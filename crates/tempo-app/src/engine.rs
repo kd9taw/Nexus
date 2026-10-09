@@ -12163,10 +12163,12 @@ impl Engine {
     /// A position joined. Err when not hosting (a race with the toggle), Err with
     /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
-    /// rules-file id — and Err when it is set up in another exchange ROLE than the club's
-    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it). The
-    /// wording lives on `ClubLog` and in `fdevent` because only they know the contest to
-    /// name. Every refusal is noted for the host's own screen too.
+    /// rules-file id — Err when it is set up in another exchange ROLE than the club's
+    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
+    /// when it is on another station CALL than this host's, outside ARRL Field Day (`call`,
+    /// the JOIN's, against the call the club's file is written under). The wording lives on
+    /// `ClubLog` and in `fdevent` because only they know the contest to name. Every refusal
+    /// is noted for the host's own screen too.
     ///
     /// A position that names no role is served as it always was: its contest has one role
     /// (both Field Days), or it is older than the field and cannot say. So is any position
@@ -12193,10 +12195,13 @@ impl Engine {
             return Err("this station is not hosting a club event".into());
         };
         let theirs = role.trim();
-        let refusal = club.join_refusal(v, contest).or_else(|| {
-            (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
-                .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
-        });
+        let refusal = club
+            .join_refusal(v, contest)
+            .or_else(|| {
+                (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
+                    .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
+            })
+            .or_else(|| club.call_refusal(&self.settings.mycall, call));
         if let Some(msg) = refusal {
             club.note_refused(pos, name, call, &msg, now);
             return Err(msg);
@@ -43215,6 +43220,93 @@ mod tests {
         assert_eq!(fd.fd_position_role(), "");
     }
 
+    /// ⭐ **A position on another station call than the host's is refused, by name, on both
+    /// screens — except at ARRL Field Day**, whose GOTA station must use a call of its own.
+    /// At a QSO party every laptop of a club entry sends the club's call, and one still set
+    /// to its owner's call sent that call on the air while the club's file claimed its
+    /// contacts under the host's.
+    #[test]
+    fn a_club_refuses_a_position_on_another_call_by_name_except_at_arrl_field_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let refused = |e: &Engine| -> Vec<(String, String, String)> {
+            e.snapshot()
+                .field_day
+                .and_then(|f| f.club)
+                .map(|c| c.refused)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.pos_name, r.call, r.reason))
+                .collect()
+        };
+        let mut e = party_host(&dir);
+        let err = e
+            .fd_club_join(v, "aaaa0001", "SSB tent", "k9abc", "ilqp", "in_state")
+            .expect_err("a position on its owner's call is refused");
+        assert!(
+            err.contains("on the air as W9XYZ and this Nexus as K9ABC,"),
+            "it says which call differs: {err}"
+        );
+        assert!(
+            err.contains(
+                "Set Callsign on the air under Who's who at this event on the \
+                 Contesting tab in Settings to W9XYZ"
+            ),
+            "and where to set it: {err}"
+        );
+        assert_eq!(
+            refused(&e),
+            vec![("SSB tent".to_string(), "K9ABC".to_string(), err.clone())],
+            "the host's own screen names it, with the very sentence"
+        );
+        // CONTROLS: the club's call, however it is typed, joins and the host's note goes; a
+        // position that cannot say its call joins as before.
+        e.fd_club_join(v, "aaaa0001", "SSB tent", " w9xyz ", "ilqp", "in_state")
+            .expect("the club's own call joins");
+        e.fd_club_join(v, "bbbb0002", "CW tent", "", "ilqp", "in_state")
+            .expect("a position that cannot say its call joins as before");
+        assert_eq!(refused(&e), Vec::new());
+        e.fd_host_stop();
+
+        // Winter Field Day and ARRL Field Day (the picker's blank default), each hosted on
+        // W9XYZ: only ARRL Field Day has a GOTA station.
+        let host = |event: &str, class: &str, journal: &str| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+            e.set_mode("fieldday-run").unwrap();
+            e.fd_host_start(dir.join(journal)).expect("hosted");
+            e
+        };
+        let mut wfd = host("wfd", "3O", "wfd.jsonl");
+        let err = wfd
+            .fd_club_join(v, "cccc0003", "Tent 2", "K9ABC", "wfd", "")
+            .expect_err("Winter Field Day has no GOTA station");
+        assert!(
+            err.contains("on the air as W9XYZ and this Nexus as K9ABC, and in WFD every"),
+            "{err}"
+        );
+        wfd.fd_host_stop();
+        let mut fd = host("", "3A", "fd.jsonl");
+        let accept = fd
+            .fd_club_join(v, "dddd0004", "GOTA", "K9GOT", "arrlfd", "")
+            .expect("an ARRL Field Day GOTA position joins on its own call");
+        assert_eq!(accept.host_call, "W9XYZ");
+        assert_eq!(refused(&fd), Vec::new());
+        fd.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -43415,13 +43507,14 @@ mod tests {
 
         // POSITIVE CONTROL: the same refusing club welcomes a CURRENT position. A
         // gate that refused everybody would satisfy every assertion above while
-        // locking every tent out of the QSO party.
+        // locking every tent out of the QSO party. It is on the club's call, as every
+        // position of a QSO party club is.
         let accept = backend
             .join(
                 PROTO_VERSION,
                 "cccc0003",
                 "SSB tent",
-                "KD9TAW",
+                "W9ABC",
                 0,
                 "tnqp",
                 "",
