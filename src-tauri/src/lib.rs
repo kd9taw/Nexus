@@ -37025,6 +37025,67 @@ mod tests {
         assert_eq!(super::EngineRig::new(digital).mode().0, "PKTUSB");
     }
 
+    /// ⭐ WHAT WSJT-X READS FROM `\dump_state` THROUGH THE CAT BROKER, byte for byte. A NET-rigctl
+    /// client reads this reply to decide the radio is usable, and its RX and TX rows are wide so the
+    /// client may set any frequency. Typed out here rather than taken from the constant, so a change
+    /// to the constant, or to the code that assembles the reply, shows up as a diff of these lines.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_cat_broker_answers_dump_state_with_the_bytes_wsjtx_has_always_read() {
+        use std::io::{Read, Write};
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let backend: std::sync::Arc<dyn tempo_audio::rigctld_server::RigBackend> =
+            std::sync::Arc::new(super::EngineRig::new(shared));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || tempo_audio::rigctld_server::serve(listener, backend));
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        // Protocol 0 puts no terminator after the dump, so `\chk_vfo`'s one line marks its end.
+        client.write_all(b"\\dump_state\n\\chk_vfo\n").unwrap();
+        let mut got = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !got.ends_with(b"CHKVFO 0\n") {
+            let n = client.read(&mut chunk).unwrap();
+            assert!(n > 0, "closed after {:?}", String::from_utf8_lossy(&got));
+            got.extend_from_slice(&chunk[..n]);
+        }
+        assert_eq!(
+            String::from_utf8(got).unwrap(),
+            concat!(
+                "0\n",
+                "2\n",
+                "1\n",
+                "135700 1300000000 0xffffffff -1 -1 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "0xffffffff 1\n",
+                "0 0\n",
+                "0xffffffff 2700\n",
+                "0xffffffff 500\n",
+                "0 0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "CHKVFO 0\n",
+            )
+        );
+    }
+
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
     /// collapsed anything that was not LSB or FM to plain USB and returned true, so VarAC or
     /// FreeDV asking for `PKTUSB`/`DATA-U` was told "done" while the rig sat in voice USB.
