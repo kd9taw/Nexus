@@ -2960,6 +2960,28 @@ mod tests {
         }
     }
 
+    /// ⭐ **The page's party fixture is exactly what this server sends.** The jsdom suite
+    /// renders `tests/fixtures/scoreboard-ilqp.json` (`ui/src/fdBoardPage.contest.test.ts`),
+    /// so a field renamed or reshaped here goes red there, instead of the TV drawing a blank
+    /// board on the night. (The rules file's own date stamp is left out: it moves with every
+    /// rules release and nothing on the page reads it.)
+    #[test]
+    fn the_pages_party_fixture_is_what_this_server_sends() {
+        let (d, now) = ilqp_board();
+        let strip = |mut v: serde_json::Value| {
+            v.as_object_mut().map(|o| o.remove("rules_generated"));
+            v
+        };
+        let data = parse(&build_data_core(&d, now));
+        let meta = strip(parse(&build_meta(&d, now)));
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/scoreboard-ilqp.json"))
+                .expect("the fixture is JSON");
+        assert_eq!(fixture["now"], now);
+        assert_eq!(fixture["data"], data, "data.json");
+        assert_eq!(strip(fixture["meta"].clone()), meta, "meta.json");
+    }
+
     const ARRL_FD_CORE_GOLDEN: &str = r##"{"event":{"kind":"arrlfd","name":"ARRL Field Day","year":2026,"start_unix":1782583200,"end_unix":1782680400,"call":"W9ABC","class":"3A","section":"WI"},"score":{"model":"powered","qso_points":6,"bonus_points":150,"power_mult":2,"powered_points":12,"total":162},"qsos":{"count":4,"rate_hour":1,"rate_10min":1,"hourly":[2,2,0]},"ticker":[{"when_unix":1782590200,"call":"VE3AAA","class":"2A","section":"ONE","band":"20m","mode":"DIG","submode":"FT8","position":"CW tent","operator":"W9AAA"},{"when_unix":1782587200,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782586900,"call":"W5XYZ","class":"2A","section":"STX","band":"40m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583400,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583300,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"CW tent","operator":"W9AAA"}],"band_mode":[{"band":"40m","ph":1,"cw":0,"dig":0},{"band":"20m","ph":1,"cw":1,"dig":1}],"sections_worked":["EMA","ONE","STX"],"positions":[{"id":"aaaa1111","label":"CW tent","operator":"W9AAA","band":"20m","mode":"CW","stale":false,"qsos_raw":2,"qsos_unique":2,"points":4,"last_qso_unix":1782590200},{"id":"bbbb2222","label":"Phone tent","operator":"W9BBB","band":"40m","mode":"PH","stale":true,"qsos_raw":3,"qsos_unique":2,"points":2,"last_qso_unix":1782587200}],"claimed":["emergency-power","web-submission"]}"##;
     const ARRL_FD_SECTION_CODES_GOLDEN: &str = r##"DE EPA MDC NNY SNJ WNY WPA IL IN WI MN ND SD AR LA MS TN KY MI OH ENY NLI NNJ IA KS MO NE CT EMA ME NH RI VT WMA AK EWA ID MT OR WWA EB NV PAC SCV SF SJV SV NC SC VA WV CO NM UT WY AL GA NFL PR SFL VI WCF AZ LAX ORG SB SDG NTX OK STX WTX NL NB NS PE QC ONE ONN ONS GH MB SK AB BC TER"##;
     const ARRL_FD_META_GOLDEN: &str = r##"{"bonuses":[{"id":"emergency-power","label":"100% emergency power","points":100},{"id":"media-publicity","label":"Media publicity","points":100},{"id":"public-location","label":"Public location","points":100},{"id":"public-info-table","label":"Public information table","points":100},{"id":"nts-message","label":"Message to ARRL SM/SEC","points":100},{"id":"w1aw-bulletin","label":"W1AW bulletin copied","points":100},{"id":"natural-power","label":"Natural power QSOs","points":100},{"id":"site-visit-official","label":"Site visit: elected official","points":100},{"id":"site-visit-agency","label":"Site visit: agency representative","points":100},{"id":"gota","label":"GOTA station max","points":100},{"id":"youth","label":"Youth participation","points":100},{"id":"web-submission","label":"Web submission","points":50},{"id":"safety-officer","label":"Safety officer","points":100},{"id":"social-media","label":"Social media","points":100},{"id":"educational","label":"Educational activity","points":100},{"id":"satellite","label":"Satellite QSO","points":100}],"event":{"call":"W9ABC","class":"3A","end_unix":1782680400,"kind":"arrlfd","name":"ARRL Field Day","section":"WI","start_unix":1782583200,"year":2026},"rules_year":2026,"scoring_model":"powered"}"##;

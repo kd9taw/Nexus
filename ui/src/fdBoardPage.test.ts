@@ -693,12 +693,13 @@ describe('fd scoreboard page', () => {
     expect(badge.classList.contains('on')).toBe(false)
   })
 
-  it('shows the host-only overlay for a non-host instance', () => {
+  it('says why there is no board in words, not a grey overlay (every reason: fdBoardPage.contest)', () => {
     const b = boot()
     b.setInactive(true)
     const overlay = document.getElementById('inactive')!
     expect(overlay.classList.contains('on')).toBe(true)
-    expect(overlay.textContent).toBe(b.STRINGS.hostOnlyMsg)
+    expect(document.getElementById('notice-title')!.textContent).toBe(b.STRINGS.noticeGenericTitle)
+    expect(document.getElementById('notice-do')!.textContent).toBe(b.STRINGS.noticeNoClubDo)
   })
 
   it('treats payload values as text, never markup (calls arrive over RF)', () => {
