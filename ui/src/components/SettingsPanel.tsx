@@ -10201,6 +10201,13 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.integrations.pskreporter.hint')}
                   </span>
+                  {/* A contest that allows spotting only over amateur RF (Winter Field Day)
+                      pauses the reports while it runs, whatever this switch says. */}
+                  {form.fdActive && rulesetPreview?.spotsRfOnly && (
+                    <span className="settings-hint">
+                      {t('settings.integrations.pskreporter.rfOnly', { event: contestName(rulesetPreview.event) })}
+                    </span>
+                  )}
                 </div>
 
                 <div className="settings-field">

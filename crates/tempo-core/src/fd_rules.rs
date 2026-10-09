@@ -182,6 +182,16 @@ pub struct AssistancePolicy {
     pub cluster_allowed: bool,
     /// i18n catalog key for the advisory note (`""` = none).
     pub assistance_note_key: &'static str,
+    /// ⭐ **Spots may be POSTED only over amateur RF while the event runs** — Winter Field
+    /// Day's *"You may spot yourself and others only via amateur RF."* (2027 rules, p.8).
+    ///
+    /// Unlike the two flags above this one is ENFORCED, not advisory: while the event runs
+    /// for a station that has the contest switched on, Nexus posts no spot over the internet
+    /// — no PSK Reporter report, no DX cluster spot, no POTA self-spot — and says why. What
+    /// it RECEIVES is untouched, because the rule is about where a spot is posted. A rules
+    /// key rather than a Winter Field Day branch, so another contest with the same rule
+    /// takes it by one line of data.
+    pub spots_rf_only: bool,
 }
 
 /// Which Saturday of the month anchors the event weekend.
@@ -1605,6 +1615,10 @@ struct AssistanceSpec {
     cluster_allowed: bool,
     #[serde(default)]
     assistance_note_key: String,
+    /// See [`AssistancePolicy::spots_rf_only`]. `#[serde(default)]`: absent is `false`, no
+    /// restriction, which is what every ruleset before the key means.
+    #[serde(default)]
+    spots_rf_only: bool,
 }
 
 fn stats_of(spec: &FileSpec) -> RulesStats {
@@ -2968,6 +2982,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     spotting_allowed: r.assistance.spotting_allowed,
                     cluster_allowed: r.assistance.cluster_allowed,
                     assistance_note_key: leak_str(r.assistance.assistance_note_key),
+                    spots_rf_only: r.assistance.spots_rf_only,
                 },
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),

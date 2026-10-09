@@ -1504,6 +1504,68 @@ fn a_refused_callsign_or_frequency_never_reaches_the_cluster_door() {
     assert_eq!(posted.lock().unwrap().1.len(), 1);
 }
 
+/// The contest switched on, with the spot block's clock fixed at `now`.
+fn running(f: &Fixture, event: &str, now: u64) {
+    let mut e = f.engine.lock().unwrap();
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = event.into();
+    e.apply_settings(s);
+    e.set_spot_clock(Some(now));
+}
+
+/// ⭐ **No spot of either kind goes over the internet from a Remote page while Winter Field Day
+/// runs** — 2027 rules p.8: *"You may spot yourself and others only via amateur RF."* A spot of
+/// another station and a self-spot are each refused before anything is posted. Controls: the
+/// same station an hour before the event, and ARRL Field Day inside its own window, post both as
+/// they always did.
+#[test]
+fn no_remote_spot_goes_over_the_internet_while_winter_field_day_runs() {
+    let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+    let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+        .event_window(2027);
+    let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+        .event_window(2026);
+    let posts = |p: &Posted| {
+        let p = p.lock().unwrap();
+        p.0.len() + p.1.len()
+    };
+    let case = |event: &str, now: u64| {
+        // A spot of another station, through the station's cluster door.
+        let mut f = Fixture::new();
+        let dx_posted = recorder(&mut f);
+        controlling(&f);
+        running(&f, event, now);
+        let dx = run(&f, &dx_spot(&f, "JA2DEF")).unwrap()["outcome"].clone();
+        // A self-spot, through the self-spot door the desktop shares.
+        let mut g = Fixture::new();
+        let me_posted = recorder(&mut g);
+        acquire(&g);
+        running(&g, event, now);
+        g.engine
+            .lock()
+            .unwrap()
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
+        let me = run(&g, &spot(&g, "US-0001")).unwrap()["outcome"].clone();
+        (dx, posts(&dx_posted), me, posts(&me_posted))
+    };
+    assert_eq!(
+        [
+            case("wfd", wfd.start_unix + 7200),
+            case("wfd", wfd.start_unix - 3600),
+            case("arrlfd", arrl.start_unix + 7200),
+        ],
+        [
+            (json!("rejected"), 0, json!("rejected"), 0),
+            (json!("applied"), 1, json!("applied"), 2),
+            (json!("applied"), 1, json!("applied"), 2),
+        ],
+        "(spot, its posts, self-spot, its posts): during Winter Field Day, before it, during \
+         ARRL Field Day"
+    );
+}
+
 #[test]
 fn a_test_build_with_no_poster_refuses_a_spot_instead_of_posting_it() {
     let f = Fixture::new();

@@ -3260,6 +3260,7 @@ export const EN = {
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
+  'spots.post.rfOnly': 'Not posted: the contest you are running allows spots only over amateur RF while it runs.',
   'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
   'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
   'spots.post.confirm.post': 'Post spot',
@@ -3654,6 +3655,7 @@ export const EN = {
   'ota.selfSpot.cluster.invalid': 'Not sent to the DX cluster: check your callsign, and that the dial is in a ham band',
   'ota.selfSpot.moved': 'Your park or frequency changed after you pressed Spot me, so nothing was posted',
   'ota.selfSpot.failed': 'Couldn’t spot you. Nothing was posted.',
+  'ota.selfSpot.rfOnly': 'Not spotted: the contest you are running allows spots only over amateur RF while it runs.',
 
   // The offline park directory. `{{formatted}}` is a park COUNT the call site has already
   // grouped for display — it never passes through a formatter here (see `logbook.markLotw`).
@@ -3985,6 +3987,7 @@ export const EN = {
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
     'Spotting assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
+  'fieldDay.advisory.spotsRfOnly': '{{event}} allows spots only over amateur RF while it runs: Nexus is sending no PSK Reporter reports, DX cluster spots or POTA self-spots until it ends. Receiving spots carries on.',
   'fieldDay.club.aria': 'Club sync',
   'fieldDay.club.head': 'Club',
   'fieldDay.club.state.synced': 'Synced',
@@ -7396,6 +7399,7 @@ export const EN = {
     'WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.',
   'settings.integrations.spotSources.title': 'Spot Sources',
   'settings.integrations.pskreporter.hint': 'upload spots to the global map',
+  'settings.integrations.pskreporter.rfOnly': 'While {{event}} runs, its rules allow spots only over amateur RF, so no reports are sent; they resume when it ends.',
   'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
   'settings.integrations.clusterSpots.hint':
     'Surface "new ones" from the Reverse Beacon Network on the Needed board + Conditions. Takes effect on restart.',

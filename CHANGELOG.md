@@ -119,6 +119,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing, is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the
   same station worked on the same band without the satellite a duplicate. ARRL Field Day, which
   counts satellite contacts, is unchanged.
+- **No spots over the internet while Winter Field Day runs.** The sponsor's 2027 rules say "You may
+  spot yourself and others only via amateur RF." So while the event runs, a station with Winter
+  Field Day switched on sends no PSK Reporter reports, posts no DX cluster spot and sends no POTA
+  self-spot, from the desktop or from Nexus Remote. The contest screen says why, the Spot and Spot
+  me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
+  and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
+  to normal when the event ends.
 
 ### Fixed
 

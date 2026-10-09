@@ -13,7 +13,7 @@
 //     literal `MULTI-OP`, so every solo Field Day entry Nexus exported claimed more
 //     than one operator was at the station.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -254,6 +254,35 @@ describe('the role / category block', () => {
     expect((await chip('Entry category', 'MULTI-OP')).getAttribute('aria-pressed')).toBe('true')
     // CHECKLOG is the third — a log sent to help the sponsor check others.
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
+  })
+
+  // While a contest that allows spotting only over amateur RF runs (Winter Field Day 2027), no PSK
+  // Reporter report goes out whatever the switch says, so Settings says so beside the switch.
+  it('says beside PSK Reporter that a contest allowing spots only over RF pauses the reports', async () => {
+    const note = /While Winter Field Day runs, its rules allow spots only over amateur RF/
+    const wfd = { event: 'wfd', rulesYear: 2027, bannedModes: [], spottingAllowed: true, clusterAllowed: true, enforcement: 'warn', role: '', exchange: [], problem: '' }
+    const show = async (fdActive: boolean, spotsRfOnly: boolean) => {
+      api.get('getSettings').mockImplementation(() =>
+        Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'wfd', fdActive } as never),
+      )
+      api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...wfd, ...(spotsRfOnly ? { spotsRfOnly } : {}) } as never))
+      renderPanel()
+      fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+      await screen.findByText('PSK Reporter')
+      // The ruleset arrives on its own fetch; let it land before anything is read off the page.
+      await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+      await act(async () => {
+        for (let i = 0; i < 8; i++) await Promise.resolve()
+      })
+    }
+    await show(true, true)
+    expect(await screen.findByText(note)).toBeTruthy()
+    // CONTROLS: the contest switched off, and a ruleset without the rule, say nothing.
+    for (const [fdActive, spotsRfOnly] of [[false, true], [true, false]] as const) {
+      cleanup()
+      await show(fdActive, spotsRfOnly)
+      expect(screen.queryByText(note), `fdActive ${fdActive}, spotsRfOnly ${spotsRfOnly}`).toBeNull()
+    }
   })
 
   // Winter Field Day has no high-power entry (2027 rules: 100 W PEP, and the Cabrillo takes QRP

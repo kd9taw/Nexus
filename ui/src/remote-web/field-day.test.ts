@@ -235,3 +235,14 @@ it('accepts the satellite-credit flag a Winter Field Day station sends, and stil
  fd.satelliteCredit='false'
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
+
+// A ruleset that allows spotting only over amateur RF while its event runs (Winter Field Day 2027)
+// says so, `spotsRfOnly: true`, and every other ruleset leaves the key out.
+it('accepts the ruleset\'s spots-over-RF-only rule, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const ruleset=(page.meta as {source:{ruleset:Record<string,unknown>}}).source.ruleset
+ ruleset.spotsRfOnly=true
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ ruleset.spotsRfOnly='true'
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})

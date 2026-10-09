@@ -142,12 +142,14 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
   // programme gave the ruleset an `exchange` (the ExchangeSpec that replaced the hardcoded
   // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
   const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
-    ['exchange','problem','role'])
+    ['exchange','problem','role','spotsRfOnly'])
   // The ruleset of whichever contest is running — the same id, so the same shape rule as the
   // status's `event` above (a hardcoded arrlfd/wfd pair here blanked every other contest).
   if (!eventId(r.event) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
     typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
     (r.role !== undefined && !text(r.role)) ||
+    // A contest that allows spotting only over amateur RF while it runs (Winter Field Day).
+    (r.spotsRfOnly !== undefined && typeof r.spotsRfOnly !== 'boolean') ||
     (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
     // The exchange is a spec object, bounded here rather than re-modelled - the real Nexus app
     // is what renders it, and this gate caps shape and size, it does not duplicate the DTO.

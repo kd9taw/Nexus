@@ -61,12 +61,19 @@ pub enum Refusal {
     NoActivation,
     /// The park or the dial is not the one the operator confirmed.
     Moved,
+    /// A contest that allows spotting only over amateur RF is running (Winter Field Day:
+    /// *"You may spot yourself and others only via amateur RF."*), so nothing is posted.
+    RfOnly,
 }
 
 impl Context {
     /// Everything comes from the station; `reference` and `dial_hz` are only what the operator's
     /// confirm showed, checked against it.
     pub fn confirmed(engine: &Engine, reference: &str, dial_hz: u64) -> Result<Self, Refusal> {
+        // Before anything else: during such a contest no target is tried at all.
+        if engine.internet_spot_block().is_some() {
+            return Err(Refusal::RfOnly);
+        }
         let (program, active) = engine.activation().ok_or(Refusal::NoActivation)?;
         if active != reference || engine.settings().dial_hz() != dial_hz {
             return Err(Refusal::Moved);

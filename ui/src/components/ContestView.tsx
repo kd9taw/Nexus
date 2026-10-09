@@ -1532,6 +1532,8 @@ export function FieldDayScoreboard({
 
 export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, observation }: Props) {
   const observed = observation !== undefined
+  // The clock the spot advisory judges the event window by.
+  const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -1795,6 +1797,12 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           activeMode={tier}
           assistanceOn={fieldDay?.assistanceOn ?? []}
           showAssistance
+          eventWindow={
+            fieldDay?.eventStartUnix !== undefined && fieldDay?.eventEndUnix !== undefined
+              ? { start: fieldDay.eventStartUnix, end: fieldDay.eventEndUnix }
+              : undefined
+          }
+          nowUnix={nowUnix}
         />
         {fieldDay?.rulesYear ? (
           <span className="fd-event-rules">

@@ -2617,6 +2617,10 @@ pub enum VoiceMemCmd {
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
+    /// The instant [`Self::internet_spot_block`] judges "while the event runs" against: the
+    /// wall clock, unless a test has fixed one ([`Self::set_spot_clock`]). Nothing in the app
+    /// sets it.
+    spot_clock: Option<u64>,
     /// Station-wide state (logbook, connector queues, DXCC/rarity/LoTW resolvers, POTA
     /// activation, journal paths, PC-clock offset) — everything that is true of the
     /// OPERATOR rather than of this receive/transmit chain. See [`StationCore`].
@@ -5344,6 +5348,7 @@ impl Engine {
                 station
             },
             settings,
+            spot_clock: None,
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
@@ -6586,6 +6591,50 @@ impl Engine {
     /// chose would be indistinguishable from one somebody did.
     fn fd_row_operator(&self) -> String {
         self.settings.fd_operator.trim().to_ascii_uppercase()
+    }
+
+    /// ⭐ **The contest whose rules forbid posting a spot over the internet RIGHT NOW**, by its
+    /// rules-file id, or `None`.
+    ///
+    /// Winter Field Day 2027: *"You may spot yourself and others only via amateur RF."* So
+    /// while its event runs, for a station that has it switched on (`fd_active`, `fd_event`),
+    /// every door that posts a spot over the internet asks here and refuses: PSK Reporter's
+    /// reports ([`Self::pskreporter_uploading`]), a DX cluster spot and a POTA self-spot.
+    /// Outside the event's window, for a contest without the rule ([`spots_rf_only`]), or
+    /// with the contest switched off, every post goes as it always did. Nothing RECEIVED is
+    /// touched: the rule is about where a spot is posted.
+    ///
+    /// [`spots_rf_only`]: tempo_core::fd_rules::AssistancePolicy::spots_rf_only
+    pub fn internet_spot_block(&self) -> Option<&'static str> {
+        let now = self.spot_clock.unwrap_or_else(now_unix_secs);
+        if !self.settings.fd_active {
+            return None;
+        }
+        let rs = tempo_core::fd_rules::ruleset_by_id(
+            self.settings.fd_event.trim(),
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )?;
+        if !rs.assistance.spots_rf_only {
+            return None;
+        }
+        let w = rs.next_or_running(now);
+        (w.start_unix <= now && now < w.end_unix).then_some(rs.event)
+    }
+
+    /// Fix the instant [`Self::internet_spot_block`] judges against (`None` = the wall
+    /// clock) — so a test can stand inside or outside an event's window. Nothing in the app
+    /// calls it.
+    pub fn set_spot_clock(&mut self, at: Option<u64>) {
+        self.spot_clock = at;
+    }
+
+    /// ⭐ **Is the PSK Reporter upload EFFECTIVELY on?** The operator's own setting, unless a
+    /// contest that allows spotting only over RF is running ([`Self::internet_spot_block`]):
+    /// a reception report posted to pskreporter.info is a spot posted over the internet. It
+    /// OVERRIDES the setting and never rewrites it, so the reports resume the moment the
+    /// event ends. The radio loop builds or drops its reporter by this.
+    pub fn pskreporter_uploading(&self) -> bool {
+        self.settings.pskreporter && self.internet_spot_block().is_none()
     }
 
     /// Switch the ACTIVE radio (dual-radio). Persists the current radio's live tune into its
@@ -43424,6 +43473,52 @@ mod tests {
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **NO SPOT OVER THE INTERNET WHILE WINTER FIELD DAY RUNS** — 2027 rules p.8: *"You
+    /// may spot yourself and others only via amateur RF."* The engine's one decision, which
+    /// every posting door asks (the desktop's and the Remote page's cluster spot, the
+    /// self-spot, and the radio loop's PSK Reporter upload): inside the event's window, for a
+    /// station with the contest switched on, it names the contest, and the PSK Reporter upload
+    /// is off whatever its switch says. Controls: the same station an hour before the event,
+    /// at the window's end, with the master switch off, and ARRL Field Day inside its own window.
+    #[test]
+    fn no_internet_spot_while_winter_field_day_runs() {
+        let at = |event: &str, class: &str, fd_active: bool, now: u64| {
+            let mut e = Engine::new("W9XYZ", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = fd_active;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.pskreporter = true;
+            e.apply_settings(s);
+            e.set_spot_clock(Some(now));
+            (e.internet_spot_block(), e.pskreporter_uploading())
+        };
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+            .event_window(2027);
+        let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+            .event_window(2026);
+        assert_eq!(
+            [
+                at("wfd", "3O", true, wfd.start_unix + 7200),
+                at("wfd", "3O", true, wfd.start_unix - 3600),
+                at("wfd", "3O", true, wfd.end_unix),
+                at("wfd", "3O", false, wfd.start_unix + 7200),
+                at("arrlfd", "3A", true, arrl.start_unix + 7200),
+            ],
+            [
+                (Some("wfd"), false),
+                (None, true),
+                (None, true),
+                (None, true),
+                (None, true)
+            ],
+            "(during Winter Field Day, before it, at its end, with the master switch off, \
+             during ARRL Field Day)"
+        );
     }
 
     /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects

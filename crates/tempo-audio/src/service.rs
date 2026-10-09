@@ -1993,9 +1993,13 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                 wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
             }
-            if s.pskreporter != psk_applied {
-                psk = s.pskreporter.then(PskReporter::new);
-                psk_applied = s.pskreporter;
+            // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
+            // over RF is running (Winter Field Day), when no reporter exists and nothing is
+            // collected for one.
+            let uploading = e.pskreporter_uploading();
+            if uploading != psk_applied {
+                psk = uploading.then(PskReporter::new);
+                psk_applied = uploading;
             }
         }
         let sinks = Sinks {

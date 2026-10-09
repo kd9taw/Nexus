@@ -846,6 +846,25 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
         &["fdObjectives", "fdObjectivesPlanned"],
     );
+    // …and its ruleset says it allows spotting only over amateur RF, a key the page takes too.
+    assert_eq!(
+        wfd_page["meta"]["source"]["ruleset"]["spotsRfOnly"],
+        serde_json::json!(true),
+        "scene guard: Winter Field Day's ruleset carries its spotting rule"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's ruleset",
+        &wfd_page["meta"]["source"]["ruleset"],
+        &[
+            "event",
+            "rulesYear",
+            "bannedModes",
+            "spottingAllowed",
+            "clusterAllowed",
+            "enforcement",
+        ],
+        &["exchange", "problem", "role", "spotsRfOnly"],
+    );
     takes_optional(
         "fieldDay: the ruleset",
         &source["ruleset"],
@@ -857,7 +876,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             "clusterAllowed",
             "enforcement",
         ],
-        &["exchange", "problem", "role"],
+        &["exchange", "problem", "role", "spotsRfOnly"],
     );
     assert_eq!(
         source["fieldDay"]["log"].as_array().map(Vec::len),
