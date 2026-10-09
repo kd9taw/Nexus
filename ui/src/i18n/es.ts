@@ -1717,6 +1717,7 @@ export const ES: PartialCatalog = {
   "fieldDay.club.refused.chip": "Sin sincronizar",
   "fieldDay.club.refused.serial": "La sincronización de club no funciona con {{contest}}: sus números de serie deben seguir una sola secuencia para toda la participación, y cada posición daría los suyos. Esta estación no aloja ningún evento de club ni se une a ninguno, y cada posición lleva su propio log.",
   "fieldDay.club.refused.transmitter": "La sincronización de club no funciona con {{contest}}: su log debe indicar qué transmisor hizo cada contacto, y la sincronización de club no numera los transmisores. Esta estación no aloja ningún evento de club ni se une a ninguno, y cada posición lleva su propio log.",
+  "fieldDay.club.refused.unknown": "La sincronización de club no funciona con {{contest}}: las reglas de concursos que cargó este Nexus no lo incluyen. Busca actualizaciones de reglas en la pestaña Concursos de Ajustes (las reglas nuevas se aplican cuando Nexus vuelve a arrancar), o elige otro concurso. Esta estación no aloja ningún evento de club ni se une a ninguno, y cada posición lleva su propio log.",
   "fieldDay.club.board.empty": "Aún no se oyen posiciones — cada otra posición Nexus de esta red aparece aquí en cuanto registra.",
   "fieldDay.club.board.column.position": "Posición",
   "fieldDay.club.bands.column.band": "Banda",

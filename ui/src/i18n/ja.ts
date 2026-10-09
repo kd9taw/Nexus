@@ -2711,6 +2711,7 @@ export const JA: PartialCatalog = {
   "fieldDay.club.refused.chip": "同期なし",
   "fieldDay.club.refused.serial": "クラブ同期は {{contest}} に対応していません。シリアル番号はエントリー全体で1つの連番でなければなりませんが、各ポジションがそれぞれ番号を出してしまいます。この局はクラブイベントをホストも参加もせず、各ポジションはそれぞれ自分のログを持ちます。",
   "fieldDay.club.refused.transmitter": "クラブ同期は {{contest}} に対応していません。ログには各交信をどの送信機が行ったかを書く必要がありますが、クラブ同期は送信機に番号を付けません。この局はクラブイベントをホストも参加もせず、各ポジションはそれぞれ自分のログを持ちます。",
+  "fieldDay.club.refused.unknown": "クラブ同期は {{contest}} に対応していません。このNexusが読み込んだコンテストルールに含まれていないためです。設定の「コンテスト」タブでルール更新を確認するか(新しいルールはNexusの次回起動時に適用されます)、別のコンテストを選んでください。この局はクラブイベントをホストも参加もせず、各ポジションはそれぞれ自分のログを持ちます。",
   "fieldDay.club.board.empty": "まだポジションが見つかりません — このネットワーク上の他の Nexus ポジションは、ログを取った時点でここに表示されます。",
   "fieldDay.club.board.column.position": "ポジション",
   "fieldDay.club.bands.column.band": "バンド",

@@ -11961,7 +11961,7 @@ impl Engine {
         let rs = self.club_sync_refusal_reason().map_err(|why| {
             std::io::Error::other(format!(
                 "club sync cannot run {}: {}",
-                self.fd_club_contest(),
+                crate::fdevent::contest_name(&self.fd_club_contest()),
                 why.sentence()
             ))
         })?;
@@ -42551,6 +42551,14 @@ mod tests {
                 .fd_host_start(dir.join(format!("{event}.ndjson")))
                 .expect_err("refused");
             assert!(err.to_string().contains(why.sentence()), "{event}: {err}");
+            // The host's log line names the contest as its sponsor does, never by the
+            // rules-file id an operator has never seen.
+            assert!(
+                err.to_string()
+                    .contains(&crate::fdevent::contest_name(event))
+                    && !err.to_string().contains(event),
+                "{event}: {err}"
+            );
             assert!(!e.fd_hosting());
             assert_eq!(
                 e.fd_sync_targets(),

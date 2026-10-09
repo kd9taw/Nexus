@@ -300,4 +300,45 @@ describe('club sync switched on for a contest the club log cannot run', () => {
     await renderWith({ fdEvent: 'cqww_cw', fdHostEnable: false, fdJoinAddr: '' })
     expect(screen.queryByText('Not syncing')).toBeNull()
   })
+
+  // A rules file the station downloaded can drop a contest, and the engine refuses club sync
+  // for it (`ClubRefusal::NoRuleset`): the station's preview of the pick resolves to the ARRL
+  // Field Day that mode entry falls back to, and the screen says why by the sponsor's name.
+  async function renderPreviewed(fdEvent: string, previewEvent: string) {
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, fdEvent, fdHostEnable: true } as never)
+    render(
+      <ContestView
+        fieldDay={fd(undefined)}
+        onSetMode={() => {}}
+        fdRuleset={{
+          event: previewEvent,
+          rulesYear: 2026,
+          bannedModes: [],
+          spottingAllowed: true,
+          clusterAllowed: true,
+          enforcement: 'warn',
+          role: '',
+          exchange: [],
+          problem: '',
+        } as never}
+      />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('says a contest the loaded rules do not carry is not syncing, and why', async () => {
+    await renderPreviewed('ilqp', 'arrlfd')
+    expect(screen.getByText('Not syncing')).toBeTruthy()
+    expect(
+      screen.getByText(/Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it/),
+    ).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: the same pick, carried by the loaded rules, says nothing of it', async () => {
+    await renderPreviewed('ilqp', 'ilqp')
+    expect(screen.queryByText('Not syncing')).toBeNull()
+  })
 })

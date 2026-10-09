@@ -116,4 +116,27 @@ describe('clubSyncRefusal', () => {
     expect(clubSyncRefusalText('transmitter', 'CQ WW')).toMatch(/which transmitter made each contact/)
     expect(clubSyncRefusalText('serial', 'CQ WPX')).toContain('CQ WPX')
   })
+  // A rules file the station downloaded can DROP a contest. The engine refuses club sync for
+  // it then (`ClubRefusal::NoRuleset`, code "unknown"), and the station's preview of the picked
+  // contest shows it by resolving the id to the ARRL Field Day that mode entry falls back to.
+  it('names a contest the loaded rules do not carry, read off the station preview', () => {
+    const fellBack = { event: 'arrlfd' }
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, fellBack)).toBe('unknown')
+    expect(clubSyncRefusal({ fdEvent: ' ilqp ', fdJoinAddr: '10.0.0.2:42073' }, fellBack)).toBe('unknown')
+    expect(contestClubRefusal('ilqp', fellBack)).toBe('unknown')
+    // The engine asks for the rules first, so a dropped serial contest is refused for that.
+    expect(clubSyncRefusal({ fdEvent: 'arrlss_cw', fdHostEnable: true }, fellBack)).toBe('unknown')
+    // CONTROLS: carried, the blank default, no preview yet, and not switched on.
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, { event: 'ilqp' })).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: '', fdHostEnable: true }, fellBack)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'arrlfd', fdHostEnable: true }, fellBack)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, null)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: false }, fellBack)).toBeNull()
+  })
+  it('says the missing-rules reason by the sponsor name, and where to fix it', () => {
+    const said = clubSyncRefusalText('unknown', 'Illinois QSO Party')
+    expect(said).toContain('Illinois QSO Party')
+    expect(said).toMatch(/rules this Nexus loaded do not include it/)
+    expect(said).toMatch(/Check for rules updates/)
+  })
 })

@@ -1855,8 +1855,9 @@ export function ContestView({
   // Section columns empty on every row.
   const fdEventIsFieldDay = isFieldDay(shownEvent)
   // Why club sync is not running, when it is switched on for a contest it cannot run — read
-  // from the station's own settings, which a Remote observation does not carry.
-  const clubRefusal = clubSyncRefusal(nativeSettings)
+  // from the station's own settings, which a Remote observation does not carry, and the
+  // station's preview of that pick (a contest the loaded rules dropped resolves elsewhere).
+  const clubRefusal = clubSyncRefusal(nativeSettings, fdRuleset)
   const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(shownEvent)
   // The window: the session's, else the preview's. Both are the rules data's running-or-next
   // window, so the banner reads the same before the contest starts as during it.

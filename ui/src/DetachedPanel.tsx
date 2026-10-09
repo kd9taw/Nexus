@@ -67,6 +67,8 @@ import {
   setSettings as persistSettings,
   setFdOperator,
   setSidebandOverride,
+  getFdRuleset,
+  type FdRulesetDto,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
 import { useLogAnswer } from './features/logSource'
@@ -235,6 +237,19 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')
   const [settings, setSettings] = useState<Settings | null>(null)
+  // The club board's window only: the station's preview of the picked contest, which says
+  // whether the rules it loaded carry it (`rulesCarry`) — so a refused club says why here too.
+  const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
+  useEffect(() => {
+    if (panel !== 'fdclub') return
+    let live = true
+    getFdRuleset()
+      .then((r) => live && setFdRuleset(r))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [panel, settings?.fdEvent])
   // Waterfall pop-out ⇄ dock: while this torn-off waterfall window lives, the main cockpit hides
   // its docked copy so the decode lists + roster get the room. On close (or unmount) we clear the
   // flag; the main window's `storage` listener then re-docks automatically. The main cockpit also
@@ -817,7 +832,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // wherever the operator happens to be standing.
     const syncConfigured =
       settings?.fdHostEnable === true || (settings?.fdJoinAddr ?? '').trim() !== ''
-    const clubRefusal = clubSyncRefusal(settings)
+    const clubRefusal = clubSyncRefusal(settings, fdRuleset)
     return (
       <DetachedShell>
         {club ? (

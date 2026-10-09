@@ -4393,6 +4393,7 @@ export const DE: PartialCatalog = {
   "fieldDay.club.refused.chip": "Kein Sync",
   "fieldDay.club.refused.serial": "Club-Sync führt {{contest}} nicht: Die laufenden Nummern müssen für den ganzen Beitrag in einer Folge laufen, und jede Position würde ihre eigenen vergeben. Diese Station hostet kein Club-Event und tritt keinem bei; jede Position führt ihr eigenes Log.",
   "fieldDay.club.refused.transmitter": "Club-Sync führt {{contest}} nicht: Das Log muss bei jedem Kontakt angeben, welcher Sender ihn gemacht hat, und Club-Sync nummeriert die Sender nicht. Diese Station hostet kein Club-Event und tritt keinem bei; jede Position führt ihr eigenes Log.",
+  "fieldDay.club.refused.unknown": "Club-Sync führt {{contest}} nicht: Die Contest-Regeln, die dieses Nexus geladen hat, enthalten ihn nicht. Suche auf dem Tab „Contest“ in den Einstellungen nach Regel-Updates (neue Regeln gelten, sobald Nexus wieder startet), oder wähle einen anderen Contest. Diese Station hostet kein Club-Event und tritt keinem bei; jede Position führt ihr eigenes Log.",
   "fieldDay.club.board.empty": "Noch keine Positionen gehört — jede weitere Nexus-Position in diesem Netz erscheint hier, sobald sie loggt.",
   "fieldDay.club.board.column.position": "Position",
   "fieldDay.club.bands.column.band": "Band",
