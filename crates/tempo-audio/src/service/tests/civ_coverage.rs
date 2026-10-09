@@ -378,46 +378,123 @@ fn the_licence_gate_still_refuses_phone_in_the_2_m_cw_segment_on_an_ic905() {
     );
 }
 
-/// ⭐ A RADIO THAT DOES NOT ANSWER A DIAL WRITE IS NOT REFUSING IT. An IC-7300 on 20 m is asked for
-/// 28.400 MHz, a dial it takes, and says nothing to the write. The operator is told the dial was
-/// not sent because the rig did not reply, the loop keeps asking, and nothing records a refusal or
-/// gives the dial up; when the radio answers again, the dial lands. The silence was counted as
-/// three refusals: "the radio refused 28.4000 MHz — it does not cover that frequency", the dial
-/// given up and healed back to 20 m, and the radio never asked again.
-#[test]
-fn a_dial_write_the_radio_does_not_answer_is_not_reported_as_refused() {
+/// A QSY from 20 m to 28.400 MHz on an IC-7300 that never answers the dial write, stepped as
+/// `run_radio` steps for `window`. `off` switches the whole radio off; otherwise it answers
+/// everything but a dial write. Returns what the operator was told about 28.400 MHz (each change
+/// of the CAT status line naming it, in order), whether any status line said "refused", the `05`
+/// writes on the wire, the dial the radio refused, the dial given up on, and the dials the engine
+/// and the radio are left on. How long each step that carried a write held the loop goes to
+/// stderr (`--nocapture`): every write to a silent radio holds it for the CI-V deadline.
+#[allow(clippy::type_complexity)]
+fn unanswered_dial(
+    off: bool,
+    window: Duration,
+) -> (Vec<String>, bool, usize, Option<f64>, Option<u64>, f64, u64) {
     let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
-    s.regs.lock().unwrap().drop_dial_writes = u32::MAX;
+    {
+        let mut r = s.regs.lock().unwrap();
+        r.drop_dial_writes = u32::MAX;
+        r.off = off;
+    }
     let n = s.wire_len();
     s.engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
-    let past_the_budget = |s: &Scene| s.dial_writes(n).len() > DIAL_SET_MAX_TRIES as usize;
-    let said = s.said_until(|s| past_the_budget(s) || s.told().1.is_some());
-    let quiet = (said, past_the_budget(&s), s.told().1, s.state.dial_giveup);
-    // The radio answers again.
-    s.regs.lock().unwrap().drop_dial_writes = 0;
-    s.settle(|s| s.main_hz() == 28_400_000);
+    let (mut said, mut held_ms) = (Vec::new(), Vec::new());
+    let mut last = s.told().0;
+    let end = Instant::now() + window;
+    while Instant::now() < end {
+        let writes = s.dial_writes(n).len();
+        let started = Instant::now();
+        s.step();
+        if s.dial_writes(n).len() > writes {
+            held_ms.push(started.elapsed().as_millis());
+        }
+        let line = s.told().0;
+        if line != last {
+            said.push(line.clone());
+            last = line;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let writes = s.dial_writes(n).len();
+    eprintln!(
+        "unanswered dial, radio {}: {writes} dial writes in {window:?}; the steps that carried \
+         one held the loop {held_ms:?} ms",
+        if off { "off" } else { "answering reads only" }
+    );
+    (
+        said.iter()
+            .filter(|l| l.contains("28.4000"))
+            .cloned()
+            .collect(),
+        said.iter().any(|l| l.contains("refused")),
+        writes,
+        s.told().1,
+        s.state.dial_giveup,
+        s.judged().0,
+        s.main_hz(),
+    )
+}
+
+/// ⭐ A DIAL THE RADIO DOES NOT ANSWER IS SENT THREE TIMES, AND IS NOT CALLED REFUSED. The IC-7300
+/// answers everything but the dial write. The loop sends the dial three times, as it did when it
+/// counted the silence as a refusal, says each time that the rig did not reply, then gives the
+/// dial up without recording a refusal and shows the dial the radio is really on. The silence was
+/// "the radio refused 28.4000 MHz — it does not cover that frequency"; and once it stopped being a
+/// refusal, the dial went out on every tick for as long as the radio stayed quiet.
+#[test]
+fn a_dial_the_radio_does_not_answer_is_sent_three_times_and_not_called_refused() {
     assert_eq!(
-        (quiet, s.main_hz(), s.judged().0),
+        unanswered_dial(false, Duration::from_secs(5)),
         (
-            (
-                vec!["28.4000 MHz not sent — no reply from the rig".to_string()],
-                true,
-                None,
-                None,
-            ),
-            28_400_000,
-            28.4,
+            vec![
+                "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(28_400_000),
+            14.074,
+            14_074_000,
         )
     );
 }
 
-/// ⭐ AN UNANSWERED DIAL WRITE FEEDS THE CIRCUIT BREAKER, NOT THE GIVE-UP. Counted at the loop's
-/// second write, its first retry, where only the dial goes out: the QSY's own write comes with the
-/// mode, whose ack proves the link and clears the breaker's misses. A silence is then one miss and
-/// no refusal toward giving the dial up. An NG, the control, is two refusals and no miss. The
-/// silence counted as a refusal.
+/// ⭐ …AND THE SAME FOR A RADIO THAT IS SWITCHED OFF. Every frame goes unanswered, reads too, so the
+/// circuit breaker trips once the daemon's cached dial runs out. The dial still goes out three
+/// times, and no more across the trip; the heal reads the daemon's cached dial.
 #[test]
-fn an_unanswered_dial_write_counts_toward_the_breaker_and_an_ng_toward_the_give_up() {
+fn a_dial_sent_to_a_radio_that_is_off_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_dial(true, Duration::from_secs(8)),
+        (
+            vec![
+                "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(28_400_000),
+            14.074,
+            14_074_000,
+        )
+    );
+}
+
+/// ⭐ AN UNANSWERED DIAL WRITE FEEDS THE CIRCUIT BREAKER AND THE GIVE-UP; AN NG THE GIVE-UP ALONE.
+/// Counted at the loop's second write, its first retry, where only the dial goes out: the QSY's own
+/// write comes with the mode, whose ack proves the link and clears the breaker's misses. A silence
+/// is then one miss and two tries toward giving the dial up. An NG, the control, is two tries and
+/// no miss. The silence was two tries and no miss when it counted as a refusal, and one miss and no
+/// tries when it stopped counting at all.
+#[test]
+fn an_unanswered_dial_write_counts_toward_the_breaker_and_the_give_up_and_an_ng_toward_the_give_up()
+{
     let second_write = |covers_hz: &[(u64, u64)], silent: u32, to: (f64, &str)| {
         let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), covers_hz);
         s.regs.lock().unwrap().drop_dial_writes = silent;
@@ -440,7 +517,7 @@ fn an_unanswered_dial_write_counts_toward_the_breaker_and_an_ng_toward_the_give_
             second_write(&[], u32::MAX, (28.4, "10m")),
             second_write(&[(30_000, 74_800_000)], 0, (145.0, "2m")),
         ),
-        ((2, 1, 0), (2, 0, 2))
+        ((2, 1, 2), (2, 0, 2))
     );
 }
 
@@ -491,7 +568,7 @@ fn a_dial_note_comes_down_when_the_dial_lands_and_a_newer_line_stays() {
         (
             (
                 vec![
-                    "28.4000 MHz not sent — no reply from the rig".to_string(),
+                    "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
                     confirmed.clone(),
                 ],
                 28_400_000,

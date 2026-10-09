@@ -504,11 +504,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio refused … — it does not cover that frequency", the dial went back to where the radio was,
   and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
   frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
-  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig",
-  the words Nexus already used for a radio on Hamlib's rigctld, and the frequency goes out when the
-  radio answers again. NEEDS-BENCH: an Icom that stops answering during a QSY (switched off, or its
-  CI-V lead pulled) should say no reply from the rig, never that it refused the frequency, and the
-  QSY should land once the radio answers again.
+  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig
+  (1/3)", the words Nexus already used for a radio on Hamlib's rigctld. After three tries, as
+  before, Nexus stops asking and shows the frequency the radio is on: "… MHz not sent — no reply
+  from the rig after 3 tries; still on …". Pick the frequency again to retry. A radio on Hamlib's
+  rigctld that does not answer a frequency change now gets the same three tries: Nexus used to send
+  it again on every pass of the radio loop until CAT dropped, and never stopped for a radio that
+  still answered reads, each try holding up the loop, and with it a transmission due to start, for
+  as long as the reply could take. NEEDS-BENCH: an Icom that stops answering during a QSY
+  (switched off, or its CI-V lead pulled) should say no reply from the rig, never that it refused
+  the frequency, stop after three tries, and take the frequency when you pick it again with the
+  radio answering.
 - **Nexus's own FlexRadio and OmniRig connections no longer give the radio a frequency range it
   does not have.** Both reported 135.7 kHz to 1.3 GHz as the radio's receive range: the range the
   CAT broker gives WSJT-X so that it will set any frequency, never the radio's own. So a FLEX-6400

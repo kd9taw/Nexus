@@ -555,6 +555,10 @@ pub(crate) mod tests_support {
         /// nor NG, and the radio stays where it was: a radio that went silent, or a frame lost
         /// on the bus. The write times out, which is not a refusal.
         pub drop_dial_writes: u32,
+        /// Fault injection — the radio is SWITCHED OFF (or its CI-V lead is out): every frame
+        /// still goes out on the bus and is logged, and nothing answers any of them. Unlike
+        /// [`FakeRadio::mute`] it can be thrown after the radio is handed to a daemon.
+        pub off: bool,
         /// THE IF FILTER WIDTH (`1A 03`) per band — THE RAW WIRE BYTE, like [`Self::att_raw`], so
         /// a test reads the encoding itself: code 22 (1.8 kHz) is `0x22`, and a binary encoder's
         /// `0x16` would sit here as exactly that. Main defaults to `0x28` (code 28, 2.4 kHz SSB).
@@ -1062,6 +1066,7 @@ pub(crate) mod tests_support {
                         drop_dial_reads: 0,
                         covers_hz: Vec::new(),
                         drop_dial_writes: 0,
+                        off: false,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
                         nak_filter_width: 0,
@@ -1125,7 +1130,9 @@ pub(crate) mod tests_support {
                     r.log.push((f.cmd, f.data.clone()));
                     r.wire.push(bytes.clone());
                     // Decide the reply under the register lock, emit after.
-                    if f.cmd == 0x29 {
+                    if r.off {
+                        Some((SILENT, Vec::new()))
+                    } else if f.cmd == 0x29 {
                         band_directed(&mut r, addr, &f.data)
                     } else {
                         let on_sub = r.sel_sub;

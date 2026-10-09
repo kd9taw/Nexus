@@ -3812,12 +3812,14 @@ struct RadioLoop {
     cat_port_identity: Option<(u16, u16, String)>,
     /// (configured port, port actually in use) when the rig came back under a new name.
     cat_port_alias: Option<(String, String)>,
-    /// A dial frequency the rig REFUSED (`RPRT <negative>`) — do not keep re-sending it. Mirrors
-    /// `mode_giveup`: the operator's HF-only radio cannot be talked into covering 2 m by asking
-    /// 8 times a second. Cleared by an explicit operator retune (the force branch) or any
-    /// successful dial set.
+    /// A dial frequency the rig REFUSED (`RPRT <negative>`), or did not answer
+    /// [`DIAL_SET_MAX_TRIES`] times — do not keep re-sending it. Mirrors `mode_giveup`: the
+    /// operator's HF-only radio cannot be talked into covering 2 m by asking 8 times a second.
+    /// Cleared by an explicit operator retune (the force branch), a successful set of that dial,
+    /// or the link coming back (`on_cat_link_back`).
     dial_giveup: Option<u64>,
-    /// Consecutive refusals of the currently-commanded dial, against [`DIAL_SET_MAX_TRIES`].
+    /// Consecutive failed sends of the currently-commanded dial, refused or unanswered, against
+    /// [`DIAL_SET_MAX_TRIES`].
     dial_fail_count: u32,
     /// The engine's CAT-status publish count ([`Engine::cat_probe_gen`]) just after this loop put
     /// a dial note up ("… not sent — no reply from the rig", "… refused by the rig (1/3)"). While
@@ -5629,6 +5631,9 @@ impl RadioLoop {
     ///  3. HEAL the app's belief from the rig itself. `set_frequency` writes the dial optimistically
     ///     the moment the operator asks, so on a refusal the UI is showing a frequency that exists
     ///     nowhere but in our own state. Read the rig and adopt what it says.
+    ///
+    /// A dial the rig does not ANSWER (a link fault) takes the same budget and the same heal, in
+    /// its own words, and records no refusal: see the `Err` arm.
     fn push_dial(
         &mut self,
         rig: &mut Rig,
@@ -5671,35 +5676,46 @@ impl RadioLoop {
             }
             Err(e) => {
                 let mhz = dial as f64 / 1_000_000.0;
-                // A LINK fault — the rig did not answer — is not a refusal and must not count
-                // toward the band give-up: it feeds the circuit breaker instead (the next heavy
-                // poll trips it with a real read), and the give-up stays clear so the band is
-                // not blacklisted for the rest of the session over a radio that was off.
-                if is_link_fault(&e) {
-                    if rig.has_control() {
-                        self.freq_misses = self.freq_misses.saturating_add(1);
-                    }
-                    return Some(format!(
-                        "{mhz:.4} MHz not sent — {}",
-                        dial_failure_brief(&e)
-                    ));
+                // A LINK fault — the rig did not answer — is not a refusal, and is never called
+                // one: it is "not sent", records no refused dial, and feeds the circuit breaker
+                // (the next heavy poll trips it with a real read). It still spends the same
+                // budget. Each send to a silent radio holds the loop for the link's whole
+                // deadline, and one in flight at a slot boundary delays an FT key-on by that
+                // much, so a dial the radio never answers is sent DIAL_SET_MAX_TRIES times, as
+                // when the silence was counted as a refusal, not on every tick until the breaker
+                // trips (never, for a radio that answers reads). The give-up blacklists nothing
+                // for the session: every recovery site forgives it (`on_cat_link_back`), and so
+                // does the operator's next retune. The try that spends the budget picks the words.
+                let silent = is_link_fault(&e);
+                if silent && rig.has_control() {
+                    self.freq_misses = self.freq_misses.saturating_add(1);
                 }
+                let brief = dial_failure_brief(&e);
                 self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
-                    return Some(format!(
-                        "{mhz:.4} MHz {} ({}/{DIAL_SET_MAX_TRIES})",
-                        dial_failure_brief(&e),
-                        self.dial_fail_count
-                    ));
+                    let tries = format!("({}/{DIAL_SET_MAX_TRIES})", self.dial_fail_count);
+                    return Some(if silent {
+                        format!("{mhz:.4} MHz not sent — {brief} {tries}")
+                    } else {
+                        format!("{mhz:.4} MHz {brief} {tries}")
+                    });
                 }
-                // Budget spent: this radio will not go there. Stop asking, and stop showing a dial
-                // the radio refused — the rig's own frequency is the only true answer.
+                // Budget spent: stop asking, and stop showing a dial the radio is not on — the
+                // rig's own frequency is the only true answer. A refusal also says the radio does
+                // not go there; a silence says only that it did not answer.
                 self.dial_giveup = Some(dial);
                 self.dial_fail_count = 0;
-                eprintln!(
-                    "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving up \
-                     (the radio does not appear to cover {mhz:.4} MHz)."
-                );
+                if silent {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) went unanswered {DIAL_SET_MAX_TRIES} times — \
+                         giving up until the link recovers or the dial is asked for again."
+                    );
+                } else {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving \
+                         up (the radio does not appear to cover {mhz:.4} MHz)."
+                    );
+                }
                 let healed = rig.read_freq().ok();
                 {
                     let mut eng = engine_lock(engine);
@@ -5707,17 +5723,21 @@ impl RadioLoop {
                         self.last_dial = hz;
                         eng.observe_rig_freq(hz);
                     }
-                    eng.set_rig_refused_dial(Some(mhz));
-                }
-                Some(match healed {
-                    Some(hz) => format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency; \
-                         still on {:.4} MHz",
-                        hz as f64 / 1_000_000.0
-                    ),
-                    None => {
-                        format!("the radio refused {mhz:.4} MHz — it does not cover that frequency")
+                    if !silent {
+                        eng.set_rig_refused_dial(Some(mhz));
                     }
+                }
+                let still_on = healed.map(|hz| format!("; still on {:.4} MHz", hz as f64 / 1e6));
+                Some(if silent {
+                    format!(
+                        "{mhz:.4} MHz not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{}",
+                        still_on.unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "the radio refused {mhz:.4} MHz — it does not cover that frequency{}",
+                        still_on.unwrap_or_default()
+                    )
                 })
             }
         }
@@ -7370,8 +7390,8 @@ impl RadioLoop {
                     // force path: `set_mode` alone shifts a pitch-offset rig, so a mode change
                     // whose dial is unchanged must still re-assert the dial in the DESTINATION
                     // mode's convention, or the shift stands and the read-back adopts it.
-                    // `dial_giveup` still stops a frequency the radio has REFUSED from being
-                    // re-sent every tick — the HF-only-rig-on-2 m storm.
+                    // `dial_giveup` still stops a frequency the radio has REFUSED (or never
+                    // answered) from being re-sent every tick — the HF-only-rig-on-2 m storm.
                     if (dial != self.last_dial || mode_changed)
                         && self.dial_giveup != Some(dial)
                         && can_push_dial
@@ -34950,6 +34970,117 @@ mod tests {
             }
         });
         (addr, seen)
+    }
+
+    /// A rigctld whose rig answers every read and no frequency change: each `F` gets Hamlib's own
+    /// "the rig did not answer" (`RPRT -5`), and everything else is answered as
+    /// [`switchable_rigctld`] answers it with the rig on. The rig stays on `start`.
+    fn rigctld_deaf_to_dial_writes(start: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = match line.trim() {
+                        l if l.starts_with("F ") => "RPRT -5\n".to_string(),
+                        "f" => format!("{start}\n"),
+                        "m" => "USB\n2400\n".to_string(),
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// ⭐ A FREQUENCY CHANGE HAMLIB SAYS THE RIG DID NOT ANSWER IS SENT THREE TIMES. The rig behind
+    /// rigctld answers every read, so the circuit breaker never trips, and gets `RPRT -5` for every
+    /// `F`. A QSY to 28.400 MHz goes out three times, is given up in "not sent — no reply from the
+    /// rig" words with the rig's own dial shown, and records no refusal. It went out on every pass
+    /// of the loop for as long as the rig stayed that way.
+    #[test]
+    fn a_dial_hamlib_says_the_rig_did_not_answer_is_sent_three_times() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, seen) = rigctld_deaf_to_dial_writes(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_rig_poll = 0.0;
+        state.last_freq_poll = 0.0;
+        state.last_smeter_poll = 0.0;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut step = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            for _ in 0..n {
+                tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.074, "20m", "USB");
+        }
+        step(&mut state, &mut rig, 5);
+        let settled = seen.lock().unwrap().len();
+        engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+        step(&mut state, &mut rig, 40);
+        let dial_writes = seen.lock().unwrap()[settled..]
+            .iter()
+            .filter(|l| l.starts_with("F "))
+            .count();
+        let (said, refused, dial) = {
+            let e = engine.lock().unwrap();
+            let snap = e.snapshot();
+            (
+                snap.radio.cat_detail,
+                snap.radio.refused_dial_mhz,
+                e.settings().dial_mhz,
+            )
+        };
+        assert_eq!(
+            (
+                dial_writes,
+                said,
+                refused,
+                state.dial_giveup,
+                state.cat_ok,
+                dial
+            ),
+            (
+                3,
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+                None,
+                Some(28_400_000),
+                Some(true),
+                14.074,
+            )
+        );
     }
 
     /// The overnight-radio review (2026-09-02), first half: a rig that is OFF answers every
