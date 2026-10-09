@@ -202,6 +202,14 @@ power and its transmit timeout beside Tune, and says so when the radio has no tr
 then nothing would end the carrier if Nexus or the network failed during a tune, so set one in
 SmartSDR.
 
+**The Flex native client (Beta) offers no ATU button**: use the ATU in SmartSDR or on the radio.
+Running the radio's own tuner from Nexus is built and stays off until a tester has checked it on
+a radio. Once it is on, the ATU button shows when the radio reports a tuner fitted,
+and each press runs one cycle. Beside it Nexus shows the same tune power and transmit timeout as
+beside Tune, and the cycle's result in the radio's own word, or why a press started no cycle.
+FlexRadio documents no command that stops a cycle part way, so Stop TX during a cycle sends the
+radio both its unkey and its tune-off.
+
 ---
 
 ## macOS

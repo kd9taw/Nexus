@@ -37,7 +37,10 @@
 //! operation arms the escalation clock: if the proof does not come within the deadline after the
 //! first one, the session sends the kind's stops again (`xmit 0`; for a tune `transmit tune 0` and
 //! `xmit 0`), reports [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). A radio-ended start (a
-//! CWX word, an ATU cycle) whose window fails is escalated at once. A tune the radio latches is
+//! CWX word, an ATU cycle) whose window fails is escalated at once. An ATU start the radio refuses
+//! in its reply, with nothing keyed before it, is not a failed window: nothing is on the air and
+//! nothing is to be ended, so it ends there, with no stop and no alarm, and the session reports
+//! the refusal ([`Event::StartRefused`]). A tune the radio latches is
 //! ended by the session itself, at its hold plus [`ptt_evidence::TUNE_MARGIN_MS`], whether or not
 //! the radio loop is running. Stop TX in the middle of a CW message is a `cwx clear`: its reply
 //! empties the radio's buffer for the readback, which then waits only for the radio to hold idle,
@@ -293,6 +296,14 @@ pub enum Event {
     KeyWritten { seq: u32 },
     /// The radio proved our unkey: keyed is cleared.
     UnkeyConfirmed,
+    /// The radio refused a start of ours in its reply and keyed nothing for it (an ATU cycle it
+    /// did not start): keyed is cleared, with no stop and no alarm. The reply's code and words,
+    /// for the operator.
+    StartRefused {
+        kind: StartKind,
+        code: u32,
+        message: String,
+    },
     /// A ping went unanswered while keyed, and the session sent `xmit 0` before anything else.
     UnkeyedOnMissedPing { misses: u32 },
     /// The radio did not confirm the unkey in time. The session sent `xmit 0` again and is
@@ -949,6 +960,22 @@ impl Session {
         self.close_with(out, End::UnkeyUnconfirmed, now);
     }
 
+    /// A start the radio refused in its reply with nothing keyed for it, as the readback found
+    /// ([`ptt_evidence::Phase::Refused`]: an ATU cycle the radio did not start): the operation
+    /// ends here. No stop goes out and the escalation clock is not armed, since nothing of ours is
+    /// on the air; the refusal is reported for the operator.
+    fn end_refused(&mut self, code: u32, message: &str) {
+        let Some(keyed) = self.keyed else { return };
+        if self.tracker.release_refused(keyed.operation) {
+            self.keyed = None;
+            self.events.push_back(Event::StartRefused {
+                kind: keyed.kind,
+                code,
+                message: message.to_string(),
+            });
+        }
+    }
+
     /// A radio-ended operation (a CWX word, an ATU cycle) whose window failed: nothing of ours
     /// will end it, so it is escalated at once.
     fn check_window(&mut self, out: &mut dyn Write, now: u64) {
@@ -1193,6 +1220,9 @@ impl Session {
                 });
             }
             Pending::Caller | Pending::Key => {
+                if !ok && pending == Pending::Key {
+                    self.end_refused(reply.code, &reply.message);
+                }
                 self.events.push_back(Event::Reply {
                     seq: reply.seq,
                     code: reply.code,

@@ -5256,6 +5256,8 @@ export const DE: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "Sendezeitlimit des Funkgeräts {{min}} min",
   "operate.strip.tune.noRadioTimeout": "Das Sendezeitlimit des Funkgeräts ist aus. Fallen Nexus oder das Netzwerk während des Abstimmens aus, beendet nichts den Träger. Stellen Sie in SmartSDR ein Sendezeitlimit ein.",
   "operate.strip.tune.radioRefused": "Tune sendet hier nichts: Der eigene Träger des Funkgeräts läge auf dieser Frequenz außerhalb Ihrer CW-Berechtigung.",
+  "operate.strip.atu.radioStatus": "ATU des Funkgeräts: {{status}}",
+  "operate.strip.atu.radioRefused": "ATU sendet hier nichts: Der eigene Träger des Funkgeräts läge auf dieser Frequenz außerhalb Ihrer CW-Berechtigung.",
   "operate.strip.rigDiverge.label": "Rig: {{mode}}",
   "operate.strip.rigDiverge.title": "Ihr Funkgerät steht auf {{rigMode}}, Nexus dagegen auf {{mode}}. Etwas hat es am Gerät umgestellt (SmartSDR, ein anderes Programm oder der Betriebsartenknopf). Senden und Loggen nutzen {{mode}} — das Funkgerät passend einstellen oder hier das Band neu wählen.",
   "operate.strip.narrowFilter.label": "Filter {{hz}} Hz",

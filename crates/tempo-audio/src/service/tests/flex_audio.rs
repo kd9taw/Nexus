@@ -3403,3 +3403,276 @@ fn a_connection_lost_mid_tune_alarms_and_the_fresh_client_ends_the_carrier() {
         (false, false, false)
     );
 }
+
+// ── The radio's own ATU: switched on in tests only ──────────────────────────────────────────
+//
+// Admission refuses an ATU start in production (`tempo_net::flex::admission::BENCHED`) until a
+// tester's bench confirms its readback, and the client then answers no `u TUNER`, so no ATU button
+// is offered on it. These tests open the door the way only tests can ([`unbenched`]); each "as it
+// ships" half is today's. They run in the Phone section: in the Digital section the stand-down
+// that follows a tune-up the radio takes halts TX, which is its own matter.
+
+/// A scene on a radio that follows `session`, its client on `config`, in the Phone section,
+/// settled, the radio's tuner probed.
+fn atu_scene(
+    session: SimSession,
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    let mut s = FlexScene::with_faults(false, session, faults, config);
+    s.engine.lock().unwrap().set_operating_mode("phone", false);
+    run_until(&mut s, "settle", |s| {
+        client(s).session().snapshot().transmit_ready && s.state.tuner_probed
+    });
+    s.run(300);
+    s
+}
+
+/// The ATU's commands on the radio's wire, and both stops a cycle can take, in order.
+fn atu_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. }
+                if text.starts_with("atu ")
+                    || text == "xmit 0"
+                    || text.starts_with("transmit tune") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the screens are given beside the ATU.
+fn beside_atu(s: &FlexScene) -> Option<tempo_app::dto::FlexAtu> {
+    s.engine.lock().unwrap().snapshot().radio.flex_atu
+}
+
+/// Whether the radio reports the client's ATU cycle keyed.
+fn cycle_keyed(s: &FlexScene) -> bool {
+    client(s)
+        .session()
+        .snapshot()
+        .model
+        .interlock
+        .sample
+        .is_some_and(|i| i.state == "TRANSMITTING" && i.source == "TUNE")
+}
+
+/// Whether the radio has reported the cycle's result and the client believes nothing of ours on the
+/// air.
+fn cycle_ended(s: &FlexScene) -> bool {
+    client(s).session().snapshot().model.atu.status.as_deref() == Some("TUNE_SUCCESSFUL")
+        && !flex_on_air(s)
+}
+
+/// The bundled radio with its `atu start` rules in place of its own.
+fn atu_rules(rules: Vec<Rule>) -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    let group = session.lookup("atu start").expect("a rule");
+    session.rules[group].1 = rules;
+    session
+}
+
+/// The bundled radio's own ATU cycle, taking `ms` from TRANSMITTING to its result (500 ms in the
+/// bundled session): room for Stop TX mid-cycle on the loop's real clock.
+fn cycle_of(ms: u64) -> Rule {
+    let mut cycle = SimSession::v4_gui_client().rules[SimSession::v4_gui_client()
+        .lookup("atu start")
+        .expect("a rule")]
+    .1[0]
+        .clone();
+    for item in &mut cycle.items {
+        if *item == Item::Wait(500) {
+            *item = Item::Wait(ms);
+        }
+    }
+    cycle
+}
+
+/// A radio with no tuner fitted: its answer to `sub atu all` carries no `atu` status.
+fn no_tuner() -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    let group = session.lookup("sub atu all").expect("a rule");
+    for rule in session.rules[group].1.iter_mut() {
+        rule.items.clear();
+    }
+    session
+}
+
+/// ⭐ ON A FLEX PROFILE THE ATU BUTTON IS THE CLIENT'S TO OFFER. The scene's profile is Hamlib model
+/// 2036, SmartSDR CAT's, whose CAT path cannot start a tune ("press TUNER on the radio itself").
+/// Behind the door, with a tuner the radio reports fitted, the screens get an ATU button that
+/// starts one, bypassed until a cycle matches: the client answers for its own path. With no tuner
+/// fitted, no button. As it ships, no button either, as before.
+#[test]
+fn the_atu_button_on_a_flex_profile_is_the_clients_to_offer() {
+    let probed = |session, config| {
+        let s = atu_scene(session, Vec::new(), config);
+        let radio = s.engine.lock().unwrap().snapshot().radio;
+        (radio.atu, radio.atu_start_tune_unsupported)
+    };
+    assert_eq!(
+        probed(SimSession::v4_gui_client(), unbenched()),
+        (Some(false), false)
+    );
+    assert_eq!(probed(no_tuner(), unbenched()), (None, true));
+    assert_eq!(probed(SimSession::v4_gui_client(), shipped()), (None, true));
+}
+
+/// ⭐ AN ATU PRESS RUNS ONE CYCLE OF THE RADIO'S OWN TUNER, AND ITS RESULT SHOWS BESIDE IT. Behind the
+/// door: one `atu start` and nothing else on the wire; the client believes nothing of ours on the
+/// air once the radio has reported the result and the idle interlock; beside the ATU the screens
+/// are given the radio's tune power and transmit timeout (the bundled radio's 10 % and off, so the
+/// warning shows) and the cycle's result in the radio's word; nothing alarms. As it ships there is
+/// no ATU button, a press is refused with its reason, and nothing reaches the radio.
+#[test]
+fn an_atu_press_runs_one_cycle_and_its_result_shows_beside_it() {
+    let mut s = atu_scene(SimSession::v4_gui_client(), Vec::new(), unbenched());
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle's result", cycle_ended);
+    s.run(500);
+    assert_eq!(
+        format!(
+            "wire={:?} on_air={} beside_atu={:?} alarms={:?}",
+            atu_wire(&s),
+            flex_on_air(&s),
+            beside_atu(&s),
+            tx_alarms(&s)
+        ),
+        "wire=[\"atu start\"] on_air=false beside_atu=Some(FlexAtu { tune: FlexTune { \
+         power_pct: Some(10), tx_timeout_ms: Some(0) }, status: Some(\"TUNE_SUCCESSFUL\"), \
+         refused: None }) alarms=[]"
+    );
+
+    let mut s = atu_scene(SimSession::v4_gui_client(), Vec::new(), shipped());
+    assert_eq!(
+        s.engine.lock().unwrap().atu_tune(),
+        Err("This radio doesn't report an antenna tuner over CAT — nothing to run".to_string())
+    );
+    s.run(500);
+    assert_eq!(
+        format!("wire={:?} beside_atu={:?}", atu_wire(&s), beside_atu(&s)),
+        "wire=[] beside_atu=None"
+    );
+}
+
+/// ⭐ STOP TX DURING AN ATU CYCLE SENDS BOTH STOPS. No command that ends a cycle part way is
+/// documented, so Stop TX (the hard stop's `T 0`) sends the radio's unkey and its tune-off, `xmit 0`
+/// and `transmit tune 0`, and nothing alarms once the radio reports the cycle's result and the idle
+/// interlock. A radio whose cycle goes on (the simulator's AtuNeverEnds) gets both again once the
+/// stop's deadline passes (shortened here to 1.5 s, as the client's own tests shorten it), and the
+/// operator reads that it may still be transmitting, ahead of the client's restart.
+#[test]
+fn stop_tx_mid_cycle_sends_both_stops_and_a_cycle_that_goes_on_alarms() {
+    let mut s = atu_scene(atu_rules(vec![cycle_of(3_000)]), Vec::new(), unbenched());
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle keyed", cycle_keyed);
+    s.engine.lock().unwrap().halt_tx();
+    run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+    s.run(500);
+    assert_eq!(
+        format!("wire={:?} alarms={:?}", atu_wire(&s), tx_alarms(&s)),
+        "wire=[\"atu start\", \"xmit 0\", \"transmit tune 0\"] alarms=[]"
+    );
+
+    let mut config = unbenched();
+    config.unkey_deadline_ms = 1_500;
+    let mut s = atu_scene(
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::AtuNeverEnds],
+        config,
+    );
+    s.replace_on_rebuild = true;
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle keyed", cycle_keyed);
+    s.engine.lock().unwrap().halt_tx();
+    let detail = status_after_the_rebuild(&mut s);
+    assert!(
+        detail.starts_with(
+            "the radio did not confirm the unkey — it may still be transmitting. Check the radio \
+             now."
+        ),
+        "{detail}"
+    );
+    let first: Vec<String> = sent(&s.sim.log(), 0)
+        .into_iter()
+        .filter(|c| c.starts_with("atu ") || c == "xmit 0" || c.starts_with("transmit tune"))
+        .collect();
+    assert_eq!(
+        first,
+        [
+            "atu start",
+            "xmit 0",
+            "transmit tune 0",
+            "xmit 0",
+            "transmit tune 0"
+        ]
+    );
+}
+
+/// ⭐ AN ATU START THE RADIO REFUSES ENDS QUIETLY, WITH ITS REASON BESIDE THE ATU. The radio answers
+/// the first `atu start` with an error and keys nothing: no stop, no alarm, the client kept (no
+/// restart), nothing of ours believed on the air, and the ATU line says why, with the radio's code.
+/// The next press clears it and runs a cycle. (Which code a radio refuses with is not established:
+/// the simulator's error code stands in.)
+#[test]
+fn a_refused_atu_start_ends_quietly_with_its_reason_beside_the_atu() {
+    let refused = Rule {
+        code: tempo_flexsim::fault::REFUSED.to_string(),
+        message: String::new(),
+        items: Vec::new(),
+    };
+    let mut s = atu_scene(
+        atu_rules(vec![refused, cycle_of(500)]),
+        Vec::new(),
+        unbenched(),
+    );
+    // So that a restart is a value here, not the scene's panic.
+    s.replace_on_rebuild = true;
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    s.run(2_000);
+    assert_eq!(
+        format!(
+            "wire={:?} on_air={} refused={:?} alarms={:?} restarted={}",
+            atu_wire(&s),
+            flex_on_air(&s),
+            beside_atu(&s).and_then(|a| a.refused),
+            tx_alarms(&s),
+            s.rebuilt.load(std::sync::atomic::Ordering::Relaxed)
+        ),
+        "wire=[\"atu start\"] on_air=false refused=Some(\"ATU not started: the radio refused it \
+         (0x5000002C).\") alarms=[] restarted=false"
+    );
+
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle's result", cycle_ended);
+    s.run(300);
+    assert_eq!(
+        beside_atu(&s).map(|a| (a.status, a.refused)),
+        Some((Some("TUNE_SUCCESSFUL".to_string()), None))
+    );
+    assert_eq!(atu_wire(&s), ["atu start", "atu start"]);
+}
