@@ -17,6 +17,11 @@ import type { DiagnosticsReport, LoggedQso } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
 import fixture from '../remote-web/__fixtures__/insights.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "each push button sends the contact its diagnosis names", takes
+// 0.20 s and 0.28 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const engine = vi.hoisted(() => ({ log: [] as unknown[] }))
 vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),

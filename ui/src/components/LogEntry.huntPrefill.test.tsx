@@ -28,6 +28,11 @@ import { LogEntry } from './LogEntry'
 import { logQso, qrzLookup } from '../api'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "fills the second park when the operator moves on from a…", takes
+// 0.74 s and 0.74 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', async (importOriginal) => {
   // Every export stubbed from the real module (CwCockpit.density's pattern); the overrides are
   // the callbook, the park directory and the log write this file reads.

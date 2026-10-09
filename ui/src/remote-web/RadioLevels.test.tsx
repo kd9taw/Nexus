@@ -89,6 +89,12 @@ function fixture(mode: 'cw' | 'phone' = 'phone', capabilities: ControlCapability
 import { t } from '../i18n'
 import { CockpitHeader } from '../components/CockpitHeader'
 import { WHEEL_REST_MS } from '../components/WheelRange'
+
+// THE BUDGET (2026-10-09). The slowest case here, "actual phone power control waits for confirmed station…", takes
+// 0.38 s and 0.37 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const choices = [
   ['phone','power','rfPower','phone.header.power.label',50,35],
   ['phone','micGain','micGain','phone.mic.aria',50,35],

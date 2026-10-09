@@ -8,6 +8,11 @@ import { OperationClient } from './operation-client'
 import type { QueryPage } from './application-query-protocol'
 import { t } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "logs a new contact from the Logbook form through the…", takes
+// 0.73 s and 0.76 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 beforeAll(() => {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })

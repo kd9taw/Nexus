@@ -24,6 +24,11 @@ vi.mock('../toast', async (original) => ({ ...(await original<typeof import('../
 
 import { PotaSotaView } from './PotaSotaView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "posts nothing until the operator presses Spot me and…", takes
+// 0.36 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const snap = { hunt: null, radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
 beforeEach(() => { api.selfSpot.mockReset(); toast.pushToast.mockReset() })
 afterEach(() => { cleanup(); localStorage.clear() })

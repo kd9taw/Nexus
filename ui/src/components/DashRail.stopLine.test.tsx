@@ -39,7 +39,10 @@ import { DASH_RAIL_FOLDS, DASH_RAIL_SECTIONS, type DashRailSection } from '../fe
 
 // Each case mounts the real App (this file mounts it more than once per case); under the full suite's
 // load that outruns vitest's default 5 s per test, which is a budget, not a claim about the app.
-vi.setConfig({ testTimeout: 30_000 })
+// Raised from 30 s on 2026-10-09: the slowest case (operate) takes 1.99 s and 1.60 s on one core (two runs), all of
+// it CPU work (5.63 s at a third of a CPU), and a loaded full suite on this box has run cases up to 20 times slower
+// than one core, 32 s for this one. 45 s holds that; a test that hangs still fails, after 45 s.
+vi.setConfig({ testTimeout: 45_000 })
 
 const STOP_TX: [string, RegExp] = ['Stop TX', /^stop tx$/i]
 const TUNE: [string, RegExp] = ['Tune', /^tune$|^tuning…$/i]

@@ -17,9 +17,14 @@
 // `auto` or names an area the layout's template at that tier really has; and in the collapse the stacked rows floor
 // at their content, so the layout scrolls instead of letting one cell spill over the next. jsdom does not lay out:
 // that the cells now stack apart, nothing is covered and every control can be reached is a Chrome measurement.
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+
+// THE BUDGET (2026-10-09). The slowest case here, "[data-viewport='xs'] with Tempo's header: every cell…", takes
+// 0.45 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const src = (rel: string) => readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
 

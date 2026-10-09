@@ -148,6 +148,11 @@ import Globe3D from './Globe3D'
 import { getSatTrackStatus } from '../api'
 import * as ReactGlobe from 'react-globe.gl'
 
+// THE BUDGET (2026-10-09). The slowest case here, "a new but identical stations array (the 300 ms…", takes 0.20 s and
+// 0.53 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core,
+// past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 type FakeGlobe = {
   paused: boolean
   frames: number

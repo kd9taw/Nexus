@@ -58,6 +58,11 @@ import {
 import type { PanelLayoutApi, PanelState } from '../features/panelState'
 import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Phone: the ✕ on Scope removes scope and nothing else", takes
+// 0.53 s and 0.38 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
   wpm: 22,

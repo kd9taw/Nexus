@@ -8,6 +8,11 @@ import { harness, LEASE, ANSWER, answerChecked } from '../remote-web/stream-link
 import { parseFrame } from '../remote-monitor/protocol'
 import type { LanRoad } from './protocol'
 
+// THE BUDGET (2026-10-09). The slowest case here, "asks the station at its lane’s own operation version…", takes
+// 1.01 s and 0.76 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const ROAD: LanRoad = {
   stationId: '60000000-0000-4000-8000-000000000001',
   deviceId: '1d2b7c3a-4e5f-8a6b-9c7d-0e1f2a3b4c5d',

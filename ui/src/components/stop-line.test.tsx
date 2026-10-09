@@ -134,6 +134,12 @@ import {
 import { rttyState } from './stop-line.api.testkit'
 import type { RttyState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "the RF scope pane is on screen with nothing
+// hidden in…", takes 0.27 s and 0.22 s on one core (two runs); a loaded full suite on this box has run cases up to 20
+// times slower than one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails,
+// after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // One api mock for every cockpit the sweeps render — the union of what they call on mount, derived from
 // the real module (stop-line.api.testkit.ts says why).
 vi.mock('../api', async (importOriginal) =>

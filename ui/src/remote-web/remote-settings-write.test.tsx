@@ -22,6 +22,12 @@ vi.mock('../api', async (original) => {
 })
 import { setSettings, updateRadioProfile } from '../api'
 
+// THE BUDGET (2026-10-09). The slowest case here, "enables only the preferences the station lets this…", takes 0.85 s
+// and 0.82 s on one core (two runs), nearly all of it CPU work (2.83 s at a third of a CPU); a loaded full suite on
+// this box has run cases up to 20 times slower than one core, 16.4 s for this one. 20 s holds that; a test that hangs
+// still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 const clients: OperationClient[] = []
 const features = { enabled: () => true, all: () => [], profile: 'full', setEnabled: () => {}, setProfile: () => {} } as unknown as FeaturesApi
 beforeAll(() => {

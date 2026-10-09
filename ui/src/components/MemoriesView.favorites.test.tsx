@@ -18,7 +18,7 @@
 // The rank numbers are what makes the cap legible — 1..STRIP_FAVORITE_LIMIT are the chips
 // the cockpit header shows, the rest are starred but off the strip.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoriesView } from './MemoriesView'
 import {
@@ -28,6 +28,11 @@ import {
   STRIP_FAVORITE_LIMIT,
   type MemoriesBank,
 } from '../features/memories'
+
+// THE BUDGET (2026-10-09). The slowest case here, "keeps master order under a Grid sort — the strip does…", takes
+// 0.34 s and 0.36 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 /** Favorites F1…Fn — every other one on HF, so the band sectioning this view applies
  *  elsewhere would visibly fire here — with a non-favorite wedged between each pair, so

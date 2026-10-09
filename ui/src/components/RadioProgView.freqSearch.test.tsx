@@ -23,6 +23,11 @@ vi.mock('../api', async (importOriginal) => ({
 
 import { RadioProgView } from './RadioProgView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "finds every machine on a typed frequency, whatever the…", takes
+// 0.30 s and 0.33 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const NOW = Math.floor(Date.now() / 1000)
 
 /** One hearham machine on `mhz` (FM, on the air, unless `over` says otherwise). */

@@ -19,6 +19,12 @@ import { SHARED_PANES } from '../features/sharedPanes'
 import type { BoxSource } from './panes/CockpitBox'
 import { t } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "80 random box and pane acts, with window and tier flips…", takes
+// 0.93 s and 0.96 s on one core (two runs), nearly all of it CPU work (3.35 s at a third of a CPU); a loaded full
+// suite on this box has run cases up to 20 times slower than one core, 18.6 s for this one. 20 s holds that; a test
+// that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({})),
   setPtt: vi.fn(async () => {}),

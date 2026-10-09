@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
@@ -8,6 +8,11 @@ import { DE } from '../i18n/de'
 import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
 import { JA } from '../i18n/ja'
+
+// THE BUDGET (2026-10-09). The slowest case here, "renders local pairing and device approval through only…", takes
+// 0.25 s and 0.65 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 afterEach(() => { cleanup(); delete window.__TAURI_INTERNALS__ })
 it('renders local pairing and device approval through only the isolated Remote commands', async () => {

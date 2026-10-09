@@ -29,6 +29,11 @@ import { MapView } from './MapView'
 import { makeProjection, project, type MapView3 } from '../mapGeo'
 import { gridToLatLon, haversineKm, type LatLon } from '../grid'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Imperial beats a British locale: miles", takes 0.25 s and 0.24 s
+// on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core, past
+// vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 class RO {
   observe() {}
   unobserve() {}

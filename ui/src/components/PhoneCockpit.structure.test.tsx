@@ -31,6 +31,11 @@ import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS, PHONE_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
+// THE BUDGET (2026-10-09). The slowest case here, "hiding ANY panel in the vocabulary leaves every…", takes 0.36 s
+// and 0.36 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', () => ({
   // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
   // that carries it, and the transmit contract will not state a frequency without it.

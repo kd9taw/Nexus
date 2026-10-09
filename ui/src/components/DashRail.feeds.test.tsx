@@ -35,6 +35,11 @@ import { ConnectView } from './ConnectView'
 import { OwnedDashRail } from './DashRail.testkit'
 import { pastTheSwitch } from './ConnectView.testkit'
 
+// THE BUDGET (2026-10-09). The slowest case here, "ask for each feed once on arrival and once a cycle, and…", takes
+// 0.29 s and 0.31 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const FEEDS = ['getGettingOut', 'getBandOutlook', 'getSpaceWxScales', 'getKc2gMuf', 'getXrayNow', 'getDxpedWindows'] as const
 const calls = (name: (typeof FEEDS)[number]) => vi.mocked(api[name] as unknown as ReturnType<typeof vi.fn>).mock.calls.length
 

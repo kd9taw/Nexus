@@ -31,6 +31,11 @@ import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
+// THE BUDGET (2026-10-09). The slowest case here, "renders NOTHING until a call is selected — the shipped…", takes
+// 0.88 s and 0.75 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
 const MY_GRID = 'EN61'
 /** What the CALLBOOK says — finer than the decoded square, and it must win. */

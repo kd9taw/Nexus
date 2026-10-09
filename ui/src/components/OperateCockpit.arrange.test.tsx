@@ -34,6 +34,12 @@ import { gripOf, paneBoxOf, pickUp, release, stubLayout } from './panes/PaneDrag
 import { t } from '../i18n'
 import { startCq } from '../api'
 
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "Roster: the Tx messages and Stations stand
+// in the rail…", takes 0.30 s and 0.23 s on one core (two runs); a loaded full suite on this box has run cases up to
+// 20 times slower than one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails,
+// after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', async (importOriginal) => {
   // Derived from the real module (stop-line.api.testkit.ts says why); null answers, as the other FT
   // suites give, with the few a mount reads.

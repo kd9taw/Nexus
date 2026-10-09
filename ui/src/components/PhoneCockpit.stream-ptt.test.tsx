@@ -18,6 +18,11 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Space over the picture arms the over and never calls…", takes
+// 0.18 s and 1.59 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const { setPtt, setTxEnabled, armStreamMic, releaseStreamMic, pushToast } = vi.hoisted(() => ({
   setPtt: vi.fn(async (_on: boolean) => ({})),
   setTxEnabled: vi.fn(async () => ({})),

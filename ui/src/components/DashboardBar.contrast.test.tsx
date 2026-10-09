@@ -42,6 +42,12 @@ vi.mock('../api', () => ({
 import { getWindowBehind } from '../api'
 import { DashboardBar, StayBehindToggle } from './DashboardBar'
 
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "FIRES: a word lettered in the warning
+// colour is caught…", takes 0.65 s and 0.59 s on one core (two runs); a loaded full suite on this box has run cases
+// up to 20 times slower than one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still
+// fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))

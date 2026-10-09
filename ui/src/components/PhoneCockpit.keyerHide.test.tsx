@@ -48,8 +48,10 @@ import type { BoxSource } from './panes/CockpitBox'
 
 // THE BUDGET (2026-10-08). The Phone cockpit renders for real here, and the WIRE case's time scales with the CPU it
 // gets: 0.85–1.0 s alone on a quiet box, but past vitest's 5 s default twice in full-suite runs at a load of 20–30.
-// 15 s is the budget the other real-render files carry; a test that hangs still fails, after 15 s.
-vi.setConfig({ testTimeout: 15_000 })
+// Raised 2026-10-09: on one core it takes 1.64 s and 1.20 s (two runs), all of it CPU work (4.63 s at a third of a
+// CPU), and a loaded full suite on this box has run cases up to 20 times slower than one core, 24 s for this one.
+// 30 s holds that; a test that hangs still fails, after 30 s.
+vi.setConfig({ testTimeout: 30_000 })
 
 // vi.hoisted, not a bare const: the vi.mock factory below is hoisted above every
 // top-level binding, so a plain const would be in its temporal dead zone when it runs.

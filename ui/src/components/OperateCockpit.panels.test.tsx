@@ -8,6 +8,11 @@ import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/pan
 import { OPERATE_PANELS, panelStateIn, seamShares } from '../features/panelState'
 import { CLASSIC_FR, classicCommit, classicWidths } from '../features/operateColumns'
 
+// THE BUDGET (2026-10-09). The slowest case here, "is a checkbox at the top of ⊞ Panels, remembered per…", takes
+// 0.27 s and 0.20 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // The waterfall paints to a canvas jsdom does not implement, and it polls the spectrum
 // on a timer — stub it. The point of these cases is whether it MOUNTS at all.
 vi.mock('./Waterfall', () => ({

@@ -18,6 +18,11 @@ import { SHARED_PANES } from '../features/sharedPanes'
 import type { BoxSource } from './panes/CockpitBox'
 import { t } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "70 random box and pane acts with tier flips between them", takes
+// 0.74 s and 0.74 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
   rxSpeeds: 15,

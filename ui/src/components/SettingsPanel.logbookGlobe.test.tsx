@@ -11,6 +11,11 @@ import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { LOGBOOK_GLOBE_KEY } from '../features/logbookGlobe'
 
+// THE BUDGET (2026-10-09). The slowest case here, "sits in Appearance ▸ Map & globe, on by default, and…", takes
+// 0.23 s and 0.27 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {

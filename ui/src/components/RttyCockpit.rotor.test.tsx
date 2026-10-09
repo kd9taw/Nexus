@@ -22,6 +22,11 @@ import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, RttyState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "draws it in the header, and → CALL and LP point at the…", takes
+// 0.81 s and 1.42 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const IDLE: RttyState = {
   armed: false, afcHz: 0, afcLocked: false, text: '', charConf: [], baud: 45.45, shiftHz: 170,
   backend: 'afsk', sending: false, latched: false, keyerError: null, markHz: 2125, spaceHz: 2295,

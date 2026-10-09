@@ -52,6 +52,12 @@ import { ContestView } from './components/ContestView'
 import type { FieldDayStatus, RepeaterSearchResult, RepeaterSearchRow } from './types'
 import { classifyViewport } from './useViewport'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Logbook: the Log submit stays reachable with the manual…", takes
+// 1.12 s and 0.93 s on one core (two runs), nearly all of it CPU work (4.64 s at a third of a CPU); a loaded full
+// suite on this box has run cases up to 20 times slower than one core, 18.7 s for this one. 20 s holds that; a test
+// that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 /** Repeaters' search: unanswered unless a case sets what it returns (the wide-window cases fetch a map). */
 const repeaterSearch = vi.hoisted(() => vi.fn())
 

@@ -14,6 +14,11 @@ import sstv from './__fixtures__/sstv.json'
 import aprs from './__fixtures__/aprs.json'
 import roster from './__fixtures__/aprs-roster.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "transfers complete image chunks and rejects corruption…", takes
+// 0.43 s and 0.43 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 it('negotiates station modes only when every hop supports version 12', async()=>{
   const added=['get_sstv_state','get_remote_aprs_state','get_remote_sstv_image','get_remote_aprs']
   expect(applicationCommands(12)).toEqual([...applicationCommands(11),...added])

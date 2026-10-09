@@ -5,7 +5,7 @@
 // REAL panel record (usePanelLayout). Where the moved panes then render is PhoneCockpit.arrange's.
 // THE LEFT SIDE (2026-10-03): Phone's fourth place, first in the menu, with and without room for it.
 import { useRef } from 'react'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { ArrangePanes } from './ArrangePanes'
 import { boxLabels } from './CockpitBox'
@@ -13,6 +13,11 @@ import { BOX_IDS, OPERATE_ARRANGE, OPERATE_PANELS, PHONE_PANELS, boxEntries, pla
 import { placedColumns } from '../../features/panelPlace'
 import { SHARED_PANES } from '../../features/sharedPanes'
 import { t } from '../../i18n'
+
+// THE BUDGET (2026-10-09). The slowest case here, "with six on screen every one is disabled, and says why", takes
+// 0.10 s and 0.54 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const LABELS: Record<PhonePanelId, string> = {
   scope: 'Scope',

@@ -19,6 +19,11 @@ import { parseStreamInput } from './stream-protocol'
 import { streamLayout } from './stream-layout'
 import { chainOf, expandWith, parseRules, reachesChain, tokensAt, winnerAt } from '../cssCascade'
 
+// THE BUDGET (2026-10-09). The slowest case here, "nothing goes while the picture is not live: what was…", takes
+// 0.36 s and 0.35 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
 const BETA = 'Beta Remote streaming is a beta feature. Access could be revoked at any time.'
