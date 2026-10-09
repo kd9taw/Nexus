@@ -85,11 +85,17 @@ Nexus in different ways.
 
 1. Run a program that speaks Icom's network protocol and offers a Hamlib rigctld port. wfview is the usual one; check
    that your version supports your radio.
-2. Turn on its rigctld server and note the port it listens on.
+2. Turn on its rigctld server and note the port it listens on (wfview's is 4533 unless you change it).
 3. In Nexus, set **Connection** to **Network**, pick **Rig Model: NET rigctl (remote rigctld)** and set
    **Network Address** to the bridge's address and that port (for wfview on the same computer, `127.0.0.1:` and the
-   port).
+   port, such as `127.0.0.1:4533`). Leave **rigctld TCP Port** as it is: Nexus talks to a rigctld on the same
+   computer directly, with no rigctld of its own in between.
 4. The audio travels through the bridge too: pick the bridge's audio devices in Nexus's audio settings.
+
+Start the bridge, with its rigctld server on, before Nexus connects to the radio. If nothing answers at the Network
+Address when Nexus connects, Nexus starts a rigctld of its own in front of it, as it does for a bridge on another
+computer, and with wfview that one refuses PTT whenever wfview reports the radio switched off. If **Share this radio
+with other programs** is on, its port must be a different number from the bridge's.
 
 **With RS-BA1:** it runs no rigctld server, so NET rigctl finds nothing to talk to. RS-BA1 gives the computer a virtual
 COM port instead, and Nexus uses that port the way it uses a USB cable:

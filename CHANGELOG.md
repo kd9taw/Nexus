@@ -311,6 +311,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
   the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
   export sections now describe the objectives and the sponsor's submission.
+- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says.** With
+  Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or localhost) where a
+  rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as it already did when
+  rigctld TCP Port was set to the same port. With any other port it started a rigctld of its own
+  between them, and in front of wfview that one refused every command, PTT included, whenever
+  wfview reported the radio switched off. Follow the wfview steps in the Icom guide and leave
+  rigctld TCP Port as it is. Start wfview first: when nothing answers at the address as Nexus
+  connects, Nexus still starts its own rigctld in front of it, as it does for a rigctld on another
+  computer. When the rigctld Nexus shares this way goes away, Test CAT names its address rather
+  than rigctld TCP Port. NEEDS-BENCH: wfview's rigctld on a real radio, with rigctld TCP Port left
+  at 4534, should connect, follow the dial and key PTT, Rear/Data keying the DATA input.
 
 ### Fixed
 
@@ -537,9 +548,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
   ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
   Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
-  included; a frequency in that form from any other rigctld server is read too. Share wfview's
-  rigctld this way rather than letting Nexus start a rigctld of its own in front of it: that one
-  refuses every command, PTT included, whenever wfview reports the radio switched off. NEEDS-BENCH:
+  included; a frequency in that form from any other rigctld server is read too. Nexus now shares
+  wfview's rigctld this way whatever rigctld TCP Port says (see Changed). NEEDS-BENCH:
   wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
   (Rear/Data keying the DATA input).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In

@@ -1353,6 +1353,11 @@ impl Rig {
         self.control.is_some()
     }
 
+    /// The CAT control channel's `host:port`, `None` without one.
+    pub fn control_addr(&self) -> Option<&str> {
+        self.control.as_deref()
+    }
+
     /// Probe the rig by reading its current dial frequency (Hz) over CAT — the
     /// basis of a WSJT-X-style "Test CAT". Connects to rigctld and sends `f`,
     /// which replies with the frequency on its own line. Returns a descriptive

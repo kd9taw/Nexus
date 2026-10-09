@@ -564,6 +564,36 @@ fn host_is_this_machine(host: &str) -> bool {
         || h.starts_with("127.")
 }
 
+/// The Network Address to share DIRECTLY: a NET rigctl radio's, when that address is on this
+/// machine (wfview's rigctld, or one the operator runs). `None` everywhere else.
+///
+/// NET rigctl means "the rigctld at this address", and one on this computer needs nothing in
+/// between: Nexus talks to it itself, as the coexist branch has always done when rigctld TCP Port
+/// happened to be the same number. With any other number Nexus started a second rigctld (`-m 2`)
+/// in front of it, and that one is not a neutral relay. Hamlib's rigctld (4.7.1, the one Nexus
+/// ships) asks the rigctld behind it for the power state as each client connects, and while that
+/// says off it refuses every command, PTT included. wfview says off until its radio has answered
+/// it, and again whenever it decides the radio is off.
+///
+/// Not for:
+/// * an address on another machine, which is still reached through Nexus's own rigctld;
+/// * rigctld TCP Port's own number, which the coexist probe asks already;
+/// * our own CAT broker's port, where Nexus would be talking to itself;
+/// * any other model, or any connection but Network (OmniRig and the Icom network client never
+///   are).
+///
+/// Pure config: the caller probes the address and shares only a rigctld's answer.
+fn net_rigctld_on_this_machine(t: &Transport) -> Option<&str> {
+    // 2 is Hamlib's NET rigctl.
+    if t.rig_model != 2 || !t.is_network() {
+        return None;
+    }
+    let (host, port) = split_host_port(&t.rig_addr)?;
+    let here =
+        host_is_this_machine(host) && port != t.rigctld_port && t.broker_self_port != Some(port);
+    here.then(|| t.rig_addr.trim())
+}
+
 /// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
 /// dial the rig at it: it would be its own rig. Pure config, so it needs no socket of its own
 /// — but it is only ASKABLE once the probe has said the port is free.
@@ -14754,6 +14784,22 @@ fn open_cat(
     // listener. If the port is genuinely taken, the bind below fails and says so.
     // The Icom network client never coexists either: whatever is on the port is not its daemon.
     let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
+    // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
+    // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
+    // rigctld's answer is taken; anything else there, or nothing, goes on exactly as before. No
+    // `foreign_daemon_refusal`: NET rigctl is exempt from it, as whatever serves the address is
+    // what the operator chose.
+    if allow_coexist {
+        if let Some(direct) = net_rigctld_on_this_machine(t) {
+            if crate::rigctld_server::probe_rigctld(direct, Duration::from_millis(400)) {
+                let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
+                rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                let mut probe = finish_cat_open(&mut rig, t);
+                probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
+                return (rig, None, probe);
+            }
+        }
+    }
     let listening = if allow_coexist {
         crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
     } else {
@@ -14949,7 +14995,7 @@ fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
 
-/// The single shared tail of both `open_cat` branches (coexist + spawn): the open-time
+/// The single shared tail of every `open_cat` branch (direct share, coexist, spawn): the open-time
 /// dial/mode commands and the health probe. ONE copy on purpose — the read-only-launch
 /// flip deletes the two commands here, and a duplicated tail is how a future edit
 /// silently resurrects one of them (the tests exercise the coexist branch; this shared
@@ -14971,7 +15017,6 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
     // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
     // that is MOX and its tuner button that is a menu write (#385).
     rig.set_never_send(t.hamlib_never_send());
-    let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -14982,9 +15027,15 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
             // cached-mode caveat (rig.rs read_mode docs) is acceptable for display.
             mode: rig.read_mode(),
         },
+        // The address the rig dials: 127.0.0.1 at rigctld TCP Port, except for a rigctld shared
+        // at a NET rigctl Network Address, where naming rigctld TCP Port would send the operator
+        // to look for a daemon Nexus is not using.
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => CatProbe::status(
             Some(false),
-            format!("rigctld is not reachable on 127.0.0.1:{port}."),
+            format!(
+                "rigctld is not reachable on {}.",
+                rig.control_addr().unwrap_or_default()
+            ),
         ),
         // ⚠️ THE ADVICE MUST MATCH THE TRANSPORT (#144, vsboost, v1.7.5). `read_freq`'s
         // message ends "check the serial port, baud rate, and that CAT/CI-V is enabled on the
@@ -30973,6 +31024,104 @@ mod tests {
         // The serial branch is UNTOUCHED — a radio on a COM port really does have a switch.
         let serial = cat_transport(4532, None);
         assert!(cat_down_message(&serial, &e).contains("radio is on"));
+    }
+
+    /// Which NET rigctl stations are shared directly, by the address alone: a rigctld on this
+    /// computer, at any port but rigctld TCP Port's (the coexist probe's) and the CAT broker's.
+    #[test]
+    fn only_a_net_rigctl_address_on_this_computer_is_shared_directly() {
+        let net = |addr: &str| {
+            let mut t = cat_transport(4534, None);
+            t.rig_model = 2; // NET rigctl
+            t.rig_conn = "network".into();
+            t.rig_addr = addr.into();
+            t
+        };
+        let with = |addr: &str, change: &dyn Fn(&mut Transport)| {
+            let mut t = net(addr);
+            change(&mut t);
+            t
+        };
+        let rows = [
+            ("wfview here", net("127.0.0.1:4533"), Some("127.0.0.1:4533")),
+            ("localhost", net("localhost:4533"), Some("localhost:4533")),
+            ("IPv6 loopback", net("[::1]:4533"), Some("[::1]:4533")),
+            ("127.0.1.1", net("127.0.1.1:4533"), Some("127.0.1.1:4533")),
+            ("spaces", net(" 127.0.0.1:4533 "), Some("127.0.0.1:4533")),
+            ("another computer", net("192.168.1.50:4533"), None),
+            ("another computer by name", net("shack-pc:4533"), None),
+            ("rigctld TCP Port's number", net("127.0.0.1:4534"), None),
+            ("no port", net("127.0.0.1"), None),
+            (
+                "the CAT broker's port",
+                with("127.0.0.1:4532", &|t| t.broker_self_port = Some(4532)),
+                None,
+            ),
+            (
+                "the CAT broker elsewhere",
+                with("127.0.0.1:4533", &|t| t.broker_self_port = Some(4532)),
+                Some("127.0.0.1:4533"),
+            ),
+            (
+                "Thetis's profile",
+                with("127.0.0.1:4533", &|t| t.rig_model = 2054),
+                None,
+            ),
+            (
+                "Hamlib Dummy",
+                with("127.0.0.1:4533", &|t| t.rig_model = 1),
+                None,
+            ),
+            ("FLRig", with("127.0.0.1:4533", &|t| t.rig_model = 4), None),
+            (
+                "Connection Serial, an old address",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "serial".into()),
+                None,
+            ),
+            (
+                "OmniRig",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "omnirig".into()),
+                None,
+            ),
+            (
+                "the Icom network client",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "icomlan".into()),
+                None,
+            ),
+        ];
+        assert_eq!(
+            rows.iter()
+                .map(|(what, t, _)| (*what, net_rigctld_on_this_machine(t)))
+                .collect::<Vec<_>>(),
+            rows.iter()
+                .map(|(what, _, want)| (*what, *want))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Test CAT names the address Nexus dials when nothing answers there. A rigctld shared at a NET
+    /// rigctl Network Address (wfview's, closed since) is not on rigctld TCP Port, and naming that
+    /// port sent the operator to look for a rigctld Nexus never used. Every other rig Nexus builds
+    /// dials 127.0.0.1 at rigctld TCP Port, and its sentence is unchanged. Port 1 is one nothing
+    /// listens on.
+    #[test]
+    fn test_cat_names_the_address_nexus_dials_when_nothing_answers_there() {
+        let mut shared = cat_transport(4534, None);
+        shared.rig_model = 2; // NET rigctl
+        shared.rig_conn = "network".into();
+        shared.rig_addr = "127.0.0.1:1".into();
+        let ours = cat_transport(1, None);
+        let sentence = |t: &Transport| {
+            let mut rig = Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat);
+            probe_cat(&mut rig, t).detail
+        };
+        assert_eq!(
+            (sentence(&shared), sentence(&ours)),
+            (
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+            )
+        );
     }
 
     /// Shared recording backend for the read-only-launch tests: a stand-in rig that
