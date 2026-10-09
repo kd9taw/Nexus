@@ -137,6 +137,9 @@ interface Props {
   /** This pane's ⊞ label, for the ✕'s accessible name — the pane's title is a heading the
    *  operator reads, and "Hide Rx Frequency" is what a screen reader must say. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: its head is then the grip it is dragged by
+   *  (panes/PaneDrag). Absent: nothing here can be dragged. */
+  grip?: string
   /**
    * The operator's own Maidenhead square — the origin every row's azimuth is
    * measured FROM. Optional and defaulting to empty: a host that doesn't pass it
@@ -254,6 +257,7 @@ export function OperateDecodes({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
   highlights = NO_HIGHLIGHTS,
   needAlertsByCall = NO_NEEDS,
   needScopes,
@@ -580,7 +584,7 @@ export function OperateDecodes({
   return (
     <section className={`operate-decodes${compact ? ' compact' : ''}`}>
       {remoteCollections && <span className="dim" role="status">{!remoteHistory ? t('remote.historyUnavailable') : remoteHistory.dropped ? t('remote.historyGap', { count: remoteHistory.dropped }) : t('remote.historySession')}</span>}
-      <div className="od-head">
+      <div className="od-head" data-pane-grip={grip}>
         {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
             head layouts — the full head is a flex COLUMN (title over the filter row) and a
             bare button appended to it would take a row of its own. */}

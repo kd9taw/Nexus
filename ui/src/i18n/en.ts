@@ -10750,6 +10750,8 @@ export const EN = {
   // `{{place}}` is the column's name as Arrange lists it, `{{next}}` the pane it landed above.
   'panels.drag.dropped.above': '{{pane}} moved: {{place}}, above {{next}}',
   'panels.drag.dropped.foot': '{{pane}} moved: {{place}}, at the foot',
+  // The grip's hover text, on a pane with no title bar (FT's Tx messages) and on ⊞ Arrange's rows.
+  'panels.drag.grip.title': 'Drag to move {{pane}}',
   // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
   // `{{title}}` is that box's own name.
   'panels.box.add': '+ Add a box',

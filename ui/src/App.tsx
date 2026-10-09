@@ -2816,6 +2816,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // too; nothing else renders a StationList with a ⊞ entry, so nothing else passes it.
       onRemove={() => operatePanels.setPanelState('stations', 'removed')}
       paneTitle={t('operate.panel.stations')}
+      // Its head is the grip FT's ⊞ Arrange drags it by (panes/PaneDrag).
+      grip="stations"
       stations={rosterStations}
       myGrid={snap.mygrid}
       currentSlot={snap.radio.slot}

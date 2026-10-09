@@ -15,7 +15,7 @@
 // no control that stops a transmission has one. The header above and the TX dock below are the shell's.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts): its words are the caller's.
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { PaneSeam, elZoom } from '../PaneSeam'
 import { leftSideRange, leftSideValue } from '../../features/paneColumns'
 import type { PanelColId } from '../../features/panelState'
@@ -29,10 +29,12 @@ export interface LeftSideProps {
   label: string
   /** The divider's accessible name. */
   widthLabel: string
+  /** The side's column, the box its panes stand in (where a drag onto the side is drawn: panes/PaneDrag). */
+  colRef?: Ref<HTMLDivElement>
   children: ReactNode
 }
 
-export function LeftSide({ stored, setCols, label, widthLabel, children }: LeftSideProps) {
+export function LeftSide({ stored, setCols, label, widthLabel, colRef, children }: LeftSideProps) {
   const ref = useRef<HTMLElement>(null)
   // Where the divider stands, measured: the side's rendered width and the range the sheet honours for
   // it. null while nothing is laid out (a hidden keep-alive host, or jsdom).
@@ -66,7 +68,9 @@ export function LeftSide({ stored, setCols, label, widthLabel, children }: LeftS
       aria-label={label}
       style={stored != null ? ({ '--cockpit-left-w': leftSideValue(stored) } as CSSProperties) : undefined}
     >
-      <div className="cockpit-left-col">{children}</div>
+      <div className="cockpit-left-col" ref={colRef}>
+        {children}
+      </div>
       {/* The side's RIGHT edge: moving it right widens the side (grows +1). */}
       {setCols && <PaneSeam
         axis="x"

@@ -22,8 +22,9 @@
 // THE STOP LINE is not near any of this. The TX strip, the dock, PTT, Tune and Stop TX have no pane id, so
 // nothing in them is a grip, and they are no place: a release over them cancels. The drag starts and stops
 // nothing on the air, and it never swallows a key — Escape cancels it AND still does what Escape does on that
-// screen (on Phone and CW it also stops transmit). The marks it draws stand INSIDE the region they mark, under
-// the sticky TX strip and dock (`.pane-drop-layer`, styles.css), so nothing it draws can cover Stop TX or Tune.
+// screen (on FT, Phone, CW and JS8 it also stops transmit). The marks it draws stand INSIDE the region they
+// mark, under the sticky TX strip and dock (`.pane-drop-layer`, styles.css), so nothing it draws can cover
+// Stop TX or Tune.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
 import { useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type RefObject } from 'react'
@@ -45,6 +46,9 @@ export interface PaneDropTarget {
 export interface PaneDragOptions<P extends string> {
   /** Where a press can start a drag: the cockpit (or the list) the grips stand in. */
   root: RefObject<HTMLElement | null>
+  /** The box the places stand in (the pane region, or the list): a place with nothing on screen gets its zone
+   *  inside it, and a release counts only over it or over a drawn place, never over what covers them. */
+  region: RefObject<HTMLElement | null>
   /** Off: nothing here starts a drag (the window does not arrange). */
   enabled: boolean
   spec: ArrangeSpec<P>
@@ -206,20 +210,46 @@ export function dropAt<P extends string>(
   const before = others[k]?.id ?? null
   const named = before != null ? areaOf(before) : undefined
   const area = named != null && place.areas.includes(named) ? named : place.areas[place.areas.length - 1]
+  // In the gap right above the pane it lands above — between two panes that touch, its middle; where
+  // something no drag moves stands between them (CW's Rig controls), right above the lower one, which is
+  // where the pane lands — or right below the last pane, or at the top of an empty place.
+  const gap = k > 0 && k < others.length ? others[k].box.top - bottom(others[k - 1].box) : Infinity
   const at =
     others.length === 0
       ? place.box.top + 4
-      : k === 0
-        ? others[0].box.top - 3
-        : k === others.length
-          ? bottom(others[k - 1].box) + 3
-          : (bottom(others[k - 1].box) + others[k].box.top) / 2
+      : k === others.length
+        ? bottom(others[k - 1].box) + 3
+        : gap < NEAR_PX
+          ? (bottom(others[k - 1].box) + others[k].box.top) / 2
+          : others[k].box.top - 3
   const mid = Math.min(Math.max(at, place.box.top + 1), bottom(place.box) - 2)
   return {
     index,
     drop: { area, before },
     line: { left: place.box.left + 4, top: mid - 1.5, width: Math.max(0, place.box.width - 8), height: 3 },
   }
+}
+
+/**
+ * The places of a grid cockpit's region as it draws them (Phone, CW, JS8), in their order on screen: each
+ * column element with the places it draws that hold a pane on screen, and a zone for each that holds none —
+ * before the element for its first place, after it for the second — so column 1 or column 2 can still be
+ * dropped onto below three tracks, where the two share one element. An element of one place is that place
+ * whether or not it holds a pane (the log column holds the log form).
+ */
+export function gridTargets(drawn: ReadonlyArray<{ el: HTMLElement | null; areas: readonly DropArea[] }>, has: (area: DropArea) => boolean): PaneDropTarget[] {
+  const out: PaneDropTarget[] = []
+  for (const d of drawn) {
+    if (d.areas.length === 1) {
+      out.push({ el: d.el, areas: d.areas })
+      continue
+    }
+    const full = d.el ? d.areas.filter(has) : []
+    if (!full.includes(d.areas[0])) out.push({ el: null, areas: [d.areas[0]] })
+    if (full.length > 0) out.push({ el: d.el, areas: full })
+    for (const area of d.areas.slice(1)) if (!full.includes(area)) out.push({ el: null, areas: [area] })
+  }
+  return out
 }
 
 /** The element a grip belongs to inside `el`: the grip's ancestor that is a child of `el` (the pane's box). */
@@ -290,6 +320,9 @@ export function usePaneDrag<P extends string>(o: PaneDragOptions<P>): PaneDrag {
       const target = e.target instanceof Element ? e.target : null
       const grip = target?.closest('[data-pane-grip]')
       if (!grip || !host.contains(grip)) return
+      // A grip of a drag host nested in this one is that host's (⊞ Arrange's list inside a cockpit's header).
+      const owner = grip.parentElement?.closest('[data-pane-drag]')
+      if (owner && owner !== host && host.contains(owner)) return
       // A press on a control inside the title is that control's.
       for (let node: Element | null = target; node && node !== grip; node = node.parentElement) if (node.matches(INTERACTIVE)) return
       const o0 = opts.current
@@ -307,7 +340,7 @@ export function usePaneDrag<P extends string>(o: PaneDragOptions<P>): PaneDrag {
       let hold: number | null = null
       let frame: number | null = null
       let measured: MeasuredPlace<P>[] = []
-      let can = new Map<string, boolean>()
+      const can = new Map<string, boolean>()
       let hovered: { drop: PaneDrop<P> } | null = null
       let hotEl: HTMLElement | null = null
       busy = true
@@ -336,15 +369,23 @@ export function usePaneDrag<P extends string>(o: PaneDragOptions<P>): PaneDrag {
           panes: tg.el && tg.el.isConnected ? panesIn<P>(tg.el, ids) : [],
           el: tg.el,
         }))
-        measured = measurePlaces(drawn, boxOf(host.getBoundingClientRect()), o1.stacked ?? false)
+        const inside = o1.region.current ?? host
+        measured = measurePlaces(drawn, boxOf(inside.getBoundingClientRect()), o1.stacked ?? false)
         return drawn
+      }
+      // What is really under the pointer: a release counts only over the region or a drawn place — never over
+      // something standing above them (the sticky TX strip over a scrolled region, a menu).
+      const uncovered = (drawn: ReturnType<typeof measure>, x: number, y: number): boolean => {
+        const under = document.elementFromPoint?.(x, y)
+        if (!under) return true
+        return [opts.current.region.current, ...drawn.map((d) => d.el)].some((el) => el != null && el.contains(under))
       }
       // A place the pane can go: any drop into one of its places that a run of the arrows reaches.
       const reachable = (p: MeasuredPlace<P>) =>
         p.areas.some((area) => [null, ...p.panes.map((q) => q.id)].some((before) => before !== id && allowed({ area, before })))
       const paint = (x: number, y: number) => {
         const drawn = measure()
-        const hit = dropAt(measured, x, y, id, areaOf)
+        const hit = uncovered(drawn, x, y) ? dropAt(measured, x, y, id, areaOf) : null
         const ok = hit != null && allowed(hit.drop)
         hovered = ok ? { drop: hit!.drop } : null
         hotEl = hit != null ? drawn[hit.index]?.el ?? null : null
@@ -436,8 +477,10 @@ export function usePaneDrag<P extends string>(o: PaneDragOptions<P>): PaneDrag {
         const drop = hovered?.drop ?? null
         end()
         if (!was) return
-        // The click a release sends after a drag is not a press on whatever it lands on.
+        // The click a release sends after a drag is not a press on whatever it lands on (the grip, which holds
+        // the pointer, or what both the press and the release were over — inside this host either way).
         const swallow = (c: MouseEvent) => {
+          if (!(c.target instanceof Node) || !host.contains(c.target)) return
           c.stopPropagation()
           c.preventDefault()
         }
@@ -453,7 +496,8 @@ export function usePaneDrag<P extends string>(o: PaneDragOptions<P>): PaneDrag {
             : t('panels.drag.dropped.foot', { pane: o1.labels[id], place }),
         )
       }
-      // Escape cancels the drag, and is never swallowed: on Phone and CW the same press stops transmit.
+      // Escape cancels the drag, and is never swallowed: on every screen that arranges, the same press stops
+      // transmit (useEscStop).
       const onKey = (ev: KeyboardEvent) => {
         if (ev.key === 'Escape') cancel()
       }

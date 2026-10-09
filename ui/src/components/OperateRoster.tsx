@@ -50,6 +50,9 @@ interface Props {
   hideNote?: string
   /** This pane's ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: its head is then the grip it is dragged by
+   *  (panes/PaneDrag). Absent: nothing here can be dragged. */
+  grip?: string
   stations: Station[]
   myGrid: string
   currentSlot: number
@@ -162,6 +165,7 @@ export function OperateRoster({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
   stations,
   myGrid,
   currentSlot,
@@ -457,7 +461,7 @@ export function OperateRoster({
 
   return (
     <div className="operate-roster">
-      <div className="or-filters">
+      <div className="or-filters" data-pane-grip={grip}>
         <strong>{t('operate.roster.title')}</strong>
         <span className="or-count">{rows.length}</span>
         {/* THE PANE'S OWN ✕. It rides the filter row because that row IS this pane's head —

@@ -3563,6 +3563,7 @@ export const FR: PartialCatalog = {
   "panels.arrange.fromSide.aria": "Ramener {{pane}} du côté gauche dans sa colonne",
   "panels.drag.dropped.above": "{{pane}} déplacé : {{place}}, au-dessus de {{next}}",
   "panels.drag.dropped.foot": "{{pane}} déplacé : {{place}}, tout en bas",
+  "panels.drag.grip.title": "Faire glisser pour déplacer {{pane}}",
   "panels.box.add": "+ Ajouter un panneau",
   "panels.box.add.a.aria": "Ajouter un panneau à la colonne 1",
   "panels.box.add.b.aria": "Ajouter un panneau à la colonne 2",

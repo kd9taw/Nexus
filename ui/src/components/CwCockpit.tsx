@@ -39,6 +39,7 @@ import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, gridTargets, usePaneDrag, type DropArea } from './panes/PaneDrag'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import {
   panelHost,
@@ -47,7 +48,7 @@ import {
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
 import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
-import { isStockPlacement, regionGroups } from '../features/panelPlace'
+import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
@@ -1179,6 +1180,38 @@ export function CwCockpit({
   // The divider between the two feeds measures and repaints their frames (PaneSeam).
   const spotsFrameRef = useRef<HTMLElement>(null)
   const neededFrameRef = useRef<HTMLElement>(null)
+  // ⊞ ARRANGE BY DRAG (2026-10-08): Phone's (PhoneCockpit, the same words): a pane is picked up by its title
+  // and dropped onto a column or between two panes, the drop the arrows' moves with their own arguments. The
+  // Rig controls frame holds no grip, so it stays where it stands; Stop TX, Tune and the dock are no place.
+  const cockpitRef = useRef<HTMLElement>(null)
+  const dropPane = panels?.dropPane != null ? (id: CwPanelId, drop: PaneDrop<CwPanelId>) => panels.dropPane?.(id, drop, paneShown) : undefined
+  const holds = (area: DropArea) => placed3.some((g) => g.col === area && g.ids.length > 0)
+  const paneDrag = usePaneDrag<CwPanelId>({
+    root: cockpitRef,
+    region: panesRef,
+    enabled: dropPane != null,
+    spec: CW_PANELS.arrange!,
+    arrangement: { place },
+    shown: paneShown,
+    sideShows: false,
+    stacked: flow === 'stack',
+    targets: () =>
+      gridTargets(
+        [
+          ...(cols === 3
+            ? [
+                { el: mainColRef.current, areas: ['a'] as const },
+                { el: auxColRef.current, areas: ['b'] as const },
+              ]
+            : [{ el: mainColRef.current, areas: ['a', 'b'] as const }]),
+          { el: logColRef.current, areas: ['log'] as const },
+        ],
+        holds,
+      ),
+    labels,
+    names: { a: t('panels.arrange.column.a'), b: t('panels.arrange.column.b'), log: t('panels.arrange.column.log') },
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
 
   // DECODE's own head row is DELETED, and its controls render in the frame head's action
   // cluster — which was rendering EMPTY on every CW pane (2026-08-04 density pass). The row's
@@ -1714,7 +1747,7 @@ export function CwCockpit({
     />
   )
   return (
-    <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`}>
+    <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1744,6 +1777,7 @@ export function CwCockpit({
                     shown={paneShown}
                     labels={labels}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                    onDrop={dropPane}
                     // "+ Add a box" only where the window lends them (never the hosted Remote page).
                     onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                     boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -2168,6 +2202,8 @@ export function CwCockpit({
             widthLabel={t('pane.seam.logWidth.label')}
           />
         )}
+        {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+        <PaneDropLayer drag={paneDrag} host={panesRef} />
       </div>
 
       {/* THE HOSTED QUICK PRESENTATION puts the contact first (`.cockpit-col--contact`), so there

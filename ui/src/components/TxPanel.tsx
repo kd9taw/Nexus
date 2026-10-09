@@ -50,6 +50,9 @@ interface Props {
   hideNote?: string
   /** This pane's ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: the Tx1–Tx6 machine has no title bar, so a ⠿ grip
+   *  at the head of its DX row is what it is dragged by (panes/PaneDrag). Absent: no grip. */
+  grip?: string
   /** The panel's own box, for the Classic divider above it that sizes it (layout L5). */
   stripRef?: Ref<HTMLElement>
 }
@@ -80,6 +83,7 @@ export function TxPanel({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
   stripRef,
 }: Props) {
   const messagesControl = useStationCapability('ftMessages')
@@ -103,6 +107,11 @@ export function TxPanel({
       aria-label={t('operate.tx.aria')}
     >
       <div className="txp-dx">
+        {grip && (
+          <span className="txp-grip" data-pane-grip={grip} aria-hidden="true" title={t('panels.drag.grip.title', { pane: paneTitle ?? t('operate.tx.aria') })}>
+            ⠿
+          </span>
+        )}
         <label className="txp-field">
           <span>{t('operate.tx.dxCall.label')}</span>
           <input

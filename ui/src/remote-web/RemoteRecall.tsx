@@ -10,11 +10,11 @@ import { RECALL_COMMAND } from './application-query-protocol'
 import { parseRecall } from './recall'
 import type { Recall } from './recall'
 
-/** `onRemove`/`hideNote`/`paneTitle`: the card's own ✕, handed down to RecallPanel. Only the
- *  Operate cockpit passes them — there the card is a ⊞ entry of its own (`recall`). */
-export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; kept?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string }; onRemove?: () => void; hideNote?: string; paneTitle?: string }
+/** `onRemove`/`hideNote`/`paneTitle`: the card's own ✕, handed down to RecallPanel, and `grip` the id its
+ *  head is dragged by. Only the Operate cockpit passes them — there the card is a ⊞ entry of its own (`recall`). */
+export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; kept?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string }; onRemove?: () => void; hideNote?: string; paneTitle?: string; grip?: string }
 export type RemoteRecallEntryProps = Omit<RecallProps, 'call' | 'bounded' | 'kept'> & { selectedCall?: string; pendingWork?: { call: string; ts: number } | null; onConsumeWork?: () => void }
-export function RemoteRecall({ snap, call, mode, bounded, kept, onOpenLog, context, onRemove, hideNote, paneTitle }: RecallProps) {
+export function RemoteRecall({ snap, call, mode, bounded, kept, onOpenLog, context, onRemove, hideNote, paneTitle, grip }: RecallProps) {
   const source = useContext(RemoteCollectionsContext)
   const available = useStationData()
   const cu = call.trim().toUpperCase()
@@ -53,7 +53,7 @@ export function RemoteRecall({ snap, call, mode, bounded, kept, onOpenLog, conte
     newEntity={Boolean(value.entity?.trim()) && !value.slots.workedEver}
     newBandSlot={newBandSlot} newModeSlot={value.slots.workedEver && !newBandSlot && !value.slots.modesWorked.includes(modeKey(logMode))}
     latestNote={value.latestNote} hasLookup={false} bounded={bounded} kept={kept} onOpenLog={onOpenLog}
-    onRemove={onRemove} hideNote={hideNote} paneTitle={paneTitle}
+    onRemove={onRemove} hideNote={hideNote} paneTitle={paneTitle} grip={grip}
     historyNotice={<div className="dim" role="status"><p>{t('remote.recallSnapshot')}</p>
       {value.rows.length < value.history.count && <p>{t('remote.collectionCapped', { count: value.rows.length, total: value.history.count })}</p>}{retry}</div>} />
 }

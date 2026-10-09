@@ -113,6 +113,7 @@ function Host({ enabled = true }: { enabled?: boolean }) {
   const b = useRef<HTMLDivElement>(null)
   const drag = usePaneDrag<Id>({
     root,
+    region,
     enabled,
     spec: SPEC,
     arrangement: {},

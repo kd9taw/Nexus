@@ -17010,13 +17010,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* DRAGGING A PANE BY ITS TITLE (components/panes/PaneDrag, 2026-10-08). A title marked `data-pane-grip` is a
    grip wherever its cockpit arranges by drag (`data-pane-drag` on the cockpit, and on ⊞ Arrange's list).
-   Both rules are :where()-wrapped, so a control's own cursor outranks them; a control in a title that has
-   none of its own shows the plain cursor, because a press on it never starts a drag. */
-:where([data-pane-drag]) :where([data-pane-grip]) {
+   Every selector here is :where()-wrapped, so a control's own cursor outranks them; a control in a title that
+   has none of its own shows the plain cursor, because a press on it never starts a drag. One selector per
+   control and no list inside the parentheses: the cascade-computing guards split a rule's selectors on its
+   commas. */
+:where([data-pane-drag] [data-pane-grip]) {
   cursor: grab;
   -webkit-touch-callout: none;
 }
-:where([data-pane-drag]) :where([data-pane-grip]) :where(button, a[href], input, select, textarea, label, [role='button']) {
+:where([data-pane-drag] [data-pane-grip]) :where(button),
+:where([data-pane-drag] [data-pane-grip]) :where(a[href]),
+:where([data-pane-drag] [data-pane-grip]) :where(input),
+:where([data-pane-drag] [data-pane-grip]) :where(select),
+:where([data-pane-drag] [data-pane-grip]) :where(textarea),
+:where([data-pane-drag] [data-pane-grip]) :where(label),
+:where([data-pane-drag] [data-pane-grip]) :where([role='button']) {
   cursor: auto;
 }
 /* While a pane is up the hand closes, and no text selects under it (body.resizing's twin). */
@@ -18112,6 +18120,15 @@ button.cq-skiptx1.on {
 .tx-panel-compact .txp-field {
   flex: 1 1 128px;
   min-width: 0;
+}
+/* The Tx messages' grip (components/panes/PaneDrag): this pane has no title bar, so a ⠿ at the start of its
+   DX row is what it is dragged by, where its cockpit arranges by drag. */
+.txp-grip {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  line-height: 1;
 }
 .tx-panel-compact .txp-dx-actions {
   flex: 1 1 100%;

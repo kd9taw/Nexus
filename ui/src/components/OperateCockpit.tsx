@@ -14,7 +14,7 @@ import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // Nothing that stops or keys a transmission is in this file: Operate's stop line is Stop TX
 // and Tune in `OperateQsoStrip.tsx` (both deferred, see that file's header) plus the Esc
 // binding below, which is a keyboard handler with no string of its own.
-import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { engagedInQso } from '../alerts'
@@ -75,6 +75,7 @@ import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, usePaneDrag, type PaneDropTarget } from './panes/PaneDrag'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { paneRoleStyle } from './panes/CockpitPaneFrame'
 import {
@@ -91,7 +92,7 @@ import {
   type PanelLayoutApi,
   type PanelState,
 } from '../features/panelState'
-import { columnsOf, placedColumns, stockColumn, type PaneColumn } from '../features/panelPlace'
+import { columnsOf, placedColumns, stockColumn, type PaneColumn, type PaneDrop } from '../features/panelPlace'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_FLOOR,
@@ -1184,8 +1185,8 @@ export function OperateCockpit({
     : null
   // In the arranged columns the card keeps its size and the column scrolls (`.cockpit-recall-kept`).
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
-    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
   ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
@@ -1227,6 +1228,7 @@ export function OperateCockpit({
           <OperateDecodes
             {...closeProps('bandActivity')}
             paneTitle={labels.bandActivity}
+            grip="bandActivity"
             history={bandHistRef.current}
             sort={bandSort}
             onSort={setBandSort}
@@ -1252,6 +1254,7 @@ export function OperateCockpit({
           <OperateDecodes
             {...closeProps('rxfreq')}
             paneTitle={labels.rxfreq}
+            grip="rxfreq"
             history={rxHistRef.current}
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
@@ -1278,6 +1281,7 @@ export function OperateCockpit({
           <OperateRoster
             {...closeProps('callRoster')}
             paneTitle={labels.callRoster}
+            grip="callRoster"
             stations={snap.stations}
             myGrid={snap.mygrid}
             currentSlot={snap.radio.slot}
@@ -1304,6 +1308,7 @@ export function OperateCockpit({
             <TxPanel
               {...closeProps('txmsgs')}
               paneTitle={labels.txmsgs}
+              grip="txmsgs"
               compact
               dxCall={dxCall}
               dxGrid={dxGrid}
@@ -1403,6 +1408,32 @@ export function OperateCockpit({
           b: { name: t('panels.arrange.column.b'), addAria: t('panels.box.add.b.aria') },
           log: { name: t('operate.arrange.rail'), addAria: t('operate.arrange.rail.add.aria') },
         }
+  // ⊞ ARRANGE BY DRAG (2026-10-08, the operator's "drag with the mouse"): a pane is picked up by its title and
+  // dropped onto a column or between two panes, in the region itself and in ⊞ Arrange's list; the drop is the
+  // arrows' moves with the arrows' own arguments, so it stores the record they would (panes/PaneDrag). The
+  // places are this layout's columns in their order on screen, each the element the dividers measure in
+  // either branch; a column with nothing on screen gets a zone where it would stand. The QSO strip with Stop
+  // TX is no place and holds no grip, so a release over it cancels.
+  const columnEls: Record<PaneColumn, RefObject<HTMLElement | null>> =
+    layoutMode === 'roster' ? { a: rosterMainRef, b: qsocolRef, log: rosterSideRef } : { a: decodesRef, b: qsocolRef, log: classicSideRef }
+  const dropPane = panels.dropPane
+    ? (id: OperatePanelId, drop: PaneDrop<OperatePanelId>) => panels.dropPane?.(id, drop, arrangeListed, false, { layout: layoutMode, order: colOrder })
+    : undefined
+  const cockpitRef = useRef<HTMLElement>(null)
+  const paneDrag = usePaneDrag<OperatePanelId>({
+    root: cockpitRef,
+    region: lowerRef,
+    enabled: dropPane != null,
+    spec: arrangeSpec,
+    arrangement: { place },
+    shown: arrangeListed,
+    sideShows: false,
+    order: colOrder,
+    targets: () => colOrder.map((col): PaneDropTarget => ({ el: columnEls[col].current, areas: [col] })),
+    labels,
+    names: Object.fromEntries(colOrder.map((col) => [col, columnNames[col].name])),
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
   const arrangeMenu = panels.movePane ? (
     <ArrangePanes
       spec={arrangeSpec}
@@ -1410,6 +1441,7 @@ export function OperateCockpit({
       shown={arrangeListed}
       labels={labels}
       onMove={(id, move) => panels.movePane?.(id, move, arrangeListed, false, { layout: layoutMode, order: colOrder })}
+      onDrop={dropPane}
       // "+ Add a box" only where the window lends them (never the hosted Remote page or the pop-out).
       onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, layoutMode, boxes.rail?.shows) : undefined}
       boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -1419,7 +1451,7 @@ export function OperateCockpit({
   ) : null
 
   return (
-    <main className="layout single operate-cockpit">
+    <main className="layout single operate-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1939,6 +1971,7 @@ export function OperateCockpit({
                   <OperateRoster
                     {...closeProps('callRoster')}
                     paneTitle={labels.callRoster}
+                    grip="callRoster"
                     stations={snap.stations}
                     myGrid={snap.mygrid}
                     currentSlot={snap.radio.slot}
@@ -1979,6 +2012,7 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('bandActivity')}
                         paneTitle={labels.bandActivity}
+                        grip="bandActivity"
                         history={bandHistRef.current}
                         sort={bandSort}
                         onSort={setBandSort}
@@ -2015,6 +2049,7 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('rxfreq')}
                         paneTitle={labels.rxfreq}
+                        grip="rxfreq"
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
@@ -2060,6 +2095,7 @@ export function OperateCockpit({
                   <OperateDecodes
                     {...closeProps('bandActivity')}
                     paneTitle={labels.bandActivity}
+                    grip="bandActivity"
                     history={bandHistRef.current}
                     sort={bandSort}
                     onSort={setBandSort}
@@ -2090,6 +2126,7 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('rxfreq')}
                         paneTitle={labels.rxfreq}
+                        grip="rxfreq"
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
@@ -2140,6 +2177,7 @@ export function OperateCockpit({
                       stripRef={txRef}
                       {...closeProps('txmsgs')}
                       paneTitle={labels.txmsgs}
+                      grip="txmsgs"
                       compact
                       dxCall={dxCall}
                       dxGrid={dxGrid}
@@ -2168,6 +2206,8 @@ export function OperateCockpit({
             </>
           )}
           {columnSeams}
+          {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+          <PaneDropLayer drag={paneDrag} host={lowerRef} />
         </div>
       </div>
       <SpotDialog
@@ -2223,6 +2263,7 @@ function OperateRecall({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
 }: {
   snap: AppSnapshot
   call: string
@@ -2235,6 +2276,8 @@ function OperateRecall({
   onRemove?: () => void
   hideNote?: string
   paneTitle?: string
+  /** The id the card's head is dragged by (RecallPanel `grip`). */
+  grip?: string
   onOpenLog?: (call: string) => void
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
@@ -2368,6 +2411,7 @@ function OperateRecall({
       onRemove={onRemove}
       hideNote={hideNote}
       paneTitle={paneTitle}
+      grip={grip}
     />
   )
 }
