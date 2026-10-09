@@ -1095,6 +1095,9 @@ export const JA: PartialCatalog = {
   "logbook.empty": "記録された交信はまだありません。",
   "logbook.emptySearch": "「{{query}}」に一致する交信はありません。",
   "logbook.reading": "ログブックを読み込み中…",
+  "logbook.readFailed": "ログブックを読み込めませんでした: {{reason}}。",
+  "logbook.readFailed.retry": "再試行",
+  "logbook.count.stale": "最新ではありません: ログブックの最後の変更より前に数えた件数です。",
   "logbook.rows.loading": "読み込み中…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑と↓で交信を移動し、PgUpとPgDnで1ページずつ、HomeとEndで最初と最後に移動します。",

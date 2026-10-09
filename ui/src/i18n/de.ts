@@ -2430,6 +2430,9 @@ export const DE: PartialCatalog = {
   "logbook.empty": "Noch keine QSOs geloggt.",
   "logbook.emptySearch": "Keine QSOs passen zu „{{query}}“.",
   "logbook.reading": "Das Logbuch wird gelesen…",
+  "logbook.readFailed": "Logbuch konnte nicht gelesen werden: {{reason}}.",
+  "logbook.readFailed.retry": "Wiederholen",
+  "logbook.count.stale": "Veraltet: gezählt vor der letzten Änderung am Logbuch.",
   "logbook.rows.loading": "Wird geladen…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ und ↓ wechseln zwischen den Kontakten, PgUp und PgDn blättern seitenweise, Home und End springen zum ersten und zum letzten.",

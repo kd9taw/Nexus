@@ -11,10 +11,16 @@
 // refusals lasted. It now says it is reading the logbook until it has an answer. Held by value
 // against a fake engine, through the real source and the real view; an answered 0 and an answered
 // 24 are the controls.
+//
+// A read that FAILS says so, with the reason and a Retry button, and Retry or reopening the view
+// asks again: the source used to count a failure as an answer, so the line said "Reading the
+// logbook…" until the next change and a reopened view never asked. A refusal while a change is
+// being saved stays quiet: "Reading the logbook…", even once its asks run out. A count held from
+// before the latest change is shown as out of date, and a held 0 never as an empty log.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { LoggedQso } from '../types'
-import type { LogQuestion } from '../features/logAnswers'
+import type { AnswerTo, LogQuestion } from '../features/logAnswers'
 import { answerAs } from '../features/logAnswers.testkit'
 import { ASK_AGAIN_AFTER_MS, ASK_AGAIN_TIMES, NOT_ANSWERED } from '../features/notAnswered'
 import { StationControlContext } from '../stationAccess'
@@ -42,12 +48,35 @@ const LOG_OF_24 = Array.from({ length: 24 }, (_, k) => contact(k + 1))
 /** The 24 as the list shows them: newest first. */
 const NEWEST_FIRST = LOG_OF_24.map((q) => q.call).reverse()
 
-/** The fake engine: its log, whether it refuses every question (a change still being saved), and
- *  the kinds of question it keeps waiting. */
-const engine = { log: [] as LoggedQso[], refusing: false, waiting: new Set<LogQuestion['kind']>() }
+/** The fake engine: its log, whether it refuses every question (a change still being saved), the
+ *  words it fails every question with (a database read error), and the kinds of question it keeps
+ *  waiting: each held one is answered, from the log as it is then, by `answerHeld`. */
+const engine = {
+  log: [] as LoggedQso[],
+  refusing: false,
+  failing: null as string | null,
+  waiting: new Set<LogQuestion['kind']>(),
+  held: [] as (() => void)[],
+}
+/** The engine's refusal while a change is still being saved, as the desktop's IPC rejects it. */
+const REFUSAL = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+const FAILED = (reason: string) => `Couldn’t read the logbook: ${reason}.`
+const OUT_OF_DATE = 'Out of date: counted before the latest change to the logbook.'
 
-/** What the list area says, top to bottom: its quiet lines. */
-const said = () => [...document.querySelectorAll('.log-scroll > p.empty')].map((p) => p.textContent)
+/** What the list area says, top to bottom: its quiet lines, without the words of their buttons. */
+const said = () =>
+  [...document.querySelectorAll('.log-scroll > p.empty')].map((p) =>
+    [...p.childNodes].filter((n) => n.nodeName !== 'BUTTON').map((n) => n.textContent).join('').trim(),
+  )
+/** The Retry button in the list area, or null. */
+const retry = () =>
+  [...document.querySelectorAll<HTMLButtonElement>('.log-scroll > p.empty button')].find((b) => b.textContent === 'Retry') ?? null
+/** The count badge's tooltip, or null. */
+const badgeTitle = () => document.querySelector('.log-title .count-badge')?.getAttribute('title') ?? null
+const answerHeld = () =>
+  act(async () => {
+    for (const answer of engine.held.splice(0)) answer()
+  })
 /** The calls the list shows, top to bottom. */
 const rows = () =>
   [...document.querySelectorAll('.log-rows .logbook-row')].map((r) => r.querySelector('.qrz-link-call')?.textContent ?? '…')
@@ -57,18 +86,23 @@ const badge = () => document.querySelector('.log-title .count-badge')?.textConte
 const sizeAsks = () => vi.mocked(askLog).mock.calls.filter(([q]) => q.kind === 'logSize').length
 const settle = () => act(async () => {})
 const aSecond = () => act(() => vi.advanceTimersByTimeAsync(ASK_AGAIN_AFTER_MS))
+const view = (logTick: number) => <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={logTick} />
 const open = async () => {
-  render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={1} />)
+  const shown = render(view(1))
   await settle()
+  return shown
 }
 
 beforeEach(() => {
   engine.log = LOG_OF_24
   engine.refusing = false
+  engine.failing = null
   engine.waiting = new Set()
-  vi.mocked(askLog).mockImplementation(async (q: LogQuestion) => {
-    if (engine.waiting.has(q.kind)) return new Promise<never>(() => {})
-    if (engine.refusing) throw `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+  engine.held = []
+  vi.mocked(askLog).mockImplementation(async <Q extends LogQuestion>(q: Q) => {
+    if (engine.waiting.has(q.kind)) return new Promise<AnswerTo<Q>>((resolve) => engine.held.push(() => resolve(answerAs(q, engine.log))))
+    if (engine.refusing) throw REFUSAL
+    if (engine.failing !== null) throw engine.failing
     return answerAs(q, engine.log)
   })
   // A 2000 px viewport and 43 px rows (the list measures rows by `offsetHeight`), so every row fits.
@@ -159,6 +193,130 @@ describe('the controls: an answer is shown as it is', () => {
     expect(rows()).toEqual(NEWEST_FIRST)
     expect(said()).toEqual([])
     expect(badge()).toBe('24')
+    expect(badgeTitle(), 'a current count says nothing more').toBeNull()
+  })
+})
+
+describe('a read of the logbook that fails', () => {
+  const BROKEN = 'database disk image is malformed'
+
+  it(`says "Couldn’t read the logbook" with the reason and a Retry button, never "${READING}"`, async () => {
+    engine.failing = BROKEN
+    await open()
+    expect(said()).toEqual([FAILED(BROKEN)])
+    expect(retry(), 'no Retry button').not.toBeNull()
+    expect(document.body.textContent).not.toContain(EMPTY)
+    expect(badge(), 'no count before there is one').toBeNull()
+    expect(rows()).toEqual([])
+  })
+
+  it('Retry asks again, and the log takes the line’s place', async () => {
+    engine.failing = BROKEN
+    await open()
+    expect(retry(), 'no Retry button').not.toBeNull()
+    engine.failing = null
+    fireEvent.click(retry()!)
+    await settle()
+    expect(rows()).toEqual(NEWEST_FIRST)
+    expect(said()).toEqual([])
+    expect(badge()).toBe('24')
+  })
+
+  it('reopening the view asks again', async () => {
+    engine.failing = BROKEN
+    await open()
+    expect(said(), 'premise: failed').toEqual([FAILED(BROKEN)])
+    cleanup()
+    engine.failing = null
+    await open()
+    expect(rows()).toEqual(NEWEST_FIRST)
+    expect(said()).toEqual([])
+    expect(badge()).toBe('24')
+  })
+
+  it('a list on screen keeps its rows when a fresh read fails, says so, and Retry brings the fresh list', async () => {
+    const { rerender } = await open()
+    expect(rows(), 'premise: the 24').toEqual(NEWEST_FIRST)
+    engine.log = [...LOG_OF_24, contact(25)]
+    engine.failing = 'disk I/O error'
+    rerender(view(2))
+    await settle()
+    expect(rows(), 'the rows it had').toEqual(NEWEST_FIRST)
+    expect(said()).toEqual([FAILED('disk I/O error')])
+    expect([badge(), badgeTitle()], 'the count it had, out of date').toEqual(['24', OUT_OF_DATE])
+    engine.failing = null
+    fireEvent.click(retry()!)
+    await settle()
+    expect(rows()).toEqual(['K25ABC', ...NEWEST_FIRST])
+    expect(said()).toEqual([])
+    expect([badge(), badgeTitle()]).toEqual(['25', null])
+  })
+})
+
+// A REFUSAL STAYS QUIET. The engine refuses a read while a change made before it is still being
+// saved; the source asks again a second later, three times. Once the asks run out the read has
+// failed, but the list keeps "Reading the logbook…": no failed line and no Retry. The save-trouble
+// notice speaks for the save, and the next change or a reopened view asks again.
+describe('a read refused while a change is being saved', () => {
+  it('stays quiet once the asks run out: no failed line, no Retry; reopening asks again', async () => {
+    engine.refusing = true
+    await open()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await aSecond()
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(sizeAsks(), 'premise: every ask refused, and no more asked').toBe(1 + ASK_AGAIN_TIMES)
+    expect([said(), retry()]).toEqual([[READING], null])
+    cleanup()
+    engine.refusing = false
+    await open()
+    expect(sizeAsks(), 'reopening asked again').toBe(2 + ASK_AGAIN_TIMES)
+    expect(rows()).toEqual(NEWEST_FIRST)
+    expect([said(), badge()]).toEqual([[], '24'])
+  })
+
+  it('a list on screen keeps its rows and says nothing more, the count marked out of date', async () => {
+    const { rerender } = await open()
+    engine.log = [...LOG_OF_24, contact(25)]
+    engine.refusing = true
+    rerender(view(2))
+    await settle()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await aSecond()
+    expect(rows(), 'the rows it had').toEqual(NEWEST_FIRST)
+    expect([said(), retry()]).toEqual([[], null])
+    expect([badge(), badgeTitle()]).toEqual(['24', OUT_OF_DATE])
+  })
+})
+
+describe('a count from before the latest change', () => {
+  it(`a held 0 is never shown as an empty log: "${READING}" until the fresh count lands`, async () => {
+    engine.log = []
+    const { rerender } = await open()
+    expect([said(), badge()], 'premise: an answered 0').toEqual([[EMPTY], '0'])
+    engine.log = [contact(1)]
+    engine.waiting = new Set(['logSize', 'page'])
+    rerender(view(2))
+    await settle()
+    expect(document.body.textContent, 'a log of 1 reported empty').not.toContain(EMPTY)
+    expect(said()).toEqual([READING])
+    expect(badge(), 'no 0 that is out of date').toBeNull()
+    await answerHeld()
+    expect(rows()).toEqual(['K1ABC'])
+    expect(said()).toEqual([])
+    expect([badge(), badgeTitle()]).toEqual(['1', null])
+  })
+
+  it('a count held while the fresh one is on its way says it is out of date', async () => {
+    const { rerender } = await open()
+    expect([badge(), badgeTitle()], 'premise: current').toEqual(['24', null])
+    engine.log = [...LOG_OF_24, contact(25)]
+    engine.waiting = new Set(['logSize', 'page'])
+    rerender(view(2))
+    await settle()
+    expect([badge(), badgeTitle()]).toEqual(['24', OUT_OF_DATE])
+    expect(rows(), 'the rows stay up meanwhile').toEqual(NEWEST_FIRST)
+    expect(said()).toEqual([])
+    await answerHeld()
+    expect([badge(), badgeTitle()]).toEqual(['25', null])
+    expect(rows()).toEqual(['K25ABC', ...NEWEST_FIRST])
   })
 })
 

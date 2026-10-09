@@ -258,6 +258,8 @@ function laterSource() {
   const asks: { q: LogQuestion; resolve: (a: unknown) => void }[] = []
   const source: LogSource = {
     peek: <Q extends LogQuestion>(q: Q) => held.get(questionKey(q)) as AnswerTo<Q> | undefined,
+    status: (q) => (held.has(questionKey(q)) ? 'current' : 'asking'),
+    failure: () => undefined,
     // Answered at the next delivery, like every other question.
     ask: <Q extends LogQuestion>(q: Q) => new Promise<AnswerTo<Q>>((resolve) => asks.push({ q, resolve: resolve as (a: unknown) => void })),
     want: (q) => {

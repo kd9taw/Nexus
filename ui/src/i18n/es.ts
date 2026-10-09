@@ -2353,6 +2353,9 @@ export const ES: PartialCatalog = {
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
   "logbook.reading": "Leyendo el log…",
+  "logbook.readFailed": "No se pudo leer el log: {{reason}}.",
+  "logbook.readFailed.retry": "Reintentar",
+  "logbook.count.stale": "Desactualizado: contado antes del último cambio en el log.",
   "logbook.rows.loading": "Cargando…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ y ↓ pasan de un contacto a otro, PgUp y PgDn avanzan de página en página, Home y End van al primero y al último.",
