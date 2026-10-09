@@ -12724,6 +12724,81 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .le-fd-moved {
   white-space: nowrap;
 }
+/* SUPER CHECK PARTIAL — one line under the boxes. Its HEIGHT is fixed while SCP is on, so
+   the strip (a `fit="content"` pane, exactly its content) neither grows nor shrinks as
+   matches come and go under the fingers that are typing. It shows the calls that fit on
+   the line and clips the rest: nothing in it has a floor. Tokens only, both themes. */
+.le-scp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: calc(18px * var(--text-scale));
+  margin-top: var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.le-scp-call {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.le-scp-call:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* Already in this log: the call is there, and quieter, because it is no news. */
+.le-scp-worked {
+  color: var(--text-faint);
+}
+/* One character away from what was typed: a different call, so it reads as one. */
+.le-scp-near {
+  font-weight: 400;
+  color: var(--text-dim);
+  text-decoration: underline dotted;
+}
+.le-scp-empty {
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-faint);
+}
+/* A box holding a call-history value, and the word in its caption that says so. Both go
+   the moment the operator types over it.
+
+   ⚠️ THE WORD MAY NOT WIDEN ITS FIELD. Beside the caption in the flow it did, the moment a
+   fill landed: measured in headless Chrome at 1024 px, "Section" + "historique" made a
+   130 px box 156 px wide, which took the width out of the Call box under the fingers
+   typing it. Placed over the caption instead, it collided with it at larger text sizes
+   (the box is a fixed 130 px; captions grow with the text). So a MARKED caption is a
+   one-line row with no width of its own (`width: 0; min-width: 100%` takes the field's
+   width, which the input sets) and the word gives way, truncated, before the name does.
+   An unmarked caption is untouched. */
+.le-fd-cap-marked {
+  display: flex;
+  gap: var(--space-1);
+  width: 0;
+  min-width: 100%;
+  white-space: nowrap;
+}
+.le-fd-cap-text {
+  flex: 0 0 auto;
+}
+.le-fd-from-history {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+}
+.le-fd-input-history {
+  color: var(--accent);
+  font-style: italic;
+}
 
 /* ===========================================================================
    Log view (full-width screen)

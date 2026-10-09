@@ -44146,6 +44146,19 @@ mod tests {
             !fd.assistance_on.iter().any(|l| l == "DX cluster / RBN"),
             "Unassisted mode is on — cluster must no longer be listed as live"
         );
+        // The contest strip's own switch for Super Check Partial and call history is this list:
+        // both were live before the declaration (on by default), and neither is now.
+        use crate::settings::{CALL_HISTORY_SOURCE, SCP_SOURCE};
+        assert!(
+            expected.iter().any(|l| l == SCP_SOURCE)
+                && expected.iter().any(|l| l == CALL_HISTORY_SOURCE)
+        );
+        assert!(
+            !fd.assistance_on
+                .iter()
+                .any(|l| l == SCP_SOURCE || l == CALL_HISTORY_SOURCE),
+            "Unassisted mode turns Super Check Partial and call history off in the strip"
+        );
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,

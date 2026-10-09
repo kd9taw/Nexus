@@ -21,7 +21,7 @@ describe('AssistanceNote', () => {
   it('names every suppressed source, so the switch cannot over-claim', () => {
     const { container } = render(<AssistanceNote unassisted />)
     const line = container.querySelector('.assist-note-line')?.textContent ?? ''
-    for (const src of ['AI CW decoder', 'DX cluster / RBN', 'PSK Reporter']) {
+    for (const src of ['AI CW decoder', 'DX cluster / RBN', 'PSK Reporter', 'Super Check Partial', 'call history']) {
       expect(line).toContain(src)
     }
     // It must NOT claim that ALL assistance is off: POTA/SOTA activator spots keep arriving,

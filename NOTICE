@@ -1417,6 +1417,11 @@ operators and communities who provide them:
 - **prop.kc2g.com** (Andrew Rodland, KC2G) — real-time MUF map.
 - **WA7BNM Contest Calendar** (<https://www.contestcalendar.com/>, Bruce Horn
   WA7BNM) — the upcoming-contests pane.
+- **Super Check Partial** (<https://www.supercheckpartial.com/>, maintained by W9KKN) — the
+  `MASTER.SCP` list of calls active in contests, for the contest strip's Super Check Partial
+  line. Nexus downloads it on the operator's computer when that feature is on, under the
+  site's rules for logging software; it is **not** redistributed with the app. Data courtesy
+  of W9KKN and the contest community whose logs it is built from.
 - **NG3K Announced DX Operations** (Bill Feidt, NG3K) — DXpedition calendar.
 - **Parks on the Air (POTA)** and **Summits on the Air (SOTA)** — activator
   spot APIs.

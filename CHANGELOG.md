@@ -37,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
   or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
   lifts; a swipe still scrolls.
+- **Super Check Partial and call history in the contest strip.** As you type a call in any
+  contest's log strip, a line under the boxes lists the calls active in recent contests that
+  contain what you have typed: calls already in your log first, then the rest, then (from the
+  fourth character) calls one character different. Click one to put it in the Call box. The list
+  (`MASTER.SCP`, about 360 KB of callsigns) comes from supercheckpartial.com, maintained by W9KKN.
+  Nexus downloads it the first time a contest starts and checks for a newer copy at most once a
+  day, following the site's rules for logging software; it is never shipped with Nexus. Settings ▸
+  Contesting ▸ Super Check Partial and call history turns it off, turns the daily check off, and
+  has Update now. You can also import an N1MM-format call-history file for one contest: as you
+  type a call that is in it, the exchange boxes it can check (a county, state, section or zone the
+  contest accepts) fill from it and say **history** in their caption, and whatever you type wins.
+  A report, a serial number, a Field Day class or a Sweepstakes check never comes from the file.
+  Unassisted mode turns both off, and the assistance record lists them.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one

@@ -36,6 +36,9 @@
 mod chains;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+/// The contest strip's Super Check Partial download and call-history file: the HTTP and the
+/// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
+mod contest_lists;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
@@ -34135,6 +34138,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_connection_log,
             get_openings_log,
             get_assistance_journal,
+            contest_lists::scp_ensure,
+            contest_lists::get_scp_status,
+            contest_lists::get_scp_calls,
+            contest_lists::import_call_history,
+            contest_lists::get_call_history_status,
+            contest_lists::get_call_history,
+            contest_lists::clear_call_history,
             get_credentials_status,
             send_cw,
             set_cw_peer_info,
