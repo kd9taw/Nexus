@@ -1807,13 +1807,29 @@ impl FieldDayLog {
                 }
             }),
             created_by: "Nexus".to_string(),
-            // Which rules data scored this log (X- headers are Cabrillo-legal and
-            // ignored by robots) — a fetched rules file with different parameters
-            // is visible on the artifact an operator actually submits.
-            x_headers: vec![(
-                "X-NEXUS-RULES-YEAR".to_string(),
-                self.ruleset().rules_year.to_string(),
-            )],
+            // ⭐ The sponsor's own X- headers first, each the value the entry SENT in its
+            // slot (Winter Field Day's `X-EXCHANGE: 3O`, its class and category), read off
+            // the first row like a sent LOCATION and off the session for an empty log; a
+            // slot with nothing in it writes no line. Then which rules data scored this log
+            // (X- headers are Cabrillo-legal and ignored by robots) — a fetched rules file
+            // with different parameters is visible on the artifact an operator submits.
+            x_headers: rs
+                .cabrillo_x_headers
+                .iter()
+                .filter_map(|(name, slot)| {
+                    let sent = self
+                        .qsos
+                        .iter()
+                        .map(|q| q.sent(slot).trim())
+                        .find(|v| !v.is_empty())
+                        .unwrap_or_else(|| self.session.field(slot).trim());
+                    (!sent.is_empty()).then(|| (name.to_string(), sent.to_string()))
+                })
+                .chain(std::iter::once((
+                    "X-NEXUS-RULES-YEAR".to_string(),
+                    self.ruleset().rules_year.to_string(),
+                )))
+                .collect(),
             // ⭐ The optional headers. The two declarations were read when the session
             // started, like CATEGORY-OPERATOR; the band and mode are what the log holds;
             // NAME and EMAIL are the entrant's settings, read by the caller at export.
@@ -1821,7 +1837,16 @@ impl FieldDayLog {
                 "CATEGORY-ASSISTED",
                 self.session.category_assisted.clone(),
             ),
-            category_power: declared("CATEGORY-POWER", self.session.category_power.clone()),
+            // A sponsor that names the powers it takes (Winter Field Day: QRP or LOW) gets
+            // the declared power only when it is one of them; HIGH there claims nothing.
+            category_power: if rs.cabrillo_power_categories.is_empty() {
+                declared("CATEGORY-POWER", self.session.category_power.clone())
+            } else {
+                rs.cabrillo_power_categories
+                    .iter()
+                    .find(|c| c.eq_ignore_ascii_case(self.session.category_power.trim()))
+                    .map_or_else(String::new, |c| c.to_string())
+            },
             category_band: declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
             category_mode: declared("CATEGORY-MODE", cabrillo_category_mode(&self.qsos)),
             // The claimed score is the one the screen shows, and only when that score is

@@ -11849,17 +11849,22 @@ impl Engine {
     /// contest uses, under the host's own station data.
     ///
     /// A Field Day club is rebuilt under exactly what it always was: its event, and the
-    /// class and section Settings holds at the moment of asking. Any other contest takes
+    /// class, section and declared power Settings holds at the moment of asking (the power
+    /// writes a line only where the rules ask for one). Any other contest takes
     /// the host's LIVE session when the host is running it (what this station is sending
     /// now, after an "I moved" included), and otherwise builds one from Settings the way
     /// `set_mode` would — refused, with its own sentence, when Settings cannot make one.
     fn fd_club_session(&self, club: &crate::fdevent::ClubLog) -> Result<ContestSession, String> {
         if let Some(event) = club.field_day_event() {
+            // …with the entry's declared power, so the club file carries the CATEGORY-POWER
+            // a position's does where the rules ask for one (Winter Field Day); ARRL Field
+            // Day's rules ask for none, and its file is unchanged.
             return Ok(ContestSession::field_day(
                 event,
                 &self.settings.fd_class,
                 &self.settings.fd_section,
-            ));
+            )
+            .with_category_power(&self.settings.contest_category_power));
         }
         if let Mode::FieldDay { station, .. } = &self.mode {
             if station.log.session.event_id == club.event_id {
@@ -43200,16 +43205,12 @@ mod tests {
         assert!(!fd.rules_generated.is_empty());
     }
 
-    /// ⭐ **ONE WINTER FIELD DAY TOTAL, ON EVERY SURFACE THAT SHOWS OR FILES ONE.** The
-    /// sponsor's formula — QSO points × (the ticked objectives' multipliers + 1), 2027 rules
-    /// p.7 — on the station's own snapshot, the club line every position shows, the spectator
-    /// board, and the `CLAIMED-SCORE` of both Cabrillo files, the position's and the club's.
-    ///
-    /// The shared fixture: W9XYZ `3O WI`; CW K1ABC on 20 m, phone N0XYZ on 40 m, RTTY N7OUT on
-    /// 80 m (2 + 1 + 2 = 5 points); 100% alternative power (×2, which brings station equipment
-    /// on alternative power, ×1) and QRP (×4) ticked, so OM 7 and 5 × 8 = 40.
-    #[test]
-    fn wfd_claims_points_times_objectives_plus_one_on_every_surface() {
+    /// The shared Winter Field Day fixture, hosting: W9XYZ `3O WI`, QRP declared, 100%
+    /// alternative power and QRP ticked, AA9OP at the key; the station logs CW K1ABC on 20 m,
+    /// phone N0XYZ on 40 m and RTTY N7OUT on 80 m (5 points), and the club holds the same
+    /// three from a position whose operator is AA9OP too. Returns the engine (hosting) and
+    /// the journal's directory.
+    fn wfd_club_fixture(tag: &str) -> (Engine, std::path::PathBuf) {
         let mut e = Engine::new("W9XYZ", "EN52", 0);
         {
             let mut s = e.settings().clone();
@@ -43217,8 +43218,13 @@ mod tests {
             s.fd_event = "wfd".into();
             s.fd_class = "3O".into();
             s.fd_section = "WI".into();
+            s.fd_operator = "AA9OP".into();
             s.contest_category_power = "QRP".into();
             s.fd_objectives = vec!["wfd-alt-power-100".into(), "wfd-qrp".into()];
+            s.op_name = "Test Operator".into();
+            s.contest_email = "op@example.org".into();
+            s.contest_club = "Test Club".into();
+            s.contest_operators = "KB9QRS".into();
             e.apply_settings(s);
         }
         e.set_mode("fieldday-run").unwrap();
@@ -43233,10 +43239,7 @@ mod tests {
                 .fd_log_manual_submode(call, class, section, mode, sub)
                 .unwrap());
         }
-        let fd = e.snapshot().field_day.expect("master on → FD chrome");
-
-        // The club: the same three contacts, as a position streams them.
-        let dir = std::env::temp_dir().join(format!("wfd-objectives-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wfd-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let _ = e.fd_club_join(
@@ -43259,11 +43262,23 @@ mod tests {
                 mode: mode.into(),
                 sub: sub.into(),
                 when: 1_800_727_200 + seq * 60,
-                op: "W9XYZ".into(),
+                op: "AA9OP".into(),
                 sat: String::new(),
                 sat_fm: false,
             });
         }
+        (e, dir)
+    }
+
+    /// ⭐ **ONE WINTER FIELD DAY TOTAL, ON EVERY SURFACE THAT SHOWS OR FILES ONE.** The
+    /// sponsor's formula — QSO points × (the ticked objectives' multipliers + 1), 2027 rules
+    /// p.7 — on the station's own snapshot, the club line every position shows, the spectator
+    /// board, and the `CLAIMED-SCORE` of both Cabrillo files, the position's and the club's:
+    /// the fixture's 5 points × (OM 7 + 1) = 40 (`wfd_club_fixture`).
+    #[test]
+    fn wfd_claims_points_times_objectives_plus_one_on_every_surface() {
+        let (mut e, dir) = wfd_club_fixture("objectives");
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
         let club = e.fd_club_state(0, 0, "aaaa0001").score;
         let board: serde_json::Value =
             serde_json::from_str(&crate::fd_scoreboard::build_data_core(
@@ -43299,6 +43314,55 @@ mod tests {
             ),
             "(QSO points, OM, snapshot total, club line, board, position Cabrillo, club \
              Cabrillo)\n{own}\n{club_file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The club's Winter Field Day file heads exactly as a position's does** — the club
+    /// file is the one the sponsor receives, so it carries every line of the sponsor's p.10
+    /// example the position's file carries: the exchange, the declared power, the claimed
+    /// score, the entrant, the club and the operators.
+    #[test]
+    fn wfd_club_file_heads_like_the_position_file() {
+        let (mut e, dir) = wfd_club_fixture("heads");
+        let heads = |cab: &str| -> Vec<String> {
+            [
+                "X-EXCHANGE:",
+                "CATEGORY-POWER:",
+                "CLAIMED-SCORE:",
+                "NAME:",
+                "EMAIL:",
+                "CLUB:",
+                "OPERATORS:",
+            ]
+            .iter()
+            .map(|tag| {
+                cab.lines()
+                    .find(|l| l.starts_with(tag))
+                    .unwrap_or("(none)")
+                    .to_string()
+            })
+            .collect()
+        };
+        let own = e.export_log("cabrillo").expect("one entry");
+        let club_file = e.fd_club_export(true).expect("one entry");
+        let want = [
+            "X-EXCHANGE: 3O",
+            "CATEGORY-POWER: QRP",
+            "CLAIMED-SCORE: 40",
+            "NAME: Test Operator",
+            "EMAIL: op@example.org",
+            "CLUB: Test Club",
+            "OPERATORS: AA9OP KB9QRS",
+        ];
+        assert_eq!(
+            (heads(&own), heads(&club_file)),
+            (
+                want.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
+                want.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+            ),
+            "(the position's file, the club's file)\n{own}\n{club_file}"
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);

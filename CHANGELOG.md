@@ -97,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
   log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
   operators (Settings ▸ Contesting ▸ Contest), each where you have set it.
+- **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
+  `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
+  `CATEGORY-POWER`. Winter Field Day's limit is 100 W PEP and it has no high-power entry, so a
+  Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the picker. A
+  club's file carries the same lines as a position's, and its OPERATORS line now names the
+  operators the positions logged under as well as the ones you typed.
 
 ### Fixed
 

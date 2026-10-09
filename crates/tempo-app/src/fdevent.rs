@@ -1030,14 +1030,34 @@ impl ClubLog {
     /// contest token and headers, and the entrant's own lines (`NAME`, `EMAIL`, `CLUB`,
     /// `ENTRY-CLASS`, `OPERATORS`), each written only where the ruleset lists it — the
     /// position's own exporter, over the club's rows.
+    ///
+    /// ⭐ **A Field Day club's `OPERATORS` are read off its rows here.** Those rows name nobody
+    /// in the rebuilt log ([`unique_log_with`](Self::unique_log_with): the exports are pinned
+    /// to the bytes 1.x wrote), yet the club's file is the one the sponsor receives, and
+    /// Winter Field Day's lists OPERATORS: everyone the positions said was at the key, then
+    /// the operators typed. A row naming the station's own call names nobody, as it does
+    /// there. ARRL Field Day's rules list no OPERATORS, and its file is unchanged.
     pub fn export_cabrillo_with(
         &self,
         mycall: &str,
         session: ContestSession,
         entrant: &CabrilloEntrant,
     ) -> Result<String, String> {
+        let mut entrant = entrant.clone();
+        if self.field_day_event().is_some() {
+            let station = mycall.trim().to_ascii_uppercase();
+            let mut named: Vec<String> = Vec::new();
+            for i in self.export_indices() {
+                let op = self.rows[i].operator.trim().to_ascii_uppercase();
+                if !op.is_empty() && op != station && !named.contains(&op) {
+                    named.push(op);
+                }
+            }
+            named.push(entrant.operators.clone());
+            entrant.operators = named.join(" ");
+        }
         self.unique_log_with(mycall, session)
-            .cabrillo_with(0, entrant)
+            .cabrillo_with(0, &entrant)
     }
 
     /// Club Cabrillo export, deduped earliest-wins.

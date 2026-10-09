@@ -50,7 +50,10 @@
 //! menu; its objectives multiply instead (2027 rules, p.7). With the objectives modelled,
 //! both WFD files also gained line 6, `CLAIMED-SCORE: 11` and `CLAIMED-SCORE: 6`: the sponsor
 //! asks for *"your calculated total score including multipliers"* (p.10), and with no
-//! objective ticked that is the QSO points × 1.
+//! objective ticked that is the QSO points × 1. And both gained `X-EXCHANGE:` before
+//! `X-NEXUS-RULES-YEAR`, the class the entry sends (p.10's `X-EXCHANGE: 3O`): `3A` in
+//! `wfd.cbr`, whose frozen fixture sends an ARRL class, and `2O` in `wfd-classes.cbr`.
+//! Neither declares a power, so neither carries CATEGORY-POWER.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.

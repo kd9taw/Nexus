@@ -330,6 +330,21 @@ pub struct FdRuleset {
     /// [`cabrillo_entry_headers`](Self::cabrillo_entry_headers) (the loader refuses either
     /// half alone).
     pub entry_classes: &'static [&'static str],
+    /// ⭐ **The sponsor's own `X-` headers, each filled from a SENT slot**: `(header, slot)`.
+    /// Winter Field Day's example log carries `X-EXCHANGE: 3O`, its class and category
+    /// (2027 rules, p.10). Empty for every contest that asks for none.
+    ///
+    /// ⚠️ A key of its own: an `X-` name in `cabrillo_headers` would make 1.17.0 refuse the
+    /// whole rules file, while it ignores an unknown key.
+    pub cabrillo_x_headers: &'static [(&'static str, &'static str)],
+    /// ⭐ **The only `CATEGORY-POWER` values the sponsor takes**, when it names some: Winter
+    /// Field Day's `QRP` or `LOW` (p.10; its limit is 100 W PEP, p.8). The declared power is
+    /// written only when it is one of them, so a station left at HIGH claims nothing. Empty
+    /// means whatever `cabrillo_headers` says about CATEGORY-POWER, as before.
+    ///
+    /// ⚠️ Never CATEGORY-POWER in `cabrillo_headers` for such a contest: 1.17.0 reads that
+    /// list and would write `HIGH` for a picker left at HIGH.
+    pub cabrillo_power_categories: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
@@ -1008,6 +1023,12 @@ struct CabrilloSpec {
     /// The sponsor's entry classes, the values `ENTRY-CLASS` may take, in its order.
     #[serde(default)]
     entry_classes: Vec<String>,
+    /// The sponsor's `X-` headers, header name → the SENT slot that fills it.
+    #[serde(default)]
+    x_headers: std::collections::BTreeMap<String, String>,
+    /// The `CATEGORY-POWER` values the sponsor takes, from HIGH, LOW and QRP.
+    #[serde(default)]
+    power_categories: Vec<String>,
     /// Sent QTH → `LOCATION` spelling, where the two lists differ.
     #[serde(default)]
     location: std::collections::BTreeMap<String, String>,
@@ -2175,6 +2196,58 @@ mode class ({})",
                     ));
                 }
             }
+            // ⭐ The sponsor's X- headers. Each refusal is a line that would ship wrong: a
+            // name a Cabrillo robot does not read as an X- header, one that would pass for
+            // Nexus's own, or a slot some entrant does not send, which writes nothing.
+            for (name, slot) in &r.cabrillo.x_headers {
+                let shaped = name.len() > 2
+                    && name.starts_with("X-")
+                    && name[2..]
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+                if !shaped {
+                    return Err(format!(
+                        "{tag}: cabrillo x-header {name:?} is not X- and uppercase letters, \
+                         digits or hyphens"
+                    ));
+                }
+                if name.starts_with("X-NEXUS-") {
+                    return Err(format!(
+                        "{tag}: cabrillo x-header {name:?} is one Nexus writes itself"
+                    ));
+                }
+                for role in &x.roles {
+                    if !role.sends.iter().any(|k| k == slot) {
+                        return Err(format!(
+                            "{tag}: cabrillo x-header {name:?} writes slot {slot:?}, which role \
+                             {:?} does not send",
+                            role.id
+                        ));
+                    }
+                }
+            }
+            // ⭐ The power categories a sponsor takes. CATEGORY-POWER in `headers` as well
+            // would let a build that reads only that list write any declared power.
+            let mut powers: Vec<&str> = Vec::new();
+            for p in &r.cabrillo.power_categories {
+                if !["HIGH", "LOW", "QRP"].contains(&p.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo power category {p:?} is not HIGH, LOW or QRP"
+                    ));
+                }
+                if powers.contains(&p.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo power category {p:?} is listed twice"
+                    ));
+                }
+                powers.push(p);
+            }
+            if !powers.is_empty() && r.cabrillo.headers.iter().any(|h| h == "CATEGORY-POWER") {
+                return Err(format!(
+                    "{tag}: cabrillo names power_categories and lists CATEGORY-POWER in headers \
+                     too (one says which powers are written)"
+                ));
+            }
             // ENTRY-CLASS and its classes come as a pair: a header with no class to write
             // ships blank, and classes nothing writes are a picker that changes nothing.
             let writes_class = r.cabrillo.entry_headers.iter().any(|h| h == "ENTRY-CLASS");
@@ -2888,6 +2961,15 @@ fn build(spec: FileSpec) -> RulesTable {
                 cabrillo_headers: leak_keys(r.cabrillo.headers),
                 cabrillo_entry_headers: leak_keys(r.cabrillo.entry_headers),
                 entry_classes: leak_keys(r.cabrillo.entry_classes),
+                cabrillo_x_headers: Box::leak(
+                    r.cabrillo
+                        .x_headers
+                        .into_iter()
+                        .map(|(name, slot)| (leak_str(name), leak_str(slot)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                cabrillo_power_categories: leak_keys(r.cabrillo.power_categories),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location

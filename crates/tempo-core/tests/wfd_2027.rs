@@ -259,3 +259,44 @@ fn wfd_cabrillo_claims_the_objective_total() {
         "(ticked, nothing ticked, ARRL Field Day):\n{cab}"
     );
 }
+
+/// ⭐ **The WFD header carries the sponsor's X-EXCHANGE and a power it takes** — p.10's example
+/// log heads `X-EXCHANGE: 3O` and `CATEGORY-POWER: QRP (≤5W DIG/CW or ≤10W PH) or LOW (≤100W)`.
+/// The power is the one Settings declares, written only when it is QRP or LOW: Winter Field Day
+/// has no high-power entry (*"All stations are limited to a maximum of 100 Watts PEP"*, p.8), so
+/// a station left at HIGH claims nothing rather than a category the sponsor does not have.
+#[test]
+fn wfd_cabrillo_header_has_the_exchange_and_a_power_the_sponsor_takes() {
+    let line = |cab: &str, tag: &str| {
+        cab.lines()
+            .find_map(|l| l.strip_prefix(tag))
+            .map(str::to_string)
+    };
+    let cab = |event: &str, power: &str| {
+        fixture(event, power)
+            .cabrillo_with(14_000, &CabrilloEntrant::default())
+            .expect("one entry")
+    };
+    let (qrp, low, high) = (cab("wfd", "QRP"), cab("wfd", "LOW"), cab("wfd", "HIGH"));
+    let arrl = cab("arrlfd", "QRP");
+    assert_eq!(
+        (
+            line(&qrp, "X-EXCHANGE: "),
+            line(&qrp, "CATEGORY-POWER: "),
+            line(&low, "CATEGORY-POWER: "),
+            line(&high, "CATEGORY-POWER: "),
+            line(&arrl, "X-EXCHANGE: "),
+            line(&arrl, "CATEGORY-POWER: "),
+        ),
+        (
+            Some("3O".to_string()),
+            Some("QRP".to_string()),
+            Some("LOW".to_string()),
+            None,
+            None,
+            None
+        ),
+        "(X-EXCHANGE, QRP declared, LOW declared, HIGH declared, then ARRL Field Day's two, \
+         which its rules ask for neither of):\n{qrp}"
+    );
+}
