@@ -6,6 +6,7 @@
 // CQ, TU and AGN are on-air words and invariant, held as constants the way the macro captions
 // are; the other steps are words, named in the catalog. A key name (F1–F8) is invariant too.
 import { t } from '../i18n'
+import { slotCaption } from './contestSlots'
 import type { EsmInert, EsmRefusal, EsmRole } from './esm'
 
 const CQ = 'CQ'
@@ -53,6 +54,8 @@ export function esmRefusalText(refusal: EsmRefusal): string {
       return t('contest.esm.refused.empty', { step: esmStepName(refusal.role), key: refusal.key })
     case 'oneSlot':
       return t('contest.esm.refused.oneSlot', { step: esmStepName(refusal.role) })
+    case 'history':
+      return t('contest.esm.refused.history', { field: slotCaption(refusal.slot) })
   }
 }
 

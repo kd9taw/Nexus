@@ -2141,6 +2141,17 @@ export async function sendCw(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('send_cw', { text })
 }
 
+/** Queue CW for Enter Sends Message. Unlike `sendCw` it NEVER turns TX on: it rejects, with the
+ *  reason, while TX is off or any transmit gate refuses, and then nothing was taken. */
+export async function sendCwArmed(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw_armed', { text })
+}
+
+/** The ESM switch in a cockpit's TX dock, saved alone (never a settings-form save). */
+export async function setContestEsm(cockpit: 'cw' | 'rtty' | 'phone', on: boolean): Promise<void> {
+  await invoke('set_contest_esm', { cockpit, on })
+}
+
 /** Record the worked station's QRZ name + state for the {HISNAME}/{HISSTATE} CW-macro tokens,
  *  keyed to `call` (pass an empty call to clear). Fire-and-forget. */
 export async function setCwPeerInfo(call: string, name: string, peerState: string): Promise<void> {

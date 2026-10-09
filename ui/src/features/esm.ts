@@ -1,11 +1,11 @@
 // ENTER SENDS MESSAGE — the step table. What Enter in a contest strip would send, what it would
 // log, and what it refuses, as N1MM Logger+'s ESM does it. Pure: no rig, no engine, no DOM.
 //
-// ⚠️ NOTHING HERE TRANSMITS, AND NOTHING MAY CALL IT FROM A SEND PATH UNTIL ITS TEXTS ARE
-// SIGNED. ESM makes Enter a new way to start a transmission, so a cockpit that wires it gathers
-// the strip's state and its transmit guards, asks this file, and carries the answer out through
-// its OWN send path, which keeps every check it has today. Nothing here weakens one: ESM's checks
-// come first, so it can refuse a step before it logs anything, and the send path checks again.
+// ⚠️ NOTHING HERE TRANSMITS. ESM makes Enter a new way to start a transmission (its rules are
+// signed, operator 2026-10-09), so the contest strip gathers its state and the cockpit's transmit
+// guards, asks this file, and carries the answer out through the cockpit's OWN send path, which
+// keeps every check it has (`features/esmHost.ts`). Nothing here weakens one: ESM's checks come
+// first, so it can refuse a step before it logs anything, and the send path checks again.
 //
 // ⭐ THE CONTACT LOGS AT THE PRESS, AS N1MM'S DOES (operator, 2026-10-08). The press that sends
 // TU (Run) or my exchange (S&P) logs the contact in the same breath; a Stop that cuts the message
@@ -59,6 +59,11 @@ export interface EsmStrip {
   exchangeComplete: boolean
   /** `contestDupe`'s verdict on the call. Only `own` stops ESM: a club dupe is a warning. */
   dupe: ContestDupeVerdict
+  /** The slot of a box that still holds a call-history fill the operator has not accepted (by
+   *  typing it), or null. Rule 10: such a value is never logged until it is accepted, so the
+   *  press for a logging step is refused by name. Nothing from call history is ever SENT: ESM
+   *  sends his call and my exchange, never his. */
+  fromHistory?: string | null
 }
 
 /** Where the caret goes after the press: the Call box, the first exchange box, or nowhere.
@@ -87,6 +92,8 @@ export type EsmRefusal =
   | { why: 'empty'; role: EsmRole; key: MacroKey }
   /** Phone: this step is mapped to two recordings, and the keyer plays one per press. */
   | { why: 'oneSlot'; role: EsmRole }
+  /** The step would log, and `slot` still holds a call-history fill nobody accepted (rule 10). */
+  | { why: 'history'; slot: string }
 
 /** One Enter press, decided.
  *
@@ -266,15 +273,19 @@ export type EsmDecision =
       next: EsmState
     }
 
-/** One Enter press: the step, its message, then the transmit guards — in that order, so the
- *  strip names the most useful reason (a dupe before an empty key, an empty key before TX off),
- *  and every refusal comes before anything could log. */
+/** One Enter press: the step, an unaccepted call-history fill at a logging step, its message,
+ *  then the transmit guards — in that order, so the strip names the most useful reason (a dupe
+ *  before an empty key, an empty key before TX off), and every refusal comes before anything
+ *  could log. */
 export function esmPress(input: EsmPressInput): EsmDecision {
   const { guards } = input
   const aside = esmInert(guards) ?? (esmHasSteps(input.roles) ? null : 'noRoles')
   if (aside) return { kind: 'inert', why: aside }
   const step = esmStep(input.state, input.strip, { cockpit: guards.cockpit, callOnce: input.callOnce })
   if (step.kind !== 'send') return step
+  // Rule 10: a call-history fill is never logged until the operator accepts it.
+  const fromHistory = input.strip.fromHistory
+  if (step.log && fromHistory) return { kind: 'refuse', refusal: { why: 'history', slot: fromHistory } }
   const message = esmMessage(input.roles, step.role, input.slots, guards.cockpit)
   if ('why' in message) return { kind: 'refuse', refusal: message }
   const refusal = esmTxRefusal(guards)

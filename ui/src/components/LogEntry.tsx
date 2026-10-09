@@ -6,12 +6,13 @@
 // `i18n/index.ts`.
 
 import { useContext, useEffect, useRef, useState } from 'react'
-import type {
-  AppSnapshot,
-  ContestFieldSpec,
-  FieldDayQso,
-  FieldDayStatus,
-  LoggedQso,
+import {
+  isOnAir,
+  type AppSnapshot,
+  type ContestFieldSpec,
+  type FieldDayQso,
+  type FieldDayStatus,
+  type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
 import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
@@ -41,6 +42,9 @@ import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
+import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
+import type { EsmHost } from '../features/esmHost'
+import { esmRefusalText, esmStepName } from '../features/esmWords'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
@@ -415,6 +419,13 @@ interface Props {
    * while it shows has nothing to say here.
    */
   active?: boolean
+  /**
+   * CONTEST STRIP ONLY — Enter Sends Message, from the CW, RTTY and Phone cockpits
+   * (`features/esmHost.ts`): with `on`, Enter in the strip's boxes sends the contact's next
+   * message through the cockpit's own send path and logs the contact at its last step. Absent,
+   * or off, and Enter is exactly what it always was. Never on the hosted page.
+   */
+  esm?: EsmHost
 }
 
 /**
@@ -446,6 +457,7 @@ export function LogEntry({
   titled = true,
   active = true,
   remote,
+  esm,
 }: Props) {
   const remoteMode = remote != null
   // A station that offers its park directory answers the two offline park reads below.
@@ -459,6 +471,8 @@ export function LogEntry({
     if (remoteMode) setRemoteDraftContext(current => current ?? currentDraftContext())
   }
   const fdActive = fieldDay != null
+  // Enter Sends Message runs here: the cockpit's switch, a contest strip, and never from afar.
+  const esmLive = !!esm?.on && fdActive && !remoteMode
   // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
   const asksForPark = exchange === 'terrestrial'
   // …and a grid square? A bird's exchange is grid-for-grid, so the field is asked
@@ -660,6 +674,12 @@ export function LogEntry({
     { call: string; whenUnix: number; label: string; at: number } | null
   >(null)
   const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // Enter Sends Message's one line in the same slot (below): why a press sent nothing, Phone's
+  // prompt, or what a stop left. `about` is the contact a stopped note names, so a new contact
+  // that is not that one retires it. `esmLineKey` is the key press that wrote it: every OTHER
+  // key lets it lapse, as every other key lets a removal lapse.
+  const [esmLine, setEsmLine] = useState<{ text: string; alert: boolean; about?: string } | null>(null)
+  const esmLineKey = useRef<Event | null>(null)
   const armedRef = useRef(removeArmed)
   armedRef.current = removeArmed
   const pressRemove = () => {
@@ -706,6 +726,9 @@ export function LogEntry({
     } else if (fdLogLen > was.len) {
       setRemoveNote(null)
     }
+    // …and an Enter Sends Message line, unless it is the stopped note about that very contact.
+    const call = newest?.call.toUpperCase()
+    setEsmLine((l) => (l && l.about !== undefined && l.about === call ? l : null))
   }, [newestKey, fdLogLen])
   // Ctrl+D from anywhere in the cockpit showing this strip — only while its host is on screen,
   // since the RTTY, PSK and JS8 strips stay mounted when hidden.
@@ -718,12 +741,15 @@ export function LogEntry({
         e.preventDefault()
         // Held down, it is still ONE press: auto-repeat can never be the second.
         if (!e.repeat) pressRemoveRef.current()
+        setEsmLine(null)
         return
       }
       if (isModifierKey(e)) return
-      // Any other key lets a waiting press lapse, and retires the last answer.
+      // Any other key lets a waiting press lapse, and retires the last answer — and an Enter
+      // Sends Message line, except at the press that wrote it.
       setRemoveArmed(null)
       setRemoveNote(null)
+      if (e !== esmLineKey.current) setEsmLine(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -732,6 +758,8 @@ export function LogEntry({
   const removeLine = removeArmed
     ? t('logEntry.remove.armed', { contact: removeArmed.label })
     : removeNote?.text
+  // …and the same for an Enter Sends Message line, behind a removal's.
+  const slotFree = removeLine == null && esmLine == null
 
   // THE FILL API (`fillExchange`): one box, refilled on every new `ts`. Keyed on the
   // stamp alone so a snapshot re-render never refills, and a slot this session does not
@@ -1097,6 +1125,8 @@ export function LogEntry({
         .then(() => contestWorking(worked))
         .catch(() => {})
     }
+    // A spot handed over is a station to answer: Enter Sends Message goes to S&P.
+    if (esmLive) esm?.dispatch('spot')
     // preventScroll: focusing the RST readies it for the report, but must NOT scroll the log
     // into view — the operator works from the decode feed/roster scrolled up, and a click
     // snapping the window down to the log every time is the reported bug.
@@ -1403,6 +1433,8 @@ export function LogEntry({
     // live slot is released, so the next call committed is issued a number of its own instead
     // of inheriting the one that was in flight.
     if (fdActive && !remoteMode) void contestEntryReset().catch(() => {})
+    // A new contact for Enter Sends Message: nothing has gone out to it.
+    if (esmLive) esm?.dispatch('cleared')
     // When the other-radio override is open, refresh its UTC time to now for the next contact
     // (a run of live V/UHF contacts each get the current time, never a silently-reused stale
     // one) while KEEPING band/freq/mode — like fdClass/fdSection, so they aren't re-entered.
@@ -1654,7 +1686,13 @@ export function LogEntry({
   }
 
   const onEnter = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') void logIt()
+    if (e.key !== 'Enter') return
+    // Alt+Enter logs without sending anything (rule 6); Ctrl or Cmd with Enter is not ESM either.
+    if (esmLive && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      void pressEsm(e)
+      return
+    }
+    void logIt()
   }
 
   /**
@@ -1816,6 +1854,167 @@ export function LogEntry({
   const pickScp = (call: string) => {
     setLogCall(call)
     requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+  }
+
+  // ⭐ ENTER SENDS MESSAGE (`features/esm.ts`; its rules signed by the operator, 2026-10-09). With
+  // the cockpit's switch on, Enter in this strip's boxes sends the contact's next message through
+  // the COCKPIT's own send path (`esm.send`, the one its F-keys use), and the press for the
+  // contact's last step logs it through `logIt`, the one log path, once that path has taken the
+  // message (decision 1). The message is expanded and taken BEFORE `logIt`'s reset clears the
+  // strip, so a message that names his call names the one in the strip (rule 7).
+  //
+  // ⛔ IT NEVER TURNS TX ON, AND A REFUSED PRESS LOGS NOTHING. Every refusal (the step's, the set's,
+  // the cockpit's transmit guards, then the send path's own answer) comes before `logIt`. With ESM
+  // off, stepping aside, or on the hosted page, Enter is what it always was (`onEnter`). The caret
+  // moves only between this strip's own boxes, on a press made in them, with `preventScroll`: the
+  // Space-PTT incident was a focus change in this shared entry code.
+
+  /** A box as ESM reads it: complete only with what the operator gave for THIS contact — typed,
+   *  picked or grabbed since the strip last cleared, an untouched default report, a blank
+   *  optional box, or a call-history fill (counted, and refused at the logging step until it is
+   *  accepted: rule 10). A value the strip carried over from the last contact is not one: Field
+   *  Day's class and section stay in their boxes after a contact is logged, and read as complete
+   *  they would make the first Enter on a new call in S&P send the exchange and log the last
+   *  station's. */
+  const esmGiven = (f: ContestFieldSpec): boolean => {
+    const v = fdValue(f)
+    if (!fdFieldOk(f, v, fdLineDomain(f))) return false
+    const fill = fillRef.current
+    return (
+      fill.typed[f.key] === true ||
+      fill.filled[f.key]?.value === v ||
+      (f.kind === 'rst' && v === rstDefault) ||
+      (v.trim() === '' && !f.required)
+    )
+  }
+  /** What ESM judges a press on: the strip's call, its exchange, the dupe verdict, and a box
+   *  still holding a call-history fill nobody accepted. */
+  const esmStrip = (): EsmStrip => ({
+    call: logCall.trim().toUpperCase(),
+    exchangeComplete: fdReceives.every(esmGiven),
+    dupe: fdDupe,
+    fromHistory: fdReceives.find((f) => fillRef.current.filled[f.key]?.value === fdValue(f))?.key ?? null,
+  })
+  // The dock's plate and highlight follow what the strip holds.
+  const stripNow = esmLive ? esmStrip() : null
+  const stripKey = stripNow
+    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.dupe}|${stripNow.fromHistory ?? ''}`
+    : ''
+  useEffect(() => {
+    esm?.onStrip(stripNow)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stripKey])
+  useEffect(
+    () => () => esm?.onStrip(null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  // The last message a press sent, until its over ends: what a stop may have cut.
+  const esmSent = useRef<{ role: EsmRole; call: string; logged: boolean; seen: boolean } | null>(null)
+  const onAir = isOnAir(snap.radio)
+  useEffect(() => {
+    const sent = esmSent.current
+    if (!sent) return
+    if (onAir) sent.seen = true
+    else if (sent.seen) esmSent.current = null
+  }, [onAir])
+  /** WHAT COUNTS AS A STOP (decision 3): any Esc, Stop TX, the keyer's ■ Stop (the cockpit counts
+   *  them in `esm.stops`) or the TX latch falling, the watchdog's among them. What went out to
+   *  the call in the strip then counts as not sent, so the next Enter sends it again rather than
+   *  logging (rule 8). A stopped last message stays logged, and the strip says so (rule 8, as
+   *  changed by the operator's D8). Nothing here stops anything: the cockpit's stop already has. */
+  const esmStopped = () => {
+    if (!esmLive || !esm) return
+    const call = logCall.trim().toUpperCase()
+    if (call) esm.dispatch('stopped')
+    const sent = esmSent.current
+    esmSent.current = null
+    if (!sent) return
+    const step = esmStepName(sent.role)
+    if (sent.logged) {
+      setEsmLine({
+        text: fieldDay?.club
+          ? t('contest.esm.stopped.loggedClubSync', { step, call: sent.call })
+          : t('contest.esm.stopped.logged', { step, call: sent.call }),
+        alert: true,
+        about: sent.call,
+      })
+    } else if (sent.call === call) {
+      setEsmLine({ text: t('contest.esm.stopped.again', { step }), alert: true })
+    }
+  }
+  const stopsSeen = useRef(esm?.stops ?? 0)
+  useEffect(() => {
+    const n = esm?.stops ?? 0
+    if (n === stopsSeen.current) return
+    stopsSeen.current = n
+    esmStopped()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esm?.stops])
+  const latchUp = useRef(snap.radio.txEnabled === true)
+  useEffect(() => {
+    const was = latchUp.current
+    latchUp.current = snap.radio.txEnabled === true
+    if (was && !latchUp.current) esmStopped()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.radio.txEnabled])
+
+  const esmCaret = (caret: EsmCaret) => {
+    if (caret === 'call') {
+      callInputRef.current?.focus({ preventScroll: true })
+    } else if (caret === 'ex0') {
+      const box = fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null
+      box?.focus({ preventScroll: true })
+      box?.select()
+    }
+  }
+  // One press, one message: a press still being taken holds the next one off.
+  const esmBusy = useRef(false)
+  const pressEsm = async (e: React.KeyboardEvent) => {
+    if (!esm || e.repeat || esmBusy.current) return
+    esmLineKey.current = e.nativeEvent
+    setEsmLine(null)
+    const strip = esmStrip()
+    const decision = esmPress({
+      state: esm.state,
+      strip,
+      callOnce: esm.callOnce,
+      guards: esm.guards(),
+      roles: esm.roles,
+      slots: esm.slots,
+    })
+    if (decision.kind === 'inert') {
+      void logIt()
+      return
+    }
+    if (decision.kind === 'refuse') {
+      setEsmLine({ text: esmRefusalText(decision.refusal), alert: true })
+      return
+    }
+    if (decision.kind === 'speak') {
+      esm.dispatch(decision.next)
+      esmCaret(decision.caret)
+      setEsmLine({ text: t('contest.esm.phone.speak'), alert: false })
+      return
+    }
+    esmBusy.current = true
+    let why: string | null
+    try {
+      why = await esm.send({ role: decision.role, keys: decision.keys, text: decision.text, call: strip.call })
+    } catch (err) {
+      why = err instanceof Error ? err.message : String(err)
+    } finally {
+      esmBusy.current = false
+    }
+    if (why !== null) {
+      setEsmLine({ text: t('contest.esm.notSent', { why }), alert: true })
+      return
+    }
+    esm.dispatch(decision.next)
+    esmSent.current = { role: decision.role, call: strip.call, logged: decision.log, seen: false }
+    if (decision.log) await logIt()
+    esmCaret(decision.caret)
   }
   if (fdActive) {
     return (
@@ -2124,12 +2323,17 @@ export function LogEntry({
             {removeLine}
           </div>
         )}
-        {removeLine == null && logCall.trim() !== '' && fdBadField !== undefined && (
+        {removeLine == null && esmLine != null && (
+          <div className="le-fd-hint le-fd-esm-line" role={esmLine.alert ? 'alert' : 'status'}>
+            {esmLine.text}
+          </div>
+        )}
+        {slotFree && logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
             {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
           </div>
         )}
-        {removeLine == null && fdOwnDupe && (
+        {slotFree && fdOwnDupe && (
           <div className="le-fd-hint" role="alert">
             {/* FOUR literal call sites rather than one with a computed key: the i18n
                 extractor reads keys statically and the placeholder guard compares each
@@ -2156,7 +2360,7 @@ export function LogEntry({
                 : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
           </div>
         )}
-        {removeLine == null && fdClubDupe && (
+        {slotFree && fdClubDupe && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.fd.dupe.club', {
               call: fdTypedCall,
@@ -2165,7 +2369,7 @@ export function LogEntry({
             })}
           </div>
         )}
-        {removeLine == null && wveMissingQth && (
+        {slotFree && wveMissingQth && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.contest.qthMissing', { call: fdTypedCall })}
           </div>

@@ -35,7 +35,12 @@ import {
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
   CW_LAYOUT_ON_AIR,
+  cwBuiltInRoles,
+  esmRoles,
+  type EsmRoleMap,
 } from '../features/esmRoles'
+import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
+import { EsmPlate } from './EsmPlate'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -63,6 +68,7 @@ import type { ModeClass } from '../neededFilters'
 import {
   getSettings,
   sendCw,
+  sendCwArmed,
   setCwKeyer,
   setCwWpm,
   stopCw,
@@ -292,6 +298,8 @@ interface Props {
    *  rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted Remote page keeps
    *  its own panes (Phone's rule). */
   boxes?: BoxSource
+  /** Enter Sends Message's switch for this cockpit (App, from Settings). Absent on the hosted page. */
+  esmSetting?: EsmSetting
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -449,6 +457,7 @@ const CW_DSP_FUNCS = [
 ] as const
 
 export function CwCockpit({
+  esmSetting,
   active = true,
   snap,
   theme,
@@ -813,9 +822,9 @@ export function CwCockpit({
   // Empty = rule unread (built without the `radio` feature, or the command failed), and no
   // caution is shown — an unreadable rule must not warn an operator off a keyer that works.
   const [catCwUnproven, setCatCwUnproven] = useState<number[]>([])
-  const [profiles, setProfiles] = useState<{ name: string; macros: { key: string; label: string; text: string }[] }[]>(
-    [],
-  )
+  const [profiles, setProfiles] = useState<
+    { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
+  >([])
   const [activeProfile, setActiveProfile] = useState(0)
   useEffect(() => {
     if (!active) return
@@ -1075,6 +1084,37 @@ export function CwCockpit({
   // TX-allowed privilege state through send() — not whatever existed at mount.
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`). The set is the
+  // one the F-keys send, with the active profile's own step mapping over the built-in layout's;
+  // the guards are read at the press; and the send is the F-keys' own path but for the re-arm:
+  // His Call becomes the strip's call before the send that may expand `!` to it, and
+  // `sendCwArmed` refuses while TX is off where `sendCw` would turn it on (rule 5).
+  const esm = useEsmHost({
+    cockpit: 'cw',
+    on: !!esmSetting?.on && !!fieldDay && control,
+    callOnce: !!esmSetting?.callOnce,
+    roles: esmRoles(cwBuiltInRoles(macros), profiles[activeProfile]?.esmRoles),
+    slots: macros,
+    guards: () => ({
+      cockpit: 'cw',
+      txEnabled: snapRef.current.radio.txEnabled,
+      txAllowed: snapRef.current.radio.txAllowed,
+      clockRepair: snapRef.current.radio.clockRepairTxHeld === true,
+    }),
+    send: async ({ text, call }: EsmMessage) => {
+      await commitHisCall(call)
+      try {
+        await sendCwArmed(text)
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    },
+  })
+  // The keyboard handler is bound once: it reads the host through this.
+  const esmRef = useRef(esm)
+  esmRef.current = esm
+  const esmLit = esmLitKeys(esm.preview)
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else.
   const send = (line: string) => {
@@ -1103,6 +1143,8 @@ export function CwCockpit({
     // Stop the CW keyer AND drop any tune carrier / stray PTT — a true stop-everything (Esc).
     void stopCw()
     void haltTx()
+    // …and for Enter Sends Message, what went out to the call in the strip counts as not sent.
+    esm.noteStop()
   }
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
@@ -1173,7 +1215,10 @@ export function CwCockpit({
       } else if (macro) {
         if (e.altKey || e.ctrlKey || e.metaKey) return
         e.preventDefault()
-        if (!e.repeat) send(macro.text)
+        if (!e.repeat) {
+          send(macro.text)
+          esmRef.current.noteKey(macro.key)
+        }
       } else if (e.key === 'PageUp') {
         e.preventDefault()
         wpmTouched.current = true
@@ -1711,6 +1756,7 @@ export function CwCockpit({
         fieldDay={fieldDay}
         active={active}
         fdMode="CW"
+        esm={esm.host}
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
@@ -2348,8 +2394,12 @@ export function CwCockpit({
             <button disabled={!control}
               key={m.key}
               type="button"
-              className="cw-macro"
-              onClick={() => send(m.text)}
+              // The key or keys the next Enter sends glow (Enter Sends Message).
+              className={`cw-macro${esmLit.includes(m.key) ? ' esm-lit' : ''}`}
+              onClick={() => {
+                send(m.text)
+                esm.noteKey(m.key)
+              }}
               title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
             >
               <span className="cw-macro-key">{m.key}</span>
@@ -2405,6 +2455,17 @@ export function CwCockpit({
           <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!control || (!text.trim())}>
             {t('cw.compose.send.label')}
           </button>
+          {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: last on the row, so
+              what it says never moves Send or His Call. */}
+          {esmSetting && fieldDay && control && (
+            <EsmPlate
+              on={esmSetting.on}
+              onSwitch={esmSetting.onSwitch}
+              mode={esm.host.state.mode}
+              onToggle={esm.toggle}
+              preview={esm.preview}
+            />
+          )}
         </div>
       </div>
       <SpotDialog

@@ -596,6 +596,10 @@ const MIGRATED = [
   'features/esmWords.ts',
   // …and Settings' role picker for one macro set — migrated from birth; a key name is a token.
   'components/EsmRolePicker.tsx',
+  // …and what a cockpit hands its contest strip, which holds no sentence at all, and the TX
+  // dock's ESM plate — both migrated from birth; ESM, N1MM's name for it, is held as a token.
+  'features/esmHost.ts',
+  'components/EsmPlate.tsx',
 ]
 
 /**

@@ -49,7 +49,12 @@ import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
-import { VoiceKeyer } from './VoiceKeyer'
+import { VoiceKeyer, type VoiceKeyerForEnter } from './VoiceKeyer'
+import { EsmPlate } from './EsmPlate'
+import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
+import { VOICE_SLOT_ROLES, esmRoles, esmVoiceSlots } from '../features/esmRoles'
+import { esmInertText } from '../features/esmWords'
+import { useEscStop } from '../useEscStop'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
 import { formatDialMhz } from './FrequencyReadout'
 // ⊘ — the shared unavailable mark. Its own module so `CockpitHeader` can print the same
@@ -237,6 +242,9 @@ interface Props {
    *  lends the dashboard rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted
    *  Remote page keeps its own panes. */
   boxes?: BoxSource
+  /** Enter Sends Message's switch for this cockpit and the voice keyer's step mapping (App, from
+   *  Settings). Absent on the hosted page. */
+  esmSetting?: EsmSetting
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -597,7 +605,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard, boxes }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -1419,6 +1427,32 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // omission: `shown(id)` is the operator's tick and nothing else may take a pane away.
   const hasBandPane = onWorkSpot != null && shown('bandActivity')
   const hasKeyerPane = shown('voiceKeyer')
+  // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`). The voice keyer
+  // is the only player of the recordings: it lends the strip its slots and a player that runs
+  // its own checks, and while it is hidden ESM steps aside (rule 4). When running, "his call and
+  // your exchange" plays nothing: the operator says them (decision 10).
+  const [keyerForEnter, setKeyerForEnter] = useState<VoiceKeyerForEnter | null>(null)
+  const esm = useEsmHost({
+    cockpit: 'phone',
+    on: !!esmSetting?.on && !!fieldDay && control,
+    callOnce: !!esmSetting?.callOnce,
+    roles: esmRoles(VOICE_SLOT_ROLES, esmSetting?.voiceRoles),
+    slots: esmVoiceSlots(keyerForEnter?.messages ?? []),
+    guards: () => ({
+      cockpit: 'phone',
+      txEnabled: snapRef.current.radio.txEnabled,
+      txAllowed: snapRef.current.radio.txAllowed,
+      clockRepair: snapRef.current.radio.clockRepairTxHeld === true,
+      keyerShown: hasKeyerPane && keyerForEnter !== null,
+      pttHeld: keyedRef.current,
+      recording: keyerForEnter?.recording ?? false,
+      radioHasMic: snapRef.current.radio.flexRadioHasMic === true,
+    }),
+    send: ({ keys }: EsmMessage) =>
+      keyerForEnter ? keyerForEnter.play(Number(keys[0].slice(1))) : Promise.resolve(esmInertText('noKeyer')),
+  })
+  // Phone's Esc is App's halt; it is a stop for ESM as well (decision 3).
+  useEscStop(esm.host.on && active, esm.noteStop)
   const hasRigScopePane = shown('rigscope') && (civScope || flexScope)
   const hasReceiverPane = shown('receiver')
   const hasTransmitterPane = shown('transmitter')
@@ -1833,6 +1867,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
         radioHasMic={snap.radio.flexRadioHasMic === true}
+        esm={{
+          lit: esmLitKeys(esm.preview),
+          report: setKeyerForEnter,
+          onStop: esm.noteStop,
+          onPlay: (slot) => esm.noteKey(`F${slot}`),
+        }}
       /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
     </CockpitPaneFrame>
   ) : null
@@ -2435,6 +2475,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         fieldDay={fieldDay}
         active={active}
         fdMode="PH"
+        esm={esm.host}
       /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
@@ -2499,7 +2540,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           .then((s) => onSnap?.(s))
           .catch((e) => pushToast(String(e), 'error'))
       }
-      onStopTx={() => void haltTx()}
+      onStopTx={() => {
+        void haltTx()
+        esm.noteStop()
+      }}
     />
   )
   return (
@@ -3183,6 +3227,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           <input disabled={!control} type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
+        {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: AFTER PTT and Lock, and
+            taking only the room left, so nothing it says can move PTT under a held pointer. */}
+        {esmSetting && fieldDay && control && (
+          <EsmPlate
+            on={esmSetting.on}
+            onSwitch={esmSetting.onSwitch}
+            mode={esm.host.state.mode}
+            onToggle={esm.toggle}
+            preview={esm.preview}
+          />
+        )}
       </div>
       </div>
 

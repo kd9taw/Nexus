@@ -228,7 +228,7 @@ With **Enter Sends Message** on, each press of Enter in the contest log strip se
 
 ### How a contact runs
 
-Each contact starts in search and pounce (S&P). Pressing the key that holds your CQ switches to running, and clicking a spot switches back to S&P.
+ESM starts in search and pounce (S&P). Pressing the key that holds your CQ switches to running, and clicking a spot switches back to S&P.
 
 | You are | The strip holds | Enter sends |
 |---|---|---|
@@ -240,6 +240,10 @@ Each contact starts in search and pounce (S&P). Pressing the key that holds your
 | S&P | a complete exchange | your exchange, and the contact logs |
 
 With **Call once (S&P)** on, your call goes once per station: the next Enter sends AGN instead. If you correct a busted call after your exchange went out, the corrected call gets your exchange again. In Phone, when you are running, Enter plays nothing for his call and your exchange: you say them yourself, because a recording cannot say a callsign, and Enter moves the cursor to his exchange.
+
+His exchange counts as complete only with what you gave for this contact: what you typed or picked, the 5NN or 59 nobody changed, or a box filled from call history. A box filled from call history (marked **history**) is not accepted until you type it: at the step that would log the contact, Enter sends nothing and the strip names the box, and Alt+Enter logs it as it is. In Field Day, the class and section the strip keeps from your last contact count only once you type them for this one.
+
+**In the TX dock**, beside the ESM switch, the plate shows **Run** or **S&P** (click it to switch) and what the next Enter does: the key or keys it sends, which glow on the dock, or why it sends nothing, or why ESM steps aside. Its tooltip reminds you that Alt+Enter logs without sending anything.
 
 ### The rules
 
@@ -254,7 +258,7 @@ With **Call once (S&P)** on, your call goes once per station: the next Enter sen
 6. One press, one message. Holding Enter sends once. Alt+Enter logs without sending anything.
 7. The call it sends is the call in the strip.
 8. The contact logs the moment you press Enter for its last step, as N1MM does: TU when you are running, your exchange in S&P. It logs only a complete exchange that is not a dupe of your own log, and only once that last message has started. An Enter that is refused logs nothing.
-   - If you then stop that message, with Esc, Stop TX or the watchdog, the contact stays logged and the strip has already cleared for the next one. The other station may not have heard your TU or your exchange.
+   - If you then stop that message, with Esc, Stop TX or the watchdog, the contact stays logged and the strip has already cleared for the next one. The strip says so. To take the contact back, press Ctrl+D twice: it leaves your contest log, score and exports, and you can restore it from the contest screen. While club sync is on it cannot be removed, because the club log already has it: edit the club's Cabrillo file before you send it in.
    - If you stop an earlier message of the contact (his call and your exchange, or your call), it counts as not sent, and the next Enter sends it again rather than logging.
 9. On a dupe of your own log, Enter sends nothing and logs nothing. A club dupe (another position worked them) stays a warning, and Enter goes on as it would for a new call.
 10. A Super Check Partial match or a call-history hint is never sent or logged until you accept it.
