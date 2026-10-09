@@ -1841,22 +1841,26 @@ export function LogEntry({
           {/* ONE BOX PER RECEIVED SLOT, in receive order. Space walks each to the next
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
-          {fdReceives.map((f, i) => (
+          {fdReceives.map((f, i) => {
+            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
+            // value: typing over it, or the strip clearing, takes the mark away.
+            const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            return (
             <label className="le-fd-field" key={f.key}>
-              <span className="le-fd-cap">
-                {fdFieldLabel(f.key)}
-                {/* ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the
-                    file's value: typing over it, or the strip clearing, takes the mark away. */}
-                {fillMarks[f.key]?.value === fdValue(f) && (
+              {fromHistory ? (
+                <span className="le-fd-cap le-fd-cap-marked">
+                  <span className="le-fd-cap-text">{fdFieldLabel(f.key)}</span>
                   <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
-                )}
-              </span>
+                </span>
+              ) : (
+                <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              )}
               <input
                 ref={(el) => {
                   fdBoxRefs.current[f.key] = el
                 }}
                 className={`settings-input mono le-fd-input le-fd-input-code${
-                  fillMarks[f.key]?.value === fdValue(f) ? ' le-fd-input-history' : ''
+                  fromHistory ? ' le-fd-input-history' : ''
                 }`}
                 value={fdValue(f)}
                 onChange={(e) => {
@@ -1894,7 +1898,7 @@ export function LogEntry({
                 autoComplete="off"
                 spellCheck={false}
                 title={
-                  fillMarks[f.key]?.value === fdValue(f)
+                  fromHistory
                     ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
                     : slotTitle(f.key)
                 }
@@ -1925,7 +1929,8 @@ export function LogEntry({
                 </ul>
               )}
             </label>
-          ))}
+            )
+          })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
               is false whenever `fdActive` is, so `logIt`'s grid guard — which
               sits above the FD branch — is provably inert on this path. A layout
