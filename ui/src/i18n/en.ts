@@ -5650,9 +5650,11 @@ export const EN = {
   // Two whole statements, and the conjunction between the two squares is inside a message of
   // its own — a language that pairs them differently can only do it if it can translate the
   // joining word.
-  'recall.geo.title': 'Great-circle distance · true bearing from your QTH',
+  // `{{to}}` is what the bearing was taken to, as the point's toast says it (`rotor.pointed.to.*`): the
+  // station's grid, its callbook position, or the centre of its country.
+  'recall.geo.title': 'Great-circle distance · true bearing from your QTH ({{to}})',
   'recall.geo.title.approx':
-    'Great-circle distance · true bearing from your QTH — approximate: computed from the center of {{squares}}',
+    'Great-circle distance · true bearing from your QTH ({{to}}) — approximate: computed from the center of {{squares}}',
   'recall.geo.approx.mine':
     'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
   'recall.geo.approx.theirs': 'their {{grid}} square',

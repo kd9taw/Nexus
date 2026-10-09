@@ -3153,6 +3153,14 @@ body.resizing-row {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
+/* A Chase row with no heading to give says why, on a line of its own under the call: in the heading's
+   place (`.chase-az`, which may not shrink) its words took the whole line from the entity in a 200 px box.
+   A word too long for a narrow box breaks rather than running under ▶ Work. */
+.chase-why {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
 .chase-work {
   flex-shrink: 0;
   font-size: var(--fs-micro);

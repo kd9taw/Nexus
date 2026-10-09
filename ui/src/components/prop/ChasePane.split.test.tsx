@@ -11,7 +11,7 @@
 // is the cascade winner over the real sheets (cssCascade.testkit). The geometry is the real-browser
 // census's.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, waitFor } from '@testing-library/react'
 import type { NeedAlert } from '../../types'
 import type { PaneContext } from '../connect/paneContext'
 import { css, loadSheets } from '../../cssCascade.testkit'
@@ -22,6 +22,15 @@ import { ChaseFeedPane } from './ChaseFeedPane'
 // 0.25 s and 0.67 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
 // one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
 vi.setConfig({ testTimeout: 15_000 })
+
+// A row's heading is the station's answer for its call (features/callBearing): here, the centre of the
+// country, 159° and 12124 km from EN52.
+vi.mock('../../api', () => ({
+  rotatorBearingToCall: vi.fn(async () => ({
+    pointed: { bearing: 159.06, to: 'country', grid: null, country: 'South Orkney Is.' },
+    km: 12123.5,
+  })),
+}))
 
 const NEED = {
   call: 'VP8ORK', entity: 'South Orkney Is.', band: '20m', zone: 13, tags: ['NewEntity'], priority: 90,
@@ -75,10 +84,11 @@ afterEach(() => {
 })
 
 describe('a Chase row whose first line has no room for the entity', () => {
-  it('stamps its head, and the entity and its heading take the line under it', () => {
+  it('stamps its head, and the entity and its heading take the line under it', async () => {
     geometry.head = 200 // 162 px of chip, call, ↗ and age: 38 px left for a 140 px entity and heading
     render(<ChasePane ctx={ctx} />)
     const head = document.querySelector<HTMLElement>('.chase-head')!
+    await waitFor(() => expect(head.querySelector('.chase-az'), 'control: the row draws its heading').not.toBeNull())
     expect(head.querySelector('.chase-entity')?.textContent, 'control: the row draws the entity').toBe('South Orkney Is.')
     expect(head.hasAttribute('data-split'), 'the entity stays cut beside the call').toBe(true)
     const place = head.querySelector<HTMLElement>('.chase-where')!

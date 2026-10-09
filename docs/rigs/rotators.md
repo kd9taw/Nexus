@@ -152,7 +152,9 @@ Once it's configured and answering, rotator control appears throughout the app:
   pane has a second line: the call in that cockpit's log entry (in FT8/FT4, the
   QSO in progress), the short-path bearing and distance to it, e.g.
   `→ EC1DD 227° (1531 km)`, and **Point**, which turns the antenna there. The
-  bearing shown is the one Point turns to.
+  bearing shown is the one Point turns to. So are the Chase box's heading beside
+  its ↗ and the distance and bearing on the recall card under a log entry, and a
+  browser on Nexus Remote turns its → CALL to the same bearing.
 - **RotorStrip in the Phone, CW, Operate, RTTY, PSK, SSTV and JS8 cockpits** — a compact heading strip.
   It **hides when there's nothing to show**, and displays **"ROTOR —"** when a
   rotator is configured but not answering, so you can tell "no rotator" from
