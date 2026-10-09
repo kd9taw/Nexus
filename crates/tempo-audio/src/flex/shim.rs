@@ -416,12 +416,11 @@ impl FlexShim {
             return None;
         }
         conn.read(|s| {
-            s.model.atu_fitted().then(|| {
-                matches!(
-                    s.model.atu.status.as_deref(),
-                    Some("TUNE_SUCCESSFUL" | "TUNE_OK")
-                )
-            })
+            let matched = matches!(
+                s.model.atu.status.as_deref(),
+                Some("TUNE_SUCCESSFUL" | "TUNE_OK")
+            );
+            s.model.atu_fitted().then_some(matched)
         })
     }
 
