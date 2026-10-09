@@ -64,6 +64,9 @@ import { pushToast, withErrorToast } from '../toast'
 // entry-strip.html`), never in jsdom — jsdom lays out nothing and every rect is 0.
 // ---------------------------------------------------------------------------
 
+/** How long a call stands in the strip before it is reported to the Rotor box (`onEntryCall`). */
+export const ENTRY_SETTLE_MS = 300
+
 /** The two slots a Field Day role receives — what a snapshot from a build older than
  *  `FieldDayStatus.receives` describes, and what this strip has always rendered. */
 const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
@@ -350,6 +353,14 @@ interface Props {
    * never filled straight back, which is what keeps a keystroke typed during the round trip.
    */
   onCallChange?: (call: string) => void
+  /**
+   * The call this strip would log, trimmed and uppercased, for the Rotor box beside its cockpit
+   * (the bearing to it, and Point). Reported however the call got there, a fill included, once it
+   * has stood for `ENTRY_SETTLE_MS`, so a call typed a key at a time is reported once rather than
+   * per keystroke (each report re-renders the window and asks the station for a bearing); and `''`
+   * the moment this strip goes, since a strip that is not on screen has no call in it.
+   */
+  onEntryCall?: (call: string) => void
   /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
   onReset?: () => void
   /**
@@ -438,6 +449,7 @@ export function LogEntry({
   onConsumeWork,
   cwLive,
   onCallChange,
+  onEntryCall,
   onReset,
   fieldDay,
   fdMode,
@@ -1168,6 +1180,16 @@ export function LogEntry({
     linkedCall.current = c
     onCallChangeRef.current(c)
   }, [logCall])
+  // What this strip would log, for the Rotor box beside the cockpit (`onEntryCall`): settled, and
+  // withdrawn when the strip goes.
+  const onEntryCallRef = useRef(onEntryCall)
+  onEntryCallRef.current = onEntryCall
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    const id = setTimeout(() => onEntryCallRef.current?.(c), ENTRY_SETTLE_MS)
+    return () => clearTimeout(id)
+  }, [logCall])
+  useEffect(() => () => onEntryCallRef.current?.(''), [])
 
   // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
   // so the Dupe badge and the B4 chips can never disagree about what a dupe is. Until the

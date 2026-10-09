@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Logbook that you merged from the contest still running now removes it from the contest log too
   (restorable), as editing it there already corrects the contest log. Going back to an older
   Nexus brings removed contacts back as ordinary contacts.
+- **The Rotor box points the antenna at the station in your log entry.** In the dashboard rail
+  beside FT8/FT4, Phone, CW, RTTY, PSK and JS8, the Rotor box keeps the antenna's live bearing on
+  its first line, and its second line now shows the call in that cockpit's log entry with the
+  short-path bearing and distance to it (for example "→ EC1DD 227° (1531 km)", in your distance
+  unit), and a **Point** button that turns the antenna there. In FT8/FT4 that is the call of the
+  QSO in progress, the one Log QSO would log, even while you have selected another station in the
+  roster. The bearing shown is the one Point turns to: both come from the same lookup, which uses
+  the station's grid or callbook position when Nexus knows one and the centre of its country
+  otherwise (the box's tooltip says which). With no call in the entry the line is empty; a call
+  Nexus cannot place says "location unknown", and without your own grid in Settings it says so.
+  Point only turns the antenna: it never keys the radio, and ■ STOP stops the rotator as before.
+  The same Rotor box standing in a cockpit's own columns shows the same line. SSTV and APRS have no
+  log entry, so the line stays empty there. The rotator readouts in the cockpit headers, and Nexus
+  Remote, are unchanged.
 - **Field Day mode has a switch on the contest screen, and the left bar calls that screen
   Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
   contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar

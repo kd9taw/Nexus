@@ -71,6 +71,7 @@ export type BoxSource = Pick<
   | 'spotsFeed'
   | 'otaBoard'
   | 'neededBoard'
+  | 'entryCall'
 > & {
   /** The dashboard rail beside this cockpit, while it is on screen (App lends it the cockpit on screen only). */
   rail?: RailLink

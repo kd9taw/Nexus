@@ -74,6 +74,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the shell
    * (stream / macros / compose) renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -304,7 +306,7 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
@@ -1212,6 +1214,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
+            onEntryCall={onEntryCall}
             snap={snap}
             mode={RTTY}
             defaultRst="599"

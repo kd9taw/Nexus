@@ -101,6 +101,8 @@ import {
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting. */
   snap?: AppSnapshot | null
   /** Apply a snapshot returned by a command without waiting for the poll. */
@@ -191,6 +193,7 @@ export function Js8Cockpit({
   callsignAgingMin = 0,
   activityAgingMin = 0,
   onOpenLogbook,
+  onEntryCall,
   panels,
   onOpenSettings,
   boxes,
@@ -1054,6 +1057,7 @@ export function Js8Cockpit({
     >
       {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
         onOpenLogbook={onOpenLogbook}
+        onEntryCall={onEntryCall}
         snap={snap}
         // The ADIF token: written as MODE=MFSK SUBMODE=JS8 by the logbook (B5).
         mode={JS8}

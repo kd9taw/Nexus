@@ -684,8 +684,9 @@ export const PANES: PaneDef[] = [
     // Self-contained control surface — polls read_rotator while mounted and draws only this
     // Basic hint itself when NO rotator is configured. A configured rotator that cannot
     // report its position keeps the pane and its STOP button; the hint used to name the
-    // ADVANCED external-rotctld field, which is not where a rotator is set up.
-    expert: () => <RotorPane />,
+    // ADVANCED external-rotctld field, which is not where a rotator is set up. Beside a cockpit it
+    // also shows the call in that cockpit's log entry, its bearing and a Point (`entryCall`).
+    expert: (c) => <RotorPane entryCall={c.entryCall} />,
   },
   {
     id: 'amp',

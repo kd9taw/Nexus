@@ -48,6 +48,7 @@ import type {
   NeedAlert,
   QrzLookup,
   PointedAt,
+  CallBearing,
   RotatorState,
   QrzPushResult,
   RouteMode,
@@ -2637,6 +2638,14 @@ export async function pointRotatorElevation(elDeg: number, azDeg?: number): Prom
  *  same great circle the other way. */
 export async function pointRotatorAtCall(call: string, longPath = false): Promise<PointedAt> {
   return invoke<PointedAt>('point_rotator_at_call', { call, longPath })
+}
+
+/** The bearing `pointRotatorAtCall(call)` turns the antenna to, and the distance to the same point,
+ *  without turning it: the station's own resolver, read only (the rotor box's line 2). Refuses with
+ *  `noGrid` or `unknownStation` when there is no bearing to give. The desktop's alone: a browser is
+ *  never offered it. */
+export async function rotatorBearingToCall(call: string): Promise<CallBearing> {
+  return invoke<CallBearing>('rotator_bearing_to_call', { call })
 }
 
 /** The grid the log form holds for the call it is logging — typed, or filled in from the

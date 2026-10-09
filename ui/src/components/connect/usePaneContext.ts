@@ -149,6 +149,9 @@ export interface PaneContextInput {
   spotsFeed?: SpotsFeed
   otaBoard?: OtaBoard
   neededBoard?: NeededBoard
+  /** The call in the log entry of the cockpit beside the box (PaneContext `entryCall`); absent on every
+   *  surface with no cockpit beside it. */
+  entryCall?: string | null
 }
 
 /** A box context, and the X-ray reading the map's flare layer draws (it is not a box's). */
@@ -197,6 +200,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     onWorkSpot: i.onWorkSpot,
     onPoint: i.onPoint,
     toggleFocusBand: i.toggleFocusBand,
+    entryCall: i.entryCall ?? null,
   }
   return { ctx, xrayNow: f.xrayNow }
 }

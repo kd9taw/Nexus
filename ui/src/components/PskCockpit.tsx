@@ -67,6 +67,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the stream
    * pane renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -150,7 +152,7 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
@@ -927,6 +929,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           {!control ? psk && <RemoteRecallEntry snap={snap} mode={mode.name} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
+            onEntryCall={onEntryCall}
             snap={snap}
             // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the
             // record says which waveform was actually on the air rather than folding QPSK

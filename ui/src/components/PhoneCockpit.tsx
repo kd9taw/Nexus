@@ -227,6 +227,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
    *  them — so working a row from the Spots pane is the view's own act. `spots` above is the
    *  feed. Absent ⇒ there is no Spots pane to show, ticked or not. */
@@ -597,7 +599,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -2419,6 +2421,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           gets the QRZ photo / bearing / history back while operating. */}
       {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
+        onEntryCall={onEntryCall}
         snap={snap}
         mode={logMode}
         defaultRst="59"
