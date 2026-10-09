@@ -2614,10 +2614,14 @@ mod tests {
             got.t3 >= got.t0 && got.t3 - got.t0 < 2_000,
             "the round trip, measured here: {got:?}"
         );
-        // Host minus this PC, round-trip corrected: +45 s, give or take half the round trip.
+        // Host minus this PC, round-trip corrected: +45 s, give or take half the round trip, plus
+        // the stamps' own whole-millisecond rounding. The four stamps are truncated to the
+        // millisecond, so the offset can sit up to about 2 ms off even when the round trip
+        // itself measures 0 ms: a fast, idle machine measured t3 == t0 and an offset of
+        // 45 001 ms, which a bound of the round trip alone (0 ms) refused.
         let offset = ((got.t1 as i64 - got.t0 as i64) + (got.t2 as i64 - got.t3 as i64)) / 2;
         assert!(
-            (offset - 45_000).abs() <= (got.t3 - got.t0) as i64,
+            (offset - 45_000).abs() <= (got.t3 - got.t0) as i64 + 2,
             "the host is 45 s ahead: {offset} ms"
         );
     }
