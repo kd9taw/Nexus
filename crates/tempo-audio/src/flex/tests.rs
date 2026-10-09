@@ -397,9 +397,6 @@ fn another_clients_transmit_slice_is_never_keyed() {
     );
 }
 
-// ── The receiver set and the intents ────────────────────────────────────────────────────────
-
-/// A Flex station's engine: model 2036, the client's report observed.
 // ── CW through the radio's keyer: switched on in tests only ─────────────────────────────────
 //
 // Admission refuses every CWX word in production (`tempo_net::flex::admission::BENCHED`) until a
@@ -605,6 +602,9 @@ fn an_over_with_an_amplifier_in_line_ends_without_an_alarm() {
     );
 }
 
+// ── The receiver set and the intents ────────────────────────────────────────────────────────
+
+/// A Flex station's engine: model 2036, the client's report observed.
 fn flex_engine(d: &FlexDaemon) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     let mut s = e.settings().clone();
