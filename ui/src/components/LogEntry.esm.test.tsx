@@ -10,6 +10,8 @@
 //     strip's values, and only once the send path took the message;
 //   - a stop makes what went out count as not sent, and a stopped last message stays logged with
 //     the strip saying so (rule 8 as the operator changed it);
+//   - a box filled from call history counts as copied, and a Super Check Partial match counts only
+//     once it is picked (rule 10);
 //   - ESM off, or from afar, and Enter is what it always was.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
@@ -39,6 +41,12 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
   setLogFormGrid: vi.fn(() => Promise.resolve()),
+  // Asked only by a session with the aids on (`aided`).
+  scpEnsure: vi.fn(() => Promise.resolve({ fetchedAt: 100, checkedAt: 100, nextCheckAt: 0, count: 3 })),
+  getScpCalls: vi.fn(() => Promise.resolve(['K9AAA', 'W9XYZ', 'K9ABC'])),
+  getCallHistory: vi.fn(() =>
+    Promise.resolve({ contest: 'ilqp', fileName: 'il-2026.txt', entries: { K9AAA: { Loc1: 'WILL' } } }),
+  ),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -406,6 +414,78 @@ describe('Enter Sends Message — what it reads as a complete exchange', () => {
     await enter(boxes()[1])
     expect(harness.sent[harness.sent.length - 1]?.role).toBe('exch')
     expect(logged()).toEqual([['K9AAA', [['CLASS', '2A'], ['SECTION', 'IL']]]])
+  })
+})
+
+describe('Enter Sends Message — call history and Super Check Partial (rule 10)', () => {
+  /** Both aids on, as the engine reports them. The file has K9AAA in Will County. */
+  const aided = () =>
+    party([], { assistanceOn: ['Super Check Partial', 'Call history'] } as unknown as Partial<FieldDayStatus>)
+  /** Let the mount's reads (the SCP list, the call-history file) settle. */
+  const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
+  const scpShown = () => [...document.querySelectorAll('.le-scp button')].map((b) => b.textContent)
+
+  it('Run: a box filled from call history counts as copied, so TU goes and the contact logs with the fill', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    await run()
+    type(callBox(), 'K9AAA')
+    expect(qthBox().value, 'premise: the file filled his county').toBe('WILL')
+    await enter(callBox())
+    await enter(callBox())
+    expect({ sent: harness.sent.map((m) => [m.role, m.text, m.call]), logged: logged(), line: line() }).toEqual({
+      sent: [
+        ['callExch', '! {RST} {EXCH}', 'K9AAA'],
+        ['tu', 'TU {MYCALL}', 'K9AAA'],
+      ],
+      logged: [['K9AAA', [['RST', '599'], ['QTH', 'WILL']]]],
+      line: null,
+    })
+  })
+
+  it('S&P: the file completes his exchange as the call is typed, so the first Enter sends your exchange and logs the fill', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    type(callBox(), 'K9AAA')
+    await enter(callBox())
+    expect({ sent: harness.sent.map((m) => [m.role, m.text, m.call]), logged: logged(), line: line() }).toEqual({
+      sent: [['exch', 'TU {RST} {EXCH}', 'K9AAA']],
+      logged: [['K9AAA', [['RST', '599'], ['QTH', 'WILL']]]],
+      line: null,
+    })
+  })
+
+  it('what you type over the fill is what logs', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    await run()
+    type(callBox(), 'K9AAA')
+    expect(qthBox().value, 'premise: the file filled his county').toBe('WILL')
+    await enter(callBox())
+    type(qthBox(), 'LAKE')
+    await enter(qthBox())
+    expect(harness.sent.map((m) => m.role)).toEqual(['callExch', 'tu'])
+    expect(logged(), 'LAKE as typed, not the file’s WILL').toEqual([['K9AAA', [['RST', '599'], ['QTH', 'LAKE']]]])
+  })
+
+  it('an SCP match is never sent or logged until you pick it', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    await run()
+    type(callBox(), 'W9XY')
+    expect(scpShown(), 'premise: SCP offers W9XYZ').toEqual(['W9XYZ'])
+    await enter(callBox())
+    expect(harness.sent.map((m) => [m.role, m.call]), 'the call as typed, not the match').toEqual([['callExch', 'W9XY']])
+    fireEvent.click(screen.getByRole('button', { name: 'W9XYZ' }))
+    await enter(callBox())
+    type(qthBox(), 'LAKE')
+    await enter(qthBox())
+    expect(harness.sent.map((m) => [m.role, m.call])).toEqual([
+      ['callExch', 'W9XY'],
+      ['callExch', 'W9XYZ'],
+      ['tu', 'W9XYZ'],
+    ])
+    expect(logged()).toEqual([['W9XYZ', [['RST', '599'], ['QTH', 'LAKE']]]])
   })
 })
 

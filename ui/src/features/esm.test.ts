@@ -387,16 +387,6 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
     expect(press({ roles: noTu, strip: strip('K9AAA') })).toMatchObject({ kind: 'send', role: 'callExch', keys: ['F2'] })
   })
 
-  it('rule 10: a call-history fill nobody accepted is never logged — the logging step is refused by name', () => {
-    const hinted = { ...strip('K9AAA', true), fromHistory: 'QTH' }
-    expect(press({ ...last, strip: hinted })).toEqual({ kind: 'refuse', refusal: { why: 'history', slot: 'QTH' } })
-    expect(press({ state: SP, strip: hinted })).toEqual({ kind: 'refuse', refusal: { why: 'history', slot: 'QTH' } })
-    // His call and my exchange carry nothing of his, so they still go.
-    expect(press({ strip: hinted })).toMatchObject({ kind: 'send', role: 'callExch', log: false })
-    // Accepted (typed over), it logs.
-    expect(press({ ...last, strip: { ...hinted, fromHistory: null } })).toMatchObject({ kind: 'send', role: 'tu', log: true })
-  })
-
   it('RTTY sends its contest set\'s keys, and steps aside while the auto sequence runs or Continuous TX is latched', () => {
     const rtty: EsmGuards = { cockpit: 'rtty', ...tx, autoRunning: false, continuousTx: false }
     const slots = resolveRttySet(undefined, 'contest', (k) => k)

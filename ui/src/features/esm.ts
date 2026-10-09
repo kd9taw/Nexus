@@ -59,11 +59,6 @@ export interface EsmStrip {
   exchangeComplete: boolean
   /** `contestDupe`'s verdict on the call. Only `own` stops ESM: a club dupe is a warning. */
   dupe: ContestDupeVerdict
-  /** The slot of a box that still holds a call-history fill the operator has not accepted (by
-   *  typing it), or null. Rule 10: such a value is never logged until it is accepted, so the
-   *  press for a logging step is refused by name. Nothing from call history is ever SENT: ESM
-   *  sends his call and my exchange, never his. */
-  fromHistory?: string | null
 }
 
 /** Where the caret goes after the press: the Call box, the first exchange box, or nowhere.
@@ -92,8 +87,6 @@ export type EsmRefusal =
   | { why: 'empty'; role: EsmRole; key: MacroKey }
   /** Phone: this step is mapped to two recordings, and the keyer plays one per press. */
   | { why: 'oneSlot'; role: EsmRole }
-  /** The step would log, and `slot` still holds a call-history fill nobody accepted (rule 10). */
-  | { why: 'history'; slot: string }
 
 /** One Enter press, decided.
  *
@@ -273,19 +266,15 @@ export type EsmDecision =
       next: EsmState
     }
 
-/** One Enter press: the step, an unaccepted call-history fill at a logging step, its message,
- *  then the transmit guards — in that order, so the strip names the most useful reason (a dupe
- *  before an empty key, an empty key before TX off), and every refusal comes before anything
- *  could log. */
+/** One Enter press: the step, its message, then the transmit guards — in that order, so the
+ *  strip names the most useful reason (a dupe before an empty key, an empty key before TX off),
+ *  and every refusal comes before anything could log. */
 export function esmPress(input: EsmPressInput): EsmDecision {
   const { guards } = input
   const aside = esmInert(guards) ?? (esmHasSteps(input.roles) ? null : 'noRoles')
   if (aside) return { kind: 'inert', why: aside }
   const step = esmStep(input.state, input.strip, { cockpit: guards.cockpit, callOnce: input.callOnce })
   if (step.kind !== 'send') return step
-  // Rule 10: a call-history fill is never logged until the operator accepts it.
-  const fromHistory = input.strip.fromHistory
-  if (step.log && fromHistory) return { kind: 'refuse', refusal: { why: 'history', slot: fromHistory } }
   const message = esmMessage(input.roles, step.role, input.slots, guards.cockpit)
   if ('why' in message) return { kind: 'refuse', refusal: message }
   const refusal = esmTxRefusal(guards)

@@ -1871,11 +1871,10 @@ export function LogEntry({
 
   /** A box as ESM reads it: complete only with what the operator gave for THIS contact — typed,
    *  picked or grabbed since the strip last cleared, an untouched default report, a blank
-   *  optional box, or a call-history fill (counted, and refused at the logging step until it is
-   *  accepted: rule 10). A value the strip carried over from the last contact is not one: Field
-   *  Day's class and section stay in their boxes after a contact is logged, and read as complete
-   *  they would make the first Enter on a new call in S&P send the exchange and log the last
-   *  station's. */
+   *  optional box, or a call-history fill, which counts as copied (rule 10). A value the strip
+   *  carried over from the last contact is not one: Field Day's class and section stay in their
+   *  boxes after a contact is logged, and read as complete they would make the first Enter on a
+   *  new call in S&P send the exchange and log the last station's. */
   const esmGiven = (f: ContestFieldSpec): boolean => {
     const v = fdValue(f)
     if (!fdFieldOk(f, v, fdLineDomain(f))) return false
@@ -1887,18 +1886,16 @@ export function LogEntry({
       (v.trim() === '' && !f.required)
     )
   }
-  /** What ESM judges a press on: the strip's call, its exchange, the dupe verdict, and a box
-   *  still holding a call-history fill nobody accepted. */
+  /** What ESM judges a press on: the strip's call, its exchange and the dupe verdict. */
   const esmStrip = (): EsmStrip => ({
     call: logCall.trim().toUpperCase(),
     exchangeComplete: fdReceives.every(esmGiven),
     dupe: fdDupe,
-    fromHistory: fdReceives.find((f) => fillRef.current.filled[f.key]?.value === fdValue(f))?.key ?? null,
   })
   // The dock's plate and highlight follow what the strip holds.
   const stripNow = esmLive ? esmStrip() : null
   const stripKey = stripNow
-    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.dupe}|${stripNow.fromHistory ?? ''}`
+    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.dupe}`
     : ''
   useEffect(() => {
     esm?.onStrip(stripNow)

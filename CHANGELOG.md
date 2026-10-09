@@ -25,10 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again; if you stop the TU or the exchange whose Enter logged the contact, the contact stays
   logged and the strip says so, and Ctrl+D twice takes it back. In Phone, Enter plays the voice
   keyer's recordings (F1 CQ, F2 your exchange, F3 TU, F4 your call, F5 AGN), and when you are
-  running you say his call and your exchange yourself. A box filled from call history counts once
-  you type it, so Enter never logs last year's exchange on its own. ESM steps aside, and Enter logs
-  as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the voice keyer
-  is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
+  running you say his call and your exchange yourself. A box filled from call history counts as
+  copied: Enter sends and logs it as it stands, so type over it when the station sends something
+  different. ESM steps aside, and Enter logs as before, while RTTY's auto sequence runs or
+  Continuous TX is latched, or while the voice keyer is hidden. It never works in FT8, FT4 or any FT
+  mode, nor on the Remote page.
 - **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
   last** beside Clear on the log strip) names your newest contest contact on the strip's message
   line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
