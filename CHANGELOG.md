@@ -52,6 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state's 102 counties, each one lit when the club works it, with the host's own county outlined.
   The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
   address for the light board, or `?theme=auto` to follow the TV's own setting.
+- **Club sync: each position says how far its clock is from the host's, and the club board shows
+  every position's.** Every 5 seconds each position measures its clock against the host's over
+  the club link, allowing for the time the measurement spends on the network. From 2 seconds off,
+  its club line says so ("This PC's clock is 3 s behind the host's"); past 30 seconds it is the
+  warning it has always been. The club board, on the host and on every position, has a new
+  **Clock** column: in step, how many seconds ahead or behind, and a dash for a position running
+  an older Nexus. Nexus Remote's Field Day view shows the column too. Nexus only shows the
+  difference: it never changes a clock, FT8 and FT4 timing is untouched, and contact times still
+  come from each position's own clock, so put a wrong one right in that PC's date and time
+  settings. Older versions of Nexus keep working alongside: an older position shows a dash in the
+  Clock column, and with an older host each position goes by the rougher reading it takes when it
+  joins.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and

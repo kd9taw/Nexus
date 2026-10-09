@@ -176,11 +176,15 @@ Before any club event:
   port**) and announces itself on UDP port 42074, which **Find club events**
   listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
   firewall rule of its own.
-- **Set every clock first.** Nexus never changes a PC's clock. A position whose
-  clock is more than 30 seconds from the host's shows a warning when it joins,
-  but the contact times in the club log and in each Cabrillo file come from each
-  position's own clock, and when two positions log the same contact the club log
-  keeps the earlier one. Set every laptop from one source, a phone for example,
+- **Set every clock first.** Nexus never changes a PC's clock. Each position
+  measures its clock against the host's every 5 seconds over the club link, and
+  from 2 seconds off its club line says so ("This PC's clock is 3 s behind the
+  host's"); past 30 seconds the line is a warning. The host's club board has a
+  **Clock** column for every position, with a dash for one running an older
+  Nexus. The contact times in the club log and in each Cabrillo file still come
+  from each position's own clock, and when two positions log the same contact the
+  club log keeps the earlier one, so put a wrong clock right in that PC's own
+  date and time settings. Set every laptop from one source, a phone for example,
   before the event starts.
 
 ### The spectator scoreboard
