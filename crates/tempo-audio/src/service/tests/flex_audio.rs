@@ -364,6 +364,31 @@ fn without_native_audio_the_client_leaves_audio_to_the_sound_card() {
         .any(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("stream create") || text.starts_with("transmit set dax"))));
 }
 
+/// ⭐ THE FLEX'S RANGE IS UNKNOWN TO THE ENGINE, as a native CI-V radio's is. The client declares
+/// none, so its `\dump_state` carries an empty RX list, and the loop's probe hands the engine
+/// "unknown": every caller fails open and the radio answers for itself. It carried the CAT
+/// broker's wide row for WSJT-X, which the probe took as this FLEX-6400's range, 135.7 kHz to
+/// 1.3 GHz, 2 m included. The pads and preamps further down the same reply are the control.
+#[test]
+fn the_flex_clients_range_is_unknown_to_the_engine() {
+    let mut s = FlexScene::new(false);
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    let e = s.engine.lock().unwrap();
+    let snap = e.snapshot();
+    assert_eq!(
+        (
+            s.state.rx_ranges.clone(),
+            e.rig_covers_mhz(145.0),
+            snap.radio.rx_ranges_mhz,
+            snap.radio.att_steps_db,
+            snap.radio.preamp_steps_db,
+        ),
+        (None, None, vec![], Some(vec![]), Some(vec![]))
+    );
+}
+
 /// The bundled session, except that the radio reports a slice it switched to one of `modes`, as a
 /// radio does (the bundled session answers a mode change without a status).
 fn reports(modes: &[&str]) -> SimSession {

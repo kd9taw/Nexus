@@ -538,6 +538,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
   is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
   on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
+- **A native CI-V Icom that does not answer a frequency change is no longer reported as refusing
+  it.** On Nexus's own CI-V connection (USB or the Icom network connection), a frequency change
+  the radio did not answer at all was counted as a refusal: after three, the CAT status said "the
+  radio refused … — it does not cover that frequency", the dial went back to where the radio was,
+  and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
+  frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
+  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig
+  (1/3)", the words Nexus already used for a radio on Hamlib's rigctld. After three tries, as
+  before, Nexus stops asking and shows the frequency the radio is on: "… MHz not sent — no reply
+  from the rig after 3 tries; still on …". Pick the frequency again to retry. A radio on Hamlib's
+  rigctld that does not answer a frequency change now gets the same three tries: Nexus used to send
+  it again on every pass of the radio loop until CAT dropped, and never stopped for a radio that
+  still answered reads, each try holding up the loop, and with it a transmission due to start, for
+  as long as the reply could take. NEEDS-BENCH: an Icom that stops answering during a QSY
+  (switched off, or its CI-V lead pulled) should say no reply from the rig, never that it refused
+  the frequency, stop after three tries, and take the frequency when you pick it again with the
+  radio answering.
+- **Nexus's own FlexRadio and OmniRig connections no longer give the radio a frequency range it
+  does not have.** Both reported 135.7 kHz to 1.3 GHz as the radio's receive range: the range the
+  CAT broker gives WSJT-X so that it will set any frequency, never the radio's own. So a FLEX-6400
+  was taken to receive 2 m, and a frequency above 1.3 GHz (a satellite downlink or a transverter's
+  band) was refused with "This radio doesn't cover…" before the radio was asked. Nexus now treats
+  their range as unknown, as it does a native CI-V radio's: the frequency goes to the radio, which
+  answers for itself. What WSJT-X and other programs read through the CAT broker is unchanged, and
+  so is the check against your licence privileges. NEEDS-BENCH: a FLEX radio, and a radio on
+  OmniRig, asked for a frequency it cannot tune should say that the radio refused it.
+- **The CAT status no longer says a frequency was not sent once the radio has taken it.** When a
+  frequency change went unanswered, or was refused once, and the next try went through, the CAT
+  status kept its note ("… MHz not sent — no reply from the rig", or "… MHz refused by the rig
+  (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
+  rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
+  is on the line by then.
+- **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
+  (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
+  wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus
+  refused the port: wfview answers Nexus's check with "ChkVFO: 0", which Nexus took for some other
+  program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
+  ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
+  Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
+  included; a frequency in that form from any other rigctld server is read too. Share wfview's
+  rigctld this way rather than letting Nexus start a rigctld of its own in front of it: that one
+  refuses every command, PTT included, whenever wfview reports the radio switched off. NEEDS-BENCH:
+  wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
+  (Rear/Data keying the DATA input).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn

@@ -16,6 +16,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
+/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetFault {
+    /// The radio, or the backend, said no: `RPRT -1`.
+    Refused,
+    /// The radio said nothing: `RPRT -5`, Hamlib's ETIMEOUT.
+    NoAnswer,
+}
+
 /// The rig state the broker serves + the setters it relays. Implemented by Nexus's
 /// live rig bridge (real radio), the native CI-V daemon, and by a mock in tests.
 ///
@@ -43,6 +52,22 @@ pub trait RigBackend: Send + Sync {
     }
     /// Setters return true on success (→ `RPRT 0`), false → `RPRT -1`.
     fn set_freq(&self, hz: u64) -> bool;
+    /// The dial write as `F` relays it: [`Self::set_freq`], for a backend that can tell a radio
+    /// that REFUSED the dial from one that did not ANSWER. Hamlib's own codes carry the
+    /// difference (`rig.h`): the refusal is `RPRT -1`, the silence `RPRT -5` (ETIMEOUT), and
+    /// Nexus's client reads `-5` as the link rather than the radio
+    /// ([`crate::rig::rprt_is_link_fault`]). So the radio loop says the radio did not answer and
+    /// counts it toward its circuit breaker; only a refusal counts toward giving the dial up.
+    ///
+    /// The default is [`Self::set_freq`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon overrides it.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        if self.set_freq(hz) {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        }
+    }
     fn set_mode(&self, mode: &str, passband_hz: u32) -> bool;
     fn set_ptt(&self, on: bool) -> bool;
     fn set_vfo(&self, _vfo: &str) -> bool {
@@ -323,6 +348,16 @@ fn rprt(ok: bool) -> String {
     }
 }
 
+/// Map a write's outcome where the backend can tell a radio that did not answer from one that
+/// refused ([`RigBackend::try_set_freq`]): the silence is Hamlib's `RPRT -5` (ETIMEOUT).
+fn rprt_set(r: Result<(), SetFault>) -> String {
+    match r {
+        Ok(()) => rprt(true),
+        Err(SetFault::Refused) => rprt(false),
+        Err(SetFault::NoAnswer) => "RPRT -5\n".into(),
+    }
+}
+
 /// Map an extended-verb outcome: `None` = the backend doesn't implement it → Hamlib's
 /// `RPRT -11` (not implemented), otherwise RPRT 0/-1.
 fn rprt_ext(r: Option<bool>) -> String {
@@ -460,15 +495,15 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 ),
                 // Hamlib sends freq as printf %lf ("F 14074000.000000"), so parse
                 // as f64 and round to Hz — a u64 parse rejects every real client.
-                Some("F") => rprt(
+                Some("F") => rprt_set(
                     p.next()
                         .and_then(|s| s.parse::<f64>().ok())
                         // Reject NaN/±inf and absurd magnitudes: `f.round() as u64`
                         // saturates inf/huge to u64::MAX (a garbage dial with a
                         // false RPRT 0). Cap at 1 THz — far above any ham band.
                         .filter(|f| f.is_finite() && (0.0..=1e12).contains(f))
-                        .map(|f| backend.set_freq(f.round() as u64))
-                        .unwrap_or(false),
+                        .map(|f| backend.try_set_freq(f.round() as u64))
+                        .unwrap_or(Err(SetFault::Refused)),
                 ),
                 Some("m") => {
                     let (mode, pbw) = backend.mode();
@@ -739,8 +774,10 @@ const REPLY_SNIPPET_MAX: usize = 200;
 /// **Accept only what a rigctld actually says.** Hamlib 4.7.1 answers `\chk_vfo` with the bare
 /// `vfo_opt` flag — `"0\n"` (or `"1\n"` under `-o`), printed by `rigctl_parse.c` with the
 /// `RPRT` trailer suppressed. Nexus's own broker (and older Hamlib, per its man page) answers
-/// `"CHKVFO 0\n"`. `RPRT <n>` is accepted as well: nothing but a rigctld-protocol server emits
-/// it, and it means the port understood the command even if it refused it.
+/// `"CHKVFO 0\n"`, and wfview's rigctld (its `src/rigctld.cpp`, 2.23) `"ChkVFO: 0\n"`, also
+/// with no `RPRT`: the labelled form is read in any case, with or without the colon. `RPRT <n>`
+/// is accepted as well: nothing but a rigctld-protocol server emits it, and it means the port
+/// understood the command even if it refused it.
 ///
 /// **The bias is deliberate.** A false negative costs one spawn attempt. A false positive is
 /// the bug this replaces: a silent connection to the wrong kind of server. So anything we do
@@ -758,7 +795,7 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
     if first.is_empty() {
         return PortReply::Silent;
     }
-    if matches!(first, "0" | "1" | "CHKVFO 0" | "CHKVFO 1") || first.starts_with("RPRT ") {
+    if matches!(first, "0" | "1") || is_chk_vfo_answer(first) || first.starts_with("RPRT ") {
         return PortReply::Rigctld;
     }
     let mut snippet: String = first.chars().take(REPLY_SNIPPET_MAX).collect();
@@ -766,6 +803,15 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
         snippet.push('…');
     }
     PortReply::NotRigctld(snippet)
+}
+
+/// `\chk_vfo`'s labelled answer: `CHKVFO`, then a colon or a space or both, then the flag, `0` or
+/// `1` — `CHKVFO 0` from Nexus's broker, `ChkVFO: 0` from wfview.
+fn is_chk_vfo_answer(line: &str) -> bool {
+    let Some((label, flag)) = line.split_once(|c: char| c == ':' || c.is_ascii_whitespace()) else {
+        return false;
+    };
+    label.eq_ignore_ascii_case("chkvfo") && matches!(flag.trim_start_matches(':').trim(), "0" | "1")
 }
 
 /// Ask `addr` whether it is a rigctld we can share, and REPORT WHAT ANSWERED.
@@ -1875,6 +1921,40 @@ pub(crate) mod tests {
             s.chars().count(),
             REPLY_SNIPPET_MAX + 1,
             "capped, with an ellipsis"
+        );
+    }
+
+    /// ⭐ WFVIEW'S RIGCTLD IS A RIGCTLD. It answers `\chk_vfo` with `ChkVFO: 0` and no `RPRT`
+    /// (wfview 2.23, `src/rigctld.cpp`; those are the bytes below). Sharing it, rigctld TCP Port
+    /// set to wfview's port, is the documented way to run Nexus beside wfview, and the probe took
+    /// it for some other program on the port (`NotRigctld("ChkVFO: 0")`), so CAT never opened. The
+    /// labelled answer is read in any case, with or without the colon; a flag other than 0 or 1,
+    /// another label, and raw rig CAT are still not a rigctld.
+    #[test]
+    fn wfviews_labelled_chk_vfo_answer_is_a_rigctld() {
+        let read = |replies: &[&[u8]]| -> Vec<PortReply> {
+            replies.iter().map(|r| classify_probe_reply(r)).collect()
+        };
+        assert_eq!(
+            (
+                classify_probe_reply(b"ChkVFO: 0\n"),
+                read(&[b"ChkVFO: 1\n", b"chkvfo:0\r\n", b"CHKVFO: 1\n"]),
+                read(&[b"ChkVFO: 2\n", b"ChkVFO:\n", b"ChkVFOs: 0\n"]),
+                read(&[THETIS_BANNER.as_bytes(), b"FA00014074000;"]),
+            ),
+            (
+                PortReply::Rigctld,
+                vec![PortReply::Rigctld; 3],
+                vec![
+                    PortReply::NotRigctld("ChkVFO: 2".into()),
+                    PortReply::NotRigctld("ChkVFO:".into()),
+                    PortReply::NotRigctld("ChkVFOs: 0".into()),
+                ],
+                vec![
+                    PortReply::NotRigctld(THETIS_BANNER.to_string()),
+                    PortReply::NotRigctld("FA00014074000;".into()),
+                ],
+            )
         );
     }
     /// `\dump_state`'s second line is the served rig's model — the fact that lets the coexist
