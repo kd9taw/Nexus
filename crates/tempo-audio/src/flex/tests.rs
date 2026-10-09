@@ -400,6 +400,211 @@ fn another_clients_transmit_slice_is_never_keyed() {
 // ── The receiver set and the intents ────────────────────────────────────────────────────────
 
 /// A Flex station's engine: model 2036, the client's report observed.
+// ── CW through the radio's keyer: switched on in tests only ─────────────────────────────────
+//
+// Admission refuses every CWX word in production (`tempo_net::flex::admission::BENCHED`) until a
+// tester's bench confirms its readback. These tests open the door the way only tests can
+// (tempo-net's `flex-unbenched`), so the path behind it runs on the same checks it will run on
+// once switched on.
+
+/// [`config`] with the door past the bench's list open.
+fn unbenched() -> session::Config {
+    let mut c = config(Vec::new());
+    c.unbenched = true;
+    c
+}
+
+/// A daemon on [`unbenched`].
+fn cw_daemon(sim: &Simulator) -> FlexDaemon {
+    FlexDaemon::start_with(sim.tcp_addr(), 0, unbenched()).expect("the daemon starts")
+}
+
+/// The served slice put in CW through the shim, once the radio reports it.
+fn in_cw(c: &mut Client, d: &FlexDaemon) {
+    assert_eq!(c.ask("M CW 0", 1), "RPRT 0\n");
+    wait_session(d, "the slice in CW", |s| {
+        s.model.slices.get(&0).and_then(|s| s.mode.as_deref()) == Some("CW")
+    });
+    wait_session(d, "the readback idle", |s| s.transmit_ready);
+}
+
+/// The CWX commands on the wire.
+fn cwx_wire(sim: &Simulator) -> Vec<String> {
+    wire(sim)
+        .into_iter()
+        .filter(|c| c.starts_with("cwx ") || c.starts_with("xmit "))
+        .collect()
+}
+
+/// ⭐ `L KEYSPD` sets the radio's CW keyer speed, `cw wpm`, which keys nothing; `l KEYSPD` reads
+/// the speed the radio reports, whoever set it. A speed outside the keyer's 5–100 sends nothing.
+#[test]
+fn l_keyspd_sets_the_radios_cw_speed() {
+    let sim = simulator(
+        with(
+            SimSession::v4_gui_client(),
+            vec![rule("cw wpm 28", "0", &["S0|transmit speed=28"])],
+        ),
+        vec![],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    assert_eq!(c.ask("l KEYSPD", 1), "20\n", "the radio's own speed");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("L KEYSPD 28", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "l KEYSPD", "28\n");
+    assert_eq!(c.ask("L KEYSPD 101", 1), "RPRT -1\n");
+    assert_eq!(c.ask("L KEYSPD fast", 1), "RPRT -1\n");
+    assert_eq!(wire(&sim)[before..], ["cw wpm 28"]);
+}
+
+/// How long the session held our CWX keyed after `b <word>` was answered.
+fn keyed_for(c: &mut Client, d: &FlexDaemon, word: &str) -> Duration {
+    let sent = Instant::now();
+    assert_eq!(c.ask(&format!("b {word}"), 1), "RPRT 0\n", "{word}");
+    assert!(d.session().snapshot().keyed, "{word} keyed at once");
+    wait_session(d, "the word ended", |s| !s.keyed);
+    sent.elapsed()
+}
+
+/// ⭐ A word goes to the radio's keyer as one `cwx send`, and the session holds it keyed for the
+/// word's keying time at the radio's speed plus the break-in window: the simulated radio lets go
+/// 0.7 s after it keys, but "W9XYZ" at the radio's 20 WPM keys for 4.38 s, and the end is proven
+/// no sooner than 4.38 + 0.3 + 0.3 s after it was sent. Right after Nexus sets a slower speed the
+/// radio has not reported yet, the word is timed at that one.
+#[test]
+fn a_cw_word_goes_out_as_one_cwx_send_timed_at_the_radios_speed() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    in_cw(&mut c, &d);
+    let word = tempo_core::cw::morse_duration_ms("W9XYZ", 20);
+    assert_eq!(word, 4_380.0);
+    let held = keyed_for(&mut c, &d, "W9XYZ");
+    assert!(
+        held >= Duration::from_millis(4_380 + 600) && held < Duration::from_millis(4_380 + 1_600),
+        "{held:?}"
+    );
+    assert_eq!(cwx_wire(&sim), ["cwx send \"W9XYZ\" 1"]);
+    // 10 WPM set, not yet reported (the bundled radio does not echo it): "TEST" keys 2.52 s at
+    // 10 WPM, 1.26 s at the radio's 20.
+    assert_eq!(c.ask("L KEYSPD 10", 1), "RPRT 0\n");
+    let held = keyed_for(&mut c, &d, "TEST");
+    assert!(held >= Duration::from_millis(2_520 + 600), "{held:?}");
+    assert_eq!(
+        cwx_wire(&sim),
+        ["cwx send \"W9XYZ\" 1", "cwx send \"TEST\" 2"]
+    );
+    assert_eq!(d.alarm(), None);
+}
+
+/// ⭐ A word the client does not send goes nowhere and says why, for the CW line
+/// ([`FlexDaemon::key_refused_since`], with no audio cause): on a DIGU slice, where the CW ID after
+/// an FT 73 is queued; with the radio's break-in off; and, as it ships, at all. The same word keys
+/// on a CW slice with break-in on.
+#[test]
+fn a_cw_word_the_client_does_not_send_says_why() {
+    let refused = |c: &mut Client, d: &FlexDaemon| {
+        let asked = Instant::now();
+        assert_eq!(c.ask("b CQ", 1), "RPRT -1\n");
+        d.key_refused_since(asked)
+    };
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(
+        refused(&mut c, &d),
+        Some((
+            "CW not sent: the radio's transmit slice is in DIGU, not CW. Nexus sends CW to the \
+             radio's keyer only in CW."
+                .to_string(),
+            None
+        ))
+    );
+    assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+    in_cw(&mut c, &d);
+    assert_eq!(c.ask("b CQ", 1), "RPRT 0\n", "the control");
+    assert_eq!(cwx_wire(&sim), ["cwx send \"CQ\" 1"]);
+
+    // Break-in off.
+    let mut session = with_mode_echo();
+    for (pattern, rules) in &mut session.rules {
+        if *pattern == Pattern::Exact("sub tx all".into()) {
+            for item in rules.iter_mut().flat_map(|r| r.items.iter_mut()) {
+                if let Item::Send(line) = item {
+                    *line = line.replace(" break_in=1 ", " break_in=0 ");
+                }
+            }
+        }
+    }
+    let sim = simulator(session, vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    in_cw(&mut c, &d);
+    assert_eq!(
+        refused(&mut c, &d),
+        Some((
+            "CW not sent: break-in is off on the radio. Turn on break-in in SmartSDR, or use \
+             another keyer."
+                .to_string(),
+            None
+        ))
+    );
+    assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+
+    // As it ships: the switch off.
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    in_cw(&mut c, &d);
+    assert_eq!(
+        refused(&mut c, &d),
+        Some((
+            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
+             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
+                .to_string(),
+            None
+        ))
+    );
+    assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+}
+
+/// ⭐ An amplifier in line (the simulator's PGXL profile: the radio's PTT_REQUESTED carries
+/// `reason=AMP:PG-XL`): an over through the client ends on its readback, with no alarm, as it
+/// ships. Any other reason on the same report still ends in the alarm.
+#[test]
+fn an_over_with_an_amplifier_in_line_ends_without_an_alarm() {
+    let over = |reason: &str| {
+        let sim = simulator(
+            SimSession::v4_gui_client(),
+            vec![Fault::KeyingReason {
+                reason: reason.into(),
+            }],
+        );
+        let d = daemon(&sim);
+        let mut c = Client::connect(&d);
+        wait_session(&d, "the readback idle", |s| s.transmit_ready);
+        assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+        ask_until_answer(&mut c, "t", "1\n");
+        assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+        let ended = d
+            .session()
+            .wait_until(WAIT, |s| !s.keyed || s.phase == session::Phase::Closed);
+        assert!(ended, "{reason}");
+        (d.is_alive(), d.alarm())
+    };
+    assert_eq!(over(tempo_flexsim::fault::PGXL), (true, None));
+    let (alive, alarm) = over("PA_RANGE");
+    assert!(!alive);
+    assert!(
+        alarm
+            .as_deref()
+            .is_some_and(|a| a.contains("did not confirm the unkey")),
+        "{alarm:?}"
+    );
+}
+
 fn flex_engine(d: &FlexDaemon) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     let mut s = e.settings().clone();
@@ -1404,6 +1609,39 @@ fn nothing_leaves_without_our_key() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
+/// ⭐ No DAX audio rides a CWX word. While the radio keys our CW word (the session holds it keyed
+/// until its readback proves the end) audio handed to the route is dropped, not sent, as with
+/// nothing keyed: the pacer sends only during an over, whose control is
+/// [`nothing_leaves_without_our_key`]'s keyed half.
+#[test]
+fn no_dax_audio_leaves_during_a_cwx_word() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = FlexDaemon::start_full(
+        sim.tcp_addr(),
+        0,
+        unbenched(),
+        Options {
+            vita: sim.udp_addr(),
+            registration: sim.udp_addr(),
+            memory: memory(),
+        },
+    )
+    .expect("the daemon starts");
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    in_cw(&mut c, &d);
+    assert!(d.tx_route_ready(), "the route is up on a CW slice too");
+    assert_eq!(c.ask("b W9XYZ", 1), "RPRT 0\n");
+    let tee = d.tx_tee().unwrap();
+    tee.feed(&tone(0.3, 0.5));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(d.session().snapshot().keyed, "still inside the word");
+    assert_eq!(dax_tx_packets(&sim).len(), 0, "DAX TX during a CWX word");
+    let tx = d.audio.as_ref().unwrap().tx();
+    assert_eq!(audio::queued(&tx), 0, "dropped, not kept for a later key");
+    wait_session(&d, "the word ended", |s| !s.keyed);
+}
+
 /// The bundled session, with the slice's mode reported back for the modes these tests set.
 fn with_mode_echo() -> SimSession {
     with(
@@ -1648,8 +1886,8 @@ fn a_key_is_refused_while_nothing_feeds_the_dax_nexus_set() {
         ),
         "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying a DIGU over: native audio is \
          off, and the radio still takes its transmit audio from the DAX Nexus set, which nothing \
-         feeds until its mic input is back\", FlexAudioRefusal { mode: \"DIGU\", cause: DaxUnfed \
-         }))"
+         feeds until its mic input is back\", Some(FlexAudioRefusal { mode: \"DIGU\", cause: \
+         DaxUnfed })))"
     );
     route_until(&d, &sim, false, "transmit set dax=0", 1);
     eventually("the mic", || {
@@ -1688,7 +1926,7 @@ fn a_phone_key_is_refused_until_the_radio_has_its_mic_back() {
         ),
         "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying a USB over: the radio still \
          takes its transmit audio from the DAX Nexus set, not its mic input, until Nexus puts the \
-         mic back\", FlexAudioRefusal { mode: \"USB\", cause: MicNotBack }))"
+         mic back\", Some(FlexAudioRefusal { mode: \"USB\", cause: MicNotBack })))"
     );
     route_until(&d, &sim, false, "transmit set dax=0", 1);
     eventually("the mic", || {

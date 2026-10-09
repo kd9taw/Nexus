@@ -2605,3 +2605,223 @@ fn stop_tx_reaches_a_flex_transmission_the_loop_did_not_key() {
         "the CW stop, then the hard stop's T 0"
     );
 }
+
+// ── CW through the radio's keyer: switched on in tests only ─────────────────────────────────
+//
+// Admission refuses every CWX word in production (`tempo_net::flex::admission::BENCHED`) until a
+// tester's bench confirms its readback. These tests open the door the way only tests can
+// (tempo-net's `flex-unbenched`), so the loop runs the path behind it on the checks it will run on
+// once switched on.
+
+/// The client's configuration with the door past the bench's list open.
+fn unbenched() -> tempo_net::flex::session::Config {
+    let mut c = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    c.unbenched = true;
+    c
+}
+
+/// The served slice's mode, as the client reports it in rigctld words.
+fn slice_mode(s: &FlexScene) -> Option<String> {
+    let d = s.state.rigctld_proc.as_ref().and_then(CatDaemon::flex)?;
+    d.slices().into_iter().find(|r| r.index == 0)?.mode
+}
+
+/// The loop's CW section, the CAT keyer at 20 WPM, on a radio that reports its slice's mode
+/// changes, its client on `config`; the slice in CW.
+fn cw_scene(
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), faults, config);
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_cw_keyer("cat", 600.0);
+        e.set_cw_wpm(20);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.03, "20m", "CW");
+    }
+    run_until(&mut s, "the slice in CW", |s| {
+        slice_mode(s).as_deref() == Some("CW")
+    });
+    s
+}
+
+/// The CW keyer's commands on the radio's wire, and the unkey, in order.
+fn cw_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. } if text.starts_with("cwx ") || text == "xmit 0" => {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the CW screen's warning line says.
+fn cw_line(s: &FlexScene) -> Option<String> {
+    s.engine.lock().unwrap().cw_keyer_error()
+}
+
+/// Whether the client believes something of ours is on the air.
+fn flex_on_air(s: &FlexScene) -> bool {
+    s.state.flex_keyed()
+}
+
+/// ⭐ A message goes out one word per `cwx send`, at the classic pacing: each word is handed over
+/// once the one before has had its keying time plus a word space (7 dits), so at most one word sits
+/// in the radio's buffer and Stop TX can drop the rest. On the loop's own clock, 20 ms a step, each
+/// gap is that time to within one step. The radio's break-in ends the message: no stop, no alarm,
+/// nothing on the CW line.
+#[test]
+fn a_macro_goes_out_one_word_per_cwx_send_at_the_classic_pacing() {
+    let mut s = cw_scene(vec![], unbenched());
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    let words = ["CQ", "TEST", "DE", "W9XYZ"];
+    // The loop's clock steps 20 ms at the real clock's pace: the client and the radio keep real
+    // time. A word is handed over on the step whose clock it was paced to.
+    let (start, zero) = (Instant::now(), now_unix_ms());
+    let mut handed = Vec::new();
+    for i in 0..600u32 {
+        let now = zero + 20.0 * f64::from(i);
+        let busy = s.state.cw_busy_until;
+        s.step(now);
+        if s.state.cw_busy_until != busy {
+            handed.push(now - zero);
+        }
+        let next = start + Duration::from_millis(20 * u64::from(i + 1));
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+        if handed.len() == words.len() && !flex_on_air(&s) {
+            break;
+        }
+    }
+    assert_eq!(handed.len(), words.len(), "{handed:?}");
+    let dit = 1200.0 / 20.0;
+    for (i, pair) in handed.windows(2).enumerate() {
+        let paced = tempo_core::cw::morse_duration_ms(words[i], 20) + 7.0 * dit;
+        let gap = pair[1] - pair[0];
+        assert!(
+            gap >= paced && gap < paced + 20.0,
+            "{}: {gap} ms after it, paced {paced}",
+            words[i + 1]
+        );
+    }
+    assert_eq!(
+        cw_wire(&s),
+        [
+            "cwx send \"CQ\" 1",
+            "cwx send \"TEST\" 2",
+            "cwx send \"DE\" 3",
+            "cwx send \"W9XYZ\" 4"
+        ]
+    );
+    assert!(!flex_on_air(&s), "the radio's break-in ended it");
+    assert_eq!(cw_line(&s), None);
+    assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new());
+}
+
+/// ⭐ Stop TX in the middle of a message (the CW screen's: the CW abort and Halt) clears the
+/// radio's CW buffer at once, `cwx clear` from `\stop_morse` and again from the hard stop's `T 0`,
+/// and nothing goes out after it. The radio's break-in ends the word that was going out: no unkey
+/// follows. On a radio that still shows our CWX transmitting after the clear, the unkey does, and
+/// its release ends it. No alarm either way.
+#[test]
+fn stop_tx_mid_macro_clears_and_sends_nothing_after() {
+    for held in [false, true] {
+        let faults = if held {
+            vec![tempo_flexsim::Fault::HoldsCwx]
+        } else {
+            Vec::new()
+        };
+        let mut s = cw_scene(faults, unbenched());
+        s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+        run_until(&mut s, "the first word", |s| !cw_wire(s).is_empty());
+        {
+            let mut e = s.engine.lock().unwrap();
+            e.stop_cw();
+            e.halt_tx();
+        }
+        run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+        s.run(3_000);
+        let mut want = vec!["cwx send \"CQ\" 1", "cwx clear", "cwx clear"];
+        if held {
+            want.push("xmit 0");
+        }
+        assert_eq!(cw_wire(&s), want, "held: {held}");
+        assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new(), "held: {held}");
+    }
+}
+
+/// ⭐ The CW ID after an FT 73 stays unsent on a DIGU slice. It is queued from the FT section with
+/// the slice in DIGU (what the loop does once the 73 has left the air), the client refuses it
+/// there, nothing reaches the radio's keyer, and the CW line says why. That is today's outcome,
+/// kept: sending it would take a mode change inside FT's QSO handling. The control: the same send
+/// from the CW section goes out.
+#[test]
+fn the_cw_id_after_73_stays_refused_on_a_digu_slice() {
+    let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), Vec::new(), unbenched());
+    run_until(&mut s, "the slice in DIGU", |s| {
+        slice_mode(s).as_deref() == Some("PKTUSB")
+    });
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mycall = e.settings().mycall.clone();
+        e.send_cw(&mycall);
+    }
+    s.run(1_500);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+    assert_eq!(
+        cw_line(&s).as_deref(),
+        Some(
+            "CW not sent: the radio's transmit slice is in DIGU, not CW. Nexus sends CW to the \
+             radio's keyer only in CW."
+        )
+    );
+    let mut s = cw_scene(Vec::new(), unbenched());
+    s.engine.lock().unwrap().send_cw("W9XYZ");
+    run_until(&mut s, "the control's word", |s| !cw_wire(s).is_empty());
+    assert_eq!(cw_wire(&s), ["cwx send \"W9XYZ\" 1"]);
+}
+
+/// ⭐ A word the client refuses drops the rest of the message, as a refused key does, so the
+/// message cannot resume part way once the radio would take a word: here the first word is
+/// refused on a DIGU slice, the slice is in CW by the time the second word is due, and nothing goes
+/// out. As it ships, the CW line says the client does not send CW yet, in place of the Hamlib
+/// advice, which does not apply to it.
+#[test]
+fn a_refused_word_drops_the_rest_of_the_message_and_says_why() {
+    let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), Vec::new(), unbenched());
+    run_until(&mut s, "the slice in DIGU", |s| {
+        slice_mode(s).as_deref() == Some("PKTUSB")
+    });
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    run_until(&mut s, "the first word refused", |s| cw_line(s).is_some());
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_cw_keyer("cat", 600.0);
+        e.set_operating_mode("cw", false);
+    }
+    run_until(&mut s, "the slice in CW", |s| {
+        slice_mode(s).as_deref() == Some("CW")
+    });
+    s.run(3_000);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+
+    // As it ships.
+    let mut s = cw_scene(
+        Vec::new(),
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    s.engine.lock().unwrap().send_cw("CQ TEST");
+    run_until(&mut s, "the word refused", |s| cw_line(s).is_some());
+    assert_eq!(
+        cw_line(&s).as_deref(),
+        Some(
+            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
+             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
+        )
+    );
+    s.run(3_000);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+}

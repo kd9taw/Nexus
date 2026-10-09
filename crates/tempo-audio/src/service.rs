@@ -5206,7 +5206,7 @@ impl RadioLoop {
     /// the rigctld answer, `RPRT -1`, which carries no reason. Anything else: nothing.
     fn explain_flex_refusal(&self, eng: &mut Engine, asked: Instant) {
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
-        if let Some((why, cause)) = flex.and_then(|d| d.key_refused_since(asked)) {
+        if let Some((why, Some(cause))) = flex.and_then(|d| d.key_refused_since(asked)) {
             eng.explain_refused_key(&why, cause);
         }
     }
@@ -9221,16 +9221,35 @@ impl RadioLoop {
                                                     // that timed out — two different faults with two different answers.
                                                     // The serial keyline's sibling ten lines above has said the system's
                                                     // own error verbatim since the FTX-1 report, for exactly this reason.
+                        let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
+                        // Nexus's own Flex client says why it sent nothing (the slice not in CW,
+                        // break-in off, ...), in place of the Hamlib advice, which would be wrong
+                        // there. Its refusal drops the rest of the message, as a refused key does,
+                        // so the message cannot resume part way on a later word the radio takes.
+                        let flex_why = cw_err
+                            .as_ref()
+                            .and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                            .and_then(|d| d.key_refused_since(asked))
+                            .map(|(why, _)| why);
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_cw_keyer_error(cw_err.map(|e| {
-                                format!(
-                                    "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
-                                     — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
-                                     (which needs Nexus's audio routed to the rig)."
-                                )
-                            }));
+                            if let Some(why) = flex_why {
+                                tempo_core::applog::info(
+                                    "tx",
+                                    &format!("CW not keyed: {why} (dropped)"),
+                                );
+                                eng.cw_key_refused();
+                                eng.set_cw_keyer_error(Some(why));
+                            } else {
+                                eng.set_cw_keyer_error(cw_err.map(|e| {
+                                    format!(
+                                        "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
+                                         — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
+                                         (which needs Nexus's audio routed to the rig)."
+                                    )
+                                }));
+                            }
                         }
                     }
                 }
@@ -10510,8 +10529,9 @@ impl RadioLoop {
                         .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
                         .flatten()
                         .and_then(|d| d.key_refused_since(asked))
-                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
-                        .map(|(_, r)| r.mode);
+                        .and_then(|(_, r)| r)
+                        .filter(|r| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|r| r.mode);
                     engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
                     self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
                 } else {
