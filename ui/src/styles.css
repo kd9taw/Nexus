@@ -1395,6 +1395,80 @@ button.nb-chip:hover {
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
+/* THE ROTOR BOX IN THE DASHBOARD RAIL (`.dash-boxes`, components/DashRail) IS LAID OUT COMPACTLY, so the
+   bearing (and the elevation), ■ STOP and line 2 are in view without scrolling in the stock four-box rail at
+   its default split. Measured in Chrome over the full app: the box's body there is 139 px at 1366×768 and
+   1600×900 and 198 px at 1920×1080, and the pane as laid out above is 288 px (317 with an elevation axis, 33
+   more with line 2) with its rose over the readings, so STOP was a scroll down inside the box. In the rail:
+   · THE ROSE STANDS BESIDE the bearing, the elevation and the boxes, and smaller: 56 px in the 300 px rail,
+     36 px at its 200 px floor, a fifth of every px between, which leaves the bearing its one line beside it
+     at the floor. It is sized by the rail's width (`--dash-rail-w`), never the box's: a box loses 10 px to
+     its scrollbar the moment line 2 arrives, and a rose sized by it moved STOP 2.5 px sideways. The drawing
+     scales (the pane's viewBox); its lines keep their widths and its letters are set larger in its own units.
+   · LINE 2 AND WHAT FOLLOWS IT RUN UNDER THE ROSE at the box's full width (`.rotor-side` lends its lines to
+     the row's grid), where "→ EC1DD 227° (951 mi)" and Point fit one line in the 300 px rail.
+   · TIGHTER LINES: the bearing at 1.25em, the elevation at the body size, the bearing and elevation boxes
+     STOP's height (not the 44 px touch floor) and narrower (three digits still show), and Point beside line
+     2's words, which wrap, wherever that leaves them 6em, so a distance such as "(15310 km)" never splits;
+     a Point too wide for that goes under them ("Ausrichten" at the floor: two lines of words, not five).
+   What still needs a scroll, measured: line 2 at 1366×768 and 1600×900 in the 200 px rail (113 px of body:
+   every box's head takes two lines there), and with an elevation axis in the 225 and 250 px rails at
+   1366×768 (its boxes and STOP take two lines below ~265 px); and with an elevation axis and a call, the
+   box's last few px (the hint) at 1366×768 and 1600×900 in the 300 px rail.
+   Everywhere else (Connect, a box in a cockpit's columns) the pane is laid out as above.
+   RotorPane.rail.test.tsx computes both. */
+.dash-boxes .pane-body .rotor-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
+  align-items: center;
+}
+.dash-boxes .pane-body .rotor-side {
+  display: contents;
+}
+.dash-boxes .pane-body .rotor-rose {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  width: clamp(36px, calc(36px + (var(--dash-rail-w, 300px) - 200px) * 0.2), 56px);
+  height: auto;
+}
+.dash-boxes .pane-body .rotor-ring,
+.dash-boxes .pane-body .rotor-tick,
+.dash-boxes .pane-body .rotor-needle {
+  vector-effect: non-scaling-stroke;
+}
+.dash-boxes .pane-body .rotor-cardinal {
+  font-size: 22px;
+}
+.dash-boxes .pane-body .rotor-az,
+.dash-boxes .pane-body .rotor-el,
+.dash-boxes .pane-body .rotor-entry {
+  grid-column: 2;
+}
+.dash-boxes .pane-body .rotor-aim,
+.dash-boxes .pane-body .rotor-slewing,
+.dash-boxes .pane-body .rotor-hint {
+  grid-column: 1 / -1;
+}
+.dash-boxes .pane-body .rotor-az {
+  font-size: 1.25em;
+}
+.dash-boxes .pane-body .rotor-el {
+  font-size: var(--fs-body);
+}
+.dash-boxes .pane-body .rotor-entry {
+  gap: var(--space-1);
+}
+.dash-boxes .pane-body .rotor-entry input.settings-input {
+  min-height: 0;
+  width: 2.75em;
+  padding: var(--space-1);
+}
+.dash-boxes .pane-body .rotor-aim-to {
+  flex: 1 1 6em;
+  min-width: 0;
+}
 /* TX controls consolidated into the QSO strip (beside CQ/S&P). */
 .cq-txctl {
   margin-left: var(--space-2);

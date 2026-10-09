@@ -283,9 +283,12 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   return (
     <section className="rotor-pane panel">
       <div className="rotor-row">
+        {/* The viewBox lets the sheet draw the rose smaller (the dashboard rail's box) without cropping it;
+            at its own size it changes nothing. */}
         <svg
           width={SIZE}
           height={SIZE}
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
           className="rotor-rose"
           onClick={(e) => slew(azFromClick(e))}
           role="img"
