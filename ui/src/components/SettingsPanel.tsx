@@ -10363,6 +10363,13 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.integrations.pskreporter.hint')}
                   </span>
+                  {/* A contest that allows spotting only over amateur RF (Winter Field Day)
+                      pauses the reports while it runs, whatever this switch says. */}
+                  {form.fdActive && rulesetPreview?.spotsRfOnly && (
+                    <span className="settings-hint">
+                      {t('settings.integrations.pskreporter.rfOnly', { event: contestName(rulesetPreview.event) })}
+                    </span>
+                  )}
                 </div>
 
                 <div className="settings-field">
@@ -12107,6 +12114,12 @@ export function SettingsPanel({
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* Winter Field Day has no high-power entry: its Cabrillo takes QRP or LOW, and a
+                  power left at HIGH writes no CATEGORY-POWER line rather than one it does not
+                  have. Said here, beside the picker that decides it. */}
+              {(form.fdEvent ?? '').trim() === 'wfd' && (
+                <span className="settings-hint">{t('settings.contestPick.power.wfd')}</span>
+              )}
               {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
                   when the log is exported rather than when a contest starts: nothing sent on
                   the air depends on it. NAME is the Station tab's operator name. */}
@@ -12652,6 +12665,9 @@ export function SettingsPanel({
                 <span className="toggle-knob" />
               </button>
               <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
+              {/* The ports a club event needs through the firewall, said where the event is
+                  switched on: Nexus adds no firewall rule of its own. */}
+              <span className="settings-hint">{t('settings.fdClub.firewall.hint')}</span>
             </label>
             {form.fdHostEnable && (
               <p className="settings-note">{t('settings.fdClub.host.note')}</p>

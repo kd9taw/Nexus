@@ -294,3 +294,40 @@ describe('contestDupe — a contest keyed on the exchange, with the exchange in 
     expect(contestDupe(party, 'K9AAA', '40m', 'CW')).toBe('none')
   })
 })
+
+describe('contestDupe — a satellite contact the contest gives no credit (Winter Field Day 2027)', () => {
+  // The sponsor: "Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not
+  // count. Do not log any such contacts." (2027 rules p.5). WFD's dupe rule lists no bird as a
+  // band, so the pass row's key equals the terrestrial contact's — and the engine keeps the pass
+  // out of the dupe index, so the badge must not call the terrestrial contact a dupe of it.
+  const wfd = (over: Partial<FieldDayStatus> = {}) =>
+    fd({
+      log: [
+        { call: 'W5SAT', class: '1O', section: 'STX', band: '70cm', mode: 'PH', submode: 'FM', sat: 'SAUDISAT 1C (SO-50)' },
+      ],
+      dupeRule: {
+        byCall: true,
+        byBand: true,
+        byModeClass: true,
+        byFields: [],
+        bySentFields: [],
+        modeClassGroups: [],
+        logDupes: false,
+      },
+      satelliteCredit: false,
+      ...over,
+    } as unknown as Partial<FieldDayStatus>)
+
+  it('does NOT call a terrestrial contact a dupe of a pass that counts for nothing', () => {
+    expect(contestDupe(wfd(), 'W5SAT', '70cm', 'PH')).toBe('none')
+  })
+
+  it('CONTROL — the same pass under a contest that credits satellites still fires', () => {
+    expect(contestDupe(wfd({ satelliteCredit: undefined }), 'W5SAT', '70cm', 'PH')).toBe('own')
+  })
+
+  it('CONTROL — a terrestrial row in the same log still fires', () => {
+    const terrestrial = { call: 'W5SAT', class: '1O', section: 'STX', band: '70cm', mode: 'PH', submode: 'FM' }
+    expect(contestDupe(wfd({ log: [terrestrial] } as Partial<FieldDayStatus>), 'W5SAT', '70cm', 'PH')).toBe('own')
+  })
+})

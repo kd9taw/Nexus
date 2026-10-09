@@ -55,7 +55,12 @@ impl Engine {
             event: log.session.event_id.clone(),
             powered_points: scored,
             bonus_points: bonus,
-            total_score: scored + bonus,
+            // ⭐ The ONE formula: a contest that scores by objectives (Winter Field Day) claims
+            // QSO points × (OM + 1), every other contest what it always claimed.
+            total_score: rs.claimed_total(qso_pts, scored, bonus, &self.settings.fd_objectives),
+            objective_multiplier: (!rs.objective_menu.is_empty())
+                .then(|| rs.objective_multiplier(&self.settings.fd_objectives)),
+            satellite_credit: (!rs.satellite_credit).then_some(false),
             event_start_unix: event_window.start_unix,
             event_end_unix: event_window.end_unix,
             rules_year: rs.rules_year,
@@ -103,7 +108,13 @@ impl Engine {
                     // ⭐ The row's key under THIS ruleset's rule, from the one builder.
                     // The strip cannot build it: the rule names sent slots, and a row's
                     // sent exchange reaches the UI only as the rendered `mex`.
-                    dkey: rs.dupe_rule.key(q),
+                    // A satellite contact the contest gives no credit is a dupe of
+                    // nothing, so it carries no key the verdict could match.
+                    dkey: if rs.satellite_credit || q.sat.is_none() {
+                        rs.dupe_rule.key(q)
+                    } else {
+                        Vec::new()
+                    },
                     // ⭐ The engine's own answer about this row, so the log table marks a
                     // zero-scoring dupe instead of guessing at one from a repeated callsign.
                     dupe: q.dupe,

@@ -277,6 +277,9 @@ const MIGRATED = [
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
   'components/ContestView.tsx',
+  // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
+  // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
+  'components/WfdObjectivesSection.tsx',
   // The contest slot captions (2026-09-17): born migrated — the entry strip and the contest
   // log table read one table of catalog keys; a slot id it has no caption for is a token.
   'features/contestSlots.ts',

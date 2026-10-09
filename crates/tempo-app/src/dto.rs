@@ -2238,9 +2238,23 @@ pub struct FieldDayStatus {
     /// Claimed bonus points (the Settings checklist).
     #[serde(default)]
     pub bonus_points: u32,
-    /// powered_points + bonus_points — the claimed total.
+    /// The claimed total: powered_points + bonus_points, or, for a contest that scores by
+    /// objectives (Winter Field Day), QSO points × (objective multiplier + 1) —
+    /// `FdRuleset::claimed_total`, the one formula.
     #[serde(default)]
     pub total_score: u32,
+    /// ⭐ **The objective multiplier (OM) the ticked objectives earn**, for a contest that
+    /// scores by objectives (Winter Field Day). `None` for every contest without an objective
+    /// menu, and then absent on the wire: the hosted Remote page refuses a key it does not
+    /// know, so every other contest's capture keeps the shape every published page accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_multiplier: Option<u32>,
+    /// ⭐ **`Some(false)` when this contest gives a satellite contact no credit** (Winter
+    /// Field Day 2027), and then a row with a `sat` counts for nothing and is no dupe of
+    /// anything, which the while-typing verdict reads. `None` — absent on the wire, for the
+    /// Remote page's sake — for every contest that credits them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub satellite_credit: Option<bool>,
     /// The active-or-next occurrence of this event's window (Unix UTC),
     /// computed in Rust from the ruleset data — the single source the
     /// banner/countdown reads. (The TS date math this replaces hardcoded a

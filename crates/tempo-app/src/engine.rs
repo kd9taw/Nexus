@@ -2617,6 +2617,10 @@ pub enum VoiceMemCmd {
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
+    /// The instant [`Self::internet_spot_block`] judges "while the event runs" against: the
+    /// wall clock, unless a test has fixed one ([`Self::set_spot_clock`]). Nothing in the app
+    /// sets it.
+    spot_clock: Option<u64>,
     /// Station-wide state (logbook, connector queues, DXCC/rarity/LoTW resolvers, POTA
     /// activation, journal paths, PC-clock offset) — everything that is true of the
     /// OPERATOR rather than of this receive/transmit chain. See [`StationCore`].
@@ -5344,6 +5348,7 @@ impl Engine {
                 station
             },
             settings,
+            spot_clock: None,
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
@@ -6586,6 +6591,50 @@ impl Engine {
     /// chose would be indistinguishable from one somebody did.
     fn fd_row_operator(&self) -> String {
         self.settings.fd_operator.trim().to_ascii_uppercase()
+    }
+
+    /// ⭐ **The contest whose rules forbid posting a spot over the internet RIGHT NOW**, by its
+    /// rules-file id, or `None`.
+    ///
+    /// Winter Field Day 2027: *"You may spot yourself and others only via amateur RF."* So
+    /// while its event runs, for a station that has it switched on (`fd_active`, `fd_event`),
+    /// every door that posts a spot over the internet asks here and refuses: PSK Reporter's
+    /// reports ([`Self::pskreporter_uploading`]), a DX cluster spot and a POTA self-spot.
+    /// Outside the event's window, for a contest without the rule ([`spots_rf_only`]), or
+    /// with the contest switched off, every post goes as it always did. Nothing RECEIVED is
+    /// touched: the rule is about where a spot is posted.
+    ///
+    /// [`spots_rf_only`]: tempo_core::fd_rules::AssistancePolicy::spots_rf_only
+    pub fn internet_spot_block(&self) -> Option<&'static str> {
+        let now = self.spot_clock.unwrap_or_else(now_unix_secs);
+        if !self.settings.fd_active {
+            return None;
+        }
+        let rs = tempo_core::fd_rules::ruleset_by_id(
+            self.settings.fd_event.trim(),
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )?;
+        if !rs.assistance.spots_rf_only {
+            return None;
+        }
+        let w = rs.next_or_running(now);
+        (w.start_unix <= now && now < w.end_unix).then_some(rs.event)
+    }
+
+    /// Fix the instant [`Self::internet_spot_block`] judges against (`None` = the wall
+    /// clock) — so a test can stand inside or outside an event's window. Nothing in the app
+    /// calls it.
+    pub fn set_spot_clock(&mut self, at: Option<u64>) {
+        self.spot_clock = at;
+    }
+
+    /// ⭐ **Is the PSK Reporter upload EFFECTIVELY on?** The operator's own setting, unless a
+    /// contest that allows spotting only over RF is running ([`Self::internet_spot_block`]):
+    /// a reception report posted to pskreporter.info is a spot posted over the internet. It
+    /// OVERRIDES the setting and never rewrites it, so the reports resume the moment the
+    /// event ends. The radio loop builds or drops its reporter by this.
+    pub fn pskreporter_uploading(&self) -> bool {
+        self.settings.pskreporter && self.internet_spot_block().is_none()
     }
 
     /// Switch the ACTIVE radio (dual-radio). Persists the current radio's live tune into its
@@ -11860,17 +11909,22 @@ impl Engine {
     /// contest uses, under the host's own station data.
     ///
     /// A Field Day club is rebuilt under exactly what it always was: its event, and the
-    /// class and section Settings holds at the moment of asking. Any other contest takes
+    /// class, section and declared power Settings holds at the moment of asking (the power
+    /// writes a line only where the rules ask for one). Any other contest takes
     /// the host's LIVE session when the host is running it (what this station is sending
     /// now, after an "I moved" included), and otherwise builds one from Settings the way
     /// `set_mode` would — refused, with its own sentence, when Settings cannot make one.
     fn fd_club_session(&self, club: &crate::fdevent::ClubLog) -> Result<ContestSession, String> {
         if let Some(event) = club.field_day_event() {
+            // …with the entry's declared power, so the club file carries the CATEGORY-POWER
+            // a position's does where the rules ask for one (Winter Field Day); ARRL Field
+            // Day's rules ask for none, and its file is unchanged.
             return Ok(ContestSession::field_day(
                 event,
                 &self.settings.fd_class,
                 &self.settings.fd_section,
-            ));
+            )
+            .with_category_power(&self.settings.contest_category_power));
         }
         if let Mode::FieldDay { station, .. } = &self.mode {
             if station.log.session.event_id == club.event_id {
@@ -11891,6 +11945,7 @@ impl Engine {
             club: self.settings.contest_club.trim().to_string(),
             entry_class: self.settings.contest_entry_class.trim().to_string(),
             operators: self.settings.contest_operators.trim().to_string(),
+            objectives: self.settings.fd_objectives.clone(),
         }
     }
 
@@ -12049,6 +12104,7 @@ impl Engine {
                     session,
                     self.settings.fd_power_mult,
                     &self.settings.fd_bonuses,
+                    &self.settings.fd_objectives,
                 )
                 .total
             })
@@ -12145,6 +12201,7 @@ impl Engine {
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
             claimed: self.settings.fd_bonuses.clone(),
+            objectives: self.settings.fd_objectives.clone(),
             positions,
             rows: club
                 .rows()
@@ -12163,6 +12220,7 @@ impl Engine {
                     submode: r.submode.clone(),
                     when_unix: r.when_unix,
                     operator: r.operator.clone(),
+                    sat: r.sat.clone(),
                 })
                 .collect(),
             contest,
@@ -25084,7 +25142,9 @@ contact yourself."
             Mode::FieldDay { station, .. } => {
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
-                    "adif" => Ok(station.log.adif()),
+                    // The file the entry submits: a satellite contact the contest gives
+                    // no credit is left out (the journal keeps it).
+                    "adif" => Ok(station.log.submission_adif()),
                     // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
                     // entrant's own settings, read at export so a corrected typo reaches the
                     // next file; the log writes each only where the contest's rules list that
@@ -43508,11 +43568,12 @@ mod tests {
     /// proved against ARRL Field Day alone.
     ///
     /// WFD scores on the `Objectives` model, so `powered == qso_pts` — there is
-    /// no on-air power multiplier — while the bonus menu is the one it shares
-    /// with ARRL FD today. Classes here are WFD's own (H/I/O/M), which is what
-    /// a real WFD log contains.
+    /// no on-air power multiplier. Since the sponsor's 2027 rules it carries no
+    /// copy of ARRL's bonus menu either, so two ARRL bonuses ticked under WFD are
+    /// worth nothing (this test pinned them at 150 while WFD borrowed that menu).
+    /// Classes here are WFD's own (H/I/O/M), which is what a real WFD log contains.
     #[test]
-    fn wfd_score_is_byte_identical_after_the_ruleset_refactor() {
+    fn wfd_scores_raw_points_and_no_arrl_bonus() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         {
             let mut s = e.settings().clone();
@@ -43521,7 +43582,7 @@ mod tests {
             s.fd_class = "3O".into();
             s.fd_section = "WI".into();
             s.fd_power_mult = 5; // ignored by the Objectives model
-            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // not WFD's
             e.apply_settings(s);
         }
         e.set_mode("fieldday-run").unwrap();
@@ -43532,23 +43593,288 @@ mod tests {
         assert!(e.fd_log_manual("W1AW", "1M", "CT", "PH").unwrap());
         assert!(e.fd_log_manual("K5ABC", "3O", "STX", "PH").unwrap());
 
-        // Objectives: powered == qso_pts, and the power tier does NOT multiply.
+        // Objectives: powered == qso_pts, the power tier does NOT multiply, and
+        // ARRL's bonuses add nothing.
         assert_eq!(
             e.fd_score(),
-            Some((6, 6, 150)),
-            "WFD scores raw QSO points — the ×5 tier must not apply"
+            Some((6, 6, 0)),
+            "WFD scores raw QSO points — the ×5 tier and ARRL's bonuses must not apply"
         );
         let fd = e.snapshot().field_day.expect("master on → FD chrome");
         assert_eq!(fd.points, 6);
         assert_eq!(fd.powered_points, 6);
-        assert_eq!(fd.bonus_points, 150);
-        assert_eq!(fd.total_score, 156);
+        assert_eq!(fd.bonus_points, 0);
+        assert_eq!(fd.total_score, 6);
         // WFD's window is 30 h (the ARRL leg pins 27 h) — the two events read
         // genuinely different window data through the same path.
         assert_eq!(fd.event_end_unix - fd.event_start_unix, 30 * 3600);
         assert!(fd.event_start_unix > 0);
-        assert_eq!(fd.rules_year, 2026);
+        assert_eq!(fd.rules_year, 2027);
         assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// The shared Winter Field Day fixture, hosting: W9XYZ `3O WI`, QRP declared, 100%
+    /// alternative power and QRP ticked, AA9OP at the key; the station logs CW K1ABC on 20 m,
+    /// phone N0XYZ on 40 m and RTTY N7OUT on 80 m (5 points), and the club holds the same
+    /// three from a position whose operator is AA9OP too. Returns the engine (hosting) and
+    /// the journal's directory.
+    fn wfd_club_fixture(tag: &str) -> (Engine, std::path::PathBuf) {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "wfd".into();
+            s.fd_class = "3O".into();
+            s.fd_section = "WI".into();
+            s.fd_operator = "AA9OP".into();
+            s.contest_category_power = "QRP".into();
+            s.fd_objectives = vec!["wfd-alt-power-100".into(), "wfd-qrp".into()];
+            s.op_name = "Test Operator".into();
+            s.contest_email = "op@example.org".into();
+            s.contest_club = "Test Club".into();
+            s.contest_operators = "KB9QRS".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let contacts = [
+            ("K1ABC", "2O", "CT", 14.030, "20m", "CW", ""),
+            ("N0XYZ", "1H", "MN", 7.200, "40m", "PH", ""),
+            ("N7OUT", "4I", "AZ", 3.580, "80m", "DIG", "RTTY"),
+        ];
+        for (call, class, section, dial, band, mode, sub) in contacts {
+            e.set_frequency(dial, band, "USB");
+            assert!(e
+                .fd_log_manual_submode(call, class, section, mode, sub)
+                .unwrap());
+        }
+        let dir = std::env::temp_dir().join(format!("wfd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join(
+            tempo_net::fdsync::PROTO_VERSION,
+            "aaaa0001",
+            "Tent",
+            "W9XYZ",
+            "wfd",
+        );
+        for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
+            e.fd_club_merge(&tempo_net::fdsync::WireQso {
+                pos: "aaaa0001".into(),
+                seq,
+                call: call.into(),
+                class: class.into(),
+                sect: section.into(),
+                ex: vec![],
+                mex: vec![],
+                band: band.into(),
+                mode: mode.into(),
+                sub: sub.into(),
+                when: 1_800_727_200 + seq * 60,
+                op: "AA9OP".into(),
+                sat: String::new(),
+                sat_fm: false,
+            });
+        }
+        (e, dir)
+    }
+
+    /// ⭐ **ONE WINTER FIELD DAY TOTAL, ON EVERY SURFACE THAT SHOWS OR FILES ONE.** The
+    /// sponsor's formula — QSO points × (the ticked objectives' multipliers + 1), 2027 rules
+    /// p.7 — on the station's own snapshot, the club line every position shows, the spectator
+    /// board, and the `CLAIMED-SCORE` of both Cabrillo files, the position's and the club's:
+    /// the fixture's 5 points × (OM 7 + 1) = 40 (`wfd_club_fixture`).
+    #[test]
+    fn wfd_claims_points_times_objectives_plus_one_on_every_surface() {
+        let (mut e, dir) = wfd_club_fixture("objectives");
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        let club = e.fd_club_state(0, 0, "aaaa0001").score;
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot().expect("host role"),
+                1_800_727_200,
+            ))
+            .unwrap();
+        let claimed = |cab: &str| {
+            cab.lines()
+                .find_map(|l| l.strip_prefix("CLAIMED-SCORE: "))
+                .map(str::to_string)
+        };
+        let own = e.export_log("cabrillo").expect("one entry");
+        let club_file = e.fd_club_export(true).expect("one entry");
+        assert_eq!(
+            (
+                fd.points,
+                fd.objective_multiplier,
+                fd.total_score,
+                club,
+                board["score"]["total"].as_u64(),
+                claimed(&own),
+                claimed(&club_file),
+            ),
+            (
+                5,
+                Some(7),
+                40,
+                40,
+                Some(40),
+                Some("40".to_string()),
+                Some("40".to_string())
+            ),
+            "(QSO points, OM, snapshot total, club line, board, position Cabrillo, club \
+             Cabrillo)\n{own}\n{club_file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The club's Winter Field Day file heads exactly as a position's does** — the club
+    /// file is the one the sponsor receives, so it carries every line of the sponsor's p.10
+    /// example the position's file carries: the exchange, the declared power, the claimed
+    /// score, the entrant, the club and the operators.
+    #[test]
+    fn wfd_club_file_heads_like_the_position_file() {
+        let (mut e, dir) = wfd_club_fixture("heads");
+        let heads = |cab: &str| -> Vec<String> {
+            [
+                "X-EXCHANGE:",
+                "CATEGORY-POWER:",
+                "CLAIMED-SCORE:",
+                "NAME:",
+                "EMAIL:",
+                "CLUB:",
+                "OPERATORS:",
+            ]
+            .iter()
+            .map(|tag| {
+                cab.lines()
+                    .find(|l| l.starts_with(tag))
+                    .unwrap_or("(none)")
+                    .to_string()
+            })
+            .collect()
+        };
+        let own = e.export_log("cabrillo").expect("one entry");
+        let club_file = e.fd_club_export(true).expect("one entry");
+        let want = [
+            "X-EXCHANGE: 3O",
+            "CATEGORY-POWER: QRP",
+            "CLAIMED-SCORE: 40",
+            "NAME: Test Operator",
+            "EMAIL: op@example.org",
+            "CLUB: Test Club",
+            "OPERATORS: AA9OP KB9QRS",
+        ];
+        assert_eq!(
+            (heads(&own), heads(&club_file)),
+            (
+                want.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
+                want.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+            ),
+            "(the position's file, the club's file)\n{own}\n{club_file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A satellite contact counts for nothing in a Winter Field Day club** — not in the
+    /// club line, not on the spectator board, not in the club's file — and is no club dupe of
+    /// the same station worked without the bird (2027 rules p.5: *"Cross-band, repeated,
+    /// relayed, meshed, and/or internet-linked contacts do not count"*). The shared fixture
+    /// (5 points, OM 7) plus two passes and one terrestrial 70 cm phone contact with a station
+    /// also worked through the bird: 6 points × 8 = 48. The station's own snapshot says the
+    /// contest gives satellites no credit, which the while-typing verdict reads.
+    #[test]
+    fn wfd_club_gives_a_satellite_contact_no_credit() {
+        let (mut e, dir) = wfd_club_fixture("satellite");
+        let row = |seq: u64, call: &str, sect: &str, sat: &str| tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq,
+            call: call.into(),
+            class: "1O".into(),
+            sect: sect.into(),
+            ex: vec![],
+            mex: vec![],
+            band: "70cm".into(),
+            mode: "PH".into(),
+            sub: "FM".into(),
+            when: 1_800_727_200 + seq * 60,
+            op: "AA9OP".into(),
+            sat: sat.into(),
+            sat_fm: !sat.is_empty(),
+        };
+        e.fd_club_merge(&row(4, "W5SAT", "STX", "SAUDISAT 1C (SO-50)"));
+        e.fd_club_merge(&row(5, "K5SAT", "NTX", "SAUDISAT 1C (SO-50)"));
+        e.fd_club_merge(&row(6, "W5SAT", "STX", ""));
+        let club = e.fd_club_state(0, 0, "aaaa0001").score;
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot().expect("host role"),
+                1_800_727_200,
+            ))
+            .unwrap();
+        let file = e.fd_club_export(true).expect("one entry");
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            (
+                club,
+                board["score"]["total"].as_u64(),
+                file.matches(" W5SAT ").count() + file.matches(" K5SAT ").count(),
+                fd.satellite_credit,
+                e.fd_club_counts(),
+            ),
+            (48, Some(48), 1, Some(false), (4, 4)),
+            "(club line, board, the club file's lines for the two stations, the snapshot's \
+             satellite credit, the club's dupe keys and sections: the fixture's three and the \
+             terrestrial W5SAT, never a pass's NTX)\n{file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **NO SPOT OVER THE INTERNET WHILE WINTER FIELD DAY RUNS** — 2027 rules p.8: *"You
+    /// may spot yourself and others only via amateur RF."* The engine's one decision, which
+    /// every posting door asks (the desktop's and the Remote page's cluster spot, the
+    /// self-spot, and the radio loop's PSK Reporter upload): inside the event's window, for a
+    /// station with the contest switched on, it names the contest, and the PSK Reporter upload
+    /// is off whatever its switch says. Controls: the same station an hour before the event,
+    /// at the window's end, with the master switch off, and ARRL Field Day inside its own window.
+    #[test]
+    fn no_internet_spot_while_winter_field_day_runs() {
+        let at = |event: &str, class: &str, fd_active: bool, now: u64| {
+            let mut e = Engine::new("W9XYZ", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = fd_active;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.pskreporter = true;
+            e.apply_settings(s);
+            e.set_spot_clock(Some(now));
+            (e.internet_spot_block(), e.pskreporter_uploading())
+        };
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+            .event_window(2027);
+        let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+            .event_window(2026);
+        assert_eq!(
+            [
+                at("wfd", "3O", true, wfd.start_unix + 7200),
+                at("wfd", "3O", true, wfd.start_unix - 3600),
+                at("wfd", "3O", true, wfd.end_unix),
+                at("wfd", "3O", false, wfd.start_unix + 7200),
+                at("arrlfd", "3A", true, arrl.start_unix + 7200),
+            ],
+            [
+                (Some("wfd"), false),
+                (None, true),
+                (None, true),
+                (None, true),
+                (None, true)
+            ],
+            "(during Winter Field Day, before it, at its end, with the master switch off, \
+             during ARRL Field Day)"
+        );
     }
 
     /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects

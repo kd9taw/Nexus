@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
   Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
   Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
+- **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
+  screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
+  each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
+  sponsor's QSO points × (objective multipliers + 1): the contest screen and its pop-out, the club
+  line every position shows, the club TV scoreboard, the summary you download and the Cabrillo
+  `CLAIMED-SCORE`. 100% alternative power counts station equipment on alternative power with it,
+  and twelve bands counts six. For six bands, twelve bands and multiple modes, a hint from your log
+  says how far it shows you are; you tick them yourself, as the sponsor's form asks. A note says
+  when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
+  read-only, once its page has been updated.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
   Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),
@@ -130,9 +140,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
   of them, and a failed fetch says so once.
+- **Winter Field Day runs on the sponsor's 2027 rules.** The rules data now says 2027, so a station
+  that has it is no longer told in January to check for rules updates. Winter Field Day no longer
+  carries a copy of ARRL Field Day's bonus list: those bonuses are not part of Winter Field Day,
+  and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
+  log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
+  operators (Settings ▸ Contesting ▸ Contest), each where you have set it.
+- **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
+  `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
+  `CATEGORY-POWER`. Winter Field Day's limit is 100 W PEP and it has no high-power entry, so a
+  Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the picker. A
+  club's file carries the same lines as a position's, and its OPERATORS line now names the
+  operators the positions logged under as well as the ones you typed.
+- **A satellite contact counts for nothing at Winter Field Day.** The sponsor's 2027 rules say
+  cross-band and relayed contacts do not count. A contact made through a satellite is still logged
+  and kept, and reaches your logbook and LoTW when you merge the contest log, but it scores
+  nothing, is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the
+  same station worked on the same band without the satellite a duplicate. ARRL Field Day, which
+  counts satellite contacts, is unchanged.
+- **No spots over the internet while Winter Field Day runs.** The sponsor's 2027 rules say "You may
+  spot yourself and others only via amateur RF." So while the event runs, a station with Winter
+  Field Day switched on sends no PSK Reporter reports, posts no DX cluster spot and sends no POTA
+  self-spot, from the desktop or from Nexus Remote. The contest screen says why, the Spot and Spot
+  me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
+  and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
+  to normal when the event ends.
+- **Winter Field Day's words follow the 2027 rules, and the manual has its checklist.** The Field
+  Day Setup box is **WFD Class and Category**: the number of transmitters, then H, I, O or M, as the
+  sponsor now names them, and the contest log puts the H/I/M/O note on that column. Settings ▸
+  Contesting ▸ Field Day Club Sync names the firewall ports a club event uses. The Field Day manual
+  has a Winter Field Day 2027 checklist (the rules update and restart, class and category, LOW or
+  QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
+  the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
+  export sections now describe the objectives and the sponsor's submission.
 
 ### Fixed
 
+- **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
+  Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
+  updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
+  as the current one: those feeds carry more than one, and a second spacecraft's readings are
+  never mixed in. Reported by KB0UZT (#404).
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -143,8 +191,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
   pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
   field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
-  in a contest and out of one, and logging a contact empties both. A decoded call goes into both
-  when you click its chip; the decoder's best guess no longer fills the log strip by itself.
+  in a contest and out of one, and logging a contact empties both. Until you work a station or
+  type a call, the decoder's best guess still fills the strip, and now His Call too: it is shown
+  unconfirmed, as before, and the F-keys send it unless you correct it first. Clicking a decoded
+  call's chip puts that call in both.
 - **CW contest keys send your report.** In a contest whose exchange includes a signal report
   (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
   cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois

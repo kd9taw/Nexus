@@ -48,6 +48,13 @@
 //! themselves accept fixtures and are therefore proved clean by the walk above before any
 //! refusal that sits on them is read.
 //!
+//! ⚠️ **A third base, `accept/objective-menu.json`, for the same reason**: Winter Field Day
+//! with its bonus list emptied and its `objective_menu` added, because a ruleset carrying
+//! both menus is refused (that refusal is its own fixture, one insertion off `seed.json`).
+//! The objective refusals — a zero multiplier, an id twice or empty, an empty label, an
+//! `implies` naming itself, naming an objective not on the menu, or missing — are each one
+//! mutation off it.
+//!
 //! ⚠️ **Some of these mutations are invisible to `JSON.parse`** — `2.0` where `2`
 //! belongs, a repeated key, an integer past `u64`, an unpaired `\u` surrogate. A
 //! tool that rewrites a fixture through `JSON.parse` + `stringify` would

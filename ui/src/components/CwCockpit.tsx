@@ -953,36 +953,76 @@ export function CwCockpit({
   // ⭐ HIS CALL AND THE LOG STRIP'S CALL ARE ONE FIELD, shown twice (RTTY's shape). The strip bound
   // its call to the contest session and never to the peer, so a call typed only in the strip was
   // not the call the F-keys keyed: they keyed His Call, the last station or none. Now a call the
-  // strip reports (typed, a spot handoff's prefill, the clear after a contact is logged) is an
+  // strip reports (typed, or a spot handoff's prefill; a logged contact's clear is below) is an
   // edit of His Call, committed like one before the next send; and His Call, settled, is what the
   // strip shows (`cwLive`). DEBOUNCED as RTTY's is: the strip spends a callbook lookup on a call
   // it is given, so typing K, K9, K9A… waits out the typing. A call that arrives whole is settled
-  // at once. The decoder's unconfirmed best guess is in neither field until its chip is picked: in
-  // the strip alone it was a call shown and not keyed, the very mismatch this ends.
+  // at once.
+  //
+  // ⭐ UNTIL A STATION IS WORKED OR A CALL IS TYPED, THE DECODER'S BEST GUESS FILLS THE ONE FIELD,
+  // shown unconfirmed in the strip and committed like a typed call before a send: the F-keys send
+  // it unless it is corrected first. Untouched, it follows a better guess. A station worked, a
+  // spot handoff or a chip pick replaces it at once, so it is never an edit (`hisCallEditing`),
+  // which would hold the field against them. Once a call is typed in either box the guess stays
+  // out until the strip is cleared for the next contact (logged, or its ✕). The calls of the
+  // contact cleared, the one in the field and the decoder's guess then, most often both the
+  // station just logged, are not offered again, nor taken back when the call just sent reaches
+  // the decode poll after the strip was cleared.
   const [hisCallDraft, setHisCallDraft] = useState('')
   const hisCallEditing = useRef(false)
-  const hisCallRef = useRef({ draft: '', worked: null as string | null })
-  hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall }
+  // The field is the decoder's to fill: holding its guess, or empty for the next one.
+  const guessing = useRef(true)
+  const best = cand.find((c) => c.best)?.call ?? null
+  const [spent, setSpent] = useState<string[]>([])
+  const offered = best && !spent.includes(best) ? best : null
+  const hisCallRef = useRef({ draft: '', worked: null as string | null, best: null as string | null })
+  hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall, best }
   const [settledHisCall, setSettledHisCall] = useState('')
+  const settling = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const id = setTimeout(() => setSettledHisCall(callsignChars(hisCallDraft)), 500)
+    settling.current = id
     return () => clearTimeout(id)
   }, [hisCallDraft])
+  // The settle still pending for a call typed must not land after this one: a contact logged
+  // within half a second of typing its call put that call back, and the strip, holding none,
+  // reported its own empty box as the operator's.
   const setCallNow = (call: string) => {
+    clearTimeout(settling.current)
     setHisCallDraft(call)
     setSettledHisCall(call)
   }
   useEffect(() => {
-    if (!hisCallEditing.current) setCallNow(guide.workedCall ?? '')
+    // A station worked takes the field, from the guess too. None, or the contact just cleared,
+    // leaves it the decoder's.
+    const worked = guide.workedCall
+    if (hisCallEditing.current || (guessing.current && (worked == null || spent.includes(worked)))) return
+    guessing.current = false
+    setCallNow(worked ?? '')
   }, [guide.workedCall])
+  useEffect(() => {
+    if (guessing.current) setCallNow(offered ?? '')
+  }, [offered])
   const onStripCall = (call: string) => {
     hisCallEditing.current = true
+    guessing.current = false
     setCallNow(call)
+  }
+  // The strip was cleared for the next contact: the field is the decoder's again. The station
+  // still worked is dropped at the next send, as it was when the emptied field was an edit.
+  const onStripReset = () => {
+    const { draft, best: guess } = hisCallRef.current
+    hisCallEditing.current = false
+    guessing.current = true
+    setSpent([callsignChars(draft), guess ?? ''].filter(Boolean))
+    setCallNow('')
   }
   const commitHisCall = async (raw?: string) => {
     if (!control) return
     hisCallEditing.current = false
     const call = callsignChars(raw ?? hisCallRef.current.draft)
+    // A guess sent is the call from then on; an empty field stays the decoder's.
+    if (call) guessing.current = false
     setHisCallDraft(call)
     if (call === (hisCallRef.current.worked ?? '')) return
     const s = await selectPeer(call || null).catch(() => null)
@@ -1030,8 +1070,9 @@ export function CwCockpit({
       pushToast(snapRef.current.radio.txRefusal ?? t('cw.send.txLocked'), 'info', 3500)
       return
     }
-    // #286: an edited His Call lands BEFORE the send that may expand `!` to it.
-    const committing = hisCallEditing.current ? commitHisCall() : null
+    // #286: an edited His Call, or the decoder's guess in it, lands BEFORE the send that may
+    // expand `!` to it.
+    const committing = hisCallEditing.current || guessing.current ? commitHisCall() : null
     void withErrorToast(async () => {
       if (committing) await committing
       return sendCw(line)
@@ -1071,9 +1112,10 @@ export function CwCockpit({
   // prefill the log with the read call/RST/name. Never transmits — the operator still keys.
   const workCall = (call: string) => {
     if (!control) return
-    // The pick replaces an edit in progress in either field, rather than waiting under it to
-    // be overwritten by that edit's commit at the next send.
+    // The pick replaces an edit in progress in either field, or the guess, rather than waiting
+    // under it to be overwritten by that edit's commit at the next send.
     hisCallEditing.current = false
+    guessing.current = false
     setCallNow(call)
     void selectPeer(call)
       .then((s) => s && onSnap?.(s))
@@ -1610,14 +1652,15 @@ export function CwCockpit({
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
         // His Call, settled, and the strip's call back into it: one field. See `settledHisCall`.
-        // `confirmed: true` because it is the operator's call (typed or picked), never a guess;
-        // the RST and name are still the decoder's read of the worked station.
+        // Unconfirmed while it is the decoder's guess, as the strip always showed one (it spends no
+        // callbook lookup on a guess); the RST and name are the decoder's read.
         cwLive={
           settledHisCall
-            ? { call: settledHisCall, rst: guide.rst, name: guide.name, confirmed: true }
+            ? { call: settledHisCall, rst: guide.rst, name: guide.name, confirmed: !guessing.current }
             : null
         }
         onCallChange={onStripCall}
+        onReset={onStripReset}
         fieldDay={fieldDay}
         fdMode="CW"
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
@@ -2278,6 +2321,7 @@ export function CwCockpit({
               maxLength={15}
               onChange={(e) => {
                 hisCallEditing.current = true
+                guessing.current = false
                 setHisCallDraft(e.target.value)
               }}
               onKeyDown={(e) => {

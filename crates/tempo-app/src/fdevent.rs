@@ -656,14 +656,19 @@ impl ClubLog {
         // the wire decoder and the journal replay — reach the club log through
         // here, so a legacy row's exchange is reconstructed once or never.
         row.synthesize_legacy_ex(self.exchange());
+        // ⭐ A satellite contact the contest gives no credit (Winter Field Day) is kept in
+        // the club's rows and journal, and acked and counted on its position's board like
+        // any row, but it counts for nothing in the club: no dupe key and no section, so it
+        // never stands in the way of a contact that does count.
+        let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
-        if self.dkeys_set.insert(dkey.clone()) {
+        if counts && self.dkeys_set.insert(dkey.clone()) {
             self.dkeys_list.push(dkey);
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
         }
         let sect = row.section.trim().to_uppercase();
-        if !sect.is_empty() && self.sections_set.insert(sect.clone()) {
+        if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
         let pos = self.positions.entry(row.posid.clone()).or_default();
@@ -789,9 +794,14 @@ impl ClubLog {
         order.sort_by_key(|&i| (self.rows[i].when_unix, i));
         let rule = self.dupe_rule();
         let spec = self.exchange();
+        let credit = self.ruleset().satellite_credit;
         let mut seen: HashSet<Vec<String>> = HashSet::new();
         let mut keep: Vec<usize> = Vec::new();
         for i in order {
+            // A satellite contact the contest gives no credit is in no file and no score.
+            if !credit && !self.rows[i].sat.is_empty() {
+                continue;
+            }
             if seen.insert(self.rows[i].dkey(&rule, spec)) {
                 keep.push(i);
             }
@@ -940,6 +950,7 @@ impl ClubLog {
             ContestSession::field_day(self.event, class, section),
             power_mult,
             bonuses,
+            &[],
         );
         (s.qso_points, s.powered, s.bonus, s.total)
     }
@@ -952,13 +963,16 @@ impl ClubLog {
     /// positions worked them).
     ///
     /// For a Field Day club this is exactly [`scored`](Self::scored): neither event has a
-    /// multiplier or a bonus station, so the total is the powered points plus the menu.
+    /// multiplier or a bonus station, so the total is the powered points plus the menu —
+    /// except that Winter Field Day scores by objectives, so its total is the host's ticked
+    /// `objectives` applied the sponsor's way (`FdRuleset::claimed_total`).
     pub fn score_with(
         &self,
         mycall: &str,
         session: ContestSession,
         power_mult: u32,
         bonuses: &[String],
+        objectives: &[String],
     ) -> ClubScore {
         let rs = self.ruleset();
         let log = self.unique_log_with(mycall, session);
@@ -969,7 +983,7 @@ impl ClubLog {
             powered,
             mults,
             bonus,
-            total: scored + bonus,
+            total: rs.claimed_total(qso_points, scored, bonus, objectives),
         }
     }
 
@@ -1062,14 +1076,34 @@ impl ClubLog {
     /// contest token and headers, and the entrant's own lines (`NAME`, `EMAIL`, `CLUB`,
     /// `ENTRY-CLASS`, `OPERATORS`), each written only where the ruleset lists it — the
     /// position's own exporter, over the club's rows.
+    ///
+    /// ⭐ **A Field Day club's `OPERATORS` are read off its rows here.** Those rows name nobody
+    /// in the rebuilt log ([`unique_log_with`](Self::unique_log_with): the exports are pinned
+    /// to the bytes 1.x wrote), yet the club's file is the one the sponsor receives, and
+    /// Winter Field Day's lists OPERATORS: everyone the positions said was at the key, then
+    /// the operators typed. A row naming the station's own call names nobody, as it does
+    /// there. ARRL Field Day's rules list no OPERATORS, and its file is unchanged.
     pub fn export_cabrillo_with(
         &self,
         mycall: &str,
         session: ContestSession,
         entrant: &CabrilloEntrant,
     ) -> Result<String, String> {
+        let mut entrant = entrant.clone();
+        if self.field_day_event().is_some() {
+            let station = mycall.trim().to_ascii_uppercase();
+            let mut named: Vec<String> = Vec::new();
+            for i in self.export_indices() {
+                let op = self.rows[i].operator.trim().to_ascii_uppercase();
+                if !op.is_empty() && op != station && !named.contains(&op) {
+                    named.push(op);
+                }
+            }
+            named.push(entrant.operators.clone());
+            entrant.operators = named.join(" ");
+        }
         self.unique_log_with(mycall, session)
-            .cabrillo_with(0, entrant)
+            .cabrillo_with(0, &entrant)
     }
 
     /// Club Cabrillo export, deduped earliest-wins.
@@ -2331,7 +2365,7 @@ mod tests {
             "the RTTY repeat is not a second contact: {cab}"
         );
         // 2 CW contacts × 2 points, × 2 counties (Cook, Will).
-        let s = club.score_with("W9XYZ", session, 1, &[]);
+        let s = club.score_with("W9XYZ", session, 1, &[], &[]);
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
     }
@@ -2461,7 +2495,7 @@ mod tests {
             ),
             2,
         );
-        let s = club.score_with("W9XYZ", party_session("ilqp", "IL", "MCLN"), 1, &[]);
+        let s = club.score_with("W9XYZ", party_session("ilqp", "IL", "MCLN"), 1, &[], &[]);
         // CW 2 + phone 1, × one county (McDonough), + 100 once.
         assert_eq!(
             (s.qso_points, s.mults, s.bonus, s.total),
@@ -2912,6 +2946,7 @@ mod tests {
                     club: "A CLUB".into(),
                     entry_class: "UNLIMITED".into(),
                     operators: "W9OP1".into(),
+                    objectives: vec!["wfd-qrp".into()],
                 },
             )
             .unwrap(),
@@ -2919,7 +2954,7 @@ mod tests {
             "the entrant's lines are written only where the ruleset lists them — never for Field Day"
         );
         assert_eq!(host.export_adif_with("W9ABC", session.clone()), J1X_ADI);
-        let s = host.score_with("W9ABC", session, 2, &[]);
+        let s = host.score_with("W9ABC", session, 2, &[], &[]);
         assert_eq!(
             (s.qso_points, s.powered, s.bonus, s.total),
             host.scored("W9ABC", "3A", "WI", 2, &[]),

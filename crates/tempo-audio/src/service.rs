@@ -1771,6 +1771,19 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     }
 }
 
+/// ⭐ The PSK Reporter sink the radio loop holds, brought in line with the EFFECTIVE upload
+/// ([`Engine::pskreporter_uploading`]): the operator's switch, unless a contest that allows
+/// spotting only over RF is running (Winter Field Day), when no reporter exists — so nothing
+/// is collected for one and nothing is sent — until the event ends. Rebuilt only when that
+/// answer changes.
+fn hot_apply_psk(e: &Engine, psk: &mut Option<PskReporter>, applied: &mut bool) {
+    let uploading = e.pskreporter_uploading();
+    if uploading != *applied {
+        *psk = uploading.then(PskReporter::new);
+        *applied = uploading;
+    }
+}
+
 /// Run the radio slot loop until an unrecoverable error. Blocks — call on a
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
@@ -2071,10 +2084,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                 wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
             }
-            if s.pskreporter != psk_applied {
-                psk = s.pskreporter.then(PskReporter::new);
-                psk_applied = s.pskreporter;
-            }
+            // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
+            // over RF is running (Winter Field Day), when no reporter exists and nothing is
+            // collected for one.
+            hot_apply_psk(&e, &mut psk, &mut psk_applied);
         }
         let sinks = Sinks {
             wsjtx: wsjtx.as_ref(),
@@ -35670,6 +35683,71 @@ mod tests {
         let snap = eng.snapshot();
         assert_eq!(snap.radio.rx_ranges_mhz.len(), 1);
         assert!((snap.radio.rx_ranges_mhz[0].1 - 60.0).abs() < 1e-6);
+    }
+
+    /// ⭐ **NO PSK REPORTER WHILE WINTER FIELD DAY RUNS** — the radio loop's half of the rule
+    /// that a spot goes out only over amateur RF while the event runs (2027 rules p.8): with the
+    /// operator's switch on throughout, the loop holds no reporter inside the event's window, so
+    /// nothing is collected for one or sent, and it holds one again once the event ends.
+    /// Controls: an hour before the event, at its end, with the master switch off, and ARRL
+    /// Field Day inside its own window all keep the reporter.
+    #[test]
+    fn the_radio_loop_holds_no_psk_reporter_while_winter_field_day_runs() {
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+            .event_window(2027);
+        let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+            .event_window(2026);
+        let station = |event: &str, class: &str, fd_active: bool, now: u64| {
+            let mut e = Engine::new("W9XYZ", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = fd_active;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.pskreporter = true;
+            e.apply_settings(s);
+            e.set_spot_clock(Some(now));
+            e
+        };
+        // The loop starts from the switch, as `run` does, then applies the effective upload.
+        let held = |e: &Engine| {
+            let (mut psk, mut applied) = (Some(PskReporter::new()), true);
+            hot_apply_psk(e, &mut psk, &mut applied);
+            (psk.is_some(), applied)
+        };
+        // …and the event ending brings the reporter back, the switch never touched.
+        let mut e = station("wfd", "3O", true, wfd.start_unix + 7200);
+        let (mut psk, mut applied) = (Some(PskReporter::new()), true);
+        hot_apply_psk(&e, &mut psk, &mut applied);
+        let during = psk.is_some();
+        e.set_spot_clock(Some(wfd.end_unix));
+        hot_apply_psk(&e, &mut psk, &mut applied);
+        assert_eq!(
+            (
+                [
+                    held(&station("wfd", "3O", true, wfd.start_unix + 7200)),
+                    held(&station("wfd", "3O", true, wfd.start_unix - 3600)),
+                    held(&station("wfd", "3O", true, wfd.end_unix)),
+                    held(&station("wfd", "3O", false, wfd.start_unix + 7200)),
+                    held(&station("arrlfd", "3A", true, arrl.start_unix + 7200)),
+                ],
+                (during, psk.is_some(), e.settings().pskreporter),
+            ),
+            (
+                [
+                    (false, false),
+                    (true, true),
+                    (true, true),
+                    (true, true),
+                    (true, true)
+                ],
+                (false, true, true),
+            ),
+            "(reporter held, upload applied): inside Winter Field Day's window, an hour before \
+             it, at its end, with the master switch off, inside ARRL Field Day's window; then \
+             (held during the event, held after it, the switch)"
+        );
     }
 
     #[test]

@@ -665,7 +665,7 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 }
 
 /// The Field Day view (`field-day.ts`): the capture's four keys, the operator settings' four, the
-/// ruleset's six and three it may carry, and the running status: seventeen keys and sixteen it
+/// ruleset's six and three it may carry, and the running status: seventeen keys and eighteen it
 /// may carry, with its contacts, club board (each row's measured clock one it may carry), dupe
 /// rule and location warning. The ruleset the
 /// desktop's Settings previews also carries a location warning; the station's never does.
@@ -714,6 +714,8 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 "locationWarning",
                 "dupeModeGroups",
                 "dupeRule",
+                "objectiveMultiplier",
+                "satelliteCredit",
             ],
         );
         for contact in status["log"].as_array().unwrap() {
@@ -820,6 +822,51 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         &source["settings"],
         &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
     );
+    // Winter Field Day's capture adds the two objective lists, which the page takes as optional.
+    let wfd = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+        tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "wfd".into(),
+            fd_class: "1O".into(),
+            fd_section: "EMA".into(),
+            fd_objectives: vec!["wfd-qrp".into()],
+            ..Default::default()
+        },
+    )));
+    wfd.lock().unwrap().restore_field_day_if_enabled();
+    // `self::` — the capture above is bound to a local named `page`.
+    let wfd_page = self::page(&wfd, &sources(), "fieldDay", "");
+    let wfd_settings = &wfd_page["meta"]["source"]["settings"];
+    assert_eq!(
+        wfd_settings["fdObjectives"],
+        serde_json::json!(["wfd-qrp"]),
+        "scene guard: Winter Field Day's capture carries its objectives"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's settings",
+        wfd_settings,
+        &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
+        &["fdObjectives", "fdObjectivesPlanned"],
+    );
+    // …and its ruleset says it allows spotting only over amateur RF, a key the page takes too.
+    assert_eq!(
+        wfd_page["meta"]["source"]["ruleset"]["spotsRfOnly"],
+        serde_json::json!(true),
+        "scene guard: Winter Field Day's ruleset carries its spotting rule"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's ruleset",
+        &wfd_page["meta"]["source"]["ruleset"],
+        &[
+            "event",
+            "rulesYear",
+            "bannedModes",
+            "spottingAllowed",
+            "clusterAllowed",
+            "enforcement",
+        ],
+        &["exchange", "problem", "role", "spotsRfOnly"],
+    );
     takes_optional(
         "fieldDay: the ruleset",
         &source["ruleset"],
@@ -831,7 +878,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             "clusterAllowed",
             "enforcement",
         ],
-        &["exchange", "problem", "role"],
+        &["exchange", "problem", "role", "spotsRfOnly"],
     );
     assert_eq!(
         source["fieldDay"]["log"].as_array().map(Vec::len),
@@ -854,6 +901,8 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         powered_points: 4,
         bonus_points: 100,
         total_score: 104,
+        objective_multiplier: Some(7),
+        satellite_credit: Some(false),
         event_start_unix: 1_782_500_400,
         event_end_unix: 1_782_597_600,
         mult_count: Some(1),
