@@ -107,7 +107,8 @@ fn stop_reaches_rotctld_and_point_at_call_uses_the_desktop_bearing() {
         json!({"action":"rotator.pointAtCall","call":"JA1ABC"}),
     );
     assert_eq!(settle(&f, &point)["outcome"], "applied");
-    // The desktop command's own math: great-circle bearing from the station grid to the entity.
+    // The desktop's own resolver, knowing nothing of JA1ABC's station: great-circle bearing from the
+    // station grid to the centre of its entity (a known grid wins: see the test below).
     let me = propagation::geo::maidenhead_to_latlon("FN31").unwrap();
     let info = propagation::dxcc::resolve("JA1ABC").unwrap();
     let bearing = propagation::geo::bearing_deg(me, (info.lat, info.lon));
@@ -126,6 +127,54 @@ fn stop_reaches_rotctld_and_point_at_call_uses_the_desktop_bearing() {
         assert_eq!(refused["reason"], "invalidAction");
     }
     assert_eq!(fake.lines().len(), 2);
+}
+
+#[test]
+fn point_at_call_turns_where_the_desktop_point_does_to_the_station_not_its_country() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+    let (f, fake) = station();
+    // AA1AA's own square, as the desktop's log form hands it to the engine: Boston, about 60° from
+    // the station's FN31. The centre of the United States is about 260° from it, so the line on
+    // the wire says which of the two the point took.
+    f.engine
+        .lock()
+        .unwrap()
+        .set_log_form_grid("AA1AA", "FN42KH");
+    let state = acquire_controls_version(&f, Instant::now(), 3);
+    let point = control_request(
+        &state,
+        json!({"action":"rotator.pointAtCall","call":"AA1AA"}),
+    );
+    assert_eq!(settle(&f, &point)["outcome"], "applied");
+
+    // The desktop's answer for the same call from the same engine: what its Rotor box shows and
+    // its point turns to (`call_bearing`).
+    let desktop = crate::call_bearing(&f.engine.lock().unwrap(), "AA1AA").expect("a bearing");
+    let me = propagation::geo::maidenhead_to_latlon("FN31").unwrap();
+    let grid = propagation::geo::bearing_deg(
+        me,
+        propagation::geo::maidenhead_to_latlon("FN42KH").unwrap(),
+    );
+    let info = propagation::dxcc::resolve("AA1AA").unwrap();
+    let country = propagation::geo::bearing_deg(me, (info.lat, info.lon));
+    let apart = |a: f64, b: f64| ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs();
+    assert!(
+        apart(grid, country) > 90.0,
+        "control: the grid ({grid:.1}°) and the country ({country:.1}°) must disagree"
+    );
+    assert_eq!(desktop.pointed.to, "grid");
+    assert!(
+        apart(desktop.pointed.bearing, grid) < 1e-9,
+        "the desktop aims at the grid: {:.1}°",
+        desktop.pointed.bearing
+    );
+    assert_eq!(
+        fake.lines(),
+        vec![tempo_audio::rotator::point_line(desktop.pointed.bearing)],
+        "the Remote's point turns where the desktop's does ({grid:.1}°), not to the centre of the \
+         United States ({country:.1}°)"
+    );
+    assert!(!f.engine.lock().unwrap().tx_enabled());
 }
 
 #[test]

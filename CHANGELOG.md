@@ -324,6 +324,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops receiving or transmitting flashes. A notice the radio keeps working through (the headphone
   monitor, the voice mic, Flex native audio falling back to the sound card, a recording that could
   not start) shows as a warning. Hovering the chip still shows the full message.
+- **The bearings shown beside a call are the ones the antenna turns to.** The Chase box's heading
+  next to its ↗ was always worked out to the centre of the station's country, while ↗ turns the
+  antenna to the station's own grid or callbook position whenever Nexus knows one: about 20° apart
+  from the Netherlands to Galicia. The distance and bearing on the recall card under a log entry
+  could differ from it too. Both now show where ↗ and Point turn the antenna: the station's grid or
+  callbook position when Nexus knows one, otherwise the centre of its country (the Chase box marks
+  that with ~, and the card's tooltip says which). A call Nexus cannot place says "location unknown"
+  instead of a number, and without your own grid in Settings they say so. In a browser on Nexus
+  Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
+  the station's country); the browser's Chase box and recall card show no bearing, because only the
+  station can work it out.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a

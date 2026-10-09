@@ -413,7 +413,8 @@ pub enum Action {
         #[serde(rename = "azimuthDeg")]
         azimuth_deg: f64,
     },
-    /// Point the rotator at a callsign's entity, bearing resolved at the station.
+    /// Point the rotator at a callsign's station: the station resolves the bearing as its own
+    /// point-at-call does.
     #[serde(rename = "rotator.pointAtCall")]
     RotatorPointAtCall { call: String },
     /// Stop the rotator.
@@ -793,8 +794,8 @@ pub fn execute(
                 permit,
             );
         }
-        // The rotator: resolved from station Settings here, written by its own worker thread so
-        // this lock is never held across rotctld. It never arms or keys anything.
+        // The rotator: resolved from the station's Settings and Engine here, written by its own
+        // worker thread so this lock is never held across rotctld. It never arms or keys anything.
         #[cfg(feature = "radio")]
         Action::RotatorPoint { azimuth_deg } => {
             if !rotator::valid_azimuth(*azimuth_deg) {
@@ -812,7 +813,7 @@ pub fn execute(
             if !rotator::valid_call(call) {
                 return Err(Reason::InvalidAction);
             }
-            let bearing = rotator::bearing_to_call(engine.settings(), call)?;
+            let bearing = rotator::bearing_to_call(engine, call)?;
             return rotator::queue(
                 engine.settings(),
                 rotator::Command::Point(bearing),

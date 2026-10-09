@@ -5,7 +5,6 @@ import {
   gridToLatLon,
   bearingDeg,
   haversineKm,
-  stationLatLon,
   distanceLabel,
   bearingLabel,
   distanceLabelAt,
@@ -165,28 +164,10 @@ describe('bearingDeg / haversineKm against an independent derivation', () => {
   })
 })
 
-describe('stationLatLon — the caller card computes from the best position it has', () => {
+describe('what an exact position buys over the centre of a square', () => {
   // W1AW: QRZ lists 41.7147, -72.7272 and grid FN31pr. The 6-character square's
   // center is 2.2 km from that pin; the 4-character FN31's is 33 km from it.
   const exact: LatLon = { lat: 41.7147, lon: -72.7272 }
-
-  it('prefers exact callbook coordinates over the grid square center', () => {
-    expect(stationLatLon(exact, 'FN31pr')).toEqual(exact)
-    expect(stationLatLon(exact, 'FN31')).toEqual(exact)
-    // …and the two disagree, which is the whole point of preferring one.
-    expect(stationLatLon(null, 'FN31')).not.toEqual(exact)
-  })
-
-  it('falls back to the locator when the callbook vouched for no position', () => {
-    expect(stationLatLon(null, 'FN31pr')).toEqual(gridToLatLon('FN31pr'))
-    expect(stationLatLon(undefined, 'FN31pr')).toEqual(gridToLatLon('FN31pr'))
-  })
-
-  it('renders absence as absence — never a point at 0,0', () => {
-    expect(stationLatLon(null, null)).toBeNull()
-    expect(stationLatLon(null, '')).toBeNull()
-    expect(stationLatLon({ lat: NaN, lon: 0 }, null)).toBeNull()
-  })
 
   it('quantifies what the exact position buys, at 835 mi and at 125', () => {
     // Unrounded, so the measurement is the geometry and not the display rounding.
@@ -224,7 +205,7 @@ describe('the labels the operator actually reads', () => {
   // The two label pairs pinned to the SAME externally-derived answers as the maths
   // above, rounded the way the display rounds. `distanceLabel`/`bearingLabel` are the
   // grid-in form still used by the roster, the needed board and the station cards;
-  // `*At` is the resolved-point form the caller card moved to. Both must land on the
+  // `*At` is the resolved-point form they are built on. Both must land on the
   // same string for a station whose only known position IS its square — otherwise the
   // fix would have quietly changed every other readout that shares these helpers.
   it.each(paths)('%s — both label forms print the reference answer', (_l, grid, deg, mi) => {

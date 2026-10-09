@@ -9,8 +9,8 @@
 // `flex:1; min-height:0; overflow:auto` (CockpitPaneFrame), so a tall card scrolls INSIDE the
 // log column and cannot squeeze the cockpit. These tests render the REAL cockpits with the REAL
 // LogEntry (only scope/header/keyer chrome stubbed) and pin both halves of that claim:
-//   - resolving a call shows the FULL card — photo <img> with the callbook URL, distance/bearing
-//     derived from the operator's own grid, the prior-QSO list;
+//   - resolving a call shows the FULL card — photo <img> with the callbook URL, the station's
+//     distance/bearing for the call (the one its point turns to), the prior-QSO list;
 //   - the layout guard — the card lives inside the log pane's `.pane-body` (the scroller),
 //     never as a shell-level sibling;
 //   - the compact variant is gone from the rendered DOM (its classes died with their last
@@ -22,8 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
-import { distanceLabel, bearingLabel } from '../grid'
-import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
+import type { AppSnapshot, CallBearing, LoggedQso, QrzLookup } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
 
 // THE BUDGET (2026-10-09). The slowest case here, "shows photo, distance/bearing and history inside the…", takes
@@ -32,6 +31,10 @@ import type { LogQuestion } from '../features/logAnswers'
 vi.setConfig({ testTimeout: 15_000 })
 
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
+/** The station's answer for W1ABC: its callbook position (41.7147, -72.7272), 1343.2 km (835 mi) and
+ *  88.22° from EN52. The centre of the FN31 the callbook gave is 823 mi at 89°, so a card that worked
+ *  the line out from its own square would not draw this. */
+const W1ABC_AIM: CallBearing = { pointed: { bearing: 88.22, to: 'position', grid: null, country: null }, km: 1343.2 }
 
 const resolved: QrzLookup = {
   call: 'W1ABC',
@@ -122,6 +125,10 @@ vi.mock('../api', async (importOriginal) => {
     searchParks: vi.fn(async () => []),
     setCwPeerInfo: vi.fn(async () => {}),
     setLogFormGrid: vi.fn(async () => {}),
+    // RecallPanel: the station's bearing for the call in the strip.
+    rotatorBearingToCall: vi.fn(async (call: string) =>
+      call === 'W1ABC' ? W1ABC_AIM : Promise.reject(new Error('unknownStation')),
+    ),
     // PhoneCockpit
     setPtt: vi.fn(async () => {}),
     setRfPower: vi.fn(async () => {}),
@@ -230,6 +237,10 @@ async function resolveCall(): Promise<HTMLElement> {
   await waitFor(() =>
     expect(document.querySelector('.recall-card .recall-log-list'), 'the log history never reached the card').not.toBeNull(),
   )
+  // …and the station's bearing for the call, a third answer on its own schedule.
+  await waitFor(() =>
+    expect(document.querySelector('.recall-card .recall-geo'), 'the bearing never reached the card').not.toBeNull(),
+  )
   return logPane
 }
 
@@ -251,10 +262,10 @@ function assertFullCard(logPane: HTMLElement) {
   // … identity + QTH …
   expect(card.textContent).toContain('Alice Example')
   expect(card.textContent).toContain('Hartford, CT')
-  // … distance/bearing derived from MY grid (snap.mygrid EN52 → their FN31) …
+  // … the station's distance/bearing for the call, the one its point turns to (W1ABC_AIM) …
   const geo = card.querySelector('.recall-geo')
   expect(geo, 'no distance/bearing line').not.toBeNull()
-  expect(geo!.textContent).toBe(`${distanceLabel('EN52', 'FN31')} · ${bearingLabel('EN52', 'FN31')}`)
+  expect(geo!.textContent).toBe('835 mi · 88°')
   // … and the real prior-QSO history (the 2026-07-26 regression stays fixed).
   const list = card.querySelector('.recall-log-list')
   expect(list, 'no prior-contact list').not.toBeNull()
