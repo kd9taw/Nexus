@@ -461,10 +461,14 @@ describe('the decoder\'s best guess, in the one field', () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     await settle()
-    // Logged before the next decode poll reports W2BBB, just sent, as the station worked.
+    // Logged while the engine is still taking W2BBB from F3, so the decode poll reports it as the
+    // station worked only after the strip was cleared.
+    const release = holdNextSelectPeer()
     await press('F3')
     fireEvent.change(qthBox(), { target: { value: 'KANE' } })
     fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await flush()
+    release()
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['', ''])
     // W2BBB, logged, is still the decoder's best guess: the next F3 keys no call.
@@ -485,16 +489,28 @@ describe('the decoder\'s best guess, in the one field', () => {
     await renderCockpit()
     await settle()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    const release = holdNextSelectPeer()
     await press('F3', stripCall())
     fireEvent.change(qthBox(), { target: { value: 'KANE' } })
     fireEvent.keyDown(qthBox(), { key: 'Enter' })
-    await settle() // K9AAA, sent, reaches the decode poll as the station worked
+    await settle() // logged within the half second the call typed takes to settle
+    expect([hisCall().value, stripCall().value]).toEqual(['', ''])
+    release()
+    await settle() // K9AAA, sent, reaches the decode poll as the station worked after the clear
     decodeState.candidates = []
     await settle()
     decodeState.candidates = [{ call: 'W2BBB', best: true }] // the same guess, back
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['', ''])
     await press('F3')
-    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K', 'DE KD9TAW 5NN COOK COOK K'])
+    decodeState.candidates = [{ call: 'N3CCC', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
+    await press('F3')
+    expect(engine.keyed).toEqual([
+      'K9AAA DE KD9TAW 5NN COOK COOK K',
+      'DE KD9TAW 5NN COOK COOK K',
+      'N3CCC DE KD9TAW 5NN COOK COOK K',
+    ])
   })
 })

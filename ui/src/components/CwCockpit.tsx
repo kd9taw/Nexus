@@ -978,11 +978,17 @@ export function CwCockpit({
   const hisCallRef = useRef({ draft: '', worked: null as string | null, best: null as string | null })
   hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall, best }
   const [settledHisCall, setSettledHisCall] = useState('')
+  const settling = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const id = setTimeout(() => setSettledHisCall(callsignChars(hisCallDraft)), 500)
+    settling.current = id
     return () => clearTimeout(id)
   }, [hisCallDraft])
+  // The settle still pending for a call typed must not land after this one: a contact logged
+  // within half a second of typing its call put that call back, and the strip, holding none,
+  // reported its own empty box as the operator's.
   const setCallNow = (call: string) => {
+    clearTimeout(settling.current)
     setHisCallDraft(call)
     setSettledHisCall(call)
   }
