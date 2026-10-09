@@ -9,15 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
-  sync runs.** The claimed score is the biggest thing on the board, with how it is made beside it,
-  then the rate (the last hour, the last ten minutes and a bar for each hour), the contacts by band
-  and mode, each position's band and mode right now, the multipliers with their counts and caps,
-  the bonus stations, the latest contact, the clock and the time left. The map shows what the
-  contest counts: the sections globe for the two Field Days, and for the Illinois QSO Party the
-  state's 102 counties, each one lit when the club works it, with the host's own county outlined.
-  The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
-  address for the light board, or `?theme=auto` to follow the TV's own setting.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
   Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),
@@ -34,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release: that first download asked for too little, and each download after it carried on from
   there, so older confirmations never arrived. Your logged contacts and the confirmations on them
   are not changed.
+- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
+  sync runs.** The claimed score is the biggest thing on the board, with how it is made beside it,
+  then the rate (the last hour, the last ten minutes and a bar for each hour), the contacts by band
+  and mode, each position's band and mode right now, the multipliers with their counts and caps,
+  the bonus stations, the latest contact, the clock and the time left. The map shows what the
+  contest counts: the sections globe for the two Field Days, and for the Illinois QSO Party the
+  state's 102 counties, each one lit when the club works it, with the host's own county outlined.
+  The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
+  address for the light board, or `?theme=auto` to follow the TV's own setting.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and
