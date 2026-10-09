@@ -349,6 +349,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
   worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
   slow disk. The globe now shows its count once the squares are counted.
+- **The Logbook says when it couldn't read your log, with a Retry button.** When a read of the
+  logbook failed (a database error, or a change still not saved after four tries), the Logbook kept
+  saying "Reading the logbook…" until your next contact, and closing and reopening it did not try
+  again. It now says "Couldn't read the logbook" with the reason and a Retry button, and reopening
+  the Logbook tries again. A count from before your latest change says "Out of date" in its
+  tooltip, and an empty log no longer says "No logged contacts yet." while your first contact is
+  being counted.
+- **JS8's ✓ marks and the band map's struck-through calls no longer blink when a new station is
+  heard.** Each station newly heard in JS8, and each new call on the band-map window, cleared every
+  ✓, name and comment in the JS8 station list, and every strike-through on the band map, until the
+  log answered: for a moment, and longer on a slow disk. Every row now keeps its marks, and only
+  the new call shows "—" until the log has answered for it.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now

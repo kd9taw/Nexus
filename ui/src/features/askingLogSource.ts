@@ -14,14 +14,18 @@
 //   - An answer never goes backwards: one to a request made before the request whose answer is
 //     already kept is dropped (v2 R4, "stale answers by identity"). The question is the key, so an
 //     answer to another sort or search cannot land in a view either.
-//   - A failed request is not retried in a loop: it waits for the next change.
+//   - A failed request is not retried in a loop: it waits for the next change, a refresh (a view's
+//     Retry), or a view opening on the question again. Until then the question reads as failed, in
+//     the transport's words, to the views showing it. It used to count as answered at its
+//     generation, so a view reopened on it never asked again.
+//   - Each answer says where it stands (`status`): asking, current, stale or failed.
 //   - Answers no view shows any more are kept a little while (LRU), so scrolling back, or leaving a
 //     view and coming back, is not a round trip.
 //
 // It holds nothing of the log beyond what its answers hold: pages, one call's history, counts.
 
 import { questionKey, type AnswerTo, type LogQuestion } from './logAnswers'
-import type { LogSource } from './logSource'
+import type { LogAnswerState, LogSource } from './logSource'
 
 /** Ask the log one question. Rejects when it cannot be answered (the view keeps what it had). */
 export type LogTransport = <Q extends LogQuestion>(q: Q) => Promise<AnswerTo<Q>>
@@ -34,8 +38,13 @@ interface Entry {
   answer?: unknown
   /** The request number the kept answer came from — a lower one never replaces it. */
   answeredBy: number
-  /** The change-feed generation the kept answer (or the last failure) reflects; -1 for none. */
+  /** The change-feed generation the kept answer reflects; -1 for none. */
   generation: number
+  /** The generation the latest failed request was asked at; -1 for none. It is the latest word on
+   *  the question while it is newer than the answer. */
+  failedAt: number
+  /** Why that request failed, in the transport's words. */
+  failure?: string
   /** Views showing this question. */
   wanted: number
   /** A request is out, asked at generation `askedAt`. */
@@ -61,8 +70,11 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
     for (const [key] of idle.slice(0, Math.max(0, idle.length - UNWANTED_KEPT))) entries.delete(key)
   }
 
-  /** Whether `entry` has, or is getting, an answer as of the current generation. */
-  const current = (entry: Entry) => (entry.inflight ? entry.askedAt : entry.generation) >= generation
+  /** Whether `entry` has been asked as of the current generation: answered, on its way, or failed
+   *  (a failure waits for the next change). */
+  const asked = (entry: Entry) => (entry.inflight ? entry.askedAt : Math.max(entry.generation, entry.failedAt)) >= generation
+  /** Whether the latest request for `entry` failed: a failure newer than its answer. */
+  const failedLast = (entry: Entry) => !entry.inflight && entry.failedAt > entry.generation
 
   const keep = (entry: Entry, answer: unknown, request: number, asOf: number) => {
     if (request < entry.answeredBy) return
@@ -73,23 +85,33 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
   }
 
   function ask(entry: Entry): void {
-    if (entry.inflight || current(entry)) return
+    if (entry.inflight || asked(entry)) return
     const request = ++requests
     const asOf = generation
     entry.inflight = true
     entry.askedAt = asOf
     transport(entry.question).then(
-      (answer) => keep(entry, answer, request, asOf),
-      () => {
-        // Nothing to apply — the view keeps what it had — and nothing retried until the log changes.
-        entry.generation = Math.max(entry.generation, asOf)
+      (answer) => {
+        entry.inflight = false
+        keep(entry, answer, request, asOf)
+        askAgainIfMoved(entry)
       },
-    ).finally(() => {
-      entry.inflight = false
-      // The log moved while this was out: ask once more for the views still showing it.
-      if (entry.wanted > 0 && !current(entry)) ask(entry)
-      else evictUnwanted()
-    })
+      (e: unknown) => {
+        entry.inflight = false
+        // Nothing to apply — the view keeps what it had, and is told the read failed — and nothing
+        // retried until the log changes or a view asks for it again.
+        entry.failedAt = Math.max(entry.failedAt, asOf)
+        entry.failure = e instanceof Error ? e.message : String(e)
+        notify()
+        askAgainIfMoved(entry)
+      },
+    )
+  }
+
+  /** The log moved while a request was out: ask once more for the views still showing it. */
+  function askAgainIfMoved(entry: Entry): void {
+    if (entry.wanted > 0 && !asked(entry)) ask(entry)
+    else evictUnwanted()
   }
 
   /** Re-ask the wanted questions the current generation has left stale — once per turn. */
@@ -106,15 +128,31 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
     const key = questionKey(q)
     let entry = entries.get(key)
     if (!entry) {
-      entry = { question: q, answeredBy: 0, generation: -1, wanted: 0, inflight: false, askedAt: -1 }
+      entry = { question: q, answeredBy: 0, generation: -1, failedAt: -1, wanted: 0, inflight: false, askedAt: -1 }
       entries.set(key, entry)
     }
     return entry
   }
 
+  /** Where `entry` stands. A failure is said only to the views showing the question: a view
+   *  opening on it asks again, so it reads as asking (or stale) from its first render. */
+  function stateOf(entry: Entry | undefined): LogAnswerState {
+    if (!entry) return 'asking'
+    if (entry.wanted > 0 && failedLast(entry) && entry.failedAt >= generation) return 'failed'
+    if (entry.answeredBy === 0) return 'asking'
+    return entry.generation >= generation ? 'current' : 'stale'
+  }
+
   return {
     peek<Q extends LogQuestion>(q: Q) {
       return entries.get(questionKey(q))?.answer as AnswerTo<Q> | undefined
+    },
+    status(q) {
+      return stateOf(entries.get(questionKey(q)))
+    },
+    failure(q) {
+      const entry = entries.get(questionKey(q))
+      return stateOf(entry) === 'failed' ? entry?.failure : undefined
     },
     async ask<Q extends LogQuestion>(q: Q) {
       const request = ++requests
@@ -126,6 +164,9 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
     want(q) {
       const entry = entryFor(q)
       entry.wanted++
+      // A view opening on a question whose latest request failed asks it again: reopening a view is
+      // how an operator asks again, and no view still shows the failure.
+      if (entry.wanted === 1 && failedLast(entry)) entry.failedAt = -1
       ask(entry)
       let released = false
       return () => {
@@ -141,6 +182,8 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
       if (logTick !== undefined && logTick === lastTick) return
       if (logTick !== undefined) lastTick = logTick
       generation++
+      // Every kept answer is now from before this change: stale until its fresh one lands.
+      notify()
       schedule()
     },
     subscribe(listener) {
@@ -151,6 +194,7 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
     },
     refresh() {
       generation++
+      notify()
       schedule()
     },
   }

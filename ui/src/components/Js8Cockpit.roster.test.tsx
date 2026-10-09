@@ -79,6 +79,9 @@ const logFixture = (): LoggedQso[] => [
   } as LoggedQso,
 ]
 const log: { current: LoggedQso[] } = { current: logFixture() }
+/** The engine's roster questions that ask about a call in `holding`: held until `answerHeld`, or
+ *  refused with `failing` when it is set. */
+const engine = { holding: new Set<string>(), failing: null as string | null, held: [] as (() => void)[] }
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -92,7 +95,14 @@ vi.mock('../api', async (importOriginal) => {
     js8Enter: vi.fn(async () => state.current),
     js8Arm: vi.fn(async () => state.current),
     // The roster asks the engine; each answer is the engine's over this log.
-    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, log.current as LoggedQso[])),
+    askLog: vi.fn(async (q: LogQuestion) => {
+      const answer = async () => (await import('../features/logAnswers.testkit')).answerAs(q, log.current as LoggedQso[])
+      if (q.kind === 'callsSummary' && q.calls.some((c) => engine.holding.has(c))) {
+        if (engine.failing !== null) throw engine.failing
+        return new Promise((resolve) => engine.held.push(() => void answer().then(resolve)))
+      }
+      return answer()
+    }),
     getLicensedBandPlan: vi.fn(async () => []),
     setRxOffset: vi.fn(async () => ({})),
     haltTx: vi.fn(async () => ({})),
@@ -143,6 +153,9 @@ function fakePanels(removed: Js8PanelId[] = []): PanelLayoutApi<Js8PanelId> {
 beforeEach(() => {
   state.current = js8Fixture()
   log.current = logFixture()
+  engine.holding = new Set()
+  engine.failing = null
+  engine.held = []
   window.localStorage.clear()
   globalThis.ResizeObserver = class {
     observe() {}
@@ -170,15 +183,20 @@ async function renderCockpit(props: Partial<Parameters<typeof Js8Cockpit>[0]> = 
  * engine answers — a round trip, however long it takes, never a fixed number of ticks. Here the
  * first answer in the file waits on a module load (the test engine's `import()`), and under load
  * it landed after `renderCockpit`'s ticks: the ✓ assertion read W0IND's row without its mark. So
- * a test that reads the join waits for the cell it reads, and a missing one is named.
+ * a test that reads the join waits for the cell it reads, and a missing one is named. A row the
+ * join has not reached yet shows "—" in the ✓ column, so the wait is for that mark to be gone too.
  */
 async function joinedCell(call: string, selector: string): Promise<HTMLElement> {
   return waitFor(() => {
-    const cell = stationRow(call).querySelector<HTMLElement>(selector)
+    const row = stationRow(call)
+    expect(row.querySelector('.js8-b4')?.textContent, `the logbook join never reached ${call}`).not.toBe(NOT_YET)
+    const cell = row.querySelector<HTMLElement>(selector)
     expect(cell, `the logbook join never reached ${call}: no ${selector}`).not.toBeNull()
     return cell!
   })
 }
+/** The ✓ column's mark for a call the log has not answered about yet. */
+const NOT_YET = '—'
 
 /** The roster row for a call, by its call button's text. */
 function stationRow(call: string): HTMLElement {
@@ -282,6 +300,58 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
 // that many minutes leaves the call-activity list unless it is the selected one
 // (mainwindow.cpp:10209-10233). The rule itself is js8Vocab's `js8ListedStations`; this is its
 // wiring: the setting App hands down, the clock, and the To box as the selection.
+// A NEWLY HEARD STATION COSTS THE ROSTER NO MARKS. The roster's question is keyed on the whole
+// heard-call set, so each new station asks a new one. Until its answer landed, every row lost its
+// ✓, name and comment: the new question had no answer, and the view drew the empty log's. Now the
+// calls the last answer covered keep it, and only a call no answer has covered yet shows "—".
+describe('a newly heard station', () => {
+  const K1NEW = { call: 'K1NEW', grid: null, snrDb: -12, freqHz: 1200, speed: 'normal', lastMs: 1_757_000_020_000, lastHb: true,
+    lastCq: false, storedMsgs: 0 } as Js8State['stations'][number]
+  /** A row's logbook marks: the ✓ column (its mark and tooltip) and the name. */
+  const marks = (call: string) => {
+    const row = stationRow(call)
+    const b4 = row.querySelector('.js8-b4')
+    return { b4: b4?.textContent ?? null, title: b4?.getAttribute('title') ?? null, name: row.querySelector('.js8-opname')?.textContent ?? null }
+  }
+  const DAVE = { b4: '✓', title: 'Worked before — 1 in the log, last 2025-06-15', name: 'Dave' }
+  const NOTHING = { b4: null, title: null, name: null }
+  /** K1NEW heard: the cockpit's next poll of the JS8 state lists it. */
+  const hear = async () => {
+    state.current = { ...state.current, stations: [...state.current.stations, K1NEW] }
+    await waitFor(() => expect(document.querySelector('[data-pane="stations"]')!.textContent).toContain('K1NEW'), { timeout: 5_000 })
+  }
+  const answerHeld = () =>
+    act(async () => {
+      for (const answer of engine.held.splice(0)) answer()
+      await new Promise((r) => setTimeout(r, 20))
+    })
+
+  it('keeps every row’s marks while the new question is on its way, and marks only the new call', async () => {
+    await renderCockpit()
+    await joinedCell('W0IND', '.js8-b4')
+    expect(marks('W0IND'), 'premise').toEqual(DAVE)
+    engine.holding.add('K1NEW')
+    await hear()
+    expect(marks('W0IND'), 'the answer it had').toEqual(DAVE)
+    expect(marks('N0GRD'), 'answered: not worked').toEqual(NOTHING)
+    expect(marks('K1NEW'), 'not answered yet').toEqual({ b4: NOT_YET, title: 'Reading the logbook…', name: null })
+    await answerHeld()
+    expect(marks('K1NEW'), 'answered: not worked').toEqual(NOTHING)
+    expect(marks('W0IND')).toEqual(DAVE)
+  })
+
+  it('a question that fails leaves the new call "—", saying why, and the rest as they were', async () => {
+    await renderCockpit()
+    await joinedCell('W0IND', '.js8-b4')
+    engine.holding.add('K1NEW')
+    engine.failing = 'database disk image is malformed'
+    await hear()
+    await waitFor(() => expect(marks('K1NEW').title).not.toBe('Reading the logbook…'))
+    expect(marks('K1NEW')).toEqual({ b4: NOT_YET, title: 'Couldn’t read the logbook: database disk image is malformed.', name: null })
+    expect(marks('W0IND')).toEqual(DAVE)
+  })
+})
+
 describe('the Stations list under JS8Call’s callsign aging', () => {
   const calls = () =>
     Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)

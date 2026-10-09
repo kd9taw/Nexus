@@ -14,16 +14,31 @@
 //              the same object for the same question until `subscribe` fires — `useSyncExternalStore`
 //              re-renders forever otherwise. An answer may be from before the latest change: a
 //              view keeps showing it until the fresh one lands, as it kept its old copy of the log.
+//   status(q)  Where the answer to `q` stands, as one word: a primitive, so a view can read it
+//              through `useSyncExternalStore` (`useLogStatus`). It changes only when `subscribe`
+//              fires.
+//                'asking'   no answer yet; one is on its way, or will be once a view wants it.
+//                'current'  the held answer reflects every change the source knows of.
+//                'stale'    the held answer is from before the latest change; a fresh one is on
+//                           its way. A view keeps showing it, and says it is out of date where
+//                           that matters (a count).
+//                'failed'   the latest ask failed, and nothing has asked since. `peek` still gives
+//                           any older answer.
+//   failure(q) Why the latest ask of `q` failed, in the transport's words, while it is 'failed'.
 //   want(q)    A view shows `q` — keep an answer to it on its way and fresh. Returns the release,
-//              called when the view stops showing it (an unmount, a new question).
+//              called when the view stops showing it (an unmount, a new question). A question
+//              whose latest ask failed is asked again when a view opens on it: reopening a view is
+//              how an operator asks again. A failure is otherwise not retried: it waits for the
+//              next change, or a refresh.
 //   follow(t)  The change feed: a view reports its window's snapshot `logTick`, which the engine
 //              moves on EVERY change to the log (station.rs `log_tick`). A tick the held answers do
 //              not reflect means they are stale; `undefined` is a view with no snapshot, which is
 //              answered with a refresh.
 //   ask(q)     One answer, as of now — for a view that reads once and keeps what it got, and for
 //              an action (a push needs the row).
-//   subscribe  Held answers changed.
-//   refresh()  This window just wrote to the log: do not wait for the tick.
+//   subscribe  Held answers, or where they stand, changed.
+//   refresh()  This window just wrote to the log, or the operator pressed Retry: ask every shown
+//              question again now, without waiting for the tick.
 //
 // The source is chosen once, before anything renders (`setLogSource`): the hooks below read it at
 // render, and a source swapped under mounted views would leave them subscribed to the old one.
@@ -35,8 +50,13 @@ import { questionKey, type AnswerTo, type LogPage, type LogQuestion } from './lo
 import type { LogQuery } from './logQuery'
 import { askAgainWhileSaving } from './notAnswered'
 
+/** Where the answer to a question stands (`LogSource.status`). */
+export type LogAnswerState = 'asking' | 'current' | 'stale' | 'failed'
+
 export interface LogSource {
   peek<Q extends LogQuestion>(q: Q): AnswerTo<Q> | undefined
+  status(q: LogQuestion): LogAnswerState
+  failure(q: LogQuestion): string | undefined
   ask<Q extends LogQuestion>(q: Q): Promise<AnswerTo<Q>>
   want(q: LogQuestion): () => void
   follow(logTick: number | undefined): void
@@ -102,6 +122,50 @@ export function useLogAnswer<Q extends LogQuestion>(q: Q | null, logTick: number
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` identifies the question the ref holds
   }, [source, key])
   return answer
+}
+
+/**
+ * Where the answer to `q` stands (`LogSource.status`), and why its latest ask failed when it did:
+ * what a view says beside, or in place of, the answer `useLogAnswer` gives it. This only reads; the
+ * view asks through `useLogAnswer`. `undefined` for `q = null`, a view that is not reading.
+ */
+export function useLogStatus(q: LogQuestion | null): { state: LogAnswerState; reason: string | undefined } | undefined {
+  const source = current
+  const key = q === null ? null : questionKey(q)
+  const question = useRef(q)
+  question.current = q
+  const readState = useCallback(
+    () => (question.current === null ? undefined : source.status(question.current)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` identifies the question the ref holds
+    [source, key],
+  )
+  const readReason = useCallback(
+    () => (question.current === null ? undefined : source.failure(question.current)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` identifies the question the ref holds
+    [source, key],
+  )
+  const state = useSyncExternalStore(source.subscribe, readState)
+  const reason = useSyncExternalStore(source.subscribe, readReason)
+  return state === undefined ? undefined : { state, reason }
+}
+
+/**
+ * The answer to `q`, or, until `q` has one, the latest answer this view was shown, WITH the
+ * question it answered. This is for a question keyed on a set of calls (a roster's heard calls, the
+ * calls on a map). Each new call asks a new question, and until its answer lands the calls the
+ * latest answer covered keep that answer. They used to drop to `emptyAnswer` for the round trip,
+ * so every mark blinked. A call the latest answer's question did not ask about is not answered
+ * yet. `undefined` while the view has been shown no answer, and for `q = null`.
+ */
+export function useLatestLogAnswer<Q extends LogQuestion>(
+  q: Q | null,
+  logTick: number | undefined,
+): { question: Q; answer: AnswerTo<Q> } | undefined {
+  const answer = useLogAnswer(q, logTick)
+  // A ref, read in the same render: a state update would draw one frame without it, the blink.
+  const latest = useRef<{ question: Q; answer: AnswerTo<Q> } | undefined>(undefined)
+  if (q !== null && answer !== undefined && latest.current?.answer !== answer) latest.current = { question: q, answer }
+  return q === null ? undefined : latest.current
 }
 
 /**

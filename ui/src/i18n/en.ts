@@ -1604,6 +1604,11 @@ export const EN = {
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
   // The list before the engine has answered what the log holds: never "No logged contacts yet." until it has.
   'logbook.reading': 'Reading the logbook…',
+  // A read of the log that failed, with its Retry. `{{reason}}` is the engine's own wording, untranslated.
+  'logbook.readFailed': 'Couldn’t read the logbook: {{reason}}.',
+  'logbook.readFailed.retry': 'Retry',
+  // The count badge's tooltip while its count is from before the latest change to the log.
+  'logbook.count.stale': 'Out of date: counted before the latest change to the logbook.',
   // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
   'logbook.rows.loading': 'Loading…',
   // The keyboard grid's keys (v2 §6), read to a screen reader as the grid's description: four

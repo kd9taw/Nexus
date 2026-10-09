@@ -21,6 +21,12 @@ const station = vi.hoisted(() => ({
   snap: null as unknown,
   listeners: new Set<(s: unknown) => void>(),
   logReads: 0,
+  /** Spots the feed adds to SPOTS. */
+  extraSpots: [] as unknown[],
+  /** Questions that ask about a call here are held until `answerHeld`, or refused with `failing`. */
+  holding: new Set<string>(),
+  failing: null as string | null,
+  held: [] as (() => void)[],
 }))
 
 vi.mock('./api', async () => {
@@ -36,11 +42,15 @@ vi.mock('./api', async () => {
   out.getNeedAlerts = vi.fn().mockResolvedValue([])
   out.getSettings = vi.fn().mockResolvedValue({})
   out.getPropagation = vi.fn().mockResolvedValue(null)
-  out.getAllSpots = vi.fn(() => Promise.resolve(SPOTS))
+  out.getAllSpots = vi.fn(() => Promise.resolve([...SPOTS, ...station.extraSpots]))
   // The engine answers each question the pop-out asks, over its log.
   const { answerAs } = await import('./features/logAnswers.testkit')
   out.askLog = vi.fn(async (q: LogQuestion) => {
     station.logReads++
+    if (q.kind === 'workedCalls' && q.calls.some((c) => station.holding.has(c))) {
+      if (station.failing !== null) throw station.failing
+      return new Promise((resolve) => station.held.push(() => resolve(answerAs(q, station.log as LoggedQso[], station.revision))))
+    }
     return answerAs(q, station.log as LoggedQso[], station.revision)
   })
   return out
@@ -95,6 +105,10 @@ beforeEach(() => {
   station.revision = 1
   station.snap = snapAt(1)
   station.logReads = 0
+  station.extraSpots = []
+  station.holding = new Set()
+  station.failing = null
+  station.held = []
 })
 afterEach(cleanup)
 
@@ -125,5 +139,59 @@ describe('the band-map pop-out’s worked calls', () => {
       for (const l of station.listeners) l(station.snap)
     })
     await waitFor(() => expect(struckThrough(container)).toEqual(['DL1ABC ', 'N0NEW', 'W1AW', 'w1abc']))
+  })
+})
+
+// A NEW CALL ON THE MAP COSTS IT NO STRIKE-THROUGH. The question is keyed on the calls on the map,
+// so a spot poll that brings a new call asks a new one. Until its answer landed, every worked spot
+// lost its strike-through: the new question had no answer, and the map drew none worked. Now the
+// calls the last answer covered keep it, and only a call no answer has covered yet shows "—".
+describe('a new call on the map', () => {
+  const K1NEW = spot('K1NEW', 14.07)
+  const WORKED = ['DL1ABC ', 'W1AW', 'w1abc']
+  /** The spots marked "—" (not answered yet), by call, and their tooltips. */
+  const unanswered = (root: HTMLElement) =>
+    [...root.querySelectorAll('.bandmap-spot')].flatMap((b) => {
+      const mark = [...b.querySelectorAll('.bandmap-call')].find((c) => c.textContent === '—')
+      return mark ? [[b.querySelector('.bandmap-call')!.textContent, mark.getAttribute('title')]] : []
+    })
+  const flush = () => act(() => vi.advanceTimersByTimeAsync(0))
+  /** The feed's next poll, 15 s on. */
+  const poll = () => act(() => vi.advanceTimersByTimeAsync(15_000))
+  const answerHeld = () =>
+    act(async () => {
+      for (const answer of station.held.splice(0)) answer()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps every strike-through while the new question is on its way, and marks only the new call', async () => {
+    const { container } = render(<DetachedPanel panel="bandmapCw" />)
+    await flush()
+    expect([struckThrough(container), unanswered(container)], 'premise').toEqual([WORKED, []])
+    station.holding.add('K1NEW')
+    station.extraSpots = [K1NEW]
+    await poll()
+    expect(shown(container), 'premise: the new spot is on the map').toBe(SPOTS.length + 1)
+    expect(struckThrough(container), 'the answer it had').toEqual(WORKED)
+    expect(unanswered(container)).toEqual([['K1NEW', 'Reading the logbook…']])
+    await answerHeld()
+    expect([struckThrough(container), unanswered(container)], 'answered: K1NEW is not in the log').toEqual([WORKED, []])
+  })
+
+  it('a question that fails leaves the new call "—", saying why, and the rest as they were', async () => {
+    const { container } = render(<DetachedPanel panel="bandmapCw" />)
+    await flush()
+    station.holding.add('K1NEW')
+    station.failing = 'database disk image is malformed'
+    station.extraSpots = [K1NEW]
+    await poll()
+    expect(struckThrough(container)).toEqual(WORKED)
+    expect(unanswered(container)).toEqual([['K1NEW', 'Couldn’t read the logbook: database disk image is malformed.']])
   })
 })

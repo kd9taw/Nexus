@@ -59,8 +59,7 @@ import {
   setTxOffset,
 } from '../api'
 import { bandLabelForMhz } from '../band'
-import { emptyAnswer } from '../features/logAnswers'
-import { useLogAnswer } from '../features/logSource'
+import { useLatestLogAnswer, useLogStatus } from '../features/logSource'
 import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
@@ -640,13 +639,22 @@ export function Js8Cockpit({
   // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE, any band,
   // any mode (features/callHistory `callsSummary`). The band/mode dupe scope belongs to the log
   // strip, not here.
+  //
+  // Each newly heard station asks a new question, and until its answer lands the rows keep the
+  // latest answer for the calls it covered: no row loses its marks for the round trip. A call that
+  // answer did not cover shows "—" (below), as the Remote path does when it cannot tell.
   const summaryQuestion = { kind: 'callsSummary', calls: stationCalls.split(' ').filter(Boolean) } as const
-  const summary =
-    useLogAnswer(active && !remote ? summaryQuestion : null, snap?.logTick) ?? emptyAnswer(summaryQuestion)
+  const reading = active && !remote ? summaryQuestion : null
+  const summary = useLatestLogAnswer(reading, snap?.logTick)
+  const summaryStatus = useLogStatus(reading)
   const logDetail = useMemo(() => {
     if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
-    return new Map(Object.entries(summary))
+    return new Map(Object.entries(summary?.answer ?? {}))
   }, [summary, remote, context.value])
+  /** The heard calls the log has answered about. */
+  const answeredCalls = useMemo(() => new Set(summary?.question.calls), [summary])
+  const unansweredTitle =
+    summaryStatus?.state === 'failed' ? t('logbook.readFailed', { reason: summaryStatus.reason ?? '' }) : t('logbook.reading')
 
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
@@ -930,6 +938,7 @@ export function Js8Cockpit({
                 </span>
               )}
               {remote && !context.value?.history[h.call.trim().toUpperCase()] && <span className="js8-cell js8-b4" title={t('remote.collectionUnavailable')}>—</span>}
+              {reading && !answeredCalls.has(h.call) && <span className="js8-cell js8-b4" title={unansweredTitle}>—</span>}
               {det && (
                 <span
                   className="js8-cell js8-b4"
