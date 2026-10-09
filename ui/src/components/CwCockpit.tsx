@@ -953,7 +953,7 @@ export function CwCockpit({
   // ⭐ HIS CALL AND THE LOG STRIP'S CALL ARE ONE FIELD, shown twice (RTTY's shape). The strip bound
   // its call to the contest session and never to the peer, so a call typed only in the strip was
   // not the call the F-keys keyed: they keyed His Call, the last station or none. Now a call the
-  // strip reports (typed, a spot handoff's prefill, the clear after a contact is logged) is an
+  // strip reports (typed, or a spot handoff's prefill; a logged contact's clear is below) is an
   // edit of His Call, committed like one before the next send; and His Call, settled, is what the
   // strip shows (`cwLive`). DEBOUNCED as RTTY's is: the strip spends a callbook lookup on a call
   // it is given, so typing K, K9, K9A… waits out the typing. A call that arrives whole is settled
