@@ -10,6 +10,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use tempo_app::engine::engine_try_lock;
+use tempo_app::logstore::NOT_ANSWERED;
 use tempo_core::logbook::query::{
     reference, BandsInLog, GridCounts, LogStatCounter, LotwBacklog, WorkedGrids,
 };
@@ -160,6 +161,37 @@ fn ask(
     queries
         .answer(engine, &q, resolve)
         .unwrap_or_else(|e| panic!("{q:?}: {e}"))
+}
+
+/// [`ask`], with the refusal answered rather than a panic.
+fn try_ask(
+    queries: &LogQueries,
+    engine: &SharedEngine,
+    q: Value,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Result<Value, String> {
+    let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
+    queries.answer(engine, &q, resolve)
+}
+
+/// [`ask`], asked again while it is refused for a change still on its way to disk
+/// ([`NOT_ANSWERED`]) — as the window asks again — for up to a test's budget
+/// ([`tempo_app::test_util::TEST_WAIT`]). Any other refusal fails, and the first answer is the one
+/// returned: never a retry until green.
+fn answered(
+    queries: &LogQueries,
+    engine: &SharedEngine,
+    q: Value,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Value {
+    let deadline = std::time::Instant::now() + tempo_app::test_util::TEST_WAIT;
+    loop {
+        match try_ask(queries, engine, q.clone(), resolve) {
+            Ok(answer) => return answer,
+            Err(why) if why.starts_with(NOT_ANSWERED) && std::time::Instant::now() < deadline => {}
+            Err(why) => panic!("{q}: refused: {why}"),
+        }
+    }
 }
 
 /// An answer as the golden file stores it: a row as its id, a page as its numbers and keys.
@@ -651,7 +683,9 @@ fn a_deleted_contact_is_gone_from_every_answer() {
 }
 
 /// ★ READ YOUR WRITES (P4). A contact logged a moment ago is in the very next answer, though the
-/// store takes it on the writer's own thread: the read waits for it.
+/// store takes it on the writer's own thread: the read waits for it. On a disk slower than that
+/// wait the read is refused and asked again, as the window asks again — never answered without
+/// the contact.
 #[test]
 fn a_contact_just_logged_is_in_the_next_answer() {
     let (records, entities) = golden_log();
@@ -668,7 +702,7 @@ fn a_contact_just_logged_is_in_the_next_answer() {
             r.when_unix = 1_800_000_000 + n;
             engine_lock(&engine).log_qso(r);
         }
-        let page = ask(
+        let page = answered(
             &queries,
             &engine,
             json!({"kind": "page", "query": default, "offset": 0, "limit": 1}),
@@ -679,7 +713,7 @@ fn a_contact_just_logged_is_in_the_next_answer() {
             json!(format!("N{n}NEW")),
             "the newest, at once"
         );
-        let history = ask(
+        let history = answered(
             &queries,
             &engine,
             json!({"kind": "callHistory", "call": format!("n{n}new"), "band": "", "mode": "", "matchMode": false}),
@@ -691,9 +725,9 @@ fn a_contact_just_logged_is_in_the_next_answer() {
 
 /// ★ THE ENGINE LOCK IS FREE WHILE AN ANSWER WAITS. With the store's writer stalled behind
 /// another program's write lock, a question asked after a contact is logged waits for the writer
-/// — and all that time the radio loop's lock can be taken. The wait runs out, the answer is the
-/// store as it stands, and it is not kept: asked again at the same revisions once the writer has
-/// caught up, the question shows the contact.
+/// — and all that time the radio loop's lock can be taken. The wait runs out and the question is
+/// refused, never answered without the contact, and nothing it read is kept: asked again at the
+/// same revisions once the writer has caught up, it shows the contact.
 #[test]
 fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
     let (records, entities) = golden_log();
@@ -712,9 +746,10 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
         r.when_unix += 60;
         engine_lock(&engine).log_qso(r);
     }
+    let asked_at = engine_lock(&engine).log_index_rev();
     let started = std::time::Instant::now();
     let answer = std::thread::scope(|s| {
-        let asking = s.spawn(|| ask(&queries, &engine, question.clone(), &resolve));
+        let asking = s.spawn(|| try_ask(&queries, &engine, question.clone(), &resolve));
         let mut free = 0;
         while !asking.is_finished() {
             if engine_try_lock(&engine).is_ok() {
@@ -732,7 +767,8 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
         started.elapsed() >= READ_WAIT,
         "control: the answer did wait for the stalled writer"
     );
-    assert_eq!(answer["total"], 24, "answered from the store as it stands");
+    let why = answer.expect_err("refused, never answered without the contact");
+    assert!(why.starts_with(NOT_ANSWERED), "{why}");
     drop(hold);
     assert!(
         lock(&queries.0.orders).is_empty(),
@@ -743,7 +779,8 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
     engine.caught_up();
     let caught_up = ask(&queries, &engine, question, &resolve);
     assert_eq!(
-        caught_up["orderRev"], answer["orderRev"],
+        caught_up["orderRev"],
+        json!(asked_at),
         "premise: the same revisions"
     );
     assert_eq!(
@@ -752,9 +789,8 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
     );
 }
 
-/// A fold read before the writer caught up is not kept either: the wait runs out, the answer is
-/// the store as it stands, and the next question, once the writer has caught up, folds again and
-/// has the contact.
+/// A fold read before the writer caught up is not kept either: the wait runs out, the fold is
+/// refused, and the next question, once the writer has caught up, folds again and has the contact.
 #[test]
 fn a_fold_read_before_the_writer_caught_up_is_not_kept() {
     let (records, entities) = golden_log();
@@ -772,21 +808,243 @@ fn a_fold_read_before_the_writer_caught_up_is_not_kept() {
         r.when_unix += 60;
         engine_lock(&engine).log_qso(r);
     }
-    let grids = || ask(&queries, &engine, json!({"kind": "workedGrids"}), &resolve);
-    let stale = grids();
-    assert!(
-        !stale.as_array().unwrap().contains(&json!("AA00")),
-        "answered from the store as it stands"
-    );
+    let grids = || try_ask(&queries, &engine, json!({"kind": "workedGrids"}), &resolve);
+    let why = grids().expect_err("refused, never answered without the contact");
+    assert!(why.starts_with(NOT_ANSWERED), "{why}");
     drop(hold);
     // Asked once the writer has caught up, as above.
     engine.caught_up();
-    let caught_up = grids();
+    let caught_up = grids().expect("answered once the store holds the contact");
     assert!(
         caught_up.as_array().unwrap().contains(&json!("AA00")),
         "the contact logged before the question is in its answer now"
     );
     assert_eq!(queries.0.folded.load(Ordering::Relaxed), 2, "folded again");
+}
+
+/// ★ P4 WHEN THE WRITER IS BEHIND: every question that reads the store, asked while changes made
+/// before it are still on their way to disk — held there past the whole of the read's wait — is
+/// REFUSED ([`NOT_ANSWERED`]), never answered without them, and keeps nothing; asked again once
+/// the store holds them, each answers with them. What a slow disk did before: the Logbook asked
+/// straight after a contact answered from the store as it stood, and left the contact out until
+/// the next change. The control: the band map's worked calls read the hot index under the Engine
+/// lock, not the store, and have the contact at once.
+#[test]
+fn a_question_whose_wait_runs_out_is_refused_never_answered_without_the_change() {
+    let (records, entities) = golden_log();
+    // ZD7AA is St Helena's, which no contact of the golden log is.
+    let resolve = |call: &str| match call {
+        "ZD7AA" => Some("St Helena".to_string()),
+        _ => entities.get(call).cloned().flatten(),
+    };
+    let d = Dir::new("behind");
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let w1aw = golden_id("fx01");
+    let default = json!({"sort": "time", "asc": false, "search": "", "needsConfirmOnly": false});
+    let by_mode = json!({"sort": "mode", "asc": true, "search": "", "needsConfirmOnly": false});
+    // Every question that reads the store, and what each answered, said by value.
+    type Say = fn(&Value) -> String;
+    let questions: [(&str, Value, Say); 14] = [
+        (
+            "the newest page",
+            json!({"kind": "page", "query": default, "offset": 0, "limit": 1}),
+            |a| format!("{} contacts, newest {}", a["total"], a["rows"][0]["call"]),
+        ),
+        (
+            "a page by mode",
+            json!({"kind": "page", "query": by_mode, "offset": 0, "limit": 1}),
+            |a| format!("{} contacts", a["total"]),
+        ),
+        (
+            "where W1AW sits",
+            json!({"kind": "locate", "query": default, "id": w1aw.to_string()}),
+            |a| format!("at {}", a["index"]),
+        ),
+        (
+            "W1AW's row",
+            json!({"kind": "row", "id": w1aw.to_string()}),
+            |a| format!("comment {}", a["comment"]),
+        ),
+        (
+            "the 25th contact",
+            json!({"kind": "rowsAt", "indices": [24]}),
+            |a| format!("{}", a[0]["call"]),
+        ),
+        ("the log's size", json!({"kind": "logSize"}), |a| {
+            format!("{a} contacts")
+        }),
+        (
+            "ZD7AA's history",
+            json!({"kind": "callHistory", "call": "zd7aa", "band": "", "mode": "", "matchMode": false}),
+            |a| format!("{} contacts", a["count"]),
+        ),
+        (
+            "ZD7AA in a roster",
+            json!({"kind": "callsSummary", "calls": ["ZD7AA"]}),
+            |a| format!("{} contacts", a["ZD7AA"]["count"]),
+        ),
+        (
+            "St Helena's slots",
+            json!({"kind": "entity", "entity": "St Helena"}),
+            |a| format!("new entity {}", a["newEntity"]),
+        ),
+        ("the squares worked", json!({"kind": "workedGrids"}), |a| {
+            format!("AA00 {}", a.as_array().unwrap().contains(&json!("AA00")))
+        }),
+        (
+            "the globe's 160m squares",
+            json!({"kind": "gridPoints", "band": "160m"}),
+            |a| format!("{} squares", a.as_array().unwrap().len()),
+        ),
+        ("the bands in the log", json!({"kind": "bandsInLog"}), |a| {
+            format!("160m {}", a.as_array().unwrap().contains(&json!("160m")))
+        }),
+        ("the statistics", json!({"kind": "statistics"}), |a| {
+            format!("{} contacts", a["total"])
+        }),
+        ("the LoTW backlog", json!({"kind": "lotwBacklog"}), |a| {
+            format!("{} unsent", a["unsent"])
+        }),
+    ];
+    let say =
+        |q: &Value, show: Say| try_ask(&queries, &engine, q.clone(), &resolve).map(|a| show(&a));
+    let w1aw_at = ask(&queries, &engine, questions[2].1.clone(), &resolve)["index"]
+        .as_u64()
+        .expect("premise: W1AW is in the newest-first order");
+    let unsent = ask(&queries, &engine, questions[13].1.clone(), &resolve)["unsent"]
+        .as_u64()
+        .expect("the LoTW backlog's count");
+
+    let db = tempo_core::logbook::migrate::database_path(&d.log());
+    let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+    // Two changes on their way to disk: an edit, made as a command makes it, and a contact logged —
+    // newest of all, on a band and in a square the log has no other contact on, from an entity it
+    // has never worked.
+    {
+        let mut edited = logged(&engine, w1aw);
+        edited.comment = Some("EDITED".into());
+        let mut zd7 = logged(&engine, golden_id("fx02"));
+        zd7.id = None;
+        zd7.call = "ZD7AA".into();
+        zd7.band = "160m".into();
+        zd7.freq_mhz = 1.840;
+        zd7.grid = Some("AA00".into());
+        zd7.when_unix = 1_800_000_000;
+        zd7.time_known = true;
+        zd7.upload = Default::default();
+        assert_eq!(
+            lotw_unsent(std::slice::from_ref(&zd7)),
+            1,
+            "premise: the LoTW backlog counts the new contact"
+        );
+        let edit = LogOp::Edit {
+            id: w1aw,
+            rec: Box::new(edited),
+        };
+        assert!(change(&engine, w1aw, &[edit]), "premise: the edit is made");
+        engine_lock(&engine).log_qso(zd7);
+    }
+    let asked_at = engine_lock(&engine).log_index_rev();
+    // Every question at once, each saying what it answered: they all wait on the one held write.
+    let asked: Vec<(&str, Result<String, String>)> = std::thread::scope(|s| {
+        let asking: Vec<_> = questions
+            .iter()
+            .map(|(name, q, show)| (*name, s.spawn(move || say(q, *show))))
+            .collect();
+        asking
+            .into_iter()
+            .map(|(name, asked)| (name, asked.join().unwrap()))
+            .collect()
+    });
+    let worked = ask(
+        &queries,
+        &engine,
+        json!({"kind": "workedCalls", "calls": ["ZD7AA"]}),
+        &resolve,
+    );
+    drop(hold);
+    assert_eq!(
+        worked,
+        json!(["ZD7AA"]),
+        "control: the worked calls read no store, and have the contact at once"
+    );
+    let answered: Vec<String> = asked
+        .iter()
+        .filter_map(|(name, a)| a.as_ref().ok().map(|what| format!("{name} ({what})")))
+        .collect();
+    assert!(
+        answered.is_empty(),
+        "answered without the changes: {}",
+        answered.join(", ")
+    );
+    for (name, answer) in &asked {
+        let why = answer.as_ref().unwrap_err();
+        assert!(why.starts_with(NOT_ANSWERED), "{name}: {why}");
+    }
+    assert!(
+        lock(&queries.0.orders)
+            .iter()
+            .all(|(k, _)| k.index_rev != asked_at),
+        "no order read before the writer caught up is kept"
+    );
+    assert!(
+        lock(&queries.0.log_order)
+            .as_ref()
+            .is_none_or(|(at, _)| *at != asked_at),
+        "nor the log's order"
+    );
+    assert!(
+        lock(&queries.0.entities)
+            .as_ref()
+            .is_none_or(|k| k.index_rev != asked_at),
+        "nor the entities' slots"
+    );
+
+    engine.caught_up();
+    let again: Vec<(&str, String)> = questions
+        .iter()
+        .map(|(name, q, show)| {
+            (
+                *name,
+                say(q, *show).expect("answered once the store holds the changes"),
+            )
+        })
+        .collect();
+    let newer = |n: u64| format!("at {}", n + 1);
+    assert_eq!(
+        again,
+        [
+            (
+                "the newest page",
+                r#"25 contacts, newest "ZD7AA""#.to_string()
+            ),
+            ("a page by mode", "25 contacts".to_string()),
+            ("where W1AW sits", newer(w1aw_at)),
+            ("W1AW's row", r#"comment "EDITED""#.to_string()),
+            ("the 25th contact", r#""ZD7AA""#.to_string()),
+            ("the log's size", "25 contacts".to_string()),
+            ("ZD7AA's history", "1 contacts".to_string()),
+            ("ZD7AA in a roster", "1 contacts".to_string()),
+            ("St Helena's slots", "new entity false".to_string()),
+            ("the squares worked", "AA00 true".to_string()),
+            ("the globe's 160m squares", "1 squares".to_string()),
+            ("the bands in the log", "160m true".to_string()),
+            ("the statistics", "25 contacts".to_string()),
+            ("the LoTW backlog", format!("{} unsent", unsent + 1)),
+        ],
+        "asked again once the store holds them, every answer has both changes"
+    );
+}
+
+/// How many of `records` the Logbook's "Upload to LoTW" counts as unsent ([`LotwBacklog`]'s own
+/// fold).
+fn lotw_unsent(records: &[QsoRecord]) -> usize {
+    let mut backlog = LotwBacklog::default();
+    for r in records {
+        backlog.add(r);
+    }
+    backlog.finish().unsent
 }
 
 // ── calls the store and the UI fold differently ────────────────────────────────────────────────
