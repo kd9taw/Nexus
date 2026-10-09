@@ -30,6 +30,12 @@ import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { isFieldDay } from '../fdEvent'
+import {
+  CW_CONTEST_LAYOUT,
+  CW_CONTEST_NO_REPORT_LAYOUT,
+  CW_FIELD_DAY_LAYOUT,
+  CW_LAYOUT_ON_AIR,
+} from '../features/esmRoles'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -403,6 +409,14 @@ export const DEFAULT_CONTEST_NO_REPORT_MACROS: CwMacro[] = [
   { key: 'F7', label: 'AGN', text: 'AGN AGN' },
   { key: 'F8', label: '?', text: '? ' },
 ]
+
+/** The built-in sets the cockpit's F-keys send in a contest: Field Day's, and the contest sets
+ *  with and without a report. ⛔ Today's three sets above, until the signed contest layout goes
+ *  on the air with Enter Sends Message: `CW_LAYOUT_ON_AIR` in `features/esmRoles.ts` is the one
+ *  switch, and this is the one place the cockpit reads it. */
+export const CW_CONTEST_SETS: { fieldDay: CwMacro[]; report: CwMacro[]; noReport: CwMacro[] } = CW_LAYOUT_ON_AIR
+  ? { fieldDay: CW_FIELD_DAY_LAYOUT, report: CW_CONTEST_LAYOUT, noReport: CW_CONTEST_NO_REPORT_LAYOUT }
+  : { fieldDay: DEFAULT_FD_MACROS, report: DEFAULT_CONTEST_MACROS, noReport: DEFAULT_CONTEST_NO_REPORT_MACROS }
 
 const WPM_MIN = 5
 const WPM_MAX = 50
@@ -828,14 +842,14 @@ export function CwCockpit({
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
   // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
   // for the two Field Day events and wrong on the air in every other contest. Among those,
-  // the exchange says whether F3 and F4 send a report: the strip's received slots, the same
+  // the exchange says whether the set sends a report: the strip's received slots, the same
   // `rst` slot it fills 599 into.
   const builtIn = fieldDay
     ? isFieldDay(fieldDay.event)
-      ? DEFAULT_FD_MACROS
+      ? CW_CONTEST_SETS.fieldDay
       : fieldDay.receives?.some((f) => f.kind === 'rst')
-        ? DEFAULT_CONTEST_MACROS
-        : DEFAULT_CONTEST_NO_REPORT_MACROS
+        ? CW_CONTEST_SETS.report
+        : CW_CONTEST_SETS.noReport
     : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index

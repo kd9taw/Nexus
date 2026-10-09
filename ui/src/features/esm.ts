@@ -271,17 +271,33 @@ export type EsmDecision =
  *  and every refusal comes before anything could log. */
 export function esmPress(input: EsmPressInput): EsmDecision {
   const { guards } = input
-  const aside =
-    esmInert(guards) ?? (ESM_ROLES.some((role) => (input.roles[role]?.length ?? 0) > 0) ? null : 'noRoles')
+  const aside = esmInert(guards) ?? (esmHasSteps(input.roles) ? null : 'noRoles')
   if (aside) return { kind: 'inert', why: aside }
   const step = esmStep(input.state, input.strip, { cockpit: guards.cockpit, callOnce: input.callOnce })
   if (step.kind !== 'send') return step
-  const message = resolveEsmRole(input.roles, step.role, input.slots)
+  const message = esmMessage(input.roles, step.role, input.slots, guards.cockpit)
   if ('why' in message) return { kind: 'refuse', refusal: message }
-  // The keyer plays one recording per press; two cannot be one message.
-  if (guards.cockpit === 'phone' && message.keys.length > 1)
-    return { kind: 'refuse', refusal: { why: 'oneSlot', role: step.role } }
   const refusal = esmTxRefusal(guards)
   if (refusal) return { kind: 'refuse', refusal }
   return { kind: 'send', ...message, role: step.role, log: step.log, caret: step.caret, next: step.next }
+}
+
+/** Whether a set's roles map any step at all. A set that maps none makes ESM step aside. */
+export function esmHasSteps(roles: EsmRoleMap): boolean {
+  return ESM_ROLES.some((role) => (roles[role]?.length ?? 0) > 0)
+}
+
+/** `role`'s message as a press sends it: its keys and their texts joined (`resolveEsmRole`), or
+ *  why there is none, by name. In Phone a step mapped to two recordings has none, because the
+ *  keyer plays one recording per press. The role picker shows exactly this for each step. */
+export function esmMessage(
+  roles: EsmRoleMap,
+  role: EsmRole,
+  slots: readonly EsmSlot[],
+  cockpit: EsmCockpit,
+): { keys: MacroKey[]; text: string } | Extract<EsmRefusal, { why: 'unmapped' | 'empty' | 'oneSlot' }> {
+  const message = resolveEsmRole(roles, role, slots)
+  if ('why' in message) return message
+  if (cockpit === 'phone' && message.keys.length > 1) return { why: 'oneSlot', role }
+  return message
 }

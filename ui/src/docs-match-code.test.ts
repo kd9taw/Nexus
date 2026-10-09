@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { EN, type MessageKey } from './i18n'
+import { CW_LAYOUT_ON_AIR } from './features/esmRoles'
 
 // DOCS-MATCH-CODE — published tables are checked against the code they describe.
 //
@@ -264,33 +265,40 @@ const rel = (abs: string) => abs.slice(repo('').length).replace(/\\/g, '/')
 
 describe('CW F-key macros match CwCockpit.tsx', () => {
   const CW_TSX = read(uiSrc('components/CwCockpit.tsx'))
+  const ESM_ROLES_TS = read(uiSrc('features/esmRoles.ts'))
 
   // A CAPTION IS EITHER WRITTEN IN THE SOURCE OR NAMED BY A CATALOG KEY (i18n phase 2): the
   // macro captions that are on-air shorthand — CQ, 73, AGN, TU, CQ FD, ? — are invariant and
   // stay written as `label`, and the ones that are words moved into `ui/src/i18n/en.ts` and
   // are named by `labelKey`. What the doc's Label column has to match is what the cockpit
   // SHOWS, so the key is resolved through the English catalog rather than compared as a key.
-  const sourceSet = (name: string) =>
-    objectsIn(declValue(CW_TSX, name)).map((span, i) => {
+  const sourceSet = (name: string, src = CW_TSX, file = 'CwCockpit.tsx') =>
+    objectsIn(declValue(src, name)).map((span, i) => {
       const o = parseObjectLiteral(span)
       for (const f of ['key', 'text']) {
-        if (!(f in o)) throw new Error(`CwCockpit.tsx ${name}[${i}] has no ${f}: ${span}`)
+        if (!(f in o)) throw new Error(`${file} ${name}[${i}] has no ${f}: ${span}`)
       }
       const label = 'labelKey' in o ? EN[o.labelKey as MessageKey] : o.label
       if (typeof label !== 'string') {
-        throw new Error(`CwCockpit.tsx ${name}[${i}] has no label (nor a catalog one): ${span}`)
+        throw new Error(`${file} ${name}[${i}] has no label (nor a catalog one): ${span}`)
       }
       return { key: o.key, label, text: o.text }
     })
 
+  // THE ON-AIR SWITCH (`CW_LAYOUT_ON_AIR`, features/esmRoles.ts): the contest and Field Day keys
+  // send today's sets until the signed contest layout goes on the air with Enter Sends Message.
+  // The manual publishes the set the cockpit SENDS, so it is compared with whichever set the
+  // switch selects, and flipping the switch without the manual's three tables turns this red.
+  const onAir = (today: string, layout: string) =>
+    CW_LAYOUT_ON_AIR
+      ? { const: `${layout} (features/esmRoles.ts)`, macros: sourceSet(layout, ESM_ROLES_TS, 'esmRoles.ts') }
+      : { const: today, macros: sourceSet(today) }
+
   const SETS = {
     default: { const: 'DEFAULT_MACROS', macros: sourceSet('DEFAULT_MACROS') },
-    fieldDay: { const: 'DEFAULT_FD_MACROS', macros: sourceSet('DEFAULT_FD_MACROS') },
-    contest: { const: 'DEFAULT_CONTEST_MACROS', macros: sourceSet('DEFAULT_CONTEST_MACROS') },
-    contestNoReport: {
-      const: 'DEFAULT_CONTEST_NO_REPORT_MACROS',
-      macros: sourceSet('DEFAULT_CONTEST_NO_REPORT_MACROS'),
-    },
+    fieldDay: onAir('DEFAULT_FD_MACROS', 'CW_FIELD_DAY_LAYOUT'),
+    contest: onAir('DEFAULT_CONTEST_MACROS', 'CW_CONTEST_LAYOUT'),
+    contestNoReport: onAir('DEFAULT_CONTEST_NO_REPORT_MACROS', 'CW_CONTEST_NO_REPORT_LAYOUT'),
   }
 
   // A published CW macro table is any table headed Key | Label | … on a CW page (every

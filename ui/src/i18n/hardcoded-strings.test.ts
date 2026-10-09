@@ -589,6 +589,11 @@ const MIGRATED = [
   'features/esm.ts',
   // …and its role tables, the same way. A macro text is an on-air token, never prose.
   'features/esmRoles.ts',
+  // …and its words: a step's name and one sentence per reason, all from the catalog — migrated
+  // from birth, with CQ, TU and AGN held as the on-air constants they are.
+  'features/esmWords.ts',
+  // …and Settings' role picker for one macro set — migrated from birth; a key name is a token.
+  'components/EsmRolePicker.tsx',
 ]
 
 /**

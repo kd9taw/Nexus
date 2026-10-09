@@ -2035,6 +2035,39 @@ contest's rules rather than sending a blank — you find out while setting up, n
 *Contest Category in Nexus 1.10.3. The badge states what you are entitled to
 claim right now; the record underneath is the evidence, kept across restarts.*
 
+### Enter Sends Message
+
+ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
+the contact’s next message from your F-keys, as N1MM Logger+ does, and the
+contact logs at its last step. ESM is off until you turn it on, in each cockpit
+separately. Enter never turns TX on, and nothing is sent by a timer."
+
+- **ESM in the CW cockpit**, **in the RTTY cockpit**, **in the Phone cockpit** —
+  one switch per cockpit, so you can run CW with it and leave Phone without it.
+  All three are off on a new install. In Phone, "Enter plays the voice keyer’s
+  recordings. When you are running, you say his call and your exchange
+  yourself: a recording cannot say a callsign."
+- **Call once (S&P)** — "In search and pounce, your call goes once per station.
+  The next Enter asks for a repeat instead of sending your call again." Off by
+  default.
+- **CW steps** — which keys of the active CW profile send each step: CQ, his
+  call and your exchange, TU, your call, your S&P exchange and AGN. A step can
+  send two keys as one message, such as F5 then F2. The mapping is saved with
+  the profile. A profile still on the built-in sets shows their steps and has
+  nothing to map until you **Customize** it under [CW](#cw).
+- **RTTY steps** — the same for each RTTY set, Everyday and Contest, each with
+  its own mapping. The Contest set's built-in key for each step is shown beside
+  your choice, and a step left on *Built in* sends it. A key you changed in the
+  cockpit keeps its place, so its step sends your text.
+- **Voice keyer steps** — which recording each step plays, one slot per step.
+  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F5
+  AGN. An empty slot plays nothing.
+
+Every step row shows what Enter would send there, or why it would send nothing:
+no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
+step aside, and Enter logs as it does with ESM off. On the hosted Remote page
+this section only says that ESM is set at the station.
+
 ### Field Day Setup
 
 - **Field Day mode** — the master switch. "Turn on for Field Day weekend: the

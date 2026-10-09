@@ -23776,6 +23776,17 @@ button.sat-chip:disabled {
 .cw-macro-text {
   flex: 1;
 }
+/* Enter Sends Message's role picker (Settings ▸ Contesting) reuses these rows. The step's name
+   takes one width so the keys line up, and wraps inside it; what the step sends takes the rest
+   of the row and wraps rather than pushing the row wider than its section. */
+.esm-role-row .cw-macro-role {
+  flex: 0 0 11em;
+}
+.esm-role-sends {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* --- Operator-resizable sub-panels (PaneSeam.tsx) --- */
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never

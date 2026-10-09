@@ -527,6 +527,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'contesting',
     keywords: ['contest', 'assisted', 'unassisted', 'category', 'entry'],
   },
+  // Enter Sends Message: a switch per cockpit (CW, RTTY, Phone), off until the operator turns it
+  // on, and the steps each cockpit's macro set sends. With the contest's own sections, above
+  // Field Day's: it works in every contest the picker runs.
+  {
+    id: 'contest-keys',
+    label: 'Enter Sends Message',
+    tab: 'contesting',
+    keywords: ['esm', 'n1mm esm', 'enter key', 'run', 's&p', 'search and pounce', 'call once',
+      'role picker', 'steps', 'next message', 'his call', 'tu'],
+  },
   {
     id: 'field-day',
     label: 'Field Day Setup',

@@ -19,7 +19,7 @@ import {
   type EsmState,
   type EsmStrip,
 } from './esm'
-import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT_DRAFT, VOICE_SLOT_ROLES, esmRoles } from './esmRoles'
+import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT, VOICE_SLOT_ROLES, esmRoles } from './esmRoles'
 import { resolveRttySet } from './rttyMacros'
 
 const RUN: EsmState = { mode: 'run', exchTo: null, myCallTo: null }
@@ -325,7 +325,7 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       callOnce: false,
       guards: cw,
       roles: CONTEST_LAYOUT_ROLES,
-      slots: CW_CONTEST_LAYOUT_DRAFT,
+      slots: CW_CONTEST_LAYOUT,
       ...over,
     })
   const last = { state: { ...RUN, exchTo: 'K9AAA' }, strip: strip('K9AAA', true) }

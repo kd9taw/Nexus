@@ -307,3 +307,27 @@ describe('F3 and F4 key the report where the contest exchange carries one', () =
     expect(await f3f4()).toEqual(['! {EXCH}', 'TU {EXCH}'])
   })
 })
+
+// ---------------------------------------------------------------------------
+// THE SIGNED CONTEST LAYOUT IS NOT ON THE AIR YET.
+//
+// Enter Sends Message's layout for these sets (F2 his call and the exchange, F3 TU, …) is signed,
+// and it goes on the air WITH Enter Sends Message, never before: `CW_LAYOUT_ON_AIR` in
+// `features/esmRoles.ts` is the one switch. Until it is on, F3 keys today's exchange in the
+// contest sets and at Field Day, as their operators have keyed it for releases. Switching it on
+// turns this red, and the change that does so updates this test with it.
+// ---------------------------------------------------------------------------
+
+describe('the signed contest layout is not on the air yet', () => {
+  it('F3 still sends today\'s exchange in a contest with a report, one without, and at Field Day', async () => {
+    const f3 = async () => (await f3f4())[0]
+    await renderCockpit({ fieldDay: fieldDayFor(SEED.rulesets.find((r) => r.event === 'ilqp')!, 0) })
+    expect(await f3()).toBe('! DE {MYCALL} {RST} {EXCH} {EXCH} K')
+    cleanup()
+    await renderCockpit({ fieldDay: fieldDayFor(SEED.rulesets.find((r) => r.event === 'arrlss_cw')!, 0) })
+    expect(await f3()).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
+    cleanup()
+    await renderCockpit({ fieldDay: { event: 'arrlfd', running: true } as unknown as FieldDayStatus })
+    expect(await f3()).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
+  })
+})
