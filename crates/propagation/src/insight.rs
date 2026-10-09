@@ -752,20 +752,20 @@ mod tests {
 
     /// A solar-wind sample from the magnetometer alone — the plasma product down — with `bz` at
     /// `tag`, built by the parser the live feed uses, so the test sees what the station sees.
-    fn wind_without_plasma(tag: &str, bz: &str) -> crate::solar_wind::SolarWind {
+    fn wind_without_plasma(tag: &str, bz: f64) -> crate::solar_wind::SolarWind {
         crate::solar_wind::assemble(
-            &serde_json::json!([["time_tag", "bz_gsm", "bt"], [tag, bz, "14.0"]]),
+            &serde_json::json!([{"time_tag": tag, "active": true, "bz_gsm": bz, "bt": 14.0}]),
             &serde_json::Value::Null,
         )
         .expect("a dated magnetometer reading is a sample")
     }
 
     /// NOW (1_700_000_000) is 22:13:20 UTC on 14 Nov 2023; this reading is a minute before it.
-    const A_MINUTE_AGO: &str = "2023-11-14 22:12:20.000";
+    const A_MINUTE_AGO: &str = "2023-11-14T22:12:20";
 
     #[test]
     fn a_southward_bz_with_the_plasma_feed_down_never_reports_a_wind_of_zero() {
-        let sw = wind_without_plasma(A_MINUTE_AGO, "-12.0");
+        let sw = wind_without_plasma(A_MINUTE_AGO, -12.0);
         let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&sw));
         let s = ins
             .iter()
@@ -785,9 +785,9 @@ mod tests {
 
     #[test]
     fn a_southward_bz_without_a_total_field_never_reports_bt_zero() {
-        // A magnetometer product with Bz and no Bt column, the plasma feed down as well.
+        // A magnetometer reading with Bz and no Bt field, the plasma feed down as well.
         let sw = crate::solar_wind::assemble(
-            &serde_json::json!([["time_tag", "bz_gsm"], [A_MINUTE_AGO, "-12.0"]]),
+            &serde_json::json!([{"time_tag": A_MINUTE_AGO, "active": true, "bz_gsm": -12.0}]),
             &serde_json::Value::Null,
         )
         .expect("a dated magnetometer reading is a sample");
@@ -812,14 +812,14 @@ mod tests {
     /// it is history, and presenting it as "turned stormy" is the stale value this feed must not show.
     #[test]
     fn a_solar_wind_reading_older_than_half_an_hour_warns_nothing() {
-        let old = wind_without_plasma("2023-11-14 20:13:20.000", "-12.0"); // two hours before NOW
+        let old = wind_without_plasma("2023-11-14T20:13:20", -12.0); // two hours before NOW
         let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&old));
         assert!(
             !ins.iter().any(|i| i.kind == InsightKind::SolarWind),
             "a two-hour-old reading was presented as a leading indicator"
         );
         // Control: the same field, a minute old, does warn.
-        let fresh = wind_without_plasma(A_MINUTE_AGO, "-12.0");
+        let fresh = wind_without_plasma(A_MINUTE_AGO, -12.0);
         let ins = generate_insights(
             NOW,
             &wx(150.0, 2.0, 1e-7),
