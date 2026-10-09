@@ -14,8 +14,9 @@
 //
 // A read that FAILS says so, with the reason and a Retry button, and Retry or reopening the view
 // asks again: the source used to count a failure as an answer, so the line said "Reading the
-// logbook…" until the next change and a reopened view never asked. A count held from before the
-// latest change is shown as out of date, and a held 0 never as an empty log.
+// logbook…" until the next change and a reopened view never asked. A refusal while a change is
+// being saved stays quiet: "Reading the logbook…", even once its asks run out. A count held from
+// before the latest change is shown as out of date, and a held 0 never as an empty log.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { LoggedQso } from '../types'
@@ -134,22 +135,18 @@ describe('the Logbook before the engine has answered', () => {
     expect(rows()).toEqual([])
   })
 
-  it(`refused while a change is being saved: "${READING}" while it is asked again, then the refusal in its own words`, async () => {
+  it(`refused while a change is being saved: "${READING}" after every ask, and a minute later`, async () => {
     engine.refusing = true
     await open()
     expect(document.body.textContent, 'refused once').not.toContain(EMPTY)
     expect(said()).toEqual([READING])
-    for (let i = 1; i < ASK_AGAIN_TIMES; i++) await aSecond()
-    expect(said(), 'still being asked again').toEqual([READING])
-    await aSecond()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await aSecond()
     expect(sizeAsks(), 'premise: every ask refused, the last one too').toBe(1 + ASK_AGAIN_TIMES)
     expect(document.body.textContent, 'refused every time').not.toContain(EMPTY)
-    expect(said(), 'nothing more is asked: the read failed, and says why').toEqual([FAILED(REFUSAL)])
-    expect(retry(), 'and offers to ask again').not.toBeNull()
+    expect(said()).toEqual([READING])
     await act(() => vi.advanceTimersByTimeAsync(60_000))
     expect(document.body.textContent, 'a minute later').not.toContain(EMPTY)
-    expect(said()).toEqual([FAILED(REFUSAL)])
-    expect(sizeAsks(), 'never asked in a loop').toBe(1 + ASK_AGAIN_TIMES)
+    expect(said()).toEqual([READING])
     expect(badge()).toBeNull()
     expect(rows()).toEqual([])
   })
@@ -253,6 +250,39 @@ describe('a read of the logbook that fails', () => {
     expect(rows()).toEqual(['K25ABC', ...NEWEST_FIRST])
     expect(said()).toEqual([])
     expect([badge(), badgeTitle()]).toEqual(['25', null])
+  })
+})
+
+// A REFUSAL STAYS QUIET. The engine refuses a read while a change made before it is still being
+// saved; the source asks again a second later, three times. Once the asks run out the read has
+// failed, but the list keeps "Reading the logbook…": no failed line and no Retry. The save-trouble
+// notice speaks for the save, and the next change or a reopened view asks again.
+describe('a read refused while a change is being saved', () => {
+  it('stays quiet once the asks run out: no failed line, no Retry; reopening asks again', async () => {
+    engine.refusing = true
+    await open()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await aSecond()
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(sizeAsks(), 'premise: every ask refused, and no more asked').toBe(1 + ASK_AGAIN_TIMES)
+    expect([said(), retry()]).toEqual([[READING], null])
+    cleanup()
+    engine.refusing = false
+    await open()
+    expect(sizeAsks(), 'reopening asked again').toBe(2 + ASK_AGAIN_TIMES)
+    expect(rows()).toEqual(NEWEST_FIRST)
+    expect([said(), badge()]).toEqual([[], '24'])
+  })
+
+  it('a list on screen keeps its rows and says nothing more, the count marked out of date', async () => {
+    const { rerender } = await open()
+    engine.log = [...LOG_OF_24, contact(25)]
+    engine.refusing = true
+    rerender(view(2))
+    await settle()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await aSecond()
+    expect(rows(), 'the rows it had').toEqual(NEWEST_FIRST)
+    expect([said(), retry()]).toEqual([[], null])
+    expect([badge(), badgeTitle()]).toEqual(['24', OUT_OF_DATE])
   })
 })
 

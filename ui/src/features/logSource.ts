@@ -23,7 +23,8 @@
 //                           its way. A view keeps showing it, and says it is out of date where
 //                           that matters (a count).
 //                'failed'   the latest ask failed, and nothing has asked since. `peek` still gives
-//                           any older answer.
+//                           any older answer. A view says so through `failureToShow`, which keeps
+//                           the refusal while a change is being saved quiet.
 //   failure(q) Why the latest ask of `q` failed, in the transport's words, while it is 'failed'.
 //   want(q)    A view shows `q` — keep an answer to it on its way and fresh. Returns the release,
 //              called when the view stops showing it (an unmount, a new question). A question
@@ -48,7 +49,7 @@ import { askLog } from '../api'
 import { createAskingLogSource } from './askingLogSource'
 import { questionKey, type AnswerTo, type LogPage, type LogQuestion } from './logAnswers'
 import type { LogQuery } from './logQuery'
-import { askAgainWhileSaving } from './notAnswered'
+import { askAgainWhileSaving, notAnswered } from './notAnswered'
 
 /** Where the answer to a question stands (`LogSource.status`). */
 export type LogAnswerState = 'asking' | 'current' | 'stale' | 'failed'
@@ -124,12 +125,18 @@ export function useLogAnswer<Q extends LogQuestion>(q: Q | null, logTick: number
   return answer
 }
 
+/** Where an answer stands, and why its latest ask failed when it did (`useLogStatus`). */
+export interface LogStatus {
+  state: LogAnswerState
+  reason: string | undefined
+}
+
 /**
  * Where the answer to `q` stands (`LogSource.status`), and why its latest ask failed when it did:
  * what a view says beside, or in place of, the answer `useLogAnswer` gives it. This only reads; the
  * view asks through `useLogAnswer`. `undefined` for `q = null`, a view that is not reading.
  */
-export function useLogStatus(q: LogQuestion | null): { state: LogAnswerState; reason: string | undefined } | undefined {
+export function useLogStatus(q: LogQuestion | null): LogStatus | undefined {
   const source = current
   const key = q === null ? null : questionKey(q)
   const question = useRef(q)
@@ -147,6 +154,17 @@ export function useLogStatus(q: LogQuestion | null): { state: LogAnswerState; re
   const state = useSyncExternalStore(source.subscribe, readState)
   const reason = useSyncExternalStore(source.subscribe, readReason)
   return state === undefined ? undefined : { state, reason }
+}
+
+/**
+ * Why a read failed, for a view to say ("Couldn’t read the logbook: …"), or null when it says
+ * nothing. That is a read that has not failed, and the engine's refusal while a change is still
+ * being saved (features/notAnswered). A refusal stays quiet even once its asks run out (operator,
+ * 2026-10-09: "Keep it silent"): the view keeps saying it is reading the logbook, and the next
+ * change, a refresh or a reopened view asks again.
+ */
+export function failureToShow(status: LogStatus | undefined): string | null {
+  return status?.state === 'failed' && !notAnswered(status.reason) ? (status.reason ?? '') : null
 }
 
 /**

@@ -14,6 +14,7 @@ import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
 import type { AppSnapshot, LoggedQso, SpotRow } from './types'
 import type { LogQuestion } from './features/logAnswers'
+import { ASK_AGAIN_AFTER_MS, ASK_AGAIN_TIMES, NOT_ANSWERED } from './features/notAnswered'
 
 const station = vi.hoisted(() => ({
   log: [] as unknown[],
@@ -193,5 +194,21 @@ describe('a new call on the map', () => {
     await poll()
     expect(struckThrough(container)).toEqual(WORKED)
     expect(unanswered(container)).toEqual([['K1NEW', 'Couldn’t read the logbook: database disk image is malformed.']])
+  })
+
+  it('a question refused while a change is being saved keeps "Reading the logbook…" on the new call, after every ask', async () => {
+    const { askLog } = await import('./api')
+    const { container } = render(<DetachedPanel panel="bandmapCw" />)
+    await flush()
+    vi.mocked(askLog).mockClear()
+    station.holding.add('K1NEW')
+    station.failing = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+    station.extraSpots = [K1NEW]
+    await poll()
+    for (let i = 0; i < ASK_AGAIN_TIMES; i++) await act(() => vi.advanceTimersByTimeAsync(ASK_AGAIN_AFTER_MS))
+    const refused = vi.mocked(askLog).mock.calls.filter(([q]) => q.kind === 'workedCalls' && q.calls.includes('K1NEW'))
+    expect(refused.length, 'premise: every ask refused').toBe(1 + ASK_AGAIN_TIMES)
+    expect(struckThrough(container)).toEqual(WORKED)
+    expect(unanswered(container)).toEqual([['K1NEW', 'Reading the logbook…']])
   })
 })

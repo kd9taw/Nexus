@@ -14,7 +14,8 @@ import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from './logA
 // Imported here, not inside a test: loading the Logbook module (~0.6 s) then counts against no
 // test's time limit.
 import { Logbook } from '../components/Logbook'
-import { setLogSource, useLogAnswer, useLogStatus, type LogSource } from './logSource'
+import { failureToShow, setLogSource, useLogAnswer, useLogStatus, type LogSource } from './logSource'
+import { NOT_ANSWERED } from './notAnswered'
 
 // THE BUDGET (2026-10-09). The slowest case here, "shows the same rows, the same count and the same order…", takes
 // 0.40 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -211,6 +212,14 @@ describe('the state of an answer', () => {
     before = told
     await act(async () => calls.splice(0)[0].reject('engine busy'))
     expect(told, 'failed').toBeGreaterThan(before)
+  })
+
+  it('a view shows any failure but the refusal while a change is being saved, which stays quiet', () => {
+    const refusal = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+    expect(failureToShow({ state: 'failed', reason: 'database disk image is malformed' })).toBe('database disk image is malformed')
+    expect(failureToShow({ state: 'failed', reason: refusal }), 'a refusal').toBeNull()
+    expect(failureToShow({ state: 'stale', reason: undefined }), 'not failed').toBeNull()
+    expect(failureToShow(undefined), 'not reading').toBeNull()
   })
 
   it('a view reads the state as one value that changes when the source says so', async () => {

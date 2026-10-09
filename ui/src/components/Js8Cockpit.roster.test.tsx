@@ -22,6 +22,7 @@ import { JS8_PINS_KEY } from '../features/js8Pins'
 import type { AppSnapshot, Js8State, LoggedQso } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
 import type { LogQuestion } from '../features/logAnswers'
+import { ASK_AGAIN_TIMES, NOT_ANSWERED } from '../features/notAnswered'
 
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
@@ -350,6 +351,28 @@ describe('a newly heard station', () => {
     expect(marks('K1NEW')).toEqual({ b4: NOT_YET, title: 'Couldn’t read the logbook: database disk image is malformed.', name: null })
     expect(marks('W0IND')).toEqual(DAVE)
   })
+
+  // The refusal is asked again a second apart, four asks in all (features/notAnswered), on real
+  // timers: Testing Library's `waitFor` never returns under a faked `setTimeout`. So about 3 s of
+  // this test is its own waiting, and it gets the house budget, 15 s.
+  it('a question refused while a change is being saved keeps "Reading the logbook…" on the new call, after every ask', async () => {
+    const { askLog } = await import('../api')
+    const { logSource } = await import('../features/logSource')
+    await renderCockpit()
+    await joinedCell('W0IND', '.js8-b4')
+    vi.mocked(askLog).mockClear()
+    engine.holding.add('K1NEW')
+    engine.failing = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+    await hear()
+    const question = { kind: 'callsSummary', calls: ['K1NEW', 'N0GRD', 'W0IND'] } as const
+    await waitFor(() => expect(logSource().status(question), 'premise: every ask refused, and the source gave up').toBe('failed'), {
+      timeout: 10_000,
+    })
+    const refused = vi.mocked(askLog).mock.calls.filter(([q]) => q.kind === 'callsSummary' && q.calls.includes('K1NEW'))
+    expect(refused.length, 'premise: four asks').toBe(1 + ASK_AGAIN_TIMES)
+    expect(marks('K1NEW')).toEqual({ b4: NOT_YET, title: 'Reading the logbook…', name: null })
+    expect(marks('W0IND')).toEqual(DAVE)
+  }, 15_000)
 })
 
 describe('the Stations list under JS8Call’s callsign aging', () => {

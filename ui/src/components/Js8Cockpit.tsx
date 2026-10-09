@@ -59,7 +59,7 @@ import {
   setTxOffset,
 } from '../api'
 import { bandLabelForMhz } from '../band'
-import { useLatestLogAnswer, useLogStatus } from '../features/logSource'
+import { failureToShow, useLatestLogAnswer, useLogStatus } from '../features/logSource'
 import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
@@ -646,15 +646,14 @@ export function Js8Cockpit({
   const summaryQuestion = { kind: 'callsSummary', calls: stationCalls.split(' ').filter(Boolean) } as const
   const reading = active && !remote ? summaryQuestion : null
   const summary = useLatestLogAnswer(reading, snap?.logTick)
-  const summaryStatus = useLogStatus(reading)
+  const summaryFailed = failureToShow(useLogStatus(reading))
   const logDetail = useMemo(() => {
     if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
     return new Map(Object.entries(summary?.answer ?? {}))
   }, [summary, remote, context.value])
   /** The heard calls the log has answered about. */
   const answeredCalls = useMemo(() => new Set(summary?.question.calls), [summary])
-  const unansweredTitle =
-    summaryStatus?.state === 'failed' ? t('logbook.readFailed', { reason: summaryStatus.reason ?? '' }) : t('logbook.reading')
+  const unansweredTitle = summaryFailed !== null ? t('logbook.readFailed', { reason: summaryFailed }) : t('logbook.reading')
 
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)

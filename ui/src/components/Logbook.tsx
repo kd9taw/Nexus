@@ -17,7 +17,7 @@ import { PaneSeam } from './PaneSeam'
 import { LOG_GLOBE_SPLIT_MAX, LOG_GLOBE_SPLIT_MIN } from '../features/paneSeam'
 import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
 import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
-import { logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
+import { failureToShow, logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
@@ -1064,11 +1064,12 @@ export function Logbook({
   // page on its way says so in its status line.
   //
   // A READ THAT FAILED says so, in the engine's words, with Retry (`load`): the count's, or the first
-  // page's, once nothing more is asked (a refusal is asked again first). Retry and reopening the
-  // view ask again. The rows the list had stay up under the line.
-  const readFailed = sizeStatus?.state === 'failed' ? sizeStatus : firstPageStatus?.state === 'failed' ? firstPageStatus : null
+  // page's. Retry and reopening the view ask again. The rows the list had stay up under the line.
+  // A refusal while a change is being saved stays quiet, even once its asks run out
+  // (`failureToShow`): the list keeps saying it is reading the logbook.
+  const readFailed = failureToShow(sizeStatus) ?? failureToShow(firstPageStatus)
   const listSays: 'failed' | 'reading' | 'empty' | 'noMatch' | null =
-    readFailed ? 'failed'
+    readFailed !== null ? 'failed'
     : listTotal > 0 ? null
     : control ? (askedLogSize === undefined || (askedLogSize === 0 && !sizeCurrent) || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch')
     : remoteLog?.phase !== 'ready' ? null
@@ -2544,7 +2545,7 @@ export function Logbook({
           </div>
           {listSays === 'failed' && (
             <p className="empty">
-              {t('logbook.readFailed', { reason: readFailed?.reason ?? '' })}{' '}
+              {t('logbook.readFailed', { reason: readFailed ?? '' })}{' '}
               <button type="button" className="log-filter-chip" onClick={load}>
                 {t('logbook.readFailed.retry')}
               </button>

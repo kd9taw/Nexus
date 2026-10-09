@@ -71,7 +71,7 @@ import {
   type FdRulesetDto,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
-import { useLatestLogAnswer, useLogStatus } from './features/logSource'
+import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
@@ -293,7 +293,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const spotCalls = useMemo(() => [...new Set(allSpots.map((s) => s.call.toUpperCase()))].sort(), [allSpots])
   const workedQuestion = isBandMap ? ({ kind: 'workedCalls', calls: spotCalls } as const) : null
   const worked = useLatestLogAnswer(workedQuestion, snap?.logTick)
-  const workedStatus = useLogStatus(workedQuestion)
+  const workedFailed = failureToShow(useLogStatus(workedQuestion))
   const workedCalls = useMemo(() => new Set(worked?.answer ?? []), [worked])
   const unansweredCalls = useMemo(() => {
     const answered = new Set(worked?.question.calls)
@@ -542,9 +542,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           typeByCall={typeByCall}
           workedCalls={workedCalls}
           unansweredCalls={unansweredCalls}
-          unansweredTitle={
-            workedStatus?.state === 'failed' ? t('logbook.readFailed', { reason: workedStatus.reason ?? '' }) : t('logbook.reading')
-          }
+          unansweredTitle={workedFailed !== null ? t('logbook.readFailed', { reason: workedFailed }) : t('logbook.reading')}
           onDock={(side) => void dockBandmapWindow(side)}
           // Tuning from the map (#39). The map is a frequency scale, so it can act as one.
           sideband={snap.radio.sideband || 'USB'}
