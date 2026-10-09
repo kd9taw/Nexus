@@ -37189,6 +37189,64 @@ mod tests {
         }
     }
 
+    /// ⭐ WHAT WSJT-X READS BACK FROM A MODE WRITE THROUGH THE CAT BROKER, byte for byte. The broker
+    /// answers for the engine, which is never silent, so its `M` answers stay `RPRT 0` for a mode
+    /// the section is in and `RPRT -1` for one it is not (and for a mode-less `M`), whatever the
+    /// shared encoder learns to say for a radio that does not answer. Hamlib's NET client sends
+    /// the width as `-1` (no change) or `0` (the rig's default); both are here. One session in
+    /// Digital and one in Phone, each with the mode read-back between.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_cat_broker_answers_wsjtxs_mode_writes_with_the_bytes_it_always_sent() {
+        use std::io::{Read, Write};
+        use tempo_app::settings::{OperatingMode, Settings};
+        for (section, dial_mhz, session, want) in [
+            (
+                OperatingMode::Digital,
+                14.074,
+                "M PKTUSB -1\nm\nM CW -1\nm\nM\nM PKTUSB 0\n",
+                "RPRT 0\nPKTUSB\n2700\nRPRT -1\nPKTUSB\n2700\nRPRT -1\nRPRT 0\n",
+            ),
+            (
+                OperatingMode::Phone,
+                14.200,
+                "M USB -1\nm\nM PKTUSB -1\nm\nM\nM USB 0\n",
+                "RPRT 0\nUSB\n2700\nRPRT -1\nUSB\n2700\nRPRT -1\nRPRT 0\n",
+            ),
+        ] {
+            let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+                tempo_app::engine::Engine::with_settings(Settings {
+                    operating_mode: section,
+                    band: "20m".into(),
+                    dial_mhz,
+                    sideband: "USB".into(),
+                    ..Settings::default()
+                }),
+            ));
+            let backend: std::sync::Arc<dyn tempo_audio::rigctld_server::RigBackend> =
+                std::sync::Arc::new(super::EngineRig::new(shared));
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || tempo_audio::rigctld_server::serve(listener, backend));
+            let mut client = std::net::TcpStream::connect(addr).unwrap();
+            client
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            client.write_all(session.as_bytes()).unwrap();
+            // Read until the whole session is in, or the broker stops: a short or wrong reply
+            // shows as a diff below, not as a hang.
+            let mut got = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while got.len() < want.len() {
+                match client.read(&mut chunk) {
+                    Ok(n) if n > 0 => got.extend_from_slice(&chunk[..n]),
+                    _ => break,
+                }
+            }
+            assert_eq!(String::from_utf8(got).unwrap(), want, "{section:?}");
+        }
+    }
+
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
     /// collapsed anything that was not LSB or FM to plain USB and returned true, so VarAC or
     /// FreeDV asking for `PKTUSB`/`DATA-U` was told "done" while the rig sat in voice USB.
