@@ -491,6 +491,11 @@ export interface FdRulesetDto {
    *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
    *  tokens: the sponsor's names, never translated. */
   entryClasses?: string[]
+  /** ⭐ When the picked contest runs: its running-or-next window (Unix UTC), from the same
+   *  rules data the session's banner reads, so the contest screen can show it before any
+   *  session exists. Filled by the preview only; absent from the Remote capture. */
+  eventStartUnix?: number
+  eventEndUnix?: number
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of

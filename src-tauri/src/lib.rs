@@ -8510,6 +8510,15 @@ struct FdRulesetDto {
     /// key it does not know, so a capture must stay the shape every published page accepts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     entry_classes: Vec<String>,
+    /// ⭐ **When the picked contest runs** — its running-or-next window (Unix UTC), from the
+    /// rules data by the same `next_or_running` the session's own banner reads. The contest
+    /// screen shows it beside the Field Day mode switch before any session exists: with the
+    /// mode off, or with a station that cannot enter yet. Filled by the PREVIEW only, and
+    /// absent otherwise for the same reason `entry_classes` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_start_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_end_unix: Option<u64>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -8537,6 +8546,8 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         problem: String::new(),
         location_warning: None,
         entry_classes: Vec::new(),
+        event_start_unix: None,
+        event_end_unix: None,
     }
 }
 
@@ -8563,6 +8574,11 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
     ) {
         // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
         dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
+        // When it runs, by the computation the session's banner reads — so the contest screen
+        // says the same thing before the session exists as during it.
+        let window = rs.next_or_running(now_unix().max(0) as u64);
+        dto.event_start_unix = Some(window.start_unix);
+        dto.event_end_unix = Some(window.end_unix);
         match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
@@ -36417,6 +36433,59 @@ mod tests {
             .entry_classes
             .is_empty()
         );
+    }
+
+    /// ⭐ **The contest screen can say when the picked contest runs before any session
+    /// exists** (Field Day mode off, or a station that cannot enter yet): the preview carries
+    /// the rules data's running-or-next window, the one the session's banner reads — and the
+    /// Remote capture still never sends it.
+    #[test]
+    fn the_preview_carries_the_picked_contests_window() {
+        let preview = |event: &str| {
+            let s = tempo_app::settings::Settings {
+                fd_event: event.into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let rs =
+            tempo_core::fd_rules::ruleset_by_id("ilqp", tempo_core::fd_rules::CURRENT_RULES_YEAR)
+                .expect("the seed carries the Illinois QSO Party");
+        // Read the clock on both sides of the preview, so a window that ends between the two
+        // reads cannot fail the test: the preview's answer is one of these two.
+        let before = rs.next_or_running(super::now_unix() as u64);
+        let ilqp = preview("ilqp");
+        let after = rs.next_or_running(super::now_unix() as u64);
+        let got = (ilqp.event_start_unix, ilqp.event_end_unix);
+        assert!(
+            got == (Some(before.start_unix), Some(before.end_unix))
+                || got == (Some(after.start_unix), Some(after.end_unix)),
+            "{got:?} is not the running-or-next window {before:?}"
+        );
+        // By value: the party runs eight hours, 1700Z Sunday to 0100Z Monday.
+        assert_eq!(
+            ilqp.event_end_unix
+                .zip(ilqp.event_start_unix)
+                .map(|(e, s)| e - s),
+            Some(8 * 3600)
+        );
+        // ARRL Field Day, the blank default: its 27 hours.
+        let sfd = preview("");
+        assert_eq!(
+            sfd.event_end_unix
+                .zip(sfd.event_start_unix)
+                .map(|(e, s)| e - s),
+            Some(27 * 3600)
+        );
+        // …and never the Remote capture, whose hosted page refuses a key it does not know.
+        let capture = serde_json::to_value(super::fd_ruleset_dto("ilqp")).unwrap();
+        assert!(
+            capture.get("eventStartUnix").is_none() && capture.get("eventEndUnix").is_none(),
+            "{capture}"
+        );
+        // CONTROL: the preview's own JSON does carry it, so the absence above is the capture's.
+        let shown = serde_json::to_value(preview("ilqp")).unwrap();
+        assert!(shown.get("eventStartUnix").is_some(), "{shown}");
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit
