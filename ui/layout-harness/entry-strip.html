@@ -50,6 +50,14 @@
    `boxesOnOneLine: false`, `stripH 204` — so these are a measurement, not a page that
    stopped laying out.
 
+  REMOVE LAST (2026-10-09, the button beside Clear that removes the newest contact):
+   Its width comes out of the Call box, and nothing else moves. Header variant, with the
+   current styles.css, measured with and without the button:
+     • 1024, 2 fields   stripH 130 → 130   callW 506.7 → 385.3   overflow 0   one line
+     • 1024, 5 fields   stripH 200 → 200   callW 278 → 278       overflow 0   one line
+     • 1366 and 1920    stripH 130 → 130   at both field counts, overflow 0
+   The six-field control still reports `boxesOnOneLine: false`, `stripH 204`.
+
   THE EXCHANGE TYPE-AHEAD's DROPDOWN (2026-09-17, the county type-ahead):
    The list hangs off the last exchange box and this dock is BOTTOM-ANCHORED, so the
    only question is which way it may open. Measured with the strip pinned to the bottom
@@ -84,6 +92,7 @@
       <div id="boxes"></div>
       <button class="le-log-btn le-fd-log-btn" type="button">Log FD</button>
       <button class="le-qrz" type="button">Clear</button>
+      <button class="le-qrz le-fd-remove" type="button">Remove last</button>
     </div>
     <div class="le-fd-verdicts"></div>
   </div>

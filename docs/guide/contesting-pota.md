@@ -77,6 +77,12 @@ band the radio is on at the moment you type it, so a contact entered after you
 have QSY'd away files on the wrong band, both in the Cabrillo and on the
 N1MM / N3FJP wire.
 
+Logged the wrong contact? **Press Ctrl+D twice**, or click **Remove last** beside Clear
+twice: the first press names your newest contest contact on the strip, the second removes
+it. It is kept under **Removed** on the contest screen, out of the score and every export,
+and **Restore** puts it back exactly. The [Field Day manual](../manual/Field-Day.md#take-back-the-last-contact)
+has the details, including where a contact may already have gone.
+
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 scores by its objectives instead**: QSO points × (the objective multipliers + 1),

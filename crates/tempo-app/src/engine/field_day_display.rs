@@ -80,45 +80,7 @@ impl Engine {
             log: log
                 .qsos()
                 .iter()
-                .map(|q| FieldDayQso {
-                    call: q.call.clone(),
-                    class: q.class().to_string(),
-                    section: q.section().to_string(),
-                    band: q.band.clone(),
-                    mode: q.mode.clone(),
-                    submode: q.submode.clone(),
-                    when_unix: q.when_unix,
-                    // The bird, for the while-typing verdict — see `FieldDayQso::sat`.
-                    sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
-                    // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
-                    // row by the one function that renders one, so an emitter
-                    // looping over these rows has the right value in hand and
-                    // no reason to reach out to the session.
-                    mex: tempo_core::contest::sent_exchange_string(q, spec),
-                    // What this contact RECEIVED, aligned with `receives` below — the
-                    // contest log table's columns. Field Day's already ride class/section.
-                    rcvd: if spec.name == "fieldday" {
-                        Vec::new()
-                    } else {
-                        role.receives
-                            .iter()
-                            .map(|k| q.rcvd(k).to_string())
-                            .collect()
-                    },
-                    // ⭐ The row's key under THIS ruleset's rule, from the one builder.
-                    // The strip cannot build it: the rule names sent slots, and a row's
-                    // sent exchange reaches the UI only as the rendered `mex`.
-                    // A satellite contact the contest gives no credit is a dupe of
-                    // nothing, so it carries no key the verdict could match.
-                    dkey: if rs.satellite_credit || q.sat.is_none() {
-                        rs.dupe_rule.key(q)
-                    } else {
-                        Vec::new()
-                    },
-                    // ⭐ The engine's own answer about this row, so the log table marks a
-                    // zero-scoring dupe instead of guessing at one from a repeated callsign.
-                    dupe: q.dupe,
-                })
+                .map(|q| field_day_qso(q, rs, spec, role))
                 .collect(),
             // The club block, plus the generalised keys `fd_club_dto` does not carry —
             // it lives in `engine.rs` and projects the mirror to the legacy triple. The
@@ -335,6 +297,56 @@ impl Engine {
             }
         }
         Ok(self.field_day_status())
+    }
+}
+
+/// One contest row as the log table shows it — the snapshot's `log`, and the contest screen's
+/// Removed list, which must render a removed contact exactly as the row it was.
+pub(super) fn field_day_qso(
+    q: &tempo_core::fieldday::LoggedQso,
+    rs: &tempo_core::fd_rules::FdRuleset,
+    spec: &'static tempo_core::contest::ExchangeSpec,
+    role: &'static tempo_core::contest::RoleSpec,
+) -> FieldDayQso {
+    FieldDayQso {
+        call: q.call.clone(),
+        class: q.class().to_string(),
+        section: q.section().to_string(),
+        band: q.band.clone(),
+        mode: q.mode.clone(),
+        submode: q.submode.clone(),
+        when_unix: q.when_unix,
+        // The bird, for the while-typing verdict — see `FieldDayQso::sat`.
+        sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
+        // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
+        // row by the one function that renders one, so an emitter
+        // looping over these rows has the right value in hand and
+        // no reason to reach out to the session.
+        mex: tempo_core::contest::sent_exchange_string(q, spec),
+        // What this contact RECEIVED, aligned with `receives` below — the
+        // contest log table's columns. Field Day's already ride class/section.
+        rcvd: if spec.name == "fieldday" {
+            Vec::new()
+        } else {
+            role.receives
+                .iter()
+                .map(|k| q.rcvd(k).to_string())
+                .collect()
+        },
+        // ⭐ The row's key under THIS ruleset's rule, from the one builder.
+        // The strip cannot build it: the rule names sent slots, and a row's
+        // sent exchange reaches the UI only as the rendered `mex`.
+        // A satellite contact the contest gives no credit is a dupe of
+        // nothing, so it carries no key the verdict could match.
+        dkey: if rs.satellite_credit || q.sat.is_none() {
+            rs.dupe_rule.key(q)
+        } else {
+            Vec::new()
+        },
+        // ⭐ The engine's own answer about this row, so the log table marks a
+        // zero-scoring dupe instead of guessing at one from a repeated callsign.
+        dupe: q.dupe,
+        seq: q.seq,
     }
 }
 

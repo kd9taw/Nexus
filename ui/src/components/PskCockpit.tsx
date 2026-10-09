@@ -955,6 +955,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             // PSK Field Day contact was worked on the air and scored nothing. The prop rides
             // the snapshot this cockpit already has rather than a new App-level prop.
             fieldDay={snap.fieldDay ?? null}
+            active={active}
             // The SCORING CLASS is DIG (2 points, dupes against the other digital modes);
             // the SUBMODE is the waveform that was actually keyed, so the export says PSK31
             // and not the FT tier the engine would otherwise fill in. Same table as `mode`

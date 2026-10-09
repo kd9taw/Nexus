@@ -82,6 +82,8 @@ vi.mock('./api', () => {
     radioprogListProjects: vi.fn().mockResolvedValue([]),
     radioprogFileNotice: vi.fn().mockResolvedValue(null),
     radioprogSaveProject: fn(), radioprogDeleteProject: fn(),
+    // The contest screen's Removed list, read on mount: none removed.
+    contestRemoved: () => Promise.resolve([]),
   }
 })
 vi.mock('./toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn() }))

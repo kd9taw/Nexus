@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -40,6 +40,7 @@ import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
+import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
@@ -407,6 +408,13 @@ interface Props {
    * (The Field Day variant below has never had a heading, on the same reasoning.)
    */
   titled?: boolean
+  /**
+   * CONTEST STRIP ONLY — is this strip's host the view on screen? Ctrl+D (remove the newest
+   * contact) is a WINDOW key, and the RTTY, PSK and JS8 cockpits stay mounted while hidden, so
+   * each hidden strip would otherwise take every press too. Default true: a host mounted only
+   * while it shows has nothing to say here.
+   */
+  active?: boolean
 }
 
 /**
@@ -436,6 +444,7 @@ export function LogEntry({
   fdSubmode,
   fillExchange,
   titled = true,
+  active = true,
   remote,
 }: Props) {
   const remoteMode = remote != null
@@ -629,6 +638,100 @@ export function LogEntry({
     fdSeenLen.current = fdLogLen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
+
+  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D (N1MM's key) or Remove last, PRESSED TWICE. The first
+  // press names the contact on the verdict line and changes nothing; a second within
+  // REMOVE_CONFIRM_MS removes it. Any other key, the window running out, or a new contact lets it
+  // lapse, so nothing is removed that the operator was not just shown — and if the newest contact
+  // changed between the presses, nothing is removed and the line says so. The engine checks the
+  // same identity again (`changed`), so a snapshot that lagged cannot remove the wrong contact.
+  //
+  // ⛔ IT NEVER MOVES THE CARET. The Space-PTT incident was a focus change in this entry code: a
+  // keyup aimed at an input was swallowed and the rig stayed keyed. The button cancels its
+  // mousedown so focus stays where it was, and nothing here calls focus(). Nor does it key or stop
+  // a transmission: Esc still stops TX, and this reaches the contest log alone.
+  //
+  // Not on the hosted Remote page or in the native client (`remoteMode`): removal is refused
+  // from afar, and Remote's operations carry no contest-log command.
+  const removable = fdActive && !remoteMode
+  const newest = newestContact(fieldDay?.log)
+  const newestKey = newest ? `${newest.call}|${newest.whenUnix}` : ''
+  const [removeArmed, setRemoveArmed] = useState<
+    { call: string; whenUnix: number; label: string; at: number } | null
+  >(null)
+  const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  const armedRef = useRef(removeArmed)
+  armedRef.current = removeArmed
+  const pressRemove = () => {
+    const armed = armedRef.current
+    const now = Date.now()
+    if (!newest) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.empty'), alert: false })
+      return
+    }
+    if (!armed || now - armed.at > REMOVE_CONFIRM_MS) {
+      setRemoveNote(null)
+      setRemoveArmed({ call: newest.call, whenUnix: newest.whenUnix, label: contactLabel(newest.rows), at: now })
+      return
+    }
+    setRemoveArmed(null)
+    if (armed.call !== newest.call || armed.whenUnix !== newest.whenUnix) {
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+      return
+    }
+    contestRemoveLast(armed.call, armed.whenUnix).then(
+      (answer) => setRemoveNote({ text: removalText(answer, armed.label), alert: answer.outcome === 'refused' }),
+      () => setRemoveNote({ text: t('logEntry.remove.failed'), alert: true }),
+    )
+  }
+  const pressRemoveRef = useRef(pressRemove)
+  pressRemoveRef.current = pressRemove
+  // The press window, from the moment of the first press.
+  useEffect(() => {
+    if (!removeArmed) return
+    const id = window.setTimeout(() => setRemoveArmed(null), Math.max(0, removeArmed.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeArmed])
+  // A new contact (or the newest gone some other way) while a press waits: it lapses, and the
+  // line says why the next press starts over. A new contact also retires the last answer.
+  const seenNewest = useRef({ key: newestKey, len: fdLogLen })
+  useEffect(() => {
+    const was = seenNewest.current
+    seenNewest.current = { key: newestKey, len: fdLogLen }
+    if (was.key === newestKey && was.len === fdLogLen) return
+    if (armedRef.current) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+    } else if (fdLogLen > was.len) {
+      setRemoveNote(null)
+    }
+  }, [newestKey, fdLogLen])
+  // Ctrl+D from anywhere in the cockpit showing this strip — only while its host is on screen,
+  // since the RTTY, PSK and JS8 strips stay mounted when hidden.
+  useEffect(() => {
+    if (!removable || !active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (isRemoveKey(e)) {
+        // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
+        // in a macOS text box) never runs.
+        e.preventDefault()
+        // Held down, it is still ONE press: auto-repeat can never be the second.
+        if (!e.repeat) pressRemoveRef.current()
+        return
+      }
+      if (isModifierKey(e)) return
+      // Any other key lets a waiting press lapse, and retires the last answer.
+      setRemoveArmed(null)
+      setRemoveNote(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [removable, active])
+  // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
+  const removeLine = removeArmed
+    ? t('logEntry.remove.armed', { contact: removeArmed.label })
+    : removeNote?.text
 
   // THE FILL API (`fillExchange`): one box, refilled on every new `ts`. Keyed on the
   // stamp alone so a snapshot re-render never refills, and a slot this session does not
@@ -1955,6 +2058,20 @@ export function LogEntry({
           >
             {t('logEntry.clear.label')}
           </button>
+          {removable && (
+            <button
+              type="button"
+              className="le-qrz le-fd-remove"
+              // ⛔ THE CARET STAYS WHERE IT WAS: a click never takes focus (see `pressRemove`).
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={pressRemove}
+              disabled={!newest}
+              aria-pressed={removeArmed != null}
+              title={t('logEntry.remove.title')}
+            >
+              {t('logEntry.remove.label')}
+            </button>
+          )}
 
         </div>
 
@@ -2002,12 +2119,17 @@ export function LogEntry({
             strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
             zero-height in every other host, so Phone and CW are unchanged. */}
         <div className="le-fd-verdicts">
-        {logCall.trim() !== '' && fdBadField !== undefined && (
+        {removeLine != null && (
+          <div className="le-fd-hint le-fd-remove-line" role={removeArmed || removeNote?.alert ? 'alert' : 'status'}>
+            {removeLine}
+          </div>
+        )}
+        {removeLine == null && logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
             {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
           </div>
         )}
-        {fdOwnDupe && (
+        {removeLine == null && fdOwnDupe && (
           <div className="le-fd-hint" role="alert">
             {/* FOUR literal call sites rather than one with a computed key: the i18n
                 extractor reads keys statically and the placeholder guard compares each
@@ -2034,7 +2156,7 @@ export function LogEntry({
                 : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
           </div>
         )}
-        {fdClubDupe && (
+        {removeLine == null && fdClubDupe && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.fd.dupe.club', {
               call: fdTypedCall,
@@ -2043,7 +2165,7 @@ export function LogEntry({
             })}
           </div>
         )}
-        {wveMissingQth && (
+        {removeLine == null && wveMissingQth && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.contest.qthMissing', { call: fdTypedCall })}
           </div>

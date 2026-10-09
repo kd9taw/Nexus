@@ -3226,9 +3226,11 @@ struct StationSinks {
     /// PSK Reporter spot buffer, flushed on `PSK_FLUSH_SECS`.
     psk_spots: Vec<Spot>,
     last_psk_flush: f64,
-    /// Field Day log cursor — how many FD QSOs have already been pushed to the club
-    /// network / WSJT-X sinks.
-    last_fd_qsos: usize,
+    /// Field Day log cursor — the highest contest seq already pushed to the club network /
+    /// WSJT-X sinks. A SEQ, not a count: rows are named by it, so a contact removed and the
+    /// next one logged inside one slot (the count back where it was) cannot hide the new one,
+    /// and a contact restored after it went out is never pushed twice.
+    last_fd_seq: u64,
     /// Last time (loop ms) we reported our band to the N3FJP club board, so the
     /// no-CAT band report fires on a coarse heartbeat, not every slot boundary.
     last_reported_band: f64,
@@ -3236,8 +3238,8 @@ struct StationSinks {
     /// immediately (between heartbeats). Empty until the first report.
     last_reported_bm: String,
     /// Whether the previous boundary saw a live FD session — the None→Some
-    /// edge seeds `last_fd_qsos` past the restored journal rows so they are
-    /// never re-pushed to the club network / WSJT-X sinks as newly logged.
+    /// edge seeds `last_fd_seq` past the restored journal rows (removed ones included) so
+    /// they are never re-pushed to the club network / WSJT-X sinks as newly logged.
     fd_was_active: bool,
 }
 
@@ -3246,7 +3248,7 @@ impl StationSinks {
         Self {
             psk_spots: Vec::new(),
             last_psk_flush: now_unix_ms(),
-            last_fd_qsos: 0,
+            last_fd_seq: 0,
             last_reported_band: now_unix_ms(),
             last_reported_bm: String::new(),
             fd_was_active: false,
@@ -12401,15 +12403,26 @@ impl RadioLoop {
         // that gate, silently starving N3FJP/N1MM whenever both sinks were their
         // default-off (the club master log simply never received the QSOs).
         let snap = eng.snapshot();
-        // An FD session just (re)started: the journal restore repopulates
-        // qso_count from 0 in one jump — seed the cursor so restored rows are
-        // never re-pushed to the club network / WSJT-X sinks as newly logged.
-        if !station.fd_was_active {
-            if let Some(fd) = snap.field_day.as_ref() {
-                station.last_fd_qsos = fd.qso_count;
-            }
+        // An FD session just (re)started: the journal restore repopulates the
+        // log in one jump — seed the cursor past every seq it holds, removed rows
+        // included, so restored rows are never re-pushed to the club network /
+        // WSJT-X sinks as newly logged.
+        if !station.fd_was_active && snap.field_day.is_some() {
+            station.last_fd_seq = eng.contest_seq_high_water();
         }
         station.fd_was_active = snap.field_day.is_some();
+        // The contacts logged since the last boundary, by seq.
+        let fd_new: Vec<tempo_app::dto::FieldDayQso> = snap
+            .field_day
+            .as_ref()
+            .map(|fd| {
+                fd.log
+                    .iter()
+                    .filter(|q| q.seq > station.last_fd_seq)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         // --- network emission (WSJT-X UDP API + PSK Reporter) ---
         if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
             let tier = tier_mode(snap.link.tier);
@@ -12468,18 +12481,16 @@ impl RadioLoop {
                     config_name: "Default",
                     tx_message: "",
                 });
-                if let Some(fd) = snap.field_day.as_ref() {
-                    if fd.qso_count > station.last_fd_qsos {
-                        let ctx = FdWsjtxCtx {
-                            when_secs: now_secs,
-                            dial_hz: sinks.cfg_dial_hz,
-                            tier: tier.to_string(),
-                            mycall: snap.mycall.clone(),
-                            mygrid: snap.mygrid.clone(),
-                        };
-                        for q in &fd.log[station.last_fd_qsos.min(fd.log.len())..] {
-                            let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
-                        }
+                if !fd_new.is_empty() {
+                    let ctx = FdWsjtxCtx {
+                        when_secs: now_secs,
+                        dial_hz: sinks.cfg_dial_hz,
+                        tier: tier.to_string(),
+                        mycall: snap.mycall.clone(),
+                        mygrid: snap.mygrid.clone(),
+                    };
+                    for q in &fd_new {
+                        let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
                     }
                 }
             }
@@ -12488,7 +12499,7 @@ impl RadioLoop {
             // an N1MM-network dashboard (UDP <contactinfo>) when configured.
             // Spawned: a parked N3FJP box must never stall the slot loop.
             if let Some(fd) = snap.field_day.as_ref() {
-                if fd.qso_count > station.last_fd_qsos {
+                if !fd_new.is_empty() {
                     let st = eng.settings();
                     let n3_host = st.n3fjp_host.trim().to_string();
                     let n3_port = st.n3fjp_port;
@@ -12497,8 +12508,7 @@ impl RadioLoop {
                     let n3_use_enter = st.n3fjp_use_enter;
                     let n1_addr = st.n1mm_addr.trim().to_string();
                     if !n3_host.is_empty() || !n1_addr.is_empty() {
-                        let new_qsos: Vec<_> =
-                            fd.log[station.last_fd_qsos.min(fd.log.len())..].to_vec();
+                        let new_qsos = fd_new.clone();
                         let mycall = snap.mycall.clone();
                         // Which radio N1MM should attribute these to (#33) — the ACTIVE radio's
                         // 1-based position, derived by the one helper so this emitter and the
@@ -12580,8 +12590,19 @@ impl RadioLoop {
         }
         // Advance the FD cursor on EVERY boundary (independent of the sinks
         // above) — so it also RESETS to 0 when a session ends, and a stale
-        // count can never later flood the club log after FD is re-armed.
-        station.last_fd_qsos = snap.field_day.as_ref().map(|f| f.qso_count).unwrap_or(0);
+        // cursor can never later flood the club log after FD is re-armed. It
+        // never moves back while a session runs: a removed contact's seq stays
+        // passed, so restoring it can never push it twice.
+        station.last_fd_seq = match snap.field_day.as_ref() {
+            Some(fd) => fd
+                .log
+                .iter()
+                .map(|q| q.seq)
+                .fold(station.last_fd_seq, u64::max),
+            None => 0,
+        };
+        // Told to the engine, so a removal can say whether the contact already went.
+        eng.note_fd_forwarded(station.last_fd_seq);
 
         // Club band board (N3FJP Network Status Display): report THIS
         // position's band without CAT so the club sees where we are. Fires
@@ -15134,6 +15155,8 @@ mod tests {
             // verdict it did not compute is asserting something it does not model.
             dkey: Vec::new(),
             dupe: false,
+            // The forwarder's cursor reads it; the emitter tests this helper feeds do not.
+            seq: 0,
         }
     }
 
@@ -35837,8 +35860,8 @@ mod tests {
             "the N3FJP club push fired with WSJT-X and PSK sinks both off"
         );
         assert_eq!(
-            station.last_fd_qsos, 1,
-            "the FD cursor advanced past the pushed QSO"
+            station.last_fd_seq, 1,
+            "the FD cursor advanced past the pushed QSO's seq"
         );
     }
 
@@ -35966,8 +35989,152 @@ mod tests {
             "exactly one QSO push fired (the new QSO only); connections seen: {conns:?}"
         );
         assert_eq!(
-            station.last_fd_qsos, 2,
+            station.last_fd_seq, 2,
             "the FD cursor covers restored + new rows"
+        );
+    }
+
+    /// ⭐ **A contact logged after a removal, inside ONE slot, still reaches the club log** —
+    /// and the removed contact is never pushed again, not even once it is restored.
+    ///
+    /// The forwarder used to name rows by COUNTING them ("rows past the count seen at the last
+    /// boundary"). Remove the newest contact and log the next inside one slot — the rhythm of a
+    /// stopped TU taken back and the station worked again — and the count is back where it was:
+    /// the new contact never reached N3FJP, the N1MM broadcast or WSJT-X listeners.
+    #[test]
+    fn a_contact_logged_after_a_removal_in_the_same_slot_is_still_forwarded() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_active: true,
+                fd_class: "1D".to_string(),
+                fd_section: "WI".to_string(),
+                n3fjp_host: "127.0.0.1".to_string(),
+                n3fjp_port: port,
+                ..Settings::default()
+            });
+            eng.set_mode("fieldday-run").unwrap();
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut boundary = |at: f64, station: &mut StationSinks| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    at,
+                    &mut ra,
+                    &mut rr,
+                    station,
+                )
+                .unwrap();
+        };
+        // Every QSO push that reached the club log port since the last call, as the calls they
+        // named (a connection that carried no QSO is not counted — see the test above).
+        let pushed = || {
+            use std::io::Read;
+            let mut calls = Vec::new();
+            let mut stop_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < stop_at {
+                match listener.accept() {
+                    Ok((mut s, _)) => {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                            .unwrap();
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        for call in ["K1ABC", "W2NEW"] {
+                            if buf.contains(call) {
+                                calls.push(call);
+                            }
+                        }
+                        stop_at = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(_) => break,
+                }
+            }
+            calls
+        };
+        let newest = |engine: &Arc<Mutex<Engine>>| {
+            let snap = engine.lock().unwrap().snapshot();
+            let q = snap.field_day.unwrap().log.last().cloned().unwrap();
+            (q.call, q.when_unix)
+        };
+
+        boundary(0.0, &mut station); // the live session, seen
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("K1ABC", "2A", "EMA", "CW")
+            .unwrap());
+        boundary(16_000.0, &mut station);
+        assert_eq!(
+            pushed(),
+            ["K1ABC"],
+            "the first contact reached the club log"
+        );
+
+        // Inside ONE slot: take it back, and work the next station.
+        let (call, when) = newest(&engine);
+        let removed = engine
+            .lock()
+            .unwrap()
+            .contest_remove_last(&call, when)
+            .unwrap()
+            .unwrap();
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("W2NEW", "3A", "ENY", "CW")
+            .unwrap());
+        boundary(32_000.0, &mut station);
+        assert_eq!(
+            pushed(),
+            ["W2NEW"],
+            "the contact after the removal reached the club log, and the removed one did not again"
+        );
+
+        // Restored, it is not pushed a second time: it went before it was removed.
+        assert!(engine
+            .lock()
+            .unwrap()
+            .contest_restore(removed.entry.id())
+            .unwrap()
+            .is_ok());
+        boundary(48_000.0, &mut station);
+        assert!(pushed().is_empty(), "nothing is pushed twice");
+
+        // The newest removed, a boundary with nothing newer, then restored: the cursor never
+        // moved back to the shorter log, so this contact is not pushed twice either.
+        let (call, when) = newest(&engine);
+        let removed = engine
+            .lock()
+            .unwrap()
+            .contest_remove_last(&call, when)
+            .unwrap()
+            .unwrap();
+        boundary(64_000.0, &mut station);
+        assert!(engine
+            .lock()
+            .unwrap()
+            .contest_restore(removed.entry.id())
+            .unwrap()
+            .is_ok());
+        boundary(80_000.0, &mut station);
+        assert!(
+            pushed().is_empty(),
+            "a restored contact that went out is not pushed again"
         );
     }
 

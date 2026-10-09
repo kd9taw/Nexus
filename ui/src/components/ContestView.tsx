@@ -9,7 +9,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto, type RemovedContest } from '../api'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
@@ -23,6 +23,7 @@ import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
+import { REMOVE_CONFIRM_MS, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -1695,6 +1696,67 @@ export function ContestView({
   const rows = useMemo(() => annotate(log), [log])
   const modes = useMemo(() => modeCounts(log), [log])
 
+  // ⭐ REMOVE THE NEWEST CONTACT, AND THE REMOVED LIST WITH RESTORE — the screen's half of the
+  // strip's Ctrl+D. Remove sits on the newest row alone and asks before it acts (a second click
+  // within REMOVE_CONFIRM_MS), as the strip does. Nothing is deleted: a removed contact is kept,
+  // left out of the score, the dupe check and every export, and Restore puts it back exactly as
+  // it was. Never offered when observing (`observed`): removal is refused from afar.
+  const removable = !observed && fieldDay != null
+  const newest = newestContact(log)
+  const [removeAsk, setRemoveAsk] = useState<{ call: string; whenUnix: number; at: number } | null>(null)
+  const [removedList, setRemovedList] = useState<RemovedContest[]>([])
+  const [removedNote, setRemovedNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The list follows the log: a removal or a restore anywhere (the strip, another window)
+  // changes its length.
+  const logLen = log.length
+  useEffect(() => {
+    if (!removable) {
+      setRemovedList([])
+      return
+    }
+    let live = true
+    contestRemoved().then((list) => live && setRemovedList(list)).catch(() => {})
+    return () => { live = false }
+  }, [removable, logLen])
+  useEffect(() => {
+    if (!removeAsk) return
+    const id = window.setTimeout(() => setRemoveAsk(null), Math.max(0, removeAsk.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeAsk])
+  const removeNewest = () => {
+    if (!newest) return
+    const now = Date.now()
+    const asked = removeAsk != null && removeAsk.call === newest.call && removeAsk.whenUnix === newest.whenUnix
+    if (!asked || now - removeAsk.at > REMOVE_CONFIRM_MS) {
+      setRemovedNote(null)
+      setRemoveAsk({ call: newest.call, whenUnix: newest.whenUnix, at: now })
+      return
+    }
+    setRemoveAsk(null)
+    const label = contactLabel(newest.rows)
+    contestRemoveLast(newest.call, newest.whenUnix)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: removalText(answer, label), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('logEntry.remove.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+  const restore = (entry: RemovedContest) => {
+    const call = entry.rows[0]?.call ?? ''
+    contestRestore(entry.id)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: restoreText(answer, call), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('fieldDay.removed.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
@@ -2499,11 +2561,61 @@ export function ContestView({
                     {r.qso.mode}
                   </span>
                 )}
+                {removable && i === rows.length - 1 && (
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    aria-pressed={removeAsk != null}
+                    title={t('fieldDay.log.remove.title')}
+                    onClick={removeNewest}
+                  >
+                    {t('fieldDay.log.remove')}
+                  </button>
+                )}
               </span>
             </div>
           ))}
         </div>
       </div>
+
+      {/* THE REMOVED LIST — kept contacts, with Restore. Only while there is something to say,
+          so the log keeps every pixel otherwise. */}
+      {removable && (removedList.length > 0 || removeAsk != null || removedNote != null) && (
+        <div className="fd-removed" role="region" aria-label={t('fieldDay.removed.aria')}>
+          {removeAsk != null && newest && (
+            <p className="fd-removed-note" role="alert">
+              {t('fieldDay.log.remove.ask', { contact: contactLabel(newest.rows) })}
+            </p>
+          )}
+          {removeAsk == null && removedNote && (
+            <p className="fd-removed-note" role={removedNote.alert ? 'alert' : 'status'}>
+              {removedNote.text}
+            </p>
+          )}
+          {removedList.length > 0 && (
+            <details className="fd-removed-list">
+              <summary>{t('fieldDay.removed.title', { count: removedList.length })}</summary>
+              <p className="fd-removed-hint">{t('fieldDay.removed.note')}</p>
+              {removedList.map((entry) => (
+                <div className="fd-removed-row" key={entry.id}>
+                  <span className="mono">{contactLabel(entry.rows)}</span>
+                  <span className="fd-removed-at">
+                    {t('fieldDay.removed.at', { time: utcHhmm(entry.removedUnix) })}
+                  </span>
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    title={t('fieldDay.removed.restore.title')}
+                    onClick={() => restore(entry)}
+                  >
+                    {t('fieldDay.removed.restore')}
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
+        </div>
+      )}
     </section>
   )
 }
