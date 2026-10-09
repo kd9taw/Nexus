@@ -46,7 +46,7 @@ export interface EsmState {
    *  only while the strip still holds THAT call, so a busted call corrected after the exchange
    *  went out gets the exchange again. */
   exchTo: string | null
-  /** The call my call went out to (S&P with "call once"), or null. Per call, as above. */
+  /** The call my call went out to (S&P, "call once" or not), or null. Per call, as above. */
   myCallTo: string | null
 }
 
@@ -57,6 +57,10 @@ export interface EsmStrip {
   /** Every exchange box passes the check the log itself uses, judged after Enter commits the box
    *  it was pressed in, the way Space does — so a county typed by name counts as its code. */
   exchangeComplete: boolean
+  /** A box still shows what call history filled in for this call, nobody having typed over it.
+   *  A fill counts as copied (rule 10), so a complete exchange with one is complete only because
+   *  of it: the file filled it as the call was typed, not the station. */
+  fromHistory: boolean
   /** `contestDupe`'s verdict on the call. Only `own` stops ESM: a club dupe is a warning. */
   dupe: ContestDupeVerdict
 }
@@ -137,10 +141,15 @@ export function esmEvent(state: EsmState, event: EsmEvent): EsmState {
  *  and my exchange, no log · R5 complete and sent → TU, and the contact logs · R6 own dupe →
  *  nothing. S&P: S1 no call → my call · S2 incomplete → my call (with "call once": the first
  *  press also moves the caret to the first box, later presses send AGN) · S3 complete → my
- *  exchange, and the contact logs · S4 own dupe → nothing.
+ *  exchange, and the contact logs · S4 own dupe → nothing · S5 complete only because of a
+ *  call-history fill, and my call not yet gone to this call → my call, as S2's first press.
  *
  *  In Phone, R2 and R4 play nothing: the operator says his call and the exchange (operator,
- *  2026-10-08), as N1MM advises for a live exchange. */
+ *  2026-10-08), as N1MM advises for a live exchange.
+ *
+ *  S5 is N1MM's order (operator, 2026-10-09). The file fills the boxes as the call is typed,
+ *  before he has sent a thing, so my call goes first and the next press sends my exchange and
+ *  logs. An exchange typed or picked is his, and goes at once (S3). */
 export function esmStep(
   state: EsmState,
   strip: EsmStrip,
@@ -168,10 +177,13 @@ export function esmStep(
     return send('callExch', false, caret, said)
   }
   if (!call) return send('myCall', false, 'stay', state)
-  if (strip.exchangeComplete) return send('exch', true, 'call', logged)
-  if (!opts.callOnce) return send('myCall', false, 'call', state)
-  if (state.myCallTo === call) return send('again', false, 'stay', state)
-  return send('myCall', false, 'ex0', { ...state, myCallTo: call })
+  // S&P remembers the call my call went to, "call once" or not: S5 asks it.
+  const myCallGone = state.myCallTo === call
+  if (strip.exchangeComplete && (myCallGone || !strip.fromHistory)) return send('exch', true, 'call', logged)
+  const called: EsmState = { ...state, myCallTo: call }
+  if (!opts.callOnce) return send('myCall', false, 'call', called)
+  if (myCallGone) return send('again', false, 'stay', state)
+  return send('myCall', false, 'ex0', called)
 }
 
 interface TxGuards {

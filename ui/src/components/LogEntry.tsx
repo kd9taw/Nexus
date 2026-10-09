@@ -1886,16 +1886,18 @@ export function LogEntry({
       (v.trim() === '' && !f.required)
     )
   }
-  /** What ESM judges a press on: the strip's call, its exchange and the dupe verdict. */
+  /** What ESM judges a press on: the strip's call, its exchange, whether a box still shows its
+   *  call-history fill (the box's **history** mark, below), and the dupe verdict. */
   const esmStrip = (): EsmStrip => ({
     call: logCall.trim().toUpperCase(),
     exchangeComplete: fdReceives.every(esmGiven),
+    fromHistory: fdReceives.some((f) => fillRef.current.filled[f.key]?.value === fdValue(f)),
     dupe: fdDupe,
   })
   // The dock's plate and highlight follow what the strip holds.
   const stripNow = esmLive ? esmStrip() : null
   const stripKey = stripNow
-    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.dupe}`
+    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.fromHistory}|${stripNow.dupe}`
     : ''
   useEffect(() => {
     esm?.onStrip(stripNow)

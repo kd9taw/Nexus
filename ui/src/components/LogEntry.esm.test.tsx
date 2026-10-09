@@ -11,14 +11,14 @@
 //   - a stop makes what went out count as not sent, and a stopped last message stays logged with
 //     the strip saying so (rule 8 as the operator changed it);
 //   - a box filled from call history counts as copied, and a Super Check Partial match counts only
-//     once it is picked (rule 10);
+//     once it is picked (rule 10); in S&P, an exchange only a fill completes waits for your call;
 //   - ESM off, or from afar, and Enter is what it always was.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { useEffect } from 'react'
 import { LogEntry } from './LogEntry'
 import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
-import { useEsmHost, type EsmMessage } from '../features/esmHost'
+import { esmLitKeys, useEsmHost, type EsmMessage } from '../features/esmHost'
 import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT, type EsmRoleMap } from '../features/esmRoles'
 import type { EsmGuards } from '../features/esm'
 
@@ -45,7 +45,11 @@ vi.mock('../api', () => ({
   scpEnsure: vi.fn(() => Promise.resolve({ fetchedAt: 100, checkedAt: 100, nextCheckAt: 0, count: 3 })),
   getScpCalls: vi.fn(() => Promise.resolve(['K9AAA', 'W9XYZ', 'K9ABC'])),
   getCallHistory: vi.fn(() =>
-    Promise.resolve({ contest: 'ilqp', fileName: 'il-2026.txt', entries: { K9AAA: { Loc1: 'WILL' } } }),
+    Promise.resolve({
+      contest: 'ilqp',
+      fileName: 'il-2026.txt',
+      entries: { K9AAA: { Loc1: 'WILL' }, K9ABC: { Loc1: 'KANE' } },
+    }),
   ),
 }))
 vi.mock('../toast', () => ({
@@ -443,16 +447,102 @@ describe('Enter Sends Message — call history and Super Check Partial (rule 10)
     })
   })
 
-  it('S&P: the file completes his exchange as the call is typed, so the first Enter sends your exchange and logs the fill', async () => {
+  // In S&P the file completes his exchange as the call is typed, before he has sent a thing, so
+  // the first Enter sends your call and the next your exchange, which logs: N1MM's order.
+  /** What the press sent and logged, and what the dock lights for the next Enter. */
+  const outcome = () => ({
+    sent: harness.sent.map((m) => [m.role, m.text, m.call]),
+    logged: logged(),
+    lit: esmLitKeys(harness.host!.preview),
+  })
+  const MY_CALL = ['myCall', '{MYCALL}']
+  const MY_EXCH = ['exch', 'TU {RST} {EXCH}']
+
+  it('S&P: when only the file completes his exchange, the first Enter sends your call and logs nothing; the next sends your exchange and logs the fill', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    type(callBox(), 'K9AAA')
+    expect(qthBox().value, 'premise: the file filled his county').toBe('WILL')
+    await enter(callBox())
+    expect(outcome()).toEqual({ sent: [[...MY_CALL, 'K9AAA']], logged: [], lit: ['F6'] })
+    expect(document.activeElement, 'the cursor stays in Call, as in N1MM').toBe(callBox())
+    expect(line()).toBe(null)
+    await enter(callBox())
+    expect(outcome()).toEqual({
+      sent: [
+        [...MY_CALL, 'K9AAA'],
+        [...MY_EXCH, 'K9AAA'],
+      ],
+      logged: [['K9AAA', [['RST', '599'], ['QTH', 'WILL']]]],
+      lit: ['F4'],
+    })
+    expect(line()).toBe(null)
+  })
+
+  it('S&P: after your call, type over the fill with what he sends, and that is what logs', async () => {
     render(<Strip fieldDay={aided()} />)
     await settle()
     type(callBox(), 'K9AAA')
     await enter(callBox())
-    expect({ sent: harness.sent.map((m) => [m.role, m.text, m.call]), logged: logged(), line: line() }).toEqual({
-      sent: [['exch', 'TU {RST} {EXCH}', 'K9AAA']],
-      logged: [['K9AAA', [['RST', '599'], ['QTH', 'WILL']]]],
-      line: null,
+    type(qthBox(), 'LAKE')
+    await enter(qthBox())
+    expect(outcome()).toEqual({
+      sent: [
+        [...MY_CALL, 'K9AAA'],
+        [...MY_EXCH, 'K9AAA'],
+      ],
+      logged: [['K9AAA', [['RST', '599'], ['QTH', 'LAKE']]]],
+      lit: ['F4'],
     })
+  })
+
+  it('S&P: type over the fill before you call and the exchange is yours: the dock lights it, and the first Enter sends it and logs what you typed', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    type(callBox(), 'K9AAA')
+    expect(esmLitKeys(harness.host!.preview), 'premise: the fill lights your call').toEqual(['F4'])
+    type(qthBox(), 'LAKE')
+    expect(esmLitKeys(harness.host!.preview), 'typed over, the dock lights your exchange').toEqual(['F6'])
+    await enter(qthBox())
+    expect(outcome()).toEqual({
+      sent: [[...MY_EXCH, 'K9AAA']],
+      logged: [['K9AAA', [['RST', '599'], ['QTH', 'LAKE']]]],
+      lit: ['F4'],
+    })
+  })
+
+  it('S&P: an exchange you type for a call the file does not hold sends and logs at the first Enter, as before', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    type(callBox(), 'W9XYZ')
+    expect(qthBox().value, 'premise: nothing filled').toBe('')
+    type(qthBox(), 'LAKE')
+    await enter(qthBox())
+    expect(outcome()).toEqual({
+      sent: [[...MY_EXCH, 'W9XYZ']],
+      logged: [['W9XYZ', [['RST', '599'], ['QTH', 'LAKE']]]],
+      lit: ['F4'],
+    })
+  })
+
+  it('S&P: your call went to the call in the strip only: corrected to another call the file holds, Enter sends your call again first', async () => {
+    render(<Strip fieldDay={aided()} />)
+    await settle()
+    type(callBox(), 'K9AAA')
+    await enter(callBox())
+    type(callBox(), 'K9ABC')
+    expect(qthBox().value, 'premise: the file fills K9ABC’s county').toBe('KANE')
+    await enter(callBox())
+    expect(outcome()).toEqual({
+      sent: [
+        [...MY_CALL, 'K9AAA'],
+        [...MY_CALL, 'K9ABC'],
+      ],
+      logged: [],
+      lit: ['F6'],
+    })
+    await enter(callBox())
+    expect(outcome().logged).toEqual([['K9ABC', [['RST', '599'], ['QTH', 'KANE']]]])
   })
 
   it('what you type over the fill is what logs', async () => {
