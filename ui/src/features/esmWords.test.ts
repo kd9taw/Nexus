@@ -18,7 +18,6 @@ const REFUSALS = {
   unmapped: { why: 'unmapped', role: 'tu' },
   empty: { why: 'empty', role: 'callExch', key: 'F2' },
   oneSlot: { why: 'oneSlot', role: 'exch' },
-  history: { why: 'history', slot: 'QTH' },
 } satisfies { [W in EsmRefusal['why']]: Extract<EsmRefusal, { why: W }> }
 const INERT = { noKeyer: true, auto: true, continuousTx: true, noRoles: true } satisfies Record<EsmInert, true>
 const inert = Object.keys(INERT) as EsmInert[]
@@ -48,7 +47,6 @@ describe('Enter Sends Message — its words', () => {
       unmapped: 'TU: no key is mapped, so Enter sends nothing and logs nothing at that step.',
       empty: 'His call and your exchange: F2 is empty, so Enter sends nothing and logs nothing at that step.',
       oneSlot: 'Your S&P exchange: mapped to two recordings, and the keyer plays one per press.',
-      history: 'QTH came from call history: type it to accept it, then press Enter. Alt+Enter logs it as it is.',
     })
   })
 
@@ -63,7 +61,7 @@ describe('Enter Sends Message — its words', () => {
 
   it('maps reasons to sentences one to one', () => {
     const texts = [...Object.values(REFUSALS).map(esmRefusalText), ...inert.map(esmInertText)]
-    expect(texts).toHaveLength(15)
+    expect(texts).toHaveLength(14)
     expect(new Set(texts).size).toBe(texts.length)
   })
 })

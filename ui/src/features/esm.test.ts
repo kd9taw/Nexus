@@ -24,11 +24,19 @@ import { resolveRttySet } from './rttyMacros'
 
 const RUN: EsmState = { mode: 'run', exchTo: null, myCallTo: null }
 const SP: EsmState = { mode: 'sp', exchTo: null, myCallTo: null }
-const strip = (call: string, exchangeComplete = false, dupe: EsmStrip['dupe'] = 'none'): EsmStrip => ({
+const strip = (
+  call: string,
+  exchangeComplete = false,
+  dupe: EsmStrip['dupe'] = 'none',
+  fromHistory = false,
+): EsmStrip => ({
   call,
   exchangeComplete,
+  fromHistory,
   dupe,
 })
+/** A strip whose exchange a call-history fill completes: no box typed over. */
+const filled = (call: string, exchangeComplete = true): EsmStrip => strip(call, exchangeComplete, 'none', true)
 const CW = { cockpit: 'cw', callOnce: false } as const
 const RTTY = { cockpit: 'rtty', callOnce: false } as const
 const PHONE = { cockpit: 'phone', callOnce: false } as const
@@ -105,8 +113,10 @@ describe('esmStep — S&P', () => {
 
   it('S2: a call typed, exchange incomplete, sends my call on every press and keeps the caret in Call', () => {
     const first = esmStep(SP, strip('K9AAA'), CW)
-    expect(first).toEqual({ kind: 'send', role: 'myCall', log: false, caret: 'call', next: SP })
-    expect(esmStep(SP, strip('K9AAA'), CW)).toEqual(first)
+    // It remembers the call my call went to, "call once" off too (S5 reads it).
+    expect(first).toEqual({ kind: 'send', role: 'myCall', log: false, caret: 'call', next: { ...SP, myCallTo: 'K9AAA' } })
+    if (first.kind !== 'send') throw new Error('refused')
+    expect(esmStep(first.next, strip('K9AAA'), CW)).toEqual(first)
   })
 
   it('S2 with "call once": the first press sends my call and moves the caret to the first box, later presses send AGN', () => {
@@ -141,6 +151,65 @@ describe('esmStep — S&P', () => {
   it('S4: an own dupe sends nothing and logs nothing', () => {
     expect(esmStep(SP, strip('K9AAA', false, 'own'), CW)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
     expect(esmStep(SP, strip('K9AAA', true, 'own'), ONCE)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
+  })
+
+  // Call history fills the boxes as the call is typed, so the exchange can be complete before he
+  // has sent a thing. Then my call goes first, as N1MM's S&P Enter sends it (operator, 2026-10-09).
+  it('S5: complete only by a call-history fill, the first press sends my call and logs nothing; the next sends my exchange and logs', () => {
+    const first = esmStep(SP, filled('K9AAA'), CW)
+    expect(first).toEqual({ kind: 'send', role: 'myCall', log: false, caret: 'call', next: { ...SP, myCallTo: 'K9AAA' } })
+    if (first.kind !== 'send') throw new Error('refused')
+    expect(esmStep(first.next, filled('K9AAA'), CW)).toEqual({ kind: 'send', role: 'exch', log: true, caret: 'call', next: SP })
+  })
+
+  it('S5 with "call once": the first press also moves the caret to the first box; the next sends my exchange and logs', () => {
+    const first = esmStep(SP, filled('K9AAA'), ONCE)
+    expect(first).toEqual({ kind: 'send', role: 'myCall', log: false, caret: 'ex0', next: { ...SP, myCallTo: 'K9AAA' } })
+    if (first.kind !== 'send') throw new Error('refused')
+    expect(esmStep(first.next, filled('K9AAA'), ONCE)).toEqual({ kind: 'send', role: 'exch', log: true, caret: 'call', next: SP })
+  })
+
+  it('S5: my call sent while his exchange was incomplete counts, so a fill that completes it with the rest typed sends my exchange', () => {
+    // Field Day: the file fills his section as the call is typed; his class is typed once he sends it.
+    for (const opts of [CW, ONCE]) {
+      const first = esmStep(SP, filled('K9AAA', false), opts)
+      expect(first).toMatchObject({ role: 'myCall', log: false, next: { ...SP, myCallTo: 'K9AAA' } })
+      if (first.kind !== 'send') throw new Error('refused')
+      expect(esmStep(first.next, filled('K9AAA'), opts)).toEqual({ kind: 'send', role: 'exch', log: true, caret: 'call', next: SP })
+    }
+  })
+
+  it('S5 is per call: my call went to K9AAA, so K9ABC, filled, gets my call first', () => {
+    expect(esmStep({ ...SP, myCallTo: 'K9AAA' }, filled('K9ABC'), CW)).toEqual({
+      kind: 'send',
+      role: 'myCall',
+      log: false,
+      caret: 'call',
+      next: { ...SP, myCallTo: 'K9ABC' },
+    })
+  })
+
+  it('S5: a stopped call counts as not sent, so the next press sends it again rather than logging', () => {
+    const stopped = esmEvent({ ...SP, myCallTo: 'K9AAA' }, 'stopped')
+    expect(esmStep(stopped, filled('K9AAA'), CW)).toEqual({
+      kind: 'send',
+      role: 'myCall',
+      log: false,
+      caret: 'call',
+      next: { ...SP, myCallTo: 'K9AAA' },
+    })
+  })
+
+  it('S5 asks only for a fill: an exchange typed or picked sends my exchange and logs at the first press (S3)', () => {
+    expect(esmStep(SP, strip('K9AAA', true), CW)).toEqual({ kind: 'send', role: 'exch', log: true, caret: 'call', next: SP })
+    expect(esmStep(SP, strip('K9AAA', true), ONCE)).toEqual({ kind: 'send', role: 'exch', log: true, caret: 'call', next: SP })
+  })
+
+  it('Run never asks it: a fill gives exactly the result a typed exchange gets', () => {
+    for (const s of [RUN, { ...RUN, exchTo: 'K9AAA' }])
+      for (const complete of [false, true])
+        for (const opts of [CW, ONCE, PHONE])
+          expect(esmStep(s, filled('K9AAA', complete), opts)).toEqual(esmStep(s, strip('K9AAA', complete), opts))
   })
 })
 
@@ -385,16 +454,6 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
     const noTu = esmRoles(null, { cq: ['F1'], callExch: ['F2'], myCall: ['F4'], exch: ['F6'], again: ['F7'] })
     expect(press({ roles: noTu, ...last })).toEqual({ kind: 'refuse', refusal: { why: 'unmapped', role: 'tu' } })
     expect(press({ roles: noTu, strip: strip('K9AAA') })).toMatchObject({ kind: 'send', role: 'callExch', keys: ['F2'] })
-  })
-
-  it('rule 10: a call-history fill nobody accepted is never logged — the logging step is refused by name', () => {
-    const hinted = { ...strip('K9AAA', true), fromHistory: 'QTH' }
-    expect(press({ ...last, strip: hinted })).toEqual({ kind: 'refuse', refusal: { why: 'history', slot: 'QTH' } })
-    expect(press({ state: SP, strip: hinted })).toEqual({ kind: 'refuse', refusal: { why: 'history', slot: 'QTH' } })
-    // His call and my exchange carry nothing of his, so they still go.
-    expect(press({ strip: hinted })).toMatchObject({ kind: 'send', role: 'callExch', log: false })
-    // Accepted (typed over), it logs.
-    expect(press({ ...last, strip: { ...hinted, fromHistory: null } })).toMatchObject({ kind: 'send', role: 'tu', log: true })
   })
 
   it('RTTY sends its contest set\'s keys, and steps aside while the auto sequence runs or Continuous TX is latched', () => {
