@@ -16926,6 +16926,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding-bottom: var(--space-2);
   margin-bottom: var(--space-1);
   border-bottom: 1px solid var(--border);
+  /* The list is where a drag in it is drawn (`.pane-drop-layer` below). */
+  position: relative;
 }
 .panels-arrange-head {
   font-size: var(--fs-label);
@@ -17000,6 +17002,82 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .panels-arrange-add:disabled {
   color: var(--text-faint);
   cursor: default;
+}
+/* A row's grip in the list: drag the row to reorder, as the pane itself is dragged by its title. */
+.panels-arrange-grip {
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+}
+/* DRAGGING A PANE BY ITS TITLE (components/panes/PaneDrag, 2026-10-08). A title marked `data-pane-grip` is a
+   grip wherever its cockpit arranges by drag (`data-pane-drag` on the cockpit, and on ⊞ Arrange's list).
+   Both rules are :where()-wrapped, so a control's own cursor outranks them; a control in a title that has
+   none of its own shows the plain cursor, because a press on it never starts a drag. */
+:where([data-pane-drag]) :where([data-pane-grip]) {
+  cursor: grab;
+  -webkit-touch-callout: none;
+}
+:where([data-pane-drag]) :where([data-pane-grip]) :where(button, a[href], input, select, textarea, label, [role='button']) {
+  cursor: auto;
+}
+/* While a pane is up the hand closes, and no text selects under it (body.resizing's twin). */
+body.pane-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+/* What a drag draws, INSIDE the place it marks — the region, the left side's column, ⊞ Arrange's list —
+   placed by PaneDropLayer in that box's own coordinates and cut to its inside. It takes no pointer, and it
+   stands at z-index 1, under the sticky TX strip and dock (2), so no mark can stand over Stop TX, Tune or PTT. */
+.pane-drop-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.pane-drop-source,
+.pane-drop-place,
+.pane-drop-line {
+  position: absolute;
+  box-sizing: border-box;
+}
+/* The pane picked up, dimmed where it stands. */
+.pane-drop-source {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  outline: 1px dashed var(--text-dim);
+  outline-offset: -1px;
+}
+/* Every place it can go, outlined; the one under the pointer filled. */
+.pane-drop-place {
+  border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: var(--radius-sm);
+}
+.pane-drop-place.hot {
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* A place with nothing on screen: a zone where it would stand, with its name. */
+.pane-drop-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+}
+.pane-drop-name {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pane-drop-tall .pane-drop-name {
+  writing-mode: vertical-rl;
+}
+/* Where the pane will land: a bar across the place, in the gap between two panes. */
+.pane-drop-line {
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--bg);
 }
 /* ⊞ Panels ▸ Layout — Connect's layout presets (ConnectView), above the entries. A column of
    full-width choices rather than a chip row: the popover is 220px wide, where three chips side by

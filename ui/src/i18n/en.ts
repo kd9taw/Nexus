@@ -10746,6 +10746,10 @@ export const EN = {
   'panels.arrange.side.aBox': 'a box',
   'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
   'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
+  // A pane dragged by its title (2026-10-08): what a screen reader is told when it lands.
+  // `{{place}}` is the column's name as Arrange lists it, `{{next}}` the pane it landed above.
+  'panels.drag.dropped.above': '{{pane}} moved: {{place}}, above {{next}}',
+  'panels.drag.dropped.foot': '{{pane}} moved: {{place}}, at the foot',
   // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
   // `{{title}}` is that box's own name.
   'panels.box.add': '+ Add a box',

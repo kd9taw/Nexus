@@ -6665,6 +6665,8 @@ export const DE: PartialCatalog = {
   "panels.arrange.side.aBox": "einen Bereich",
   "panels.arrange.toSide.aria": "{{pane}} auf die linke Seite verschieben",
   "panels.arrange.fromSide.aria": "{{pane}} von der linken Seite zurück in seine Spalte verschieben",
+  "panels.drag.dropped.above": "{{pane}} verschoben: {{place}}, über {{next}}",
+  "panels.drag.dropped.foot": "{{pane}} verschoben: {{place}}, ganz unten",
   "panels.box.add": "+ Bereich hinzufügen",
   "panels.box.add.a.aria": "Einen Bereich zu Spalte 1 hinzufügen",
   "panels.box.add.b.aria": "Einen Bereich zu Spalte 2 hinzufügen",

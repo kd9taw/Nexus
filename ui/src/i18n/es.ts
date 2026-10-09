@@ -3561,6 +3561,8 @@ export const ES: PartialCatalog = {
   "panels.arrange.side.aBox": "un panel",
   "panels.arrange.toSide.aria": "Mover {{pane}} al lado izquierdo",
   "panels.arrange.fromSide.aria": "Devolver {{pane}} del lado izquierdo a su columna",
+  "panels.drag.dropped.above": "{{pane}} movido: {{place}}, encima de {{next}}",
+  "panels.drag.dropped.foot": "{{pane}} movido: {{place}}, al final",
   "panels.box.add": "+ Añadir un panel",
   "panels.box.add.a.aria": "Añadir un panel a la columna 1",
   "panels.box.add.b.aria": "Añadir un panel a la columna 2",

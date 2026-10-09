@@ -6659,6 +6659,8 @@ export const JA: PartialCatalog = {
   "panels.arrange.side.aBox": "パネル",
   "panels.arrange.toSide.aria": "{{pane}} を左側へ移動",
   "panels.arrange.fromSide.aria": "{{pane}} を左側から元の列へ戻す",
+  "panels.drag.dropped.above": "{{pane}} を移動しました: {{place}}、{{next}} の上",
+  "panels.drag.dropped.foot": "{{pane}} を移動しました: {{place}}、いちばん下",
   "panels.box.add": "+ パネルを追加",
   "panels.box.add.a.aria": "列 1 にパネルを追加",
   "panels.box.add.b.aria": "列 2 にパネルを追加",
