@@ -21,7 +21,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // and stay in the code.
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
-import { isStockPlacement, regionGroups } from '../features/panelPlace'
+import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
@@ -30,6 +30,7 @@ import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, gridTargets, usePaneDrag, type DropArea } from './panes/PaneDrag'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
@@ -1509,6 +1510,43 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const mainColRef = useRef<HTMLDivElement>(null)
   const auxColRef = useRef<HTMLDivElement>(null)
   const logColRef = useRef<HTMLDivElement>(null)
+  // ⊞ ARRANGE BY DRAG (2026-10-08, the operator's "drag with the mouse"): a pane is picked up by its title and
+  // dropped onto a column, the left side or between two panes, here and in ⊞ Arrange's list; the drop is the
+  // arrows' moves with the arrows' own arguments, so it stores the record they would (panes/PaneDrag). The
+  // places are the columns as this tier draws them, the left side while the window has room for it. PTT, the
+  // dock and the TX strip hold no grip and are no place: a release over them cancels.
+  const sideColRef = useRef<HTMLDivElement>(null)
+  const cockpitRef = useRef<HTMLElement>(null)
+  const dropPane =
+    panels?.dropPane != null ? (id: PhonePanelId, drop: PaneDrop<PhonePanelId>) => panels.dropPane?.(id, drop, paneShown, sideRoom) : undefined
+  const holds = (area: DropArea) => (area === 'side' ? sideGroup.length > 0 : placed3.some((g) => g.col === area && g.ids.length > 0))
+  const paneDrag = usePaneDrag<PhonePanelId>({
+    root: cockpitRef,
+    region: panesRef,
+    enabled: dropPane != null,
+    spec: PHONE_PANELS.arrange!,
+    arrangement: { place, leftSide: panels?.layout.leftSide },
+    shown: paneShown,
+    sideShows: sideRoom,
+    stacked: flow === 'stack',
+    targets: () =>
+      gridTargets(
+        [
+          ...(sideRoom ? [{ el: sideShows ? sideColRef.current : null, areas: ['side'] as const }] : []),
+          ...(cols === 3
+            ? [
+                { el: mainColRef.current, areas: ['a'] as const },
+                { el: auxColRef.current, areas: ['b'] as const },
+              ]
+            : [{ el: mainColRef.current, areas: ['a', 'b'] as const }]),
+          { el: logColRef.current, areas: ['log'] as const },
+        ],
+        holds,
+      ),
+    labels,
+    names: { a: t('panels.arrange.column.a'), b: t('panels.arrange.column.b'), log: t('panels.arrange.column.log'), side: t('panels.arrange.side') },
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
 
   // ── WHAT THIS RIG DRIVES, one boolean per control ────────────────────────────────────
   // Read through `reports`, so each one is "reporting now, or reported at some point this
@@ -2464,7 +2502,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     />
   )
   return (
-    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`}>
+    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -2532,6 +2570,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                     labels={labels}
                     sideRoom={sideRoom}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown, sideRoom)}
+                    onDrop={dropPane}
                     // "+ Add a box" only where the window lends them (never the hosted Remote page).
                     onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                     boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -2689,8 +2728,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           setCols={panels.setCols}
           label={t('pane.left.label')}
           widthLabel={t('pane.seam.leftWidth.label')}
+          colRef={sideColRef}
         >
           {sideGroup.map(placedPane)}
+          <PaneDropLayer drag={paneDrag} host={sideColRef} />
         </LeftSide>
       )}
       <div className={sideShows ? 'cockpit-stage' : 'cockpit-flat'}>
@@ -2918,6 +2959,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             widthLabel={t('pane.seam.logWidth.label')}
           />
         )}
+        {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+        <PaneDropLayer drag={paneDrag} host={panesRef} />
       </div>
       {/* the stage */}</div>
       {/* the left side's row */}</div>

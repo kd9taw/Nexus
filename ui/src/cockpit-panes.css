@@ -234,10 +234,11 @@
   min-width: 0;
   display: grid;
   gap: var(--space-3);
-  /* The containing block of the column dividers (`.cockpit-colseam` below), and of nothing else:
-     every pane frame already contains its own positioned content (`.pane-frame` carries a
-     backdrop-filter, which makes it the containing block of everything absolutely positioned
-     inside it), and a column holds only frames. */
+  /* The containing block of the column dividers (`.cockpit-colseam` below), and of a drag's marks
+     while a pane is dragged (`.pane-drop-layer`, styles.css), and of nothing else: every pane frame
+     already contains its own positioned content (`.pane-frame` carries a backdrop-filter, which
+     makes it the containing block of everything absolutely positioned inside it), and a column
+     holds only frames. */
   position: relative;
   /* Safe fallback for a region that somehow has no state stamped yet (useRegionCols owns
      both attributes and stamps before first paint, but the failure direction must still be

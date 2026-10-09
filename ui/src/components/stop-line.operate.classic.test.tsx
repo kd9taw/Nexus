@@ -43,8 +43,8 @@ afterEach(cleanup)
 describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that stops a transmission', () => {
   // Fifty placements in five runs of ten, each its own test with its own budget (OPERATE_RUN_BUDGET_MS).
   it.each(arrangementRuns(operateClassic))(
-    '%s: random placements %i–%i of 50, every id hidden singly and all at once, every stop control where it was',
-    async (_name, _from, _to, c, k) => arrangementRun(c, k),
+    '%s: %s, every id hidden singly and all at once, every stop control where it was',
+    async (_name, _what, c, k) => arrangementRun(c, k),
     OPERATE_RUN_BUDGET_MS,
   )
 })

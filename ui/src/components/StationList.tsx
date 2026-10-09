@@ -27,6 +27,9 @@ interface Props {
   hideNote?: string
   /** The ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: its head is then the grip it is dragged by
+   *  (panes/PaneDrag). Absent: nothing here can be dragged. */
+  grip?: string
   stations: Station[]
   myGrid: string
   currentSlot: number
@@ -91,6 +94,7 @@ export function StationList({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
   stations,
   myGrid,
   currentSlot,
@@ -208,7 +212,7 @@ export function StationList({
 
   return (
     <aside className="station-list panel">
-      <div className="panel-header">
+      <div className="panel-header" data-pane-grip={grip}>
         <h2>{t('roster.title')}</h2>
         {/* The badge counts what is ON SCREEN, with the total beside it when a filter or a
             search is holding something back (the Spots panel's idiom). It used to show the

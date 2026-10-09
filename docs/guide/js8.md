@@ -51,6 +51,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 - **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
   **Arrange** ▸ **+ Add a box** at the foot of a column, each closed by its own **✕** (see
   [Phone](phone.md)). Nothing in a box transmits.
+- **Moving them** — ⊞ Panels ▸ **Arrange**'s arrows, or drag a pane or a box by its title
+  bar onto a column or between two panes (see [Phone](phone.md)). The Log moves only up and
+  down in its column, and nothing in the TX dock can be dragged.
 
 **The TX dock**, pinned under the panes. The **To** box (blank = everyone, a callsign,
 `@ALLCALL`, or a `@GROUP` you belong to), the composer, a frame estimate ("3 frames ·

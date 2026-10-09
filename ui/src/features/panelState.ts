@@ -242,12 +242,15 @@ import {
   coerceColumnOrder,
   coerceLeftSide,
   coercePlacement,
+  dropArranged,
   moveArranged,
   placeAtFoot,
   stockColumn,
   stockPlacement,
   type ArrangeSpec,
+  type Arrangement,
   type PaneColumn,
+  type PaneDrop,
   type PaneMove,
   type PanePlacement,
 } from './panelPlace'
@@ -750,6 +753,12 @@ export interface PanelLayoutApi<P extends string> {
    *  `at` (FT, 2026-10-07): the layout the move is in, for a vocabulary arranged per layout, and the
    *  columns' order on this window where it is not their stock one. */
   movePane?: (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows?: boolean, at?: PaneMoveAt) => void
+  /** A pane DROPPED by drag (2026-10-08: dragged by its title onto a column or between panes, in the
+   *  cockpit or in ⊞ Arrange's list): the arrows' own moves, run to that place (features/panelPlace
+   *  `dropArranged`), stored as ONE undoable step, and none at all when the drop changes nothing. The
+   *  arguments after the drop are `movePane`'s, and a cockpit passes the ones its arrows pass, so a drag
+   *  stores exactly the record the same presses would. Optional, as `movePane`. */
+  dropPane?: (id: P, drop: PaneDrop<P>, shown: (id: P) => boolean, sideShows?: boolean, at?: PaneMoveAt) => void
   /** ⊞ Arrange's "+ Add a box" (2026-10-07): the first hidden box, on screen at the foot of `area` (a
    *  column, or the left side), showing the first entry of the shared list not on screen (`addBoxTo`).
    *  ONE undoable step, and none at all when every box is on screen. Optional: only a vocabulary with
@@ -889,16 +898,15 @@ export function usePanelLayout<P extends string>(
       }),
     [key],
   )
-  const movePane = useCallback(
-    (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows = false, at?: PaneMoveAt) =>
+  // One ⊞ Arrange step, a move's or a drop's: the arrangement `make` returns from the one in the record,
+  // written the same way for both, so a drag and the arrows cannot store two different records.
+  const arrangeStep = useCallback(
+    (at: PaneMoveAt | undefined, make: (arrange: ArrangeSpec<P>, arr: Arrangement<P>) => Arrangement<P> | null) =>
       setHist((h) => {
         const arrange = arrangeSpecOf(spec, at?.layout)
         if (!arrange) return h
-        // ◀ ▶ go to the neighbouring column ON SCREEN: the stock order, unless the cockpit says its
-        // columns stand in another on this window (`at.order`). No cockpit renders a stored column
-        // order yet (features/panelPlace).
         const arr = { place: placeOf(spec, h.cur, at?.layout), leftSide: h.cur.leftSide }
-        const next = moveArranged(arrange, arr, id, move, shown, sideShows, at?.order)
+        const next = make(arrange, arr)
         if (!next) return h
         // Everything else in the record rides along; the placement and the left side are the move's.
         const { leftSide: _side, ...rest } = withPlace(spec, h.cur, at?.layout, next.place)
@@ -908,6 +916,19 @@ export function usePanelLayout<P extends string>(
         return { cur, prev: h.cur }
       }),
     [key, spec],
+  )
+  // ◀ ▶ go to the neighbouring column ON SCREEN: the stock order, unless the cockpit says its columns
+  // stand in another on this window (`at.order`). No cockpit renders a stored column order yet
+  // (features/panelPlace).
+  const movePane = useCallback(
+    (id: P, move: PaneMove, shown: (id: P) => boolean, sideShows = false, at?: PaneMoveAt) =>
+      arrangeStep(at, (arrange, arr) => moveArranged(arrange, arr, id, move, shown, sideShows, at?.order)),
+    [arrangeStep],
+  )
+  const dropPane = useCallback(
+    (id: P, drop: PaneDrop<P>, shown: (id: P) => boolean, sideShows = false, at?: PaneMoveAt) =>
+      arrangeStep(at, (arrange, arr) => dropArranged(arrange, arr, id, drop, shown, sideShows, at?.order)),
+    [arrangeStep],
   )
   // The boxes' two acts: each one undoable step, and a step that would change nothing is none.
   const boxStep = useCallback(
@@ -972,6 +993,7 @@ export function usePanelLayout<P extends string>(
     setShares,
     setCols,
     movePane: spec.arrange || spec.arrangeBy ? movePane : undefined,
+    dropPane: spec.arrange || spec.arrangeBy ? dropPane : undefined,
     addBox: boxIdsOf(spec).length > 0 ? addBox : undefined,
     setBox: boxIdsOf(spec).length > 0 ? setBox : undefined,
     setExtra: spec.arrangeBy ? setExtra : undefined,

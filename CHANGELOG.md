@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the log. A contest picked while another is running says that turning the mode off and on again
   switches to it. The scoreboard's own window and the main window's title read Contest too. ARRL
   Field Day and Winter Field Day keep their names.
+- **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
+  its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
+  enough for it) onto the left side. While you drag, the columns it can go to are outlined, a line
+  shows where it will land, and a column with nothing in it shows a box where it would stand. ⊞
+  Panels ▸ Arrange's list drags the same way, by a pane's name or the ⠿ beside it, and its ▲ ▼ ◀ ▶
+  stay for the keyboard and screen readers. A drop makes exactly the move the arrows would, into
+  the same saved arrangement, so Undo last change takes it back and Classic and Roster still keep
+  their own. Esc, or letting go anywhere else, puts the pane back, and Esc still stops transmit as
+  it always has. FT's Tx messages, which have no title bar, are picked up by the ⠿ at the start of
+  their DX row. Buttons, filters and fields in a title work as before, a double-click on a decode
+  still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
+  or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
+  lifts; a swipe still scrolls.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one

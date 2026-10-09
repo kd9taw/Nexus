@@ -84,6 +84,9 @@ interface Props {
   hideNote?: string
   /** The card's ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: its head is then the grip it is dragged by
+   *  (panes/PaneDrag). Absent: nothing here can be dragged. */
+  grip?: string
   /** ⭐ THE CONTEST-SCOPED DUPE, a SECOND verdict beside the lifetime `Dupe {band}` badge.
    *
    *  The two mean different things and both are wanted. The lifetime badge asks "have I ever
@@ -168,7 +171,7 @@ export function recallCardClass(bounded?: boolean, kept?: boolean): string {
   return `recall-card${bounded ? ' cockpit-recall' : ''}${bounded && kept ? ' cockpit-recall-kept' : ''}`
 }
 
-export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -273,7 +276,7 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
 
   return (
     <div className={recallCardClass(bounded, kept)}>
-      <div className="recall-head">
+      <div className="recall-head" data-pane-grip={grip}>
         {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
             and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
             here. Failures are TOASTED, not swallowed — there is no global unhandledrejection

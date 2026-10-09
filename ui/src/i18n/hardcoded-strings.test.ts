@@ -448,6 +448,8 @@ const MIGRATED = [
   'components/panes/LeftSide.tsx',
   // A box in a cockpit (2026-10-07): born migrated; the entries' names are the Conditions boxes'.
   'components/panes/CockpitBox.tsx',
+  // A pane dragged by its title (2026-10-08): born migrated; the panes' and places' names are the cockpit's.
+  'components/panes/PaneDrag.tsx',
   'features/profiles.ts',
   'features/registry.ts',
   // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two

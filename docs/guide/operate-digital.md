@@ -118,6 +118,22 @@ keeps its decodes. In an arranged column the callsign card keeps its size; when 
 than fits, the column scrolls. Nothing moves until you move it, and **Reset layout** puts both layouts
 back as they shipped.
 
+**Drag a pane.** You can also pick a pane up by its title bar and drop it where you want it. While you
+drag, each column it can go to is outlined, a line shows where it will land (between two panes, or at
+the foot of a column), and a column with nothing in it shows a box where it would stand. Let go to drop
+it there. **Esc**, or letting go anywhere else (over the strip with **Stop TX**, say), puts it back where
+it was; as everywhere on this screen, **Esc** also stops transmit. The Tx messages have no title bar, so
+they are picked up by the **⠿** at the start of their DX row. A drop makes exactly the move the arrows
+would, so **Undo last change** takes it back, and the rows in ⊞ Panels ▸ **Arrange** drag the same way,
+by their name or the **⠿** beside it. A button, a filter or a field in a title still does what it did, a
+double-click on a decode still answers the station, and nothing in the strip above the columns can be
+dragged. On a touch screen, hold a finger on the title until the pane lifts, then drag; a swipe still
+scrolls.
+
+![Band Activity being dragged into the side rail, with a line above Stations where it will land.](../img/manual/operate-arrange-drag.webp)
+*Dragging Band Activity into Classic's side rail, in a build after Nexus 1.17.0: the pane is dimmed where it
+was, the rail is outlined, and the line marks the drop. **Stop TX** and **Tune** stay in the strip above.*
+
 **Boxes.** Any pane of [Conditions](connect.md) — the Clock, Space Wx, POTA / SOTA, the Spots and
 Needed boards and the rest — can also stand in these columns, in up to six boxes. In ⊞ Panels ▸
 **Arrange**, each column ends with **+ Add a box**: it puts a box at the foot of that column, showing

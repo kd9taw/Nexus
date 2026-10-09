@@ -23,10 +23,11 @@ import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, gridTargets, usePaneDrag, type DropArea } from './panes/PaneDrag'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { panelHost } from '../features/panelHost'
 import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
-import { regionGroups } from '../features/panelPlace'
+import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
@@ -535,6 +536,41 @@ export function Js8Cockpit({
     cols === 3 || auxInLogTrack
       ? placed3.map((g) => g.ids)
       : [[...placed3[0].ids, ...placed3[1].ids], placed3[2].ids]
+  // ⊞ ARRANGE BY DRAG (2026-10-08): Phone's (PhoneCockpit, the same words): a pane is picked up by its title
+  // and dropped onto a column or between two panes, the drop the arrows' moves with their own arguments; the
+  // log stays in its column, as its arrows keep it (pinned). The dock with its stop controls is no place.
+  const cockpitRef = useRef<HTMLElement>(null)
+  const dropPane = panels?.dropPane != null ? (id: Js8PanelId, drop: PaneDrop<Js8PanelId>) => panels.dropPane?.(id, drop, paneShown) : undefined
+  const holds = (area: DropArea) => placed3.some((g) => g.col === area && g.ids.length > 0)
+  const paneDrag = usePaneDrag<Js8PanelId>({
+    root: cockpitRef,
+    region: panesRef,
+    enabled: dropPane != null,
+    spec: JS8_PANELS.arrange!,
+    arrangement: { place },
+    shown: paneShown,
+    sideShows: false,
+    stacked: flow === 'stack',
+    // The columns as this tier draws them (`rendered`): a | b | log, or a | b with the log column empty, or a
+    // + b | log.
+    targets: () =>
+      gridTargets(
+        cols === 3 || auxInLogTrack
+          ? [
+              { el: mainColRef.current, areas: ['a'] },
+              { el: auxColRef.current, areas: ['b'] },
+              { el: cols === 3 ? logColRef.current : null, areas: ['log'] },
+            ]
+          : [
+              { el: mainColRef.current, areas: ['a', 'b'] },
+              { el: logColRef.current, areas: ['log'] },
+            ],
+        holds,
+      ),
+    labels,
+    names: { a: t('panels.arrange.column.a'), b: t('panels.arrange.column.b'), log: t('panels.arrange.column.log') },
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
   /** Whether `below` sits directly under `above` in one rendered column — what makes them a pair. */
   const adjacent = (above: Js8PanelId, below: Js8PanelId) =>
     rendered.some((ids) => {
@@ -1104,7 +1140,7 @@ export function Js8Cockpit({
     ])
 
   return (
-    <main className="layout single js8-cockpit">
+    <main className="layout single js8-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -1197,6 +1233,7 @@ export function Js8Cockpit({
                       shown={paneShown}
                       labels={labels}
                       onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                      onDrop={dropPane}
                       // "+ Add a box" only where the window lends them (never the hosted Remote page).
                       onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                       boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -1344,6 +1381,8 @@ export function Js8Cockpit({
             widthLabel={auxInLogTrack ? t('js8.seam.auxWidth.label') : t('pane.seam.logWidth.label')}
           />
         )}
+        {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+        <PaneDropLayer drag={paneDrag} host={panesRef} />
       </div>
 
       {/* TX DOCK — every transmit control, pinned OUTSIDE the pane region. None has a ⊞ id.

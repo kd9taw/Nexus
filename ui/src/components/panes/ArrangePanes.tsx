@@ -31,6 +31,11 @@
 // order on screen — FT's side rail can stand on the left, and Roster has two), and says what a narrower
 // window does with them (`narrow`). ◀ ▶ then follow that order, and there is no log form to mention.
 //
+// BY DRAG TOO (2026-10-08): where the cockpit offers it (`onDrop`), a row is dragged by its name or its ⠿
+// grip onto another place in the list (panes/PaneDrag), and the drop is the same moves the arrows make
+// (the record's `dropPane`). The arrows stay, for the keyboard and screen readers; a drop is told to a
+// screen reader, and focus stays with the pane as after an arrow when it was in the list.
+//
 // THE STOP LINE is not near this: only a pane with a vocabulary id can be listed or moved (the
 // ArrangeSpec, features/panelPlace), and no control that stops a transmission has one. A move changes
 // where a pane stands in the region or on the left side and nothing else — the header and the TX dock
@@ -40,8 +45,9 @@
 // cockpit's (`labels`); the arrows are glyphs, not words.
 import { useId, useLayoutEffect, useRef } from 'react'
 import { getLocale, t } from '../../i18n'
-import { PANE_COLUMNS, canMoveArranged, placedColumns, type ArrangeSpec, type PaneColumn, type PaneMove } from '../../features/panelPlace'
+import { PANE_COLUMNS, canMoveArranged, placedColumns, type ArrangeSpec, type PaneColumn, type PaneDrop, type PaneMove } from '../../features/panelPlace'
 import type { PanelLayout } from '../../features/panelState'
+import { PaneDropLayer, usePaneDrag, type DropArea, type PaneDropTarget } from './PaneDrag'
 
 /** The four moves, in the order the buttons stand, with the glyph each shows. */
 const MOVES: ReadonlyArray<readonly [PaneMove, string]> = [
@@ -84,6 +90,9 @@ export interface ArrangePanesProps<P extends string> {
   /** Whether this window has room for the cockpit's left side (absent: it has none). */
   sideRoom?: boolean
   onMove: (id: P, move: PaneMove) => void
+  /** A row dropped by drag onto a place in the list (the record's `dropPane`, with the arguments `onMove`'s
+   *  arrows pass). Absent: the rows are not dragged. */
+  onDrop?: (id: P, drop: PaneDrop<P>) => void
   /** "+ Add a box" at the foot of `area` (the record's `addBox`). Absent: no box is offered here — the
    *  cockpit has none, or the window lends them nothing (the hosted Remote page). */
   onAddBox?: (area: PaneColumn | 'side') => void
@@ -104,7 +113,7 @@ const ADD_ARIA: Readonly<Record<PaneColumn | 'side', () => string>> = {
   side: () => t('panels.box.add.side.aria'),
 }
 
-export function ArrangePanes<P extends string>({ spec, layout, shown, labels, sideRoom = false, onMove, onAddBox, boxesFull = false, columns, narrow }: ArrangePanesProps<P>) {
+export function ArrangePanes<P extends string>({ spec, layout, shown, labels, sideRoom = false, onMove, onDrop, onAddBox, boxesFull = false, columns, narrow }: ArrangePanesProps<P>) {
   const uid = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   // The move just pressed from a focused button, until the render that shows it.
@@ -120,6 +129,29 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
   const places = columns ?? PANE_COLUMNS.map((col) => ({ col, name: columnName(col), addAria: ADD_ARIA[col]() }))
   const order = columns?.map((c) => c.col)
   const can = (id: P, move: PaneMove) => canMoveArranged(spec, arr, id, move, shown, sideOn, order)
+  // By drag: the places are the list's own groups, one above the other, and a drop runs the arrows' moves.
+  const drag = usePaneDrag<P>({
+    root: rootRef,
+    region: rootRef,
+    enabled: onDrop != null,
+    spec,
+    arrangement: arr,
+    shown,
+    sideShows: sideOn,
+    order,
+    stacked: true,
+    targets: () =>
+      [...(rootRef.current?.querySelectorAll<HTMLElement>(':scope > [data-arrange-area]') ?? [])].map(
+        (el): PaneDropTarget => ({ el, areas: [el.dataset.arrangeArea as DropArea] }),
+      ),
+    labels,
+    names: { ...Object.fromEntries(places.map((pl) => [pl.col, pl.name])), side: t('panels.arrange.side') },
+    onDrop: (id, drop) => {
+      // As after an arrow pressed from the keyboard: focus stays with the pane, if it was in the list.
+      if (rootRef.current?.contains(document.activeElement)) pending.current = { id, move: 'up' }
+      onDrop?.(id, drop)
+    },
+  })
   // A pane on the side is listed there while the side shows; otherwise it is in its column.
   const inColumn = (id: P) => shown(id) && !(sideOn && side.includes(id))
   const moveLabel = (id: P, move: PaneMove): string =>
@@ -134,7 +166,14 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
     return (
       <div key={id} className="panels-arrange-pane">
         <div className="panels-arrange-row">
-          <span className="panels-arrange-name">{labels[id]}</span>
+          {onDrop && (
+            <span className="panels-arrange-grip" data-pane-grip={id} aria-hidden="true" title={t('panels.drag.grip.title', { pane: labels[id] })}>
+              ⠿
+            </span>
+          )}
+          <span className="panels-arrange-name" data-pane-grip={onDrop ? id : undefined}>
+            {labels[id]}
+          </span>
           <span className="panels-arrange-moves">
             {MOVES.map(([move, glyph]) =>
               // A pinned pane has no ◀ ▶; a pane on the side has no ◀ (nothing stands left of it).
@@ -218,7 +257,7 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
     }
   })
   return (
-    <div className="panels-arrange" role="group" aria-labelledby={`${uid}-head`} ref={rootRef}>
+    <div className="panels-arrange" role="group" aria-labelledby={`${uid}-head`} ref={rootRef} data-pane-drag={onDrop ? '' : undefined}>
       <span className="panels-arrange-head" id={`${uid}-head`}>
         {t('panels.arrange.heading')}
       </span>
@@ -228,7 +267,7 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
         </span>
       )}
       {spec.leftSide && (
-        <div className="panels-arrange-col" role="group" aria-labelledby={`${uid}-side`}>
+        <div className="panels-arrange-col" role="group" aria-labelledby={`${uid}-side`} data-arrange-area={sideOn ? 'side' : undefined}>
           <span className="panels-arrange-colhead" id={`${uid}-side`}>
             {t('panels.arrange.side')}
           </span>
@@ -266,7 +305,7 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
       {places.map(({ col, name }) => {
         const ids = cols[col].filter(inColumn)
         return (
-          <div key={col} className="panels-arrange-col" role="group" aria-labelledby={`${uid}-${col}`}>
+          <div key={col} className="panels-arrange-col" role="group" aria-labelledby={`${uid}-${col}`} data-arrange-area={col}>
             <span className="panels-arrange-colhead" id={`${uid}-${col}`}>
               {name}
             </span>
@@ -277,6 +316,7 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, si
         )
       })}
       <span className="panels-menu-why">{narrow ?? t('panels.arrange.narrow')}</span>
+      <PaneDropLayer drag={drag} host={rootRef} />
     </div>
   )
 }
