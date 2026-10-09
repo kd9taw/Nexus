@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Field Day mode has a switch on the contest screen, and the left bar calls that screen
+  Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
+  contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar
+  order, and it stays on the bar with Field Day mode off: the top of its screen has the same Field
+  Day mode switch as Settings ▸ Contesting ▸ Field Day Setup, beside the picked contest and when it
+  runs (its dates in UTC and the countdown), and it saves at once. Opening the screen with the mode
+  off does not start the contest. If the contest cannot start yet, the switch stays off and the
+  screen says what is missing (your Class and Section for Field Day, or the field a QSO party
+  needs), with a button to that place in Settings. With the mode on, the screen says which
+  contest's rules apply, the modes it does not permit, and during Winter Field Day that no spots
+  are posted over the internet. With club sync on it says that turning the mode off keeps this
+  station in the club event, sends no contacts until the mode is back on, and loses nothing from
+  the log. A contest picked while another is running says that turning the mode off and on again
+  switches to it. The scoreboard's own window and the main window's title read Contest too. ARRL
+  Field Day and Winter Field Day keep their names.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
