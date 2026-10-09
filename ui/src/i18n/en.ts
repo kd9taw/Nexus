@@ -4061,6 +4061,15 @@ export const EN = {
     "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
   'fieldDay.club.boardCut':
     "Each position's club board shows {{shown}} of this club's {{positions}} positions, as many as one club line carries, leaving out the ones heard from least recently. Contacts, dupe warnings and the score still sync.",
+  'fieldDay.keptOut.running': {
+    one: "{{count}} contact in this computer's contest journal was logged in another running of {{contest}}, a rehearsal before it for one, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal were logged in another running of {{contest}}, a rehearsal before it for one, so they are not in this log.",
+  },
+  'fieldDay.keptOut.contest': {
+    one: "{{count}} contact in this computer's contest journal belongs to another contest, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
+  },
+  'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',

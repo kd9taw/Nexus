@@ -25238,7 +25238,8 @@ contact yourself."
         if station.log.qso_count() == 0 {
             return None;
         }
-        Some(station.log.adif())
+        // With the records the restore held: the journal is their only copy on disk.
+        Some(station.log.journal_adif())
     }
 
     /// One waterfall row: the Goertzel power spectrum of the **live** captured
@@ -26485,6 +26486,11 @@ pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
 /// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
 /// rewrites the journal from the log, which would drop the rest for good.
 ///
+/// Only the session's own rows are loaded: its contest's, from the running of it `now_unix`
+/// belongs to ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). The rest — a
+/// rehearsal's, another contest's — are held by the log, said on the contest screen, and
+/// written back with every rewrite of the journal ([`Engine::field_day_log_adif`]).
+///
 /// A journal kept in place is not read again; `carried`, the live log's own rows, crosses the
 /// rebuild instead (see `set_mode_with_decoder`).
 fn restore_fd_journal(
@@ -26494,9 +26500,10 @@ fn restore_fd_journal(
     carried: Option<&str>,
     now_unix: i64,
 ) {
+    let now = now_unix.max(0) as u64;
     if tempo_core::keep_aside::refuses(path) {
         if let Some(rows) = carried {
-            log.merge_adif(rows, min_when_unix);
+            log.restore_journal(rows, min_when_unix, now);
         }
         return;
     }
@@ -26511,7 +26518,7 @@ fn restore_fd_journal(
     // Lossy on purpose, as the logbook's own load: the ADIF structure is ASCII, so every record
     // survives a bad byte, and the file itself is kept below.
     let text = String::from_utf8_lossy(&bytes);
-    let merged = log.merge_adif(&text, min_when_unix);
+    let merged = log.restore_journal(&text, min_when_unix, now);
     let why = if matches!(text, std::borrow::Cow::Owned(_)) {
         Some("it is not UTF-8".to_string())
     } else if merged.unreadable > 0 {
@@ -42956,6 +42963,150 @@ mod tests {
         e.apply_settings(s);
         e.set_mode("fieldday-sp").expect("the party runs");
         e
+    }
+
+    /// ⭐ **Entering the party restores this session's rows only, says how many it kept out
+    /// and why, and keeps them on disk** — through the engine's own restore, the shell's
+    /// journal file and the rewrite the next contact makes, on the real clock: an ARRL Field
+    /// Day contact from an hour ago, in the same per-position journal.
+    #[test]
+    fn the_party_keeps_another_contests_journal_rows_out_says_so_and_keeps_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-kept-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let mut fd = tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(tempo_core::fieldday::FdEvent::ArrlFd, "3A", "IL"),
+            "40m",
+        );
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert!(fd.log_fields_at(
+            "K1ABC",
+            &[pair("CLASS", "2A"), pair("SECTION", "EMA")],
+            "CW",
+            "",
+            0,
+            now_unix_secs() - 3600
+        ));
+        let fd_journal = fd.adif();
+        let fd_record = fd_journal[fd_journal.find("<CALL").unwrap()..]
+            .trim_end()
+            .to_string();
+        std::fs::write(&path, &fd_journal).unwrap();
+        let party = |path: &std::path::Path| {
+            let mut e = Engine::new("W9XYZ", "EN50", 0);
+            e.set_fd_log_path(path.to_path_buf());
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "COOK".into();
+            e.apply_settings(s);
+            e.set_mode("fieldday-sp").expect("the party runs");
+            e
+        };
+        let mut e = party(&path);
+        let st = e.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.qso_count, 0,
+            "the Field Day contact is not in the party's log"
+        );
+        assert_eq!(
+            st.kept_out,
+            Some(crate::dto::FdKeptOutDto {
+                other_contest: 1,
+                other_running: 0
+            }),
+            "and the screen is told how many, and why"
+        );
+        assert!(e
+            .contest_log_manual(
+                "N9AAA",
+                &[pair("RST", "599"), pair("QTH", "LAKE")],
+                "CW",
+                None
+            )
+            .unwrap());
+        e.journal_mark().wait();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains(&fd_record),
+            "kept, as Field Day wrote it:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("<CALL:5>N9AAA"),
+            "beside the party's own:\n{on_disk}"
+        );
+        // CONTROL: a restart from that file brings the party's contact back, and keeps the
+        // Field Day one out again.
+        let again = party(&path);
+        let st = again.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.log.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
+            vec!["N9AAA"]
+        );
+        assert_eq!(st.kept_out.map(|k| k.other_contest), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **…and a rehearsal days before the party, through the engine's own restore** at the
+    /// party's clock — the date the operator's question is about, which the real clock
+    /// cannot be set to. CONTROL: the rehearsal's own restart, at the rehearsal's clock,
+    /// loads it whole.
+    #[test]
+    fn the_engines_restore_keeps_a_rehearsal_out_of_the_party() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-rehearsal-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let session = match &ilqp_engine("COOK", "eeee0001").mode {
+            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            _ => panic!("the party runs"),
+        };
+        // Wednesday 14 October 2026, 2300Z and 2301Z; the party starts Sunday the 18th 1700Z.
+        let (wed, sun) = (1_792_018_800u64, 1_792_351_800u64);
+        let mut rehearsal = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        for (i, call) in ["K9AAA", "K9BBB"].into_iter().enumerate() {
+            let ex = [
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), "KANE".to_string()),
+            ];
+            assert!(rehearsal.log_fields_at(call, &ex, "CW", "", 0, wed + 60 * i as u64));
+        }
+        std::fs::write(&path, rehearsal.adif()).unwrap();
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        restore_fd_journal(&mut log, &path, sun - 4 * 86_400, None, sun as i64);
+        assert!(
+            log.qsos().is_empty(),
+            "not one rehearsal contact in the party's log"
+        );
+        assert_eq!(log.held(), (0, 2), "two kept out, as another running");
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session, "40m");
+        restore_fd_journal(
+            &mut log,
+            &path,
+            wed + 3600 - 4 * 86_400,
+            None,
+            (wed + 3600) as i64,
+        );
+        assert_eq!(
+            log.qsos()
+                .iter()
+                .map(|q| q.call.as_str())
+                .collect::<Vec<_>>(),
+            vec!["K9AAA", "K9BBB"],
+            "CONTROL: the rehearsal's own restart"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// One party contact as a current position streams it, resolved through the

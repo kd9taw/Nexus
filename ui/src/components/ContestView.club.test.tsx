@@ -343,6 +343,39 @@ describe('club sync switched on for a contest the club log cannot run', () => {
   })
 })
 
+// ⭐ WHAT THE JOURNAL RESTORE KEPT OUT. The contest journal is one file per position whatever
+// contest it last ran; entering a contest loads only its own rows from this running of it, and
+// the screen says how many it kept out and why — a rehearsal's, another contest's — and that
+// nothing was deleted.
+describe('the contest screen says what the journal restore kept out', () => {
+  async function renderWith(status: Partial<FieldDayStatus>) {
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, fdEvent: 'ilqp' } as never)
+    render(<ContestView fieldDay={{ ...fd(undefined), ...status }} onSetMode={() => {}} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('names each reason with its count, and says nothing was deleted', async () => {
+    await renderWith({ event: 'ilqp', keptOut: { otherContest: 1, otherRunning: 3 } })
+    expect(screen.getByText(/3 contacts in this computer's contest journal were logged in another running of Illinois QSO Party/)).toBeTruthy()
+    expect(screen.getByText(/1 contact in this computer's contest journal belongs to another contest/)).toBeTruthy()
+    expect(screen.getByText(/Nothing was deleted/)).toBeTruthy()
+  })
+
+  it('says only the reason that applies', async () => {
+    await renderWith({ event: 'ilqp', keptOut: { otherContest: 0, otherRunning: 1 } })
+    expect(screen.getByText(/1 contact in this computer's contest journal was logged in another running/)).toBeTruthy()
+    expect(screen.queryByText(/belongs to another contest/)).toBeNull()
+  })
+
+  it('POSITIVE CONTROL: a session that kept nothing out says nothing of it', async () => {
+    await renderWith({ event: 'ilqp' })
+    expect(screen.queryByText(/Nothing was deleted/)).toBeNull()
+  })
+})
+
 // ⭐ THE HOST'S SIDE OF A REFUSAL, AND OF A FULL BOARD. A position the host turns away is told
 // why on its own screen; the host's club block says so too — who, and what they were told — and
 // warns before its board outgrows the club line every position is sent, naming the count.

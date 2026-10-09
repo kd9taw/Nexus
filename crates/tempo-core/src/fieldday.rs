@@ -395,6 +395,25 @@ pub struct AdifMerge {
     pub unreadable: usize,
 }
 
+/// A journal record's QSO_DATE (yyyymmdd) + TIME_ON (hhmmss) as Unix seconds. An
+/// unparseable one stamps 0 and falls to the age gate (never a panic on garbage input).
+fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
+    let parse_dt = |d: &str, t: &str| -> Option<u64> {
+        Some(unix_from_ymdhms(
+            d.get(0..4)?.parse().ok()?,
+            d.get(4..6)?.parse().ok()?,
+            d.get(6..8)?.parse().ok()?,
+            t.get(0..2)?.parse().ok()?,
+            t.get(2..4)?.parse().ok()?,
+            t.get(4..6)?.parse().ok()?,
+        ))
+    };
+    match (f.get("QSO_DATE"), f.get("TIME_ON")) {
+        (Some(d), Some(t)) => parse_dt(d, t).unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// What became of one journal record ([`FieldDayLog::merge_adif`]).
 enum RowFate {
     Restored,
@@ -402,6 +421,26 @@ enum RowFate {
     NoCall,
     /// Passed over on purpose: from a previous event, or already in the log.
     Passed,
+}
+
+/// Why a journal record was kept out of the log it was restored into
+/// ([`FieldDayLog::restore_journal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Held {
+    /// Its `CONTEST_ID` is another contest's.
+    OtherContest,
+    /// It was logged in another running of this contest — a rehearsal before it, for one
+    /// ([`FdRuleset::running_of`](crate::fd_rules::FdRuleset::running_of)).
+    OtherRunning,
+}
+
+/// A journal record the log did not load, kept as the journal held it so that every
+/// rewrite of the journal carries it on ([`FieldDayLog::journal_adif`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeldRecord {
+    why: Held,
+    /// Its tags through its `<EOR>`, byte for byte.
+    adif: String,
 }
 
 /// A dupe-checked contest log with scoring — and **the log IS the session**: its
@@ -461,6 +500,9 @@ pub struct FieldDayLog {
     /// the per-position monotonic sequence instead of colliding with rows the
     /// club host already merged.
     next_seq: u64,
+    /// Journal records of another contest, or of another running of this one, that a
+    /// restore kept out of this log — and keeps ([`restore_journal`](Self::restore_journal)).
+    held: Vec<HeldRecord>,
 }
 
 impl FieldDayLog {
@@ -486,6 +528,7 @@ impl FieldDayLog {
             worked: HashSet::new(),
             constant_sent_warning: None,
             next_seq: 1,
+            held: Vec::new(),
         }
     }
 
@@ -1412,6 +1455,12 @@ impl FieldDayLog {
     /// read — no CALL, or cut off before their `<EOR>` — which the journal's reader keeps the
     /// file for, because the next contact rewrites the journal from this log without them.
     pub fn merge_adif(&mut self, text: &str, min_when_unix: u64) -> AdifMerge {
+        self.merge_journal(text, min_when_unix, None)
+    }
+
+    /// [`merge_adif`](Self::merge_adif), holding the records of another contest or of
+    /// another running than `running` when one is given ([`restore_journal`](Self::restore_journal)).
+    fn merge_journal(&mut self, text: &str, min_when_unix: u64, running: Option<u16>) -> AdifMerge {
         // Minimal `<NAME:len>value` tokenizer mirroring logbook.rs `parse_adif`
         // (this journal only needs the handful of FD tags).
         let body = match text.to_ascii_uppercase().find("<EOH>") {
@@ -1423,6 +1472,8 @@ impl FieldDayLog {
         let mut torn = false;
         let bytes = body.as_bytes();
         let mut i = 0;
+        // Where the record being read began: just past the last `<EOR>`.
+        let mut record_start = 0;
         while i < bytes.len() {
             if bytes[i] != b'<' {
                 i += 1;
@@ -1438,12 +1489,16 @@ impl FieldDayLog {
             let tag = &body[i + 1..end];
             i = end + 1;
             if tag.eq_ignore_ascii_case("EOR") {
-                match self.restore_row(&cur, min_when_unix) {
-                    RowFate::Restored => merged.restored += 1,
-                    RowFate::NoCall => merged.unreadable += 1,
-                    RowFate::Passed => {}
+                match running.and_then(|r| self.kept_out(&cur, min_when_unix, r)) {
+                    Some(why) => self.hold(why, body[record_start..i].trim_start(), &cur),
+                    None => match self.restore_row(&cur, min_when_unix) {
+                        RowFate::Restored => merged.restored += 1,
+                        RowFate::NoCall => merged.unreadable += 1,
+                        RowFate::Passed => {}
+                    },
                 }
                 cur.clear();
+                record_start = i;
                 continue;
             }
             // NAME:len or NAME:len:type
@@ -1462,6 +1517,85 @@ impl FieldDayLog {
             merged.unreadable += 1;
         }
         merged
+    }
+
+    /// ⭐ **The journal restore: [`merge_adif`](Self::merge_adif) of this session's rows
+    /// only** — the ones of this log's own contest (`CONTEST_ID`), logged in the running of
+    /// it that `now_unix` belongs to ([`FdRuleset::running_of`](crate::fd_rules::FdRuleset::running_of)).
+    ///
+    /// The journal is one file per position, whatever contest it last ran, and the restore
+    /// used to load every row of the last four days into the session starting: a club that
+    /// rehearsed on the Wednesday began the Sunday's party with the rehearsal's contacts in
+    /// every position's log, and a position that had run another contest that week read its
+    /// rows against the party's exchange. A restart inside the session — a crash, a relaunch,
+    /// the day after to export — still restores every one of its own rows.
+    ///
+    /// ⚠️ **Nothing is deleted.** The rows kept out are HELD, verbatim
+    /// ([`held`](Self::held) counts them), and every rewrite of the journal carries them on
+    /// ([`journal_adif`](Self::journal_adif)), so they are there for the session they belong
+    /// to. Their sequence numbers stay taken: a club host or the general log holding a
+    /// rehearsal's `(position, seq)` would read a re-used one as a contact it already has.
+    pub fn restore_journal(&mut self, text: &str, min_when_unix: u64, now_unix: u64) -> AdifMerge {
+        let running = self.ruleset().running_of(now_unix);
+        self.merge_journal(text, min_when_unix, Some(running))
+    }
+
+    /// How many journal records the restore kept out: `(another contest, another running
+    /// of this one)`.
+    pub fn held(&self) -> (usize, usize) {
+        let count = |why| self.held.iter().filter(|h| h.why == why).count();
+        (count(Held::OtherContest), count(Held::OtherRunning))
+    }
+
+    /// ⭐ **The journal: [`adif`](Self::adif) and the records the restore held**, after
+    /// them, as the journal held them — what the engine writes the journal file from, so a
+    /// row kept out of this session is never dropped by a rewrite. Never an export: those
+    /// carry this log's rows alone.
+    pub fn journal_adif(&self) -> String {
+        let mut s = self.adif();
+        for h in &self.held {
+            s.push_str(&h.adif);
+            s.push('\n');
+        }
+        s
+    }
+
+    /// Why the restore keeps `f` out of this log, or `None` to restore it (or to leave it
+    /// to [`restore_row`](Self::restore_row), which reports a record with no call and
+    /// passes one older than `min_when_unix` over, exactly as before).
+    fn kept_out(
+        &self,
+        f: &std::collections::HashMap<String, String>,
+        min_when_unix: u64,
+        running: u16,
+    ) -> Option<Held> {
+        f.get("CALL").filter(|c| !c.trim().is_empty())?;
+        let when = record_when(f);
+        if when < min_when_unix {
+            return None;
+        }
+        let contest = f.get("CONTEST_ID").map_or("", |c| c.trim());
+        if !contest.is_empty() && !contest.eq_ignore_ascii_case(self.session.contest_id.trim()) {
+            return Some(Held::OtherContest);
+        }
+        (self.ruleset().running_of(when) != running).then_some(Held::OtherRunning)
+    }
+
+    /// Keep a journal record out of this log, and keep it.
+    fn hold(&mut self, why: Held, adif: &str, f: &std::collections::HashMap<String, String>) {
+        if let Some(seq) = f
+            .get("APP_NEXUS_QSEQ")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0)
+        {
+            self.next_seq = self.next_seq.max(seq + 1);
+        }
+        if !self.held.iter().any(|h| h.adif == adif) {
+            self.held.push(HeldRecord {
+                why,
+                adif: adif.to_string(),
+            });
+        }
     }
 
     /// One tokenized journal record → the log (the dupe-checked insert half of
@@ -1527,22 +1661,7 @@ impl FieldDayLog {
             ),
             None => ("DIG", String::new()),
         };
-        // QSO_DATE (yyyymmdd) + TIME_ON (hhmmss) → when_unix. Unparseable rows
-        // stamp 0 and fall to the age gate (never a panic on garbage input).
-        let parse_dt = |d: &str, t: &str| -> Option<u64> {
-            Some(unix_from_ymdhms(
-                d.get(0..4)?.parse().ok()?,
-                d.get(4..6)?.parse().ok()?,
-                d.get(6..8)?.parse().ok()?,
-                t.get(0..2)?.parse().ok()?,
-                t.get(2..4)?.parse().ok()?,
-                t.get(4..6)?.parse().ok()?,
-            ))
-        };
-        let when_unix = match (f.get("QSO_DATE"), f.get("TIME_ON")) {
-            (Some(d), Some(t)) => parse_dt(d, t).unwrap_or(0),
-            _ => 0,
-        };
+        let when_unix = record_when(f);
         if when_unix < min_when_unix {
             return RowFate::Passed;
         }

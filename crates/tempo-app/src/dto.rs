@@ -2383,6 +2383,26 @@ pub struct FieldDayStatus {
     /// multiplier display. Field Day: one board, over `SECTION`.
     #[serde(default)]
     pub boards: Vec<FdBoardDto>,
+    /// ⭐ **The contacts in this position's contest journal this session did not load, and
+    /// why** — the journal is one file per position whatever contest it last ran, and a
+    /// restore loads only this session's rows: this contest's, from this running of it (a
+    /// rehearsal days before is another). They stay in the journal, untouched, and every
+    /// rewrite of it carries them on. `None` when nothing was kept out.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends it
+    /// (`ui/src/remote-web/field-day.ts` refuses any status key it does not), so the page
+    /// that takes it is deployed before the release that writes it. Absent when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_out: Option<FdKeptOutDto>,
+}
+
+/// [`FieldDayStatus::kept_out`]: the journal's rows of another contest, and of another
+/// running of this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdKeptOutDto {
+    pub other_contest: u32,
+    pub other_running: u32,
 }
 
 /// The [`FieldKind`](tempo_core::contest::FieldKind) discriminant as the wire tag the

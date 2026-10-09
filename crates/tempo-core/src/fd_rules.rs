@@ -66,6 +66,10 @@ const SEED: &str = include_str!("fd_rules.seed.json");
 /// [`ruleset`] selects purely on the event; the year is carried for the
 /// forthcoming multi-year table and to stamp exports.
 pub const CURRENT_RULES_YEAR: u16 = 2026;
+/// How long before a contest starts its running's day begins ([`FdRuleset::running_of`]):
+/// a day. The morning a club sets up on is inside it, and a rehearsal on an earlier day is
+/// not.
+pub const RUNNING_DAY_LEAD_SECS: u64 = 24 * 3600;
 
 /// One Field Day bonus (replaces the old `tempo_app::FD_BONUSES` tuple table).
 /// `id` is the stable settings key; `points` is what a claimed bonus scores.
@@ -506,6 +510,29 @@ impl FdRuleset {
             self.window.start_hour_utc,
             self.window.duration_hours * 3600,
         )
+    }
+
+    /// ⭐ **Which running of this contest a moment belongs to** — the year of the latest
+    /// running whose DAY has begun by `unix`. A running's day begins
+    /// [`RUNNING_DAY_LEAD_SECS`] before the contest starts, and lasts until the next
+    /// running's day begins: the setup before the contest, the contest itself, and the days
+    /// after it its logs are exported in.
+    ///
+    /// The Field Day journal restore reads it (`FieldDayLog::restore_journal`): a club's
+    /// rehearsal days before the contest belongs to the running before, so its contacts are
+    /// kept out of the contest's log.
+    pub fn running_of(&self, unix: u64) -> u16 {
+        let year = civil_year_of_unix(unix);
+        let day_begins = |y: u16| {
+            self.event_window(y)
+                .start_unix
+                .saturating_sub(RUNNING_DAY_LEAD_SECS)
+        };
+        if unix >= day_begins(year) {
+            year
+        } else {
+            year.saturating_sub(1)
+        }
     }
 
     /// The currently-running occurrence if `now` is inside one, else the next

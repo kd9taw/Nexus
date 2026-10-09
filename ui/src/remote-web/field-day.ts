@@ -38,6 +38,15 @@ function dupeRule(v: unknown): boolean {
     return false
   }
 }
+// Two counts, both required: what the station's journal restore kept out of the session.
+function keptOut(v: unknown): boolean {
+  try {
+    const k = object(v, ['otherContest','otherRunning'])
+    return integer(k.otherContest) && integer(k.otherRunning)
+  } catch {
+    return false
+  }
+}
 function locationWarning(v: unknown): boolean {
   try {
     const w = object(v, ['typed','hints'])
@@ -58,7 +67,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit','keptOut'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -77,6 +86,8 @@ function status(v: unknown): void {
     (f.objectiveMultiplier !== undefined && !integer(f.objectiveMultiplier)) ||
     // Whether a satellite contact counts, sent (as false) only by a contest where it does not.
     (f.satelliteCredit !== undefined && typeof f.satelliteCredit !== 'boolean') ||
+    // What the journal restore kept out of this session, sent only when it kept something.
+    (f.keptOut !== undefined && !keptOut(f.keptOut)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
     // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
     // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.

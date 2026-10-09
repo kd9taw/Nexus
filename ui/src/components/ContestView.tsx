@@ -1315,6 +1315,27 @@ export function FdClubSection({
 }
 
 /**
+ * The contacts in this computer's contest journal that entering the contest did not load,
+ * by reason, and that nothing was deleted — the journal is one file per position whatever
+ * contest it last ran, and the session loads only its own contest's rows from this running.
+ */
+function FdKeptOutNote({
+  keptOut,
+  contest,
+}: {
+  keptOut: { otherContest: number; otherRunning: number }
+  contest: string
+}) {
+  return (
+    <p className="fd-score-note" role="note">
+      {keptOut.otherRunning > 0 && <>{t('fieldDay.keptOut.running', { count: keptOut.otherRunning, contest })} </>}
+      {keptOut.otherContest > 0 && <>{t('fieldDay.keptOut.contest', { count: keptOut.otherContest })} </>}
+      {t('fieldDay.keptOut.kept')}
+    </p>
+  )
+}
+
+/**
  * Club sync switched on for a contest it cannot run, said where the club block would be.
  *
  * The engine refuses it (`clubSyncRefusal`, `Engine::club_sync_refusal`): the club log runs
@@ -2311,6 +2332,8 @@ export function ContestView({
       {!fieldDay?.club && clubRefusal && (
         <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} why={clubRefusal} />
       )}
+      {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
+      {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />

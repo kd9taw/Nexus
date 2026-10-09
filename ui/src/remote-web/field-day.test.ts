@@ -264,10 +264,20 @@ it('accepts a board row\'s measured clock, null or absent, and refuses anything 
  for (const bad of [1.5,'-3000',Number.MAX_SAFE_INTEGER+2,true,{}]) expect(()=>parseFieldDay(page(bad)),String(bad)).toThrow('invalidFieldDay')
 })
 
-// Two keys a host sends only when they apply, so an older station sends neither: how full its
-// club board is (`boardFull`) and the positions it turned away (`refused`). This validator
-// refuses a key it does not know, so the page that takes them is deployed before the release
-// that writes them.
+// Three keys a station sends only when they apply, so an older station sends none: what its
+// journal restore kept out of the session (`keptOut`), and, on a host, how full its club board
+// is (`boardFull`) and the positions it turned away (`refused`). This validator refuses a key it
+// does not know, so the page that takes them is deployed before the release that writes them.
+it('accepts what the journal restore kept out, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.keptOut={otherContest:1,otherRunning:3}
+ expect(parseFieldDay(page).fieldDay?.keptOut).toEqual({otherContest:1,otherRunning:3})
+ for(const bad of [{otherContest:1},{otherContest:-1,otherRunning:0},{otherContest:1,otherRunning:'3'},{otherContest:1,otherRunning:0,extra:1},null,[]]){
+  fd.keptOut=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+})
 it('accepts a host club\'s full board and the positions it turned away, and still bounds them',()=>{
  const page=fieldDayPage()
  const club=(page.meta as {source:{fieldDay:{club:Record<string,unknown>}}}).source.fieldDay.club

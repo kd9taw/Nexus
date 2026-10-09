@@ -3373,6 +3373,10 @@ export interface FieldDayStatus {
   role?: string
   /** One block per multiplier board — the generalised worked-sections display. */
   boards?: ContestBoard[]
+  /** The contacts in this computer's contest journal this session did not load: another
+   *  contest's, and another running of this one's (a rehearsal before it). They stay in the
+   *  journal, untouched. Absent when nothing was kept out, and from an older station. */
+  keptOut?: { otherContest: number; otherRunning: number }
 }
 
 /** One exchange slot, as the entry strip renders a box for it.

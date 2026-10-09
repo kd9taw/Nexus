@@ -672,8 +672,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubRefusedDto, FieldDayQso,
-        FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubRefusedDto, FdKeptOutDto,
+        FieldDayQso, FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -717,8 +717,16 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 "dupeRule",
                 "objectiveMultiplier",
                 "satelliteCredit",
+                "keptOut",
             ],
         );
+        if let Some(kept) = status.get("keptOut") {
+            takes(
+                &format!("{what}: what the journal restore kept out"),
+                kept,
+                &["otherContest", "otherRunning"],
+            );
+        }
         for contact in status["log"].as_array().unwrap() {
             takes_optional(
                 &format!("{what}: a contact"),
@@ -1001,6 +1009,10 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         }),
         role: String::new(),
         boards: Vec::new(),
+        kept_out: Some(FdKeptOutDto {
+            other_contest: 1,
+            other_running: 3,
+        }),
     };
     status(
         "fieldDay: every field",
