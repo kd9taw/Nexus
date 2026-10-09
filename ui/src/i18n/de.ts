@@ -4328,6 +4328,7 @@ export const DE: PartialCatalog = {
   "fieldDay.mode.rule.banned": "Nicht zugelassen: {{modes}}. Verbindungen darin werden geloggt, zählen aber nicht.",
   "fieldDay.mode.rule.cluster": "DX-Cluster-Unterstützung ist nicht zugelassen.",
   "fieldDay.mode.rule.spotting": "Spotting-Unterstützung ist nicht zugelassen.",
+  "fieldDay.mode.rule.spotsRfOnly": "Während des Events werden keine Spots über das Internet gesendet.",
   "fieldDay.mode.picked": "In den Einstellungen gewählt: {{picked}}. Schalten Sie den Field-Day-Modus aus und wieder ein, um dorthin zu wechseln.",
   "fieldDay.mode.needs.one": "Die Station nimmt erst an {{contest}} teil, wenn „{{field}}“ ausgefüllt ist.",
   "fieldDay.mode.needs.two": "Die Station nimmt erst an {{contest}} teil, wenn „{{first}}“ und „{{second}}“ ausgefüllt sind.",

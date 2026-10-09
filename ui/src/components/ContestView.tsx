@@ -1917,6 +1917,18 @@ export function ContestView({
     if (running && !running.spottingAllowed) {
       modeLines.push({ key: 'spotting', text: t('fieldDay.mode.rule.spotting') })
     }
+    // ⭐ A contest that allows spots only over amateur RF (Winter Field Day): inside its window
+    // the station posts none over the internet, judged by the same window the engine's spot
+    // block judges. Plainly, beside the switch; the banner's advisory names what is held back.
+    if (
+      running?.spotsRfOnly &&
+      fieldDay.eventStartUnix !== undefined &&
+      fieldDay.eventEndUnix !== undefined &&
+      fieldDay.eventStartUnix <= nowUnix &&
+      nowUnix < fieldDay.eventEndUnix
+    ) {
+      modeLines.push({ key: 'spotsRfOnly', text: t('fieldDay.mode.rule.spotsRfOnly') })
+    }
     // A contest picked while this one runs takes effect when the mode goes off and on again
     // (the session is kept across every save, which is what protects its log). Say so here,
     // beside the switch that does it.

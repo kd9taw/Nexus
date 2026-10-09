@@ -4000,6 +4000,7 @@ export const EN = {
   'fieldDay.mode.rule.banned': 'Not permitted: {{modes}}. Contacts in them are logged but do not count.',
   'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
+  'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
   'fieldDay.mode.picked':
     'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',

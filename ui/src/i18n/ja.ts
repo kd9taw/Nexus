@@ -2669,6 +2669,7 @@ export const JA: PartialCatalog = {
   "fieldDay.mode.rule.banned": "認められていないモード：{{modes}}。記録はできますが得点にはなりません。",
   "fieldDay.mode.rule.cluster": "DXクラスターによる支援は認められていません。",
   "fieldDay.mode.rule.spotting": "スポッティング支援は認められていません。",
+  "fieldDay.mode.rule.spotsRfOnly": "イベント期間中はインターネット経由でスポットを送信しません。",
   "fieldDay.mode.picked": "設定で選択中：{{picked}}。切り替えるには、Field Dayモードをいったんオフにしてからオンにしてください。",
   "fieldDay.mode.needs.one": "{{field}}を設定するまで、局は{{contest}}に参加できません。",
   "fieldDay.mode.needs.two": "{{first}}と{{second}}を設定するまで、局は{{contest}}に参加できません。",

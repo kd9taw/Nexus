@@ -270,6 +270,35 @@ describe('with the mode on, the screen says which rules apply now', () => {
     ])
   })
 
+  it('Winter Field Day inside its window: no spots over the internet, said plainly', async () => {
+    const start = Date.UTC(2027, 0, 23, 16) / 1000
+    const wfd = session({
+      event: 'wfd',
+      eventStartUnix: start,
+      eventEndUnix: start + 30 * 3600,
+      composing: [
+        { key: 'CLASS', raw: '2O' },
+        { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+      ],
+    })
+    const wfdRules = rules({ event: 'wfd', bannedModes: ['FT8', 'FT4'], spotsRfOnly: true })
+    const held = { fdEvent: 'wfd', fdClass: '2O', fdSection: 'IL', fdActive: true }
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2027-01-23T20:00:00Z'))
+    await openOn(held, { fieldDay: wfd, fdActive: true, fdRuleset: wfdRules })
+    expect(lines()).toEqual([
+      'The Winter Field Day rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+      'No spots are posted over the internet during the event.',
+    ])
+    // CONTROL: the day before, the same rules and no such line — it is the window's.
+    cleanup()
+    vi.setSystemTime(new Date('2027-01-22T20:00:00Z'))
+    await openOn(held, { fieldDay: wfd, fdActive: true, fdRuleset: wfdRules })
+    expect(lines()).not.toContain('No spots are posted over the internet during the event.')
+    expect(lines()).toContain('Not permitted: FT8, FT4. Contacts in them are logged but do not count.')
+  })
+
   it('a contest picked since it started: the switch is the way over, and no rules from the wrong one', async () => {
     await openOn(
       { ...ILQP_STATION, fdEvent: 'cqww_cw', fdActive: true },

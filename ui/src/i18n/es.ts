@@ -1615,6 +1615,7 @@ export const ES: PartialCatalog = {
   "fieldDay.mode.rule.banned": "No permitido: {{modes}}. Los contactos en esos modos se registran, pero no puntúan.",
   "fieldDay.mode.rule.cluster": "No se permite la asistencia del DX cluster.",
   "fieldDay.mode.rule.spotting": "No se permite la asistencia de spotting.",
+  "fieldDay.mode.rule.spotsRfOnly": "Durante el evento no se publica ningún spot por internet.",
   "fieldDay.mode.picked": "Elegido en Ajustes: {{picked}}. Desactiva y vuelve a activar el modo Field Day para cambiar a ese concurso.",
   "fieldDay.mode.needs.one": "La estación no entrará en {{contest}} hasta que indiques tu {{field}}.",
   "fieldDay.mode.needs.two": "La estación no entrará en {{contest}} hasta que indiques tu {{first}} y tu {{second}}.",
