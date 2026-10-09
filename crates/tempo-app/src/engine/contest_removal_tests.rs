@@ -377,3 +377,44 @@ fn removal_and_restore_never_touch_the_transmitter() {
     assert!(e.contest_restore(gone.entry.id()).unwrap().is_ok());
     assert_eq!(transmit_state(&e), before, "a restore");
 }
+
+/// ⭐ **The journal is written for a log that holds rows, whatever they score.** The guard used
+/// to ask the SCORED count, so a Winter Field Day log holding only a satellite contact (worth
+/// nothing there) counted as empty: it was never journaled, and a restart lost the contact.
+#[test]
+fn a_log_of_contacts_that_score_nothing_is_still_journaled() {
+    use tempo_core::doppler::Transponder;
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_frequency(436.795, "70cm", "USB");
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "wfd".into();
+    s.fd_class = "1O".into();
+    s.fd_section = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-run").expect("Winter Field Day runs");
+    let _ = e.snapshot();
+    e.set_sat_transponder(Some((
+        "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+        0,
+        Transponder::channel(145_850_000, 436_795_000),
+    )));
+    assert!(e
+        .contest_log_satellite(
+            "W1AW",
+            &fields(&[("CLASS", "2O"), ("SECTION", "IL")]),
+            "PH",
+            None
+        )
+        .unwrap());
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    assert_eq!(
+        (fd.qso_count, fd.log.len()),
+        (0, 1),
+        "PREMISE: the contact is in the log, and worth nothing at Winter Field Day"
+    );
+    assert!(
+        e.field_day_log_adif().is_some(),
+        "the journal is written for a log that holds a row"
+    );
+}

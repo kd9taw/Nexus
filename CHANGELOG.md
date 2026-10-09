@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
+  last** beside Clear on the log strip) names your newest contest contact on the strip's message
+  line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
+  it. Any other key, the 5 seconds, or a new contact cancels it, a held-down Ctrl+D counts as one
+  press, and the caret stays where it was. A county-line contact goes with all its counties. The
+  contact is never deleted: it leaves the score, the multipliers, the rate, the dupe check and
+  every export, and the contest screen keeps it under **Removed**, where **Restore** puts it back
+  exactly (same time, serial and number) unless you have worked that station again on that band
+  and mode. Its serial number and its club-sync number are never given to another contact, even
+  after a restart. The strip also says where the contact had already gone (N3FJP, the N1MM
+  broadcast, WSJT-X listeners, and your logbook with the services it was uploaded to), because
+  Nexus cannot take it back from there. Removal is refused while club sync is on, since the club
+  log cannot take a contact back yet. Ctrl+D never keys or stops the transmitter, and Esc still
+  stops TX. It is not offered on the Remote page or in the Remote client. The newest row on the
+  contest screen has its own **Remove**, which asks the same way. Deleting a contact in the
+  Logbook that you merged from the contest still running now removes it from the contest log too
+  (restorable), as editing it there already corrects the contest log. Going back to an older
+  Nexus brings removed contacts back as ordinary contacts.
 - **Field Day mode has a switch on the contest screen, and the left bar calls that screen
   Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
   contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar
@@ -204,6 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
+  satellite contact no credit, and the contest journal was skipped for a log whose scored count
+  was zero, so a log of satellite contacts alone was never written to disk and a restart or a
+  Run/S&P switch lost them.
 - **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
   Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks

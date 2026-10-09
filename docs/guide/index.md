@@ -243,6 +243,7 @@ them is the moment your hands are in a field. Those are called out below.
 | `Space` (hold) | Phone | Push-to-talk. The press is ignored in a text field; the release always unkeys, wherever focus has moved. |
 | `F1`–`F6` | Phone, while the Voice keyer pane is on screen | Play that recorded message. Ignored while a recording is in progress. |
 | `Esc` | Phone — **fires while typing too** | Halt TX, as the header's **Stop TX** does. With the Voice keyer pane on screen and the cursor outside a text field, it stops playback as well. |
+| `Ctrl+D` | Any cockpit showing the contest log strip — **fires while typing too** | Remove your newest contest contact: the first press names it on the strip, a second within 5 seconds removes it. Held down, it is one press; with Alt, Shift or Cmd it does nothing. It never keys or stops TX. |
 | `Esc` | RTTY / PSK / JS8 | Stop TX: drops the queue, drops the continuous-TX latch and unkeys. |
 | `Esc` | Tempo, SSTV, APRS, Satellites — **fires while typing too** | Halt TX, as **Stop TX** does (on Tempo, the top bar's). APRS and Satellites draw no Stop TX; this is their stop. |
 | `↑` `↓` `Home` `End` | List | Move between rows. The list is one Tab stop. |
