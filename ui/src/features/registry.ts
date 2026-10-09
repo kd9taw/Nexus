@@ -330,11 +330,11 @@ export const FEATURES: FeatureDef[] = [
     oneLineKey: 'features.chat.oneLine',
   }),
   feature({
-    // NOTE: Field Day VISIBILITY is not driven by this persisted feature flag — it is
-    // owned by the Field Day master switch `settings.fdActive` (a persisted backend bool,
-    // toggled in Settings ▸ Features). App.tsx overrides `enabled.fieldDay` with `fdActive`
-    // for the nav + view-redirect, so the two can never diverge. This entry stays only so
-    // Field Day remains a real registry section (view/landing/profile semantics).
+    // NOTE: the Contest item's VISIBILITY is not driven by this persisted feature flag.
+    // App.tsx keeps it on the rail whatever this flag says, because the Field Day master
+    // switch (`settings.fdActive`) is at the top of its screen; the master switch owns what
+    // the mode reveals. This entry stays so the screen remains a real registry section
+    // (view/landing/profile semantics).
     //
     // The section is the CONTEST screen, whichever contest is picked, so it is named
     // "Contest". Its id stays `fieldDay`: the operator's rail order and every stored record

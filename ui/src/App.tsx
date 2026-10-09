@@ -2432,9 +2432,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
       if (next === 'chat') handleSetMode('chat')
-      else if (next === 'fieldDay') handleSetMode('fieldday-sp')
+      // The contest only while its mode is on. With the mode off this is the screen that turns
+      // it on, and a session entered behind the master switch is one the snapshot hides: a
+      // Running started from it would call CQ unseen.
+      else if (next === 'fieldDay' && settings?.fdActive === true) handleSetMode('fieldday-sp')
     },
-    [handleSetMode, !!remote],
+    [handleSetMode, !!remote, settings?.fdActive],
   )
 
   /**
@@ -2633,12 +2636,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // no hook may live after the early return, or React unmounts the whole app once
   // snap loads and the hook count changes).
 
-  // Field Day visibility is owned by the persisted master switch (settings.fdActive),
-  // NOT the standalone feature flag — so the two can never diverge. Fold it into the
-  // enabled map that the nav and the redirect guard below both read: master off →
-  // Field Day is invisible (nav item hidden, view redirects away); master on → visible.
+  // ⭐ THE CONTEST SCREEN IS ON THE RAIL WITH FIELD DAY MODE OFF, because the mode switch is at
+  // the top of it: hidden while the mode is off, the screen could only ever turn the mode off.
+  // What the mode reveals still follows the persisted master switch (settings.fdActive) and
+  // nothing else: the Class/Section exchange in every cockpit, the Club Board button, and
+  // entering the contest when the screen opens (`handleView`). A Remote observer, who cannot
+  // press the switch, keeps the old rule: the screen only while the station's mode is on.
   const fdActive = settings?.fdActive === true
-  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
+  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: remote ? fdActive : true }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
@@ -3686,10 +3691,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onDigitalMode={handleDigitalMode}
           // The club band board is a WINDOW, not a section: the rail button opens the
           // `fdclub` pop-out straight onto a second monitor. It rides the Field Day
-          // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
-          // board used to be reachable only from inside ContestView once sync was
-          // already on, which is exactly why nobody found it.
+          // master switch (`clubBoard`) and NOT club sync — the board used to be
+          // reachable only from inside ContestView once sync was already on, which is
+          // exactly why nobody found it.
           onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
+          clubBoard={fdActive}
           // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
           // Day, as it is to the engine.
           contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}

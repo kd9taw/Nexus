@@ -185,7 +185,7 @@ When the FD workspace is open and a digital contact is in progress, the TempoFas
 - **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
 - **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
 
-Opening **Contest** in the left bar with Field Day mode on always starts in **Search-and-Pounce**. Switch to Running via the button pair in the Contest screen's header.
+Opening **Contest** in the left bar with Field Day mode on always starts in **Search-and-Pounce**; with the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
 The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
@@ -300,7 +300,7 @@ A plain-text check sheet: every section multiplier with the call and band that f
 
 ## Other Contests, and CQ WW RTTY
 
-The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Field Day mode** in Field Day Setup, which is the switch for every contest. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
+The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Field Day mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Field Day Setup. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
 
 **CQ WW RTTY** (last full weekend of September, 0000Z Saturday for 48 hours):
 
@@ -336,7 +336,7 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 
 Before the party, on every laptop:
 
-- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again).
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
 - [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.

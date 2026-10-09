@@ -2037,13 +2037,12 @@ claim right now; the record underneath is the evidence, kept across restarts.*
 
 ### Field Day Setup
 
-- **Field Day mode** — the master switch. "Turn on for Field Day weekend —
-  reveals the Field Day workspace and the Class/Section exchange across all
-  modes. Off the rest of the year." It stays on across restarts until you turn it
-  off. The **same switch** also appears in
-  [Appearance ▸ Features](#features) under Contesting — Field Day visibility is
-  owned by this persisted setting, not by a feature flag, so the Features group
-  hosts the master rather than a separate toggle.
+- **Field Day mode** — the master switch. "Turn on for Field Day weekend: the
+  Class/Section exchange appears across all modes. Off the rest of the year." It
+  stays on across restarts until you turn it off. The **same switch** also
+  appears in [Appearance ▸ Features](#features) under Contesting, and at the top
+  of the **Contest** screen (the tent in the left bar), which saves it at once and
+  says what is missing when the picked contest cannot start yet.
 - **Event** — moved up to [Contest](#contest) at the top of this tab, where it is now
   the contest picker. Same setting, one level up.
 - **FD Class** / **WFD Category** (the label follows the Event) — "Number of

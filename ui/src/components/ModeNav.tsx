@@ -65,6 +65,10 @@ interface Props {
   /** The picked contest's own name (`contestName(settings.fdEvent)`), for the Contest item's
    *  tooltip. Absent until the settings arrive, when the tooltip is the label alone. */
   contest?: string
+  /** Whether the Club Board button shows under the Contest item: the Field Day master switch.
+   *  The Contest item itself stays with the mode off (its screen is where the mode is turned
+   *  on), so the board cannot ride the item's own visibility. */
+  clubBoard?: boolean
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
@@ -242,7 +246,17 @@ const MODE_LABEL: Record<OpMode, string> = {
   fieldDay: 'FIELD DAY',
 }
 
-export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, onClubBoard, contest }: Props) {
+export function ModeNav({
+  view,
+  mode,
+  enabled,
+  onSelect,
+  tier,
+  onDigitalMode,
+  onClubBoard,
+  contest,
+  clubBoard = true,
+}: Props) {
   // A button's tooltip and accessible name. The Contest item's names the picked contest.
   const titleOf = (it: Item): string =>
     it.id === 'fieldDay' && contest ? t('nav.fieldDay.title', { contest }) : it.title
@@ -375,11 +389,11 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, on
               </div>
               {/* The club band board, straight to its own window. It rides WITH the Contest
                   item (including through a drag-reorder) because that is the only place an
-                  operator looks for it, and it is gated on the SAME switch — the FD master
-                  switch, never on club sync. Gating it on sync is what hid it: the board only
+                  operator looks for it, and it is gated on the FD master switch (`clubBoard`),
+                  never on club sync. Gating it on sync is what hid it: the board only
                   existed inside ContestView once `fieldDay.club` was non-null, so an operator
                   who had not already turned sync on had no way to learn it was there. */}
-              {it.id === 'fieldDay' && (
+              {it.id === 'fieldDay' && clubBoard && (
                 <Tooltip content={t('nav.fdClub.title')}>
                   <button
                     type="button"

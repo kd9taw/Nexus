@@ -4149,7 +4149,7 @@ export const EN = {
   'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
   'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
   'settings.fieldDay.mode.hint':
-    'Turn on for Field Day weekend — reveals the Field Day workspace and the Class/Section exchange across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply.',
+    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply. The same switch is at the top of the Contest screen.',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
@@ -8043,7 +8043,7 @@ export const EN = {
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
   'settings.features.fieldDay.hint':
-    'Turn on for Field Day weekend — reveals the Field Day workspace, the Class/Section exchange across all modes, and the setup tab. Off the rest of the year (nothing shows). Stays on across restarts until you turn it off; Save settings to apply.',
+    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the

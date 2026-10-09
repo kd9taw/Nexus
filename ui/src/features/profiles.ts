@@ -72,9 +72,9 @@ export const PROFILES: Record<ProfileId, Profile> = {
       return t('profiles.contest.blurb')
     },
     intents: ['contest'],
-    // NOT 'fieldDay': that section's visibility is gated by the persisted master
-    // switch (settings.fdActive), which no path may auto-enable — landing there
-    // would redirect to a hidden view. 'operate' is core, so it's always reachable.
+    // NOT 'fieldDay': contacts are made in the cockpits, and the Contest screen is one
+    // click away on the rail. Nothing here may turn the Field Day master switch on
+    // (settings.fdActive); only the operator does. 'operate' is core, so it's always reachable.
     landing: 'operate',
     nowBarEmphasis: 'rate',
   },

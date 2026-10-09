@@ -81,6 +81,26 @@ describe('the club band board has its own way in', () => {
     cleanup()
   })
 
+  it('rides the master switch, not the Contest item: the item stays with the mode off, the board does not', () => {
+    // The Contest item is on the rail with Field Day mode off (its screen is where the mode
+    // is turned on), so the board is gated on the switch itself.
+    render(
+      <ModeNav
+        view="operate"
+        mode="chat"
+        enabled={{ fieldDay: true } as Record<FeatureId, boolean>}
+        onSelect={vi.fn()}
+        tier="FT8"
+        onDigitalMode={vi.fn()}
+        onClubBoard={vi.fn()}
+        clubBoard={false}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Contest' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /club band board/i })).toBeNull()
+    cleanup()
+  })
+
   it('App wires the rail button to the club-board window', () => {
     // The rail is presentational (it takes callbacks, it never calls the API);
     // the seam that actually opens the OS window lives in App.
