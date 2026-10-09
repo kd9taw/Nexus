@@ -109,7 +109,7 @@ impl Frame {
 
 /// Encode a frequency in Hz as Icom's 5-byte little-endian BCD (10 decimal digits, so up
 /// to 9,999,999,999 Hz — comfortably past the IC-9700's 1.3 GHz). Any digits above the
-/// tenth are dropped.
+/// tenth are dropped; the IC-905's 10 GHz dial takes [`freq_to_bcd12`].
 pub fn freq_to_bcd(hz: u64) -> [u8; 5] {
     let mut out = [0u8; 5];
     let mut n = hz % 10_000_000_000; // keep 10 digits
@@ -123,9 +123,21 @@ pub fn freq_to_bcd(hz: u64) -> [u8; 5] {
     out
 }
 
+/// Encode a frequency in Hz as 6-byte little-endian BCD (12 digits): [`freq_to_bcd`]'s five
+/// bytes, then a sixth holding the 100 GHz digit over the 10 GHz digit. The IC-905's dial on its
+/// 10 GHz band (CI-V Reference Guide A7711-9EX-2, PDF p. 17). Any digits above the twelfth are
+/// dropped.
+pub fn freq_to_bcd12(hz: u64) -> [u8; 6] {
+    let mut out = [0u8; 6];
+    out[..5].copy_from_slice(&freq_to_bcd(hz));
+    let top = hz / 10_000_000_000; // the 10 GHz digit and up
+    out[5] = ((((top / 10) % 10) as u8) << 4) | ((top % 10) as u8);
+    out
+}
+
 /// Decode little-endian BCD bytes back to Hz. Any non-decimal nibble (`> 9`, e.g. from a
 /// corrupt read) is treated as `0` rather than producing a wild value. Works for any
-/// length; Icom frequency fields are 5 bytes.
+/// length; Icom frequency fields are 5 bytes (6 for the IC-905's dial on its 10 GHz band).
 pub fn bcd_to_freq(bytes: &[u8]) -> u64 {
     let mut hz = 0u64;
     let mut mult = 1u64;
@@ -245,6 +257,27 @@ mod tests {
         assert_eq!(freq_to_bcd(145_000_000), [0x00, 0x00, 0x00, 0x45, 0x01]);
         assert_eq!(freq_to_bcd(14_074_000), [0x00, 0x40, 0x07, 0x14, 0x00]);
         assert_eq!(freq_to_bcd(0), [0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    /// A7711-9EX-2 PDF p. 17's layout at 10368.150 MHz, typed out: 1 Hz first, then the 100 GHz
+    /// digit (0) over the 10 GHz digit (1) in the sixth byte. Below 10 GHz the sixth byte is 0.
+    #[test]
+    fn freq_bcd12_exact_byte_layout() {
+        assert_eq!(
+            freq_to_bcd12(10_368_150_000),
+            [0x00, 0x00, 0x15, 0x68, 0x03, 0x01]
+        );
+        assert_eq!(
+            freq_to_bcd12(10_000_000_000),
+            [0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
+        );
+        assert_eq!(
+            freq_to_bcd12(145_000_000),
+            [0x00, 0x00, 0x00, 0x45, 0x01, 0x00]
+        );
+        for hz in [10_368_150_000, 10_489_550_000, 10_499_999_999] {
+            assert_eq!(bcd_to_freq(&freq_to_bcd12(hz)), hz, "round-trip {hz} Hz");
+        }
     }
 
     #[test]

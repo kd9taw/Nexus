@@ -338,6 +338,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
   for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
   IC-905 on 10 GHz.
+- **IC-905 on 10 GHz: the dial, a QSY and the log are on the frequency the radio is on.** On its
+  10 GHz band the IC-905 sends and takes its frequency with two more digits than on its other
+  bands, and Nexus's own CI-V connection read and wrote the usual ten. With the radio on 10368.150
+  MHz the dial read 368.150 MHz, a contact logged there went in at 368.150 MHz with no band, and a
+  QSY to 10368.150 MHz (or a split's transmit frequency there) sent the radio to 368.150 MHz.
+  Transmit stayed locked, because 368 MHz is outside every amateur band. Nexus now reads and
+  writes the longer form on 10 GHz, over USB and over the Icom network connection, as Icom's CI-V
+  reference for the IC-905 describes it: the dial reads 10368.150 MHz, the log gets 3 cm, and the
+  check against your licence privileges judges 3 cm, as it does every other band. Its other bands,
+  and every other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the
+  dial, a QSY and a logged contact, receiving or into a dummy load).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn

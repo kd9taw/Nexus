@@ -14884,6 +14884,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ic905_ten_ghz;
     mod icom_lan;
     mod receive_source;
     mod refused_key;

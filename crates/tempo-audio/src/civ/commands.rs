@@ -3,13 +3,14 @@
 //! command numbers are shared; per-model differences are the CI-V **address** (below) and a
 //! few band/mode specifics handled by the caller. The IC-7760 and IC-7300MK2 share the same
 //! numbers and are driven only over their network connection (`crate::icomlan`); on USB both
-//! still go through Hamlib.
+//! still go through Hamlib. The dial itself differs on one radio: the IC-905's is 12 digits on
+//! its 10 GHz band ([`twelve_digit_dial`]), so the dial's builders and decoder take the model.
 //!
 //! A command builder returns a [`Frame`] (`.to_bytes()` for the wire); a decoder takes a
 //! *reply* frame and extracts the value. Set commands are acknowledged with a bare
 //! `FB`/`FA` ([`Frame::is_ack`]/[`Frame::is_nak`]).
 
-use super::frame::{bcd_to_freq, freq_to_bcd, Frame};
+use super::frame::{bcd_to_freq, freq_to_bcd, freq_to_bcd12, Frame};
 
 /// The Icom rigs Nexus knows how to drive natively over CI-V, with their factory-default
 /// CI-V bus address. (The address is user-changeable on the rig; the serial engine lets the
@@ -155,15 +156,73 @@ impl Mode {
     }
 }
 
+// ---- the dial's digits ----
+
+/// Does `model` send and take its dial in 12 digits on a 10 GHz band? The operating frequency
+/// (`00`, `03`, `05` and `1C 03`, one format) is 10 digits, 5 bytes, on every radio here but
+/// one:
+///
+/// | Model | Dial | Source |
+/// |---|---|---|
+/// | IC-905 | 10 digits to 5600 MHz, **12 (6 bytes) on 10 GHz** | CI-V Reference Guide A7711-9EX-2, PDF p. 17: "When the 5600 MHz or lower band is selected, the number of digits is 10 (1 ~ 5). When the 10 GHz band is selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz" |
+/// | IC-9700 | 10 digits | A7508-3EX-4, PDF p. 14 |
+/// | IC-705 | 10 | A7560-8EX-6, PDF p. 18 |
+/// | IC-7610 | 10 | A7380-7EX-4, PDF p. 11 |
+/// | IC-7300 | 10 | Full Manual A7292-4EX-12, PDF p. 167 |
+/// | IC-7760 | 10 | A7788-8EX-2, PDF p. 18 |
+/// | IC-7300MK2 | 10 | its reference, rev 0, PDF p. 16 |
+///
+/// Read as 10 digits, an IC-905 on 10368.150 MHz reported 368.150 MHz, and a QSY to 10368.150
+/// MHz sent it 368.150 MHz. No wildcard arm, so a model added to [`IcomModel`] has to be read
+/// against its own guide first.
+pub fn twelve_digit_dial(model: IcomModel) -> bool {
+    match model {
+        IcomModel::Ic905 => true,
+        IcomModel::Ic7300
+        | IcomModel::Ic7610
+        | IcomModel::Ic9700
+        | IcomModel::Ic705
+        | IcomModel::Ic7760
+        | IcomModel::Ic7300Mk2 => false,
+    }
+}
+
+/// Where the IC-905's 10 GHz band starts: its scope's 10 GHz range is 10000–10500 MHz (range
+/// `06`, A7711-9EX-2 PDF p. 30). It is also the first frequency 10 digits cannot hold.
+const TEN_GHZ_HZ: u64 = 10_000_000_000;
+
+/// The dial as `model` takes it at `hz` (`05`, and the frequency in `25`): 12 digits on a
+/// [`twelve_digit_dial`] radio's 10 GHz band, else the 10 every band and radio took before, byte
+/// for byte. A radio the caller did not name is sent 10.
+fn dial_bcd(hz: u64, model: Option<IcomModel>) -> Vec<u8> {
+    if hz >= TEN_GHZ_HZ && model.is_some_and(twelve_digit_dial) {
+        freq_to_bcd12(hz).to_vec()
+    } else {
+        freq_to_bcd(hz).to_vec()
+    }
+}
+
+/// The dial from the data of a `00`/`03` report. The radio says which form it sent by the byte
+/// count: a [`twelve_digit_dial`] radio sends six bytes while its 10 GHz band is selected, and
+/// those are read whole. Anything else is read as before, its first five bytes.
+fn dial_from(data: &[u8], model: Option<IcomModel>) -> Option<u64> {
+    if data.len() == 6 && model.is_some_and(twelve_digit_dial) {
+        Some(bcd_to_freq(data))
+    } else {
+        (data.len() >= 5).then(|| bcd_to_freq(&data[..5]))
+    }
+}
+
 // ---- command builders (controller → radio) ----
 
-/// Read the operating frequency (cmd `03`). Reply carries 5-byte BCD freq.
+/// Read the operating frequency (cmd `03`). Reply carries the dial: 5-byte BCD, or 6 from an
+/// IC-905 on its 10 GHz band ([`parse_freq`]).
 pub fn read_freq(radio: u8) -> Frame {
     Frame::command(radio, 0x03, &[])
 }
-/// Set the operating frequency (cmd `05`).
-pub fn set_freq(radio: u8, hz: u64) -> Frame {
-    Frame::command(radio, 0x05, &freq_to_bcd(hz))
+/// Set the operating frequency (cmd `05`), in the form `model` takes at `hz` ([`dial_bcd`]).
+pub fn set_freq(radio: u8, hz: u64, model: Option<IcomModel>) -> Frame {
+    Frame::command(radio, 0x05, &dial_bcd(hz, model))
 }
 /// Read the operating mode + filter (cmd `04`).
 pub fn read_mode(radio: u8) -> Frame {
@@ -227,10 +286,11 @@ pub fn set_duplex(radio: u8, shift: &str) -> Frame {
     Frame::command(radio, 0x0F, &[b])
 }
 /// Set the UNSELECTED VFO's frequency (cmd `25 01`) — the split/duplex TX dial on the
-/// 7300 family without swapping VFOs.
-pub fn set_unselected_freq(radio: u8, hz: u64) -> Frame {
+/// 7300 family without swapping VFOs. The frequency is the same field as [`set_freq`]'s: "See
+/// “Operating frequency.” (p. 16)" (A7711-9EX-2 PDF p. 28; its printed p. 16 is PDF p. 17).
+pub fn set_unselected_freq(radio: u8, hz: u64, model: Option<IcomModel>) -> Frame {
     let mut data = vec![0x01];
-    data.extend_from_slice(&freq_to_bcd(hz));
+    data.extend_from_slice(&dial_bcd(hz, model));
     Frame::command(radio, 0x25, &data)
 }
 /// Set the UNSELECTED VFO's MODE (cmd `26 01`) — the split TX VFO's own mode
@@ -1181,10 +1241,11 @@ pub fn parse_scope_center_mode(f: &Frame) -> Option<bool> {
 // ---- reply decoders ----
 
 /// Extract the frequency (Hz) from a `03` frequency report (or an unsolicited transceive
-/// `00` report, which shares the 5-byte-BCD payload).
-pub fn parse_freq(f: &Frame) -> Option<u64> {
-    if (f.cmd == 0x03 || f.cmd == 0x00) && f.data.len() >= 5 {
-        Some(bcd_to_freq(&f.data[..5]))
+/// `00` report, which shares its payload): 5-byte BCD, or 6 from an IC-905 on its 10 GHz band
+/// ([`dial_from`]).
+pub fn parse_freq(f: &Frame, model: Option<IcomModel>) -> Option<u64> {
+    if f.cmd == 0x03 || f.cmd == 0x00 {
+        dial_from(&f.data, model)
     } else {
         None
     }
@@ -1711,7 +1772,7 @@ mod tests {
             read_meter(0x98, METER_SWR),
             set_split(0x98, true),
             select_vfo(0x98, "SUB").unwrap(),
-            set_freq(0x98, 14_074_000),
+            set_freq(0x98, 14_074_000, Some(IcomModel::Ic7610)),
         ];
         for f in &unmarked {
             assert!(
@@ -1737,7 +1798,7 @@ mod tests {
 
     #[test]
     fn set_freq_encodes_cmd_05_with_bcd() {
-        let f = set_freq(0xA2, 145_000_000);
+        let f = set_freq(0xA2, 145_000_000, Some(IcomModel::Ic9700));
         assert_eq!(f.cmd, 0x05);
         assert_eq!(f.to, 0xA2);
         assert_eq!(bcd_to_freq(&f.data), 145_000_000);
@@ -1977,13 +2038,92 @@ mod tests {
             cmd: 0x03,
             data: freq_to_bcd(432_100_000).to_vec(),
         };
-        assert_eq!(parse_freq(&reply), Some(432_100_000));
+        assert_eq!(
+            parse_freq(&reply, Some(IcomModel::Ic9700)),
+            Some(432_100_000)
+        );
         // A transceive (cmd 00) report is decoded the same way.
         let xcv = Frame {
             cmd: 0x00,
             ..reply.clone()
         };
-        assert_eq!(parse_freq(&xcv), Some(432_100_000));
+        assert_eq!(parse_freq(&xcv, Some(IcomModel::Ic9700)), Some(432_100_000));
+    }
+
+    /// The IC-905 on 10 GHz, in the bytes of A7711-9EX-2 PDF p. 17's layout at 10368.150 MHz:
+    /// 1 Hz first, the 100 GHz digit (0) over the 10 GHz digit (1) in the sixth byte. Its `03`
+    /// reply and its `00` report read 12 digits, and `05` and `25 01` are written in 12.
+    #[test]
+    fn the_ic905s_10_ghz_dial_is_12_digits_each_way() {
+        let ic905 = Some(IcomModel::Ic905);
+        let dial = [0x00, 0x00, 0x15, 0x68, 0x03, 0x01];
+        for cmd in [0x03, 0x00] {
+            let f = Frame {
+                to: 0xE0,
+                from: 0xAC,
+                cmd,
+                data: dial.to_vec(),
+            };
+            assert_eq!(parse_freq(&f, ic905), Some(10_368_150_000), "{cmd:02X}");
+        }
+        assert_eq!(
+            set_freq(0xAC, 10_368_150_000, ic905).to_bytes(),
+            [0xFE, 0xFE, 0xAC, 0xE0, 0x05, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01, 0xFD]
+        );
+        assert_eq!(
+            set_unselected_freq(0xAC, 10_368_150_000, ic905).data,
+            [0x01, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01]
+        );
+        // The band's lowest frequency is already 12 digits.
+        assert_eq!(
+            set_freq(0xAC, 10_000_000_000, ic905).data,
+            [0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
+        );
+    }
+
+    /// The controls, by construction: what the tree sent and read before the IC-905's 12 digits.
+    /// The IC-905 below 10 GHz, every other radio at every frequency (10368.150 MHz included,
+    /// which none of them can tune) and a radio the caller did not name are written
+    /// `freq_to_bcd`'s 10 digits, and their six-byte reports read as the first five bytes.
+    #[test]
+    fn every_other_band_and_radio_keeps_the_10_digit_dial() {
+        let before_write = |hz: u64| freq_to_bcd(hz).to_vec();
+        let six = Frame {
+            to: 0xE0,
+            from: 0xA2,
+            cmd: 0x03,
+            data: vec![0x00, 0x00, 0x15, 0x68, 0x03, 0x01],
+        };
+        for hz in [144_200_000, 1_296_100_000, 5_760_100_000, 9_999_999_999] {
+            assert_eq!(
+                set_freq(0xAC, hz, Some(IcomModel::Ic905)).data,
+                before_write(hz),
+                "IC-905 at {hz}"
+            );
+        }
+        for model in [
+            Some(IcomModel::Ic7300),
+            Some(IcomModel::Ic7610),
+            Some(IcomModel::Ic9700),
+            Some(IcomModel::Ic705),
+            Some(IcomModel::Ic7760),
+            Some(IcomModel::Ic7300Mk2),
+            None,
+        ] {
+            for hz in [14_074_000, 1_296_100_000, 10_368_150_000] {
+                assert_eq!(
+                    set_freq(0xA2, hz, model).data,
+                    before_write(hz),
+                    "{model:?}"
+                );
+                assert_eq!(
+                    set_unselected_freq(0xA2, hz, model).data[1..],
+                    before_write(hz)[..],
+                    "{model:?}"
+                );
+            }
+            assert_eq!(parse_freq(&six, model), Some(368_150_000), "{model:?}");
+        }
     }
 
     #[test]
@@ -2344,7 +2484,7 @@ mod tests {
         );
         assert_eq!(
             set_band_freq(0x98, BAND_MAIN, 14_074_000).data[1..],
-            set_freq(0x98, 14_074_000).data[..]
+            set_freq(0x98, 14_074_000, Some(IcomModel::Ic7610)).data[..]
         );
         assert_eq!(set_band_freq(0x98, BAND_SUB, 7_074_000).data[0], 0x01);
         // A plain mode: the mode byte alone after the band, which the radio takes as DATA OFF

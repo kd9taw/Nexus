@@ -5,7 +5,8 @@
 //! routing layer.
 
 use super::commands::{
-    parse_data_mode, parse_freq, parse_mode, parse_ptt, parse_rf_power_raw, parse_smeter_raw, Mode,
+    parse_data_mode, parse_freq, parse_mode, parse_ptt, parse_rf_power_raw, parse_smeter_raw,
+    IcomModel, Mode,
 };
 use super::frame::Frame;
 
@@ -28,9 +29,10 @@ impl CivState {
     /// Fold one received frame (a solicited reply or an unsolicited transceive `00`/`01` report)
     /// into the state. Returns `true` if it updated something, so the caller can push a fresh
     /// snapshot only on a real change. Acknowledge frames (`FB`/`FA`) and anything unrecognized
-    /// leave the state untouched.
-    pub fn apply(&mut self, f: &Frame) -> bool {
-        if let Some(hz) = parse_freq(f) {
+    /// leave the state untouched. `model` is the radio the frame came from: the dial's digits
+    /// are per model ([`super::commands::twelve_digit_dial`]).
+    pub fn apply(&mut self, f: &Frame, model: Option<IcomModel>) -> bool {
+        if let Some(hz) = parse_freq(f, model) {
             self.freq_hz = Some(hz);
             return true;
         }
@@ -80,17 +82,17 @@ mod tests {
     #[test]
     fn folds_freq_mode_ptt_smeter_into_state() {
         let mut st = CivState::default();
-        assert!(st.apply(&reply(0x03, &freq_to_bcd(145_000_000))));
+        assert!(st.apply(&reply(0x03, &freq_to_bcd(145_000_000)), None));
         assert_eq!(st.freq_hz, Some(145_000_000));
 
-        assert!(st.apply(&reply(0x04, &[Mode::Usb.to_byte(), 0x02])));
+        assert!(st.apply(&reply(0x04, &[Mode::Usb.to_byte(), 0x02]), None));
         assert_eq!(st.mode, Some(Mode::Usb));
         assert_eq!(st.filter, Some(0x02));
 
-        assert!(st.apply(&reply(0x1C, &[0x00, 0x01])));
+        assert!(st.apply(&reply(0x1C, &[0x00, 0x01]), None));
         assert_eq!(st.ptt, Some(true));
 
-        assert!(st.apply(&reply(0x15, &[0x02, 0x01, 0x20]))); // raw 120 = S9
+        assert!(st.apply(&reply(0x15, &[0x02, 0x01, 0x20]), None)); // raw 120 = S9
         assert_eq!(st.smeter_raw, Some(120));
     }
 
@@ -98,19 +100,22 @@ mod tests {
     fn transceive_report_updates_like_a_reply() {
         // The radio pushes an unsolicited freq (cmd 00) when the operator turns the knob.
         let mut st = CivState::default();
-        assert!(st.apply(&reply(0x00, &freq_to_bcd(14_074_000))));
+        assert!(st.apply(&reply(0x00, &freq_to_bcd(14_074_000)), None));
         assert_eq!(st.freq_hz, Some(14_074_000));
     }
 
     #[test]
     fn ack_and_unknown_frames_do_not_change_state() {
         let mut st = CivState::default();
-        assert!(!st.apply(&Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0xFB, 0xFD]).unwrap())); // ack
+        assert!(!st.apply(
+            &Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0xFB, 0xFD]).unwrap(),
+            None
+        )); // ack
         assert_eq!(st, CivState::default());
         // A command frame we send (not a report) shouldn't be mistaken for state either — the
         // splitter drops our echoes, but be defensive: set_freq is cmd 05, not a report.
-        assert!(!st.apply(&set_freq(0xA2, 145_000_000)));
-        assert!(!st.apply(&set_mode(0xA2, Mode::Cw, None)));
-        assert!(!st.apply(&read_ptt(0xA2)));
+        assert!(!st.apply(&set_freq(0xA2, 145_000_000, None), None));
+        assert!(!st.apply(&set_mode(0xA2, Mode::Cw, None), None));
+        assert!(!st.apply(&read_ptt(0xA2), None));
     }
 }
