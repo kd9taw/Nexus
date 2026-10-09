@@ -1214,6 +1214,15 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
+      {/* The host's alone: the positions it turned away, each with the sentence it was sent,
+          which that position's own screen shows as its host error. */}
+      {club.refused?.map((r, i) => (
+        <div key={i} style={CLUB_WARN} role="alert">
+          {r.posName
+            ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
+            : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+        </div>
+      ))}
       {/* The host's alone: its board is as big as the club line every position is sent can
           carry — said before one more position might not fit, and once it is cut. */}
       {club.boardFull && (

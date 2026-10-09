@@ -343,10 +343,29 @@ describe('club sync switched on for a contest the club log cannot run', () => {
   })
 })
 
-// ⭐ THE HOST'S FULL BOARD. The host's club block warns before its board outgrows the club line
-// every position is sent, naming the count, and says how many the positions see once it is cut.
-describe('the host\'s club block says how full its board is', () => {
+// ⭐ THE HOST'S SIDE OF A REFUSAL, AND OF A FULL BOARD. A position the host turns away is told
+// why on its own screen; the host's club block says so too — who, and what they were told — and
+// warns before its board outgrows the club line every position is sent, naming the count.
+describe('the host\'s club block names who it turned away and how full its board is', () => {
   const HOST: FdClubStatus = { ...CLUB, hosting: true }
+
+  it('names a refused position and quotes what it was told', () => {
+    render(
+      <FdClubSection
+        club={{
+          ...HOST,
+          refused: [{ posName: 'SSB tent', call: 'W9XYZ', reason: 'this club sends the in-state IL QSO Party exchange (its county)' }],
+        }}
+      />,
+    )
+    expect(screen.getByText(/Turned away SSB tent \(W9XYZ\)/)).toBeTruthy()
+    expect(screen.getByText(/this club sends the in-state IL QSO Party exchange \(its county\)/)).toBeTruthy()
+  })
+
+  it('names an unnamed refused position by its call', () => {
+    render(<FdClubSection club={{ ...HOST, refused: [{ posName: '', call: 'K9ABC', reason: 'x' }] }} />)
+    expect(screen.getByText(/Turned away K9ABC/)).toBeTruthy()
+  })
 
   it('warns, naming the count, before the next position might not fit on the board', () => {
     render(<FdClubSection club={{ ...HOST, boardFull: { positions: 58, shown: 58 } }} />)
@@ -358,8 +377,9 @@ describe('the host\'s club block says how full its board is', () => {
     expect(screen.getByText(/Each position's club board shows 59 of this club's 70 positions/)).toBeTruthy()
   })
 
-  it('POSITIVE CONTROL: a club with room says nothing of it', () => {
+  it('POSITIVE CONTROL: a club with room and no refusals says neither', () => {
     render(<FdClubSection club={HOST} />)
+    expect(screen.queryByText(/Turned away/)).toBeNull()
     expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
   })
 })

@@ -313,3 +313,100 @@ fn log_party_fd(eng: &Shared) {
         .fd_log_manual("K1ABC", "2A", "EMA", "CW")
         .expect("Field Day mode"));
 }
+
+/// A party position set up out of state: Indiana, so it sends its state instead of a county.
+fn indiana_party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
+    let mut e = Engine::new("W9XYZ", "EN50", 0);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "ilqp".into();
+    s.contest_qth_state = "IN".into();
+    s.fd_position_id = posid.into();
+    s.fd_position_name = name.into();
+    s.fd_join_addr = join_addr.into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-sp").expect("enter the party");
+    Arc::new(Mutex::new(e))
+}
+
+/// ⭐ **A position set up in another exchange role than the club's is refused, by name, on
+/// both screens** — over the real bridge and sockets. In the Illinois QSO Party a station in
+/// Illinois sends its county and one outside it sends its state, and a club entry is one
+/// station in one place: an Indiana-configured laptop at the club's site would send every
+/// contact with the wrong exchange into the club's in-state log. CONTROL: the same position,
+/// set up in Illinois, joins and its contact merges — and the host's note for it goes.
+#[test]
+fn a_position_set_up_out_of_state_is_refused_by_name_on_both_screens() {
+    let dir = std::env::temp_dir().join(format!("ilqp-role-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = party_engine("aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_event.ilqp.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let out = indiana_party_engine("bbbb0002", "SSB tent", &addr);
+    log_party(&out, "K9AAA", "COOK", "PH");
+    let out_sd = start_pump(&out, &addr);
+
+    let position_error = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .and_then(|c| c.last_error)
+            .unwrap_or_default()
+    };
+    wait_until("the position's screen says why", 10, || {
+        position_error(&out).contains("out-of-state")
+    });
+    let said = position_error(&out);
+    assert!(
+        said.contains("in-state") && said.contains("Your station data"),
+        "{said}"
+    );
+    let refused = engine_lock(&host)
+        .snapshot()
+        .field_day
+        .and_then(|f| f.club)
+        .map(|c| c.refused)
+        .unwrap_or_default();
+    assert_eq!(refused.len(), 1, "the host's screen names it: {refused:?}");
+    assert_eq!(
+        (
+            refused[0].pos_name.as_str(),
+            refused[0].call.as_str(),
+            refused[0].reason.as_str()
+        ),
+        ("SSB tent", "W9XYZ", said.as_str()),
+        "who, and the very sentence it was sent"
+    );
+    assert_eq!(
+        club_rows(&host),
+        0,
+        "not one of its contacts reached the club"
+    );
+
+    // CONTROL: set up in Illinois, the same position joins and its contact merges.
+    out_sd.store(true, Ordering::Relaxed);
+    let fixed = party_engine("bbbb0002", "SSB tent", &addr);
+    log_party(&fixed, "K9BBB", "COOK", "PH");
+    let fixed_sd = start_pump(&fixed, &addr);
+    wait_until("the position set up in Illinois merges", 20, || {
+        club_rows(&host) == 1
+    });
+    wait_until("the host's note for it goes", 10, || {
+        engine_lock(&host)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .is_some_and(|c| c.refused.is_empty())
+    });
+    for sd in [host_sd, host_pump_sd, fixed_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}

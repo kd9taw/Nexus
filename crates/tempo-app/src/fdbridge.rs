@@ -37,8 +37,9 @@ impl ClubBackend for EngineClubBackend {
         call: &str,
         _max_seq: u64,
         contest: &str,
+        role: &str,
     ) -> Result<JoinAccept, String> {
-        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest)
+        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest, role)
     }
 
     fn merge(&self, row: &WireQso) -> u64 {
@@ -74,6 +75,10 @@ impl PositionSync for EnginePositionSync {
 
     fn contest(&self) -> String {
         engine_lock(&self.0).fd_position_contest()
+    }
+
+    fn role(&self) -> String {
+        engine_lock(&self.0).fd_position_role()
     }
 
     fn host_contest(&self, contest: &str) -> Result<(), String> {

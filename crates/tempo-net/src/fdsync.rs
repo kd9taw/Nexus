@@ -265,6 +265,15 @@ pub enum Msg {
         /// for anything else.
         #[serde(default)]
         contest: String,
+        /// ⭐ **The exchange role this position sends under** (`"in_state"`, `"w_ve"`,
+        /// `"dx"`): a QSO party gives a station inside the state one exchange and one
+        /// outside it another, chosen by where the station is set up. A club entry is one
+        /// station in one place, so the host refuses a position set up in another role, by
+        /// name. `""` for a contest with one role (both Field Days) and from a position older
+        /// than the field, which the host serves as before — and never written when empty,
+        /// so those JOINs are the bytes they always were. An older host ignores it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        role: String,
     },
     /// host→pos, the join's answer.
     Welcome {
@@ -431,7 +440,9 @@ pub trait ClubBackend: Send + Sync {
     ///
     /// `contest` is the JOIN's own (`""` from a position too old to send one), and it
     /// reaches the backend for the same reason: whether a position logging that
-    /// contest may join this club is the policy layer's question.
+    /// contest may join this club is the policy layer's question. So does `role`, the
+    /// exchange role the position sends under (`""` when it has none to say).
+    #[allow(clippy::too_many_arguments)]
     fn join(
         &self,
         v: u32,
@@ -440,6 +451,7 @@ pub trait ClubBackend: Send + Sync {
         call: &str,
         max_seq: u64,
         contest: &str,
+        role: &str,
     ) -> Result<JoinAccept, String>;
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
     /// the new high-water ack for `row.pos`.
@@ -698,6 +710,7 @@ fn serve_club_connection(
                         call,
                         max_seq,
                         contest,
+                        role,
                     } => {
                         if v > PROTO_VERSION {
                             let _ = writer.write_all(
@@ -711,14 +724,15 @@ fn serve_club_connection(
                             );
                             break;
                         }
-                        let accept = match backend.join(v, &pos, &name, &call, max_seq, &contest) {
-                            Ok(a) => a,
-                            Err(msg) => {
-                                let _ =
-                                    writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
-                                break;
-                            }
-                        };
+                        let accept =
+                            match backend.join(v, &pos, &name, &call, max_seq, &contest, &role) {
+                                Ok(a) => a,
+                                Err(msg) => {
+                                    let _ = writer
+                                        .write_all(encode_line(&Msg::Error { msg }).as_bytes());
+                                    break;
+                                }
+                            };
                         let welcome = Msg::Welcome {
                             v: PROTO_VERSION,
                             event: accept.event,
@@ -932,6 +946,11 @@ pub trait PositionSync: Send + Sync {
     fn identity(&self) -> (String, String, String, u64);
     /// The contest this position is logging, for the JOIN line (the rules-file id).
     fn contest(&self) -> String;
+    /// The exchange role this position sends under, for the JOIN line (`""` when the
+    /// contest has one role).
+    fn role(&self) -> String {
+        String::new()
+    }
     /// The contest the host named in its welcome (`""` from a host too old to name
     /// one). `Err(reason)` = this position must not stream to that host: nothing is
     /// sent, the reason is shown exactly as a host's refusal is, and the session ends
@@ -1001,6 +1020,7 @@ fn run_position_session(
             call,
             max_seq,
             contest: backend.contest(),
+            role: backend.role(),
         })
         .as_bytes(),
     )?;
@@ -1272,6 +1292,7 @@ mod tests {
                 call: "KD9TAW".into(),
                 max_seq: 42,
                 contest: String::new(),
+                role: String::new(),
             },
             Msg::Welcome {
                 v: 1,
@@ -1368,6 +1389,7 @@ mod tests {
             call: String::new(),
             max_seq: 0,
             contest: String::new(),
+            role: String::new(),
         });
         assert!(j.contains("\"t\":\"join\"") && j.contains("\"max_seq\""));
         let w = encode_line(&Msg::Welcome {
@@ -1536,6 +1558,8 @@ mod tests {
         refuse_below_v2: Mutex<Option<String>>,
         /// The contest each JOIN named, in arrival order — what reached the policy layer.
         contests: Mutex<Vec<String>>,
+        /// The role each JOIN named, in arrival order.
+        roles: Mutex<Vec<String>>,
         /// Each presence report's clock, in arrival order.
         clocks: Mutex<Vec<(String, Option<i64>)>>,
     }
@@ -1553,9 +1577,11 @@ mod tests {
             _call: &str,
             _max_seq: u64,
             contest: &str,
+            role: &str,
         ) -> Result<JoinAccept, String> {
             self.log(format!("join v{v} {pos}"));
             self.contests.lock().unwrap().push(contest.to_string());
+            self.roles.lock().unwrap().push(role.to_string());
             // The guard is dropped before the branch, not held across it: an
             // `if let` scrutinee lives until the end of the body, which is how a
             // lock taken here would still be held while the arm runs.
@@ -1694,6 +1720,7 @@ mod tests {
             call: "KD9TAW".into(),
             max_seq,
             contest: String::new(),
+            role: String::new(),
         }
     }
 
@@ -2139,6 +2166,7 @@ mod tests {
                 call: String::new(),
                 max_seq: 0,
                 contest: String::new(),
+                role: String::new(),
             }],
             500,
         );
@@ -2313,6 +2341,9 @@ mod tests {
         fn contest(&self) -> String {
             "ilqp".into()
         }
+        fn role(&self) -> String {
+            "in_state".into()
+        }
         fn host_contest(&self, contest: &str) -> Result<(), String> {
             self.host_contests.lock().unwrap().push(contest.to_string());
             // The guard is dropped before the branch, as `FakeClub::join`'s is.
@@ -2469,6 +2500,11 @@ mod tests {
             "the position's contest reached the host's policy layer"
         );
         assert_eq!(
+            *club.roles.lock().unwrap(),
+            vec!["in_state".to_string()],
+            "…and so did the role it sends under"
+        );
+        assert_eq!(
             *posn.host_contests.lock().unwrap(),
             vec!["arrlfd".to_string()],
             "…and the club's reached the position's"
@@ -2491,6 +2527,22 @@ mod tests {
             Some(""),
             "an older JOIN names no contest"
         );
+        assert_eq!(
+            club.roles.lock().unwrap().last().map(String::as_str),
+            Some(""),
+            "…and no role, which the policy layer serves as it always has"
+        );
+        // A JOIN with no role to say is the bytes every older host was shown: no key at all.
+        let no_role = encode_line(&Msg::Join {
+            v: PROTO_VERSION,
+            pos: "eeee0001".into(),
+            name: String::new(),
+            call: "KD9TAW".into(),
+            max_seq: 0,
+            contest: "arrlfd".into(),
+            role: String::new(),
+        });
+        assert!(!no_role.contains("role"), "{no_role}");
         host_sd.store(true, Ordering::Relaxed);
         // …and an older host's WELCOME decodes with no contest, which is what the position
         // has to refuse a non-Field-Day stream on.

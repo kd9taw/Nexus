@@ -3527,6 +3527,8 @@ export interface FdClubStatus {
    *  many positions it has, and how many of them each position's board shows (`shown`
    *  below `positions` = already cut to the ones heard from most recently). */
   boardFull?: { positions: number; shown: number }
+  /** The HOST's alone: positions it turned away, and the sentence each was sent. */
+  refused?: { posName: string; call: string; reason: string }[]
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */

@@ -12037,10 +12037,17 @@ impl Engine {
     // --- host half (the ClubBackend impl calls these) ----------------------
 
     /// A position joined. Err when not hosting (a race with the toggle), Err with
-    /// §18.2's refusal when an OLDER position cannot run this club's contest, and Err
+    /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
-    /// rules-file id. The wording lives on `ClubLog` because only it knows the contest
-    /// to name.
+    /// rules-file id — and Err when it is set up in another exchange ROLE than the club's
+    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it). The
+    /// wording lives on `ClubLog` and in `fdevent` because only they know the contest to
+    /// name. Every refusal is noted for the host's own screen too.
+    ///
+    /// A position that names no role is served as it always was: its contest has one role
+    /// (both Field Days), or it is older than the field and cannot say. So is any position
+    /// of a club whose own session Settings can no longer build — there is no role to hold
+    /// it to, and that club already scores nothing until Settings are put right.
     pub fn fd_club_join(
         &mut self,
         v: u32,
@@ -12048,12 +12055,26 @@ impl Engine {
         name: &str,
         call: &str,
         contest: &str,
+        role: &str,
     ) -> Result<tempo_net::fdsync::JoinAccept, String> {
         let now = now_unix_secs();
+        // The club's own role, read before the club is borrowed to change it.
+        let club_role = self
+            .fd_club
+            .as_ref()
+            .and_then(|club| self.fd_club_session(club).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default();
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
-        if let Some(msg) = club.join_refusal(v, contest) {
+        let theirs = role.trim();
+        let refusal = club.join_refusal(v, contest).or_else(|| {
+            (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
+                .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
+        });
+        if let Some(msg) = refusal {
+            club.note_refused(pos, name, call, &msg, now);
             return Err(msg);
         }
         let acked = club.join(pos, name, call, now);
@@ -12381,6 +12402,24 @@ impl Engine {
         }
     }
 
+    /// ⭐ **The exchange role this position's rows are sent under** — the JOIN's `role`: the
+    /// live session's in Field Day, and outside it the role Settings would start the picked
+    /// contest in (what the Contesting tab previews), so a position set up on the wrong side
+    /// of the state line hears so before its first contact. `""` for a contest with one role
+    /// (both Field Days), and for one Settings cannot start yet.
+    pub fn fd_position_role(&self) -> String {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.role().id.to_string(),
+            _ => tempo_core::fd_rules::ruleset_by_id(
+                &self.fd_club_contest(),
+                tempo_core::fd_rules::CURRENT_RULES_YEAR,
+            )
+            .and_then(|rs| ContestSession::for_ruleset(rs, &self.contest_station_data()).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default(),
+        }
+    }
+
     /// ⭐ **Whether this position may stream to a host running `contest`** (the welcome's,
     /// `""` from a host too old to name one) — `Err` with the sentence the club chip shows.
     ///
@@ -12524,6 +12563,21 @@ impl Engine {
                     shown: shown as u32,
                 },
             ),
+            // The host's alone: who it turned away, and what each was told.
+            refused: self
+                .fd_club
+                .as_ref()
+                .map(|c| {
+                    c.refused(now_unix_secs())
+                        .into_iter()
+                        .map(|r| crate::dto::FdClubRefusedDto {
+                            pos_name: r.label.clone(),
+                            call: r.call.clone(),
+                            reason: r.reason.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -42213,6 +42267,7 @@ mod tests {
             "CW tent",
             "KD9TAW",
             "arrlfd",
+            "",
         );
         e.fd_club_merge(&tempo_net::fdsync::WireQso {
             pos: "aaaa0001".into(),
@@ -42276,8 +42331,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "bbbb0002",
             &tempo_net::fdsync::PosReport {
@@ -42348,7 +42403,14 @@ mod tests {
         let mut first_warned = None;
         for n in 1..=90u32 {
             let pos = format!("{n:08x}");
-            let _ = e.fd_club_join(v, &pos, &format!("Position {n:02} tent"), "W9ABC", "arrlfd");
+            let _ = e.fd_club_join(
+                v,
+                &pos,
+                &format!("Position {n:02} tent"),
+                "W9ABC",
+                "arrlfd",
+                "",
+            );
             e.fd_club_pos_status(
                 &pos,
                 &tempo_net::fdsync::PosReport {
@@ -42409,8 +42471,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "aaaa0001",
             &tempo_net::fdsync::PosReport {
@@ -42550,6 +42612,116 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!((out[0].seq, out[0].call.as_str()), (2, "W5DEF"));
         assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
+    }
+
+    /// An Illinois QSO Party club host in Cook County — the in-state role — hosting.
+    fn party_host(dir: &std::path::Path) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e.fd_host_start(dir.join("ilqp.ndjson"))
+            .expect("the Illinois QSO Party is hosted");
+        e
+    }
+
+    /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
+    /// on both screens** — in a QSO party a station inside the state sends its county and
+    /// one outside it sends its state, chosen by where Settings says it is. A club entry is
+    /// one station in one place, so a position set up out of state would send every contact
+    /// with the wrong exchange into an in-state club log, and nothing said so.
+    #[test]
+    fn a_party_club_refuses_a_position_set_up_in_another_role_by_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-role-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let err = e
+            .fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "w_ve")
+            .expect_err("a position set up out of state is refused");
+        assert!(
+            err.contains("in-state") && err.contains("out-of-state"),
+            "it says which value differs: {err}"
+        );
+        assert!(
+            err.contains("Your station data") && err.contains("Contesting tab"),
+            "and where to set it: {err}"
+        );
+        // The host's own screen says so too: who, and what they were told.
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        let refused: Vec<(&str, &str, &str)> = club
+            .refused
+            .iter()
+            .map(|r| (r.pos_name.as_str(), r.call.as_str(), r.reason.as_str()))
+            .collect();
+        assert_eq!(refused, vec![("SSB tent", "W9XYZ", err.as_str())]);
+        // A DX one, by its own word.
+        let dx = e
+            .fd_club_join(v, "cccc0003", "DX tent", "W9XYZ", "ilqp", "dx")
+            .expect_err("a position set up as DX is refused");
+        assert!(dx.contains("DX"), "{dx}");
+        // CONTROLS. The same position set up in the club's role joins, and the host's note
+        // for it goes; an older position, which cannot say its role, is served as before.
+        e.fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state")
+            .expect("the club's own role joins");
+        e.fd_club_join(v, "bbbb0002", "CW tent", "W9XYZ", "ilqp", "")
+            .expect("an older position joins as it always has");
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(
+            club.refused
+                .iter()
+                .map(|r| r.pos_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DX tent"],
+            "the joined position's note is gone; the DX one's stays"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The role a position's JOIN names is the one its rows are sent under** — the live
+    /// session's in Field Day mode, else the one Settings would start the picked contest
+    /// with — and nothing for a contest with one role.
+    #[test]
+    fn the_join_names_the_role_this_positions_exchange_is_sent_under() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        e.apply_settings(s.clone());
+        assert_eq!(e.fd_position_role(), "in_state", "previewed from Settings");
+        e.set_mode("fieldday-sp").unwrap();
+        assert_eq!(e.fd_position_role(), "in_state", "the live session's");
+        let mut out = Engine::new("W9XYZ", "EN61", 0);
+        s.contest_qth_state = "IN".into();
+        s.contest_qth_county.clear();
+        out.apply_settings(s);
+        out.set_mode("fieldday-sp").unwrap();
+        assert_eq!(
+            out.fd_position_role(),
+            "w_ve",
+            "an Indiana station is out of state"
+        );
+        // CONTROL: Field Day has one role, and says none.
+        let mut fd = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = fd.settings().clone();
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        fd.apply_settings(s);
+        fd.set_mode("fieldday-sp").unwrap();
+        assert_eq!(fd.fd_position_role(), "");
     }
 
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
@@ -42720,7 +42892,7 @@ mod tests {
         // A Field Day club serves a v1 tent exactly as it always did.
         assert!(
             backend
-                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "")
+                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "", "")
                 .is_ok(),
             "a mixed-version FIELD DAY club must be unaffected by the gate"
         );
@@ -42733,7 +42905,7 @@ mod tests {
             club.event_id = "tnqp".into();
         }
         let msg = backend
-            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "")
+            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "", "")
             .expect_err("a v1 tent cannot run a QSO party");
         assert!(
             msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"),
@@ -42754,7 +42926,15 @@ mod tests {
         // gate that refused everybody would satisfy every assertion above while
         // locking every tent out of the QSO party.
         let accept = backend
-            .join(PROTO_VERSION, "cccc0003", "SSB tent", "KD9TAW", 0, "tnqp")
+            .join(
+                PROTO_VERSION,
+                "cccc0003",
+                "SSB tent",
+                "KD9TAW",
+                0,
+                "tnqp",
+                "",
+            )
             .expect("a v2 tent joins the QSO party");
         assert_eq!(accept.host_call, "W9ABC");
 
@@ -42847,16 +43027,16 @@ mod tests {
             .expect("the party is hosted");
         let v = tempo_net::fdsync::PROTO_VERSION;
         let accept = e
-            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp")
+            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp", "")
             .expect("a party position joins the party");
         assert_eq!(
             accept.contest, "ilqp",
             "the welcome names the club's contest"
         );
-        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp")
+        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp", "")
             .expect("a second party position");
         let refused = e
-            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd")
+            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd", "")
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
             refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
@@ -43740,6 +43920,7 @@ mod tests {
             "Tent",
             "W9XYZ",
             "wfd",
+            "",
         );
         for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
             e.fd_club_merge(&tempo_net::fdsync::WireQso {

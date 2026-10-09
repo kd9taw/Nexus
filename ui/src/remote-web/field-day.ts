@@ -110,7 +110,7 @@ function status(v: unknown): void {
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
@@ -120,10 +120,18 @@ function status(v: unknown): void {
       (c.dkeys !== undefined && (!Array.isArray(c.dkeys) || c.dkeys.length > 4096 ||
         !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
       !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
-    // A host's alone, sent only when it applies: how full its club board is.
+    // A host's alone, each sent only when it applies: how full its board is, and the positions
+    // it turned away with the sentence each was sent (the host keeps at most 16).
     if (c.boardFull !== undefined) {
       const b = object(c.boardFull,['positions','shown'])
       if (![b.positions,b.shown].every(integer)) throw new Error('invalidFieldDay')
+    }
+    if (c.refused !== undefined) {
+      if (!Array.isArray(c.refused) || c.refused.length > 16) throw new Error('invalidFieldDay')
+      for (const raw of c.refused) {
+        const r = object(raw,['posName','call','reason'])
+        if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
+      }
     }
     for (const raw of c.board) {
       // `clockMs`: that position's clock minus the host's, in whole ms, either sign; null when it

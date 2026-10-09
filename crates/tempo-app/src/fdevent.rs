@@ -151,6 +151,34 @@ pub fn contest_mismatch(club: &str, mine: &str) -> String {
     )
 }
 
+/// A QSO party's exchange role as an operator knows it: the side of the state line it
+/// sends for, and what that side sends. The role ids are the rules file's
+/// (`exchange.roles[].id`); one this build has no words for is named by its id.
+fn role_words(role: &str) -> (String, &'static str) {
+    match role {
+        "in_state" => ("in-state".into(), "its county"),
+        "out_of_state" | "w_ve" => ("out-of-state".into(), "its state or province"),
+        "dx" => ("DX".into(), "DX"),
+        other => (format!("\"{other}\""), "another exchange"),
+    }
+}
+
+/// ⭐ **The sentence for a position set up in another exchange role than the club's** — in a
+/// QSO party, inside the state against outside it (or DX). Where Settings says a station is
+/// decides which exchange it sends, and a club entry is one station in one place, so every
+/// position sends the club's. One wording for the position's screen and the host's.
+/// `contest` is the club's contest as named; `club` and `mine` are role ids.
+pub fn role_mismatch(contest: &str, club: &str, mine: &str) -> String {
+    let ((club_side, club_sends), (my_side, my_sends)) = (role_words(club), role_words(mine));
+    format!(
+        "this club sends the {club_side} {contest} exchange ({club_sends}), and this Nexus is \
+         set up to send the {my_side} one ({my_sends}). Set State or province and County under \
+         Your station data on the Contesting tab in Settings to the club's, then turn Field Day \
+         mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
+         in your own log."
+    )
+}
+
 /// A field vector as it travels — the wire's and the journal's one shape.
 pub fn to_wire_fields(vs: &[FieldValue]) -> Vec<WireField> {
     vs.iter()
@@ -353,6 +381,26 @@ pub struct ClubPosition {
     pub clock_ms: Option<i64>,
 }
 
+/// A position this host turned away, for the host's own screen ([`ClubLog::refused`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    /// The name and station call its JOIN gave.
+    pub label: String,
+    pub call: String,
+    /// The sentence it was sent, verbatim.
+    pub reason: String,
+    /// Host clock at its last refused JOIN.
+    pub at_unix: u64,
+}
+
+/// How long the host keeps showing a refused position after its last try. A refused
+/// position tries again at least every 15 s while its sync is on, so a minute without one
+/// means it has stopped.
+const REFUSED_SHOWN_SECS: u64 = 60;
+/// The most refused positions the host keeps: the JOIN that fills this list comes off the
+/// network, and a peer that cycles position ids must not grow it without bound.
+const MAX_REFUSED: usize = 16;
+
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClubScore {
@@ -413,6 +461,8 @@ pub struct ClubLog {
     arrivals: VecDeque<(u64, String)>,
     /// The append-only event journal. `None` = not journaling (tests).
     journal: Option<std::fs::File>,
+    /// Positions this host turned away, by position id ([`note_refused`](Self::note_refused)).
+    refused: HashMap<String, Refused>,
     /// `(positions, shown)` while the board last sent was as big as one club line carries,
     /// from [`tempo_net::fdsync::board_fit`] ([`note_board_sent`](Self::note_board_sent)).
     /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
@@ -712,6 +762,7 @@ impl ClubLog {
     /// A position joined (or rejoined): remember its identity, return the
     /// high-water ack it should stream past.
     pub fn join(&mut self, posid: &str, label: &str, call: &str, now: u64) -> u64 {
+        self.refused.remove(posid);
         let pos = self.positions.entry(posid.to_string()).or_default();
         if !label.trim().is_empty() {
             pos.label = label.trim().to_string();
@@ -721,6 +772,47 @@ impl ClubLog {
         }
         pos.last_seen_unix = now;
         pos.acked
+    }
+
+    /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
+    /// while the position keeps trying ([`refused`](Self::refused)). The name and call come
+    /// off the network, so each is cut to 64 characters, and the list to [`MAX_REFUSED`],
+    /// the oldest going first.
+    pub fn note_refused(&mut self, posid: &str, label: &str, call: &str, reason: &str, now: u64) {
+        let cut = |s: &str| s.trim().chars().take(64).collect::<String>();
+        self.refused.insert(
+            cut(posid),
+            Refused {
+                label: cut(label),
+                call: cut(call).to_uppercase(),
+                reason: reason.to_string(),
+                at_unix: now,
+            },
+        );
+        while self.refused.len() > MAX_REFUSED {
+            let oldest = self
+                .refused
+                .iter()
+                .min_by_key(|(id, r)| (r.at_unix, (*id).clone()))
+                .map(|(id, _)| id.clone());
+            if let Some(id) = oldest {
+                self.refused.remove(&id);
+            }
+        }
+    }
+
+    /// The positions refused within the last minute, by name (unnamed ones by id after) —
+    /// one that has stopped trying drops off, and one that joined went at its join.
+    pub fn refused(&self, now: u64) -> Vec<&Refused> {
+        let mut out: Vec<(&String, &Refused)> = self
+            .refused
+            .iter()
+            .filter(|(_, r)| now.saturating_sub(r.at_unix) <= REFUSED_SHOWN_SECS)
+            .collect();
+        out.sort_by(|(a_id, a), (b_id, b)| {
+            (a.label.is_empty(), &a.label, *a_id).cmp(&(b.label.is_empty(), &b.label, *b_id))
+        });
+        out.into_iter().map(|(_, r)| r).collect()
     }
 
     /// A position's presence report. `r.name` is its CURRENT friendly name

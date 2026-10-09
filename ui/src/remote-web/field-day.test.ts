@@ -264,16 +264,25 @@ it('accepts a board row\'s measured clock, null or absent, and refuses anything 
  for (const bad of [1.5,'-3000',Number.MAX_SAFE_INTEGER+2,true,{}]) expect(()=>parseFieldDay(page(bad)),String(bad)).toThrow('invalidFieldDay')
 })
 
-// A key a host sends only when it applies, so an older station never does: how full its club
-// board is (`boardFull`). This validator refuses a key it does not know, so the page that takes
-// it is deployed before the release that writes it.
-it('accepts a host club\'s full board, and still bounds it',()=>{
+// Two keys a host sends only when they apply, so an older station sends neither: how full its
+// club board is (`boardFull`) and the positions it turned away (`refused`). This validator
+// refuses a key it does not know, so the page that takes them is deployed before the release
+// that writes them.
+it('accepts a host club\'s full board and the positions it turned away, and still bounds them',()=>{
  const page=fieldDayPage()
  const club=(page.meta as {source:{fieldDay:{club:Record<string,unknown>}}}).source.fieldDay.club
  club.boardFull={positions:70,shown:59}
- expect(parseFieldDay(page).fieldDay?.club?.boardFull).toEqual({positions:70,shown:59})
+ club.refused=[{posName:'SSB tent',call:'W9XYZ',reason:'this club sends the in-state IL QSO Party exchange (its county)'}]
+ const got=parseFieldDay(page).fieldDay?.club
+ expect(got?.boardFull).toEqual({positions:70,shown:59})
+ expect(got?.refused?.[0].call).toBe('W9XYZ')
  for(const bad of [{positions:70},{positions:70,shown:1.5},{positions:70,shown:59,extra:0},null]){
   club.boardFull=bad
   expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+ club.boardFull={positions:70,shown:59}
+ for(const bad of [[{posName:'a',call:'b'}],[{posName:'a',call:'b',reason:7}],Array(17).fill({posName:'a',call:'b',reason:'c'}),{}]){
+  club.refused=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad).slice(0,60)).toThrow('invalidFieldDay')
  }
 })

@@ -2673,6 +2673,28 @@ pub struct FdClubDto {
     /// takes it is deployed before the release that writes it. Absent unless it applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_full: Option<FdBoardFullDto>,
+    /// ⭐ **The positions this host turned away, and what each was told** — the HOST's alone:
+    /// the refusal a JOIN met (a version, a contest or an exchange role this club does not
+    /// run), the latest per position, kept while that position keeps trying. The position's
+    /// own screen shows the same sentence, from the host's `error` line, so both ends say
+    /// which value differs and where to set it.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know first, as `board_full`
+    /// is. Absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<FdClubRefusedDto>,
+}
+
+/// One entry of [`FdClubDto::refused`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubRefusedDto {
+    /// The position's name, as its JOIN gave it (empty when it has none).
+    pub pos_name: String,
+    /// The station call its JOIN gave.
+    pub call: String,
+    /// The sentence the position was sent, verbatim.
+    pub reason: String,
 }
 
 /// [`FdClubDto::board_full`]: how many positions the host's club has, and how many of them

@@ -672,8 +672,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FieldDayQso, FieldDayStatus,
-        LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubRefusedDto, FieldDayQso,
+        FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -769,13 +769,25 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     "dupes",
                     "board",
                 ],
-                &["lastError", "dkeys", "boardFull"],
+                &["lastError", "dkeys", "boardFull", "refused"],
             );
             if let Some(full) = club.get("boardFull") {
                 takes(
                     &format!("{what}: the club's full board"),
                     full,
                     &["positions", "shown"],
+                );
+            }
+            for refused in club
+                .get("refused")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                takes(
+                    &format!("{what}: a position the club turned away"),
+                    refused,
+                    &["posName", "call", "reason"],
                 );
             }
             for row in club["board"].as_array().unwrap() {
@@ -961,6 +973,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 positions: 70,
                 shown: 59,
             }),
+            refused: vec![FdClubRefusedDto {
+                pos_name: "SSB tent".into(),
+                call: "W1AW".into(),
+                reason: "this club sends the in-state exchange".into(),
+            }],
         }),
         upload: Default::default(),
         receives: Vec::new(),
