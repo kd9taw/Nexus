@@ -7030,7 +7030,7 @@ export const FR: PartialCatalog = {
   "topbar.operator.single": "Opérateur unique (effacer)",
   "topbar.operator.set": "Définir l'opérateur",
   "topbar.operator.set.title": "Aucun opérateur défini — cliquez pour indiquer qui est au manip",
-  "topbar.operator.firstSet": "Aucun opérateur dans le journal — définissez le premier dans le Tableau de bord Field Day",
+  "topbar.operator.firstSet": "Aucun opérateur dans le journal — définissez le premier dans l'écran Concours",
   "topbar.operator.switch": "Basculer sur {{call}}",
   "topbar.operator.title": "Vous trafiquez en {{call}} — cliquez pour changer qui est au manip",
   "topbar.recording.title": "Enregistrement de ce QSO en WAV — cliquez pour arrêter",

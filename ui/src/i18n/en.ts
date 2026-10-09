@@ -11327,7 +11327,7 @@ export const EN = {
   // says an operator can be named at all.
   'topbar.operator.set': 'Set operator',
   'topbar.operator.set.title': 'Nobody is set as the operator — click to say who is at the key',
-  'topbar.operator.firstSet': 'No operators logged yet — set the first one on the Field Day dashboard',
+  'topbar.operator.firstSet': 'No operators logged yet — set the first one on the Contest screen',
   // `{{rig}}` and `{{believed}}` are mode names, straight through.
   'topbar.rigMode.chip': 'rig: {{mode}}',
   'topbar.rigMode.title':

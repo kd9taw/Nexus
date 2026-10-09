@@ -7030,7 +7030,7 @@ export const ES: PartialCatalog = {
   "topbar.operator.single": "Operador único (limpiar)",
   "topbar.operator.set": "Definir operador",
   "topbar.operator.set.title": "No hay ningún operador definido — pulsa para indicar quién está a los mandos",
-  "topbar.operator.firstSet": "Todavía no hay operadores en el log — define el primero en el Tablero de Field Day",
+  "topbar.operator.firstSet": "Todavía no hay operadores en el log — define el primero en la pantalla Concurso",
   "topbar.operator.switch": "Cambiar a {{call}}",
   "topbar.operator.title": "Operando como {{call}} — pulsa para cambiar quién está a los mandos",
   "topbar.recording.title": "Grabando este QSO en un WAV — pulsa para parar",

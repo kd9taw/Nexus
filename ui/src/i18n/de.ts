@@ -5286,7 +5286,7 @@ export const DE: PartialCatalog = {
   "topbar.operator.single": "Einzeloperator (zurücksetzen)",
   "topbar.operator.set": "Operator festlegen",
   "topbar.operator.set.title": "Es ist kein Operator festgelegt — klicken, um anzugeben, wer an der Taste sitzt",
-  "topbar.operator.firstSet": "Noch keine Operatoren im Log — den ersten im Field-Day-Dashboard festlegen",
+  "topbar.operator.firstSet": "Noch keine Operatoren im Log — den ersten im Contest-Bildschirm festlegen",
   "topbar.rigMode.chip": "Rig: {{mode}}",
   "topbar.rigMode.title": "Ihr Funkgerät steht auf {{rig}}, Nexus dagegen auf {{believed}}. Den Betriebsartenknopf am Gerät drehen (oder in einem Cockpit das Band wählen), damit beides übereinstimmt.",
   "topbar.rxLevel.label": "RX-Pegel",

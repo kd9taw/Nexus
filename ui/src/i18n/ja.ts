@@ -7014,7 +7014,7 @@ export const JA: PartialCatalog = {
   "topbar.operator.single": "シングルオペレーター(クリア)",
   "topbar.operator.set": "オペレーター設定",
   "topbar.operator.set.title": "オペレーターが未設定です — クリックして運用者を指定します",
-  "topbar.operator.firstSet": "ログにオペレーターがまだ登録されていません — 最初の1人はField Dayダッシュボードで設定します",
+  "topbar.operator.firstSet": "ログにオペレーターがまだ登録されていません — 最初の1人はコンテスト画面で設定します",
   "topbar.rigMode.chip": "リグ:{{mode}}",
   "topbar.rigMode.title": "無線機は{{rig}}ですが、Nexusは{{believed}}と認識しています。無線機のモードつまみを合わせるか、運用コックピットでバンドを選び直してください。",
   "topbar.rxLevel.label": "RX音声レベル",
