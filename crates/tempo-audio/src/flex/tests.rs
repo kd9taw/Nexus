@@ -567,6 +567,83 @@ fn a_cw_word_the_client_does_not_send_says_why() {
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
 }
 
+/// ⭐ A word with a character Nexus has no Morse for is not sent, and the CW line names the
+/// character: Nexus cannot time it (`morse_duration_ms` skips it), while the radio's keyer may send
+/// it, so the word could outlast the window its readback holds open and end in a false alarm. The
+/// same word without it goes out.
+#[test]
+fn a_cw_word_nexus_cannot_time_is_refused_by_name() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    in_cw(&mut c, &d);
+    for (word, c_) in [("W9XYZ!", '!'), ("OP'S", '\''), ("5NN#", '#')] {
+        let asked = Instant::now();
+        assert_eq!(c.ask(&format!("b {word}"), 1), "RPRT -1\n", "{word}");
+        assert_eq!(
+            d.key_refused_since(asked),
+            Some((
+                format!(
+                    "CW not sent: Nexus has no Morse for \"{c_}\", so it cannot tell how long the \
+                     radio takes to send it. Take it out of the message, or use another keyer."
+                ),
+                None
+            )),
+            "{word}"
+        );
+    }
+    assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+    assert_eq!(c.ask("b W9XYZ", 1), "RPRT 0\n", "the control");
+    assert_eq!(cwx_wire(&sim), ["cwx send \"W9XYZ\" 1"]);
+}
+
+/// The tune carrier's and the key's commands on the wire.
+fn tune_wire(sim: &Simulator) -> Vec<String> {
+    wire(sim)
+        .into_iter()
+        .filter(|c| c.starts_with("transmit tune") || c.starts_with("xmit "))
+        .collect()
+}
+
+/// ⭐ THE RADIO'S TUNE CARRIER IS OFF AS IT SHIPS, AND TYPED BEHIND THE DOOR. As it ships the client
+/// says so (`tunes_natively`, and `sends_cw` for its CW), and a tune it is asked for is refused
+/// before anything reaches the radio, as admission refuses every start no bench has confirmed. With
+/// the test-only door open the same typed calls start the carrier (`transmit tune 1`) and end it
+/// with its own stop (`transmit tune 0`), its end proven, no alarm; and the client reads what the
+/// radio reports beside Tune: the bundled radio's 10 % tune power and its transmit timeout off.
+#[test]
+fn the_radios_tune_carrier_is_off_as_it_ships_and_typed_behind_the_door() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = daemon(&sim);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!((d.tunes_natively(), d.sends_cw()), (false, false));
+    assert_eq!(
+        d.tune_on(3_000),
+        Err(Some(Refusal::NoReadback(StartKind::Tune)))
+    );
+    assert_eq!(tune_wire(&sim), Vec::<String>::new());
+
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = cw_daemon(&sim);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!((d.tunes_natively(), d.sends_cw()), (true, true));
+    assert_eq!(
+        d.radio_tune(),
+        FlexTune {
+            power_pct: Some(10),
+            tx_timeout_ms: Some(0)
+        }
+    );
+    assert_eq!(d.tune_on(3_000), Ok(()));
+    wait_session(&d, "the radio tuned", |s| {
+        s.model.transmit.tune == Some(true)
+    });
+    assert!(matches!(d.tune_off(), StopOutcome::Sent { .. }));
+    wait_session(&d, "the end proven", |s| !s.keyed);
+    assert_eq!(tune_wire(&sim), ["transmit tune 1", "transmit tune 0"]);
+    assert_eq!(d.alarm(), None);
+}
+
 /// ⭐ An amplifier in line (the simulator's PGXL profile: the radio's PTT_REQUESTED carries
 /// `reason=AMP:PG-XL`): an over through the client ends on its readback, with no alarm, as it
 /// ships. Any other reason on the same report still ends in the alarm.

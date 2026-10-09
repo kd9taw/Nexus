@@ -3284,6 +3284,9 @@ struct RadioLoop {
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
     tuning_keyed: bool,
+    /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
+    /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
+    tune_native: bool,
     /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
     /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
     /// else an FT8 operator gets dropped from DATA-U to plain USB.
@@ -3619,6 +3622,12 @@ struct RadioLoop {
     /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
     /// voice keyer's refusal).
     flex_radio_has_mic_pushed: Option<bool>,
+    /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
+    /// pushed to the engine (`None` inside: Tune is Nexus's tone).
+    flex_tune_pushed: Option<Option<tempo_app::dto::FlexTune>>,
+    /// The CW speed the Flex client's radio last reported, while its CW is switched on: a change
+    /// to a speed this loop did not set is followed (`last_cat_wpm`).
+    cw_radio_wpm: Option<u32>,
     /// When the current native audio source started, for the starvation check. `None` once
     /// starvation has been reported (the check is one-shot per source — it must not re-fire every
     /// tick).
@@ -4035,6 +4044,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             tuning_keyed: false,
+            tune_native: false,
             tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
@@ -4117,6 +4127,8 @@ impl RadioLoop {
             flex_client_audio_failed: false,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
+            flex_tune_pushed: None,
+            cw_radio_wpm: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
             silent_capture_since: None,
@@ -5267,6 +5279,32 @@ impl RadioLoop {
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
     /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
     /// all, and an over that goes out unkeys at its end as any over does.
+    /// Start the radio's own tune carrier through Nexus's Flex client, held at most `hold_ms`
+    /// ([`crate::flex::FlexDaemon::tune_on`]). A refusal goes on the PTT line in the operator's
+    /// words, as a refused key's does ([`Self::report_ptt`]), and comes back for the log; a start
+    /// clears that line.
+    fn key_radio_tune(&mut self, engine: &Arc<Mutex<Engine>>, hold_ms: u64) -> Option<String> {
+        let started = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .map(|d| d.tune_on(hold_ms));
+        let why = match started {
+            Some(Ok(())) => {
+                self.report_ptt(engine, false);
+                return None;
+            }
+            Some(Err(refusal)) => crate::flex::tune_refusal_words(refusal.as_ref()),
+            None => crate::flex::tune_refusal_words(None),
+        };
+        tempo_core::applog::info("tx", &format!("{why} (dropped)"));
+        if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
+            engine_lock(engine).set_audio_error(Some(why.clone()));
+            self.err_owner = ErrOwner::Ptt;
+        }
+        Some(why)
+    }
+
     fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
         let key = if plain {
@@ -5785,6 +5823,7 @@ impl RadioLoop {
         self.mode_giveup = None;
         self.mode_saw_reject = false;
         self.last_cat_wpm = 0;
+        self.cw_radio_wpm = None;
         // The WinKeyer is not the thing being handed off (it is its own box on its own
         // port), but the handoff resets every "already told it" cache and this one costs
         // two bytes to be wrong about, so it goes with the rest.
@@ -6087,6 +6126,17 @@ impl RadioLoop {
         if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
             self.flex_radio_has_mic_pushed = Some(radio_has_mic);
             engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+        }
+        // …and, while Tune is the client's radio's own carrier (switched on only once a tester's
+        // bench has confirmed it), what that radio reports beside Tune: its tune power and its own
+        // transmit timeout. The engine then judges a tune as CW where the radio puts the carrier
+        // too. Pushed on the change, before the tune branch below reads `tuning`.
+        let flex_tune = flex
+            .filter(|d| d.tunes_natively())
+            .map(crate::flex::FlexDaemon::radio_tune);
+        if self.flex_tune_pushed != Some(flex_tune) {
+            self.flex_tune_pushed = Some(flex_tune);
+            engine_lock(engine).observe_flex_tune(flex_tune);
         }
 
         self.apply_remote_radio(engine, rig, now);
@@ -8943,6 +8993,31 @@ impl RadioLoop {
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
             let ready = now >= self.cw_busy_until && self.may_key();
+            // THE RADIO'S CW SPEED IS FOLLOWED, NEVER FOUGHT (Nexus's Flex client, once its CW is
+            // switched on). The radio's keyer sends each word at the speed it reports, and another
+            // program can change that speed (SmartSDR, a Maestro). A change the radio reports to a
+            // speed this loop did not set (`last_cat_wpm`) becomes the WPM control's: the CW screen
+            // shows what the radio keys at, the pacing below uses it, and nothing sets it back.
+            // Nexus's own speed still reaches the radio with the next word when the operator moves
+            // the control. Not persisted: the operator's saved speed is the operator's.
+            if let Some(d) = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|d| d.sends_cw())
+            {
+                let radio = d.cw_speed();
+                if radio != self.cw_radio_wpm {
+                    self.cw_radio_wpm = radio;
+                    if let Some(wpm) = radio.filter(|w| *w != self.last_cat_wpm) {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_wpm(wpm);
+                        // The control's range is narrower than the radio's: what it holds is what
+                        // this loop would send, so the radio's speed is not sent back over it.
+                        self.last_cat_wpm = eng.cw_wpm();
+                    }
+                }
+            }
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 (
@@ -11244,12 +11319,11 @@ impl RadioLoop {
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
         let mut is_tuning = eng.tuning();
+        // Operator-configurable auto-release (WSJT-X "Tune after t s"), floored at 1 s and
+        // CLAMPED to the MAX_TUNE_MS hard ceiling.
+        let max_ms = ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
         if is_tuning {
             if let Some(start) = self.tune_started_ms {
-                // Operator-configurable auto-release (WSJT-X "Tune after t s"),
-                // floored at 1 s and CLAMPED to the MAX_TUNE_MS hard ceiling.
-                let max_ms =
-                    ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
                 if now - start > max_ms {
                     eng.set_tune(false);
                     is_tuning = false;
@@ -11265,9 +11339,26 @@ impl RadioLoop {
         }
         if is_tuning {
             let keying = !self.tuning_keyed;
+            // THE RADIO'S OWN TUNE CARRIER (Nexus's Flex client, Beta, switched on only once a
+            // tester's bench has confirmed its readback). The radio makes the carrier itself at its
+            // own tune power (`transmit tune 1`), so this loop plays no tone, DAX carries nothing,
+            // and the client's typed calls start and end it: rigctld has no verb for it. The
+            // loop's timeout above and its release below stand; the client's session also ends the
+            // carrier by itself at the hold handed to it plus its margin, whether or not this loop
+            // runs. Decided at the key, kept to the release.
+            let native = if keying {
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(crate::flex::FlexDaemon::tunes_natively)
+            } else {
+                self.tune_native
+            };
             // TUNE POWER (`Settings::tune_power_pct`) — the level a tune-up keys at, read while
             // the lock is still held. Applied in the LOOP and not in a cockpit, so every path
-            // that starts a tune gets it.
+            // that starts a tune gets it. Not to the radio's own carrier, which keys at the tune
+            // power set on the radio: Nexus shows that one and writes nothing (operator ruling,
+            // 2026-10-08, "Radio's, shown, nothing written").
             //
             // SAFE-DIRECTION ONLY: the lower of the operator's tune level and the level already
             // commanded, so a tune can turn the rig DOWN and never up — and it inherits the
@@ -11281,6 +11372,7 @@ impl RadioLoop {
             let tune_pct = eng
                 .settings()
                 .tune_power_pct
+                .filter(|_| !native)
                 .map(|pct| f32::from(pct.min(100)) / 100.0);
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
@@ -11375,25 +11467,43 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                let key = self.key_over(rig, false);
-                // The tune's line, in the words the voice keyer gives a refused key.
-                self.report_ptt(engine, key.warns());
+                let refused = if native {
+                    // Held at most the auto-release's time: the client's session ends it at that
+                    // plus its margin even if this loop stalls.
+                    self.key_radio_tune(engine, max_ms as u64)
+                } else {
+                    let key = self.key_over(rig, false);
+                    // The tune's line, in the words the voice keyer gives a refused key.
+                    self.report_ptt(engine, key.warns());
+                    match key {
+                        KeyUp::Refused(why) => {
+                            note_refused_key("tune not keyed", &why);
+                            Some(why)
+                        }
+                        _ => None,
+                    }
+                };
                 self.tuning_keyed = true;
+                self.tune_native = native;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
                 self.tune_last_chunk_ms = None;
                 self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
-                if let KeyUp::Refused(why) = &key {
-                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`). The tune
-                    // ends here, through the same call its auto-release makes, and the next
-                    // tick's release below unkeys and puts the DATA mode and the power back, as
-                    // it does for every tune.
-                    note_refused_key("tune not keyed", why);
+                if refused.is_some() {
+                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`; the client's
+                    // carrier was never started). The tune ends here, through the same call its
+                    // auto-release makes, and the next tick's release below unkeys and puts the
+                    // DATA mode and the power back, as it does for every tune.
                     engine_lock(engine).set_tune(false);
                     return Ok(());
                 }
+            }
+            if native {
+                // The radio makes the carrier: nothing to play.
+                self.rx.clear(); // don't decode our own carrier
+                return Ok(());
             }
             // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
             //
@@ -11437,7 +11547,21 @@ impl RadioLoop {
             // took to play out. Nothing but tune carrier can be queued here — the tune branch
             // supersedes any pending slot over and returns early on every tick it runs.
             backend.flush_output();
-            let _ = rig.ptt(false);
+            // The radio's own carrier ends with its own stop, the client's typed call; every other
+            // tune with the unkey, as does a native tune whose client has gone.
+            match self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|_| self.tune_native)
+            {
+                Some(d) => {
+                    d.tune_off();
+                }
+                None => {
+                    let _ = rig.ptt(false);
+                }
+            }
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
                 // Restore the PRE-TUNE data state — NOT a hardcoded OFF. An FT8/DATA-U operator
                 // (tune_was_data) stays in DATA-U; only a plain USB/LSB operator gets DATA off.
