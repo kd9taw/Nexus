@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+pub mod contest_removal;
+/// Removing the newest contest contact, through the engine.
+#[cfg(test)]
+mod contest_removal_tests;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -2733,6 +2737,10 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// The highest contest seq the slot loop has handed to N3FJP, the N1MM broadcast and
+    /// WSJT-X listeners — the forwarder's own cursor, told here each slot boundary
+    /// ([`Self::note_fd_forwarded`]) so a removal can say whether the contact already went.
+    fd_forwarded_seq: u64,
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
@@ -5377,6 +5385,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_forwarded_seq: 0,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
             // any path that leaves a pending message in the sequencer (a CQ-run state, a
@@ -25172,7 +25181,10 @@ contact yourself."
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
-        if station.log.qso_count() == 0 {
+        // EMPTY means no row at all. A log whose every contact was removed still holds them,
+        // and the journal on disk still has them LIVE until it is rewritten: skipping the write
+        // here brought a removed contact back on the next mode change or restart.
+        if station.log.qsos().is_empty() && station.log.removed().is_empty() {
             return None;
         }
         Some(station.log.adif())
@@ -25829,9 +25841,14 @@ contact yourself."
         self.station.set_sat_tag(id, sat_name)
     }
 
-    /// See [`StationCore::delete_qso`].
+    /// See [`StationCore::delete_qso`] — plus the contest half [`Self::contest_row_deleted`], as
+    /// [`Self::update_qso`] carries a correction into the contest log.
     pub fn delete_qso(&mut self, id: tempo_core::logbook::RecordId) -> bool {
-        self.station.delete_qso(id)
+        let Some(gone) = self.station.delete_row(id) else {
+            return false;
+        };
+        self.contest_row_deleted(&gone);
+        true
     }
 
     /// See [`StationCore::clear_logbook`] — plus the reset of the LoTW/eQSL

@@ -12,6 +12,8 @@ import type { FieldDayStatus } from '../types'
 import type { FdRulesetDto } from '../api'
 
 vi.mock('../api', () => ({
+  // The contest screen's Removed list, read on mount: none removed.
+  contestRemoved: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),

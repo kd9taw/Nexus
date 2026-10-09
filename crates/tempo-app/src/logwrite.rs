@@ -102,6 +102,12 @@ pub fn change_row<T>(
             e.station_mut()
                 .commit_planned(&plan, class, rows, false, Vec::new(), context)
                 .ok()?;
+            // A delete — every command's comes through here, the desktop's, by id and a Remote
+            // browser's: the contest log's own row goes too, as a removal, in the same hold of
+            // the lock, as an edit's correction reaches it ([`Engine::contest_row_deleted`]).
+            if after.is_none() {
+                e.contest_row_deleted(&before);
+            }
             Some(Ok(Ok(Some(then(e, (Arc::clone(&before), after))))))
         });
         if let Some(made) = made {

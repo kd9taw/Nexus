@@ -1709,6 +1709,7 @@ export function CwCockpit({
         onCallChange={onStripCall}
         onReset={onStripReset}
         fieldDay={fieldDay}
+        active={active}
         fdMode="CW"
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>

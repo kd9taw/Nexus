@@ -154,6 +154,8 @@ const MIGRATED = [
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
   'components/LogEntry.tsx',
+  // Removing the newest contest contact: the strip's and the contest screen's sentences.
+  'features/contestRemoval.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
