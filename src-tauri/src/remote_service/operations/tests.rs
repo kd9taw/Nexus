@@ -306,6 +306,8 @@ struct Fixture {
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
+    /// The test's clock ([`Fixture::now`]): an hour ahead of the box's, and still.
+    clock: Instant,
     /// Declared last, so dropped last: the folder goes once the engine has, and with it every
     /// thread of the engine's that writes the log there (the 1.13 path's `log.adi` lane, the
     /// store's mirror), each joined after its last try at what it still owed.
@@ -338,7 +340,17 @@ impl Fixture {
             connection,
             _folder: Folder(dir.clone()),
             dir,
+            clock: Instant::now() + Duration::from_secs(3600),
         }
+    }
+    /// The time to hand the authority, which takes `now` with every request: the test's own
+    /// clock, which moves only where a test asks at a later time (`f.now() + LEASE`). The box's
+    /// clock let a five-second lease lapse in a test that never heartbeats, whenever a loaded box
+    /// stopped the test's process for longer than that. Where the authority reads the box's clock
+    /// itself (a permit's reconcile, a command's check as it runs, a hardware permit's deadline),
+    /// that clock is an hour behind every deadline set on this one, so it ends nothing either.
+    fn now(&self) -> Instant {
+        self.clock
     }
     /// The same station with its log owned by the STORE — the ordinary launch since the
     /// logbook moved into its database — rather than by `contacts.adi` directly.

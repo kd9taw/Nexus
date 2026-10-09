@@ -312,9 +312,12 @@ export function Logbook({
   // rows the station sent (`observedLog`, below).
   const [observedLog, setLog] = useState<LoggedQso[]>([])
   // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
-  // globe key on it. A Remote browser counts the rows the station sent, as it always did.
-  const nativeLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick) ?? emptyAnswer(LOG_SIZE)
-  const logSize = control ? nativeLogSize : observedLog.length
+  // globe key on it. A Remote browser counts the rows the station sent, as it always did. The
+  // engine's answer is `undefined` until it lands, and for as long as the engine refuses the
+  // question while a change is being saved (features/notAnswered): the gates count that as 0, with
+  // nothing to export or purge yet, but only an ANSWERED 0 is an empty log.
+  const askedLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick)
+  const logSize = control ? (askedLogSize ?? emptyAnswer(LOG_SIZE)) : observedLog.length
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -1046,6 +1049,17 @@ export function Logbook({
   const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
   const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
   const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
+  // WHAT THE LIST SAYS WHEN IT HAS NO ROWS — and a log that exists is never reported empty. "No
+  // logged contacts yet." only on an answer that the LOG holds none: the engine's count of 0, or a
+  // page the station sent for no search and no filter. A list that matched nothing says so. Until
+  // the engine has counted the log, and sent the first page of a log it counted, the list is
+  // reading the logbook: at every open for a moment, and for as long as the engine refuses the
+  // questions while a change is being saved. A Remote page on its way says so in its status line.
+  const listSays: 'reading' | 'empty' | 'noMatch' | null =
+    listTotal > 0 ? null
+    : control ? (askedLogSize === undefined || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch')
+    : remoteLog?.phase !== 'ready' ? null
+    : deferredSearch.trim() || needsConfirmOnly ? 'noMatch' : 'empty'
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1736,7 +1750,7 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          <span className="count-badge">{remoteLog?.total ?? logSize}</span>
+          {(!control || askedLogSize !== undefined) && <span className="count-badge">{remoteLog?.total ?? logSize}</span>}
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
         {!control && remoteLog && (canLog || showForm) && (
@@ -2511,8 +2525,9 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {logSize === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
-          {logSize > 0 && listTotal === 0 && (
+          {listSays === 'reading' && <p className="empty">{t('logbook.reading')}</p>}
+          {listSays === 'empty' && <p className="empty">{t('logbook.empty')}</p>}
+          {listSays === 'noMatch' && (
             <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
           {listTotal > 0 && (

@@ -1602,6 +1602,8 @@ export const EN = {
   'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
+  // The list before the engine has answered what the log holds: never "No logged contacts yet." until it has.
+  'logbook.reading': 'Reading the logbook…',
   // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
   'logbook.rows.loading': 'Loading…',
   // The keyboard grid's keys (v2 §6), read to a screen reader as the grid's description: four

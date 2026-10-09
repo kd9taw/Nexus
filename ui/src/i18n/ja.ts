@@ -1094,6 +1094,7 @@ export const JA: PartialCatalog = {
   "logbook.field.qslCard.label": "カード受領",
   "logbook.empty": "記録された交信はまだありません。",
   "logbook.emptySearch": "「{{query}}」に一致する交信はありません。",
+  "logbook.reading": "ログブックを読み込み中…",
   "logbook.rows.loading": "読み込み中…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑と↓で交信を移動し、PgUpとPgDnで1ページずつ、HomeとEndで最初と最後に移動します。",
