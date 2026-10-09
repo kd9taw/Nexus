@@ -255,6 +255,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
 
+- **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
+  Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
+  elevation boxes, with the line for the call in your log entry under them, so the bearing (and
+  elevation), ■ STOP and that line with **Point** all show in the stock rail on a 1366×768 screen and
+  larger, where STOP used to be a scroll down inside the box. In a rail narrowed toward its minimum on
+  a 1366×768 or 1600×900 screen the call's line can still be a short scroll down: drag the divider
+  under the box to give it room. The Rotor pane on Conditions and in a cockpit's own columns is
+  unchanged.
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each

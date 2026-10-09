@@ -152,7 +152,12 @@ Once it's configured and answering, rotator control appears throughout the app:
   pane has a second line: the call in that cockpit's log entry (in FT8/FT4, the
   QSO in progress), the short-path bearing and distance to it, e.g.
   `→ EC1DD 227° (1531 km)`, and **Point**, which turns the antenna there. The
-  bearing shown is the one Point turns to.
+  bearing shown is the one Point turns to. In the dashboard rail the pane is laid
+  out tighter, with a smaller rose beside the bearing and the boxes, so the
+  bearing, STOP and the second line show without scrolling in the stock rail. In
+  a rail narrowed toward its minimum on a 1366×768 or 1600×900 screen the second
+  line can still be a short scroll down inside the box: drag the divider under
+  the Rotor box to give it room.
 - **RotorStrip in the Phone, CW, Operate, RTTY, PSK, SSTV and JS8 cockpits** — a compact heading strip.
   It **hides when there's nothing to show**, and displays **"ROTOR —"** when a
   rotator is configured but not answering, so you can tell "no rotator" from
