@@ -190,6 +190,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on, or while XIT is on. Stop TX clears the radio's CW buffer at once, so only the word already
   going out can still finish; if the radio still shows transmitting just after that, Nexus sends
   the unkey, and if the radio does not confirm it, Nexus says so in red and drops the connection.
+  A speed another program sets on the radio (SmartSDR, say) becomes the WPM control's, so the CW
+  screen shows what the radio sends at and Nexus does not set it back. A word with a character
+  Nexus has no Morse for (`!` or `#`, for example) is not sent, and the CW line names the
+  character: Nexus could not tell how long the radio takes to send it. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: Tune with the radio's own carrier through the Flex native client, built and off
+  until a tester has checked it on a radio.** Once it is switched on, Tune on the Flex native
+  client starts the radio's own tune carrier, at the tune power set in SmartSDR, in place of
+  keying the radio and playing Nexus's tone. It runs while you hold Tune, up to your tune timeout
+  (12 seconds unless you change it, never more than 60), and releasing Tune, Stop TX or the
+  timeout ends it; if Nexus itself stalls, the connection ends it 2 seconds after the timeout.
+  Beside Tune, Nexus shows the radio's tune power and its transmit timeout, and when the radio has
+  no transmit timeout it says so: then nothing would end the carrier if Nexus or the network
+  failed during a tune. Nexus writes no power for this carrier, and the Tune power setting says it
+  does not apply there. Tune is also refused where the radio's carrier would fall outside your
+  CW privileges. Until it is switched on, Tune on the Flex native client works as before.
   NEEDS-BENCH on a FLEX radio.
 
 ### Changed
