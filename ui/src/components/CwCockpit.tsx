@@ -375,8 +375,24 @@ export const DEFAULT_FD_MACROS: CwMacro[] = [
  * Illinois QSO Party or CQ WW CW operator called CQ for somebody else's event; `CQ TEST` is
  * what a contest CQ is, and the exchange tokens are unchanged ({EXCH} is the running
  * contest's own exchange). Everything below F1 is Field Day's set, which is what a contest
- * needs. */
+ * needs, plus the REPORT: {EXCH} is the exchange without the signal report, which {RST}
+ * keys, so F3 and F4 send {RST} before it. Without it the Illinois QSO Party's F3 keyed the
+ * county alone, where the sponsor's exchange is RS(T) and county. */
 export const DEFAULT_CONTEST_MACROS: CwMacro[] = [
+  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
+  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {RST} {EXCH} {EXCH} K' },
+  { key: 'F4', label: 'TU', text: '! TU {RST} {EXCH} DE {MYCALL} K' },
+  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
+/** The contest set for an exchange with NO signal report (Sweepstakes, the California QSO
+ * Party, the ARRL VHF contests): the same keys with {RST} left out of F3 and F4, because a
+ * 5NN there is a wrong exchange — Sweepstakes would copy it as the serial. */
+export const DEFAULT_CONTEST_NO_REPORT_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
   { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
@@ -810,11 +826,15 @@ export function CwCockpit({
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
   // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
-  // for the two Field Day events and wrong on the air in every other contest.
+  // for the two Field Day events and wrong on the air in every other contest. Among those,
+  // the exchange says whether F3 and F4 send a report: the strip's received slots, the same
+  // `rst` slot it fills 599 into.
   const builtIn = fieldDay
     ? isFieldDay(fieldDay.event)
       ? DEFAULT_FD_MACROS
-      : DEFAULT_CONTEST_MACROS
+      : fieldDay.receives?.some((f) => f.kind === 'rst')
+        ? DEFAULT_CONTEST_MACROS
+        : DEFAULT_CONTEST_NO_REPORT_MACROS
     : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
@@ -929,13 +949,36 @@ export function CwCockpit({
   // use it too). The field shows that call — a decode fills it — and an overtype commits through
   // the same `selectPeer` on Enter, on blur, or just before a macro sends, so "type the call, press
   // F2" keys the TYPED call and never the stale one. Nothing here keys the rig on its own.
+  //
+  // ⭐ HIS CALL AND THE LOG STRIP'S CALL ARE ONE FIELD, shown twice (RTTY's shape). The strip bound
+  // its call to the contest session and never to the peer, so a call typed only in the strip was
+  // not the call the F-keys keyed: they keyed His Call, the last station or none. Now a call the
+  // strip reports (typed, a spot handoff's prefill, the clear after a contact is logged) is an
+  // edit of His Call, committed like one before the next send; and His Call, settled, is what the
+  // strip shows (`cwLive`). DEBOUNCED as RTTY's is: the strip spends a callbook lookup on a call
+  // it is given, so typing K, K9, K9A… waits out the typing. A call that arrives whole is settled
+  // at once. The decoder's unconfirmed best guess is in neither field until its chip is picked: in
+  // the strip alone it was a call shown and not keyed, the very mismatch this ends.
   const [hisCallDraft, setHisCallDraft] = useState('')
   const hisCallEditing = useRef(false)
   const hisCallRef = useRef({ draft: '', worked: null as string | null })
   hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall }
+  const [settledHisCall, setSettledHisCall] = useState('')
   useEffect(() => {
-    if (!hisCallEditing.current) setHisCallDraft(guide.workedCall ?? '')
+    const id = setTimeout(() => setSettledHisCall(callsignChars(hisCallDraft)), 500)
+    return () => clearTimeout(id)
+  }, [hisCallDraft])
+  const setCallNow = (call: string) => {
+    setHisCallDraft(call)
+    setSettledHisCall(call)
+  }
+  useEffect(() => {
+    if (!hisCallEditing.current) setCallNow(guide.workedCall ?? '')
   }, [guide.workedCall])
+  const onStripCall = (call: string) => {
+    hisCallEditing.current = true
+    setCallNow(call)
+  }
   const commitHisCall = async (raw?: string) => {
     if (!control) return
     hisCallEditing.current = false
@@ -1028,6 +1071,10 @@ export function CwCockpit({
   // prefill the log with the read call/RST/name. Never transmits — the operator still keys.
   const workCall = (call: string) => {
     if (!control) return
+    // The pick replaces an edit in progress in either field, rather than waiting under it to
+    // be overwritten by that edit's commit at the next send.
+    hisCallEditing.current = false
+    setCallNow(call)
     void selectPeer(call)
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
@@ -1049,7 +1096,10 @@ export function CwCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWork?.ts])
 
-  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4).
+  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
+  // macro key is one send, and never with Alt, Ctrl or Cmd held (RTTY's guard): a held F3's
+  // auto-repeat queued the exchange again on every repeat, and Alt+F4, the window's close,
+  // sent F4's macro. A modified key is left to the system; PgUp/PgDn still repeat.
   // Live ref so the document listener (bound once) always reads current state.
   // Esc's ABORT rides the shared capture listener (useEscStop, operator 2026-10-01), so no
   // control on the screen can swallow it; here its default is cancelled, as it always was, and it
@@ -1064,8 +1114,9 @@ export function CwCockpit({
       if (e.key === 'Escape') {
         e.preventDefault()
       } else if (macro) {
+        if (e.altKey || e.ctrlKey || e.metaKey) return
         e.preventDefault()
-        send(macro.text)
+        if (!e.repeat) send(macro.text)
       } else if (e.key === 'PageUp') {
         e.preventDefault()
         wpmTouched.current = true
@@ -1558,12 +1609,15 @@ export function CwCockpit({
         }}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
-        cwLive={{
-          call: guide.workedCall ?? cand.find((c) => c.best)?.call ?? null,
-          rst: guide.rst,
-          name: guide.name,
-          confirmed: guide.workedCall != null,
-        }}
+        // His Call, settled, and the strip's call back into it: one field. See `settledHisCall`.
+        // `confirmed: true` because it is the operator's call (typed or picked), never a guess;
+        // the RST and name are still the decoder's read of the worked station.
+        cwLive={
+          settledHisCall
+            ? { call: settledHisCall, rst: guide.rst, name: guide.name, confirmed: true }
+            : null
+        }
+        onCallChange={onStripCall}
         fieldDay={fieldDay}
         fdMode="CW"
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}

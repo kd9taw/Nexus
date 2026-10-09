@@ -287,13 +287,18 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
     default: { const: 'DEFAULT_MACROS', macros: sourceSet('DEFAULT_MACROS') },
     fieldDay: { const: 'DEFAULT_FD_MACROS', macros: sourceSet('DEFAULT_FD_MACROS') },
     contest: { const: 'DEFAULT_CONTEST_MACROS', macros: sourceSet('DEFAULT_CONTEST_MACROS') },
+    contestNoReport: {
+      const: 'DEFAULT_CONTEST_NO_REPORT_MACROS',
+      macros: sourceSet('DEFAULT_CONTEST_NO_REPORT_MACROS'),
+    },
   }
 
   // A published CW macro table is any table headed Key | Label | … on a CW page (every
   // per-mode page is `<mode>.md`, so RTTY's own four-macro table is not mistaken for this
-  // one). The Field Day set is the table under a Field Day heading, and the contest set the
-  // table under a heading that says contest and does not say Field Day — the cockpit picks
-  // between those two the same way. All three classifications are read off the doc, so a
+  // one). The Field Day set is the table under a Field Day heading, the contest set without a
+  // report the table under a heading that says "without a report", and the contest set the
+  // table under any other heading that says contest and does not say Field Day — the cockpit
+  // picks between those the same way. All four classifications are read off the doc, so a
   // renamed section or a reordered column fails rather than silently guarding nothing.
   const macroTables = docCorpus()
     .filter((abs) => /(^|\/)cw\.md$/i.test(rel(abs)))
@@ -303,9 +308,11 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
       ...t,
       set: /field day/i.test(t.heading)
         ? SETS.fieldDay
-        : /contest/i.test(t.heading)
-          ? SETS.contest
-          : SETS.default,
+        : /without a report/i.test(t.heading)
+          ? SETS.contestNoReport
+          : /contest/i.test(t.heading)
+            ? SETS.contest
+            : SETS.default,
     }))
 
   // A guard that quietly matches no table is worse than no guard, so what it found is
@@ -314,6 +321,7 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
     expect(SETS.default.macros).toHaveLength(8)
     expect(SETS.fieldDay.macros).toHaveLength(8)
     expect(SETS.contest.macros).toHaveLength(8)
+    expect(SETS.contestNoReport.macros).toHaveLength(8)
     const files = [...new Set(macroTables.map((t) => t.file))]
     expect(files, 'no CW page publishes a "Key | Label" table — this guard is checking nothing').toContain(
       'docs/manual/CW.md',
@@ -322,6 +330,8 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
     expect(fd, 'no Field Day macro table found — DEFAULT_FD_MACROS is unguarded').not.toEqual([])
     const contest = macroTables.filter((t) => t.set === SETS.contest).map((t) => `${t.file} — ${t.heading}`)
     expect(contest, 'no contest macro table found — DEFAULT_CONTEST_MACROS is unguarded').not.toEqual([])
+    const noReport = macroTables.filter((t) => t.set === SETS.contestNoReport).map((t) => `${t.file} — ${t.heading}`)
+    expect(noReport, 'no no-report contest table found — DEFAULT_CONTEST_NO_REPORT_MACROS is unguarded').not.toEqual([])
   })
 
   it.each(macroTables.map((t) => [`${t.file} — ${t.heading}`, t] as const))(

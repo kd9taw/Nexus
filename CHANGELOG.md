@@ -113,6 +113,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
+  too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
+  sent its macro, Alt+F4 (which closes the window) included. One press is now
+  one send, however long you hold the key, and a key with Ctrl, Alt or Cmd held is left to the
+  system, as on the RTTY and PSK screens. Esc and Stop TX stop exactly as before.
+- **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
+  log strip was not the one the keys sent: they sent the call in His Call, which was the last
+  station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
+  pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
+  field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
+  in a contest and out of one, and logging a contact empties both. A decoded call goes into both
+  when you click its chip; the decoder's best guess no longer fills the log strip by itself.
+- **CW contest keys send your report.** In a contest whose exchange includes a signal report
+  (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
+  cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois
+  QSO Party, F3 to K9AAA from Cook County sent `K9AAA DE <your call> COOK COOK K`. They now send
+  5NN before it. Sweepstakes, the California QSO Party and the ARRL VHF contests have no report
+  in their exchange, and their keys send what they did; so do Field Day's. Macro profiles you
+  saved are never changed: if you copied the contest keys into one of your own, add `{RST}`
+  before `{EXCH}` in its F3 and F4.
 - **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
   joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
   selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
