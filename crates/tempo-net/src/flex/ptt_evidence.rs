@@ -58,7 +58,12 @@
 //!   hold, and has a transition's time to see it.
 //!
 //! What fails an `xmit` attempt fails these too: a foreign owner, a physical keying source, a
-//! partial line, a failed reply or write, a second start, a missed deadline. The facts behind the
+//! partial line, a failed reply or write, a second start, a missed deadline. One refusal does not
+//! fail an attempt: an ATU start the radio refuses in its own reply ([`Phase::Refused`]). Any sample
+//! before a start's reply fails the attempt, so a refusal arriving first proves nothing keyed for
+//! it and nothing is to be ended; the session ends it there, quietly
+//! ([`StopTracker::release_refused`]). A CWX word the radio refuses still fails its window: the
+//! CW line could not say so once the word has been handed over. The facts behind the
 //! three new profiles are AetherSDR's notes and code comments at the same commit, read for facts,
 //! and none is confirmed on a real radio: each constant says where its facts come from and what
 //! stands in where the notes are silent. Admission refuses those starts until a tester's bench
@@ -249,6 +254,9 @@ pub enum Phase {
     Window,
     Confirmed,
     Failed,
+    /// The radio refused an ATU start in its reply, before any sample: nothing keyed for it, and
+    /// nothing is to be ended ([`StopTracker::release_refused`]).
+    Refused,
 }
 
 /// Why an attempt failed.
@@ -688,7 +696,17 @@ impl StopTracker {
         if sequence != self.key_sequence && sequence != self.stop_sequence {
             return;
         }
-        if result != Some(0) {
+        let atu = self.profile.ending == (Ending::Radio { atu_result: true });
+        if result != Some(0)
+            && atu
+            && sequence == self.key_sequence
+            && self.phase == Phase::AwaitKeyReply
+        {
+            // The radio did not start the cycle, and has keyed nothing for it: any sample since
+            // the start was armed would have failed the attempt.
+            self.phase = Phase::Refused;
+            self.deadline_ms = 0;
+        } else if result != Some(0) {
             self.fail(Failure::Reply);
         } else if sequence == self.key_sequence && self.phase == Phase::AwaitKeyReply {
             if matches!(self.profile.ending, Ending::Radio { .. }) {
@@ -1025,6 +1043,20 @@ impl StopTracker {
     /// sequence number. Nothing happens unless `request` is the confirmed one.
     pub fn consume(&mut self, request: StopRequest, now_ms: u64) -> bool {
         if self.evidence(now_ms) != Some(request) {
+            return false;
+        }
+        self.phase = Phase::Idle;
+        self.deadline_ms = 0;
+        self.operation = None;
+        self.stop = None;
+        true
+    }
+
+    /// The caller took the end of `operation`, an ATU start the radio refused
+    /// ([`Phase::Refused`]): back to idle, as after a proven end. Nothing happens in any other
+    /// phase or for another operation.
+    pub fn release_refused(&mut self, operation: Operation) -> bool {
+        if self.phase != Phase::Refused || self.operation != Some(operation) {
             return false;
         }
         self.phase = Phase::Idle;
@@ -1915,6 +1947,76 @@ mod tests {
         assert!(h.evidence().is_some());
         h.feed("S0|atu status=TUNE_IN_PROGRESS");
         assert_eq!(h.evidence(), None);
+    }
+
+    /// ⭐ An ATU start the radio refuses in its own reply, with nothing before it, keyed nothing:
+    /// the attempt is refused, not failed, and once released the tracker takes a fresh start. A
+    /// sample before the reply (the radio keyed after all), a failed write, or a refused CWX word
+    /// still fails the attempt, and a refusal releases only its own operation.
+    #[test]
+    fn an_atu_start_the_radio_refuses_keyed_nothing() {
+        let refused = |h: &mut Harness| {
+            assert!(h
+                .tracker
+                .begin_window(h.operation, h.stop, ATU, 101, Window::atu(), h.now));
+            h.written(101, true, true);
+        };
+        let mut h = Harness::new();
+        refused(&mut h);
+        h.feed("R101|50000016|");
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.failure(), h.evidence()),
+            (Phase::Refused, Failure::None, None)
+        );
+        h.now += ATU_CEILING_MS + TRANSITION_TIMEOUT_MS;
+        h.tracker.poll(h.now);
+        assert_eq!(
+            h.tracker.phase(),
+            Phase::Refused,
+            "no deadline: nothing to end"
+        );
+        assert!(!h.tracker.release_refused(op(9)), "another operation's");
+        assert!(h.tracker.release_refused(h.operation));
+        assert_eq!(h.tracker.phase(), Phase::Idle);
+        assert!(!h.tracker.release_refused(h.operation), "once");
+        assert!(h
+            .tracker
+            .begin_window(op(2), stop_of(op(2)), ATU, 102, Window::atu(), h.now));
+
+        // The radio keyed before it answered: that is not a refusal.
+        let mut h = Harness::new();
+        refused(&mut h);
+        h.feed(&REQUESTED.replace("source=SW", "source=TUNE"));
+        h.feed("R101|50000016|");
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.failure()),
+            (Phase::Failed, Failure::State)
+        );
+        assert!(!h.tracker.release_refused(h.operation));
+        // A start that did not go out in full.
+        let mut h = Harness::new();
+        assert!(h
+            .tracker
+            .begin_window(h.operation, h.stop, ATU, 101, Window::atu(), h.now));
+        h.written(101, true, false);
+        h.feed("R101|50000016|");
+        assert_eq!(h.tracker.failure(), Failure::Write);
+        // A CWX word refused in its reply fails as before.
+        let mut h = Harness::new();
+        assert!(h.tracker.begin_window(
+            h.operation,
+            h.stop,
+            CWX,
+            101,
+            Window::cwx(300, 300),
+            h.now
+        ));
+        h.written(101, true, true);
+        h.feed("R101|50000016|");
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.failure()),
+            (Phase::Failed, Failure::Reply)
+        );
     }
 
     #[test]

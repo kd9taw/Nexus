@@ -12,9 +12,10 @@
 //! - exactly one slice is the transmit slice, and it is ours;
 //! - what the start's kind needs of the radio's settings ([`kind_checks`]): a CWX word only on a
 //!   transmit slice in CW, with the radio's break-in on and its Sync CWX not on, so that the
-//!   radio's own keyer keys and unkeys it; a tune, an ATU cycle or a CWX word never while the
-//!   transmit slice's XIT is on, which would put the radio's own carrier off the dial the engine
-//!   judged. Nexus reads these settings and never writes them;
+//!   radio's own keyer keys and unkeys it; an ATU cycle only while the radio reports a tuner
+//!   fitted; a tune, an ATU cycle or a CWX word never while the transmit slice's XIT is on, which
+//!   would put the radio's own carrier off the dial the engine judged. Nexus reads these settings
+//!   and never writes them;
 //! - the interlock's last whole sample is `READY`, transmit allowed, no reason, no keying source
 //!   (no mic, ACC or RCA PTT), and names no transmitting client, or names us;
 //! - the unkey readback is idle: it has seen the radio idle on this connection, so the end of the
@@ -177,6 +178,9 @@ pub enum Refusal {
     /// A tune, an ATU cycle or a CWX word while the transmit slice reports XIT on: the radio's own
     /// carrier would sit off the dial the engine judged, which knows nothing of the slice's XIT.
     XitOn,
+    /// An ATU cycle while the radio reports no antenna tuner fitted
+    /// ([`StatusModel::atu_fitted`]).
+    NoAtu,
     /// The readback has not seen the radio idle on this connection.
     ReadbackNotIdle,
     /// Another program feeds the radio's DAX transmit audio (SmartSDR's DAX, typically): Nexus
@@ -221,6 +225,7 @@ impl fmt::Display for Refusal {
             Refusal::BreakInOff => f.write_str("the radio's break-in is off"),
             Refusal::SyncCwx => f.write_str("the radio's Sync CWX is on"),
             Refusal::XitOn => f.write_str("XIT is on for the transmit slice"),
+            Refusal::NoAtu => f.write_str("the radio reports no antenna tuner"),
             Refusal::ReadbackNotIdle => {
                 f.write_str("the radio has not been seen idle on this connection")
             }
@@ -339,8 +344,9 @@ fn admit_kinds(
 
 /// What only some kinds need of the radio's settings, refuse-only. A CWX word keys the radio's own
 /// keyer, which keys and unkeys the radio with its own break-in: the transmit slice must be in CW,
-/// break-in on, Sync CWX not on. A tune, an ATU cycle and a CWX word are carriers the radio makes
-/// itself where its transmit slice says, so the slice's XIT must be off. A key is none of these.
+/// break-in on, Sync CWX not on. An ATU cycle needs the radio's tuner. A tune, an ATU cycle and a
+/// CWX word are carriers the radio makes itself where its transmit slice says, so the slice's XIT
+/// must be off. A key is none of these.
 fn kind_checks(
     model: &StatusModel,
     tx: Option<&SliceDelta>,
@@ -357,6 +363,9 @@ fn kind_checks(
         if model.transmit.sync_cwx == Some(true) {
             return Err(Refusal::SyncCwx);
         }
+    }
+    if kind == StartKind::Atu && !model.atu_fitted() {
+        return Err(Refusal::NoAtu);
     }
     if kind != StartKind::Key && tx.and_then(|s| s.xit_on) == Some(true) {
         return Err(Refusal::XitOn);
@@ -472,6 +481,8 @@ mod tests {
     const OUR_CW_SLICE: &str =
         "S2B6E1F40|slice 0 in_use=1 tx=1 client_handle=0x2B6E1F40 mode=CW xit_on=0";
     const KEYER: &str = "S0|transmit break_in=1 break_in_delay=300 synccwx=0";
+    /// The radio's tuner fitted, as the simulator's radio reports it.
+    const ATU: &str = "S0|atu status=NONE atu_enabled=1 memories_enabled=0 using_mem=0";
 
     fn model(lines: &[&str]) -> StatusModel {
         let mut m = StatusModel::default();
@@ -754,9 +765,12 @@ mod tests {
         }
         // XIT refuses each carrier the radio makes itself; the CW rules are CWX's alone.
         for start in [TxStart::TuneOn, TxStart::AtuStart] {
-            assert_eq!(refused(&[xit.as_str(), KEYER, IDLE], start), Refusal::XitOn);
+            assert_eq!(
+                refused(&[xit.as_str(), KEYER, IDLE, ATU], start),
+                Refusal::XitOn
+            );
         }
-        let off = [digu.as_str(), "S0|transmit break_in=0 synccwx=1", IDLE];
+        let off = [digu.as_str(), "S0|transmit break_in=0 synccwx=1", IDLE, ATU];
         for start in [TxStart::TuneOn, TxStart::AtuStart] {
             assert!(admit_unbenched(&model(&off), &facts(), start).is_ok());
         }
@@ -768,6 +782,38 @@ mod tests {
         assert_eq!(
             admit(&model(&[OUR_CW_SLICE, KEYER, IDLE]), &facts(), cwx()).unwrap_err(),
             Refusal::NoReadback(StartKind::Cwx)
+        );
+        assert_eq!(BENCHED, &[StartKind::Key]);
+    }
+
+    /// ⭐ An ATU cycle needs the radio's tuner: refused while the radio reports none fitted, by its
+    /// `atu` status saying `atu_enabled=0` or by no `atu` status at all; admitted once it says
+    /// `atu_enabled=1`. Nothing else is asked of the tuner (its status is the cycle's own), the
+    /// tune carrier needs none, and in production the switch is still off, before this check.
+    #[test]
+    fn an_atu_cycle_needs_the_radios_tuner() {
+        let atu = |lines: &[&str]| admit_unbenched(&model(lines), &facts(), TxStart::AtuStart);
+        let not_fitted = ATU.replace("atu_enabled=1", "atu_enabled=0");
+        for lines in [
+            vec![OUR_TX_SLICE, IDLE],
+            vec![OUR_TX_SLICE, IDLE, not_fitted.as_str()],
+            vec![OUR_TX_SLICE, IDLE, "S0|atu status=TUNE_SUCCESSFUL"],
+        ] {
+            assert_eq!(atu(&lines).unwrap_err(), Refusal::NoAtu, "{lines:?}");
+        }
+        for status in ["NONE", "TUNE_SUCCESSFUL", "TUNE_BYPASS", "TUNE_FAIL"] {
+            let fitted = ATU.replace("status=NONE", &format!("status={status}"));
+            assert!(atu(&[OUR_TX_SLICE, IDLE, &fitted]).is_ok(), "{status}");
+        }
+        // A later line saying it is not fitted takes it back.
+        assert_eq!(
+            atu(&[OUR_TX_SLICE, IDLE, ATU, &not_fitted]).unwrap_err(),
+            Refusal::NoAtu
+        );
+        assert!(admit_unbenched(&model(&[OUR_TX_SLICE, IDLE]), &facts(), TxStart::TuneOn).is_ok());
+        assert_eq!(
+            admit(&model(&[OUR_TX_SLICE, IDLE]), &facts(), TxStart::AtuStart).unwrap_err(),
+            Refusal::NoReadback(StartKind::Atu)
         );
         assert_eq!(BENCHED, &[StartKind::Key]);
     }

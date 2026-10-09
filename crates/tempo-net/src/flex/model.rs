@@ -212,6 +212,14 @@ impl StatusModel {
             .collect()
     }
 
+    /// Whether the radio reports an antenna tuner fitted: its `atu` status says
+    /// `atu_enabled=1`. Some radios have the tuner as an option (the FLEX-6300). ⚠️ Which key says
+    /// a tuner is fitted is not documented: `atu_enabled` stands in until a tester's bench, on a
+    /// radio with the tuner and on one without it. A radio that has not said so has none here.
+    pub fn atu_fitted(&self) -> bool {
+        self.atu.atu_enabled == Some(true)
+    }
+
     /// The streams this connection owns, for teardown.
     pub fn our_streams(&self, ours: Option<u32>) -> Vec<u32> {
         self.streams
