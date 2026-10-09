@@ -551,7 +551,7 @@ impl CivBackend {
         let dial = self
             .read(commands::read_freq(self.addr), 0x03, None)
             .ok()
-            .and_then(|f| commands::parse_freq(&f));
+            .and_then(|f| commands::parse_freq(&f, self.model));
         let ok = self.ack(commands::set_dsp_func(
             self.addr,
             commands::FUNC_SATMODE,
@@ -571,7 +571,7 @@ impl CivBackend {
                 false,
             ));
             if let Some(hz) = dial {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             }
             return false;
         }
@@ -583,7 +583,7 @@ impl CivBackend {
             // next verb's `ensure_main` repairs it, and the next Doppler
             // correction rewrites the dial).
             if self.select("Main") {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             } else {
                 g.sel_stray = true;
             }
@@ -1108,7 +1108,7 @@ impl RigBackend for CivBackend {
             Ok(f) => {
                 *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(std::time::Instant::now());
-                commands::parse_freq(&f)
+                commands::parse_freq(&f, self.model)
                     .or(self.h.state().freq_hz)
                     .unwrap_or(0)
             }
@@ -1216,7 +1216,7 @@ impl RigBackend for CivBackend {
             return self.ensure_main(&mut g)
                 && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
         }
-        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
+        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz, self.model))
     }
 
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
@@ -1417,18 +1417,18 @@ impl RigBackend for CivBackend {
             return Some(false);
         }
         if !g.engaged {
-            return Some(self.ack(commands::set_unselected_freq(self.addr, hz)));
+            return Some(self.ack(commands::set_unselected_freq(self.addr, hz, self.model)));
         }
         // Satellite mode: the TX dial lives in the SUB band. Select-write-
         // verify-restore, atomic under the band lock. Success ONLY when the
         // rig's own read-back returns the frequency we sent — per LAW, what
         // was DONE, never what was computed.
         let ok = self.select("Sub")
-            && self.ack(commands::set_freq(self.addr, hz))
+            && self.ack(commands::set_freq(self.addr, hz, self.model))
             && self
                 .read(commands::read_freq(self.addr), 0x03, None)
                 .ok()
-                .and_then(|f| commands::parse_freq(&f))
+                .and_then(|f| commands::parse_freq(&f, self.model))
                 == Some(hz);
         // ALWAYS hand the selection back to Main — even mid-failure — and
         // re-read the dial so the engine's state cache holds MAIN's frequency
@@ -3286,6 +3286,64 @@ mod tests {
                 ],
                 "{model:?}: the dial and mode writes moved"
             );
+        }
+    }
+
+    /// ⭐ ON ITS 10 GHz BAND THE IC-905 SENDS ITS DIAL IN 12 DIGITS. "When the 10 GHz band is
+    /// selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz" (A7711-9EX-2, PDF
+    /// p. 17). The fake radio adds that sixth byte by hand ([`Regs::ten_ghz_12_digits`]). Read as
+    /// 10 digits, 10368.150 MHz came back as 368.150 MHz: the 10 GHz digit was never read.
+    #[test]
+    fn the_ic905s_10_ghz_dial_is_read_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        regs.lock().unwrap().main_hz = 10_368_150_000; // the radio on its 10 GHz band
+        assert_eq!(b.freq_hz(), 10_368_150_000);
+    }
+
+    /// ⭐ …AND IS SENT ITS DIAL IN 12 DIGITS: `05` and the split's `25 01` (whose frequency is the
+    /// same field, "See “Operating frequency.” (p. 16)", A7711-9EX-2 PDF p. 28). The bytes are
+    /// PDF p. 17's layout typed out: 1 Hz first, the 100 GHz digit (0) over the 10 GHz digit in
+    /// the sixth byte. In 10 digits a QSY to 10368.150 MHz sent the radio to 368.150 MHz.
+    #[test]
+    fn a_qsy_on_the_ic905s_10_ghz_band_is_sent_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        let n = regs.lock().unwrap().wire.len();
+        let acked = (b.set_freq(10_368_150_000), b.set_split_freq(10_368_200_000));
+        let r = regs.lock().unwrap();
+        assert_eq!(
+            (acked, hex_frames(&r.wire[n..]), r.main_hz, r.unselected_hz),
+            (
+                (true, Some(true)),
+                vec![
+                    "FE FE AC E0 05 00 00 15 68 03 01 FD".to_string(),
+                    "FE FE AC E0 25 01 00 00 20 68 03 01 FD".to_string(),
+                ],
+                10_368_150_000,
+                10_368_200_000
+            )
+        );
+    }
+
+    /// The control: on every IC-905 band at or below 5600 MHz the dial stays 10 digits (5
+    /// bytes), read and written exactly as before (A7711-9EX-2 PDF p. 17).
+    #[test]
+    fn the_ic905s_bands_up_to_5600_mhz_keep_their_10_digit_dial() {
+        for (hz, bcd) in [
+            (144_200_000u64, "00 00 20 44 01"),
+            (432_100_000, "00 00 10 32 04"),
+            (1_296_100_000, "00 00 10 96 12"),
+            (2_304_100_000, "00 00 10 04 23"),
+            (5_760_100_000, "00 00 10 60 57"),
+        ] {
+            let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+            let n = regs.lock().unwrap().wire.len();
+            assert!(b.set_freq(hz), "{hz}");
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [format!("FE FE AC E0 05 {bcd} FD")],
+                "{hz}"
+            );
+            assert_eq!(b.freq_hz(), hz, "{hz}: read back");
         }
     }
 
