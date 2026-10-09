@@ -431,6 +431,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
   eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
   adds that confirmation. Confirmations already in your log are not changed.
+- **Sync from QRZ no longer marks a contact as uploaded to LoTW.** Your QRZ logbook can also say
+  that a contact was sent to LoTW, and Sync from QRZ took that as LoTW's word: a contact could come
+  out of a sync marked as already on file at LoTW, including one whose mark Logbook ▸ Check
+  confirmations had just taken off, and Nexus then never uploaded it. Sync from QRZ and Pull
+  confirmations automatically now leave a contact's LoTW upload mark as it was, and a contact a
+  sync adds to your log starts without one. LoTW's own list of your uploads still marks them. The
+  contacts this affects go in your next LoTW upload; one LoTW already holds is a duplicate there
+  and changes nothing. Marks already in your log are not changed, and nothing changes in what goes
+  to QRZ, Club Log or eQSL.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the
