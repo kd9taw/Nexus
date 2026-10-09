@@ -335,6 +335,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
   radio that is only named like one of those, where Nexus's own CI-V never runs and the log
   would have nothing to record.
+- **The Data mode picker (D1/D2/D3) is greyed where it cannot reach the radio.** On an IC-7610
+  connected over Network or through OmniRig with Native Icom CI-V left on, Settings ▸ Radio ▸
+  Rig & CAT ▸ Advanced offered the picker and said the radio is put into the mode you pick, but
+  the pick was never sent: Nexus's own CI-V connection does not run there. The picker is now
+  greyed there, as the Native Icom CI-V switch above it is, and says it needs that connection.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
