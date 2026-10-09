@@ -396,6 +396,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched since your account's last download by any program. The older confirmations never
   arrived, and the syncs after it carried on from there. Nexus now asks for everything from
   1900-01-01 in that case.
+- **The first eQSL download asks for your whole InBox.** With no earlier download on record (the
+  first sync, or after you changed the eQSL username or cleared the log), Nexus asked eQSL for your
+  InBox without saying from when, and eQSL's documentation does not say what it sends then. Nexus
+  now asks for every card received from 1900 on, as Logbook ▸ Check confirmations does. Later
+  downloads carry on from the last one, as before.
+- **Sync from QRZ takes only QRZ's own confirmation.** Your QRZ logbook also repeats what LoTW,
+  eQSL and paper cards say about a contact, and Sync from QRZ took those copies as the services'
+  own: a contact could gain a LoTW, eQSL or paper-card confirmation from QRZ's copy, with the award
+  credit a LoTW or card confirmation brings, and a confirmation Logbook ▸ Check confirmations took
+  off could come back with the next sync. Sync from QRZ and Pull confirmations automatically now
+  mark a contact confirmed only where QRZ itself confirms it, on the contacts in your log and on the
+  ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
+  eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
+  adds that confirmation. Confirmations already in your log are not changed.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the

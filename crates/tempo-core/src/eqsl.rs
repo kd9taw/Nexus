@@ -16,8 +16,11 @@
 /// ever go to eQSL over TLS.
 pub const EQSL_INBOX_URL: &str = "https://www.eqsl.cc/qslcard/DownloadInBox.cfm";
 
-/// `RcvdSince` for the whole InBox: from 1900-01-01 00:00. Logbook ▸ Check confirmations sends it
-/// outright, because eQSL documents no meaning for a request that leaves it out.
+/// `RcvdSince` for the whole InBox: from 1900-01-01 00:00, where the range eQSL's `DownloadInBox`
+/// spec gives the parameter starts ("Everything that was entered into the database on or after this
+/// date/time"). The spec gives no meaning to a request that leaves it out, so [`build_inbox_url`]
+/// sends this for an empty cursor (the first sync, a changed username, a cleared log), and Logbook ▸
+/// Check confirmations sends it outright.
 pub const WHOLE_INBOX_SINCE: &str = "190001010000";
 
 /// Step-1 success marker (matched case-insensitively).
@@ -32,7 +35,8 @@ pub struct EqslQuery {
     pub username: String,
     /// eQSL account password.
     pub password: String,
-    /// Incremental cursor `RcvdSince=YYYYMMDDHHMM`. `None`/empty → full InBox.
+    /// Incremental cursor `RcvdSince=YYYYMMDDHHMM`. `None`/empty → the whole InBox, asked for from
+    /// 1900 ([`WHOLE_INBOX_SINCE`]).
     pub rcvd_since: Option<String>,
     /// The account's QTH Nickname. eQSL's own spec: "if not logged in, if multiple
     /// accounts with same callsign" the `QTHNickname` parameter disambiguates —
@@ -85,13 +89,14 @@ pub fn build_inbox_url(q: &EqslQuery) -> String {
             url.push_str(&pct(nick));
         }
     }
-    if let Some(since) = q.rcvd_since.as_deref() {
-        let since = since.trim();
-        if !since.is_empty() {
-            url.push_str("&RcvdSince=");
-            url.push_str(&pct(since));
-        }
-    }
+    let since = q
+        .rcvd_since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(WHOLE_INBOX_SINCE);
+    url.push_str("&RcvdSince=");
+    url.push_str(&pct(since));
     url
 }
 
@@ -351,14 +356,13 @@ mod tests {
     }
 
     #[test]
-    fn url_encodes_secrets_and_omits_blank_since() {
+    fn url_encodes_secrets() {
         let url = build_inbox_url(&q());
         assert!(url.starts_with("https://www.eqsl.cc/qslcard/DownloadInBox.cfm?"));
         assert!(url.contains("UserName=KD9TAW"));
         // & ? space must be percent-encoded so they can't break/inject params.
         assert!(url.contains("Password=p%40ss%20w%26rd%3F1"));
         assert!(!url.contains("p@ss w&rd?1"));
-        assert!(!url.contains("RcvdSince="));
     }
 
     #[test]
@@ -369,6 +373,32 @@ mod tests {
             ..q()
         });
         assert!(url.contains("RcvdSince=202606050000"));
+    }
+
+    /// An empty cursor (the first sync, a changed username, a cleared log) asks for the whole
+    /// InBox in so many words, from 1900: the request Logbook ▸ Check confirmations sends. eQSL's
+    /// spec gives no meaning to a request that leaves `RcvdSince` out. A cursor that is set is
+    /// sent as it is.
+    #[test]
+    fn an_empty_cursor_asks_for_the_whole_inbox_from_1900() {
+        let check = build_inbox_url(&EqslQuery {
+            rcvd_since: Some(WHOLE_INBOX_SINCE.into()),
+            ..q()
+        });
+        for since in [None, Some(""), Some("   ")] {
+            let url = build_inbox_url(&EqslQuery {
+                rcvd_since: since.map(String::from),
+                ..q()
+            });
+            assert_eq!(url, check, "cursor {since:?}: the check's request");
+            assert!(url.ends_with("&RcvdSince=190001010000"), "cursor {since:?}");
+        }
+        let url = build_inbox_url(&EqslQuery {
+            rcvd_since: Some("202606050000".into()),
+            ..q()
+        });
+        assert!(url.ends_with("&RcvdSince=202606050000"));
+        assert_eq!(url.matches("RcvdSince=").count(), 1, "the cursor alone");
     }
 
     #[test]
