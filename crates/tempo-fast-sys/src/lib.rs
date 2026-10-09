@@ -710,10 +710,6 @@ extern "C" {
         max_out: c_int,
     ) -> c_int;
 
-    /// Decode every FST4 signal in a 180000-sample (15 s) frame.
-    ///
-    /// DECODE ONLY — there is deliberately no `fst4_encode` / `fst4_gen_wave`.
-    /// FST4 ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
     /// Encode a message into the 160 FST4 channel symbols (values 0..3).
     ///
     /// `iwspr`: 0 = FST4 (77-bit QSO message, LDPC(240,101)), 1 = FST4W (50-bit
@@ -749,6 +745,8 @@ extern "C" {
         nwave_cap: c_int,
     ) -> c_int;
 
+    /// Decode every FST4 or FST4W signal in one T/R period of `ntrperiod * 12000`
+    /// samples.
     pub fn fst4_decode_frame(
         iwave: *const i16, // [ntrperiod * 12000] — see `fst4_nmax`
         ntrperiod: c_int,  // 15|30|60|120|300|900|1800; anything else ⇒ -1

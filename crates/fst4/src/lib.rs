@@ -414,9 +414,9 @@ mod tests {
     #[test]
     fn noise_decodes_to_nothing() {
         // Same property the C smoke test asserts, through the Rust surface: the
-        // decoder runs to completion on pure noise and invents nothing. With no
-        // FST4 TX in-tree there is no way to synthesise a signal, so this is a
-        // liveness + silence check, NOT a sensitivity test.
+        // decoder runs to completion on pure noise and invents nothing. This is a
+        // liveness + silence check, NOT a sensitivity test; that is
+        // encode_then_decode_recovers_the_message.
         // Both modes, at the shortest period so the suite stays quick.
         for wspr in [false, true] {
             let mut iwave = vec![0i16; nmax(15)];

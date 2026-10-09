@@ -1,18 +1,17 @@
-! Nexus: C ABI wrapper for native FST4 decode, built on the vendored WSJT-X GPL
-! modem sources (lib/fst4 + fst4_decode.f90). Modelled on ft4_cabi.f90, not
+! Nexus: C ABI wrapper for native FST4 decode and transmit, built on the vendored
+! WSJT-X GPL modem sources (lib/fst4 + fst4_decode.f90). Modelled on ft4_cabi.f90, not
 ! ft8_cabi.f90: like FT4, the WSJT-X FST4 decoder (fst4_decode::decode) is a clean
 ! self-contained OO decoder driven through a callback, with no nzhsym streaming
 ! ladder, no a7 cross-cycle table and no shared memory. So it is driven directly
 ! via a collector callback, exactly as ft4_cabi does.
 !
-! RX-ONLY, DELIBERATELY. There is no fst4_encode / fst4_gen_wave here. FST4 is
-! being added as a decode-only mode: `Capabilities { tx: false }` on the Rust side
-! means modes::tx_mode() refuses to hand it to the transmit path. Adding TX means
-! adding genfst4 + a gen_fst4wave wrapper here AND flipping that flag AND passing
-! the FT-mode TX hard gate — three deliberate steps, not an oversight.
+! TRANSMIT TOO. fst4_encode_msg (the vendored genfst4) and fst4_gen_wave (the
+! vendored gen_fst4wave) are the TX half, and both FST4 and FST4W transmit:
+! `Capabilities { tx: true }` on the Rust side, with FST4W marked beacon_only.
 !
-! (gen_fst4wave IS compiled into libtempo regardless: fst4_decode calls it to
-! regenerate and subtract a decoded signal, so it is on the RECEIVE path.)
+! gen_fst4wave's one call in the decoder is in dopspread (fst4_decode.f90:966), a
+! plotting aid nothing calls since its plotspec block was removed, so fst4_gen_wave
+! below is the generator's only live caller.
 !
 ! Underlying Fortran:
 !   fst4_decode  (fst4_decode.f90)  - OO decoder: get_candidates_fst4 -> sync_fst4
