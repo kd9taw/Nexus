@@ -694,7 +694,9 @@ describe('by drag: the same moves, by a pane’s title', () => {
     act(() => api!.undo())
     await settle()
     expect(rendered()).toEqual([['callRoster'], ['bandActivity', 'rxfreq']])
-  })
+    // A real FT mount and three drags, 0.8 s in the full suite on a loaded box: past the 5 s default only under
+    // far more load than that, the budget the real-render files in this tree carry.
+  }, 15_000)
 
   it('a double-click on a decode still calls the station after a drag, through the cockpit’s own handler', async () => {
     const calls: unknown[][] = []
@@ -708,5 +710,5 @@ describe('by drag: the same moves, by a pane’s title', () => {
     expect(rendered()[0][0]).toBe('bandActivity')
     fireEvent.doubleClick(row())
     expect(calls.splice(0)).toEqual(stock)
-  })
+  }, 15_000)
 })

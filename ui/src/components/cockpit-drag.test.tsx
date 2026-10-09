@@ -206,6 +206,12 @@ function arranged(s: Setting): Array<Arrangement<string>> {
   return out
 }
 
+/** Each setting's budget: three mounts (stock and two arranged), every arrow pressed and dragged in each. The
+ *  heaviest, FT Classic with its rail on the left, took 4.3 s alone, 33.0 s in the full suite on a loaded box,
+ *  54.8 s at a fifth of a CPU and 73.5 s at a tenth (a SIGSTOP/SIGCONT duty cycle), where it had also run past
+ *  the first budget of 60 s once. 240 s is the arrangement sweeps' budget (stop-line.testkit): 3.3× the tenth. */
+const DRAG_EQUALS_ARROWS_BUDGET_MS = 240_000
+
 describe('a drag moves the record exactly as the arrows do', () => {
   it.each(SETTINGS.map((s) => [s.name, s] as const))(
     '%s: every arrow on offer, in the stock arrangement and in arranged ones',
@@ -215,7 +221,7 @@ describe('a drag moves the record exactly as the arrows do', () => {
       for (const arr of arranged(s)) compared += await dragEqualsArrows(s, arr)
       expect(compared).toBeGreaterThan(8)
     },
-    60_000,
+    DRAG_EQUALS_ARROWS_BUDGET_MS,
   )
 })
 
