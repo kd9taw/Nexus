@@ -1792,7 +1792,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await click(button('FT'))
     }
     if (applicationVersion < 10) {
-      await click(button('Field Day'))
+      await click(button('Contest'))
       await until(`!!document.querySelector('.remote-view-unavailable')`)
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       assert.equal(fieldDayQueries.length,0)
@@ -4038,7 +4038,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await untilThroughLapse(`document.querySelector('.pota-spot-list')?.textContent.includes('Updated test summit')`)
     }
     if (applicationVersion >= 10) {
-      await click(button('Field Day'))
+      await click(button('Contest'))
       assert.equal(await evaluate(`document.body.textContent.includes('Could not switch mode')`), false)
       await until(`document.querySelector('.fieldday')?.textContent.includes('K1ABC')`)
       await until(`!!document.querySelector('.fd-bonuses-list')`)
@@ -4455,7 +4455,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await until(`document.querySelector('.app')?.dataset.remoteStale!=='true' && document.querySelector('.bubble-text')?.textContent==='BAND MESSAGE'`)
     Object.assign(applicationData.get_snapshot,beforeTempo);applicationRevision++
     if(applicationVersion>=10){
-      await click(button('Field Day'))
+      await click(button('Contest'))
       await until(`!!document.querySelector('.fd-bonuses-list')`)
       // Leaving for Tempo unmounted the native event view. Establish the
       // operator's collapsed choice on this new mount before testing loss.
