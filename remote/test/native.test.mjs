@@ -768,6 +768,12 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
         assert.deepEqual(value.settings.fdBonuses,['emergency-power'])
       } else assert.equal(value.fieldDay,null)
     }
+    // Sweepstakes LOGS a repeat and scores it zero, so the station counts one contact fewer than its log holds. The page
+    // required the two to be equal and refused that capture whole, which showed the station as unavailable.
+    assert.deepEqual(await probe.send({type:'seedSweepstakes'}),{event:'arrlss_cw',qsoCount:1,rows:2},'the station counts the first contact and logs the repeat')
+    const contest=statsReference.parseFieldDay(await queryPage(fd,{collection:'fieldDay',cursor:null,search:'',unconfirmed:false,after:null}))
+    assert.equal(contest.fieldDay.qsoCount,1)
+    assert.deepEqual(contest.fieldDay.log.map(q=>[q.call,q.dupe===true]),[['K9XYZ',false],['K9XYZ',true]])
     fd.close()
     const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
     const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard:js8Fixture.state.stations,allcallReplied:[],nextInboxId:2}})

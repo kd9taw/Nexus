@@ -214,7 +214,10 @@ impl Engine {
             return Ok(None);
         };
         let log = &station.log;
-        if log.qso_count() > 2048
+        // ROWS, which is what the capture carries and the browser bounds: `qso_count` leaves out a
+        // logged dupe and a satellite contact the contest gives no credit, so it can sit under the
+        // bound while the log it ships is over it.
+        if log.qsos().len() > 2048
             || (self.fd_sync_enabled()
                 && (self.fd_mirror.dupes.len() > 4096
                     // The generalised keys now ship too, and they are the SAME contacts
@@ -688,6 +691,62 @@ mod tests {
         let wire = serde_json::to_value(e.snapshot().field_day.unwrap()).unwrap();
         assert_eq!(wire["log"].as_array().unwrap().len(), before);
         assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
+    }
+
+    /// ⭐ **THE SIZE BOUND COUNTS THE ROWS IT WOULD SEND.** The browser refuses a capture of more
+    /// than 2048 rows, and `qso_count` is not rows: it leaves out a logged dupe. Bounded on it, a
+    /// Sweepstakes log of 2048 stations and one logged repeat went out as 2049 rows the page then
+    /// refused, so the operator read "Station data unavailable" instead of "too large to show".
+    #[test]
+    fn the_size_bound_counts_the_rows_a_capture_carries() {
+        let ss = |stations: u64| {
+            let mut e = Engine::with_settings(crate::settings::Settings {
+                mycall: "W1ABC".into(),
+                fd_active: true,
+                fd_event: "arrlss_cw".into(),
+                contest_check: "68".into(),
+                fd_section: "EMA".into(),
+                contest_category_assisted: "NON-ASSISTED".into(),
+                contest_category_power: "LOW".into(),
+                ..Default::default()
+            });
+            e.restore_field_day_if_enabled();
+            let Mode::FieldDay { station, .. } = &mut e.mode else {
+                panic!("in SS")
+            };
+            // Every station once, then the first again: logged, marked, worth nothing.
+            for (nr, i) in (0..stations).chain([0]).enumerate() {
+                let call = format!("K1T{i}");
+                let fields = [
+                    ("NR", (nr + 1).to_string()),
+                    ("PREC", "A".into()),
+                    ("CALL", call.clone()),
+                    ("CK", "72".into()),
+                    ("SEC", "IL".into()),
+                ]
+                .map(|(k, v)| (k.to_string(), v));
+                assert!(station
+                    .log
+                    .log_fields_at(&call, &fields, "CW", "", 0, 1000 + nr as u64));
+            }
+            e
+        };
+        let e = ss(2048);
+        let native = e.snapshot().field_day.unwrap();
+        assert_eq!(
+            (native.qso_count, native.log.len(), native.log[2048].dupe),
+            (2048, 2049, true),
+            "PREMISE: the repeat is a row the count leaves out"
+        );
+        assert_eq!(
+            e.bounded_field_day_status().map(|s| s.map(|s| s.log.len())),
+            Err("applicationTooLarge"),
+            "the station refuses a capture of 2049 rows rather than sending it"
+        );
+        // CONTROL: one station fewer is 2048 rows with the repeat, and goes whole.
+        let e = ss(2047);
+        let captured = e.bounded_field_day_status().unwrap().unwrap();
+        assert_eq!((captured.qso_count, captured.log.len()), (2047, 2048));
     }
 
     #[test]
