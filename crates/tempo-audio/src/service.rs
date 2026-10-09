@@ -15115,6 +15115,7 @@ mod tests {
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod wfview;
     use super::should_command_rf_power;
 
     #[test]

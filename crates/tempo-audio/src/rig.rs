@@ -285,6 +285,15 @@ fn rprt_error(what: &str, reply: &str) -> std::io::Error {
     }
 }
 
+/// A frequency line of a rigctld reply, in Hz. Hamlib's own rigctld prints a whole number
+/// (`14074000`); wfview's prints Hamlib's `%lf` form (`14074000.000000`), which Hamlib's NET
+/// client reads as a double, so it is read as one here too and rounded to the Hz. The bounds are
+/// the broker's for an `F` it is sent (finite, 0 to 1 THz).
+fn hz_in_line(line: &str) -> Option<u64> {
+    let hz = line.trim().parse::<f64>().ok()?;
+    (hz.is_finite() && (0.0..=1e12).contains(&hz)).then(|| hz.round() as u64)
+}
+
 /// Parse the RECEIVE frequency ranges (Hz, inclusive) out of a rigctld `\dump_state` reply.
 ///
 /// The format is Hamlib's own machine-readable capability dump — the one its NETRIGCTL backend
@@ -1478,7 +1487,7 @@ impl Rig {
         let reply = self.command("f\n")?;
         reply
             .lines()
-            .find_map(|l| l.trim().parse::<u64>().ok())
+            .find_map(hz_in_line)
             .filter(|hz| *hz > 0)
             .ok_or_else(|| match rprt_code(&reply) {
                 Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
@@ -1614,10 +1623,7 @@ impl Rig {
     pub fn read_split_freq(&mut self) -> Option<u64> {
         self.control.as_ref()?;
         let reply = self.command("i\n").ok()?;
-        reply
-            .lines()
-            .find_map(|l| l.trim().parse::<u64>().ok())
-            .filter(|hz| *hz > 0)
+        reply.lines().find_map(hz_in_line).filter(|hz| *hz > 0)
     }
     /// Set the split (TX) VFO's mode + passband — the transmit-side twin of
     /// [`Self::set_mode`], which only ever reaches the RX VFO. A BLANK mode is a
@@ -2654,6 +2660,30 @@ mod tests {
         let mut rig = Rig::rigctld(&addr);
         assert_eq!(rig.read_freq().unwrap(), 14_074_000);
         assert_eq!(log.lock().unwrap().as_slice(), &["f".to_string()]);
+    }
+
+    /// ⭐ A FREQUENCY IN HAMLIB'S `%lf` FORM IS A FREQUENCY. wfview's rigctld answers `f` and `i`
+    /// with `14074000.000000` (its `src/rigctld.cpp`, 2.23; those are the bytes below), which
+    /// Hamlib's own NET client reads as a double. Nexus read it as no frequency at all, "rig did
+    /// not return a frequency", so the open's first read failed and sharing wfview's rigctld never
+    /// connected. The control: `0.000000`, like a whole `0`, is still no frequency.
+    #[test]
+    fn a_frequency_in_hamlibs_lf_form_is_read() {
+        let (addr, _) = mock_rigctld(|line| match line.trim() {
+            "f" => "14074000.000000\n".into(),
+            "i" => "14076000.000000\n".into(),
+            _ => "RPRT 0\n".into(),
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let (zero, _) = mock_rigctld(|_| "0.000000\n".into());
+        assert_eq!(
+            (
+                rig.read_freq().ok(),
+                rig.read_split_freq(),
+                Rig::rigctld(&zero).read_freq().is_err(),
+            ),
+            (Some(14_074_000), Some(14_076_000), true)
+        );
     }
 
     /// ⭐ THE READ THAT MAKES A/B SELECTION HONEST. `v` (get_vfo) is the one question Nexus

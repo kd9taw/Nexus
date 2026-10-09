@@ -530,6 +530,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
   rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
   is on the line by then.
+- **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
+  (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
+  wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus
+  refused the port: wfview answers Nexus's check with "ChkVFO: 0", which Nexus took for some other
+  program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
+  ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
+  Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
+  included; a frequency in that form from any other rigctld server is read too. Share wfview's
+  rigctld this way rather than letting Nexus start a rigctld of its own in front of it: that one
+  refuses every command, PTT included, whenever wfview reports the radio switched off. NEEDS-BENCH:
+  wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
+  (Rear/Data keying the DATA input).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
