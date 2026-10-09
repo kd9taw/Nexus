@@ -53,7 +53,9 @@
 //!   proof is a window ([`Window`]). From the start's reply on, every keyed sample names us with
 //!   the kind's source, and the end is the radio holding idle: for CWX through a hold after the
 //!   last word's expected end, for the ATU once a result ([`ATU_RESULTS`]) has been reported. Later
-//!   CWX words join the open window ([`StopTracker::append`]).
+//!   CWX words join the open window ([`StopTracker::append`]). A `cwx clear` the radio took
+//!   empties its buffer ([`StopTracker::cleared`]): from its reply the window waits only for the
+//!   hold, and has a transition's time to see it.
 //!
 //! What fails an `xmit` attempt fails these too: a foreign owner, a physical keying source, a
 //! partial line, a failed reply or write, a second start, a missed deadline. The facts behind the
@@ -527,6 +529,21 @@ impl StopTracker {
             .window_deadline_ms
             .max(now_ms.saturating_add(self.timeout_ms));
         true
+    }
+
+    /// The radio took a `cwx clear` (its reply, at `now_ms`): nothing more is to be sent, so the
+    /// open window no longer waits out the last word's expected end, only the radio holding idle
+    /// for its hold, and has a transition's time from here to see it, as every stop does. A word
+    /// still awaiting its reply keeps its own timing; outside an open window nothing changes.
+    pub fn cleared(&mut self, now_ms: u64) {
+        if !self.advance_clock(now_ms) || self.phase != Phase::Window || !self.words.is_empty() {
+            return;
+        }
+        self.expected_end_ms = self.expected_end_ms.min(now_ms);
+        self.window_deadline_ms = self
+            .window_deadline_ms
+            .max(now_ms.saturating_add(self.timeout_ms));
+        self.settle_window();
     }
 
     fn arm(

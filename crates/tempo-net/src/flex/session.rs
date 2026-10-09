@@ -39,7 +39,10 @@
 //! `xmit 0`), reports [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). A radio-ended start (a
 //! CWX word, an ATU cycle) whose window fails is escalated at once. A tune the radio latches is
 //! ended by the session itself, at its hold plus [`ptt_evidence::TUNE_MARGIN_MS`], whether or not
-//! the radio loop is running. The session itself never starts a transmission: none of its
+//! the radio loop is running. Stop TX in the middle of a CW message is a `cwx clear`: its reply
+//! empties the radio's buffer for the readback, which then waits only for the radio to hold idle,
+//! and if the radio still shows our CWX transmitting the break-in delay + 300 ms after that reply,
+//! the session sends `xmit 0`, once. The session itself never starts a transmission: none of its
 //! reactions to lines, replies, time or teardown is a start.
 //!
 //! PORTED from AetherSDR (https://github.com/aethersdr/AetherSDR, GPL-3.0; the upstream file
@@ -59,8 +62,8 @@
 //!
 //! Added for Nexus, with no upstream code taken: the kinds other than `xmit` (each one's readback
 //! profile, its own stops and escalation, the tune's deadline, CWX words joining an open
-//! operation), [`Session::end_ours`], and the snapshot's belief that something of ours may be on
-//! the air ([`Snapshot::ours_on_air`]).
+//! operation, the unkey that follows a CWX clear), [`Session::end_ours`], and the snapshot's
+//! belief that something of ours may be on the air ([`Snapshot::ours_on_air`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
@@ -164,10 +167,12 @@ pub struct Config {
     /// The UDP registration's datagram, sent after registration, just before `client udpport`;
     /// `None` sends none.
     pub udp_registration: Option<UdpRegistration>,
-    /// Admit every kind, also those whose readback no bench has confirmed: the unit tests' way to
-    /// run the readback per kind. Not compiled outside this crate's tests.
-    #[cfg(test)]
-    pub(crate) unbenched: bool,
+    /// Admit every kind, also those whose readback no bench has confirmed: the tests' way to run
+    /// the readback per kind. Compiled only in this crate's tests and with the test-support
+    /// feature `flex-unbenched` (tempo-audio's tests), which a release build refuses
+    /// ([`admission::BENCHED`]).
+    #[cfg(any(test, feature = "flex-unbenched"))]
+    pub unbenched: bool,
 }
 
 impl Config {
@@ -187,7 +192,7 @@ impl Config {
             teardown_timeout_ms: 2_000,
             previous_handles: Vec::new(),
             udp_registration: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "flex-unbenched"))]
             unbenched: false,
         }
     }
@@ -367,7 +372,7 @@ enum Pending {
     SliceList,
     Caller,
     Key,
-    Stop,
+    Stop(TxStop),
     TxAudio(TxAudio),
     Teardown(u32),
 }
@@ -385,6 +390,10 @@ struct Keyed {
     escalated: bool,
     /// When the session ends it by itself: a tune's hold plus [`ptt_evidence::TUNE_MARGIN_MS`].
     deadline_ms: Option<u64>,
+    /// When the first reply to a `cwx clear` for our CWX came back.
+    clear_replied_ms: Option<u64>,
+    /// The unkey that follows a clear the radio did not act on has gone out.
+    unkey_followed: bool,
 }
 
 /// The break-in delay a CWX word's readback assumes when the radio has not reported one: the
@@ -535,11 +544,29 @@ impl Session {
 
     /// Admission for `start`; under test, every kind when the configuration says so.
     fn admit(&self, start: TxStart) -> Result<Admitted, Refusal> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "flex-unbenched"))]
         if self.config.unbenched {
             return admission::admit_unbenched(&self.model, &self.facts(), start);
         }
         admission::admit(&self.model, &self.facts(), start)
+    }
+
+    /// The break-in delay the radio reports, or the longest it can report when it has not.
+    fn break_in_delay_ms(&self) -> u64 {
+        self.model
+            .transmit
+            .cw_break_in_delay
+            .and_then(|d| u64::try_from(d).ok())
+            .unwrap_or(BREAK_IN_DELAY_MAX_MS)
+    }
+
+    /// Whether the radio still shows a session of ours transmitting: its last whole interlock
+    /// sample is PTT_REQUESTED or TRANSMITTING naming one, or it has sent no whole sample since.
+    fn still_transmitting(&self) -> bool {
+        self.model.interlock.sample.as_ref().is_none_or(|s| {
+            matches!(s.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING")
+                && self.is_ours(s.tx_client_handle)
+        })
     }
 
     /// Whether the interlock's last owner is this session or one of our previous sessions.
@@ -709,13 +736,7 @@ impl Session {
         let window = match kind {
             StartKind::Cwx => {
                 let word_ms = lasting_ms.ok_or(Refusal::NoReadback(kind))?;
-                let delay = self
-                    .model
-                    .transmit
-                    .cw_break_in_delay
-                    .and_then(|d| u64::try_from(d).ok())
-                    .unwrap_or(BREAK_IN_DELAY_MAX_MS);
-                Some(Window::cwx(word_ms, delay))
+                Some(Window::cwx(word_ms, self.break_in_delay_ms()))
             }
             StartKind::Atu => Some(Window::atu()),
             StartKind::Key | StartKind::Tune => None,
@@ -778,6 +799,8 @@ impl Session {
                     first_stop_ms: None,
                     escalated: false,
                     deadline_ms,
+                    clear_replied_ms: None,
+                    unkey_followed: false,
                 });
             }
         }
@@ -843,7 +866,7 @@ impl Session {
                 keyed.first_stop_ms.get_or_insert(now);
             }
         }
-        self.pending.insert(seq, Pending::Stop);
+        self.pending.insert(seq, Pending::Stop(stop));
         self.write(out, seq, &encode::render_stop(stop), now);
         StopOutcome::Sent { seq }
     }
@@ -908,7 +931,7 @@ impl Session {
         }
         for stop in escalation_stops(kind) {
             let seq = self.take_seq();
-            self.pending.insert(seq, Pending::Stop);
+            self.pending.insert(seq, Pending::Stop(*stop));
             self.write(out, seq, &encode::render_stop(*stop), now);
         }
         self.events.push_back(Event::UnkeyUnconfirmed);
@@ -1140,7 +1163,25 @@ impl Session {
                     message: reply.message,
                 });
             }
-            Pending::Caller | Pending::Key | Pending::Stop => {
+            Pending::Stop(stop) => {
+                // Stop TX in the middle of a CW message: the clear's reply starts the wait for
+                // the follow-up unkey ([`Self::poll`]), and a clear the radio took has emptied its
+                // buffer, so our CWX's window no longer waits out the last word's expected end.
+                if stop == TxStop::CwxClear {
+                    if let Some(keyed) = self.keyed.as_mut().filter(|k| k.kind == StartKind::Cwx) {
+                        keyed.clear_replied_ms.get_or_insert(now);
+                        if ok {
+                            self.tracker.cleared(now);
+                        }
+                    }
+                }
+                self.events.push_back(Event::Reply {
+                    seq: reply.seq,
+                    code: reply.code,
+                    message: reply.message,
+                });
+            }
+            Pending::Caller | Pending::Key => {
                 self.events.push_back(Event::Reply {
                     seq: reply.seq,
                     code: reply.code,
@@ -1289,6 +1330,21 @@ impl Session {
                 self.escalate(out, now);
                 return;
             }
+            // Stop TX in the middle of a CW message: the clear empties the radio's buffer, and
+            // only the word going out may finish. A radio still showing our CWX transmitting
+            // break-in delay + 300 ms after the clear's reply is told to unkey, once; the
+            // escalation clock the clear armed stands.
+            let follow_up = keyed.clear_replied_ms.is_some_and(|at| {
+                now >= at
+                    .saturating_add(self.break_in_delay_ms())
+                    .saturating_add(ptt_evidence::CWX_IDLE_MS)
+            });
+            if follow_up && !keyed.unkey_followed && !keyed.escalated && self.still_transmitting() {
+                if let Some(k) = self.keyed.as_mut() {
+                    k.unkey_followed = true;
+                }
+                self.stop(out, TxStop::Unkey, now);
+            }
             // A latched tune is ended here at its deadline, whether or not the radio loop asks.
             let latched_out = keyed.deadline_ms.is_some_and(|d| now >= d);
             if latched_out && keyed.first_stop_ms.is_none() && !keyed.escalated {
@@ -1432,9 +1488,9 @@ enum Request {
 struct Shared {
     snapshot: Mutex<Snapshot>,
     changed: Condvar,
-    /// The snapshot's `keyed` and open phase, readable without copying the model: the DAX
-    /// transmit pacer asks before every packet.
-    keyed: AtomicBool,
+    /// An over of ours (`xmit 1`) unconfirmed, and the session open, readable without copying the
+    /// model: the DAX transmit pacer asks before every packet.
+    over: AtomicBool,
     open: AtomicBool,
     /// The snapshot's `ours_on_air`, the same way: the radio loop asks every tick.
     on_air: AtomicBool,
@@ -1502,7 +1558,7 @@ impl Connection {
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(session.snapshot()),
             changed: Condvar::new(),
-            keyed: AtomicBool::new(false),
+            over: AtomicBool::new(false),
             open: AtomicBool::new(true),
             on_air: AtomicBool::new(false),
             #[cfg(test)]
@@ -1563,10 +1619,12 @@ impl Connection {
         rx.recv().map_err(|_| None)?.map_err(Some)
     }
 
-    /// Whether a start of ours is unconfirmed, on a session that has not closed: what the last
-    /// published snapshot says, without copying it.
-    pub fn keyed(&self) -> bool {
-        self.shared.open.load(Ordering::Acquire) && self.shared.keyed.load(Ordering::Acquire)
+    /// Whether an over of ours (`xmit 1`) is unconfirmed, on a session that has not closed: what
+    /// the last published state says, without copying it. The DAX transmit pacer sends only then:
+    /// a CWX word, a tune or an ATU cycle is keyed unconfirmed too, but the radio makes it itself,
+    /// and no DAX audio belongs on it.
+    pub fn over_keyed(&self) -> bool {
+        self.shared.open.load(Ordering::Acquire) && self.shared.over.load(Ordering::Acquire)
     }
 
     /// End a transmission. Never gated.
@@ -1750,7 +1808,8 @@ fn publish(session: &Session, shared: &Shared) {
     let snapshot = session.snapshot();
     shared.on_air.store(snapshot.ours_on_air, Ordering::Release);
     *lock(&shared.snapshot) = snapshot;
-    shared.keyed.store(session.keyed(), Ordering::Release);
+    let over = session.keyed.is_some_and(|k| k.kind == StartKind::Key);
+    shared.over.store(over, Ordering::Release);
     shared.open.store(!session.is_closed(), Ordering::Release);
     shared.changed.notify_all();
 }

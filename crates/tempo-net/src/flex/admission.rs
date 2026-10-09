@@ -10,6 +10,11 @@
 //!   client handle;
 //! - nothing of ours is keyed already;
 //! - exactly one slice is the transmit slice, and it is ours;
+//! - what the start's kind needs of the radio's settings ([`kind_checks`]): a CWX word only on a
+//!   transmit slice in CW, with the radio's break-in on and its Sync CWX not on, so that the
+//!   radio's own keyer keys and unkeys it; a tune, an ATU cycle or a CWX word never while the
+//!   transmit slice's XIT is on, which would put the radio's own carrier off the dial the engine
+//!   judged. Nexus reads these settings and never writes them;
 //! - the interlock's last whole sample is `READY`, transmit allowed, no reason, no keying source
 //!   (no mic, ACC or RCA PTT), and names no transmitting client, or names us;
 //! - the unkey readback is idle: it has seen the radio idle on this connection, so the end of the
@@ -45,12 +50,21 @@ use std::fmt;
 use super::encode::{StartKind, TxAudio, TxStart};
 use super::model::{owner_of, Owner, StatusModel};
 use super::ptt_evidence;
+use super::status::SliceDelta;
 
 /// The kinds whose readback a tester's bench has confirmed on a real radio. Only these are
 /// admitted; any other start is refused with [`Refusal::NoReadback`] before every other check. A
 /// kind joins this list only after its readback profile ([`super::ptt_evidence`]) has passed the
 /// bench, never on the strength of the notes it was built from.
 pub const BENCHED: &[StartKind] = &[StartKind::Key];
+
+// The door past [`BENCHED`] (`session::Config::unbenched`) is test support: this crate's tests,
+// and tempo-audio's through the `flex-unbenched` feature. A release build never carries it.
+#[cfg(all(feature = "flex-unbenched", not(debug_assertions)))]
+compile_error!(
+    "`flex-unbenched` admits the Flex starts no bench has confirmed: test support, never in a \
+     release build"
+);
 
 /// A start that passed admission. Constructed only by [`admit`].
 #[derive(Debug)]
@@ -149,6 +163,20 @@ pub enum Refusal {
     InterlockNotReady {
         state: String,
     },
+    /// A CWX word while the transmit slice is not in CW: its mode as reported, empty when it has
+    /// reported none. The CW ID after an FT 73 is queued with the slice in DIGU, so it stays unsent.
+    NotCw {
+        mode: String,
+    },
+    /// A CWX word while the radio does not report its break-in on: nothing would key and unkey
+    /// the radio around the word.
+    BreakInOff,
+    /// A CWX word while the radio reports Sync CWX on: it would hold transmit after the text until
+    /// told (AetherSDR's notes), which no bench has measured.
+    SyncCwx,
+    /// A tune, an ATU cycle or a CWX word while the transmit slice reports XIT on: the radio's own
+    /// carrier would sit off the dial the engine judged, which knows nothing of the slice's XIT.
+    XitOn,
     /// The readback has not seen the radio idle on this connection.
     ReadbackNotIdle,
     /// Another program feeds the radio's DAX transmit audio (SmartSDR's DAX, typically): Nexus
@@ -186,6 +214,13 @@ impl fmt::Display for Refusal {
                 write!(f, "the radio does not allow transmit ({reason})")
             }
             Refusal::InterlockNotReady { state } => write!(f, "the interlock is {state}"),
+            Refusal::NotCw { mode } if mode.is_empty() => {
+                f.write_str("the transmit slice has not reported its mode")
+            }
+            Refusal::NotCw { mode } => write!(f, "the transmit slice is in {mode}, not CW"),
+            Refusal::BreakInOff => f.write_str("the radio's break-in is off"),
+            Refusal::SyncCwx => f.write_str("the radio's Sync CWX is on"),
+            Refusal::XitOn => f.write_str("XIT is on for the transmit slice"),
             Refusal::ReadbackNotIdle => {
                 f.write_str("the radio has not been seen idle on this connection")
             }
@@ -206,9 +241,9 @@ pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admit
     admit_kinds(model, facts, start, BENCHED)
 }
 
-/// [`admit`] for every kind, also those whose readback no bench has confirmed: the unit tests'
-/// way to run the readback per kind. Not compiled outside this crate's tests.
-#[cfg(test)]
+/// [`admit`] for every kind, also those whose readback no bench has confirmed: the tests' way to
+/// run the readback per kind. Not compiled outside tests ([`BENCHED`]).
+#[cfg(any(test, feature = "flex-unbenched"))]
 pub(super) fn admit_unbenched(
     model: &StatusModel,
     facts: &Facts,
@@ -245,20 +280,22 @@ fn admit_kinds(
     if facts.keyed && !append {
         return Err(Refusal::AlreadyKeyed);
     }
-    match model.tx_slices().as_slice() {
+    let tx = match model.tx_slices().as_slice() {
         [] => return Err(Refusal::NoTxSlice),
         [slice] => {
-            let reported = model.slices.get(slice).and_then(|s| s.client_handle);
-            let owner = owner_of(reported, Some(ours));
+            let tx = model.slices.get(slice);
+            let owner = owner_of(tx.and_then(|s| s.client_handle), Some(ours));
             if owner != Owner::Ours {
                 return Err(Refusal::TxSliceNotOurs {
                     slice: *slice,
                     owner,
                 });
             }
+            tx
         }
         several => return Err(Refusal::SeveralTxSlices(several.to_vec())),
-    }
+    };
+    kind_checks(model, tx, kind)?;
     let sample = model
         .interlock
         .sample
@@ -298,6 +335,33 @@ fn admit_kinds(
         return Err(Refusal::ReadbackNotIdle);
     }
     Ok(Admitted(start))
+}
+
+/// What only some kinds need of the radio's settings, refuse-only. A CWX word keys the radio's own
+/// keyer, which keys and unkeys the radio with its own break-in: the transmit slice must be in CW,
+/// break-in on, Sync CWX not on. A tune, an ATU cycle and a CWX word are carriers the radio makes
+/// itself where its transmit slice says, so the slice's XIT must be off. A key is none of these.
+fn kind_checks(
+    model: &StatusModel,
+    tx: Option<&SliceDelta>,
+    kind: StartKind,
+) -> Result<(), Refusal> {
+    if kind == StartKind::Cwx {
+        let mode = tx.and_then(|s| s.mode.clone()).unwrap_or_default();
+        if !mode.eq_ignore_ascii_case("CW") {
+            return Err(Refusal::NotCw { mode });
+        }
+        if model.transmit.cw_break_in != Some(true) {
+            return Err(Refusal::BreakInOff);
+        }
+        if model.transmit.sync_cwx == Some(true) {
+            return Err(Refusal::SyncCwx);
+        }
+    }
+    if kind != StartKind::Key && tx.and_then(|s| s.xit_on) == Some(true) {
+        return Err(Refusal::XitOn);
+    }
+    Ok(())
 }
 
 /// Another program's DAX transmit stream, if the radio reports one: a `dax_tx` stream that is not
@@ -404,6 +468,10 @@ mod tests {
     const IDLE: &str =
         "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=";
     const OUR_TX_SLICE: &str = "S2B6E1F40|slice 0 in_use=1 tx=1 client_handle=0x2B6E1F40";
+    /// Our transmit slice in CW, XIT off, and the radio's keyer as a CWX word needs it.
+    const OUR_CW_SLICE: &str =
+        "S2B6E1F40|slice 0 in_use=1 tx=1 client_handle=0x2B6E1F40 mode=CW xit_on=0";
+    const KEYER: &str = "S0|transmit break_in=1 break_in_delay=300 synccwx=0";
 
     fn model(lines: &[&str]) -> StatusModel {
         let mut m = StatusModel::default();
@@ -572,7 +640,11 @@ mod tests {
             readback_idle: false,
             ..facts()
         };
-        let m = model(&[OUR_TX_SLICE, &keying(crate::flex::ptt_evidence::CWX.source)]);
+        let m = model(&[
+            OUR_CW_SLICE,
+            KEYER,
+            &keying(crate::flex::ptt_evidence::CWX.source),
+        ]);
         assert!(admit_unbenched(&m, &open(StartKind::Cwx), cwx()).is_ok());
         // Only a CWX word, and only into our CWX.
         assert_eq!(
@@ -614,16 +686,87 @@ mod tests {
                 },
             ),
         ] {
-            let m = model(&[OUR_TX_SLICE, &line]);
+            let m = model(&[OUR_CW_SLICE, KEYER, &line]);
             assert_eq!(
                 admit_unbenched(&m, &open(StartKind::Cwx), cwx()).unwrap_err(),
                 want,
                 "{line}"
             );
         }
+        // ...the slice's mode and the radio's keyer among them: a word into our CWX after the
+        // slice left CW is refused.
+        let usb = OUR_CW_SLICE.replace("mode=CW", "mode=USB");
+        let m = model(&[&usb, KEYER, &keying(crate::flex::ptt_evidence::CWX.source)]);
+        assert_eq!(
+            admit_unbenched(&m, &open(StartKind::Cwx), cwx()).unwrap_err(),
+            Refusal::NotCw { mode: "USB".into() }
+        );
         // And the bench's list holds: in production, no CWX word at all.
         assert_eq!(
             admit(&m, &open(StartKind::Cwx), cwx()).unwrap_err(),
+            Refusal::NoReadback(StartKind::Cwx)
+        );
+        assert_eq!(BENCHED, &[StartKind::Key]);
+    }
+
+    /// ⭐ A CWX word goes only to a transmit slice in CW, with the radio's break-in on and its Sync
+    /// CWX not on; a tune, an ATU cycle or a CWX word never while the slice's XIT is on. Each
+    /// refusal by value against its control, the key untouched by all four, and the switch still
+    /// off in production.
+    #[test]
+    fn cwx_is_refused_off_a_cw_slice_and_with_break_in_off() {
+        let cwx = || TxStart::CwxSend(CwxText::new("CQ").unwrap());
+        let digu = OUR_CW_SLICE.replace("mode=CW", "mode=DIGU");
+        let xit = OUR_CW_SLICE.replace("xit_on=0", "xit_on=1");
+        let refused = |lines: &[&str], start: TxStart| {
+            admit_unbenched(&model(lines), &facts(), start).unwrap_err()
+        };
+        // The control: our CW slice, break-in on, Sync CWX off, XIT off.
+        assert!(admit_unbenched(&model(&[OUR_CW_SLICE, KEYER, IDLE]), &facts(), cwx()).is_ok());
+        for (lines, want) in [
+            (
+                vec![digu.as_str(), KEYER, IDLE],
+                Refusal::NotCw {
+                    mode: "DIGU".into(),
+                },
+            ),
+            (
+                vec![OUR_TX_SLICE, KEYER, IDLE],
+                Refusal::NotCw {
+                    mode: String::new(),
+                },
+            ),
+            (
+                vec![OUR_CW_SLICE, "S0|transmit break_in=0 synccwx=0", IDLE],
+                Refusal::BreakInOff,
+            ),
+            (
+                vec![OUR_CW_SLICE, "S0|transmit synccwx=0", IDLE],
+                Refusal::BreakInOff,
+            ),
+            (
+                vec![OUR_CW_SLICE, "S0|transmit break_in=1 synccwx=1", IDLE],
+                Refusal::SyncCwx,
+            ),
+            (vec![xit.as_str(), KEYER, IDLE], Refusal::XitOn),
+        ] {
+            assert_eq!(refused(&lines, cwx()), want, "{lines:?}");
+        }
+        // XIT refuses each carrier the radio makes itself; the CW rules are CWX's alone.
+        for start in [TxStart::TuneOn, TxStart::AtuStart] {
+            assert_eq!(refused(&[xit.as_str(), KEYER, IDLE], start), Refusal::XitOn);
+        }
+        let off = [digu.as_str(), "S0|transmit break_in=0 synccwx=1", IDLE];
+        for start in [TxStart::TuneOn, TxStart::AtuStart] {
+            assert!(admit_unbenched(&model(&off), &facts(), start).is_ok());
+        }
+        // The key: none of the four.
+        let all = digu.replace("xit_on=0", "xit_on=1");
+        let all = [all.as_str(), "S0|transmit break_in=0 synccwx=1", IDLE];
+        assert!(admit(&model(&all), &facts(), TxStart::Key).is_ok());
+        // And in production the switch is off: no CWX word, before any of these.
+        assert_eq!(
+            admit(&model(&[OUR_CW_SLICE, KEYER, IDLE]), &facts(), cwx()).unwrap_err(),
             Refusal::NoReadback(StartKind::Cwx)
         );
         assert_eq!(BENCHED, &[StartKind::Key]);

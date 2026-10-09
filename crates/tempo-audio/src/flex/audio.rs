@@ -22,9 +22,9 @@
 //! real time, 128 stereo frames a packet, in the tested format ([`streams::dax_tx_packet`], float32
 //! stereo) to the radio's VITA-49 port (4991). The operator's TX level is applied as each packet leaves, as the sound card applies it,
 //! so the Pwr slider means the same on both routes and DAX never carries full-scale audio by
-//! default. A packet leaves only while a key of ours is held on the session, on our own transmit
-//! stream, and while no other program feeds DAX: anything queued otherwise is dropped, never held
-//! for a later key. The pacer wakes the moment an over is queued, so its first packet leaves
+//! default. A packet leaves only while an over of ours (`xmit 1`) is keyed on the session, never
+//! during a CWX word, a tune or an ATU cycle, on our own transmit stream, and while no other
+//! program feeds DAX: anything queued otherwise is dropped, never held for a later key. The pacer wakes the moment an over is queued, so its first packet leaves
 //! without waiting out an idle tick.
 //!
 //! Nexus's own design, not a port: the broker and the formats it uses are ported in
@@ -534,10 +534,11 @@ impl DaxTx {
         self.stream.load(Ordering::Acquire) != 0
     }
 
-    /// The stream to send on now: a key of ours is held and the route is up.
+    /// The stream to send on now: an over of ours (`xmit 1`) is keyed and the route is up. Not a
+    /// CWX word, a tune or an ATU cycle: the radio makes those itself, and no audio rides them.
     fn sendable(&self) -> Option<u32> {
         let stream = self.stream.load(Ordering::Acquire);
-        (stream != 0 && self.conn.upgrade().is_some_and(|c| c.keyed())).then_some(stream)
+        (stream != 0 && self.conn.upgrade().is_some_and(|c| c.over_keyed())).then_some(stream)
     }
 
     /// The next packet's stereo samples, scaled by the level as it stands now, or `None` when
@@ -641,7 +642,7 @@ fn pace(tx: &DaxTx, stop: &AtomicBool, sock: &UdpSocket, vita: SocketAddr) {
             std::thread::sleep(TX_PACER_TICK.min(next_at - now));
             continue;
         }
-        // Only while a key of ours is held, on our own stream: otherwise the audio is dropped,
+        // Only while an over of ours is keyed, on our own stream: otherwise the audio is dropped,
         // never kept for a later key.
         let Some(stream) = tx.sendable() else {
             crate::backend::TxTee::flush(tx);

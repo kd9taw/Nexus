@@ -5,7 +5,7 @@
 //!
 //! - [`Command`]: everything that cannot key the transmitter: registration, keepalive,
 //!   subscriptions, queries, slices and their DAX channels, display objects, DAX receive streams,
-//!   stream removal, ATU bypass. [`render`] turns it into text.
+//!   stream removal, ATU bypass, the CW keyer's speed. [`render`] turns it into text.
 //! - [`TxStart`]: what can key the transmitter (`xmit 1`, `transmit tune 1`, `atu start`,
 //!   `cwx send`). It reaches the wire only through [`render_start`], which takes an
 //!   [`Admitted`], and only `super::admission::admit` constructs one. Nothing else in Nexus can
@@ -25,9 +25,10 @@
 //!
 //! Not representable here, so nothing in Nexus can send them: `slice set <n> tx=1` (moving the
 //! transmit slice), every `transmit set` write but RF power and the DAX source, `dax audio set`,
-//! `cw key`/`cw ptt`, `dvk`, slice `play`, amplifier and tuner relays, waveform commands,
-//! `interlock` writes, TNF commands, and any raw text. Later changes add what they need as typed
-//! variants.
+//! `cw key`/`cw ptt`, every `cw` and `cwx` setting but the speed (break-in and its delay, QSK,
+//! pitch, CW-L, weight, the paddles: the operator's radio settings, several radio-wide), `dvk`,
+//! slice `play`, amplifier and tuner relays, waveform commands, `interlock` writes, TNF commands,
+//! and any raw text. Later changes add what they need as typed variants.
 //!
 //! PORTED from AetherSDR (https://github.com/aethersdr/AetherSDR, GPL-3.0; the upstream file
 //! carries no per-file header, the licence is the repository's), the verb encodings of
@@ -47,7 +48,8 @@
 //! FlexRadio's public API documentation (`TCPIP-slice`, `TCPIP-transmit`), with the key names and
 //! the `0`/`1` flags the slice and transmit decoders read back. So are the DAX commands
 //! (`TCPIP-stream`, `TCPIP-slice`, `TCPIP-transmit`): a slice's DAX channel, the DAX receive and
-//! transmit streams, and the transmitter's DAX source.
+//! transmit streams, and the transmitter's DAX source. And the CW keyer's speed (`TCPIP-cw`, `cw
+//! wpm`), which the transmit decoder reads back as `speed`.
 
 use std::fmt;
 
@@ -334,6 +336,11 @@ pub enum Command {
     TransmitRfPower {
         level: i32,
     },
+    /// `cw wpm <5–100>`: the radio's CW keyer speed, which CWX keys at too (the CWX page repeats
+    /// it). Not a keying command; the engine's WPM control decides the value.
+    CwSpeed {
+        wpm: u32,
+    },
 }
 
 /// A command that can key the transmitter. Rendered only through [`render_start`].
@@ -461,6 +468,8 @@ pub enum EncodeError {
     Pixels,
     /// A DAX channel outside 1–8 (0 is "none" only for a slice's channel).
     Channel(u8),
+    /// A CW speed outside the keyer's 5–100 WPM.
+    Speed(u32),
 }
 
 impl fmt::Display for EncodeError {
@@ -533,7 +542,8 @@ impl Command {
             | Command::PanafallCreate { .. }
             | Command::StreamCreateDaxRx { .. }
             | Command::AtuBypass
-            | Command::TransmitRfPower { .. } => None,
+            | Command::TransmitRfPower { .. }
+            | Command::CwSpeed { .. } => None,
         }
     }
 }
@@ -664,6 +674,12 @@ pub fn render(command: &Command) -> Result<Rendered, EncodeError> {
         Command::StreamRemove { stream } => format!("stream remove {}", id(*stream)),
         Command::AtuBypass => "atu bypass".to_string(),
         Command::TransmitRfPower { level: l } => format!("transmit set rfpower={}", level(*l)?),
+        Command::CwSpeed { wpm } => {
+            if !(5..=100).contains(wpm) {
+                return Err(EncodeError::Speed(*wpm));
+            }
+            format!("cw wpm {wpm}")
+        }
     };
     Ok(Rendered::ordinary(text, command.target()))
 }
@@ -833,6 +849,7 @@ pub(super) mod tests {
             },
             Command::AtuBypass,
             Command::TransmitRfPower { level: 40 },
+            Command::CwSpeed { wpm: 28 },
         ];
         for c in &all {
             // Exhaustiveness: adding a variant breaks this match until the list covers it.
@@ -871,7 +888,8 @@ pub(super) mod tests {
                 | Command::StreamCreateDaxRx { .. }
                 | Command::StreamRemove { .. }
                 | Command::AtuBypass
-                | Command::TransmitRfPower { .. } => {}
+                | Command::TransmitRfPower { .. }
+                | Command::CwSpeed { .. } => {}
             }
         }
         all
@@ -1051,6 +1069,10 @@ pub(super) mod tests {
             Some(Target::Slice(4))
         );
         assert_eq!(Command::TransmitRfPower { level: 5 }.target(), None);
+        assert_eq!(text(Command::CwSpeed { wpm: 28 }), "cw wpm 28");
+        assert_eq!(text(Command::CwSpeed { wpm: 5 }), "cw wpm 5");
+        assert_eq!(text(Command::CwSpeed { wpm: 100 }), "cw wpm 100");
+        assert_eq!(Command::CwSpeed { wpm: 28 }.target(), None);
     }
 
     #[test]
@@ -1101,6 +1123,12 @@ pub(super) mod tests {
             assert_eq!(
                 render(&Command::TransmitRfPower { level }),
                 Err(EncodeError::Level(level))
+            );
+        }
+        for wpm in [0, 4, 101] {
+            assert_eq!(
+                render(&Command::CwSpeed { wpm }),
+                Err(EncodeError::Speed(wpm))
             );
         }
     }

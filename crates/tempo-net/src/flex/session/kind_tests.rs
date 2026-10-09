@@ -196,6 +196,13 @@ impl Bench {
         self.settle();
     }
 
+    /// One stop, as the shim sends one for `\stop_morse`.
+    fn stop(&mut self, stop: TxStop) -> StopOutcome {
+        let stopped = self.s.stop(&mut self.out, stop, self.now);
+        self.settle();
+        stopped
+    }
+
     /// Our transmit slice in CW, as the radio reports a mode change.
     fn in_cw(mut self) -> Bench {
         self.line(&format!("S{OURS:08X}|slice 0 mode=CW"));
@@ -295,7 +302,7 @@ fn t_0_sends_only_the_stops_that_are_ours() {
     assert_eq!(b.end_ours(), ["transmit tune 0", "cwx clear", "xmit 0"]);
     // Our CWX word and our ATU cycle: theirs, the ATU's being both (no stop for a cycle is
     // documented).
-    let mut b = Bench::ready(vec![], vec![PREVIOUS]);
+    let mut b = Bench::ready(vec![], vec![PREVIOUS]).in_cw();
     b.start(cwx("CQ"), Some(300)).expect("sending");
     b.advance(20);
     assert_eq!(b.end_ours(), ["cwx clear"]);
@@ -371,7 +378,7 @@ fn the_session_ends_a_latched_tune_at_its_deadline_without_the_loop() {
 /// radio's own break-in then ends the operation, with no stop from Nexus.
 #[test]
 fn a_second_word_appends_and_a_key_inside_our_cwx_is_refused() {
-    let mut b = Bench::ready(vec![], vec![]);
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
     b.start(cwx("CQ"), Some(300)).expect("sending");
     b.advance(50);
     assert!(b.s.keyed());
@@ -400,7 +407,7 @@ fn a_second_word_appends_and_a_key_inside_our_cwx_is_refused() {
         Err(Refusal::NoReadback(StartKind::Cwx))
     );
     // Once a stop has gone out for our CWX, it takes no more words.
-    let mut b = Bench::ready(vec![], vec![]);
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
     b.start(cwx("CQ"), Some(300)).expect("sending");
     b.advance(20);
     assert_eq!(b.end_ours(), ["cwx clear"]);
@@ -412,7 +419,7 @@ fn a_second_word_appends_and_a_key_inside_our_cwx_is_refused() {
 #[test]
 fn a_foreign_source_inside_a_cwx_window_fails_the_attempt() {
     for handle in [OURS, 0] {
-        let mut b = Bench::ready(vec![], vec![]);
+        let mut b = Bench::ready(vec![], vec![]).in_cw();
         b.start(cwx("CQ"), Some(300)).expect("sending");
         b.advance(20);
         b.line(&keyed_by(handle, "MIC"));
@@ -425,7 +432,7 @@ fn a_foreign_source_inside_a_cwx_window_fails_the_attempt() {
         assert!(b.closed_unconfirmed());
     }
     // The control: the same word without the sample ends by the radio's hand.
-    let mut b = Bench::ready(vec![], vec![]);
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
     b.start(cwx("CQ"), Some(300)).expect("sending");
     b.advance(3_000);
     assert_eq!(b.count(&Event::UnkeyConfirmed), 1);
@@ -544,4 +551,73 @@ fn an_amplifiers_reason_on_a_keying_report_is_ours_and_any_other_fails() {
         assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1, "{reason}");
         assert!(b.closed_unconfirmed(), "{reason}");
     }
+}
+
+/// ⭐ Stop TX in the middle of a CW message: `cwx clear` goes out at once, no word joins after it,
+/// and the radio's own release ends the operation, with no unkey. A radio still showing our CWX
+/// transmitting break-in delay + 300 ms after the clear's reply (the simulator's held CWX) is sent
+/// the unkey then, once, and its release proves the end: no alarm either way.
+#[test]
+fn stop_tx_mid_macro_clears_and_sends_nothing_after() {
+    let ended_clean = |b: &Bench| {
+        assert!(!b.s.keyed(), "{:?}", b.events);
+        assert_eq!(b.count(&Event::UnkeyConfirmed), 1);
+        assert_eq!(b.count(&Event::UnkeyUnconfirmed), 0);
+        assert_eq!(b.s.phase(), Phase::Ready);
+    };
+    // The radio's break-in ends it.
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
+    b.start(cwx("CQ"), Some(1_620)).expect("sending");
+    b.advance(400);
+    assert!(matches!(b.stop(TxStop::CwxClear), StopOutcome::Sent { .. }));
+    assert_eq!(
+        b.start(cwx("TEST"), Some(1_000)),
+        Err(Refusal::AlreadyKeyed)
+    );
+    b.advance(TRANSITION_TIMEOUT_MS + 1_000);
+    ended_clean(&b);
+    assert_eq!(b.transmit_wire(), ["cwx send \"CQ\" 1", "cwx clear"]);
+
+    // The radio holds transmit after the clear.
+    let mut b = Bench::ready(vec![Fault::HoldsCwx], vec![]).in_cw();
+    b.start(cwx("CQ"), Some(1_620)).expect("sending");
+    b.advance(400);
+    let replied = b.now;
+    assert!(matches!(b.stop(TxStop::CwxClear), StopOutcome::Sent { .. }));
+    b.advance(300 + 300 - 1);
+    assert_eq!(b.written_at("xmit 0"), None, "inside the break-in window");
+    b.advance(1);
+    assert_eq!(b.written_at("xmit 0"), Some(replied + 300 + 300));
+    b.advance(TRANSITION_TIMEOUT_MS);
+    ended_clean(&b);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"CQ\" 1", "cwx clear", "xmit 0"]
+    );
+
+    // Stopped after the word's expected end, on a radio that holds it: from the clear's reply the
+    // end has a transition's time, so the unkey and its release still come inside it.
+    let mut b = Bench::ready(vec![Fault::HoldsCwx], vec![]).in_cw();
+    b.start(cwx("E"), Some(300)).expect("sending");
+    b.advance(1_000);
+    let replied = b.now;
+    assert!(matches!(b.stop(TxStop::CwxClear), StopOutcome::Sent { .. }));
+    b.advance(TRANSITION_TIMEOUT_MS);
+    assert_eq!(b.written_at("xmit 0"), Some(replied + 300 + 300));
+    ended_clean(&b);
+}
+
+/// ⭐ A long word stopped part way ends on the radio's release, not at its expected end: the clear
+/// emptied the radio's buffer. Waiting out a 12-second word past the five seconds a stop has to be
+/// proven would raise "may still be transmitting" and drop the connection over an idle radio.
+#[test]
+fn a_long_word_stopped_part_way_ends_on_the_radios_release() {
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
+    b.start(cwx("CQ"), Some(12_000)).expect("sending");
+    b.advance(400);
+    assert!(matches!(b.stop(TxStop::CwxClear), StopOutcome::Sent { .. }));
+    b.advance(TRANSITION_TIMEOUT_MS + 1_000);
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 0, "{:?}", b.events);
+    assert_eq!(b.count(&Event::UnkeyConfirmed), 1);
+    assert_eq!(b.transmit_wire(), ["cwx send \"CQ\" 1", "cwx clear"]);
 }

@@ -180,7 +180,8 @@ pub const PROVENANCE: &[Ported] = &[
         tests: &["tests/flex_ptt_stop_tracker_test.cpp"],
         differences: "plain operation and stop ids replace the coordinator; consume() replaces \
                       the acknowledgment; no thread check; the timeout is a parameter; Nexus's \
-                      own profiles for tune, CWX and ATU",
+                      own profiles for tune, CWX and ATU, the CWX clear, and an amplifier's \
+                      reason on a keying report",
     },
     Ported {
         file: "ownership.rs",
