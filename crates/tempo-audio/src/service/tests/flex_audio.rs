@@ -1654,6 +1654,12 @@ fn a_receive_floor_fallback_inside_the_guard_refuses_the_over_too() {
              +900=Some(false)"
         )
     );
+    // The fallback's line is named as Flex audio, the radio carrying on through the sound card.
+    let snapshot = s.engine.lock().unwrap().snapshot();
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"],
+        "flexAudio"
+    );
 }
 
 /// The Phone cockpit's "mic disconnected" (`flex_dax_tx`) follows the radio, not the toggle:

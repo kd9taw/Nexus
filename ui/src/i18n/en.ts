@@ -10530,7 +10530,20 @@ export const EN = {
   // A lane item PERSISTS while its condition holds, so its wording is what the operator
   // stares at. `detail` is the backend's own message where one exists and is interpolated as
   // data, never translated.
-  'shell.lane.audio.message': 'RADIO STOPPED',
+  // The station's audio-error line, headed by the kind of problem the station names beside its
+  // sentence (features/audioError.ts); the sentence is the tooltip, as data. `.other` heads a line
+  // from a station too old to name the kind.
+  'shell.lane.audio.engineStopped': 'RADIO ENGINE STOPPED',
+  'shell.lane.audio.soundCard': 'SOUND CARD FAILED',
+  'shell.lane.audio.noReceiveAudio': 'NO RECEIVE AUDIO',
+  'shell.lane.audio.ptt': 'PTT NOT ACCEPTED',
+  'shell.lane.audio.flexAudio': 'NO FLEX AUDIO',
+  'shell.lane.audio.flexAddress': 'NO FLEX RADIO IP',
+  'shell.lane.audio.monitor': 'HEADPHONE MONITOR OFF',
+  'shell.lane.audio.voiceMic': 'VOICE MIC FAILED',
+  'shell.lane.audio.recording': 'RECORDING FAILED',
+  'shell.lane.audio.decodeCrash': 'DECODE CRASHED',
+  'shell.lane.audio.other': 'RADIO ALERT',
   'shell.lane.scopeSpan.message': 'SCOPE SPAN REFUSED',
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',

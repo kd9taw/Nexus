@@ -291,6 +291,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
+  sound card that failed, a headphone monitor that was held off and every other notice on that line
+  all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
+  and CAT worked. Each now says what it is: PTT NOT ACCEPTED, SOUND CARD FAILED, NO RECEIVE AUDIO,
+  NO FLEX AUDIO, HEADPHONE MONITOR OFF, VOICE MIC FAILED, RECORDING FAILED and so on, and RADIO
+  ENGINE STOPPED only when Nexus's radio engine itself has stopped and needs a restart. Only what
+  stops receiving or transmitting flashes. A notice the radio keeps working through (the headphone
+  monitor, the voice mic, Flex native audio falling back to the sound card, a recording that could
+  not start) shows as a warning. Hovering the chip still shows the full message.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a
