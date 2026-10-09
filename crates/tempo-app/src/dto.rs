@@ -2597,8 +2597,10 @@ pub struct FdClubBoardRow {
     ///
     /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends
     /// it (`ui/src/remote-web/field-day.ts` refuses any board key it does not), so the page
-    /// that takes it is deployed before the release that writes it.
-    #[serde(default)]
+    /// that takes it is deployed before the release that writes it. Absent, not `null`, when
+    /// there is no value, so a position's board, which never has one, stays exactly what an
+    /// older page takes; only a host's measured rows carry the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_ms: Option<i64>,
 }
 

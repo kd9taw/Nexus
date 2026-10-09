@@ -42241,6 +42241,15 @@ mod tests {
             None,
             "a position that has not measured one"
         );
+        // On the wire to the screen (and to Remote), the key is there only with a value.
+        let json = |id: &str| {
+            serde_json::to_value(club.board.iter().find(|r| r.posid == id).unwrap()).unwrap()
+        };
+        assert_eq!(json("bbbb0002")["clockMs"], -3_000);
+        assert!(
+            json("cccc0003").get("clockMs").is_none(),
+            "no key, not a null"
+        );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -42386,6 +42395,13 @@ mod tests {
         assert_eq!(
             club.board[0].clock_ms, None,
             "a position's board has no clock column: the column is the host's"
+        );
+        assert!(
+            serde_json::to_value(&club.board[0])
+                .unwrap()
+                .get("clockMs")
+                .is_none(),
+            "…and its rows carry no clock key, so a hosted page older than the column takes them"
         );
 
         // A second local contact while connected but unacked → BEHIND, queued 1.

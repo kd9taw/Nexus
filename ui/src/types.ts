@@ -3441,8 +3441,8 @@ export interface FdClubBoardRow {
   lastSeenSecs: number
   /** That position's clock minus the host's, in ms, as it measured it over the club link
    *  and reported it to the host. Filled on the HOST's board only (the board's Clock column);
-   *  `null` on a position's, and for a position that has not measured one; absent from a
-   *  station older than the field. Shown, never applied. */
+   *  absent on a position's, for a position that has not measured one, and from a station
+   *  older than the field. Shown, never applied. */
   clockMs?: number | null
 }
 
