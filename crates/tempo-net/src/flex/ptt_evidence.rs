@@ -61,6 +61,14 @@
 //! and none is confirmed on a real radio: each constant says where its facts come from and what
 //! stands in where the notes are silent. Admission refuses those starts until a tester's bench
 //! confirms their profiles.
+//!
+//! **An amplifier's reason** is added for Nexus too, for every kind, `xmit` included: a keying
+//! report (PTT_REQUESTED, TRANSMITTING) whose only reason names an amplifier ([`amplifier_only`],
+//! `reason=AMP:PG-XL` while the radio waits on a PowerGeniusXL in line, in AetherSDR's notes) is
+//! ours when its source and its place in the order are (operator ruling, 2026-10-09). Any other
+//! reason, two reasons, or an amplifier's reason on a release or idle report still fails, and the
+//! idle that ends an attempt still carries no reason. ⚠️ Unconfirmed until a tester's bench with
+//! an amplifier in line.
 
 use std::num::NonZeroU64;
 
@@ -298,6 +306,15 @@ impl Default for StopTracker {
     fn default() -> Self {
         StopTracker::new(TRANSITION_TIMEOUT_MS)
     }
+}
+
+/// Whether an interlock `reason` names an amplifier and nothing else: `AMP:<name>`, one name, as
+/// the radio reports an amplifier in line it is waiting on (`AMP:PG-XL`, a PowerGeniusXL, in
+/// AetherSDR's notes). An empty name, two reasons or any other reason is not.
+pub fn amplifier_only(reason: &str) -> bool {
+    reason
+        .strip_prefix("AMP:")
+        .is_some_and(|name| !name.is_empty() && !name.contains(','))
 }
 
 /// Upstream's guarded number parse: one to ten digits of `base`, fitting 32 bits. A missing or
@@ -870,7 +887,11 @@ impl StopTracker {
             self.fail(Failure::Ownership);
             return;
         }
-        if allowed != "1" || !reason.is_empty() {
+        // A keying report whose only reason names an amplifier is ours when everything else is:
+        // its source above, and its place in the order below. Any other reason, or one on any
+        // other report, fails the attempt.
+        let keying = matches!(state, "PTT_REQUESTED" | "TRANSMITTING");
+        if allowed != "1" || !(reason.is_empty() || (keying && amplifier_only(reason))) {
             self.fail(Failure::State);
             return;
         }
@@ -1710,7 +1731,8 @@ mod tests {
             "S0|interlock tx_client_handle=0x87654321 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
             "S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=TUNE tx_allowed=1 amplifier=",
             "S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=",
-            "S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason=AMP:PG-XL source=SW tx_allowed=1 amplifier=",
+            // A reason other than an amplifier's (an amplifier's alone is ours: below).
+            "S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason=PA_RANGE source=SW tx_allowed=1 amplifier=",
             "S0|interlock state=TRANSMITTING",
         ] {
             let mut h = Harness::new();
@@ -1732,6 +1754,105 @@ mod tests {
         h.now += 1;
         h.tracker.poll(h.now);
         assert_eq!(h.tracker.failure(), Failure::Timeout);
+    }
+
+    /// `line` with `reason` in place of its empty reason.
+    fn with_reason(line: &str, reason: &str) -> String {
+        line.replace(" reason= ", &format!(" reason={reason} "))
+    }
+
+    /// ⭐ A keying report whose only reason names an amplifier (`reason=AMP:PG-XL`, a PGXL in line)
+    /// is ours when its source and its place in the order are: an over confirms through it, and a
+    /// CWX window keeps going. Any other reason, two reasons or no name fails, and so does an
+    /// amplifier's reason on a release, on the idle that would end it, out of order or under
+    /// another source.
+    #[test]
+    fn an_amplifiers_reason_on_a_keying_report_is_ours() {
+        assert!(amplifier_only("AMP:PG-XL"));
+        let keyed = |h: &mut Harness, reason: &str| {
+            assert!(h.tracker.begin(h.operation, 101, h.now));
+            h.written(101, true, true);
+            h.feed("R101|0|");
+            h.feed(&with_reason(REQUESTED, reason));
+        };
+        // The over: both keying reports carry it, and the captured release confirms.
+        let mut h = Harness::new();
+        keyed(&mut h, "AMP:PG-XL");
+        h.feed(&with_reason(TRANSMITTING, "AMP:PG-XL"));
+        assert_eq!(h.tracker.phase(), Phase::Transmitting);
+        h.complete();
+        assert_eq!(h.evidence(), Some(h.stop));
+        // Any other reason on the same report.
+        for reason in [
+            "PA_RANGE",
+            "ANT:ANT2",
+            "AMP:PG-XL,ANT:ANT2",
+            "AMP:",
+            "amp:PG-XL",
+        ] {
+            let mut h = Harness::new();
+            keyed(&mut h, reason);
+            assert_eq!(
+                (h.tracker.phase(), h.tracker.failure()),
+                (Phase::Failed, Failure::State),
+                "{reason}"
+            );
+        }
+        // On a release or on the idle that would end it.
+        let release = [UNKEY, READY_OWNED, IDLE];
+        for at in 0..release.len() {
+            let mut h = Harness::new();
+            h.start();
+            h.stop_reply();
+            for (i, line) in release.iter().enumerate() {
+                if i == at {
+                    h.feed(&with_reason(line, "AMP:PG-XL"));
+                } else {
+                    h.feed(line);
+                }
+            }
+            assert_eq!(h.tracker.phase(), Phase::Failed, "{}", release[at]);
+            assert_eq!(h.evidence(), None);
+        }
+        // Out of order, or under another source.
+        for (line, why) in [
+            (with_reason(TRANSMITTING, "AMP:PG-XL"), Failure::State),
+            (
+                with_reason(&REQUESTED.replace("source=SW", "source=MIC"), "AMP:PG-XL"),
+                Failure::Ownership,
+            ),
+        ] {
+            let mut h = Harness::new();
+            assert!(h.tracker.begin(h.operation, 101, h.now));
+            h.written(101, true, true);
+            h.feed("R101|0|");
+            h.feed(&line);
+            assert_eq!(h.tracker.failure(), why, "{line}");
+        }
+        // In a CWX window: the keying report with an amplifier's reason is ours, and the radio's
+        // release ends the word as it would with no amplifier.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        let word: Vec<(u64, String)> = radio_says("cwx send \"CQ\" 1")
+            .into_iter()
+            .map(|(wait, line)| {
+                let keying =
+                    line.contains("state=PTT_REQUESTED") || line.contains("state=TRANSMITTING");
+                (
+                    wait,
+                    if keying {
+                        with_reason(&line, "AMP:PG-XL")
+                    } else {
+                        line
+                    },
+                )
+            })
+            .collect();
+        h.play(&word);
+        assert_eq!(h.tracker.phase(), Phase::Window);
+        h.now += 600;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
     }
 
     #[test]

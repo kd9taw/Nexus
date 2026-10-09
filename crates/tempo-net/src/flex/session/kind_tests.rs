@@ -2,16 +2,17 @@
 //!
 //! Every command the session writes is answered from `tempo-flexsim`'s bundled session: its reply
 //! at once, its statuses at the times their waits say, each rule's statuses after the earlier
-//! rules' (the API's ordering rule, as the simulator keeps it). A fault that swallows a stop
-//! swallows it here exactly as in the simulator ([`withholds`]). Time moves a millisecond at a
-//! time and the session is polled at each, so a deadline shows at the millisecond it falls.
+//! rules' (the API's ordering rule, as the simulator keeps it). A fault that changes or swallows
+//! a rule's statuses does it here exactly as in the simulator ([`statuses`]). Time moves a
+//! millisecond at a time and the session is polled at each, so a deadline shows at the
+//! millisecond it falls.
 //!
 //! The kinds no bench has confirmed are admitted here through the configuration's test-only door
 //! ([`Config::unbenched`]); in production admission refuses their starts. Nexus's own tests.
 
 use super::*;
 use crate::flex::encode::CwxText;
-use tempo_flexsim::fault::withholds;
+use tempo_flexsim::fault::{statuses, PGXL};
 use tempo_flexsim::session::Item;
 use tempo_flexsim::{Fault, Foreign, Session as SimSession};
 
@@ -68,11 +69,8 @@ impl Radio {
             None => (self.rules.default_code.clone(), String::new(), Vec::new()),
         };
         self.push(now, format!("R{seq}|{code}|{}", expand(&message)));
-        if withholds(&self.faults, text) {
-            return;
-        }
         let mut due = self.last_status_due.max(now);
-        for item in items {
+        for item in statuses(&self.faults, text, items) {
             match item {
                 Item::Wait(ms) => due += ms,
                 Item::Send(line) => self.push(due, expand(&line)),
@@ -196,6 +194,12 @@ impl Bench {
         self.s
             .on_bytes(&mut self.out, format!("{line}\n").as_bytes(), self.now);
         self.settle();
+    }
+
+    /// Our transmit slice in CW, as the radio reports a mode change.
+    fn in_cw(mut self) -> Bench {
+        self.line(&format!("S{OURS:08X}|slice 0 mode=CW"));
+        self
     }
 
     fn start(&mut self, start: TxStart, lasting_ms: Option<u64>) -> Result<u32, Refusal> {
@@ -477,4 +481,67 @@ fn closing_or_a_missed_ping_ends_a_tune_with_its_own_stop() {
         Some("transmit tune 1")
     );
     assert_eq!(b.transmit_wire()[1], "transmit tune 0");
+}
+
+/// ⭐ An amplifier in line (the simulator's PGXL profile: every PTT_REQUESTED carries
+/// `reason=AMP:PG-XL`, every TRANSMITTING the amplifiers): an over, a tune and a CWX word each end
+/// by their own proof, with no alarm. Any other reason on the same reports still fails the over:
+/// its unkey goes out again, the operator is told, the session closes.
+#[test]
+fn an_amplifiers_reason_on_a_keying_report_is_ours_and_any_other_fails() {
+    let pgxl = || {
+        vec![Fault::KeyingReason {
+            reason: PGXL.into(),
+        }]
+    };
+    let ended_clean = |b: &Bench, what: &str| {
+        assert!(!b.s.keyed(), "{what}: {:?}", b.events);
+        assert_eq!(b.count(&Event::UnkeyConfirmed), 1, "{what}");
+        assert_eq!(b.count(&Event::UnkeyUnconfirmed), 0, "{what}");
+        assert_eq!(b.s.phase(), Phase::Ready, "{what}");
+    };
+    let mut b = Bench::ready(pgxl(), vec![]);
+    b.start(TxStart::Key, None).expect("keyed");
+    b.advance(100);
+    assert_eq!(b.end_ours(), ["xmit 0"]);
+    b.advance(1_000);
+    ended_clean(&b, "an over");
+    assert_eq!(b.transmit_wire(), ["xmit 1", "xmit 0"]);
+
+    let mut b = Bench::ready(pgxl(), vec![]);
+    b.start(TxStart::TuneOn, Some(10_000)).expect("tuning");
+    b.advance(100);
+    assert_eq!(b.end_ours(), ["transmit tune 0"]);
+    b.advance(1_000);
+    ended_clean(&b, "a tune");
+
+    let mut b = Bench::ready(pgxl(), vec![]).in_cw();
+    b.start(cwx("CQ"), Some(300)).expect("sending");
+    b.advance(3_000);
+    ended_clean(&b, "a CWX word");
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"CQ\" 1"],
+        "the radio ended it"
+    );
+
+    for reason in ["PA_RANGE", "AMP:PG-XL,ANT:ANT2"] {
+        let mut b = Bench::ready(
+            vec![Fault::KeyingReason {
+                reason: reason.into(),
+            }],
+            vec![],
+        );
+        b.start(TxStart::Key, None).expect("keyed");
+        b.advance(100);
+        assert_eq!(b.end_ours(), ["xmit 0"]);
+        b.advance(TRANSITION_TIMEOUT_MS);
+        assert_eq!(
+            b.transmit_wire(),
+            ["xmit 1", "xmit 0", "xmit 0"],
+            "{reason}"
+        );
+        assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1, "{reason}");
+        assert!(b.closed_unconfirmed(), "{reason}");
+    }
 }
