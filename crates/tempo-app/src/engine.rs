@@ -11970,7 +11970,7 @@ impl Engine {
         let rs = self.club_sync_refusal_reason().map_err(|why| {
             std::io::Error::other(format!(
                 "club sync cannot run {}: {}",
-                self.fd_club_contest(),
+                crate::fdevent::contest_name(&self.fd_club_contest()),
                 why.sentence()
             ))
         })?;
@@ -12046,10 +12046,17 @@ impl Engine {
     // --- host half (the ClubBackend impl calls these) ----------------------
 
     /// A position joined. Err when not hosting (a race with the toggle), Err with
-    /// §18.2's refusal when an OLDER position cannot run this club's contest, and Err
+    /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
-    /// rules-file id. The wording lives on `ClubLog` because only it knows the contest
-    /// to name.
+    /// rules-file id — and Err when it is set up in another exchange ROLE than the club's
+    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it). The
+    /// wording lives on `ClubLog` and in `fdevent` because only they know the contest to
+    /// name. Every refusal is noted for the host's own screen too.
+    ///
+    /// A position that names no role is served as it always was: its contest has one role
+    /// (both Field Days), or it is older than the field and cannot say. So is any position
+    /// of a club whose own session Settings can no longer build — there is no role to hold
+    /// it to, and that club already scores nothing until Settings are put right.
     pub fn fd_club_join(
         &mut self,
         v: u32,
@@ -12057,12 +12064,26 @@ impl Engine {
         name: &str,
         call: &str,
         contest: &str,
+        role: &str,
     ) -> Result<tempo_net::fdsync::JoinAccept, String> {
         let now = now_unix_secs();
+        // The club's own role, read before the club is borrowed to change it.
+        let club_role = self
+            .fd_club
+            .as_ref()
+            .and_then(|club| self.fd_club_session(club).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default();
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
-        if let Some(msg) = club.join_refusal(v, contest) {
+        let theirs = role.trim();
+        let refusal = club.join_refusal(v, contest).or_else(|| {
+            (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
+                .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
+        });
+        if let Some(msg) = refusal {
+            club.note_refused(pos, name, call, &msg, now);
             return Err(msg);
         }
         let acked = club.join(pos, name, call, now);
@@ -12123,7 +12144,9 @@ impl Engine {
             .as_mut()
             .expect("checked above, under the same lock");
         club.mark_seen(mark_seen, now);
-        club.club_state(dupes_from, sections_from, total, now)
+        let st = club.club_state(dupes_from, sections_from, total, now);
+        club.note_board_sent(&st.board);
+        st
     }
 
     /// A position's presence report. `report.name` is its current friendly
@@ -12388,6 +12411,24 @@ impl Engine {
         }
     }
 
+    /// ⭐ **The exchange role this position's rows are sent under** — the JOIN's `role`: the
+    /// live session's in Field Day, and outside it the role Settings would start the picked
+    /// contest in (what the Contesting tab previews), so a position set up on the wrong side
+    /// of the state line hears so before its first contact. `""` for a contest with one role
+    /// (both Field Days), and for one Settings cannot start yet.
+    pub fn fd_position_role(&self) -> String {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.role().id.to_string(),
+            _ => tempo_core::fd_rules::ruleset_by_id(
+                &self.fd_club_contest(),
+                tempo_core::fd_rules::CURRENT_RULES_YEAR,
+            )
+            .and_then(|rs| ContestSession::for_ruleset(rs, &self.contest_station_data()).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default(),
+        }
+    }
+
     /// ⭐ **Whether this position may stream to a host running `contest`** (the welcome's,
     /// `""` from a host too old to name one) — `Err` with the sentence the club chip shows.
     ///
@@ -12524,6 +12565,28 @@ impl Engine {
             // of this DTO's dupe data; the mirror's unprojected keys need no work here.
             dkeys: Vec::new(),
             board,
+            // The host's alone: how full the board every position is sent has become.
+            board_full: self.fd_club.as_ref().and_then(|c| c.board_full()).map(
+                |(positions, shown)| crate::dto::FdBoardFullDto {
+                    positions: positions as u32,
+                    shown: shown as u32,
+                },
+            ),
+            // The host's alone: who it turned away, and what each was told.
+            refused: self
+                .fd_club
+                .as_ref()
+                .map(|c| {
+                    c.refused(now_unix_secs())
+                        .into_iter()
+                        .map(|r| crate::dto::FdClubRefusedDto {
+                            pos_name: r.label.clone(),
+                            call: r.call.clone(),
+                            reason: r.reason.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -25187,7 +25250,8 @@ contact yourself."
         if station.log.qsos().is_empty() && station.log.removed().is_empty() {
             return None;
         }
-        Some(station.log.adif())
+        // With the records the restore held: the journal is their only copy on disk.
+        Some(station.log.journal_adif())
     }
 
     /// One waterfall row: the Goertzel power spectrum of the **live** captured
@@ -26439,6 +26503,11 @@ pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
 /// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
 /// rewrites the journal from the log, which would drop the rest for good.
 ///
+/// Only the session's own rows are loaded: its contest's, from the running of it `now_unix`
+/// belongs to ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). The rest — a
+/// rehearsal's, another contest's — are held by the log, said on the contest screen, and
+/// written back with every rewrite of the journal ([`Engine::field_day_log_adif`]).
+///
 /// A journal kept in place is not read again; `carried`, the live log's own rows, crosses the
 /// rebuild instead (see `set_mode_with_decoder`).
 fn restore_fd_journal(
@@ -26448,9 +26517,10 @@ fn restore_fd_journal(
     carried: Option<&str>,
     now_unix: i64,
 ) {
+    let now = now_unix.max(0) as u64;
     if tempo_core::keep_aside::refuses(path) {
         if let Some(rows) = carried {
-            log.merge_adif(rows, min_when_unix);
+            log.restore_journal(rows, min_when_unix, now);
         }
         return;
     }
@@ -26465,7 +26535,7 @@ fn restore_fd_journal(
     // Lossy on purpose, as the logbook's own load: the ADIF structure is ASCII, so every record
     // survives a bad byte, and the file itself is kept below.
     let text = String::from_utf8_lossy(&bytes);
-    let merged = log.merge_adif(&text, min_when_unix);
+    let merged = log.restore_journal(&text, min_when_unix, now);
     let why = if matches!(text, std::borrow::Cow::Owned(_)) {
         Some("it is not UTF-8".to_string())
     } else if merged.unreadable > 0 {
@@ -42246,6 +42316,7 @@ mod tests {
             "CW tent",
             "KD9TAW",
             "arrlfd",
+            "",
         );
         e.fd_club_merge(&tempo_net::fdsync::WireQso {
             pos: "aaaa0001".into(),
@@ -42309,8 +42380,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "bbbb0002",
             &tempo_net::fdsync::PosReport {
@@ -42356,6 +42427,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **The host's club board warns before the next position might not fit on the board
+    /// every position is sent, naming the count** — and once the club has more positions than
+    /// one club line carries, says how many of them the positions see.
+    ///
+    /// The board rides every club line, the heartbeat's too, and a line past 8 KB is one no
+    /// position can read. Nothing on the host said the club was nearing that.
+    #[test]
+    fn the_hosts_club_board_warns_before_the_next_position_would_not_fit() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut first_warned = None;
+        for n in 1..=90u32 {
+            let pos = format!("{n:08x}");
+            let _ = e.fd_club_join(
+                v,
+                &pos,
+                &format!("Position {n:02} tent"),
+                "W9ABC",
+                "arrlfd",
+                "",
+            );
+            e.fd_club_pos_status(
+                &pos,
+                &tempo_net::fdsync::PosReport {
+                    band: "160m".into(),
+                    mode: "dig".into(),
+                    op: format!("kd9t{n:04}"),
+                    freq: 1_840_000,
+                    name: format!("Position {n:02} tent"),
+                    clock_ms: None,
+                },
+            );
+            // What every connection's heartbeat asks for, and what the positions are sent.
+            let sent = e.fd_club_state(0, 0, &pos);
+            let shown = tempo_net::fdsync::board_fit(&sent.board).rows.len() as u32;
+            let full = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+            if n == 10 {
+                assert_eq!(full, None, "CONTROL: a club of 10 is nowhere near the line");
+            }
+            if let Some(f) = full {
+                assert_eq!(f.positions, n, "the warning names the club's positions");
+                assert_eq!(f.shown, shown, "and how many the positions are sent");
+                first_warned.get_or_insert(f);
+            }
+        }
+        let first = first_warned.expect("a club of 90 positions is warned");
+        assert_eq!(
+            first.shown, first.positions,
+            "warned BEFORE anyone is left out: all {} still on the board",
+            first.positions
+        );
+        let last = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+        let last = last.expect("still warned at 90");
+        assert_eq!(last.positions, 90);
+        assert!(
+            last.shown < 90 && last.shown >= first.positions,
+            "past the line the board is cut, not dropped: {last:?}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
     /// the host already holds per position — the scoreboard seam simply
     /// dropped it, carrying label + operator only, so the club TV could not
@@ -42375,8 +42520,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "aaaa0001",
             &tempo_net::fdsync::PosReport {
@@ -42518,6 +42663,116 @@ mod tests {
         assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
     }
 
+    /// An Illinois QSO Party club host in Cook County — the in-state role — hosting.
+    fn party_host(dir: &std::path::Path) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e.fd_host_start(dir.join("ilqp.ndjson"))
+            .expect("the Illinois QSO Party is hosted");
+        e
+    }
+
+    /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
+    /// on both screens** — in a QSO party a station inside the state sends its county and
+    /// one outside it sends its state, chosen by where Settings says it is. A club entry is
+    /// one station in one place, so a position set up out of state would send every contact
+    /// with the wrong exchange into an in-state club log, and nothing said so.
+    #[test]
+    fn a_party_club_refuses_a_position_set_up_in_another_role_by_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-role-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let err = e
+            .fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "w_ve")
+            .expect_err("a position set up out of state is refused");
+        assert!(
+            err.contains("in-state") && err.contains("out-of-state"),
+            "it says which value differs: {err}"
+        );
+        assert!(
+            err.contains("Your station data") && err.contains("Contesting tab"),
+            "and where to set it: {err}"
+        );
+        // The host's own screen says so too: who, and what they were told.
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        let refused: Vec<(&str, &str, &str)> = club
+            .refused
+            .iter()
+            .map(|r| (r.pos_name.as_str(), r.call.as_str(), r.reason.as_str()))
+            .collect();
+        assert_eq!(refused, vec![("SSB tent", "W9XYZ", err.as_str())]);
+        // A DX one, by its own word.
+        let dx = e
+            .fd_club_join(v, "cccc0003", "DX tent", "W9XYZ", "ilqp", "dx")
+            .expect_err("a position set up as DX is refused");
+        assert!(dx.contains("DX"), "{dx}");
+        // CONTROLS. The same position set up in the club's role joins, and the host's note
+        // for it goes; an older position, which cannot say its role, is served as before.
+        e.fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state")
+            .expect("the club's own role joins");
+        e.fd_club_join(v, "bbbb0002", "CW tent", "W9XYZ", "ilqp", "")
+            .expect("an older position joins as it always has");
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(
+            club.refused
+                .iter()
+                .map(|r| r.pos_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DX tent"],
+            "the joined position's note is gone; the DX one's stays"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The role a position's JOIN names is the one its rows are sent under** — the live
+    /// session's in Field Day mode, else the one Settings would start the picked contest
+    /// with — and nothing for a contest with one role.
+    #[test]
+    fn the_join_names_the_role_this_positions_exchange_is_sent_under() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        e.apply_settings(s.clone());
+        assert_eq!(e.fd_position_role(), "in_state", "previewed from Settings");
+        e.set_mode("fieldday-sp").unwrap();
+        assert_eq!(e.fd_position_role(), "in_state", "the live session's");
+        let mut out = Engine::new("W9XYZ", "EN61", 0);
+        s.contest_qth_state = "IN".into();
+        s.contest_qth_county.clear();
+        out.apply_settings(s);
+        out.set_mode("fieldday-sp").unwrap();
+        assert_eq!(
+            out.fd_position_role(),
+            "w_ve",
+            "an Indiana station is out of state"
+        );
+        // CONTROL: Field Day has one role, and says none.
+        let mut fd = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = fd.settings().clone();
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        fd.apply_settings(s);
+        fd.set_mode("fieldday-sp").unwrap();
+        assert_eq!(fd.fd_position_role(), "");
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -42593,6 +42848,14 @@ mod tests {
                 .fd_host_start(dir.join(format!("{event}.ndjson")))
                 .expect_err("refused");
             assert!(err.to_string().contains(why.sentence()), "{event}: {err}");
+            // The host's log line names the contest as its sponsor does, never by the
+            // rules-file id an operator has never seen.
+            assert!(
+                err.to_string()
+                    .contains(&crate::fdevent::contest_name(event))
+                    && !err.to_string().contains(event),
+                "{event}: {err}"
+            );
             assert!(!e.fd_hosting());
             assert_eq!(
                 e.fd_sync_targets(),
@@ -42678,7 +42941,7 @@ mod tests {
         // A Field Day club serves a v1 tent exactly as it always did.
         assert!(
             backend
-                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "")
+                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "", "")
                 .is_ok(),
             "a mixed-version FIELD DAY club must be unaffected by the gate"
         );
@@ -42691,7 +42954,7 @@ mod tests {
             club.event_id = "tnqp".into();
         }
         let msg = backend
-            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "")
+            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "", "")
             .expect_err("a v1 tent cannot run a QSO party");
         assert!(
             msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"),
@@ -42712,7 +42975,15 @@ mod tests {
         // gate that refused everybody would satisfy every assertion above while
         // locking every tent out of the QSO party.
         let accept = backend
-            .join(PROTO_VERSION, "cccc0003", "SSB tent", "KD9TAW", 0, "tnqp")
+            .join(
+                PROTO_VERSION,
+                "cccc0003",
+                "SSB tent",
+                "KD9TAW",
+                0,
+                "tnqp",
+                "",
+            )
             .expect("a v2 tent joins the QSO party");
         assert_eq!(accept.host_call, "W9ABC");
 
@@ -42734,6 +43005,150 @@ mod tests {
         e.apply_settings(s);
         e.set_mode("fieldday-sp").expect("the party runs");
         e
+    }
+
+    /// ⭐ **Entering the party restores this session's rows only, says how many it kept out
+    /// and why, and keeps them on disk** — through the engine's own restore, the shell's
+    /// journal file and the rewrite the next contact makes, on the real clock: an ARRL Field
+    /// Day contact from an hour ago, in the same per-position journal.
+    #[test]
+    fn the_party_keeps_another_contests_journal_rows_out_says_so_and_keeps_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-kept-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let mut fd = tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(tempo_core::fieldday::FdEvent::ArrlFd, "3A", "IL"),
+            "40m",
+        );
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert!(fd.log_fields_at(
+            "K1ABC",
+            &[pair("CLASS", "2A"), pair("SECTION", "EMA")],
+            "CW",
+            "",
+            0,
+            now_unix_secs() - 3600
+        ));
+        let fd_journal = fd.adif();
+        let fd_record = fd_journal[fd_journal.find("<CALL").unwrap()..]
+            .trim_end()
+            .to_string();
+        std::fs::write(&path, &fd_journal).unwrap();
+        let party = |path: &std::path::Path| {
+            let mut e = Engine::new("W9XYZ", "EN50", 0);
+            e.set_fd_log_path(path.to_path_buf());
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "COOK".into();
+            e.apply_settings(s);
+            e.set_mode("fieldday-sp").expect("the party runs");
+            e
+        };
+        let mut e = party(&path);
+        let st = e.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.qso_count, 0,
+            "the Field Day contact is not in the party's log"
+        );
+        assert_eq!(
+            st.kept_out,
+            Some(crate::dto::FdKeptOutDto {
+                other_contest: 1,
+                other_running: 0
+            }),
+            "and the screen is told how many, and why"
+        );
+        assert!(e
+            .contest_log_manual(
+                "N9AAA",
+                &[pair("RST", "599"), pair("QTH", "LAKE")],
+                "CW",
+                None
+            )
+            .unwrap());
+        e.journal_mark().wait();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains(&fd_record),
+            "kept, as Field Day wrote it:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("<CALL:5>N9AAA"),
+            "beside the party's own:\n{on_disk}"
+        );
+        // CONTROL: a restart from that file brings the party's contact back, and keeps the
+        // Field Day one out again.
+        let again = party(&path);
+        let st = again.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.log.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
+            vec!["N9AAA"]
+        );
+        assert_eq!(st.kept_out.map(|k| k.other_contest), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **…and a rehearsal days before the party, through the engine's own restore** at the
+    /// party's clock — the date the operator's question is about, which the real clock
+    /// cannot be set to. CONTROL: the rehearsal's own restart, at the rehearsal's clock,
+    /// loads it whole.
+    #[test]
+    fn the_engines_restore_keeps_a_rehearsal_out_of_the_party() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-rehearsal-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let session = match &ilqp_engine("COOK", "eeee0001").mode {
+            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            _ => panic!("the party runs"),
+        };
+        // Wednesday 14 October 2026, 2300Z and 2301Z; the party starts Sunday the 18th 1700Z.
+        let (wed, sun) = (1_792_018_800u64, 1_792_351_800u64);
+        let mut rehearsal = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        for (i, call) in ["K9AAA", "K9BBB"].into_iter().enumerate() {
+            let ex = [
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), "KANE".to_string()),
+            ];
+            assert!(rehearsal.log_fields_at(call, &ex, "CW", "", 0, wed + 60 * i as u64));
+        }
+        std::fs::write(&path, rehearsal.adif()).unwrap();
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        restore_fd_journal(&mut log, &path, sun - 4 * 86_400, None, sun as i64);
+        assert!(
+            log.qsos().is_empty(),
+            "not one rehearsal contact in the party's log"
+        );
+        assert_eq!(log.held(), (0, 2), "two kept out, as another running");
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session, "40m");
+        restore_fd_journal(
+            &mut log,
+            &path,
+            wed + 3600 - 4 * 86_400,
+            None,
+            (wed + 3600) as i64,
+        );
+        assert_eq!(
+            log.qsos()
+                .iter()
+                .map(|q| q.call.as_str())
+                .collect::<Vec<_>>(),
+            vec!["K9AAA", "K9BBB"],
+            "CONTROL: the rehearsal's own restart"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// One party contact as a current position streams it, resolved through the
@@ -42805,16 +43220,16 @@ mod tests {
             .expect("the party is hosted");
         let v = tempo_net::fdsync::PROTO_VERSION;
         let accept = e
-            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp")
+            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp", "")
             .expect("a party position joins the party");
         assert_eq!(
             accept.contest, "ilqp",
             "the welcome names the club's contest"
         );
-        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp")
+        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp", "")
             .expect("a second party position");
         let refused = e
-            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd")
+            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd", "")
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
             refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
@@ -43698,6 +44113,7 @@ mod tests {
             "Tent",
             "W9XYZ",
             "wfd",
+            "",
         );
         for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
             e.fd_club_merge(&tempo_net::fdsync::WireQso {

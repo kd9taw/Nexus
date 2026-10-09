@@ -273,6 +273,38 @@ describe('the Club Sync section says it will not run a contest the club log cann
     ).toBeTruthy()
   })
 
+  // A downloaded rules file can drop a contest, and the engine refuses club sync for it then:
+  // the station's preview of the SAVED pick resolves it to the ARRL Field Day mode entry falls
+  // back to, which is how this tab can tell.
+  const preview = (event: string) =>
+    Promise.resolve({ event, rulesYear: 2026, bannedModes: [], spottingAllowed: true, clusterAllowed: true, enforcement: 'warn', role: '', exchange: [], problem: '' })
+
+  it('names a contest the loaded rules do not carry, from the preview of the saved pick', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdEvent: 'ilqp', fdHostEnable: false })),
+    )
+    api.get('getFdRuleset').mockImplementation(() => preview('arrlfd'))
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(
+        /Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it/,
+      ),
+    ).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: the same pick, carried by the loaded rules, carries no note', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdEvent: 'ilqp', fdHostEnable: false })),
+    )
+    api.get('getFdRuleset').mockImplementation(() => preview('ilqp'))
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByRole('switch', { name: /club event hosting/ })).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    expect(screen.queryByText(/Club sync does not run/)).toBeNull()
+  })
+
   it('POSITIVE CONTROL: the Illinois QSO Party and both Field Days carry no such note', async () => {
     for (const fdEvent of ['ilqp', 'arrlfd', 'wfd']) {
       api.get('getSettings').mockImplementation(() =>

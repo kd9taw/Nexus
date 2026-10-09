@@ -6,7 +6,7 @@
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
-import { ContestView } from './ContestView'
+import { ContestView, FdClubSection } from './ContestView'
 import { getSettings } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FdClubStatus, FieldDayStatus } from '../types'
@@ -301,5 +301,120 @@ describe('club sync switched on for a contest the club log cannot run', () => {
   it('POSITIVE CONTROL: a refused contest with club sync never switched on says nothing either', async () => {
     await renderWith({ fdEvent: 'cqww_cw', fdHostEnable: false, fdJoinAddr: '' })
     expect(screen.queryByText('Not syncing')).toBeNull()
+  })
+
+  // A rules file the station downloaded can drop a contest, and the engine refuses club sync
+  // for it (`ClubRefusal::NoRuleset`): the station's preview of the pick resolves to the ARRL
+  // Field Day that mode entry falls back to, and the screen says why by the sponsor's name.
+  async function renderPreviewed(fdEvent: string, previewEvent: string) {
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, fdEvent, fdHostEnable: true } as never)
+    render(
+      <ContestView
+        fieldDay={fd(undefined)}
+        onSetMode={() => {}}
+        fdRuleset={{
+          event: previewEvent,
+          rulesYear: 2026,
+          bannedModes: [],
+          spottingAllowed: true,
+          clusterAllowed: true,
+          enforcement: 'warn',
+          role: '',
+          exchange: [],
+          problem: '',
+        } as never}
+      />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('says a contest the loaded rules do not carry is not syncing, and why', async () => {
+    await renderPreviewed('ilqp', 'arrlfd')
+    expect(screen.getByText('Not syncing')).toBeTruthy()
+    expect(
+      screen.getByText(/Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it/),
+    ).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: the same pick, carried by the loaded rules, says nothing of it', async () => {
+    await renderPreviewed('ilqp', 'ilqp')
+    expect(screen.queryByText('Not syncing')).toBeNull()
+  })
+})
+
+// ⭐ WHAT THE JOURNAL RESTORE KEPT OUT. The contest journal is one file per position whatever
+// contest it last ran; entering a contest loads only its own rows from this running of it, and
+// the screen says how many it kept out and why — a rehearsal's, another contest's — and that
+// nothing was deleted.
+describe('the contest screen says what the journal restore kept out', () => {
+  async function renderWith(status: Partial<FieldDayStatus>) {
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...defaultSettings, fdEvent: 'ilqp' } as never)
+    render(<ContestView fieldDay={{ ...fd(undefined), ...status }} onSetMode={() => {}} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('names each reason with its count, and says nothing was deleted', async () => {
+    await renderWith({ event: 'ilqp', keptOut: { otherContest: 1, otherRunning: 3 } })
+    expect(screen.getByText(/3 contacts in this computer's contest journal were logged in another running of Illinois QSO Party/)).toBeTruthy()
+    expect(screen.getByText(/1 contact in this computer's contest journal belongs to another contest/)).toBeTruthy()
+    expect(screen.getByText(/Nothing was deleted/)).toBeTruthy()
+  })
+
+  it('says only the reason that applies', async () => {
+    await renderWith({ event: 'ilqp', keptOut: { otherContest: 0, otherRunning: 1 } })
+    expect(screen.getByText(/1 contact in this computer's contest journal was logged in another running/)).toBeTruthy()
+    expect(screen.queryByText(/belongs to another contest/)).toBeNull()
+  })
+
+  it('POSITIVE CONTROL: a session that kept nothing out says nothing of it', async () => {
+    await renderWith({ event: 'ilqp' })
+    expect(screen.queryByText(/Nothing was deleted/)).toBeNull()
+  })
+})
+
+// ⭐ THE HOST'S SIDE OF A REFUSAL, AND OF A FULL BOARD. A position the host turns away is told
+// why on its own screen; the host's club block says so too — who, and what they were told — and
+// warns before its board outgrows the club line every position is sent, naming the count.
+describe('the host\'s club block names who it turned away and how full its board is', () => {
+  const HOST: FdClubStatus = { ...CLUB, hosting: true }
+
+  it('names a refused position and quotes what it was told', () => {
+    render(
+      <FdClubSection
+        club={{
+          ...HOST,
+          refused: [{ posName: 'SSB tent', call: 'W9XYZ', reason: 'this club sends the in-state IL QSO Party exchange (its county)' }],
+        }}
+      />,
+    )
+    expect(screen.getByText(/Turned away SSB tent \(W9XYZ\)/)).toBeTruthy()
+    expect(screen.getByText(/this club sends the in-state IL QSO Party exchange \(its county\)/)).toBeTruthy()
+  })
+
+  it('names an unnamed refused position by its call', () => {
+    render(<FdClubSection club={{ ...HOST, refused: [{ posName: '', call: 'K9ABC', reason: 'x' }] }} />)
+    expect(screen.getByText(/Turned away K9ABC/)).toBeTruthy()
+  })
+
+  it('warns, naming the count, before the next position might not fit on the board', () => {
+    render(<FdClubSection club={{ ...HOST, boardFull: { positions: 58, shown: 58 } }} />)
+    expect(screen.getByText(/This club has 58 positions, as many as each position's club board has room for/)).toBeTruthy()
+  })
+
+  it('says how many the positions see once the board is cut', () => {
+    render(<FdClubSection club={{ ...HOST, boardFull: { positions: 70, shown: 59 } }} />)
+    expect(screen.getByText(/Each position's club board shows 59 of this club's 70 positions/)).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: a club with room and no refusals says neither', () => {
+    render(<FdClubSection club={HOST} />)
+    expect(screen.queryByText(/Turned away/)).toBeNull()
+    expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
   })
 })

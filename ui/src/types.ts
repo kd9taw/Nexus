@@ -3382,6 +3382,10 @@ export interface FieldDayStatus {
   role?: string
   /** One block per multiplier board — the generalised worked-sections display. */
   boards?: ContestBoard[]
+  /** The contacts in this computer's contest journal this session did not load: another
+   *  contest's, and another running of this one's (a rehearsal before it). They stay in the
+   *  journal, untouched. Absent when nothing was kept out, and from an older station. */
+  keptOut?: { otherContest: number; otherRunning: number }
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
@@ -3532,6 +3536,12 @@ export interface FdClubStatus {
    *  Absent on a build older than the field. */
   dkeys?: string[][]
   board: FdClubBoardRow[]
+  /** The HOST's alone, from the moment its board is as big as one club line carries: how
+   *  many positions it has, and how many of them each position's board shows (`shown`
+   *  below `positions` = already cut to the ones heard from most recently). */
+  boardFull?: { positions: number; shown: number }
+  /** The HOST's alone: positions it turned away, and the sentence each was sent. */
+  refused?: { posName: string; call: string; reason: string }[]
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */

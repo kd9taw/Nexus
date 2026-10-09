@@ -193,6 +193,14 @@ impl Engine {
                     worked: log.worked_values(b.slot),
                 })
                 .collect(),
+            // What the journal restore kept out of this session, and why.
+            kept_out: match log.held() {
+                (0, 0) => None,
+                (contest, running) => Some(crate::dto::FdKeptOutDto {
+                    other_contest: contest as u32,
+                    other_running: running as u32,
+                }),
+            },
         })
     }
 

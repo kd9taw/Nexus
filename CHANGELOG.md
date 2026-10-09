@@ -263,6 +263,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a
   Run/S&P switch lost them.
+- **A rehearsal's contacts no longer come back into the contest's log.** The contest journal on
+  each laptop holds whatever contest it last ran, and entering Field Day mode used to load every
+  contact of the last four days into the session starting: a club that rehearsed on the Wednesday
+  began Sunday's QSO party with the rehearsal's contacts in every position's log, and in the
+  club's log once the positions sent them. Now only the contest you are entering is loaded, and
+  only its contacts from 24 hours before it starts onwards; a quit, a crash or the next day's
+  export still brings back every one of them. The rest stay in the journal untouched, and the
+  Contest screen says how many it kept out and why. Nothing is deleted.
+- **A club position set up on the wrong side of the state line is turned away, by name.** At a
+  QSO party a laptop with another state in Your station data sends its state instead of the
+  club's county on every contact. The host now refuses it when it joins, and both that laptop's
+  club block and the host's say which exchange each sends and where to set it. A position on an
+  older Nexus, which cannot say, joins as before. A different callsign is not refused: an ARRL
+  Field Day GOTA station must use one.
+- **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
+  file Nexus loaded does not have the contest you picked, club sync does not run, and now the
+  Contest screen, the club board window and Settings say so, by the contest's name, with where to
+  check for a rules update. The host's log line names the contest the same way instead of an
+  internal id.
+- **A big club no longer locks every position out of club sync.** The first line of the club
+  state a position is sent carried the whole board, every section and 50 worked stations, and
+  somewhere past 27 to 38 positions, by the contest and the length of the names, it grew longer
+  than the 8 KB line every Nexus reads: each position
+  dropped the connection on it and reconnected into the same line, with nothing on screen to say
+  why. The sections and worked stations now go out over as many lines as they need, so a club of
+  about 59 positions fits, and older Nexus positions read the new lines unchanged. The host's
+  club block warns before one more position might not fit, naming how many it has; past that,
+  each position's board leaves out the positions heard from least recently, while contacts, dupe
+  warnings and the score still sync. A position whose host is on an older Nexus with too big a
+  club now says so instead of reconnecting in silence.
 - **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
   Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks

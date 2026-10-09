@@ -656,3 +656,162 @@ fn the_wsjt_modes_are_banned_and_the_bands_are_the_sponsors() {
         "160 through 2, no WARC band"
     );
 }
+
+// ---- the journal restore: this running of this contest, and nothing else -------------
+
+/// 2026-10-14T23:00:00Z — the Wednesday evening of a club's rehearsal, four days before the
+/// 2026 party (which starts at 1_792_342_800, Sunday 18 October 1700Z).
+const WED: u64 = 1_792_018_800;
+/// 2026-10-18T19:30:00Z — two and a half hours into the party.
+const SUN: u64 = 1_792_351_800;
+/// How far back a journal restore reaches (the engine's four days).
+const FOUR_DAYS: u64 = 4 * 86_400;
+
+/// One contact logged at `when`, from Cook County, of a station in `qth`.
+fn worked(log: &mut FieldDayLog, call: &str, qth: &str, when: u64) {
+    assert!(
+        log.log_fields_at(
+            call,
+            &fields(&[("RST", "599"), ("QTH", qth)]),
+            "CW",
+            "",
+            0,
+            when
+        ),
+        "{call} logged"
+    );
+}
+
+/// Every ADIF record in a journal, as written: its tags through its `<EOR>`.
+fn records(journal: &str) -> Vec<String> {
+    let body = &journal[journal.find("<EOH>").map_or(0, |i| i + 5)..];
+    body.split_inclusive("<EOR>")
+        .map(|r| r.trim_start().to_string())
+        .filter(|r| r.ends_with("<EOR>"))
+        .collect()
+}
+
+fn calls(log: &FieldDayLog) -> Vec<&str> {
+    log.qsos().iter().map(|q| q.call.as_str()).collect()
+}
+
+/// ⭐ **A rehearsal days before the party is kept out of the party's log, and kept on
+/// disk.** The journal restore used to load every row of the last four days whatever
+/// contest or day it was from, so a club that rehearsed on the Wednesday started the
+/// party on the Sunday with the rehearsal's contacts in every position's log — in the
+/// club's merged log too, once each position streamed them up. Nothing is deleted: the
+/// rows not loaded ride every rewrite of the journal unchanged, and the sequence numbers
+/// they used are not given out again (a host or a general log holding the rehearsal's
+/// `(position, seq)` would take a re-used one for a contact it already has).
+#[test]
+fn a_rehearsal_days_before_the_party_stays_out_of_its_log_and_on_disk() {
+    let mut rehearsal = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    for (i, call) in ["K9AAA", "K9BBB", "K9CCC"].into_iter().enumerate() {
+        worked(&mut rehearsal, call, "KANE", WED + 60 * i as u64);
+    }
+    let journal = rehearsal.adif();
+    assert_eq!(records(&journal).len(), 3);
+
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    party.restore_journal(&journal, SUN - FOUR_DAYS, SUN);
+    assert_eq!(
+        calls(&party),
+        Vec::<&str>::new(),
+        "not one rehearsal contact is loaded"
+    );
+    assert_eq!(
+        party.held(),
+        (0, 3),
+        "three kept out, as another running of the party"
+    );
+    for record in records(&journal) {
+        assert!(
+            party.journal_adif().contains(&record),
+            "kept, byte for byte: {record}"
+        );
+    }
+    worked(&mut party, "N9ZZZ", "LAKE", SUN);
+    assert_eq!(
+        party.qsos()[0].seq,
+        4,
+        "the rehearsal's sequence numbers are not re-used"
+    );
+
+    // The party's own restart, from the journal the party wrote: its contact comes back,
+    // and the rehearsal's three are still kept out, and still there.
+    let mut again = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    again.restore_journal(&party.journal_adif(), SUN + 60 - FOUR_DAYS, SUN + 60);
+    assert_eq!(calls(&again), vec!["N9ZZZ"]);
+    assert_eq!(again.held(), (0, 3));
+    assert_eq!(
+        records(&again.journal_adif()).len(),
+        4,
+        "nothing was deleted"
+    );
+}
+
+/// ⭐ **A journal of another contest is kept out of this one, and kept.** A position that
+/// ran Field Day mode for another contest in the last four days (an ARRL Field Day log
+/// here) would have had those rows loaded into the party's log, read against the party's
+/// exchange — and written back as party rows, their class and section gone.
+#[test]
+fn a_journal_of_another_contest_stays_out_of_this_one_and_on_disk() {
+    let fd = tempo_core::contest::ContestSession::field_day(
+        tempo_core::fieldday::FdEvent::ArrlFd,
+        "3A",
+        "IL",
+    );
+    let mut field_day = FieldDayLog::new("W9AWE", fd, "40m");
+    assert!(field_day.log_fields_at(
+        "K1ABC",
+        &fields(&[("CLASS", "2A"), ("SECTION", "EMA")]),
+        "CW",
+        "",
+        0,
+        SUN - 3600
+    ));
+    let journal = field_day.adif();
+
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    party.restore_journal(&journal, SUN - FOUR_DAYS, SUN);
+    assert_eq!(
+        calls(&party),
+        Vec::<&str>::new(),
+        "no Field Day contact in the party's log"
+    );
+    assert_eq!(party.held(), (1, 0), "one kept out, as another contest");
+    let kept = records(&party.journal_adif());
+    assert_eq!(kept, records(&journal), "kept as Field Day wrote it");
+    assert!(kept[0].contains("<CONTEST_ID:14>ARRL-FIELD-DAY") && kept[0].contains("<CLASS:2>2A"));
+}
+
+/// ⭐ **A restart inside the same session restores everything** — this is what the journal
+/// is for: a crash during the party (its contacts, and the one logged during the setup
+/// before it began), the day after (when its file is exported), and the rehearsal's own
+/// restart on the Wednesday all come back whole, with nothing kept out.
+#[test]
+fn a_restart_in_the_same_session_restores_every_contact() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    worked(&mut party, "N9SET", "KANE", 1_792_341_000); // 1630Z, setting up
+    worked(&mut party, "N9AAA", "LAKE", 1_792_343_100); // 1705Z
+    worked(&mut party, "N9BBB", "WILL", 1_792_346_400); // 1800Z
+    let journal = party.adif();
+    for now in [SUN, 1_792_422_000] {
+        // during the party, and Monday 1500Z
+        let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+        back.restore_journal(&journal, now - FOUR_DAYS, now);
+        assert_eq!(calls(&back), vec!["N9SET", "N9AAA", "N9BBB"], "at {now}");
+        assert_eq!(back.held(), (0, 0));
+    }
+    let mut rehearsal = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    worked(&mut rehearsal, "K9AAA", "KANE", WED);
+    worked(&mut rehearsal, "K9BBB", "KANE", WED + 60);
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "COOK")), "40m");
+    back.restore_journal(&rehearsal.adif(), WED + 3600 - FOUR_DAYS, WED + 3600);
+    assert_eq!(
+        calls(&back),
+        vec!["K9AAA", "K9BBB"],
+        "the rehearsal's own restart"
+    );
+    assert_eq!(back.held(), (0, 0));
+}

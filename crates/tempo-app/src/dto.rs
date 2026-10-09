@@ -2391,6 +2391,26 @@ pub struct FieldDayStatus {
     /// multiplier display. Field Day: one board, over `SECTION`.
     #[serde(default)]
     pub boards: Vec<FdBoardDto>,
+    /// ⭐ **The contacts in this position's contest journal this session did not load, and
+    /// why** — the journal is one file per position whatever contest it last ran, and a
+    /// restore loads only this session's rows: this contest's, from this running of it (a
+    /// rehearsal days before is another). They stay in the journal, untouched, and every
+    /// rewrite of it carries them on. `None` when nothing was kept out.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends it
+    /// (`ui/src/remote-web/field-day.ts` refuses any status key it does not), so the page
+    /// that takes it is deployed before the release that writes it. Absent when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_out: Option<FdKeptOutDto>,
+}
+
+/// [`FieldDayStatus::kept_out`]: the journal's rows of another contest, and of another
+/// running of this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdKeptOutDto {
+    pub other_contest: u32,
+    pub other_running: u32,
 }
 
 /// The [`FieldKind`](tempo_core::contest::FieldKind) discriminant as the wire tag the
@@ -2671,6 +2691,47 @@ pub struct FdClubDto {
     #[serde(default)]
     pub dkeys: Vec<Vec<String>>,
     pub board: Vec<FdClubBoardRow>,
+    /// ⭐ **The host's warning that its board is as big as one club line carries** — set on
+    /// the HOST only, from the moment one more position as long as its longest might not fit
+    /// on the board every position is sent, and absent before. `shown` below `positions` is
+    /// the board already cut to the positions heard from most recently.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends it
+    /// (`ui/src/remote-web/field-day.ts` refuses any club key it does not), so the page that
+    /// takes it is deployed before the release that writes it. Absent unless it applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_full: Option<FdBoardFullDto>,
+    /// ⭐ **The positions this host turned away, and what each was told** — the HOST's alone:
+    /// the refusal a JOIN met (a version, a contest or an exchange role this club does not
+    /// run), the latest per position, kept while that position keeps trying. The position's
+    /// own screen shows the same sentence, from the host's `error` line, so both ends say
+    /// which value differs and where to set it.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know first, as `board_full`
+    /// is. Absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<FdClubRefusedDto>,
+}
+
+/// One entry of [`FdClubDto::refused`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubRefusedDto {
+    /// The position's name, as its JOIN gave it (empty when it has none).
+    pub pos_name: String,
+    /// The station call its JOIN gave.
+    pub call: String,
+    /// The sentence the position was sent, verbatim.
+    pub reason: String,
+}
+
+/// [`FdClubDto::board_full`]: how many positions the host's club has, and how many of them
+/// the board each position is sent can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdBoardFullDto {
+    pub positions: u32,
+    pub shown: u32,
 }
 
 /// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).

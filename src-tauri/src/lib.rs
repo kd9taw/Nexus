@@ -33641,10 +33641,19 @@ fn start_on_the_logbook(
                             let name = e.settings().fd_event_name.clone();
                             e.fd_host_start(fd_event_journal_path(&name, &contest))
                         };
-                        let bound = started.map_err(|e| e.to_string()).and_then(|()| {
-                            std::net::TcpListener::bind(("0.0.0.0", port))
-                                .map_err(|e| e.to_string())
-                        });
+                        // A club the engine will not host is not a port problem: it says
+                        // its own reason, and nothing about the port.
+                        let bound = started
+                            .map_err(|e| format!("couldn't host the club event: {e}."))
+                            .and_then(|()| {
+                                std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
+                                    format!(
+                                        "couldn't host on port {port}: {e} — change the Host \
+                                         port in Settings ▸ Contesting or stop the program \
+                                         using it."
+                                    )
+                                })
+                            });
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
@@ -33692,15 +33701,7 @@ fn start_on_the_logbook(
                             Err(e) => {
                                 engine_lock(&mgr_engine).fd_host_stop();
                                 if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
-                                    conn_log(
-                                        "FD sync",
-                                        "error",
-                                        format!(
-                                            "couldn't host on port {port}: {e} — change the \
-                                             Host port in Settings ▸ Contesting or stop the \
-                                             program using it. Retrying quietly."
-                                        ),
-                                    );
+                                    conn_log("FD sync", "error", format!("{e} Retrying quietly."));
                                 }
                                 bind_failed = Some((port, now));
                             }

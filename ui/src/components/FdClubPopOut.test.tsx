@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from '../DetachedPanel'
 import { FdClubSection, FdBandOccupancy } from './ContestView'
-import { openPanelWindow, subscribeSnapshot, getSettings } from '../api'
+import { openPanelWindow, subscribeSnapshot, getSettings, getFdRuleset } from '../api'
 import type { AppSnapshot, FdClubStatus } from '../types'
 import { BAND_COLOR } from '../bandColors'
 
@@ -26,6 +26,7 @@ vi.mock('../api', () => ({
   getPropagation: vi.fn(() => Promise.resolve(null)),
   getNeedAlerts: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve(null)),
+  getFdRuleset: vi.fn(() => Promise.resolve(null)),
   selectPeer: vi.fn(() => Promise.resolve(null)),
 }))
 
@@ -244,6 +245,40 @@ describe('the club band board pops out', () => {
       screen.getByText(/Club sync does not run CQ World-Wide WPX Contest \(CW\): its serial numbers/),
     ).toBeTruthy()
     expect(screen.queryByText(/nothing has stopped/i)).toBeNull()
+  })
+
+  it('⭐ says why when the rules this station loaded do not carry the picked contest', async () => {
+    // A downloaded rules file can drop a contest, and the engine then refuses club sync for
+    // it. The station's preview of the pick resolves it to the ARRL Field Day that mode entry
+    // falls back to, which is how this window can tell.
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'ilqp' } as never)
+    vi.mocked(getFdRuleset).mockResolvedValue({ event: 'arrlfd' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    expect(
+      await screen.findByText(
+        /Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it/,
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(/nothing has stopped/i)).toBeNull()
+  })
+
+  it('POSITIVE CONTROL: the same pick, carried by the loaded rules, is a club the host stepped away from', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'ilqp' } as never)
+    vi.mocked(getFdRuleset).mockResolvedValue({ event: 'ilqp' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    expect(await screen.findByText(/nothing has stopped/i)).toBeTruthy()
+    // The preview was asked for and has answered before the absence below is read.
+    await vi.waitFor(() => expect(vi.mocked(getFdRuleset)).toHaveBeenCalled())
+    await settle()
+    expect(screen.queryByText(/Club sync does not run/)).toBeNull()
   })
 
   it('POSITIVE CONTROL: a station that really has not configured sync is still told how', async () => {

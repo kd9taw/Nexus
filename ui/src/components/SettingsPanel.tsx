@@ -3539,8 +3539,12 @@ export function SettingsPanel({
     ? RETIRED_SECTIONS[form.fdSection.trim().toUpperCase()]
     : undefined
   // Why club sync cannot run the picked contest at all, or null when it can — shown beside
-  // the switches before anybody turns one on.
-  const clubRefusalHere = contestClubRefusal(form.fdEvent)
+  // the switches before anybody turns one on. The station's preview answers for the SAVED
+  // pick, so it is asked only while the form's pick is the saved one.
+  const clubRefusalHere = contestClubRefusal(
+    form.fdEvent,
+    (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null,
+  )
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>

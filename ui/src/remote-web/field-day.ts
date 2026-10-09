@@ -38,6 +38,15 @@ function dupeRule(v: unknown): boolean {
     return false
   }
 }
+// Two counts, both required: what the station's journal restore kept out of the session.
+function keptOut(v: unknown): boolean {
+  try {
+    const k = object(v, ['otherContest','otherRunning'])
+    return integer(k.otherContest) && integer(k.otherRunning)
+  } catch {
+    return false
+  }
+}
 function locationWarning(v: unknown): boolean {
   try {
     const w = object(v, ['typed','hints'])
@@ -58,7 +67,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit','keptOut'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -77,6 +86,8 @@ function status(v: unknown): void {
     (f.objectiveMultiplier !== undefined && !integer(f.objectiveMultiplier)) ||
     // Whether a satellite contact counts, sent (as false) only by a contest where it does not.
     (f.satelliteCredit !== undefined && typeof f.satelliteCredit !== 'boolean') ||
+    // What the journal restore kept out of this session, sent only when it kept something.
+    (f.keptOut !== undefined && !keptOut(f.keptOut)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
     // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
     // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.
@@ -110,7 +121,7 @@ function status(v: unknown): void {
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
@@ -120,6 +131,19 @@ function status(v: unknown): void {
       (c.dkeys !== undefined && (!Array.isArray(c.dkeys) || c.dkeys.length > 4096 ||
         !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
       !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
+    // A host's alone, each sent only when it applies: how full its board is, and the positions
+    // it turned away with the sentence each was sent (the host keeps at most 16).
+    if (c.boardFull !== undefined) {
+      const b = object(c.boardFull,['positions','shown'])
+      if (![b.positions,b.shown].every(integer)) throw new Error('invalidFieldDay')
+    }
+    if (c.refused !== undefined) {
+      if (!Array.isArray(c.refused) || c.refused.length > 16) throw new Error('invalidFieldDay')
+      for (const raw of c.refused) {
+        const r = object(raw,['posName','call','reason'])
+        if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
+      }
+    }
     for (const raw of c.board) {
       // `clockMs`: that position's clock minus the host's, in whole ms, either sign; null when it
       // has not measured one, and absent from a station older than the field.
