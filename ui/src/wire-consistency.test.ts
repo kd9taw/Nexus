@@ -22,6 +22,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { NOT_ANSWERED } from './features/notAnswered'
 
 const dto = readFileSync(
   fileURLToPath(new URL('../../crates/tempo-app/src/dto.rs', import.meta.url)),
@@ -102,6 +103,10 @@ const rxdsp = readFileSync(
   'utf8',
 )
 const waterfall = readFileSync(fileURLToPath(new URL('./waterfall.ts', import.meta.url)), 'utf8')
+const logstore = readFileSync(
+  fileURLToPath(new URL('../../crates/tempo-app/src/logstore.rs', import.meta.url)),
+  'utf8',
+)
 
 /** The value of a bare Rust `const NAME: <ty> = <number>;`. Throws if it is gone or renamed —
  *  a mirror guard that quietly stops finding one half is worse than no guard. */
@@ -137,5 +142,18 @@ describe('Rust <-> TypeScript mirrored constants', () => {
     // comparison above pass on two NaNs. Both must be real, positive numbers.
     expect(Number.isFinite(rust) && rust > 0).toBe(true)
     expect(Number.isFinite(ts) && ts > 0).toBe(true)
+  })
+
+  it('the refusal a log read is asked again on is the engine’s own words', () => {
+    // The engine refuses a log read the store has not caught up with in words that begin with
+    // `logstore::NOT_ANSWERED`, and the window asks again only on a refusal that begins with its
+    // copy (features/notAnswered.ts). A copy that drifted would match nothing, and every refused
+    // read would go back to waiting for the next change, silently.
+    const m = logstore.match(/pub const NOT_ANSWERED: &str =\s*"([^"]+)";/)
+    if (!m) throw new Error('const NOT_ANSWERED not found in crates/tempo-app/src/logstore.rs — renamed, or moved out of it')
+    expect(
+      NOT_ANSWERED,
+      `the refusal drifted: logstore.rs NOT_ANSWERED = "${m[1]}", notAnswered.ts NOT_ANSWERED = "${NOT_ANSWERED}"`,
+    ).toBe(m[1])
   })
 })

@@ -35,7 +35,10 @@
 //!    (`tempo_core::logbook::io_fence`).
 //! 2. **Read your writes (P4).** A read first waits — bounded, off every lock — for every change
 //!    made before the question was asked, so a Logbook asked straight after a contact shows it.
-//!    A read that ran out of wait answers from the store as it stands, and is not kept.
+//!    A read that ran out of wait is REFUSED
+//!    ([`Freshness::or_refuse`](tempo_app::logstore::Freshness::or_refuse)) and keeps nothing, and
+//!    the window asks again. It never answers from the store as it stands: that answer left the
+//!    contact just logged out of the Logbook until the next change.
 //! 3. **Revisions name what the answer was cut from.** A page carries `revision` (the log's),
 //!    `orderRev` (the `index_rev` its order was built at) and `contentRev` (the `content_rev` its
 //!    rows were read at). An upload stamp or a QSL-sent mark moves `content_rev` and not
@@ -51,7 +54,7 @@ use serde_json::Value;
 use tauri::State;
 use tempo_app::dto::LoggedQso;
 use tempo_app::engine::{engine_lock, Engine};
-use tempo_app::logstore::{Freshness, LogRows, StoreReads};
+use tempo_app::logstore::{LogRows, StoreReads};
 use tempo_core::logbook::query::{
     self, BandsInLog, CallSummary, EntityIndex, GridCount, GridCounts, LogFold, LogQuery,
     LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
@@ -64,7 +67,8 @@ use crate::{SharedEngine, Tally};
 /// Order vectors kept (SPEC-2 v2 §2: an LRU of four). One is a log-sized `Vec<u32>`.
 pub(crate) const ORDERS_KEPT: usize = 4;
 
-/// How long a read waits for the writer to take the changes made before it was asked (P4).
+/// How long a read waits for the writer to take the changes made before it was asked (P4), before
+/// it is refused.
 const READ_WAIT: Duration = Duration::from_secs(2);
 
 // ── what each fold reads ──────────────────────────────────────────────────────────────────────
@@ -239,12 +243,16 @@ impl Capture {
     }
 }
 
-/// A read of the store, waited for (P4) and fenced off the Engine lock by [`StoreReads`].
+/// A read of the store, waited for (P4) and fenced off the Engine lock by [`StoreReads`]; refused
+/// ([`Freshness::or_refuse`](tempo_app::logstore::Freshness::or_refuse)) when the store did not
+/// hold every change made before it was asked within the wait.
 fn read<T>(
     reads: &StoreReads,
     f: impl FnOnce(&sqlite::LogDb) -> sqlite::Result<T>,
-) -> Result<(T, Freshness), String> {
-    reads.read(READ_WAIT, f).map_err(unreadable)
+) -> Result<T, String> {
+    let (answer, fresh) = reads.read(READ_WAIT, f).map_err(unreadable)?;
+    fresh.or_refuse()?;
+    Ok(answer)
 }
 
 /// What an answer says when the store could not be read. Never an empty answer, which would
@@ -289,7 +297,7 @@ struct OrderKey {
 }
 
 /// An order vector kept, or on its way: the first asker builds it and any other waits for that
-/// build rather than making its own. `None` once built means the build was not kept (a stale
+/// build rather than making its own. `None` once built means the build was not kept (a refused
 /// read, a failure), and the slot is dropped.
 #[derive(Default)]
 struct OrderSlot(OnceLock<Option<Arc<Vec<u32>>>>);
@@ -480,13 +488,9 @@ impl LogQueries {
         };
         let mut not_kept = None;
         let kept = slot.0.get_or_init(|| match self.build_order(c, query) {
-            Ok((order, Freshness::Current)) => Some(Arc::new(order)),
-            Ok((order, Freshness::Stale(_))) => {
-                not_kept = Some(Ok(Arc::new(order)));
-                None
-            }
+            Ok(order) => Some(Arc::new(order)),
             Err(e) => {
-                not_kept = Some(Err(e));
+                not_kept = Some(e);
                 None
             }
         });
@@ -495,9 +499,9 @@ impl LogQueries {
             None => {
                 lock(&self.0.orders).retain(|(_, s)| !Arc::ptr_eq(s, &slot));
                 match not_kept {
-                    Some(answer) => answer,
+                    Some(e) => Err(e),
                     // Another asker's build was not kept: this one reads for itself.
-                    None => self.build_order(c, query).map(|(order, _)| Arc::new(order)),
+                    None => self.build_order(c, query).map(Arc::new),
                 }
             }
         }
@@ -505,7 +509,7 @@ impl LogQueries {
 
     /// Build the order vector: off the index for the default order, else one narrow pass in log
     /// order through the UI's filter and comparator.
-    fn build_order(&self, c: &Capture, query: &LogQuery) -> Result<(Vec<u32>, Freshness), String> {
+    fn build_order(&self, c: &Capture, query: &LogQuery) -> Result<Vec<u32>, String> {
         #[cfg(test)]
         self.0
             .built
@@ -536,8 +540,7 @@ impl LogQueries {
         let slice: Vec<u32> = order.iter().skip(offset).take(limit).copied().collect();
         let (rows, log_size): (Vec<(u32, QsoRecord)>, u64) = match &c.rows {
             LogRows::Store(reads) => {
-                let ((found, size), _) =
-                    read(reads, |db| Ok((db.rows_at(&slice)?, db.row_count()?)))?;
+                let (found, size) = read(reads, |db| Ok((db.rows_at(&slice)?, db.row_count()?)))?;
                 // A row another window deleted since the order was built is left out; the
                 // window's next poll moves the order.
                 let rows = slice
@@ -574,7 +577,7 @@ impl LogQueries {
         let handle = match id.parse::<RecordId>() {
             Err(()) => None,
             Ok(id) => match &c.rows {
-                LogRows::Store(reads) => read(reads, |db| db.rowid_of(&id))?.0,
+                LogRows::Store(reads) => read(reads, |db| db.rowid_of(&id))?,
             },
         };
         json(LocateAnswer {
@@ -595,13 +598,10 @@ impl LogQueries {
             return Ok(None);
         };
         let row = match &c.rows {
-            LogRows::Store(reads) => {
-                read(reads, |db| match db.rowid_of(&id)? {
-                    Some(rowid) => Ok(db.rows_at(&[rowid])?.pop().flatten()),
-                    None => Ok(None),
-                })?
-                .0
-            }
+            LogRows::Store(reads) => read(reads, |db| match db.rowid_of(&id)? {
+                Some(rowid) => Ok(db.rows_at(&[rowid])?.pop().flatten()),
+                None => Ok(None),
+            })?,
         };
         Ok(row.map(|r| logged(r, resolve)))
     }
@@ -621,7 +621,7 @@ impl LogQueries {
                     .map(|&i| position(i, log.len()).map(|p| log[p]))
                     .collect();
                 let asked: Vec<u32> = rowids.iter().flatten().copied().collect();
-                let mut found = read(reads, |db| db.rows_at(&asked))?.0.into_iter();
+                let mut found = read(reads, |db| db.rows_at(&asked))?.into_iter();
                 rowids
                     .iter()
                     .map(|r| r.and_then(|_| found.next().flatten()))
@@ -641,17 +641,14 @@ impl LogQueries {
                 return Ok(Arc::clone(order));
             }
         }
-        let (order, fresh) = read(reads, |db| db.rowids_in_log_order())?;
-        let order = Arc::new(order);
-        if fresh == Freshness::Current {
-            *lock(&self.0.log_order) = Some((c.index_rev, Arc::clone(&order)));
-        }
+        let order = Arc::new(read(reads, |db| db.rowids_in_log_order())?);
+        *lock(&self.0.log_order) = Some((c.index_rev, Arc::clone(&order)));
         Ok(order)
     }
 
     fn log_size(&self, c: &Capture) -> Result<u64, String> {
         match &c.rows {
-            LogRows::Store(reads) => Ok(read(reads, |db| db.row_count())?.0),
+            LogRows::Store(reads) => read(reads, |db| db.row_count()),
         }
     }
 
@@ -736,11 +733,10 @@ impl LogQueries {
             return Ok(Vec::new());
         }
         match &c.rows {
-            LogRows::Store(reads) => Ok(read(reads, |db| {
+            LogRows::Store(reads) => read(reads, |db| {
                 let rowids = db.rowids_by_call_norm(keys)?;
                 Ok(db.rows_at(&rowids)?.into_iter().flatten().collect())
-            })?
-            .0),
+            }),
         }
     }
 
@@ -748,7 +744,8 @@ impl LogQueries {
 
     /// A fold question (C14's folds, for the UI's questions): kept against `mark` — the
     /// watermark of what it reads — and `key`, or else one narrow pass over the log in log
-    /// order with the Engine lock released, kept unless the read ran out of wait.
+    /// order with the Engine lock released, kept — or refused, keeping nothing, if the read ran
+    /// out of wait.
     fn fold<K: PartialEq, F: LogFold>(
         &self,
         engine: &SharedEngine,
@@ -770,17 +767,13 @@ impl LogQueries {
         self.0
             .folded
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let fresh = rows
-            .each(narrow, Scope::All, Order::Log, &mut |r| {
-                fold.add(r);
-                ControlFlow::Continue(())
-            })
-            .map_err(unreadable)?;
-        let answer = fold.finish();
-        Ok(match fresh {
-            Freshness::Current => kept.put(at, key, answer),
-            Freshness::Stale(_) => Arc::new(answer),
+        rows.each(narrow, Scope::All, Order::Log, &mut |r| {
+            fold.add(r);
+            ControlFlow::Continue(())
         })
+        .map_err(unreadable)?
+        .or_refuse()?;
+        Ok(kept.put(at, key, fold.finish()))
     }
 
     // ── entities ──────────────────────────────────────────────────────────────────────────────
@@ -812,16 +805,16 @@ impl LogQueries {
                 .or_insert_with(|| resolve(&r.call));
             index.add(e.as_deref(), r);
         };
-        let (after, fresh) = match &c.rows {
+        let after = match &c.rows {
             LogRows::Store(reads) => {
                 let mut last = from;
-                let ((), fresh) = read(reads, |db| {
+                read(reads, |db| {
                     db.each_narrow_after(ENTITY_COLUMNS, from, &mut |rowid, r| {
                         count(&mut index, r);
                         last = rowid;
                     })
                 })?;
-                (last, fresh)
+                last
             }
         };
         let built = Arc::new(EntityCache {
@@ -831,7 +824,7 @@ impl LogQueries {
             after,
             index,
         });
-        if fresh == Freshness::Current {
+        {
             let mut kept = lock(&self.0.entities);
             if kept.as_ref().is_none_or(|k| k.revision <= built.revision) {
                 *kept = Some(Arc::clone(&built));

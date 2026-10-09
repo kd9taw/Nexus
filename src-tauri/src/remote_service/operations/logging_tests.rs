@@ -9,13 +9,13 @@ fn run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
         DEVICE,
         request,
         &f.engine,
-        Instant::now(),
+        f.now(),
     )
 }
 
 fn acquire(f: &Fixture) -> Value {
     f.authority.permit(DEVICE, true).unwrap();
-    let state = control_state_version(f, Instant::now(), 4);
+    let state = control_state_version(f, f.now(), 4);
     run(
         f,
         &Request::Acquire {
@@ -43,14 +43,14 @@ fn confirm(key: &str) -> Value {
 }
 
 fn command(f: &Fixture, action: Value) -> Request {
-    control_request(&control_state_version(f, Instant::now(), 4), action)
+    control_request(&control_state_version(f, f.now(), 4), action)
 }
 
 #[test]
 fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     let f = Fixture::new();
     let key = hold(&f);
-    let state = control_state_version(&f, Instant::now(), 4);
+    let state = control_state_version(&f, f.now(), 4);
     assert_eq!(
         state["controls"]["capabilities"],
         json!([
@@ -75,7 +75,7 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
                 DEVICE,
                 &request,
                 &f.engine,
-                Instant::now()
+                f.now()
             ),
             Err("stationUnsupported")
         );
@@ -97,7 +97,7 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
                     operation_id: request.id().into()
                 },
                 &f.engine,
-                Instant::now()
+                f.now()
             ),
             Err("stationUnsupported")
         );
@@ -139,7 +139,7 @@ fn radio_permission_cannot_confirm_or_discard_a_contact() {
         let f = Fixture::new();
         let key = hold(&f);
         f.authority.permit(DEVICE, false).unwrap();
-        let state = acquire_controls_version(&f, Instant::now(), 4);
+        let state = acquire_controls_version(&f, f.now(), 4);
         assert!(!state["controls"]["capabilities"]
             .as_array()
             .unwrap()
@@ -354,7 +354,7 @@ fn target(row: &Value) -> Value {
 }
 
 fn change(f: &Fixture, change: Value) -> Request {
-    let s = control_state_version(f, Instant::now(), 4);
+    let s = control_state_version(f, f.now(), 4);
     serde_json::from_value(json!({"type":"logChange","requestId":id(),"stationBootId":s["stationBootId"],
         "leaseId":s["leaseId"],"expectedRevision":s["revision"],"commandWindowId":s["commandWindowId"],
         "clientSequence":s["nextSequence"],"change":change}))
@@ -418,7 +418,7 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
         assert!(e.mark_qsl_card(id, true));
     }
     acquire(&f);
-    let state = control_state_version(&f, Instant::now(), 4);
+    let state = control_state_version(&f, f.now(), 4);
     assert_eq!(state["actions"], json!(["log.manual"]));
     let before = row(&f, "W1AW");
     let request = change(&f, edit(&before));
@@ -611,7 +611,7 @@ fn log_changes_need_logging_permission_and_operation_v4() {
     let f = Fixture::new();
     seed(&f);
     let stale_free = row(&f, "W1AW");
-    let state = acquire_controls_version(&f, Instant::now(), 4);
+    let state = acquire_controls_version(&f, f.now(), 4);
     let capabilities = state["controls"]["capabilities"].as_array().unwrap();
     assert!(!capabilities.contains(&json!("logEdit")));
     let delete = json!({"kind":"delete","target":target(&stale_free)});
@@ -623,7 +623,7 @@ fn log_changes_need_logging_permission_and_operation_v4() {
     let request = change(&f, delete);
     for version in [1, 2, 3] {
         assert!(
-            !control_state_version(&f, Instant::now(), version)["controls"]["capabilities"]
+            !control_state_version(&f, f.now(), version)["controls"]["capabilities"]
                 .as_array()
                 .is_some_and(|c| c.contains(&json!("logEdit")))
         );
@@ -634,7 +634,7 @@ fn log_changes_need_logging_permission_and_operation_v4() {
                 DEVICE,
                 &request,
                 &f.engine,
-                Instant::now()
+                f.now()
             ),
             Err("stationUnsupported")
         );
@@ -793,7 +793,7 @@ fn a_qsl_sent_mark_accepts_only_the_menu_codes() {
         assert_eq!(run(&f, &request), Err("invalidRecord"));
     }
     // A missing `via` is malformed, not a withdrawal: only an explicit null clears the mark.
-    let s = control_state_version(&f, Instant::now(), 4);
+    let s = control_state_version(&f, f.now(), 4);
     assert!(
         serde_json::from_value::<Request>(json!({"type":"logChange","requestId":id(),
         "stationBootId":s["stationBootId"],"leaseId":s["leaseId"],"expectedRevision":s["revision"],
@@ -832,11 +832,7 @@ fn a_remote_hunt_tags_the_next_logged_contact_and_never_keys_or_tunes() {
     );
     // The station's own funnel stamps the hunted reference on the next contact with that call,
     // including one logged from this browser.
-    let logged = run(
-        &f,
-        &f.command(&control_state_version(&f, Instant::now(), 4)),
-    )
-    .unwrap();
+    let logged = run(&f, &f.command(&control_state_version(&f, f.now(), 4))).unwrap();
     assert_eq!(logged["outcome"], "applied");
     {
         let e = f.engine.lock().unwrap();
@@ -1008,11 +1004,7 @@ fn a_remote_activation_stamps_your_reference_on_logged_contacts_and_never_keys_o
         Some(("POTA".into(), "US-0001".into()))
     );
     // The station's own funnel stamps your park on a contact logged from this browser.
-    let logged = run(
-        &f,
-        &f.command(&control_state_version(&f, Instant::now(), 4)),
-    )
-    .unwrap();
+    let logged = run(&f, &f.command(&control_state_version(&f, f.now(), 4))).unwrap();
     assert_eq!(logged["outcome"], "applied");
     {
         let e = f.engine.lock().unwrap();
@@ -1123,7 +1115,7 @@ fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
         .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     let offered = |f: &Fixture| {
-        control_state_version(f, Instant::now(), 4)["controls"]["capabilities"]
+        control_state_version(f, f.now(), 4)["controls"]["capabilities"]
             .as_array()
             .unwrap()
             .contains(&json!("selfSpot"))
@@ -1132,7 +1124,7 @@ fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
     // Positive control: with the switch off, the station neither offers nor accepts it again.
     f.authority.self_spot_off = true;
     assert!(!offered(&f));
-    let state = control_state_version(&f, Instant::now(), 4);
+    let state = control_state_version(&f, f.now(), 4);
     let request = spot(&f, "US-0001");
     assert_eq!(run(&f, &request), Err("stationUnsupported"));
     // The refusal consumed no sequence and no window, so the next write still lands.
@@ -1151,7 +1143,7 @@ fn a_self_spot_posts_both_targets_the_station_call_dial_park_and_mode_exactly_on
         .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     assert!(
-        control_state_version(&f, Instant::now(), 4)["controls"]["capabilities"]
+        control_state_version(&f, f.now(), 4)["controls"]["capabilities"]
             .as_array()
             .unwrap()
             .contains(&json!("selfSpot"))
@@ -1333,7 +1325,7 @@ fn a_self_spot_needs_logging_permission_and_current_control() {
         .set_activation("POTA", "US-0001", Vec::new())
         .unwrap();
     // Station control is not the logging grant: not offered, and refused.
-    let state = acquire_controls_version(&f, Instant::now(), 4);
+    let state = acquire_controls_version(&f, f.now(), 4);
     assert!(!state["controls"]["capabilities"]
         .as_array()
         .unwrap()
@@ -1352,7 +1344,7 @@ fn a_self_spot_needs_logging_permission_and_current_control() {
             DEVICE,
             &request,
             &f.engine,
-            Instant::now()
+            f.now()
         ),
         Err("notController")
     );
@@ -1385,7 +1377,7 @@ fn a_test_build_with_no_poster_refuses_a_self_spot_instead_of_posting_it() {
 /// Station control only, the grant a spot of another station needs.
 fn controlling(f: &Fixture) {
     f.authority.permit_station(DEVICE, true).unwrap();
-    let state = control_state_version(f, Instant::now(), 4);
+    let state = control_state_version(f, f.now(), 4);
     run(
         f,
         &Request::Acquire {
@@ -1404,7 +1396,7 @@ fn dx_spot(f: &Fixture, call: &str) -> Request {
 }
 
 fn offers_post_spot(f: &Fixture) -> bool {
-    control_state_version(f, Instant::now(), 4)["controls"]["capabilities"]
+    control_state_version(f, f.now(), 4)["controls"]["capabilities"]
         .as_array()
         .unwrap()
         .contains(&json!("postSpot"))
@@ -1602,7 +1594,7 @@ fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
     acquire(&f);
     f.authority.permit_station(DEVICE, true).unwrap();
     activating(&f);
-    let lease = control_state_version(&f, Instant::now(), 4)["leaseId"]
+    let lease = control_state_version(&f, f.now(), 4)["leaseId"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -1613,9 +1605,7 @@ fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
         let posting = s.spawn(|| run(&f, &request));
         in_flight.recv().unwrap();
         let status = f.authority.local_status();
-        let admitted = f
-            .authority
-            .audio_admitted(SESSION, DEVICE, &lease, Instant::now());
+        let admitted = f.authority.audio_admitted(SESSION, DEVICE, &lease, f.now());
         let revoked = f.authority.permit_station(DEVICE, false);
         let replay = run(&f, &request);
         release.send(()).unwrap();
@@ -1952,7 +1942,7 @@ fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing(
         .any(|r| r.call == "K1ABC" && r.qsl_rcvd.card));
 
     heartbeat();
-    let before = control_state_version(&f, Instant::now(), 4);
+    let before = control_state_version(&f, f.now(), 4);
     let request = change(
         &f,
         json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
@@ -1963,7 +1953,7 @@ fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing(
     drop(hold);
     assert_eq!(busy, Err("stationBusy"));
     assert_eq!(
-        control_state_version(&f, Instant::now(), 4)["nextSequence"],
+        control_state_version(&f, f.now(), 4)["nextSequence"],
         before["nextSequence"],
         "no sequence was spent"
     );
@@ -2387,7 +2377,7 @@ fn an_id_target_is_held_to_its_grammar() {
         );
     }
     assert_eq!(adif(&f), bytes);
-    let s = control_state_version(&f, Instant::now(), 4);
+    let s = control_state_version(&f, f.now(), 4);
     let mut mixed = target(&row(&f, "K1ABC"));
     mixed["id"] = good["id"].clone();
     assert!(
