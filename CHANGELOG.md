@@ -224,6 +224,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
   and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
   page, a search that matches nothing now says so, where it said the log was empty.
+- **The Logbook globe no longer says "0 grid squares worked" while it is still counting them.**
+  Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
+  worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
+  slow disk. The globe now shows its count once the squares are counted.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now

@@ -139,8 +139,11 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
   // QSOs → unique 4-char grid squares → dots (the shared reduction the 2-D map uses too, so the
   // two views plot identical points). The dedupe is what keeps a 50k-QSO FT8 log at ~a thousand
   // points instead of 50k — and the squares are counted where the log is; only the placing is here.
+  // NO COUNT UNTIL THE ENGINE HAS COUNTED: the empty log's answer stands in for the dots until then
+  // (none drawn), and its 0 would say "0 grid squares worked" of a log that has squares.
   const squaresQuestion = { kind: 'gridPoints', band } as const
-  const squares = useLogAnswer(squaresQuestion, logTick) ?? emptyAnswer(squaresQuestion)
+  const squaresAnswered = useLogAnswer(squaresQuestion, logTick)
+  const squares = squaresAnswered ?? emptyAnswer(squaresQuestion)
   const points = useMemo(() => gridCountsToPoints(squares), [squares])
 
   // Same earth as the Connect globe (features/globeBasemap.ts), so the two read as one app: NASA's
@@ -355,11 +358,13 @@ function QsoGlobeView({ logTick, onReload }: { logTick?: number; onReload: () =>
             </option>
           ))}
         </select>
-        <span className="qso-globe-count">
-          {band === 'all'
-            ? t('logbook.globe.count.all', { count: points.length })
-            : t('logbook.globe.count.band', { count: points.length, band })}
-        </span>
+        {squaresAnswered !== undefined && (
+          <span className="qso-globe-count">
+            {band === 'all'
+              ? t('logbook.globe.count.all', { count: points.length })
+              : t('logbook.globe.count.band', { count: points.length, band })}
+          </span>
+        )}
       </div>
       {size.w > 0 && size.h > 0 && (
         <Globe
