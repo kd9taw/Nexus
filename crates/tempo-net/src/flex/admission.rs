@@ -14,9 +14,15 @@
 //!   (no mic, ACC or RCA PTT), and names no transmitting client, or names us;
 //! - the unkey readback is idle: it has seen the radio idle on this connection, so the end of the
 //!   transmission can be proven ([`super::ptt_evidence`]);
-//! - and the start is one whose end the readback can prove. Today that is `xmit` only: tune, ATU
-//!   and CWX starts are refused until the readback covers them (their interlock sequences are
-//!   not established on hardware).
+//! - and the start is of a kind whose readback a tester's bench has confirmed ([`BENCHED`]). Today
+//!   that is `xmit` only. Tune, ATU and CWX have readback profiles built from AetherSDR's notes,
+//!   but their starts are refused, before any other check, until the bench confirms them.
+//!
+//! **A CWX word while our own CWX operation is open** joins it: the two checks that describe that
+//! operation (nothing of ours keyed, the readback idle) do not apply, nor does the interlock's
+//! `READY` while the radio keys our CWX under the CWX source. Every other check does: the transmit
+//! slice ours and alone, no other transmitting client, no hardware source, transmit allowed, no
+//! reason.
 //!
 //! [`Admitted`] is the value a start must carry to be rendered ([`super::encode::render_start`]).
 //! Its field is private to this module and [`admit`] is the only constructor, so a keying
@@ -38,6 +44,13 @@ use std::fmt;
 
 use super::encode::{StartKind, TxAudio, TxStart};
 use super::model::{owner_of, Owner, StatusModel};
+use super::ptt_evidence;
+
+/// The kinds whose readback a tester's bench has confirmed on a real radio. Only these are
+/// admitted; any other start is refused with [`Refusal::NoReadback`] before every other check. A
+/// kind joins this list only after its readback profile ([`super::ptt_evidence`]) has passed the
+/// bench, never on the strength of the notes it was built from.
+pub const BENCHED: &[StartKind] = &[StartKind::Key];
 
 /// A start that passed admission. Constructed only by [`admit`].
 #[derive(Debug)]
@@ -86,6 +99,8 @@ pub struct Facts {
     pub handle: Option<u32>,
     /// A start of ours is unconfirmed: keyed until the readback proves otherwise.
     pub keyed: bool,
+    /// The kind of our unconfirmed start, if any.
+    pub open: Option<StartKind>,
     /// The readback has seen the radio idle and is ready to track a key.
     pub readback_idle: bool,
     /// Our own DAX transmit stream, from the reply to our create.
@@ -95,7 +110,8 @@ pub struct Facts {
 /// Why a start was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// Tune, ATU and CWX: the readback cannot prove their end yet.
+    /// A kind whose readback no tester's bench has confirmed yet ([`BENCHED`]): tune, ATU, CWX.
+    /// Also a CWX word sent with no keying time, which its readback needs.
     NoReadback(StartKind),
     NotReady,
     /// A TCP API version not reviewed for transmit: receive only.
@@ -187,8 +203,34 @@ impl std::error::Error for Refusal {}
 /// Run the Flex-side checks for `start`. Pure: no state changes, no I/O, and the only result
 /// other than a refusal is the one value that can be rendered as a keying command.
 pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admitted, Refusal> {
+    admit_kinds(model, facts, start, BENCHED)
+}
+
+/// [`admit`] for every kind, also those whose readback no bench has confirmed: the unit tests'
+/// way to run the readback per kind. Not compiled outside this crate's tests.
+#[cfg(test)]
+pub(super) fn admit_unbenched(
+    model: &StatusModel,
+    facts: &Facts,
+    start: TxStart,
+) -> Result<Admitted, Refusal> {
+    let all = [
+        StartKind::Key,
+        StartKind::Tune,
+        StartKind::Atu,
+        StartKind::Cwx,
+    ];
+    admit_kinds(model, facts, start, &all)
+}
+
+fn admit_kinds(
+    model: &StatusModel,
+    facts: &Facts,
+    start: TxStart,
+    kinds: &[StartKind],
+) -> Result<Admitted, Refusal> {
     let kind = start.kind();
-    if kind != StartKind::Key {
+    if !kinds.contains(&kind) {
         return Err(Refusal::NoReadback(kind));
     }
     if !facts.ready {
@@ -198,7 +240,9 @@ pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admit
         return Err(Refusal::ProtocolUnsupported);
     }
     let ours = facts.handle.ok_or(Refusal::NoHandle)?;
-    if facts.keyed {
+    // A CWX word while our own CWX operation is open joins it (see the module header).
+    let append = kind == StartKind::Cwx && facts.open == Some(StartKind::Cwx);
+    if facts.keyed && !append {
         return Err(Refusal::AlreadyKeyed);
     }
     match model.tx_slices().as_slice() {
@@ -232,6 +276,8 @@ pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admit
                 source: sample.source.clone(),
             })
         }
+        // Our own CWX keying the radio.
+        cwx if append && cwx == ptt_evidence::CWX.source => {}
         other => {
             return Err(Refusal::SourceActive {
                 source: other.to_string(),
@@ -243,12 +289,12 @@ pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admit
             reason: sample.reason.clone(),
         });
     }
-    if sample.state != "READY" {
+    if sample.state != "READY" && !append {
         return Err(Refusal::InterlockNotReady {
             state: sample.state.clone(),
         });
     }
-    if !facts.readback_idle {
+    if !facts.readback_idle && !append {
         return Err(Refusal::ReadbackNotIdle);
     }
     Ok(Admitted(start))
@@ -376,6 +422,7 @@ mod tests {
             transmit_protocol: true,
             handle: Some(OURS),
             keyed: false,
+            open: None,
             readback_idle: true,
             dax_tx_stream: None,
         }
@@ -506,6 +553,80 @@ mod tests {
                 Refusal::NoReadback(kind)
             );
         }
+    }
+
+    /// A CWX word joins our own open CWX operation while the radio keys it, and nothing else
+    /// does; every check but the two that describe that operation still refuses.
+    #[test]
+    fn a_cwx_word_joins_our_open_cwx_and_nothing_else_does() {
+        let cwx = || TxStart::CwxSend(CwxText::new("TEST").unwrap());
+        let keying = |source: &str| {
+            format!(
+                "S0|interlock tx_client_handle=0x2B6E1F40 state=TRANSMITTING reason= \
+                 source={source} tx_allowed=1"
+            )
+        };
+        let open = |kind| Facts {
+            keyed: true,
+            open: Some(kind),
+            readback_idle: false,
+            ..facts()
+        };
+        let m = model(&[OUR_TX_SLICE, &keying(crate::flex::ptt_evidence::CWX.source)]);
+        assert!(admit_unbenched(&m, &open(StartKind::Cwx), cwx()).is_ok());
+        // Only a CWX word, and only into our CWX.
+        assert_eq!(
+            admit_unbenched(&m, &open(StartKind::Cwx), TxStart::Key).unwrap_err(),
+            Refusal::AlreadyKeyed
+        );
+        assert_eq!(
+            admit_unbenched(&m, &open(StartKind::Cwx), TxStart::TuneOn).unwrap_err(),
+            Refusal::AlreadyKeyed
+        );
+        assert_eq!(
+            admit_unbenched(&m, &open(StartKind::Tune), cwx()).unwrap_err(),
+            Refusal::AlreadyKeyed
+        );
+        // Every other check stands.
+        for (line, want) in [
+            (
+                keying("MIC"),
+                Refusal::HardwarePtt {
+                    source: "MIC".into(),
+                },
+            ),
+            (
+                keying("TUNE"),
+                Refusal::SourceActive {
+                    source: "TUNE".into(),
+                },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x7A3C0001 state=TRANSMITTING reason= source=SW \
+                 tx_allowed=1"
+                    .to_string(),
+                Refusal::TransmitterHeld { by: 0x7A3C_0001 },
+            ),
+            (
+                keying("SW").replace("tx_allowed=1", "tx_allowed=0"),
+                Refusal::TransmitNotAllowed {
+                    reason: String::new(),
+                },
+            ),
+        ] {
+            let m = model(&[OUR_TX_SLICE, &line]);
+            assert_eq!(
+                admit_unbenched(&m, &open(StartKind::Cwx), cwx()).unwrap_err(),
+                want,
+                "{line}"
+            );
+        }
+        // And the bench's list holds: in production, no CWX word at all.
+        assert_eq!(
+            admit(&m, &open(StartKind::Cwx), cwx()).unwrap_err(),
+            Refusal::NoReadback(StartKind::Cwx)
+        );
+        assert_eq!(BENCHED, &[StartKind::Key]);
     }
 
     // ── The transmitter's audio source ──

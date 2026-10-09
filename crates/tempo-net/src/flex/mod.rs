@@ -19,7 +19,7 @@
 //! | [`model`] | the status model: the radio as reported, with every object's owner |
 //! | [`encode`] | the typed command encoder: ordinary commands, starts, stops |
 //! | [`admission`] | the refuse-only Flex checks a start must pass; the only source of an admitted start |
-//! | [`ptt_evidence`] | the interlock readback that proves an unkey |
+//! | [`ptt_evidence`] | the readback that proves a transmission ended, per kind |
 //! | [`ownership`] | ownership and recovery as pure policy functions |
 //! | [`handshake`] | the connect sequence and GUI-client registration |
 //! | [`keepalive`] | pings and the missed-reply count |
@@ -39,11 +39,14 @@
 //!   `TxStart`; `session::tests::no_input_makes_the_session_originate_a_key` drives the session
 //!   with random input in every state and checks that the only start ever written is the one the
 //!   test asked for.
-//! - Stops ([`encode::TxStop`]) are never gated: an unkey asks only "are we keyed?".
-//! - Keyed is set at the key attempt and cleared only by the interlock readback; a reply to
-//!   `xmit 0` is not RF cessation. An unconfirmed unkey is sent again, the session closes and the
-//!   operator is told.
-//! - Only `xmit` has a readback today, so admission refuses tune, ATU and CWX starts.
+//! - Stops ([`encode::TxStop`]) are never gated: a stop asks only "is it ours?", and rigctld's
+//!   `T 0` ends everything of ours ([`session::Session::end_ours`]).
+//! - Keyed is set at the start attempt and cleared only by the readback of its kind; a reply to a
+//!   stop is not RF cessation. An unconfirmed end is stopped again, the session closes and the
+//!   operator is told. A tune the radio latches is ended by the session itself at its deadline.
+//! - Each kind has a readback profile, but only `xmit`'s is confirmed on a radio, so admission
+//!   refuses tune, ATU and CWX starts ([`admission::BENCHED`]) until a tester's bench confirms
+//!   theirs.
 //! - Where the transmitter takes its audio from (`stream create type=dax_tx`, `transmit set dax`)
 //!   is its own typed kind ([`encode::TxAudio`]) with its own admission: never while anything is
 //!   keyed, never beside another program's DAX transmit stream.
@@ -165,7 +168,7 @@ pub const PROVENANCE: &[Ported] = &[
         ],
         differences: "sans-I/O core on a std thread; typed kinds replace the text match on other \
                       writers; no demo, kernel RTT or WAN; evidence consumed when complete; a \
-                      failed write ends the session",
+                      failed write ends the session; Nexus's own stops and deadlines per kind",
     },
     Ported {
         file: "ptt_evidence.rs",
@@ -176,7 +179,8 @@ pub const PROVENANCE: &[Ported] = &[
         references: &[],
         tests: &["tests/flex_ptt_stop_tracker_test.cpp"],
         differences: "plain operation and stop ids replace the coordinator; consume() replaces \
-                      the acknowledgment; no thread check; the timeout is a parameter",
+                      the acknowledgment; no thread check; the timeout is a parameter; Nexus's \
+                      own profiles for tune, CWX and ATU",
     },
     Ported {
         file: "ownership.rs",

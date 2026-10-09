@@ -27,14 +27,20 @@
 //!   close.
 //!
 //! **Transmit.** [`Session::start`] runs admission ([`super::admission`]); only an admitted start
-//! is rendered, and the readback ([`super::ptt_evidence`]) is armed and "keyed" set before the
-//! write, so an attempt that fails partway still needs its unkey. [`Session::stop`] is never
-//! gated: it asks only "are we keyed?" (an unconfirmed start of ours, or an interlock naming this
-//! session's handle or one of our previous sessions'). Keyed clears only when the readback proves
-//! the unkey; a reply to `xmit 0` is not that proof. If the proof does not come within the
-//! deadline after the first stop, the session sends `xmit 0` again, reports
-//! [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). The session itself never starts a
-//! transmission: none of its reactions to lines, replies, time or teardown is a start.
+//! is rendered, and the readback ([`super::ptt_evidence`]) is armed with its kind's profile and
+//! "keyed" set before the write, so an attempt that fails partway still needs its stop.
+//! [`Session::stop`] is never gated: it asks only "is it ours?" (an unconfirmed start of ours, or
+//! an interlock naming this session's handle or one of our previous sessions').
+//! [`Session::end_ours`] is rigctld's `T 0`: the open operation's own stop, or, with none open,
+//! every stop the radio's status shows a session of ours may need. Keyed clears only when the
+//! readback proves the end; a reply to a stop is not that proof. Every stop that ends the open
+//! operation arms the escalation clock: if the proof does not come within the deadline after the
+//! first one, the session sends the kind's stops again (`xmit 0`; for a tune `transmit tune 0` and
+//! `xmit 0`), reports [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). A radio-ended start (a
+//! CWX word, an ATU cycle) whose window fails is escalated at once. A tune the radio latches is
+//! ended by the session itself, at its hold plus [`ptt_evidence::TUNE_MARGIN_MS`], whether or not
+//! the radio loop is running. The session itself never starts a transmission: none of its
+//! reactions to lines, replies, time or teardown is a start.
 //!
 //! PORTED from AetherSDR (https://github.com/aethersdr/AetherSDR, GPL-3.0; the upstream file
 //! carries no per-file header, the licence is the repository's), `src/core/backends/flex/RadioConnection.h`
@@ -50,6 +56,11 @@
 //! gives each command; the demo-radio branches, kernel RTT sampling and WAN paths are dropped;
 //! evidence is consumed in the step that completes it rather than queued to a coordinator; a
 //! failed write ends the session. Recorded in the repo-root NOTICE (AetherSDR entry).
+//!
+//! Added for Nexus, with no upstream code taken: the kinds other than `xmit` (each one's readback
+//! profile, its own stops and escalation, the tune's deadline, CWX words joining an open
+//! operation), [`Session::end_ours`], and the snapshot's belief that something of ours may be on
+//! the air ([`Snapshot::ours_on_air`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
@@ -61,14 +72,16 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::admission::{self, Facts, Refusal};
+use super::admission::{self, Admitted, Facts, Refusal};
 use super::encode::{
     self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxStart, TxStop,
 };
 use super::handshake::{self, ConnectConfig, Registration, NOT_SUPPORTED};
 use super::keepalive::{Keepalive, Tick};
 use super::model::{ObjectRef, Owner, StatusModel};
-use super::ptt_evidence::{Operation, Stamp, StopRequest, StopTracker, TRANSITION_TIMEOUT_MS};
+use super::ptt_evidence::{
+    self, Operation, Stamp, StopRequest, StopTracker, Window, TRANSITION_TIMEOUT_MS,
+};
 use super::reconnect::End;
 use super::status::{decode, ClientAction, Decoded};
 use super::wire::{self, parse_line, Line, Reply, Severity, Status, WireError, MAX_LINE};
@@ -151,6 +164,10 @@ pub struct Config {
     /// The UDP registration's datagram, sent after registration, just before `client udpport`;
     /// `None` sends none.
     pub udp_registration: Option<UdpRegistration>,
+    /// Admit every kind, also those whose readback no bench has confirmed: the unit tests' way to
+    /// run the readback per kind. Not compiled outside this crate's tests.
+    #[cfg(test)]
+    pub(crate) unbenched: bool,
 }
 
 impl Config {
@@ -170,6 +187,8 @@ impl Config {
             teardown_timeout_ms: 2_000,
             previous_handles: Vec::new(),
             udp_registration: None,
+            #[cfg(test)]
+            unbenched: false,
         }
     }
 }
@@ -298,6 +317,15 @@ pub enum SendError {
     },
 }
 
+/// What ending everything of ours did ([`Session::end_ours`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndOutcome {
+    /// These stops went out, in order, with their sequence numbers. None: nothing of ours to stop.
+    Sent(Vec<(TxStop, u32)>),
+    /// The connection is closed; nothing can be written.
+    NotConnected,
+}
+
 /// What a stop did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopOutcome {
@@ -319,6 +347,9 @@ pub struct Snapshot {
     pub handle: Option<u32>,
     /// A start of ours is unconfirmed.
     pub keyed: bool,
+    /// A transmission of ours may be on the air: a start of ours is unconfirmed, or the radio
+    /// names this session or a previous one of ours as the transmitter while it keys or tunes.
+    pub ours_on_air: bool,
     /// The readback has seen the radio idle and nothing of ours is keyed.
     pub transmit_ready: bool,
     /// Our DAX transmit stream, from the reply to our create, until the radio removes it.
@@ -352,6 +383,34 @@ struct Keyed {
     stop_tracked: bool,
     first_stop_ms: Option<u64>,
     escalated: bool,
+    /// When the session ends it by itself: a tune's hold plus [`ptt_evidence::TUNE_MARGIN_MS`].
+    deadline_ms: Option<u64>,
+}
+
+/// The break-in delay a CWX word's readback assumes when the radio has not reported one: the
+/// longest the transmit status can carry (0-2000 ms), so the hold is never shorter than the radio's.
+const BREAK_IN_DELAY_MAX_MS: u64 = 2_000;
+
+/// The stops that end an operation of this kind, in the order they go out: Stop TX for the ATU
+/// sends both the unkey and the tune-off (no command that ends a cycle is documented).
+fn own_stops(kind: StartKind) -> &'static [TxStop] {
+    match kind {
+        StartKind::Key => &[TxStop::Unkey],
+        StartKind::Tune => &[TxStop::TuneOff],
+        StartKind::Cwx => &[TxStop::CwxClear],
+        StartKind::Atu => &[TxStop::Unkey, TxStop::TuneOff],
+    }
+}
+
+/// The stops sent again when an operation of this kind is not proven ended: its own, then the
+/// unkey after them.
+fn escalation_stops(kind: StartKind) -> &'static [TxStop] {
+    match kind {
+        StartKind::Key => &[TxStop::Unkey],
+        StartKind::Tune => &[TxStop::TuneOff, TxStop::Unkey],
+        StartKind::Cwx => &[TxStop::CwxClear, TxStop::Unkey],
+        StartKind::Atu => &[TxStop::Unkey, TxStop::TuneOff],
+    }
 }
 
 /// Session identities are process-wide, nonzero and never reused.
@@ -450,6 +509,7 @@ impl Session {
             transmit_protocol: self.protocol == Protocol::Supported,
             handle: self.handle,
             keyed: self.keyed.is_some(),
+            ours_on_air: self.ours_on_air(),
             transmit_ready: self.transmit_ready(),
             dax_tx_stream: self.dax_tx_stream,
             model: self.model.clone(),
@@ -467,9 +527,42 @@ impl Session {
             transmit_protocol: self.protocol == Protocol::Supported,
             handle: self.handle,
             keyed: self.keyed.is_some(),
+            open: self.keyed.map(|k| k.kind),
             readback_idle: self.tracker.phase() == super::ptt_evidence::Phase::Idle,
             dax_tx_stream: self.dax_tx_stream,
         }
+    }
+
+    /// Admission for `start`; under test, every kind when the configuration says so.
+    fn admit(&self, start: TxStart) -> Result<Admitted, Refusal> {
+        #[cfg(test)]
+        if self.config.unbenched {
+            return admission::admit_unbenched(&self.model, &self.facts(), start);
+        }
+        admission::admit(&self.model, &self.facts(), start)
+    }
+
+    /// Whether the interlock's last owner is this session or one of our previous sessions.
+    fn named(&self) -> bool {
+        self.model
+            .interlock
+            .last_tx_client_handle
+            .is_some_and(|h| self.is_ours(h))
+    }
+
+    /// A transmission of ours may be on the air: a start of ours is unconfirmed, or the radio names
+    /// a session of ours as the transmitter while it keys, releases or tunes (or has not sent a
+    /// whole sample since naming it).
+    fn ours_on_air(&self) -> bool {
+        self.keyed.is_some()
+            || (self.named()
+                && (self.model.transmit.tune == Some(true)
+                    || self.model.interlock.sample.as_ref().is_none_or(|s| {
+                        matches!(
+                            s.state.as_str(),
+                            "PTT_REQUESTED" | "TRANSMITTING" | "UNKEY_REQUESTED"
+                        )
+                    })))
     }
 
     fn stamp(&mut self) -> Stamp {
@@ -511,34 +604,34 @@ impl Session {
         ok
     }
 
-    /// Tell the readback about a transmit-capable write, stamped where it happened. The key and
-    /// the bound unkey are its inputs; any other transmit-capable write during an attempt spoils
-    /// the attempt's evidence, as another writer's would (upstream's `otherCommand`, typed here).
+    /// Tell the readback about a transmit-capable write, stamped where it happened. The open
+    /// operation's own starts (the key, a CWX word) and its bound stop are its inputs; any other
+    /// transmit-capable write during an attempt spoils the attempt's evidence, as another writer's
+    /// would (upstream's `otherCommand`, typed here).
     fn report_write(&mut self, seq: u32, kind: Kind, ok: bool, now: u64) {
         let Some(keyed) = self.keyed else { return };
-        let tracked_key = keyed.kind == StartKind::Key;
         match kind {
             // Admission refuses an audio-source change while anything is keyed, so it cannot
             // reach here; if it did, it is not a keying write.
             Kind::Ordinary | Kind::TxAudio(_) => {}
-            Kind::Start(StartKind::Key) if tracked_key && keyed.stop.is_none() => {
+            // The readback checks the sequence number: a second start that is not its own fails.
+            Kind::Start(k) if k == keyed.kind => {
                 let stamp = self.stamp();
                 self.tracker.command_written(stamp, seq, true, ok, now);
             }
-            Kind::Stop(TxStop::Unkey) if keyed.stop_seq == Some(seq) => {
+            Kind::Stop(_) if keyed.stop_seq == Some(seq) => {
                 if keyed.stop_tracked {
                     let stamp = self.stamp();
                     self.tracker.command_written(stamp, seq, false, ok, now);
                 }
             }
             // A repeated unkey is not another writer: it is the same stop again, unreported, as
-            // upstream sends it.
-            Kind::Stop(TxStop::Unkey) => {}
+            // upstream sends it. Nor is the operation's own stop again, or a radio-ended
+            // operation's stops, which its readback does not wait for.
+            Kind::Stop(stop) if stop == TxStop::Unkey || own_stops(keyed.kind).contains(&stop) => {}
             Kind::Start(_) | Kind::Stop(_) => {
-                if tracked_key {
-                    let stamp = self.stamp();
-                    self.tracker.command_written(stamp, 0, true, false, now);
-                }
+                let stamp = self.stamp();
+                self.tracker.command_written(stamp, 0, true, false, now);
             }
         }
     }
@@ -589,27 +682,105 @@ impl Session {
     // ── Transmit ─────────────────────────────────────────────────────────────────────────────
 
     /// Start a transmission, if admission allows it. The readback is armed and keyed is set before
-    /// the write.
+    /// the write. [`Self::start_lasting`] with nothing known about how long it lasts: a tune is
+    /// then held for at most [`ptt_evidence::TUNE_HOLD_MAX_MS`], and a CWX word is refused (its
+    /// readback needs the word's keying time).
     pub fn start(&mut self, out: &mut dyn Write, start: TxStart, now: u64) -> Result<u32, Refusal> {
+        self.start_lasting(out, start, None, now)
+    }
+
+    /// [`Self::start`] with what the caller knows of how long the transmission lasts: a tune's
+    /// hold (the session ends it at that plus [`ptt_evidence::TUNE_MARGIN_MS`] by itself, and at
+    /// most at [`ptt_evidence::TUNE_HOLD_MAX_MS`] plus the margin), or a CWX word's keying time at
+    /// the radio's speed. A key and an ATU cycle take nothing from it. A CWX word sent while our
+    /// own CWX operation is open joins it, until a stop has gone out for it.
+    pub fn start_lasting(
+        &mut self,
+        out: &mut dyn Write,
+        start: TxStart,
+        lasting_ms: Option<u64>,
+        now: u64,
+    ) -> Result<u32, Refusal> {
         let kind = start.kind();
-        let admitted = admission::admit(&self.model, &self.facts(), start)?;
-        let operation = Operation(
-            NonZeroU64::new(self.next_operation).expect("operation numbers start at one"),
-        );
-        self.next_operation += 1;
-        let seq = self.take_seq();
-        if !self.tracker.begin(operation, seq, now) {
-            return Err(Refusal::ReadbackNotIdle);
+        // A window the radio has just closed is taken first, so a word is never added to it.
+        self.tracker.poll(now);
+        self.check_evidence(now);
+        let admitted = self.admit(start)?;
+        let window = match kind {
+            StartKind::Cwx => {
+                let word_ms = lasting_ms.ok_or(Refusal::NoReadback(kind))?;
+                let delay = self
+                    .model
+                    .transmit
+                    .cw_break_in_delay
+                    .and_then(|d| u64::try_from(d).ok())
+                    .unwrap_or(BREAK_IN_DELAY_MAX_MS);
+                Some(Window::cwx(word_ms, delay))
+            }
+            StartKind::Atu => Some(Window::atu()),
+            StartKind::Key | StartKind::Tune => None,
+        };
+        let append = self
+            .keyed
+            .filter(|k| kind == StartKind::Cwx && k.kind == StartKind::Cwx);
+        if append.is_some_and(|k| k.first_stop_ms.is_some()) {
+            // Stopping: the operation takes no more words.
+            return Err(Refusal::AlreadyKeyed);
         }
-        self.keyed = Some(Keyed {
-            operation,
-            kind,
-            stop: None,
-            stop_seq: None,
-            stop_tracked: false,
-            first_stop_ms: None,
-            escalated: false,
-        });
+        let seq = self.take_seq();
+        match (append, window) {
+            (Some(open), Some(window)) => {
+                if !self.tracker.append(open.operation, seq, window, now) {
+                    return Err(Refusal::ReadbackNotIdle);
+                }
+            }
+            _ => {
+                let operation = Operation(
+                    NonZeroU64::new(self.next_operation).expect("operation numbers start at one"),
+                );
+                self.next_operation += 1;
+                let end = StopRequest {
+                    operation,
+                    attempt: NonZeroU64::MIN,
+                };
+                let armed = match (kind, window) {
+                    (StartKind::Tune, _) => {
+                        self.tracker
+                            .begin_as(operation, ptt_evidence::TUNE, seq, now)
+                    }
+                    (StartKind::Cwx, Some(w)) => {
+                        self.tracker
+                            .begin_window(operation, end, ptt_evidence::CWX, seq, w, now)
+                    }
+                    (StartKind::Atu, Some(w)) => {
+                        self.tracker
+                            .begin_window(operation, end, ptt_evidence::ATU, seq, w, now)
+                    }
+                    _ => self.tracker.begin(operation, seq, now),
+                };
+                if !armed {
+                    return Err(Refusal::ReadbackNotIdle);
+                }
+                let deadline_ms = (kind == StartKind::Tune).then(|| {
+                    let hold = lasting_ms
+                        .unwrap_or(ptt_evidence::TUNE_HOLD_MAX_MS)
+                        .min(ptt_evidence::TUNE_HOLD_MAX_MS);
+                    now.saturating_add(hold)
+                        .saturating_add(ptt_evidence::TUNE_MARGIN_MS)
+                });
+                self.keyed = Some(Keyed {
+                    operation,
+                    kind,
+                    // A radio-ended operation's proof is its window's: no stop is bound to it.
+                    stop: window.map(|_| end),
+                    stop_seq: None,
+                    stop_tracked: false,
+                    first_stop_ms: None,
+                    escalated: false,
+                    deadline_ms,
+                });
+            }
+        }
         let rendered = encode::render_start(admitted, self.cwx_block);
         if kind == StartKind::Cwx {
             self.cwx_block += 1;
@@ -623,19 +794,19 @@ impl Session {
 
     /// Whether there is something of ours for this stop to end.
     fn ours_to_stop(&self, stop: TxStop) -> bool {
-        let named = self
-            .model
-            .interlock
-            .last_tx_client_handle
-            .is_some_and(|h| self.is_ours(h));
+        let named = self.named();
         let started = self.keyed.map(|k| k.kind);
         match stop {
             TxStop::Unkey => started.is_some() || named,
             TxStop::TuneOff => {
-                started == Some(StartKind::Tune)
+                matches!(started, Some(StartKind::Tune | StartKind::Atu))
                     || (self.model.transmit.tune == Some(true) && named)
             }
-            TxStop::CwxClear => started == Some(StartKind::Cwx),
+            // Our CWX, or, with no operation of ours open, one the interlock says is ours. Not
+            // beside another open operation: a clear written next to an over's unkey would spoil
+            // that over's readback, and the radio loop sends `\stop_morse` after `T 0` when it
+            // hands a radio over and when it shuts down.
+            TxStop::CwxClear => started == Some(StartKind::Cwx) || (started.is_none() && named),
         }
     }
 
@@ -649,25 +820,59 @@ impl Session {
             return StopOutcome::NothingOfOurs;
         }
         let seq = self.take_seq();
-        if stop == TxStop::Unkey {
-            if let Some(keyed) = self.keyed.as_mut() {
-                if keyed.kind == StartKind::Key && keyed.stop.is_none() {
-                    let request = StopRequest {
-                        operation: keyed.operation,
-                        attempt: NonZeroU64::MIN,
-                    };
-                    keyed.stop = Some(request);
-                    keyed.stop_seq = Some(seq);
-                    keyed.stop_tracked =
-                        self.tracker
-                            .request_stop(keyed.operation, request, seq, now);
-                }
+        if let Some(keyed) = self.keyed.as_mut() {
+            // The stop the readback proves: an over's unkey, a tune's tune-off.
+            let bound = matches!(
+                (keyed.kind, stop),
+                (StartKind::Key, TxStop::Unkey) | (StartKind::Tune, TxStop::TuneOff)
+            );
+            if bound && keyed.stop.is_none() {
+                let request = StopRequest {
+                    operation: keyed.operation,
+                    attempt: NonZeroU64::MIN,
+                };
+                keyed.stop = Some(request);
+                keyed.stop_seq = Some(seq);
+                keyed.stop_tracked = self
+                    .tracker
+                    .request_stop(keyed.operation, request, seq, now);
+            }
+            // Every stop that ends the operation arms the escalation clock, and so does an unkey,
+            // whatever the operation.
+            if stop == TxStop::Unkey || own_stops(keyed.kind).contains(&stop) {
                 keyed.first_stop_ms.get_or_insert(now);
             }
         }
         self.pending.insert(seq, Pending::Stop);
         self.write(out, seq, &encode::render_stop(stop), now);
         StopOutcome::Sent { seq }
+    }
+
+    /// End everything of ours: rigctld's `T 0`. Never gated. With an operation of ours open, its
+    /// own stops ([`own_stops`]). With none, every stop the radio's status shows a session of ours
+    /// may need: `transmit tune 0` while `transmit tune=1` is reported and the interlock names a
+    /// session of ours, then `cwx clear` and `xmit 0` while it names one. Another client's
+    /// transmission is never stopped from here.
+    pub fn end_ours(&mut self, out: &mut dyn Write, now: u64) -> EndOutcome {
+        if self.phase == Phase::Closed {
+            return EndOutcome::NotConnected;
+        }
+        let stops: Vec<TxStop> = match self.keyed {
+            Some(keyed) => own_stops(keyed.kind).to_vec(),
+            None => [TxStop::TuneOff, TxStop::CwxClear, TxStop::Unkey]
+                .into_iter()
+                .filter(|s| self.ours_to_stop(*s))
+                .collect(),
+        };
+        let mut sent = Vec::new();
+        for stop in stops {
+            match self.stop(out, stop, now) {
+                StopOutcome::Sent { seq } => sent.push((stop, seq)),
+                StopOutcome::NothingOfOurs => {}
+                StopOutcome::NotConnected => return EndOutcome::NotConnected,
+            }
+        }
+        EndOutcome::Sent(sent)
     }
 
     /// Change where the transmitter's audio comes from, if its admission allows it (never while
@@ -692,16 +897,35 @@ impl Session {
         }
     }
 
-    /// The unkey was not proven in time: unkey again, tell the operator, close.
+    /// The end was not proven in time: the kind's stops again ([`escalation_stops`]), tell the
+    /// operator, close.
     fn escalate(&mut self, out: &mut dyn Write, now: u64) {
+        let kind = self.keyed.map_or(StartKind::Key, |k| k.kind);
         if let Some(keyed) = self.keyed.as_mut() {
             keyed.escalated = true;
+            // Stops have gone out: teardown does not send them a third time.
+            keyed.first_stop_ms.get_or_insert(now);
         }
-        let seq = self.take_seq();
-        self.pending.insert(seq, Pending::Stop);
-        self.write(out, seq, &encode::render_stop(TxStop::Unkey), now);
+        for stop in escalation_stops(kind) {
+            let seq = self.take_seq();
+            self.pending.insert(seq, Pending::Stop);
+            self.write(out, seq, &encode::render_stop(*stop), now);
+        }
         self.events.push_back(Event::UnkeyUnconfirmed);
         self.close_with(out, End::UnkeyUnconfirmed, now);
+    }
+
+    /// A radio-ended operation (a CWX word, an ATU cycle) whose window failed: nothing of ours
+    /// will end it, so it is escalated at once.
+    fn check_window(&mut self, out: &mut dyn Write, now: u64) {
+        let failed = self.keyed.is_some_and(|k| {
+            matches!(k.kind, StartKind::Cwx | StartKind::Atu)
+                && !k.escalated
+                && self.tracker.phase() == super::ptt_evidence::Phase::Failed
+        });
+        if failed {
+            self.escalate(out, now);
+        }
     }
 
     // ── Input ────────────────────────────────────────────────────────────────────────────────
@@ -769,6 +993,7 @@ impl Session {
             Err(error) => self.events.push_back(Event::LineRejected { error }),
         }
         self.check_evidence(now);
+        self.check_window(out, now);
     }
 
     /// This session may no longer transmit. The unkey path stays: keyed is kept, and stops are
@@ -1041,9 +1266,9 @@ impl Session {
             Tick::Idle => {}
             Tick::Ping => self.ping(out, now),
             Tick::Missed { misses } => {
-                // A missed ping while keyed unkeys before anything else.
+                // A missed ping while keyed ends what is ours before anything else.
                 if self.keyed.is_some() {
-                    self.stop(out, TxStop::Unkey, now);
+                    self.end_ours(out, now);
                     self.events.push_back(Event::UnkeyedOnMissedPing { misses });
                 }
                 self.ping(out, now);
@@ -1055,6 +1280,7 @@ impl Session {
         }
         self.tracker.poll(now);
         self.check_evidence(now);
+        self.check_window(out, now);
         if let Some(keyed) = self.keyed {
             let due = keyed
                 .first_stop_ms
@@ -1062,6 +1288,11 @@ impl Session {
             if due && !keyed.escalated {
                 self.escalate(out, now);
                 return;
+            }
+            // A latched tune is ended here at its deadline, whether or not the radio loop asks.
+            let latched_out = keyed.deadline_ms.is_some_and(|d| now >= d);
+            if latched_out && keyed.first_stop_ms.is_none() && !keyed.escalated {
+                self.end_ours(out, now);
             }
         }
         if let Some((_, _, deadline)) = &self.closing {
@@ -1084,21 +1315,16 @@ impl Session {
         self.close_with(out, End::Closed, now);
     }
 
-    /// Teardown: a best-effort unkey if ours may be keyed and no stop has gone out, `stream
-    /// remove` for our streams, then the marker and the close once they are answered or the wait
-    /// runs out.
+    /// Teardown: a best-effort end of everything ours ([`Self::end_ours`]) if ours may be keyed
+    /// and no stop has gone out, `stream remove` for our streams, then the marker and the close
+    /// once they are answered or the wait runs out.
     fn close_with(&mut self, out: &mut dyn Write, end: End, now: u64) {
         if matches!(self.phase, Phase::Closing | Phase::Closed) {
             return;
         }
         let unstopped = self.keyed.is_some_and(|k| k.first_stop_ms.is_none());
-        let named = self
-            .model
-            .interlock
-            .last_tx_client_handle
-            .is_some_and(|h| self.is_ours(h));
-        if unstopped || (named && self.keyed.is_none()) {
-            self.stop(out, TxStop::Unkey, now);
+        if unstopped || (self.named() && self.keyed.is_none()) {
+            self.end_ours(out, now);
             if self.phase == Phase::Closed {
                 return;
             }
@@ -1196,8 +1422,9 @@ pub enum ConnError {
 
 enum Request {
     Send(Command, Sender<Result<Reply, ConnError>>),
-    Start(TxStart, Sender<Result<u32, Refusal>>),
+    Start(TxStart, Option<u64>, Sender<Result<u32, Refusal>>),
     Stop(TxStop, Sender<StopOutcome>),
+    EndOurs(Sender<EndOutcome>),
     Route(TxAudio, Sender<Result<u32, Refusal>>),
     Close,
 }
@@ -1209,6 +1436,8 @@ struct Shared {
     /// transmit pacer asks before every packet.
     keyed: AtomicBool,
     open: AtomicBool,
+    /// The snapshot's `ours_on_air`, the same way: the radio loop asks every tick.
+    on_air: AtomicBool,
     /// Test only: where a test holds the driver (see [`Connection::hold_after`]).
     #[cfg(test)]
     hold: Mutex<Option<(Announcement, Receiver<()>)>>,
@@ -1275,6 +1504,7 @@ impl Connection {
             changed: Condvar::new(),
             keyed: AtomicBool::new(false),
             open: AtomicBool::new(true),
+            on_air: AtomicBool::new(false),
             #[cfg(test)]
             hold: Mutex::new(None),
         });
@@ -1307,9 +1537,18 @@ impl Connection {
 
     /// Start a transmission (admission decides). `Err(None)` when the session is gone.
     pub fn start(&self, start: TxStart) -> Result<u32, Option<Refusal>> {
+        self.start_lasting(start, None)
+    }
+
+    /// [`Session::start_lasting`]: a start with how long it lasts, as its caller knows it.
+    pub fn start_lasting(
+        &self,
+        start: TxStart,
+        lasting_ms: Option<u64>,
+    ) -> Result<u32, Option<Refusal>> {
         let (tx, rx) = mpsc::channel();
         self.requests
-            .send(Request::Start(start, tx))
+            .send(Request::Start(start, lasting_ms, tx))
             .map_err(|_| None)?;
         rx.recv().map_err(|_| None)?.map_err(Some)
     }
@@ -1337,6 +1576,22 @@ impl Connection {
             return StopOutcome::NotConnected;
         }
         rx.recv().unwrap_or(StopOutcome::NotConnected)
+    }
+
+    /// End everything of ours ([`Session::end_ours`]): rigctld's `T 0`. Never gated.
+    pub fn end_ours(&self) -> EndOutcome {
+        let (tx, rx) = mpsc::channel();
+        if self.requests.send(Request::EndOurs(tx)).is_err() {
+            return EndOutcome::NotConnected;
+        }
+        rx.recv().unwrap_or(EndOutcome::NotConnected)
+    }
+
+    /// Whether a transmission of ours may be on the air ([`Snapshot::ours_on_air`]), as the last
+    /// published snapshot says, without copying it. Kept once the session has closed: a session
+    /// that ended with something of ours unconfirmed still says so.
+    pub fn ours_on_air(&self) -> bool {
+        self.shared.on_air.load(Ordering::Acquire)
     }
 
     /// The next event, waiting up to `timeout`.
@@ -1429,13 +1684,17 @@ fn drive<S: Read + Write>(
                     }
                     Err(e) => answer(&session, shared, reply, Err(ConnError::Refused(e))),
                 },
-                Ok(Request::Start(start, reply)) => {
-                    let started = session.start(&mut io, start, now());
+                Ok(Request::Start(start, lasting_ms, reply)) => {
+                    let started = session.start_lasting(&mut io, start, lasting_ms, now());
                     answer(&session, shared, reply, started);
                 }
                 Ok(Request::Stop(stop, reply)) => {
                     let stopped = session.stop(&mut io, stop, now());
                     answer(&session, shared, reply, stopped);
+                }
+                Ok(Request::EndOurs(reply)) => {
+                    let ended = session.end_ours(&mut io, now());
+                    answer(&session, shared, reply, ended);
                 }
                 Ok(Request::Route(audio, reply)) => {
                     let routed = session.route(&mut io, audio, now());
@@ -1488,7 +1747,9 @@ fn drive<S: Read + Write>(
 /// so a reader woken by an announcement reads the state it reports, or a later one, never the
 /// state from before it.
 fn publish(session: &Session, shared: &Shared) {
-    *lock(&shared.snapshot) = session.snapshot();
+    let snapshot = session.snapshot();
+    shared.on_air.store(snapshot.ours_on_air, Ordering::Release);
+    *lock(&shared.snapshot) = snapshot;
     shared.keyed.store(session.keyed(), Ordering::Release);
     shared.open.store(!session.is_closed(), Ordering::Release);
     shared.changed.notify_all();
@@ -1502,5 +1763,7 @@ fn answer<T>(session: &Session, shared: &Shared, reply: Sender<T>, value: T) {
     shared.pause_after(&Announcement::Answer);
 }
 
+#[cfg(test)]
+mod kind_tests;
 #[cfg(test)]
 mod tests;
