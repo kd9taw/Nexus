@@ -109,6 +109,7 @@ import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { markerWidthHz } from './waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
+import { contestName } from './fdEvent'
 import { OperateCockpit } from './components/OperateCockpit'
 import { NowBar } from './components/NowBar'
 import { AwardsJourney } from './components/AwardsJourney'
@@ -3689,6 +3690,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // board used to be reachable only from inside ContestView once sync was
           // already on, which is exactly why nobody found it.
           onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
+          // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
+          // Day, as it is to the engine.
+          contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field

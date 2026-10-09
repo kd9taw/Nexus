@@ -239,7 +239,8 @@ it.each(['native', 'older observer', 'Field Day observer'])('%s navigation prese
     <App remote={native ? undefined : { snapshot: current, settings, bandPlan: [],
       fieldDay: kind === 'Field Day observer', status: <div>Observer</div> }} />
   </StationControlContext.Provider>)
-  fireEvent.click((await screen.findByText('Field Day', { selector: '.mode-label' })).closest('button')!)
+  // The rail calls the contest screen "Contest" (its id is still `fieldDay`).
+  fireEvent.click((await screen.findByText('Contest', { selector: '.mode-label' })).closest('button')!)
   await waitFor(() => expect(container.querySelector(native ? '.panel.fieldday' : kind === 'older observer'
     ? '.remote-view-unavailable' : '.remote-field-day-view')).not.toBeNull())
   const board = (await screen.findByText('Club Board', { selector: '.mode-label' })).closest('button')!

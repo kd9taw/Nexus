@@ -18923,7 +18923,8 @@ async fn open_panel_window(
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),
-        "fieldday" => "Nexus — Field Day".to_string(),
+        // The contest screen's scoreboard, for whichever contest is picked.
+        "fieldday" => "Nexus — Contest".to_string(),
         "fdclub" => "Nexus — Club band board".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),

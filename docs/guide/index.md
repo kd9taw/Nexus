@@ -277,8 +277,8 @@ SSTV, APRS and JS8 cockpits.
 | Satellites | ⧉ in the Satellites header | |
 | Memories | ↗ Pop out, Memories toolbar | |
 | POTA / SOTA | POTA/SOTA header | |
-| Field Day scoreboard | Field Day view | |
-| Club band board | ⧉ Pop out board — Field Day view, and the Field Day header | Opens wider and shorter, set in glance type: it is read across a tent. |
+| Contest scoreboard | ⧉ Pop out, Contest screen | |
+| Club band board | ⧉ Pop out board on the Contest screen, and Club Board under Contest in the left bar | Opens wider and shorter, set in glance type: it is read across a tent. |
 | Band map (Phone) | ⧉ on the band-map pane head, in Phone | Docks to a screen edge as a full-height strip; size, position and dock survive a restart. |
 | Band map (CW) | ⧉ on the band-map pane head, in CW | Same. |
 

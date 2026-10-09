@@ -70,10 +70,11 @@ describe('the club band board has its own way in', () => {
     cleanup()
   })
 
-  it('it sits with Field Day in the rail, not stranded at the end', () => {
+  it('it sits with the Contest item in the rail, not stranded at the end', () => {
     renderNav({ fieldDay: true })
     const buttons = [...document.querySelectorAll('.mode-nav-top button')]
-    const fd = buttons.findIndex((b) => /Field Day/i.test(b.getAttribute('aria-label') ?? ''))
+    // The contest screen's item, which the rail calls "Contest" (its id is still `fieldDay`).
+    const fd = buttons.findIndex((b) => /^Contest/.test(b.getAttribute('aria-label') ?? ''))
     const club = buttons.findIndex((b) => /club band board/i.test(b.getAttribute('aria-label') ?? ''))
     expect(fd).toBeGreaterThanOrEqual(0)
     expect(club).toBe(fd + 1)

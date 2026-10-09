@@ -329,15 +329,18 @@ export const FEATURES: FeatureDef[] = [
     workspace: 'msg',
     oneLineKey: 'features.chat.oneLine',
   }),
-  {
+  feature({
     // NOTE: Field Day VISIBILITY is not driven by this persisted feature flag — it is
     // owned by the Field Day master switch `settings.fdActive` (a persisted backend bool,
     // toggled in Settings ▸ Features). App.tsx overrides `enabled.fieldDay` with `fdActive`
     // for the nav + view-redirect, so the two can never diverge. This entry stays only so
     // Field Day remains a real registry section (view/landing/profile semantics).
+    //
+    // The section is the CONTEST screen, whichever contest is picked, so it is named
+    // "Contest". Its id stays `fieldDay`: the operator's rail order and every stored record
+    // name it by id.
     id: 'fieldDay',
-    // The ARRL event's own name.
-    label: 'Field Day',
+    labelKey: 'features.fieldDay.label',
     kind: 'section',
     category: 'Contesting',
     core: false,
@@ -345,10 +348,8 @@ export const FEATURES: FeatureDef[] = [
     intents: ['contest'],
     view: 'fieldDay',
     workspace: 'dx',
-    get oneLine() {
-      return t('features.fieldDay.oneLine')
-    },
-  },
+    oneLineKey: 'features.fieldDay.oneLine',
+  }),
   feature({
     id: 'connect',
     labelKey: 'features.connect.label',

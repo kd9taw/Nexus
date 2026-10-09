@@ -128,7 +128,7 @@ a club sync worked.*
   a lock (N3FJP semantics); your own log's dupes still refuse.
 - A live **band board** shows where every position is (band, mode, operator,
   rate), stale-marked the moment one goes quiet. It has its own **Club Board**
-  button in the left rail under Field Day, and its own window — one click, on a
+  button in the left rail under Contest, and its own window — one click, on a
   second monitor or a corner of the big one, in bigger type than the dashboard
   copy because it is watched from across the tent. **Pop out board** in the club
   header opens the same window. The rail button is there whenever Field Day is

@@ -2083,7 +2083,7 @@ narrow.
   it every time someone takes the seat; their contacts are stamped with it
   (ADIF `OPERATOR`) so the club can split the log by operator afterwards. Blank
   means the callsign above. It is the same setting as **Operator at the key** on
-  the Station tab and the OPERATOR box on the Field Day dashboard.
+  the Station tab and the OPERATOR box on the Contest screen.
 
 Nothing here is a second copy: change one of them anywhere and it changes
 everywhere.

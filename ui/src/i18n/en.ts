@@ -10617,7 +10617,10 @@ export const EN = {
   'nav.stats.label': 'Stats',
   'nav.stats.title':
     'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations',
-  'nav.fieldDay.title': 'Field Day — contest rate workspace',
+  // The rail's contest item: a word, so it translates. {{contest}} is the picked contest's own
+  // name (fdEvent.ts CONTESTS), which a translator leaves exactly as it is.
+  'nav.fieldDay.label': 'Contest',
+  'nav.fieldDay.title': 'Contest — {{contest}}',
   'nav.fdClub.label': 'Club Board',
   'nav.fdClub.title': 'Club band board — who is on what band at every position on site, in its own window for a second monitor',
   'nav.pota.title': "POTA / SOTA — parks & summits: who's on now (hunt) + tag your activation",
@@ -11436,6 +11439,7 @@ export const EN = {
   'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
   'features.chat.label': 'Chat',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
+  'features.fieldDay.label': 'Contest',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
   'features.connect.label': 'Conditions',
   'features.connect.windowTitle': 'Conditions (formerly Connect)',

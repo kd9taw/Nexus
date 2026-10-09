@@ -35,9 +35,10 @@ import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '..
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
 // TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
 // named for itself: the seven mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS, JS8) and
-// the two named for an event or a programme (Field Day, POTA / SOTA) carry their names
-// verbatim below, because a mode name and a programme name are the same letters in every
-// language (`i18n/index.ts`, the invariant-token rule).
+// the one named for a programme (POTA / SOTA) carry their names verbatim below, because a mode
+// name and a programme name are the same letters in every language (`i18n/index.ts`, the
+// invariant-token rule). "Contest" is a word, so it is a catalog entry; the contest its tooltip
+// names is the sponsor's own name, carried into the entry as a value.
 
 // `View` now lives in the feature registry (features ARE the views); re-export so
 // existing `import { type View } from './ModeNav'` call-sites keep working.
@@ -59,8 +60,11 @@ interface Props {
   onDigitalMode: (m: DigitalMode) => void
   /** Open the club band board in its own window (the `fdclub` pop-out). It is a WINDOW,
    * not a `View`, so it takes its own callback rather than an `ITEMS` entry — see the
-   * button below the Field Day item. */
+   * button below the Contest item. */
   onClubBoard?: () => void
+  /** The picked contest's own name (`contestName(settings.fdEvent)`), for the Contest item's
+   *  tooltip. Absent until the settings arrive, when the tooltip is the label alone. */
+  contest?: string
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
@@ -200,15 +204,19 @@ export const ITEMS: Item[] = [
   item({ id: 'logbook', icon: BookOpen, labelKey: 'nav.logbook.label', titleKey: 'nav.logbook.title' }),
   item({ id: 'awards', icon: Trophy, labelKey: 'nav.awards.label', titleKey: 'nav.awards.title' }),
   item({ id: 'stats', icon: BarChart3, labelKey: 'nav.stats.label', titleKey: 'nav.stats.title' }),
-  // The ARRL event's own name, and the two programmes' — tokens, not prose.
+  // The contest screen, whichever contest is picked. Its tooltip names that contest, which only
+  // the render knows (`titleOf` below); this title is what shows before the settings arrive.
   {
     id: 'fieldDay',
-    label: 'Field Day',
     icon: Tent,
+    get label() {
+      return t('nav.fieldDay.label')
+    },
     get title() {
-      return t('nav.fieldDay.title')
+      return t('nav.fieldDay.label')
     },
   },
+  // The two programmes' own names — tokens, not prose.
   {
     id: 'pota',
     label: 'POTA/SOTA',
@@ -234,7 +242,10 @@ const MODE_LABEL: Record<OpMode, string> = {
   fieldDay: 'FIELD DAY',
 }
 
-export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, onClubBoard }: Props) {
+export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, onClubBoard, contest }: Props) {
+  // A button's tooltip and accessible name. The Contest item's names the picked contest.
+  const titleOf = (it: Item): string =>
+    it.id === 'fieldDay' && contest ? t('nav.fieldDay.title', { contest }) : it.title
   // Operator's drag-and-drop rail order for the global sections (shared across windows).
   // `order` is the persisted id list; `orderNav` folds it over the shipped ITEMS so a new
   // section is never lost and a deleted one is dropped.
@@ -273,14 +284,15 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, on
   // drag never starts. Placed before the fixed props so `onClick`/`className` can't be clobbered.
   const navBtn = (it: Item, dragProps?: ButtonHTMLAttributes<HTMLButtonElement>) => {
     const Icon = it.icon
+    const title = titleOf(it)
     return (
-      <Tooltip key={it.id} content={it.title}>
+      <Tooltip key={it.id} content={title}>
         <button
           type="button"
           {...dragProps}
           className={`mode-btn${view === it.id ? ' active' : ''}`}
           aria-current={view === it.id ? 'page' : undefined}
-          aria-label={it.title}
+          aria-label={title}
           onClick={() => onSelect(it.id)}
         >
           <span className="mode-glyph" aria-hidden="true">
@@ -361,7 +373,7 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode, on
                   },
                 })}
               </div>
-              {/* The club band board, straight to its own window. It rides WITH the Field Day
+              {/* The club band board, straight to its own window. It rides WITH the Contest
                   item (including through a drag-reorder) because that is the only place an
                   operator looks for it, and it is gated on the SAME switch — the FD master
                   switch, never on club sync. Gating it on sync is what hid it: the board only
