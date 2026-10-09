@@ -220,6 +220,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Logbook list left it out until you logged another contact, and the Needed board kept the
   station you had just worked marked as needed until its next half-minute refresh. Nexus now asks
   again each second, up to three times, and shows the contact as soon as it is saved.
+- **The Logbook no longer says your log is empty while it is still reading it.** Opening it showed
+  "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
+  and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
+  page, a search that matches nothing now says so, where it said the log was empty.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now

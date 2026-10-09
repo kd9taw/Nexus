@@ -2306,6 +2306,7 @@ export const FR: PartialCatalog = {
   "logbook.delete.heading": "Supprimer le QSO avec {{call}} sur {{band}} ?",
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
+  "logbook.reading": "Lecture du journal…",
   "logbook.rows.loading": "Chargement…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ et ↓ passent d’un contact à l’autre, Pg préc. et Pg suiv. d’une page à l’autre, Début et Fin vont au premier et au dernier.",

@@ -2306,6 +2306,7 @@ export const ES: PartialCatalog = {
   "logbook.delete.heading": "¿Eliminar el QSO con {{call}} en {{band}}?",
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
+  "logbook.reading": "Leyendo el log…",
   "logbook.rows.loading": "Cargando…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ y ↓ pasan de un contacto a otro, PgUp y PgDn avanzan de página en página, Home y End van al primero y al último.",

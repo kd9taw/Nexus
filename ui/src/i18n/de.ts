@@ -2351,6 +2351,7 @@ export const DE: PartialCatalog = {
   "logbook.field.qslCard.label": "Karte erhalten",
   "logbook.empty": "Noch keine QSOs geloggt.",
   "logbook.emptySearch": "Keine QSOs passen zu „{{query}}“.",
+  "logbook.reading": "Das Logbuch wird gelesen…",
   "logbook.rows.loading": "Wird geladen…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ und ↓ wechseln zwischen den Kontakten, PgUp und PgDn blättern seitenweise, Home und End springen zum ersten und zum letzten.",
