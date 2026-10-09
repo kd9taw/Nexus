@@ -5984,11 +5984,14 @@ export function SettingsPanel({
                 </label>
               )}
 
+              {/* The log records Nexus's own CI-V engine, so it is offered where that engine drives
+                  the radio, asked the way the native switch above asks it: by the model NUMBER and
+                  the connection (`civBlocked`, the engine's `native_civ_model`), with the switch on,
+                  or on the Icom network connection. It was asked of the model NAME, which hid it from
+                  an IC-7610 stored as "Icom 7610" and offered it to a radio merely named like one. */}
               {(form.rigConn === 'icomlan'
                 ? ICOM_LAN_MODELS.includes(form.rigModel)
-                : form.rigConn !== 'network' &&
-                  /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
-                  form.icomNativeCat) && (
+                : civBlocked === null && form.icomNativeCat) && (
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.civLog.label')}</span>
                     <button disabled={remote}
