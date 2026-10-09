@@ -9259,6 +9259,22 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cockpit-stopstate.done {
   color: var(--state-good);
 }
+/* BESIDE TUNE (`RadioTuneNote`): what the Flex radio reports about its own tune carrier. The last
+   child of a TX strip, on a line of its own (`flex-basis: 100%`), so it never moves a control or
+   the TX state; the warning is the signed wording, word for word, so it wraps rather than clips.
+   Both variables exist in each theme. */
+.radio-tune-note {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.radio-tune-note.warn {
+  color: var(--state-weak);
+  font-weight: 700;
+}
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
 .ph-tx-utils {

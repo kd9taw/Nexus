@@ -6374,6 +6374,10 @@ export const EN = {
   'settings.digital.tunePower.label': 'Tune power (%)',
   'settings.digital.tunePower.hint':
     "The power a tune-up keys at — leave it empty and Nexus never touches your power, which is what it does today. It can only turn the rig DOWN, never up: it keys at whichever is lower, this or the power you are already running, so 50 % here while you run 25 % still tunes at 25 %. On a 100 W rig, 10 % is about 10 W — enough for an antenna tuner, kind to a loop.",
+  'settings.digital.tunePower.flexHint':
+    "With the Flex native client, Tune is the radio's own carrier at the tune power set in SmartSDR ({{pct}} % now). Nexus writes no power for it, so this setting does not apply there.",
+  'settings.digital.tunePower.flexHintNoValue':
+    "With the Flex native client, Tune is the radio's own carrier at the tune power set in SmartSDR. Nexus writes no power for it, so this setting does not apply there.",
   'settings.rigControl.rigctldPort.label': 'rigctld TCP Port',
   'settings.rigControl.rigctldPort.hint': 'Port Nexus launches rigctld on.',
   'settings.rigControl.plainSsb.label': 'Data modes use plain SSB',
@@ -9026,6 +9030,13 @@ export const EN = {
   'operate.strip.state.transmitting': '▲ TRANSMITTING',
   'operate.strip.state.receiving': '▼ Receiving',
   'operate.strip.state.txOff': '■ TX off',
+  'operate.strip.tune.radioPower': 'Radio tune power {{pct}} %',
+  'operate.strip.tune.radioTimeoutSec': 'Radio TX timeout {{sec}} s',
+  'operate.strip.tune.radioTimeoutMin': 'Radio TX timeout {{min}} min',
+  'operate.strip.tune.noRadioTimeout':
+    "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will end the carrier. Set a transmit timeout in SmartSDR.",
+  'operate.strip.tune.radioRefused':
+    "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 
   // The rig moved under us. `{{rigMode}}` is what the radio reports and `{{mode}}` what
   // Nexus commanded — both mode names, and both data.

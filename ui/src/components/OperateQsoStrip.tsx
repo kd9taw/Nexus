@@ -16,6 +16,7 @@ import { t } from '../i18n'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
+import { RadioTuneNote } from './RadioTuneNote'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
  *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
@@ -450,6 +451,9 @@ export function OperateQsoStrip({
         </span>
       )}
       {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}
+      {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
+          child, on a line of its own, so it never moves the clusters or the readouts. */}
+      {radio && <RadioTuneNote radio={radio} />}
     </section>
   )
 }

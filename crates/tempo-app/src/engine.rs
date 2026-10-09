@@ -2822,6 +2822,10 @@ pub struct Engine {
     /// air. The voice keyer, APRS and SSTV refuse while it stands; see
     /// [`Self::observe_flex_radio_has_mic`].
     flex_radio_has_mic: bool,
+    /// While Nexus's own Flex client tunes with the radio's own carrier: what the radio reports
+    /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
+    /// [`Self::observe_flex_tune`].
+    flex_tune: Option<crate::dto::FlexTune>,
     /// The Flex VITA **meter** worker is running — the only thing that produces a
     /// FlexLib-scaled SWR on this radio. Display-only; see
     /// [`Self::observe_flex_meter_stream`].
@@ -5419,6 +5423,7 @@ impl Engine {
             rig_confirmed: false,
             flex_dax_tx: false,
             flex_radio_has_mic: false,
+            flex_tune: None,
             flex_meter_stream: false,
             last_dx_tier: None,
             last_msg_tier: None,
@@ -7521,6 +7526,21 @@ impl Engine {
     /// the voice keyer, APRS and SSTV read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
+    }
+
+    /// Nexus's own Flex client started or stopped tuning with the radio's own carrier, or the
+    /// radio reported a new tune power or transmit timeout. `None`: Tune is a tone Nexus plays, as
+    /// on every other CAT link.
+    ///
+    /// The radio's carrier (`transmit tune`) keys at the radio's tune power, which Nexus only shows
+    /// (operator ruling, 2026-10-08, "Radio's, shown, nothing written"), and the radio puts it
+    /// where its transmit slice says, a place the engine's model of the section's emission does
+    /// not describe: so while this stands, a tune is also judged as CW at the frequency the radio
+    /// transmits on ([`Self::tune_allowed`]). The radio's own transmit timeout is shown beside
+    /// Tune, with a warning when it is off, and never refuses a tune (operator ruling, 2026-10-08,
+    /// "Warn only"). Pushed by the radio loop on the change.
+    pub fn observe_flex_tune(&mut self, tune: Option<crate::dto::FlexTune>) {
+        self.flex_tune = tune;
     }
 
     /// The Flex VITA **meter** worker just started or stopped.
@@ -17437,7 +17457,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let was_tuning = self.tuning;
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
-        self.tuning = on && self.tx_allowed();
+        self.tuning = on && self.tune_allowed();
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
             // same, though incidentally: any click or keystroke anywhere in its window zeroes
@@ -17492,7 +17512,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Masked by privileges on READ too, so if the dial moves into a locked segment while a
     /// tune is armed, the loop stops keying immediately.
     pub fn tuning(&self) -> bool {
-        self.tuning && self.tx_allowed()
+        self.tuning && self.tune_allowed()
+    }
+
+    /// Whether the licence allows a tune carrier: [`Self::tx_allowed`], and while the carrier is
+    /// the radio's own ([`Self::observe_flex_tune`]) that carrier judged as CW where the radio
+    /// transmits as well, as CW keyed from another section is ([`Self::poll_cw_one`]). The radio
+    /// makes it at its transmit slice, which the section's own model (FT's signal an audio offset
+    /// above the dial, Phone's passband) does not place; where on the slice it lands in each mode is
+    /// for a tester's bench. Both must allow it, so this only ever refuses more.
+    fn tune_allowed(&self) -> bool {
+        self.tx_allowed()
+            && (self.flex_tune.is_none() || self.tx_allowed_as(crate::settings::OperatingMode::Cw))
     }
 
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter. Driven by
@@ -22154,6 +22185,9 @@ contact yourself."
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
         s.radio.flex_radio_has_mic = self.flex_radio_has_mic;
+        s.radio.flex_tune = self.flex_tune;
+        s.radio.flex_tune_refused =
+            self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -30590,6 +30624,71 @@ mod tests {
         // All clear → accepted.
         e.atu_tune()
             .expect("an idle, armed, in-privileges rig runs its tuner");
+    }
+
+    /// ⭐ THE RADIO'S OWN TUNE CARRIER IS JUDGED AS CW TOO. Nexus's Flex client tunes with the
+    /// radio's carrier, which the radio puts at its transmit slice, not where the section's model
+    /// puts Nexus's own signal: so while the client says so (`observe_flex_tune`), a tune needs CW
+    /// privileges at the transmit frequency as well as the section's. A General in DIGU at
+    /// 14.024 MHz may send FT8 1.5 kHz up (14.0255, in the data segment) but holds no CW privilege
+    /// at 14.024 (the CW floor is 14.025): the tone tune keys there, the radio's carrier does not,
+    /// and the snapshot says why. A tune already up stops being asked for once the client says the
+    /// carrier is the radio's (`tuning` is judged on every read, the radio loop's question). At
+    /// 14.030 both are allowed. The CW judgement is added to the section's, never in its place: in
+    /// Phone at 14.100 a General may send CW but not phone, and the radio's carrier is refused
+    /// there as the tone tune is, with the licence's own lock saying why.
+    #[test]
+    fn the_radios_own_tune_carrier_is_judged_as_cw_where_the_radio_puts_it() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.024, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: FT8 1.5 kHz above 14.024 is a General's"
+        );
+        let tune = |e: &mut Engine| {
+            e.set_tune(true);
+            let s = e.snapshot();
+            (e.tuning(), s.radio.tuning, s.radio.flex_tune_refused)
+        };
+        assert_eq!(tune(&mut e), (true, true, false), "the tone tune keys");
+
+        let radio = crate::dto::FlexTune {
+            power_pct: Some(10),
+            tx_timeout_ms: Some(0),
+        };
+        e.observe_flex_tune(Some(radio));
+        assert!(
+            !e.tuning(),
+            "the tune up when the carrier became the radio's"
+        );
+        e.set_tune(false);
+        assert_eq!(tune(&mut e), (false, false, true), "the radio's carrier");
+        assert_eq!(e.snapshot().radio.flex_tune, Some(radio));
+
+        e.set_frequency(14.030, "20m", "USB");
+        assert_eq!(tune(&mut e), (true, true, false), "inside the CW segment");
+        e.set_tune(false);
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.100, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "scene guard: no phone for a General at 14.100"
+        );
+        assert_eq!(
+            tune(&mut e),
+            (false, false, false),
+            "CW is a General's at 14.100, phone is not"
+        );
+
+        e.observe_flex_tune(None);
+        let s = e.snapshot();
+        assert_eq!(
+            (s.radio.flex_tune, s.radio.flex_tune_refused),
+            (None, false)
+        );
     }
 
     #[test]

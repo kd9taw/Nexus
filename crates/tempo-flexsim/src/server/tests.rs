@@ -746,6 +746,48 @@ fn a_disconnect_mid_over_closes_the_session_while_transmitting() {
     }
 }
 
+/// The same disconnect under the radio's own tune carrier: the first `transmit tune 1` the radio
+/// takes is a key too, so the session closes while the tune is TRANSMITTING, and with
+/// `radio_stays_keyed` the next connection is told the dropped handle still holds the tune.
+#[test]
+fn a_disconnect_mid_tune_closes_the_session_and_can_leave_the_carrier_up() {
+    for stays in [false, true] {
+        let sim = start(
+            Session::v4_gui_client(),
+            vec![Fault::DisconnectMidOver {
+                after: Duration::from_millis(50),
+                radio_stays_keyed: stays,
+            }],
+        );
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("transmit tune 1");
+        c.until(|l| l.contains("state=TRANSMITTING"));
+        assert!(c.closed_by_peer(), "the session outlived the tune");
+        assert!(closed(&sim, 0, Closer::Simulator));
+
+        let (mut d, _) = Client::greeted(&sim);
+        let tx = d.statuses("sub tx all");
+        assert_eq!(
+            tx.iter().any(|l| l == "S0|transmit tune=1"),
+            stays,
+            "{tx:?}"
+        );
+        let last = tx
+            .iter()
+            .rev()
+            .find(|l| l.contains("|interlock tx_client_handle="))
+            .unwrap();
+        assert_eq!(
+            last.contains("tx_client_handle=0x2B6E1F40 state=TRANSMITTING")
+                && last.contains("source=TUNE"),
+            stays,
+            "{last}"
+        );
+    }
+}
+
 fn meters(ticks: usize) -> Stream {
     Stream {
         stream_id: vita::METER_STREAM_ID,

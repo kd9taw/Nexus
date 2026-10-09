@@ -542,6 +542,17 @@ impl Session {
         }
     }
 
+    /// Whether admission takes starts of `kind` on this session: a kind a tester's bench has
+    /// confirmed ([`admission::BENCHED`]), or, under test, any kind when the configuration's door
+    /// is open. Its other checks still decide each start.
+    pub fn switched_on(&self, kind: StartKind) -> bool {
+        #[cfg(any(test, feature = "flex-unbenched"))]
+        if self.config.unbenched {
+            return true;
+        }
+        admission::BENCHED.contains(&kind)
+    }
+
     /// Admission for `start`; under test, every kind when the configuration says so.
     fn admit(&self, start: TxStart) -> Result<Admitted, Refusal> {
         #[cfg(any(test, feature = "flex-unbenched"))]
@@ -1533,6 +1544,8 @@ pub struct Connection {
     events: Mutex<Receiver<Event>>,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    /// The kinds of start its admission takes ([`Session::switched_on`]), fixed for its life.
+    switched_on: Vec<StartKind>,
 }
 
 impl Connection {
@@ -1555,6 +1568,15 @@ impl Connection {
         let (event_tx, events) = mpsc::channel();
         let epoch = Instant::now();
         let session = Session::new(config, 0);
+        let switched_on = [
+            StartKind::Key,
+            StartKind::Tune,
+            StartKind::Atu,
+            StartKind::Cwx,
+        ]
+        .into_iter()
+        .filter(|k| session.switched_on(*k))
+        .collect();
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(session.snapshot()),
             changed: Condvar::new(),
@@ -1575,7 +1597,14 @@ impl Connection {
             events: Mutex::new(events),
             shared,
             thread: Some(thread),
+            switched_on,
         })
+    }
+
+    /// Whether this connection's admission takes starts of `kind` ([`Session::switched_on`]): a
+    /// kind it refuses before any other check is one its owner does not offer.
+    pub fn switched_on(&self, kind: StartKind) -> bool {
+        self.switched_on.contains(&kind)
     }
 
     /// Send a command and wait for its reply.
@@ -1662,6 +1691,12 @@ impl Connection {
     /// a later one.
     pub fn snapshot(&self) -> Snapshot {
         lock(&self.shared.snapshot).clone()
+    }
+
+    /// Read the same state in place, without the copy [`Self::snapshot`] makes: for a caller that
+    /// asks every tick for a field or two.
+    pub fn read<T>(&self, f: impl FnOnce(&Snapshot) -> T) -> T {
+        f(&lock(&self.shared.snapshot))
     }
 
     /// Wait until `done` holds for the state, or `timeout` passes. Returns whether it held.
