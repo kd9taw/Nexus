@@ -16,6 +16,7 @@ import { getJourney, getSettings } from '../api'
 import { t } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { shareCard } from '../features/shareCard'
+import { askAgainWhileSaving } from '../features/notAnswered'
 import { fmtDistanceKm, fmtKmTokens, useUnits, type Units } from '../units'
 
 /**
@@ -37,7 +38,8 @@ export function JourneyView() {
 
   useEffect(() => {
     let alive = true
-    getJourney()
+    // Asked again while a contact logged just before is still being saved (features/notAnswered).
+    askAgainWhileSaving(getJourney, () => alive)
       .then((s) => alive && setJourney(s))
       .catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)))
     getSettings()

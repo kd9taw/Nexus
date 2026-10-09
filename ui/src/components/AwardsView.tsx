@@ -18,6 +18,7 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { logSource } from '../features/logSource'
+import { askAgainWhileSaving } from '../features/notAnswered'
 import { PaneSeam } from './PaneSeam'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { VIEW_COLUMN_FLOOR, columnShareStyle, parseColumnShare } from '../features/viewColumns'
@@ -345,10 +346,11 @@ export function AwardsView({
     mounted.current = true
     if (observation) return () => { mounted.current = false }
     let live = true
-    getAwards()
+    // Asked again while a contact logged just before is still being saved (features/notAnswered).
+    askAgainWhileSaving(getAwards, () => live)
       .then((a) => live && setAw(a))
       .catch(() => live && setErr(true))
-    getConfirmationDiagnostics()
+    askAgainWhileSaving(getConfirmationDiagnostics, () => live)
       .then((d) => live && setDiag(d))
       .catch(() => {}) // diagnostics are a best-effort add-on; never block the dashboard
     return () => {

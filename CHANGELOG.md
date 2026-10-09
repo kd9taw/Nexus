@@ -204,6 +204,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station you had just worked could stay marked as needed and the counts were one short, with
   nothing to say so. Now, while the contact is still being saved, they give no answer rather than
   a short one, and the next look includes it.
+- **On a slow disk, a contact you just logged shows up within seconds in the Logbook list, the
+  Needed board, Awards, Journey and Statistics.** When saving it took more than two seconds, the
+  Logbook list left it out until you logged another contact, and the Needed board kept the
+  station you had just worked marked as needed until its next half-minute refresh. Nexus now asks
+  again each second, up to three times, and shows the contact as soon as it is saved.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
