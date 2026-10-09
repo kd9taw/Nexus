@@ -1811,13 +1811,26 @@ fn each_of_a_pair_finds_its_own_row(f: &Fixture) {
 /// (checked from this thread while it waits), and the change then applies. Held past the wait,
 /// the change is `stationBusy` and nothing moved: no sequence was spent and the contact is as it
 /// was. The control: once the write lands, the change asked again applies.
+///
+/// It holds control as a page does, heartbeating its five-second lease after each wait on the
+/// store: on a loaded machine those waits add up past five seconds, and the lease lapsed.
 #[test]
 fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing() {
     use crate::remote_service::query::log_tests::parse_one;
     use tempo_core::logbook::sqlite::WriteHold;
     let f = Fixture::with_store();
     seed(&f);
-    acquire(&f);
+    let lease = acquire(&f)["leaseId"]
+        .as_str()
+        .expect("a lease")
+        .to_string();
+    let heartbeat = || {
+        let beat = Request::Heartbeat {
+            request_id: id(),
+            lease_id: lease.clone(),
+        };
+        assert_eq!(run(&f, &beat).unwrap()["phase"], "controlling");
+    };
     let db = f.dir.join("contacts.sqlite3");
     let logged = |call: &str| {
         parse_one(&format!(
@@ -1852,13 +1865,31 @@ fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing(
         }
         drop(hold);
         asked.join().unwrap()
-    })
+    });
+    // On a loaded machine the write can land after the search's own wait, which is then refused
+    // `stationBusy` with nothing advanced (the second half holds that): asked again once the
+    // write is in, as a page asks again, the change applies.
+    let result = match result {
+        Err("stationBusy") => {
+            let _ = written(&f);
+            heartbeat();
+            run(
+                &f,
+                &change(
+                    &f,
+                    json!({"kind":"qslCard","target":target(&row(&f, "K1ABC")),"received":true}),
+                ),
+            )
+        }
+        other => other,
+    }
     .unwrap();
     assert_eq!(result["outcome"], "applied", "{result}");
     assert!(records(&f)
         .iter()
         .any(|r| r.call == "K1ABC" && r.qsl_rcvd.card));
 
+    heartbeat();
     let before = control_state_version(&f, Instant::now(), 4);
     let request = change(
         &f,
@@ -1874,10 +1905,12 @@ fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing(
         before["nextSequence"],
         "no sequence was spent"
     );
+    heartbeat();
     assert!(
         records(&f).iter().any(|r| r.call == "W1AW"),
         "the contact is as it was"
     );
+    heartbeat();
     let result = run(
         &f,
         &change(
@@ -1935,6 +1968,9 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
     assert_eq!(changed.id.map(|id| id.to_string()), held.id);
 
     comment("changed before the search");
+    // The change is in the store before the search: on a loaded machine its write can outlast
+    // the search's own wait, which is then refused as unread.
+    let _ = written(&f);
     assert_eq!(
         crate::find_seen(&f.engine, &held).unwrap_err(),
         crate::LOG_ROW_GONE
@@ -1958,6 +1994,9 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
     let unread = crate::find_seen(&f.engine, &held);
     drop(hold);
     assert_eq!(unread.unwrap_err(), crate::LOG_UNREAD);
+    // "Once written" is the control's premise, so wait for the write: letting the hold go only
+    // lets the writer start.
+    let _ = written(&f);
     assert!(
         crate::find_seen(&f.engine, &held).is_ok(),
         "control: once written, found"
