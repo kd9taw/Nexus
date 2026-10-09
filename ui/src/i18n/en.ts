@@ -4055,6 +4055,10 @@ export const EN = {
   'fieldDay.club.refused.serial': 'Club sync does not run {{contest}}: its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refused.transmitter': 'Club sync does not run {{contest}}: its log must say which transmitter made each contact, and club sync does not number the transmitters. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refused.unknown': 'Club sync does not run {{contest}}: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.',
+  'fieldDay.club.boardFull':
+    "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
+  'fieldDay.club.boardCut':
+    "Each position's club board shows {{shown}} of this club's {{positions}} positions, as many as one club line carries, leaving out the ones heard from least recently. Contacts, dupe warnings and the score still sync.",
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',

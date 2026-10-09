@@ -263,3 +263,17 @@ it('accepts a board row\'s measured clock, null or absent, and refuses anything 
  expect(parseFieldDay(page(-3000)).fieldDay?.club?.board[0].clockMs).toBe(-3000)
  for (const bad of [1.5,'-3000',Number.MAX_SAFE_INTEGER+2,true,{}]) expect(()=>parseFieldDay(page(bad)),String(bad)).toThrow('invalidFieldDay')
 })
+
+// A key a host sends only when it applies, so an older station never does: how full its club
+// board is (`boardFull`). This validator refuses a key it does not know, so the page that takes
+// it is deployed before the release that writes it.
+it('accepts a host club\'s full board, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const club=(page.meta as {source:{fieldDay:{club:Record<string,unknown>}}}).source.fieldDay.club
+ club.boardFull={positions:70,shown:59}
+ expect(parseFieldDay(page).fieldDay?.club?.boardFull).toEqual({positions:70,shown:59})
+ for(const bad of [{positions:70},{positions:70,shown:1.5},{positions:70,shown:59,extra:0},null]){
+  club.boardFull=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+})

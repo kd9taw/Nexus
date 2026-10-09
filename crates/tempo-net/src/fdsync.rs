@@ -62,16 +62,17 @@ pub const PROTO_VERSION: u32 = 2;
 pub const DEFAULT_TCP_PORT: u16 = 42073;
 /// UDP port the host's once-a-second discovery beacon broadcasts on.
 pub const BEACON_PORT: u16 = 42074;
-/// One NDJSON line's byte cap — bounds a hostile peer's memory cost. The
-/// biggest legit line (a `snap` with thousands of dupe keys) is chunked by
-/// the sender instead ([`SNAP_DUPES_PER_LINE`]).
+/// One NDJSON line's byte cap, its `\n` included — bounds a hostile peer's memory
+/// cost. Every release reads with this cap and drops the connection over a longer
+/// line, so it can never grow: the biggest legit state (a `snap` with thousands of
+/// dupe keys) is chunked by the sender instead ([`write_club_state`]).
 pub const MAX_LINE_BYTES: usize = 8 * 1024;
-/// Dupe keys per `snap`/`club` line — keeps every line under
-/// [`MAX_LINE_BYTES`]. Halved from 100 for v2: a line now carries the legacy
-/// triple AND the generalised key for the same entry, and a generalised key is
-/// longer than a triple (a QSO party's is five components, one of them a county
-/// name). 50 × (a triple + a key) is the same ~4 KB budget 100 × a triple was.
-/// The mirror unions chunks, so chunking is invisible to state.
+/// At most this many dupe keys per `snap`/`club` line, and fewer when the line's
+/// bytes run out first ([`write_club_state`]). Halved from 100 for v2: a line now
+/// carries the legacy triple AND the generalised key for the same entry, and a
+/// generalised key is longer than a triple (a QSO party's is five components, one
+/// of them a county name). The mirror unions chunks, so chunking is invisible to
+/// state.
 pub const SNAP_DUPES_PER_LINE: usize = 50;
 /// Host connection cap — bounds a SYN-happy peer. A real club runs ~25
 /// positions; 64 leaves room for reconnect races.
@@ -83,6 +84,13 @@ pub const DEAD_SECS: u64 = 15;
 /// Consecutive undecodable lines before a connection is dropped (a peer that
 /// is not speaking this protocol at all).
 const MAX_GARBAGE_LINES: u32 = 32;
+/// What a position says when its host sends a line past [`MAX_LINE_BYTES`]: no release
+/// can read one, so the connection drops on it and the next one meets the same line.
+/// Only a host older than [`write_club_state`]'s bound sends one — for a big club.
+pub const LINE_PAST_THE_CAP: &str = "the host sent club state longer than the 8 KB line every \
+     Nexus reads, so this position cannot sync and keeps trying: the host's club has more \
+     positions than its Nexus can carry. Update the host's Nexus. Contacts you log meanwhile \
+     stay in your own log and go up when it can.";
 
 /// One slot of an exchange on the wire: the `(key, domain, raw)` triple, not a
 /// pair. `d` is the domain that matched an `Enum` value (`""` for every other
@@ -474,9 +482,78 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
-/// Send a `ClubState` as one or more lines, chunking the dupe lists so every
-/// line stays under the cap. Only the FIRST chunk carries sections/score/
-/// board (the mirror overwrites scalars, unions lists).
+/// The bytes one value adds to a JSON array: its own, and the comma before it unless it is
+/// the array's first.
+fn grows_by<T: Serialize>(value: &T, first: bool) -> usize {
+    serde_json::to_string(value).map_or(0, |s| s.len()) + usize::from(!first)
+}
+
+/// What one club line can carry of a board ([`board_fit`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BoardFit {
+    /// The rows that fit, in the board's own order — every one of them when the board fits.
+    pub rows: Vec<WireBoardRow>,
+    /// Whether the line still has room for one more row as long as the longest here.
+    /// `false` is the host's warning that the next position to join may not fit.
+    pub room: bool,
+}
+
+/// ⭐ **How much of `board` one club line can carry**: all of it when it fits, and otherwise
+/// the rows heard from most recently (the smallest `age`), as many as fit, in the board's own
+/// order — so a position that has gone quiet is the first one left out.
+///
+/// Measured against the longest line a board rides — a heartbeat's `club` line, a byte longer
+/// than a snapshot's first chunk, carrying the largest score and count a line can — so the
+/// rows kept do not move as the score grows, and a snapshot and every heartbeat after it show
+/// the same board.
+///
+/// The board cannot be split instead: every mirror replaces its board with each chunk's that
+/// has rows in it, so a board over two lines would show only the second.
+pub fn board_fit(board: &[WireBoardRow]) -> BoardFit {
+    let mut used = encode_line(&Msg::Club(ClubState {
+        score: u32::MAX,
+        qsos: u64::MAX,
+        ..Default::default()
+    }))
+    .len();
+    let sizes: Vec<usize> = board.iter().map(|r| grows_by(r, true)).collect();
+    let mut freshest: Vec<usize> = (0..board.len()).collect();
+    freshest.sort_by_key(|&i| board[i].age);
+    let mut kept = vec![false; board.len()];
+    let mut n = 0;
+    for i in freshest {
+        let grow = sizes[i] + usize::from(n > 0);
+        if used + grow <= MAX_LINE_BYTES {
+            used += grow;
+            kept[i] = true;
+            n += 1;
+        }
+    }
+    let longest = sizes.iter().copied().max().unwrap_or(0);
+    BoardFit {
+        rows: board
+            .iter()
+            .zip(&kept)
+            .filter(|(_, &k)| k)
+            .map(|(r, _)| r.clone())
+            .collect(),
+        room: n == board.len() && used + longest + usize::from(n > 0) <= MAX_LINE_BYTES,
+    }
+}
+
+/// Send a `ClubState` as one or more lines, every one of them inside
+/// [`MAX_LINE_BYTES`].
+///
+/// The FIRST line carries the scalars and the board, the whole board and on that line
+/// only — or, when even the board alone would not fit, the rows of it that do
+/// ([`board_fit`]). The key lists and the sections then fill that line and as many more
+/// as it takes, each line taking what fits, at most [`SNAP_DUPES_PER_LINE`] key pairs a
+/// line. Every mirror since club sync shipped (1.10) unions both lists and clears them only
+/// on a snapshot's first chunk, so where an entry lands changes no state — and a club that
+/// fit before writes exactly the bytes it always did. The first line used to carry every
+/// section whatever its size, which put a Field Day club of about 38 positions, or a QSO
+/// party that had worked every QTH, past the cap: each position dropped the connection on
+/// that line and reconnected into the same one.
 ///
 /// ⚠️ The two key lists are chunked by the SAME index range, because the host
 /// builds them index-parallel — entry `n` of `dupes` and entry `n` of `dkeys`
@@ -489,6 +566,10 @@ fn is_zero(v: &u64) -> bool {
 /// refactor away from "reachable and silent" on a path whose failure mode is a
 /// tent's dupe warnings quietly not arriving. Taking the max costs one `max` call
 /// and removes the hazard instead of describing it.
+///
+/// An entry too long for a line of its own is left out rather than sent past the cap,
+/// where every position would drop the connection on it. Only a hostile peer's row can
+/// make one: every line it sent was capped too.
 fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::Result<()> {
     let ClubState {
         reset: _,
@@ -499,37 +580,71 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         qsos,
         board,
     } = st;
-    let total = dkeys.len().max(dupes.len());
-    let mut first = true;
-    let mut start = 0usize;
-    loop {
-        let end = (start + SNAP_DUPES_PER_LINE).min(total);
-        let part = ClubState {
-            reset: snap && first,
-            dupes: dupes
-                .get(start..end.min(dupes.len()))
-                .unwrap_or(&[])
-                .to_vec(),
-            dkeys: dkeys
-                .get(start..end.min(dkeys.len()))
-                .unwrap_or(&[])
-                .to_vec(),
-            sections: if first { sections.clone() } else { Vec::new() },
-            score,
-            qsos,
-            board: if first { board.clone() } else { Vec::new() },
-        };
-        let msg = if snap {
+    let line = |part: ClubState| {
+        encode_line(&if snap {
             Msg::Snap(part)
         } else {
             Msg::Club(part)
+        })
+    };
+    let empty = line(ClubState {
+        score,
+        qsos,
+        ..Default::default()
+    })
+    .len();
+    let pair_len = |i: usize| {
+        dupes.get(i).map_or(0, |d| grows_by(d, true))
+            + dkeys.get(i).map_or(0, |k| grows_by(k, true))
+    };
+    let fits_alone = |len: usize| empty + len <= MAX_LINE_BYTES;
+    let pairs: Vec<usize> = (0..dkeys.len().max(dupes.len()))
+        .filter(|&i| fits_alone(pair_len(i)))
+        .collect();
+    let sections: Vec<&String> = sections
+        .iter()
+        .filter(|s| fits_alone(grows_by(s, true)))
+        .collect();
+    let board = board_fit(&board).rows;
+    let (mut next_pair, mut next_section) = (0usize, 0usize);
+    let mut first = true;
+    loop {
+        let mut part = ClubState {
+            reset: snap && first,
+            score,
+            qsos,
+            board: if first { board.clone() } else { Vec::new() },
+            ..Default::default()
         };
-        w.write_all(encode_line(&msg).as_bytes())?;
+        let mut used = line(part.clone()).len();
+        while let Some(&i) = pairs.get(next_pair) {
+            let (d, k) = (dupes.get(i), dkeys.get(i));
+            let grow = d.map_or(0, |d| grows_by(d, part.dupes.is_empty()))
+                + k.map_or(0, |k| grows_by(k, part.dkeys.is_empty()));
+            if part.dkeys.len().max(part.dupes.len()) == SNAP_DUPES_PER_LINE
+                || used + grow > MAX_LINE_BYTES
+            {
+                break;
+            }
+            part.dupes.extend(d.cloned());
+            part.dkeys.extend(k.cloned());
+            used += grow;
+            next_pair += 1;
+        }
+        while let Some(s) = sections.get(next_section) {
+            let grow = grows_by(s, part.sections.is_empty());
+            if used + grow > MAX_LINE_BYTES {
+                break;
+            }
+            part.sections.push((*s).clone());
+            used += grow;
+            next_section += 1;
+        }
+        w.write_all(line(part).as_bytes())?;
         first = false;
-        if end >= total {
+        if next_pair >= pairs.len() && next_section >= sections.len() {
             return Ok(());
         }
-        start = end;
     }
 }
 
@@ -970,7 +1085,14 @@ fn run_position_session(
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => break Err(e),
+            Err(e) => {
+                // A line past the cap: no release can read one, and the next connection
+                // meets the same line. Say so, or the chip simply never settles.
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    backend.on_error(LINE_PAST_THE_CAP);
+                }
+                break Err(e);
+            }
         }
         if last_rx.elapsed().as_secs() >= DEAD_SECS {
             break Ok(welcomed); // host silent → reconnect
@@ -2623,6 +2745,366 @@ mod tests {
         assert!(
             (offset - 45_000).abs() <= (got.t3 - got.t0) as i64 + 2,
             "the host is 45 s ahead: {offset} ms"
+        );
+    }
+
+    // ---- the 8 KB line, and a club big enough to reach it ------------------
+
+    /// A board row as long as a real one gets: a 16-character position name, an
+    /// 8-character operator, 4-digit counts and a 5-digit age — the sizes the club
+    /// clock's line budget was measured with.
+    fn long_row(i: usize, age: u64) -> WireBoardRow {
+        WireBoardRow {
+            pos: format!("{:08x}", 0x9a85_f000_u32 + i as u32),
+            name: format!("Position {i:02} tent"),
+            band: "160m".into(),
+            mode: "DIG".into(),
+            op: format!("KD9T{i:04}"),
+            qsos: 1234,
+            uniq: 1234,
+            rate: 1234,
+            age,
+        }
+    }
+
+    /// A club's state as its join snapshot carries it: `rows` positions, 120 worked
+    /// stations and everything worked so far. A Field Day club sends the legacy triple
+    /// beside each key and its 85 ARRL/RAC sections; a QSO party sends five-component
+    /// keys only, and its list is the QTHs it has worked — 165 for one that has worked
+    /// every county and state.
+    fn big_club(rows: usize, field_day: bool) -> ClubState {
+        let keys: Vec<Vec<String>> = (0..120)
+            .map(|i| {
+                let mut k = vec![format!("K9A{i:03}"), "160M".to_string(), "DIG".to_string()];
+                if !field_day {
+                    k.extend(["COOK".to_string(), "MCLN".to_string()]);
+                }
+                k
+            })
+            .collect();
+        ClubState {
+            reset: false,
+            dupes: if field_day {
+                keys.iter()
+                    .map(|k| (k[0].clone(), k[1].clone(), k[2].clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            dkeys: keys,
+            sections: if field_day {
+                (0..85).map(|i| format!("S{i:02}")).collect()
+            } else {
+                (0..165).map(|i| format!("Q{i:03}")).collect()
+            },
+            score: 12_345,
+            qsos: 4_321,
+            board: (0..rows).map(|i| long_row(i, 12_345)).collect(),
+        }
+    }
+
+    /// Every line `write_club_state` writes for `st`, each with its `\n` — the bytes a
+    /// receiver's cap is measured against.
+    fn lines_of(st: ClubState, snap: bool) -> Vec<String> {
+        let mut buf = Vec::new();
+        write_club_state(&mut buf, st, snap).unwrap();
+        String::from_utf8(buf)
+            .unwrap()
+            .split_inclusive('\n')
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The lines every release before this one wrote: 50 key pairs a line, and the
+    /// sections and the board on the first line whatever their size. Rebuilt here so the
+    /// new sender can be compared with it byte for byte, and so the ceiling it had can
+    /// still be measured.
+    fn old_lines(st: &ClubState, snap: bool) -> Vec<String> {
+        let total = st.dkeys.len().max(st.dupes.len());
+        let mut out = Vec::new();
+        let mut start = 0;
+        loop {
+            let end = (start + SNAP_DUPES_PER_LINE).min(total);
+            let first = start == 0;
+            let part = ClubState {
+                reset: snap && first,
+                dupes: st
+                    .dupes
+                    .get(start..end.min(st.dupes.len()))
+                    .unwrap_or(&[])
+                    .to_vec(),
+                dkeys: st
+                    .dkeys
+                    .get(start..end.min(st.dkeys.len()))
+                    .unwrap_or(&[])
+                    .to_vec(),
+                sections: if first {
+                    st.sections.clone()
+                } else {
+                    Vec::new()
+                },
+                score: st.score,
+                qsos: st.qsos,
+                board: if first { st.board.clone() } else { Vec::new() },
+            };
+            out.push(encode_line(&if snap {
+                Msg::Snap(part)
+            } else {
+                Msg::Club(part)
+            }));
+            if end >= total {
+                return out;
+            }
+            start = end;
+        }
+    }
+
+    /// What a position's mirror holds after reading `lines`, by the rule every release
+    /// since club sync shipped applies them with (`ClubMirror::apply`, the same body in
+    /// 1.10.0, 1.10.3, 1.12, 1.13, 1.14 and 1.17): the first chunk of a snapshot clears
+    /// the lists, every chunk unions them and overwrites the scalars, and a chunk's board
+    /// replaces the board only when it has rows or resets. A line past the cap is not
+    /// read at all — the receiver drops the connection on it — so it panics here.
+    #[derive(Debug, Default, PartialEq)]
+    struct Mirrored {
+        dupes: std::collections::HashSet<(String, String, String)>,
+        dkeys: std::collections::HashSet<Vec<String>>,
+        sections: std::collections::HashSet<String>,
+        score: u32,
+        qsos: u64,
+        board: Vec<WireBoardRow>,
+    }
+    fn mirror_of(lines: &[String]) -> Mirrored {
+        let mut m = Mirrored::default();
+        for line in lines {
+            assert!(
+                line.len() <= MAX_LINE_BYTES,
+                "a {} B line: every receiver drops the connection on it",
+                line.len()
+            );
+            let (Some(Msg::Snap(st)) | Some(Msg::Club(st))) = decode_line(line) else {
+                panic!("a club-state line: {line}");
+            };
+            if st.reset {
+                m.dupes.clear();
+                m.dkeys.clear();
+                m.sections.clear();
+            }
+            m.dupes.extend(st.dupes);
+            m.dkeys.extend(st.dkeys);
+            m.sections.extend(st.sections);
+            m.score = st.score;
+            m.qsos = st.qsos;
+            if !st.board.is_empty() || st.reset {
+                m.board = st.board;
+            }
+        }
+        m
+    }
+
+    /// The board a mirror would hold after `lines`, or `None` when a line is past the cap.
+    fn board_read(lines: &[String]) -> Option<Vec<WireBoardRow>> {
+        lines
+            .iter()
+            .all(|l| l.len() <= MAX_LINE_BYTES)
+            .then(|| mirror_of(lines).board)
+    }
+
+    /// ⭐ **A club bigger than the old first line could carry still reaches every
+    /// position whole** — every line inside the cap, the board on the first line only,
+    /// and the mirror holding exactly what the host sent.
+    ///
+    /// The join snapshot's first line used to carry the whole board, every section and
+    /// 50 key pairs, so a club of 40 positions wrote a first line past 8 KB, and every
+    /// position dropped the connection on it and reconnected into the same line, for ever.
+    #[test]
+    fn a_big_clubs_join_snapshot_keeps_every_line_inside_the_cap() {
+        for (rows, field_day) in [(40, true), (40, false)] {
+            let st = big_club(rows, field_day);
+            let lines = lines_of(st.clone(), true);
+            for line in &lines {
+                assert!(
+                    line.len() <= MAX_LINE_BYTES,
+                    "{rows} positions, field day {field_day}: a {} B line",
+                    line.len()
+                );
+            }
+            let m = mirror_of(&lines);
+            assert_eq!(m.board, st.board, "the board arrived whole, in order");
+            assert_eq!(m.dupes, st.dupes.iter().cloned().collect());
+            assert_eq!(m.dkeys, st.dkeys.iter().cloned().collect());
+            assert_eq!(m.sections, st.sections.iter().cloned().collect());
+            assert_eq!((m.score, m.qsos), (st.score, st.qsos));
+            for line in &lines[1..] {
+                let Some(Msg::Snap(part)) = decode_line(line) else {
+                    panic!("a snap chunk: {line}");
+                };
+                assert!(
+                    part.board.is_empty() && !part.reset,
+                    "only the first chunk carries the board and the reset"
+                );
+            }
+        }
+    }
+
+    /// The other direction of the same property: a club that fits today writes the
+    /// bytes it always wrote, every line of them, so nothing about a small club moves.
+    #[test]
+    fn a_club_that_fit_before_writes_the_bytes_it_always_wrote() {
+        for (rows, field_day) in [(10, true), (10, false), (0, true)] {
+            let st = big_club(rows, field_day);
+            for snap in [true, false] {
+                assert_eq!(
+                    lines_of(st.clone(), snap),
+                    old_lines(&st, snap),
+                    "{rows} positions, field day {field_day}, snap {snap}"
+                );
+            }
+        }
+    }
+
+    /// ⭐ **A board too long for any line leaves out the positions heard from least
+    /// recently, and every line still fits** — rather than a line no position can read,
+    /// which every position would drop and reconnect into: the board rides EVERY club
+    /// line, the heartbeat's too, so a board that outgrew the line would take the whole
+    /// club off the air at once. It cannot be split instead, because a mirror replaces
+    /// its board with every chunk's.
+    #[test]
+    fn a_board_too_long_for_one_line_leaves_out_the_positions_heard_from_least_recently() {
+        let mut st = big_club(0, true);
+        // Ages that disagree with board order, so "freshest" and "first" cannot coincide.
+        st.board = (0..70)
+            .map(|i| long_row(i, (i as u64 * 37) % 70 + 10_000))
+            .collect();
+        for snap in [true, false] {
+            let lines = lines_of(st.clone(), snap);
+            let board = mirror_of(&lines).board;
+            assert!(board.len() < 70, "70 rows cannot fit one line");
+            assert!(board.len() > 40, "but most of them do: {}", board.len());
+            let oldest_kept = board.iter().map(|r| r.age).max().unwrap();
+            let left_out: Vec<&WireBoardRow> =
+                st.board.iter().filter(|r| !board.contains(r)).collect();
+            assert_eq!(left_out.len(), 70 - board.len());
+            assert!(
+                left_out.iter().all(|r| r.age > oldest_kept),
+                "every row left out was heard from less recently than every row kept"
+            );
+            let kept_in_order: Vec<&WireBoardRow> =
+                st.board.iter().filter(|r| board.contains(r)).collect();
+            assert_eq!(
+                board.iter().collect::<Vec<_>>(),
+                kept_in_order,
+                "the rows kept stay in the board's own order"
+            );
+        }
+    }
+
+    /// The ceilings, measured with the row sizes above: the most positions whose board
+    /// still reaches every position whole, before this change and after. Printed for the
+    /// record; the assertions hold the new floor and the old figures the record quotes.
+    #[test]
+    fn the_largest_club_whose_board_reaches_every_position_whole() {
+        let ceiling = |field_day: bool, write: &dyn Fn(&ClubState) -> Vec<String>| {
+            (1..=128)
+                .take_while(|&n| {
+                    let st = big_club(n, field_day);
+                    board_read(&write(&st)).is_some_and(|b| b == st.board)
+                })
+                .last()
+                .unwrap_or(0)
+        };
+        let old = |st: &ClubState| old_lines(st, true);
+        let new = |st: &ClubState| lines_of(st.clone(), true);
+        let (fd_old, party_old) = (ceiling(true, &old), ceiling(false, &old));
+        let (fd_new, party_new) = (ceiling(true, &new), ceiling(false, &new));
+        eprintln!(
+            "ceiling: Field Day {fd_old} -> {fd_new} positions; party {party_old} -> {party_new}"
+        );
+        assert_eq!(
+            (fd_old, party_old),
+            (38, 37),
+            "the old figures, with these rows and keys"
+        );
+        assert!(fd_new >= 50 && party_new >= 50, "{fd_new} / {party_new}");
+        // The heartbeat carries the board too, and the same rows must fit there.
+        let st = big_club(fd_new, true);
+        assert_eq!(
+            board_read(&lines_of(st.clone(), false)),
+            Some(st.board),
+            "the heartbeat carries the same whole board"
+        );
+    }
+
+    /// ⭐ **A position sent a line it cannot read says so, instead of reconnecting into it
+    /// in silence.** An older host with a big club writes a first line past the cap; the
+    /// connection drops on it, the position reconnects, and the same line comes again.
+    /// Nothing on screen used to say why the chip never settled.
+    #[test]
+    fn a_position_sent_a_line_past_the_cap_says_why() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
+        let addr = listener.local_addr().unwrap().to_string();
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr, pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let (s, _) = listener.accept().unwrap();
+        let mut w = s.try_clone().unwrap();
+        w.write_all(
+            encode_line(&Msg::Welcome {
+                v: PROTO_VERSION,
+                event: "TEST FD".into(),
+                host_call: "W9ABC".into(),
+                acked: 3,
+                now_unix: now_unix(),
+                contest: "ilqp".into(),
+            })
+            .as_bytes(),
+        )
+        .unwrap();
+        // CONTROL: a line exactly AT the cap is read — the boundary, from the inside.
+        let at_cap = |qsos: u64, len: usize| {
+            let mut st = ClubState {
+                qsos,
+                sections: vec![String::new()],
+                ..Default::default()
+            };
+            let pad = len - encode_line(&Msg::Club(st.clone())).len();
+            st.sections[0] = "X".repeat(pad);
+            encode_line(&Msg::Club(st))
+        };
+        let fits = at_cap(7, MAX_LINE_BYTES);
+        assert_eq!(fits.len(), MAX_LINE_BYTES);
+        w.write_all(fits.as_bytes()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && *posn.club_qsos.lock().unwrap() != 7 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            *posn.club_qsos.lock().unwrap(),
+            7,
+            "a line at the cap is read"
+        );
+        assert!(posn.errors.lock().unwrap().is_empty());
+        // …and one byte past it is the one no release reads.
+        w.write_all(at_cap(8, MAX_LINE_BYTES + 1).as_bytes())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && posn.errors.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(listener);
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        assert_eq!(
+            posn.errors.lock().unwrap().first().map(String::as_str),
+            Some(LINE_PAST_THE_CAP),
+            "the position says why it cannot sync"
+        );
+        assert_eq!(
+            *posn.club_qsos.lock().unwrap(),
+            7,
+            "the over-long line was not read"
         );
     }
 }

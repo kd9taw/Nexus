@@ -1214,6 +1214,15 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
+      {/* The host's alone: its board is as big as the club line every position is sent can
+          carry — said before one more position might not fit, and once it is cut. */}
+      {club.boardFull && (
+        <div style={CLUB_WARN} role="status">
+          {club.boardFull.shown < club.boardFull.positions
+            ? t('fieldDay.club.boardCut', { shown: club.boardFull.shown, positions: club.boardFull.positions })
+            : t('fieldDay.club.boardFull', { positions: club.boardFull.positions })}
+        </div>
+      )}
       {club.board.length === 0 ? (
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the

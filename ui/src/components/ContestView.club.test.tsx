@@ -6,7 +6,7 @@
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
-import { ContestView } from './ContestView'
+import { ContestView, FdClubSection } from './ContestView'
 import { getSettings } from '../api'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FdClubStatus, FieldDayStatus } from '../types'
@@ -340,5 +340,26 @@ describe('club sync switched on for a contest the club log cannot run', () => {
   it('POSITIVE CONTROL: the same pick, carried by the loaded rules, says nothing of it', async () => {
     await renderPreviewed('ilqp', 'ilqp')
     expect(screen.queryByText('Not syncing')).toBeNull()
+  })
+})
+
+// ⭐ THE HOST'S FULL BOARD. The host's club block warns before its board outgrows the club line
+// every position is sent, naming the count, and says how many the positions see once it is cut.
+describe('the host\'s club block says how full its board is', () => {
+  const HOST: FdClubStatus = { ...CLUB, hosting: true }
+
+  it('warns, naming the count, before the next position might not fit on the board', () => {
+    render(<FdClubSection club={{ ...HOST, boardFull: { positions: 58, shown: 58 } }} />)
+    expect(screen.getByText(/This club has 58 positions, as many as each position's club board has room for/)).toBeTruthy()
+  })
+
+  it('says how many the positions see once the board is cut', () => {
+    render(<FdClubSection club={{ ...HOST, boardFull: { positions: 70, shown: 59 } }} />)
+    expect(screen.getByText(/Each position's club board shows 59 of this club's 70 positions/)).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: a club with room says nothing of it', () => {
+    render(<FdClubSection club={HOST} />)
+    expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
   })
 })

@@ -672,7 +672,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdClubBoardRow, FdClubDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FieldDayQso, FieldDayStatus,
+        LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -768,8 +769,15 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     "dupes",
                     "board",
                 ],
-                &["lastError", "dkeys"],
+                &["lastError", "dkeys", "boardFull"],
             );
+            if let Some(full) = club.get("boardFull") {
+                takes(
+                    &format!("{what}: the club's full board"),
+                    full,
+                    &["positions", "shown"],
+                );
+            }
             for row in club["board"].as_array().unwrap() {
                 takes_optional(
                     &format!("{what}: a club board row"),
@@ -949,6 +957,10 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 last_seen_secs: 5,
                 clock_ms: Some(-3_000),
             }],
+            board_full: Some(FdBoardFullDto {
+                positions: 70,
+                shown: 59,
+            }),
         }),
         upload: Default::default(),
         receives: Vec::new(),

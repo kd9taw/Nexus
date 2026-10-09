@@ -12114,7 +12114,9 @@ impl Engine {
             .as_mut()
             .expect("checked above, under the same lock");
         club.mark_seen(mark_seen, now);
-        club.club_state(dupes_from, sections_from, total, now)
+        let st = club.club_state(dupes_from, sections_from, total, now);
+        club.note_board_sent(&st.board);
+        st
     }
 
     /// A position's presence report. `report.name` is its current friendly
@@ -12515,6 +12517,13 @@ impl Engine {
             // of this DTO's dupe data; the mirror's unprojected keys need no work here.
             dkeys: Vec::new(),
             board,
+            // The host's alone: how full the board every position is sent has become.
+            board_full: self.fd_club.as_ref().and_then(|c| c.board_full()).map(
+                |(positions, shown)| crate::dto::FdBoardFullDto {
+                    positions: positions as u32,
+                    shown: shown as u32,
+                },
+            ),
         })
     }
 
@@ -42309,6 +42318,73 @@ mod tests {
         assert!(
             json("cccc0003").get("clockMs").is_none(),
             "no key, not a null"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host's club board warns before the next position might not fit on the board
+    /// every position is sent, naming the count** — and once the club has more positions than
+    /// one club line carries, says how many of them the positions see.
+    ///
+    /// The board rides every club line, the heartbeat's too, and a line past 8 KB is one no
+    /// position can read. Nothing on the host said the club was nearing that.
+    #[test]
+    fn the_hosts_club_board_warns_before_the_next_position_would_not_fit() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut first_warned = None;
+        for n in 1..=90u32 {
+            let pos = format!("{n:08x}");
+            let _ = e.fd_club_join(v, &pos, &format!("Position {n:02} tent"), "W9ABC", "arrlfd");
+            e.fd_club_pos_status(
+                &pos,
+                &tempo_net::fdsync::PosReport {
+                    band: "160m".into(),
+                    mode: "dig".into(),
+                    op: format!("kd9t{n:04}"),
+                    freq: 1_840_000,
+                    name: format!("Position {n:02} tent"),
+                    clock_ms: None,
+                },
+            );
+            // What every connection's heartbeat asks for, and what the positions are sent.
+            let sent = e.fd_club_state(0, 0, &pos);
+            let shown = tempo_net::fdsync::board_fit(&sent.board).rows.len() as u32;
+            let full = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+            if n == 10 {
+                assert_eq!(full, None, "CONTROL: a club of 10 is nowhere near the line");
+            }
+            if let Some(f) = full {
+                assert_eq!(f.positions, n, "the warning names the club's positions");
+                assert_eq!(f.shown, shown, "and how many the positions are sent");
+                first_warned.get_or_insert(f);
+            }
+        }
+        let first = first_warned.expect("a club of 90 positions is warned");
+        assert_eq!(
+            first.shown, first.positions,
+            "warned BEFORE anyone is left out: all {} still on the board",
+            first.positions
+        );
+        let last = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+        let last = last.expect("still warned at 90");
+        assert_eq!(last.positions, 90);
+        assert!(
+            last.shown < 90 && last.shown >= first.positions,
+            "past the line the board is cut, not dropped: {last:?}"
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);

@@ -3523,6 +3523,10 @@ export interface FdClubStatus {
    *  Absent on a build older than the field. */
   dkeys?: string[][]
   board: FdClubBoardRow[]
+  /** The HOST's alone, from the moment its board is as big as one club line carries: how
+   *  many positions it has, and how many of them each position's board shows (`shown`
+   *  below `positions` = already cut to the ones heard from most recently). */
+  boardFull?: { positions: number; shown: number }
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */

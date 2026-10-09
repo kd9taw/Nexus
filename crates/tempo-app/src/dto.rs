@@ -2663,6 +2663,25 @@ pub struct FdClubDto {
     #[serde(default)]
     pub dkeys: Vec<Vec<String>>,
     pub board: Vec<FdClubBoardRow>,
+    /// ⭐ **The host's warning that its board is as big as one club line carries** — set on
+    /// the HOST only, from the moment one more position as long as its longest might not fit
+    /// on the board every position is sent, and absent before. `shown` below `positions` is
+    /// the board already cut to the positions heard from most recently.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends it
+    /// (`ui/src/remote-web/field-day.ts` refuses any club key it does not), so the page that
+    /// takes it is deployed before the release that writes it. Absent unless it applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_full: Option<FdBoardFullDto>,
+}
+
+/// [`FdClubDto::board_full`]: how many positions the host's club has, and how many of them
+/// the board each position is sent can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdBoardFullDto {
+    pub positions: u32,
+    pub shown: u32,
 }
 
 /// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).

@@ -110,7 +110,7 @@ function status(v: unknown): void {
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
@@ -120,6 +120,11 @@ function status(v: unknown): void {
       (c.dkeys !== undefined && (!Array.isArray(c.dkeys) || c.dkeys.length > 4096 ||
         !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
       !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
+    // A host's alone, sent only when it applies: how full its club board is.
+    if (c.boardFull !== undefined) {
+      const b = object(c.boardFull,['positions','shown'])
+      if (![b.positions,b.shown].every(integer)) throw new Error('invalidFieldDay')
+    }
     for (const raw of c.board) {
       // `clockMs`: that position's clock minus the host's, in whole ms, either sign; null when it
       // has not measured one, and absent from a station older than the field.

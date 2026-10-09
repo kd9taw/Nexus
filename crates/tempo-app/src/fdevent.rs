@@ -413,6 +413,11 @@ pub struct ClubLog {
     arrivals: VecDeque<(u64, String)>,
     /// The append-only event journal. `None` = not journaling (tests).
     journal: Option<std::fs::File>,
+    /// `(positions, shown)` while the board last sent was as big as one club line carries,
+    /// from [`tempo_net::fdsync::board_fit`] ([`note_board_sent`](Self::note_board_sent)).
+    /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
+    /// builds a board of its own to measure.
+    board_full: Option<(usize, usize)>,
 }
 
 /// How far back a host journal replay reaches. Matches the position ADIF journal's own
@@ -744,6 +749,21 @@ impl ClubLog {
     /// the host's board column. `None` for a position that has not measured one.
     pub fn clock_ms(&self, posid: &str) -> Option<i64> {
         self.positions.get(posid).and_then(|p| p.clock_ms)
+    }
+
+    /// Note what the board just sent to a position could carry
+    /// ([`tempo_net::fdsync::board_fit`]): the board rides every club line, and one too
+    /// long for a line is cut to the positions heard from most recently.
+    pub fn note_board_sent(&mut self, board: &[WireBoardRow]) {
+        let fit = tempo_net::fdsync::board_fit(board);
+        self.board_full = (!fit.room).then_some((board.len(), fit.rows.len()));
+    }
+
+    /// `Some((positions, shown))` once the board the positions are sent is as big as one club
+    /// line carries — no room left for one more position as long as its longest, or already
+    /// cut to `shown` of `positions`. `None` before.
+    pub fn board_full(&self) -> Option<(usize, usize)> {
+        self.board_full
     }
 
     /// Stamp a position's liveness (any socket activity counts — the board's
