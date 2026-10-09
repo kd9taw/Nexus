@@ -2292,6 +2292,8 @@ pub struct FieldDayStatus {
     /// the UI quiet decode popups about them mid-contact, like QsoStatus.dxcall.
     #[serde(default)]
     pub dxcall: Option<String>,
+    /// The contacts that COUNT (`FieldDayLog::qso_count`), not the rows: `log` also holds each
+    /// logged dupe and each satellite contact the contest gives no credit.
     pub qso_count: usize,
     pub sections: usize,
     /// The distinct sections worked (the identities behind `sections`), sorted —

@@ -335,6 +335,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
   the station's country); the browser's Chase box and recall card show no bearing, because only the
   station can work it out.
+- **Nexus Remote shows a contest log that holds a duplicate.** In Sweepstakes, CQ WW, CQ WPX,
+  the ARRL VHF contests and the New York QSO Party a repeat contact is logged and scored zero, as
+  the sponsors ask. One such repeat in the log left the Contest screen on Nexus Remote blank, with
+  "Station data unavailable. Refresh or reconnect." however often you refreshed. It now shows the
+  log, the repeat marked, with the QSO count the shack shows; and a log that its repeats take past
+  what the browser can show says it is too large, rather than unavailable.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a
