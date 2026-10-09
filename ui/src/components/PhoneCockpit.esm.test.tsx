@@ -224,6 +224,19 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     expect(qthBox().value).toBe('COOK')
   })
 
+  it('refuses while PTT is held: nothing plays and nothing logs', async () => {
+    await renderCockpit()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    fireEvent.pointerDown(screen.getByRole('button', { name: /push to talk/i }))
+    await flush()
+    await enter(qthBox())
+    expect(played()).toEqual([])
+    expect(loggedCalls()).toEqual([])
+    expect(line()).toBe('You are holding PTT, so Enter plays nothing.')
+  })
+
   it('the keyer’s ■ Stop is a stop: what it played counts as not sent', async () => {
     await renderCockpit()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
