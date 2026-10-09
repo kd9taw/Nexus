@@ -775,13 +775,13 @@ impl ClubLog {
     }
 
     /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
-    /// while the position keeps trying ([`refused`](Self::refused)). The name and call come
-    /// off the network, so each is cut to 64 characters, and the list to [`MAX_REFUSED`],
-    /// the oldest going first.
+    /// while the position keeps trying ([`refused`](Self::refused)), under the position id its
+    /// join clears. The name and call come off the network, so each is cut to 64 characters,
+    /// and the list to [`MAX_REFUSED`], the oldest going first.
     pub fn note_refused(&mut self, posid: &str, label: &str, call: &str, reason: &str, now: u64) {
         let cut = |s: &str| s.trim().chars().take(64).collect::<String>();
         self.refused.insert(
-            cut(posid),
+            posid.to_string(),
             Refused {
                 label: cut(label),
                 call: cut(call).to_uppercase(),
@@ -1381,6 +1381,48 @@ impl SyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⭐ **The host's list of the positions it turned away**: one entry per position with the
+    /// sentence it was sent last, gone when that position joins, dropped a minute after its
+    /// last try, and never more than sixteen, the oldest going first.
+    #[test]
+    fn the_host_lists_each_refused_position_while_it_keeps_trying() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        let shown = |c: &ClubLog, now: u64| -> Vec<(String, String, String)> {
+            c.refused(now)
+                .into_iter()
+                .map(|r| (r.label.clone(), r.call.clone(), r.reason.clone()))
+                .collect()
+        };
+        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "first", 100);
+        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "second", 110);
+        assert_eq!(
+            shown(&club, 120),
+            vec![("SSB tent".into(), "W9XYZ".into(), "second".into())],
+            "one entry, the latest sentence, the call as a call"
+        );
+        assert_eq!(
+            shown(&club, 170).len(),
+            1,
+            "kept a minute after the last try"
+        );
+        assert!(shown(&club, 171).is_empty(), "and not a second longer");
+        club.note_refused("bbbb0002", "CW tent", "k9abc", "refused", 200);
+        club.join("bbbb0002", "CW tent", "K9ABC", 201);
+        assert!(
+            shown(&club, 202).is_empty(),
+            "a position that joins leaves the list"
+        );
+        for i in 0..20u64 {
+            club.note_refused(&format!("c{i:07}"), "", "K9ZZZ", "refused", 300 + i);
+        }
+        let ids: Vec<&String> = club.refused.keys().collect();
+        assert_eq!(ids.len(), 16, "never more than sixteen");
+        assert!(
+            (4..20).all(|i| club.refused.contains_key(&format!("c{i:07}"))),
+            "the four oldest went first: {ids:?}"
+        );
+    }
 
     /// One presence report, dial fixed — these tests are about the name.
     fn report(name: &str, band: &str, mode: &str, op: &str) -> PosReport {

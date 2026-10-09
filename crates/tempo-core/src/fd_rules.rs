@@ -3136,6 +3136,40 @@ mod tests {
     use crate::contest::ContestSession;
     use crate::fieldday::FieldDayLog;
 
+    /// ⭐ **A moment belongs to the running whose day has begun** — a day, to the second,
+    /// before the contest starts, and from then until the next running's day: the boundary
+    /// the contest journal restore keeps a rehearsal out by. A January contest's early
+    /// January belongs to the running of the year before.
+    #[test]
+    fn a_moment_belongs_to_the_running_whose_day_has_begun() {
+        let ilqp = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("shipped");
+        let start = ilqp.event_window(2026).start_unix;
+        assert_eq!(start, 1_792_342_800, "2026-10-18T17:00:00Z");
+        assert_eq!(
+            ilqp.running_of(start - 86_400),
+            2026,
+            "its day begins 24 h before"
+        );
+        assert_eq!(
+            ilqp.running_of(start - 86_400 - 1),
+            2025,
+            "a second before is the last running's"
+        );
+        assert_eq!(
+            ilqp.running_of(start + 30 * 86_400),
+            2026,
+            "and the weeks after are this one's"
+        );
+        let wfd = ruleset_by_id("wfd", CURRENT_RULES_YEAR).expect("shipped");
+        let start = wfd.event_window(2027).start_unix;
+        assert_eq!(
+            wfd.running_of(start - 86_400 - 3600),
+            2026,
+            "early January 2027 is 2026's"
+        );
+        assert_eq!(wfd.running_of(start), 2027);
+    }
+
     /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
     /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
     /// membership test, so the domain must be EXACTLY that set — 85 sections plus
