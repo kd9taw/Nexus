@@ -210,8 +210,10 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
             bare_save_unit = true;
             continue;
         }
-        // The attribute form, read once its statement is whole. A comment or blank line
-        // between continuation lines does not end the statement.
+        // SAVE, read once its statement is whole: the attribute form, and the statement
+        // form's names on a continuation line (`save a, &` then `b`), which the per-line
+        // test below reads only up to the `&`. A comment or blank line between
+        // continuation lines does not end the statement.
         if !line.is_empty() || stmt.is_empty() {
             let piece = line.strip_prefix('&').unwrap_or(line);
             if let Some(head) = piece.strip_suffix('&') {
@@ -219,7 +221,11 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
                 stmt.push(' ');
             } else {
                 stmt.push_str(piece);
-                if saves_by_attribute(&stmt) {
+                let slow = stmt.to_ascii_lowercase();
+                if saves_by_attribute(&stmt)
+                    || slow.starts_with("save ")
+                    || slow.starts_with("save::")
+                {
                     out.extend(names_in_decl(&stmt));
                 }
                 stmt.clear();
@@ -1086,6 +1092,22 @@ subroutine nosave(n, x)
 end subroutine nosave
 ";
         assert_eq!(scan_fortran(src), Vec::<String>::new());
+    }
+
+    /// A `save` LIST continued onto another line. The per-line test reads the names up
+    /// to the `&` and never sees the rest, so msk144signalquality, mskrtd and
+    /// gen_tempofastwave each had saved names on a continuation line that the gate could
+    /// not see (their rows came from nm, not from the gate).
+    #[test]
+    fn a_continued_save_list_is_read_whole() {
+        let src = "\
+subroutine sl()
+  real a, b, c
+  save a, b, &
+       c
+end subroutine sl
+";
+        assert_eq!(scan_fortran(src), ["a", "b", "c"]);
     }
 
     #[test]

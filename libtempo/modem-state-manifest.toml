@@ -11378,6 +11378,13 @@ reason = """A one-character sync marker, `character*1 csync` at jt65_decode.f90:
 # attribute finds 13: those 10, plus q65.f90's three module-scope arrays, which
 # the gate already read. `the_attribute_form_of_save_is_found` and its control
 # `a_unit_with_no_saved_symbol_reports_none` pin the behaviour.
+#
+# The same join now reads a `save` LIST to its end. The gate read one line of it,
+# so names on a continuation line were invisible: 10 of them, in
+# msk144signalquality (navg, tlast, training_dxcall, trained_dxcall), mskrtd
+# (nsnrlast, nsnrlastswl, nhasharray, recent_shmsgs) and tempofast/gen_tempofastwave
+# (dphi_peak, nramp_out). All 10 already had rows from nm, so none is added here.
+# `a_continued_save_list_is_read_whole` pins it.
 # ---------------------------------------------------------------------------
 
 [[symbol]]
