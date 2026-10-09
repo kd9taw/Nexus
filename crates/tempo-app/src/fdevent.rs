@@ -1107,8 +1107,12 @@ pub struct ClubMirror {
     /// Link liveness + when it went down (the Offline chip's `since`).
     pub connected: bool,
     pub down_since_unix: u64,
-    /// Local minus host clock at the last welcome (warn > 30 s, NEVER adjust).
+    /// This PC's clock minus the host's, whole seconds: the welcome's until the first timed
+    /// round trip closes, measured from then on ([`Self::clock`]). The club line shows it
+    /// from 2 s and warns past 30 s; NOTHING ever adjusts a clock by it.
     pub skew_secs: i64,
+    /// The round-trip measurement behind [`Self::skew_secs`], this session's only.
+    pub clock: crate::clubclock::ClubClock,
     /// The last host `error` line, verbatim (version refusal etc.).
     pub last_error: Option<String>,
 }
@@ -1143,7 +1147,19 @@ impl ClubMirror {
         self.event = event.to_string();
         self.host_call = host_call.to_string();
         self.skew_secs = skew_secs;
+        // A new session may be with another host, so the measurement starts again; until
+        // its first round trip the welcome's whole seconds stand.
+        self.clock = Default::default();
         self.last_error = None;
+    }
+
+    /// One answered round trip of the timed ping (`fdsync::ClockSample`). Updates what the
+    /// club line says, and nothing else.
+    pub fn on_clock(&mut self, sample: tempo_net::fdsync::ClockSample) {
+        self.clock.add(sample);
+        if let Some(secs) = self.clock.skew_secs() {
+            self.skew_secs = secs;
+        }
     }
 
     pub fn on_link(&mut self, connected: bool, now: u64) {
