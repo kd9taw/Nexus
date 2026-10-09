@@ -1120,6 +1120,26 @@ pub struct FlexTune {
     pub tx_timeout_ms: Option<u64>,
 }
 
+/// What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner
+/// ([`RadioStatus::flex_atu`]). Read and shown; Nexus writes none of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexAtu {
+    /// The radio's tune power and its own transmit timeout, as beside Tune: an ATU cycle is the
+    /// radio's own carrier, and only the radio's timeout ends it if Nexus or the network fails
+    /// during one.
+    #[serde(default)]
+    pub tune: FlexTune,
+    /// The radio's ATU status as it reports it (`atu status`): `TUNE_SUCCESSFUL`, `TUNE_FAIL`, …,
+    /// the radio's own word, shown as it is. `None` until the radio reports one.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Why Nexus's last ATU press started no cycle, in words for the ATU line: the radio's refusal
+    /// in its reply, or the client's own (XIT on, …). `None` once a press goes out.
+    #[serde(default)]
+    pub refused: Option<String>,
+}
+
 /// Why Nexus's own Flex client kept a slot over's key off the air
 /// ([`SlotKeyRefused::flex_audio`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1705,6 +1725,19 @@ pub struct RadioStatus {
     /// transmits on too. Tune then keys nothing, and the screen says why beside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_tune_refused: bool,
+    /// While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
+    /// and the radio reports a tuner fitted: what is shown beside the ATU, the radio's tune power
+    /// and transmit timeout as beside Tune, and the ATU line. See `Engine::observe_flex_atu`.
+    ///
+    /// Skipped when `None`, which is every other station, so their snapshots are byte for byte
+    /// what they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_atu: Option<FlexAtu>,
+    /// While the ATU is the client's (`flex_atu`), the licence refuses its carrier here though it
+    /// allows the mode's own emission: the cycle is judged as CW at the frequency the radio
+    /// transmits on too. ATU then keys nothing, and the screen says why beside it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flex_atu_refused: bool,
     /// The Flex VITA **meter** worker is running, which on a Flex is the only producer of a
     /// FlexLib-scaled SWR. OBSERVED from the worker, never read from `flex_native_pan` — see
     /// `Engine::observe_flex_meter_stream`. Read it with [`Self::swr_scale_verified`]: that
