@@ -371,6 +371,9 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
             change(&engine, id, &[LogOp::MarkQslCard { id, received: true }]),
             "premise: marked"
         );
+        // Asked once the store holds the mark: straight after it, a question on a slow disk waits
+        // its two seconds and is refused (P4), as the read-your-writes tests show.
+        engine.caught_up();
         assert!(
             !key_taken(&engine, id, &before),
             "{home}: the key of a row that changed since is accepted"
@@ -450,6 +453,9 @@ fn order_rev_survives_a_stamp_and_moves_on_an_edit() {
     };
     assert!(stamped, "premise: the stamp landed");
     assert_ne!(snapshot_tick(&engine), tick, "the change feed moved");
+    // Asked once the store holds the stamp: straight after it, a question on a slow disk waits its
+    // two seconds and is refused (P4), and a refused build would count here as one.
+    engine.caught_up();
     let after_stamp = page(&queries);
     assert_eq!(
         after_stamp["orderRev"], first["orderRev"],
@@ -480,6 +486,7 @@ fn order_rev_survives_a_stamp_and_moves_on_an_edit() {
         assert!(change(&engine, target, &[edit]));
     }
     assert_ne!(snapshot_tick(&engine), tick, "the change feed moved");
+    engine.caught_up();
     let after_edit = page(&queries);
     assert_ne!(
         after_edit["orderRev"], first["orderRev"],
@@ -579,6 +586,9 @@ fn a_fold_is_kept_until_what_it_reads_moves() {
     let (done, _) =
         tempo_app::logwrite::stamp_lotw_batch(&engine, &[signed], &accepted(1_790_000_000));
     assert_eq!(done.stamped, 1, "premise: the stamp landed");
+    // Asked once the store holds the stamp: straight after it, a question on a slow disk waits its
+    // two seconds and is refused (P4), and a refused fold would count here as one.
+    engine.caught_up();
     let after_stamp = asked();
     assert_eq!(after_stamp, expected(&log_of(&engine)));
     assert_eq!(folded(), 6, "the backlog alone folded again");
@@ -596,6 +606,7 @@ fn a_fold_is_kept_until_what_it_reads_moves() {
         r.when_unix = 1_800_000_000;
         engine_lock(&engine).log_qso(r);
     }
+    engine.caught_up();
     assert_eq!(asked(), expected(&log_of(&engine)));
     assert_eq!(folded(), 11, "every fold folded again");
 }
@@ -658,6 +669,9 @@ fn a_deleted_contact_is_gone_from_every_answer() {
     };
     assert!(located(&queries).is_number(), "premise: it has a place");
     assert!(change(&engine, gone, &[LogOp::Delete(gone)]));
+    // Asked once the store holds the delete: straight after it, a question on a slow disk waits
+    // its two seconds and is refused (P4), as the read-your-writes tests show.
+    engine.caught_up();
     assert_eq!(located(&queries), Value::Null);
     let row = ask(
         &queries,
