@@ -2632,6 +2632,49 @@ export async function getAssistanceJournal(): Promise<import('./types').Assistan
   return invoke('get_assistance_journal')
 }
 
+/** Super Check Partial: download the list, or check for a newer one, when the site's rules for
+ *  logging software allow it now, and say what is held. The station decides: nothing is sent
+ *  while SCP is off or Unassisted mode is declared, and never more than once a day unless
+ *  `manual` (the operator's "Update now"). */
+export async function scpEnsure(manual: boolean): Promise<import('./types').ScpStatus> {
+  return invoke('scp_ensure', { manual })
+}
+
+/** What is held of the Super Check Partial list, without asking the site anything. */
+export async function getScpStatus(): Promise<import('./types').ScpStatus> {
+  return invoke('get_scp_status')
+}
+
+/** The Super Check Partial calls, once per strip mount; empty while SCP is effectively off. */
+export async function getScpCalls(): Promise<string[]> {
+  return invoke('get_scp_calls')
+}
+
+/** Import an N1MM-format call-history file for one contest (a `FieldDayStatus.event` id). A file
+ *  that does not read is refused and the one held is kept. */
+export async function importCallHistory(
+  text: string,
+  fileName: string,
+  contest: string,
+): Promise<import('./types').CallHistoryStatus> {
+  return invoke('import_call_history', { text, fileName, contest })
+}
+
+/** What call history is imported, if any. */
+export async function getCallHistoryStatus(): Promise<import('./types').CallHistoryStatus | null> {
+  return invoke('get_call_history_status')
+}
+
+/** The imported call history for the strip; null when none is imported or it is effectively off. */
+export async function getCallHistory(): Promise<import('./types').CallHistoryFile | null> {
+  return invoke('get_call_history')
+}
+
+/** Forget the imported call history. */
+export async function clearCallHistory(): Promise<void> {
+  return invoke('clear_call_history')
+}
+
 /** Clear the streaming CW decoder's accumulated transcript. */
 export async function cwClear(): Promise<void> {
   return invoke('cw_clear')

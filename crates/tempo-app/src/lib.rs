@@ -14,6 +14,7 @@
 
 pub mod alltxt;
 pub mod bandplan;
+pub mod call_history;
 pub mod clocksync;
 pub mod connect_web;
 pub mod dto;
@@ -32,6 +33,7 @@ pub mod presence;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
+pub mod scp;
 #[cfg(test)]
 mod stage1_tests;
 pub mod station;
