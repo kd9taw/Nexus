@@ -165,6 +165,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
+  Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
+  updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
+  as the current one: those feeds carry more than one, and a second spacecraft's readings are
+  never mixed in. Reported by KB0UZT (#404).
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
