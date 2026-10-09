@@ -11,7 +11,10 @@
 // operators have been keying for releases.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { CwCockpit } from './CwCockpit'
+import { isFieldDay } from '../fdEvent'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 const decodeState = {
@@ -82,6 +85,7 @@ vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 beforeEach(() => {
   decodeState.sent = []
   decodeState.keyerError = null
+  settingsState.macros.cwProfiles = []
   settingsState.rigModel = 0
   unprovenModels = []
   globalThis.ResizeObserver = class {
@@ -172,5 +176,129 @@ describe('the CW macro set follows the contest that is running', () => {
       fireEvent.click([...document.querySelectorAll('.cw-macro')][0])
     })
     expect(api.sendCw).toHaveBeenCalledWith('CQ FD DE {MYCALL} {MYCALL} K')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE REPORT IN A CONTEST EXCHANGE.
+//
+// `{EXCH}` is the running contest's exchange WITHOUT the signal report, which `{RST}` keys
+// (`Engine::contest_sent_exchange`). The contest set's F3 and F4 carried `{EXCH}` and no
+// `{RST}`, so in the Illinois QSO Party, whose exchange is "RS(T) and county", F3 keyed the
+// county with no 5NN. Where the exchange has no report (Sweepstakes, the California QSO Party,
+// the ARRL VHF contests) a 5NN is a wrong exchange — Sweepstakes would copy it as the serial —
+// so those keep the set without it.
+//
+// Every shipped ruleset is checked: its received slots are read off the rules seed the engine
+// loads, as the engine tags them, and its answer is what its sponsor's rules say. A ruleset
+// added to the seed with no entry below fails until somebody says which it is. The strings
+// these templates key through the real engine, contest by contest, are pinned on the Rust side
+// (`cw_contest_macros_key_each_built_in_contests_exchange`).
+// ---------------------------------------------------------------------------
+
+type SeedRuleset = {
+  event: string
+  exchange: { fields: { key: string; kind: { type: string } }[]; roles: { id: string; receives: string[] }[] }
+}
+const SEED = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../crates/tempo-core/src/fd_rules.seed.json'), 'utf8'),
+) as { rulesets: SeedRuleset[] }
+
+/** Does the sponsor's exchange carry a signal report? From each contest's own rules. */
+const EXCHANGE_HAS_REPORT: Record<string, boolean> = {
+  ilqp: true, // RS(T), and county, state, province or DX
+  tnqp: true, // RS(T), and county or state
+  ohqp: true, // RST, and county, state or DX
+  txqp: true, // RS(T), and county or state
+  nyqp: true, // RS(T), and county or state
+  cqww_cw: true, // RST and CQ zone
+  cqww_ssb: true,
+  cqww_rtty: true, // RST, CQ zone, and a W/VE station's state
+  cqwpx_cw: true, // RST and serial
+  cqwpx_ssb: true,
+  arrlss_cw: false, // serial, precedence, call, check, section
+  arrlss_ssb: false,
+  cqp: false, // serial, and county, state or DX
+  arrlvhf_jan: false, // grid
+  arrlvhf_jun: false,
+  arrlvhf_sep: false,
+}
+
+/** `dto::field_kind_tag`: the seed's `one_of` is the wire's `oneOf`; every other tag is spelled
+ *  the same. */
+const wireKind = (type: string) => (type === 'one_of' ? 'oneOf' : type)
+
+/** The contest block the engine serialises for a ruleset, as far as the macro choice reads it:
+ *  the event and the received slots of each of its roles. */
+function fieldDayFor(r: SeedRuleset, role: number): FieldDayStatus {
+  return {
+    event: r.event,
+    running: true,
+    role: r.exchange.roles[role].id,
+    receives: r.exchange.roles[role].receives.map((key) => ({
+      key,
+      kind: wireKind(r.exchange.fields.find((f) => f.key === key)!.kind.type),
+      required: true,
+    })),
+  } as unknown as FieldDayStatus
+}
+
+const REPORT = { F3: '! DE {MYCALL} {RST} {EXCH} {EXCH} K', F4: '! TU {RST} {EXCH} DE {MYCALL} K' }
+const NO_REPORT = { F3: '! DE {MYCALL} {EXCH} {EXCH} K', F4: '! TU {EXCH} DE {MYCALL} K' }
+
+/** What F3 and then F4 hand the keyer, pressed on the dock. */
+async function f3f4(): Promise<string[]> {
+  const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>
+  api.sendCw.mockClear()
+  for (const i of [2, 3]) {
+    await act(async () => {
+      fireEvent.click([...document.querySelectorAll('.cw-macro')][i])
+    })
+  }
+  return api.sendCw.mock.calls.map((c) => c[0] as string)
+}
+
+const contests = SEED.rulesets.filter((r) => !isFieldDay(r.event))
+
+describe('F3 and F4 key the report where the contest exchange carries one', () => {
+  it('reads every shipped contest that is not a Field Day', () => {
+    expect(contests.map((r) => r.event).sort()).toEqual(Object.keys(EXCHANGE_HAS_REPORT).sort())
+  })
+
+  it.each(contests.flatMap((r) => r.exchange.roles.map((role, i) => [`${r.event} (${role.id || 'all'})`, r, i] as const)))(
+    '%s',
+    async (_name, r, role) => {
+      await renderCockpit({ fieldDay: fieldDayFor(r, role) })
+      const want = EXCHANGE_HAS_REPORT[r.event] ? REPORT : NO_REPORT
+      expect(await f3f4()).toEqual([want.F3, want.F4])
+    },
+  )
+
+  it('leaves Field Day, no contest, and an operator\'s own macros as they were', async () => {
+    // Field Day's exchange (class and section) has no report, and its set is unchanged.
+    for (const event of ['arrlfd', 'wfd']) {
+      await renderCockpit({ fieldDay: { event, running: true } as unknown as FieldDayStatus })
+      expect(await f3f4()).toEqual([NO_REPORT.F3, NO_REPORT.F4])
+      cleanup()
+    }
+    // A casual QSO sends its report with F3 already.
+    await renderCockpit()
+    expect(await f3f4()).toEqual(['! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN', '! DE {MYCALL} TU 73 SK'])
+    cleanup()
+    // An operator's saved profile is theirs: the Illinois QSO Party keys it as written.
+    settingsState.macros.cwProfiles = [
+      {
+        name: 'Mine',
+        macros: [
+          { key: 'F1', label: 'CQ', text: 'CQ IL {MYCALL}' },
+          { key: 'F2', label: 'Call', text: '{MYCALL}' },
+          { key: 'F3', label: 'Exch', text: '! {EXCH}' },
+          { key: 'F4', label: 'TU', text: 'TU {EXCH}' },
+        ],
+      },
+    ]
+    const ilqp = SEED.rulesets.find((r) => r.event === 'ilqp')!
+    await renderCockpit({ fieldDay: fieldDayFor(ilqp, 0) })
+    expect(await f3f4()).toEqual(['! {EXCH}', 'TU {EXCH}'])
   })
 })

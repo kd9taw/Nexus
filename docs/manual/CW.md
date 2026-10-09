@@ -97,11 +97,12 @@ It is a display only. Nexus never moves your dial to zero-beat for you.
 ## Eight F-Key Macros
 
 Eight macros are fired by `F1`–`F8` or the corresponding on-screen buttons. **Which eight depends
-on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:470`):
+on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 
 1. a saved **macro profile**, if one is active — see *Custom macro profiles* below;
 2. otherwise the **Field Day set**, in ARRL Field Day and Winter Field Day;
-3. otherwise the **contest set**, in any other contest you have picked;
+3. otherwise the **contest set**, in any other contest you have picked whose exchange has a
+   signal report, or the **contest set without a report** in one whose exchange has none;
 4. otherwise the **default set**.
 
 ### The default set
@@ -136,10 +137,29 @@ Active in ARRL Field Day and Winter Field Day, where `{EXCH}` expands to your cl
 
 ### The contest set
 
-Active in any other contest you pick on the Contesting tab. The same cadence with the call a
-contest uses — Field Day's `CQ FD` belongs to Field Day, and keying it in the Illinois QSO
-Party or CQ WW CW calls for somebody else's event. `{EXCH}` is that contest's own exchange
-without the signal report — your zone in CQ WW CW, your county in a QSO party.
+Active in any other contest you pick on the Contesting tab whose exchange has a signal report:
+the QSO parties, CQ WW and CQ WPX. The same cadence with the call a contest uses — Field Day's
+`CQ FD` belongs to Field Day, and keying it in the Illinois QSO Party or CQ WW CW calls for
+somebody else's event. `{EXCH}` is that contest's own exchange without the signal report — your
+zone in CQ WW CW, your county in a QSO party — so `F3` and `F4` send `{RST}` before it: in the
+Illinois QSO Party, `F3` to K9AAA from Cook County sends `K9AAA DE <your call> 5NN COOK COOK K`.
+
+| Key | Label | Content |
+|---|---|---|
+| `F1` | CQ TEST | `CQ TEST DE {MYCALL} {MYCALL} K` |
+| `F2` | Call | `! DE {MYCALL} K` |
+| `F3` | Exch | `! DE {MYCALL} {RST} {EXCH} {EXCH} K` |
+| `F4` | TU | `! TU {RST} {EXCH} DE {MYCALL} K` |
+| `F5` | My Call | `{MYCALL}` |
+| `F6` | His Call | `! ` |
+| `F7` | AGN | `AGN AGN` |
+| `F8` | ? | `? ` |
+
+### The contest set without a report
+
+Active in a contest whose exchange has no signal report: Sweepstakes, the California QSO Party
+and the ARRL VHF contests. A 5NN there would be a wrong exchange, so `F3` and `F4` leave
+`{RST}` out.
 
 | Key | Label | Content |
 |---|---|---|
@@ -152,6 +172,10 @@ without the signal report — your zone in CQ WW CW, your county in a QSO party.
 | `F7` | AGN | `AGN AGN` |
 | `F8` | ? | `? ` |
 
+If you copied the contest set into a macro profile of your own before this change, Nexus has
+not changed your copy: add `{RST}` before `{EXCH}` in its `F3` and `F4` yourself, for a
+contest whose exchange has a report.
+
 ### Macro Tokens
 
 | Token | Expands to |
@@ -160,21 +184,20 @@ without the signal report — your zone in CQ WW CW, your county in a QSO party.
 | `{NAME}` | Your name (`op_name` in Settings; empty by default until set) |
 | `{MYGRID}` | Your Maidenhead grid square |
 | `{RST}` | `5NN` (hardcoded 599 with cut numbers: 9→N, 0→T) |
-| `{EXCH}` | Your contest exchange without the report: class and section in Field Day, the running contest's own exchange otherwise. Serial numbers are not included. Empty outside a contest. |
+| `{EXCH}` | Your contest exchange without the report: class and section in Field Day, the running contest's own exchange otherwise, with the serial number where the contest has one. Empty outside a contest. |
 | `!` | The worked callsign (the callsign prefilled by a Needed-board click or typed by you) |
 
 If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is normalized — no double-space appears mid-message.
 
-**RST note:** the RST token always sends `5NN`. There is no serial-number field and no per-QSO RST input; the CW cockpit is casual/ragchew only by design.
+**RST note:** the RST token always sends `5NN`; there is no per-QSO RST input.
 
 ### Custom macro profiles
 
 Macro text is editable and savable. A **macro profile** is a named set of all eight; save as many
 as you like and switch the active one from the CW cockpit (`ui/src/types.ts`, `cwProfiles`). An
-active profile takes precedence over both built-in sets above, Field Day included.
+active profile takes precedence over every built-in set above, Field Day included.
 
-**RST stays `5NN` regardless.** There is no serial-number field and no per-QSO RST input — the CW
-cockpit is casual/ragchew by design, and a profile does not change that.
+**RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 
 ---
 

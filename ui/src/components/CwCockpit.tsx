@@ -375,8 +375,24 @@ export const DEFAULT_FD_MACROS: CwMacro[] = [
  * Illinois QSO Party or CQ WW CW operator called CQ for somebody else's event; `CQ TEST` is
  * what a contest CQ is, and the exchange tokens are unchanged ({EXCH} is the running
  * contest's own exchange). Everything below F1 is Field Day's set, which is what a contest
- * needs. */
+ * needs, plus the REPORT: {EXCH} is the exchange without the signal report, which {RST}
+ * keys, so F3 and F4 send {RST} before it. Without it the Illinois QSO Party's F3 keyed the
+ * county alone, where the sponsor's exchange is RS(T) and county. */
 export const DEFAULT_CONTEST_MACROS: CwMacro[] = [
+  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
+  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {RST} {EXCH} {EXCH} K' },
+  { key: 'F4', label: 'TU', text: '! TU {RST} {EXCH} DE {MYCALL} K' },
+  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
+/** The contest set for an exchange with NO signal report (Sweepstakes, the California QSO
+ * Party, the ARRL VHF contests): the same keys with {RST} left out of F3 and F4, because a
+ * 5NN there is a wrong exchange — Sweepstakes would copy it as the serial. */
+export const DEFAULT_CONTEST_NO_REPORT_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
   { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
@@ -810,11 +826,15 @@ export function CwCockpit({
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
   // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
-  // for the two Field Day events and wrong on the air in every other contest.
+  // for the two Field Day events and wrong on the air in every other contest. Among those,
+  // the exchange says whether F3 and F4 send a report: the strip's received slots, the same
+  // `rst` slot it fills 599 into.
   const builtIn = fieldDay
     ? isFieldDay(fieldDay.event)
       ? DEFAULT_FD_MACROS
-      : DEFAULT_CONTEST_MACROS
+      : fieldDay.receives?.some((f) => f.kind === 'rst')
+        ? DEFAULT_CONTEST_MACROS
+        : DEFAULT_CONTEST_NO_REPORT_MACROS
     : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
