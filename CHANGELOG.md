@@ -229,8 +229,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QSO party a laptop with another state in Your station data sends its state instead of the
   club's county on every contact. The host now refuses it when it joins, and both that laptop's
   club block and the host's say which exchange each sends and where to set it. A position on an
-  older Nexus, which cannot say, joins as before. A different callsign is not refused: an ARRL
-  Field Day GOTA station must use one.
+  older Nexus, which cannot say, joins as before.
+- **A club position on another callsign is turned away, by name.** Every laptop of one club
+  entry sends the club's call, but a laptop still set to its owner's call sent that call on the
+  air while the club's file claimed its contacts under the host's. The host now refuses it when
+  it joins, and both that laptop's club block and the host's name the two calls and where to set
+  it: Callsign on the air, under Who's who at this event on the Contesting tab. Older Nexus
+  positions send their call too and are refused the same way. ARRL Field Day is the exception,
+  because its GOTA station must use a call of its own: there a position on any call joins as
+  before.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

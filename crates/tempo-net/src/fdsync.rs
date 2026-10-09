@@ -249,6 +249,10 @@ pub enum Msg {
         pos: String,
         #[serde(default)]
         name: String,
+        /// The position's station call, its Settings' "Callsign on the air", sent by every
+        /// release since club sync began. The host refuses one that is not its own, by name,
+        /// except at ARRL Field Day (whose GOTA station must use another), and serves an
+        /// empty one as before.
         #[serde(default)]
         call: String,
         /// The position's own high-water seq (its journal's max).

@@ -26,9 +26,10 @@
 //! ⭐ **A club runs ONE ruleset — the host's contest — and everything is read
 //! from it**: the exchange the rows are resolved against, the dupe key, the
 //! scoring and multipliers, the Cabrillo token and headers. A position logging a
-//! different contest is refused at JOIN, by name ([`ClubLog::join_refusal`]),
-//! and a contest the club log cannot run faithfully is refused before a club is
-//! built at all ([`club_refusal`]).
+//! different contest is refused at JOIN, by name ([`ClubLog::join_refusal`]), so is
+//! one on another station call than the host's outside ARRL Field Day
+//! ([`ClubLog::call_refusal`]), and a contest the club log cannot run faithfully is
+//! refused before a club is built at all ([`club_refusal`]).
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
@@ -174,6 +175,20 @@ pub fn role_mismatch(contest: &str, club: &str, mine: &str) -> String {
         "this club sends the {club_side} {contest} exchange ({club_sends}), and this Nexus is \
          set up to send the {my_side} one ({my_sends}). Set State or province and County under \
          Your station data on the Contesting tab in Settings to the club's, then turn Field Day \
+         mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
+         in your own log."
+    )
+}
+
+/// ⭐ **The sentence for a position on another station call than the club's** — the call
+/// goes on the air, and the club's file claims every contact under the host's. One wording
+/// for the position's screen and the host's. `contest` is the club's contest as named;
+/// `club` and `mine` are the two calls as the screens show them.
+pub fn call_mismatch(contest: &str, club: &str, mine: &str) -> String {
+    format!(
+        "this club is on the air as {club} and this Nexus as {mine}, and in {contest} every \
+         position of a club entry sends the club's call. Set Callsign on the air under Who's \
+         who at this event on the Contesting tab in Settings to {club}, then turn Field Day \
          mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
          in your own log."
     )
@@ -630,6 +645,45 @@ impl ClubLog {
             return None;
         }
         Some(contest_mismatch(&self.contest_id, theirs))
+    }
+
+    /// ⭐ **Why a joining position on another station call cannot be served, or `None` to
+    /// serve it** — `club` is the host's call, the one the club's file is written under, and
+    /// `theirs` the JOIN's: Settings' "Callsign on the air" on that position, which every
+    /// Nexus has sent since club sync began.
+    ///
+    /// A club entry is one station on the air under one call: ARRL Field Day rule 6.12 ("All
+    /// stations for a single entry must be operated under one callsign"), Winter Field Day
+    /// ("one or many stations, all using the same callsign") and the Illinois QSO Party
+    /// ("Each Mobile or Rover vehicle is considered one station and must use only one
+    /// call"). A position on another call sends that call on the air while the club's file
+    /// claims its contacts under the host's, so it is refused at JOIN, by name, before its
+    /// first contact reaches the club.
+    ///
+    /// ⚠️ **Except ARRL Field Day**, whose GOTA station "must use a different callsign from
+    /// the primary Field Day station" (rule 4.1.1.1) and whose contacts "may be claimed for
+    /// credit by its primary Field Day operation" (4.1.1.5): a position there is served on
+    /// any call. Winter Field Day has no GOTA station.
+    ///
+    /// Compared trimmed and case-blind, and nothing more: `W9XYZ/P` is another call on the
+    /// air, and none of the rules the club runs that were read for this (ARRL Field Day and
+    /// VHF, Winter Field Day, and the Illinois, New York, Ohio, Tennessee and Texas QSO
+    /// parties) counts a portable suffix as the same station; an ARRL VHF rover signs `/R`
+    /// as an entry of its own. A call either end cannot say (empty) is served as before.
+    pub fn call_refusal(&self, club: &str, theirs: &str) -> Option<String> {
+        let (club, theirs) = (club.trim(), theirs.trim());
+        if club.is_empty()
+            || theirs.is_empty()
+            || club.eq_ignore_ascii_case(theirs)
+            || self.event_id == FdEvent::ArrlFd.code()
+        {
+            return None;
+        }
+        Some(call_mismatch(
+            &self.contest_id,
+            &club.to_uppercase(),
+            &theirs.to_uppercase(),
+        ))
     }
 
     /// Open (creating if absent) the append-only journal at `path`, replaying
@@ -3074,6 +3128,65 @@ mod tests {
             party_club.join_refusal(1, "ilqp"),
             party_club.version_refusal(1)
         );
+    }
+
+    /// ⭐ **A position on another station call than the host's is refused at JOIN, by name**
+    /// — both calls named, and where to set the position's. The calls are compared trimmed
+    /// and case-blind, and nothing more: a portable suffix is another call on the air. A
+    /// call either end cannot say is served as before.
+    #[test]
+    fn a_position_on_another_call_is_refused_by_name_with_where_to_set_it() {
+        let party_club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        assert_eq!(
+            party_club.call_refusal("W9XYZ", " k9abc "),
+            Some(
+                "this club is on the air as W9XYZ and this Nexus as K9ABC, and in IL QSO Party \
+                 every position of a club entry sends the club's call. Set Callsign on the air \
+                 under Who's who at this event on the Contesting tab in Settings to W9XYZ, then \
+                 turn Field Day mode off and on again: this Nexus rejoins by itself. Contacts \
+                 you log meanwhile stay in your own log."
+                    .to_string()
+            )
+        );
+        let portable = party_club
+            .call_refusal("W9XYZ", "W9XYZ/P")
+            .expect("W9XYZ/P is not the club's call on the air");
+        assert!(portable.contains("this Nexus as W9XYZ/P,"), "{portable}");
+        // CONTROLS: the club's own call joins however it is typed, and a call either end
+        // cannot say joins as before.
+        assert_eq!(party_club.call_refusal("W9XYZ", "W9XYZ"), None);
+        assert_eq!(party_club.call_refusal("W9XYZ", " w9xyz "), None);
+        assert_eq!(party_club.call_refusal("W9XYZ", ""), None);
+        assert_eq!(party_club.call_refusal("W9XYZ", "  "), None);
+        assert_eq!(party_club.call_refusal("", "K9ABC"), None);
+    }
+
+    /// ⭐ **Only ARRL Field Day serves a position on another call** — its GOTA station must
+    /// use a call of its own (rule 4.1.1.1). Every other contest the club log runs refuses
+    /// one, each by its own name: Winter Field Day, the QSO parties and the VHF contests.
+    #[test]
+    fn only_arrl_field_day_serves_a_position_on_another_call() {
+        let (mut served, mut refused) = (Vec::new(), Vec::new());
+        for event in seeded_events() {
+            let rs = party(&event);
+            if club_refusal(rs).is_some() {
+                continue;
+            }
+            match ClubLog::for_ruleset(rs, "TEST").call_refusal("W9XYZ", "K9GOT") {
+                None => served.push(event),
+                Some(msg) => {
+                    assert!(
+                        msg.contains(&format!("in {} every", rs.contest_id)),
+                        "{event}: {msg}"
+                    );
+                    refused.push(event);
+                }
+            }
+        }
+        assert_eq!(served, vec!["arrlfd".to_string()]);
+        for event in ["wfd", "ilqp", "nyqp", "tnqp", "ohqp", "txqp", "arrlvhf_jun"] {
+            assert!(refused.iter().any(|e| e == event), "{event}: {refused:?}");
+        }
     }
 
     /// ⭐ **Field Day through the any-ruleset constructor is the Field Day club it always
