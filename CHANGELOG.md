@@ -364,6 +364,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched since your account's last download by any program. The older confirmations never
   arrived, and the syncs after it carried on from there. Nexus now asks for everything from
   1900-01-01 in that case.
+- **The first eQSL download asks for your whole InBox.** With no earlier download on record (the
+  first sync, or after you changed the eQSL username or cleared the log), Nexus asked eQSL for your
+  InBox without saying from when, and eQSL's documentation does not say what it sends then. Nexus
+  now asks for every card received from 1900 on, as Logbook ▸ Check confirmations does. Later
+  downloads carry on from the last one, as before.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the
