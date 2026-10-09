@@ -33,6 +33,7 @@ import { askLog } from '../api'
 import { createAskingLogSource } from './askingLogSource'
 import { questionKey, type AnswerTo, type LogPage, type LogQuestion } from './logAnswers'
 import type { LogQuery } from './logQuery'
+import { askAgainWhileSaving } from './notAnswered'
 
 export interface LogSource {
   peek<Q extends LogQuestion>(q: Q): AnswerTo<Q> | undefined
@@ -44,8 +45,11 @@ export interface LogSource {
 }
 
 /** The engine's answers. `async`: a transport that throws before it returns a promise would throw
- *  out of a view's effect (`want`) instead of rejecting. */
-const askingTheEngine = (): LogSource => createAskingLogSource(async (q) => askLog(q))
+ *  out of a view's effect (`want`) instead of rejecting. A question the engine refused because a
+ *  change made before it is still being saved is asked again a second later, a few times
+ *  (features/notAnswered): the tick that change moved has already been followed, so nothing else
+ *  would ask it again until the next change. */
+const askingTheEngine = (): LogSource => createAskingLogSource(async (q) => askAgainWhileSaving(() => askLog(q)))
 
 let current: LogSource = askingTheEngine()
 

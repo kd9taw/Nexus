@@ -10,6 +10,7 @@ import { t } from '../i18n'
 import type { GeoLogStats } from '../types'
 import { type LogStats, type Tally } from '../features/logStats'
 import { logSource } from '../features/logSource'
+import { askAgainWhileSaving } from '../features/notAnswered'
 
 /** Service names and ham shorthand — the same letters in every language. */
 const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
@@ -60,11 +61,13 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
   useEffect(() => {
     if (observation) return
     let live = true
+    // Both asked again while a contact logged just before is still being saved: the log source
+    // does it for its questions, and the geographic cards ask so here (features/notAnswered).
     void logSource()
       .ask({ kind: 'statistics' })
       .then(value => { if (live) setStats(value) })
       .catch(() => { if (live) setFailed(true) })
-    void getLogStats()
+    void askAgainWhileSaving(getLogStats, () => live)
       .then(value => { if (live) setGeo(value) })
       .catch(() => { if (live) setGeo(null) })
     return () => { live = false }

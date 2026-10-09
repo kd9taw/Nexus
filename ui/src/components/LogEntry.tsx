@@ -34,6 +34,9 @@ import {
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
+import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
+import { scpLine } from '../features/scp'
+import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
@@ -621,6 +624,8 @@ export function LogEntry({
     if (fdActive && fieldDay && fdLogLen > fdSeenLen.current) {
       const lastEntry = fieldDay.log?.[fdLogLen - 1]
       if (lastEntry) {
+        // Every box is rewritten, so no box is a call-history fill or the operator's any more.
+        setFill(EMPTY_FILL)
         setFdFields((prev) => {
           const next = { ...prev }
           for (const f of fdReceives) {
@@ -735,9 +740,60 @@ export function LogEntry({
   useEffect(() => {
     if (!fdActive || !fillExchange) return
     if (!fdReceives.some((f) => f.key === fillExchange.key)) return
+    // The operator's own act (a double-click on what they copied), so call history never
+    // writes over it.
+    noteTyped(fillExchange.key)
     setFdField(fillExchange.key, fillExchange.value)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillExchange?.ts])
+
+  // ⭐ SUPER CHECK PARTIAL AND CALL HISTORY are on where the ENGINE says they are: its effective
+  // assistance sources (`assistanceOn`) fold Unassisted mode in, so declaring an unassisted entry
+  // takes both off this strip at the next snapshot, as it does the cluster and the AI CW decoder.
+  // Never on Remote: the hosted page gets neither.
+  const assistOn = fieldDay?.assistanceOn ?? []
+  const scpOn = fdActive && !remoteMode && assistOn.includes(SCP_SOURCE)
+  const historyOn = fdActive && !remoteMode && assistOn.includes(CALL_HISTORY_SOURCE)
+  const scpCalls = useScpList(scpOn)
+  const historyFile = useCallHistory(historyOn)
+  // What the call-history fill has done since the strip last cleared. The ref is the truth, read
+  // by the fill effect and the key handlers in the same tick; the state renders the marks.
+  const fillRef = useRef<FillState>(EMPTY_FILL)
+  const [fillMarks, setFillMarks] = useState<FillState['filled']>({})
+  const setFill = (next: FillState) => {
+    if (next === fillRef.current) return
+    fillRef.current = next
+    setFillMarks(next.filled)
+  }
+  /** The operator typed in a box (or picked from its list, or grabbed into it): it is theirs. */
+  const noteTyped = (key: string) => setFill(typedIn(fillRef.current, key))
+  /** The strip is clearing. A logged contact keeps what it logged; an abandoned one gives its
+   *  call-history values back, so one station's last exchange never stays in a box, unmarked,
+   *  for the next. */
+  const endFill = (logged: boolean) => {
+    if (fillRef.current === EMPTY_FILL) return
+    if (!logged) {
+      const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+      const { writes } = applyFill(fillRef.current, '', {}, values)
+      if (Object.keys(writes).length > 0) setFdFields((prev) => ({ ...prev, ...writes }))
+    }
+    setFill(EMPTY_FILL)
+  }
+  // ⭐ THE FILL, AS THE CALL IS TYPED (operator, 2026-10-08). Every change of the call (typed, a
+  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what the
+  // file holds for exactly that call: `features/callHistoryFill` decides what may go in, and
+  // takes a fill back out when the call stops being the one it was for.
+  const fdReceivesKey = fdReceives.map((f) => f.key).join(' ')
+  useEffect(() => {
+    if (!fdActive) return
+    const offered = historyFill(logCall, fdReceives, historyFile, fieldDay?.event)
+    const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+    const r = applyFill(fillRef.current, logCall, offered, values)
+    if (r.state === fillRef.current) return
+    setFill(r.state)
+    if (Object.keys(r.writes).length > 0) setFdFields((prev) => ({ ...prev, ...r.writes }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -1323,6 +1379,9 @@ export function LogEntry({
   }
 
   const reset = () => {
+    // Before the call goes: a contact abandoned here gives its call-history values back. A
+    // logged one has already said it keeps them (`endFill(true)` beside its `reset()`).
+    endFill(false)
     setRemoteDraftContext(null)
     setLogCall('')
     setLogRstSent(defaultRst)
@@ -1504,7 +1563,10 @@ export function LogEntry({
           }
           // The contact is in the log once any county entered it; a line that was all dupes
           // leaves the entry on screen, as a refused single contact does.
-          if (logged.length > 0) reset()
+          if (logged.length > 0) {
+            endFill(true)
+            reset()
+          }
         }
         return
       }
@@ -1532,6 +1594,7 @@ export function LogEntry({
           }),
           'success',
         )
+        endFill(true)
         reset()
       }
       return
@@ -1742,6 +1805,18 @@ export function LogEntry({
     logEntity !== null &&
     WVE_ENTITIES.has(logEntity) &&
     fdValue(qthSlot).trim() === ''
+  // The SCP line for what is in the Call box: calls already in this log first, then the list's
+  // partial matches, then its one-character-different ones. A scan per render, zero IPC.
+  const scpHits =
+    scpOn && scpCalls.length > 0
+      ? scpLine(logCall, scpCalls, (fieldDay?.log ?? []).map((q) => q.call.toUpperCase()))
+      : []
+  /** A click on the SCP line puts that call in the Call box, as typing it would, and leaves
+   *  the caret there. Nothing is ever put in the box from the line on its own. */
+  const pickScp = (call: string) => {
+    setLogCall(call)
+    requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+  }
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -1873,16 +1948,30 @@ export function LogEntry({
           {/* ONE BOX PER RECEIVED SLOT, in receive order. Space walks each to the next
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
-          {fdReceives.map((f, i) => (
+          {fdReceives.map((f, i) => {
+            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
+            // value: typing over it, or the strip clearing, takes the mark away.
+            const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            return (
             <label className="le-fd-field" key={f.key}>
-              <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              {fromHistory ? (
+                <span className="le-fd-cap le-fd-cap-marked">
+                  <span className="le-fd-cap-text">{fdFieldLabel(f.key)}</span>
+                  <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
+                </span>
+              ) : (
+                <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              )}
               <input
                 ref={(el) => {
                   fdBoxRefs.current[f.key] = el
                 }}
-                className="settings-input mono le-fd-input le-fd-input-code"
+                className={`settings-input mono le-fd-input le-fd-input-code${
+                  fromHistory ? ' le-fd-input-history' : ''
+                }`}
                 value={fdValue(f)}
                 onChange={(e) => {
+                  noteTyped(f.key)
                   setFdField(f.key, e.target.value)
                   // The list is offered from every universe this slot draws on, which for
                   // a QSO party's one QTH box is counties AND states — and, inside a county
@@ -1915,7 +2004,11 @@ export function LogEntry({
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
-                title={slotTitle(f.key)}
+                title={
+                  fromHistory
+                    ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
+                    : slotTitle(f.key)
+                }
               />
               {fdHits.key === f.key && fdHits.values.length > 0 && (
                 <ul className="le-fd-suggest">
@@ -1927,6 +2020,7 @@ export function LogEntry({
                           e.preventDefault() // pick before the input's onBlur closes the list
                           // Inside a county line the pick completes the part being typed.
                           const line = fdLineDomain(f)
+                          noteTyped(f.key)
                           setFdField(
                             f.key,
                             line && isCountyLine(fdValue(f)) ? withLastCountyPart(fdValue(f), v.code) : v.code,
@@ -1942,7 +2036,8 @@ export function LogEntry({
                 </ul>
               )}
             </label>
-          ))}
+            )
+          })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
               is false whenever `fdActive` is, so `logIt`'s grid guard — which
               sits above the FD branch — is provably inert on this path. A layout
@@ -1979,6 +2074,39 @@ export function LogEntry({
           )}
 
         </div>
+
+        {/* ⭐ SUPER CHECK PARTIAL — one line under the boxes, there whenever SCP is on so the
+            strip does not grow and shrink as calls come and go (it is a `fit="content"` pane,
+            so its height is its content). A click puts the call in the Call box; nothing is put
+            there from this line on its own, and a call missing from it is not an error. A log
+            aid, not a transmit control. */}
+        {scpOn && (
+          <div className="le-scp" role="group" aria-label={t('logEntry.scp.label')} title={t('logEntry.scp.title')}>
+            {scpCalls.length === 0 ? (
+              <span className="le-scp-empty">{t('logEntry.scp.none')}</span>
+            ) : (
+              scpHits.map((h) => (
+                <button
+                  key={h.call}
+                  type="button"
+                  className={`le-scp-call le-scp-${h.kind}`}
+                  // The caret stays in the Call box: a press here is a pick, not a move.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickScp(h.call)}
+                  title={
+                    h.kind === 'worked'
+                      ? t('logEntry.scp.worked.title')
+                      : h.kind === 'near'
+                        ? t('logEntry.scp.near.title')
+                        : undefined
+                  }
+                >
+                  {h.call}
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {/* THE VERDICT SLOT — always present, empty or not.
 

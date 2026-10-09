@@ -1574,6 +1574,21 @@ pub struct Settings {
     /// operator hears would be worse than the exposure this closes.
     #[serde(default)]
     pub unassisted_mode: bool,
+    /// SUPER CHECK PARTIAL: the line of contest calls under the contest strip's Call box
+    /// (`crate::scp`). On by default (operator, 2026-10-08), so the list downloads the first time
+    /// a contest starts. Read it through [`Settings::scp_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub scp_enabled: bool,
+    /// The once-a-day check for a newer Super Check Partial list. Off keeps the list held; the
+    /// operator's "Update now" still asks.
+    #[serde(default = "default_true")]
+    pub scp_auto_update: bool,
+    /// CALL HISTORY: fill the contest strip's exchange boxes from the file the operator imported
+    /// (`crate::call_history`). Importing a file is the operator asking for it, so this is on;
+    /// it is the way to stop the fill without losing the file. Read it through
+    /// [`Settings::call_history_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub call_history_enabled: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Antenna rotator, the INTEGRATED way: a Hamlib rotator model number
@@ -3945,6 +3960,12 @@ fn default_rated_watts() -> u32 {
     100
 }
 
+/// The assistance label Super Check Partial is journaled and reported under. The contest strip
+/// matches it on `FieldDayStatus::assistance_on` (see [`Settings::assistance_sources`]).
+pub const SCP_SOURCE: &str = "Super Check Partial";
+/// The assistance label call history is journaled and reported under, matched the same way.
+pub const CALL_HISTORY_SOURCE: &str = "Call history";
+
 fn default_true() -> bool {
     true
 }
@@ -4494,6 +4515,9 @@ impl Default for Settings {
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
             unassisted_mode: false,
+            scp_enabled: true,
+            scp_auto_update: true,
+            call_history_enabled: true,
             // Matches the profile default above: 4534 (broker owns 4532, rotctld 4533; #53).
             rigctld_port: 4534,
             rotator_model: 0,
@@ -4782,15 +4806,35 @@ impl Settings {
         !self.unassisted_mode
     }
 
+    /// Is Super Check Partial EFFECTIVELY on? The operator's switch, minus Unassisted mode. A list
+    /// of the calls active in contests is help finding and copying stations, so an unassisted
+    /// entry gets none, and nothing is downloaded while one is declared.
+    pub fn scp_active(&self) -> bool {
+        self.scp_enabled && !self.unassisted_mode
+    }
+
+    /// Is call history EFFECTIVELY on? The operator's switch, minus Unassisted mode, for the same
+    /// reason as [`Settings::scp_active`]: last time's exchange is help copying this one.
+    pub fn call_history_active(&self) -> bool {
+        self.call_history_enabled && !self.unassisted_mode
+    }
+
     /// The assistance sources this build knows how to suppress, as
     /// `(label, effectively_on)` — the single list the journal records and the UI reads,
     /// so a new assistance source cannot be added to the app and forgotten by Unassisted
     /// mode. Order is stable: it is display order and journal order.
-    pub fn assistance_sources(&self) -> [(&'static str, bool); 3] {
+    ///
+    /// ⚠️ The contest strip reads the last two labels off `FieldDayStatus::assistance_on` to
+    /// decide whether it shows Super Check Partial and fills from call history
+    /// (`ui/src/features/contestLists.ts`), so a rename here is a rename there: guarded by
+    /// `the_strip_reads_the_scp_and_call_history_labels_the_engine_sends`.
+    pub fn assistance_sources(&self) -> [(&'static str, bool); 5] {
         [
             ("AI CW decoder", self.ai_cw_active()),
             ("DX cluster / RBN", self.cluster_active()),
             ("PSK Reporter needs", self.pskr_evidence_active()),
+            (SCP_SOURCE, self.scp_active()),
+            (CALL_HISTORY_SOURCE, self.call_history_active()),
         ]
     }
 
@@ -6662,7 +6706,7 @@ mod tests {
         // rename, not a parser hole.
         assert_eq!(
             labels.len(),
-            3,
+            5,
             "assistance_sources changed shape: {labels:?}"
         );
         for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
@@ -12208,6 +12252,97 @@ mod tests {
             s.pskreporter,
             "the outbound upload is explicitly not assistance and must keep running"
         );
+    }
+
+    /// Super Check Partial and call history are on out of the box (the operator's ruling: the
+    /// list downloads the first time a contest starts), and Unassisted mode turns both off
+    /// without touching either switch, exactly as it does the cluster and the AI CW decoder.
+    #[test]
+    fn scp_and_call_history_are_on_by_default_and_unassisted_turns_both_off() {
+        let mut s = Settings::default();
+        assert_eq!(
+            (s.scp_enabled, s.scp_auto_update, s.call_history_enabled),
+            (true, true, true)
+        );
+        assert_eq!((s.scp_active(), s.call_history_active()), (true, true));
+        s.unassisted_mode = true;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, false));
+        assert_eq!(
+            (s.scp_enabled, s.call_history_enabled),
+            (true, true),
+            "it overrides, never overwrites"
+        );
+        let labels: Vec<_> = s
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| !on)
+            .map(|&(label, _)| label)
+            .collect();
+        assert!(labels.contains(&SCP_SOURCE) && labels.contains(&CALL_HISTORY_SOURCE));
+        s.unassisted_mode = false;
+        s.scp_enabled = false;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, true));
+    }
+
+    /// The three switches on the exact wire keys the UI writes, and a settings file written
+    /// before they existed loads with all three ON: the ruling's default reaches upgrades too.
+    #[test]
+    fn scp_and_call_history_settings_use_the_exact_wire_keys_and_old_files_load_them_on() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"scpEnabled\":true",
+            "\"scpAutoUpdate\":true",
+            "\"callHistoryEnabled\":true",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW"}"#).unwrap();
+        assert_eq!(
+            (
+                old.scp_enabled,
+                old.scp_auto_update,
+                old.call_history_enabled
+            ),
+            (true, true, true)
+        );
+        let off: Settings = serde_json::from_str(
+            r#"{"scpEnabled":false,"scpAutoUpdate":false,"callHistoryEnabled":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                off.scp_enabled,
+                off.scp_auto_update,
+                off.call_history_enabled
+            ),
+            (false, false, false),
+            "the operator's own choice round-trips"
+        );
+    }
+
+    /// The contest strip decides whether it shows Super Check Partial and fills from call
+    /// history by these two labels on `FieldDayStatus::assistance_on`. A rename on either side
+    /// would leave the strip silently showing neither, so the UI's mirror is read here.
+    #[test]
+    fn the_strip_reads_the_scp_and_call_history_labels_the_engine_sends() {
+        let ts = include_str!("../../../ui/src/features/contestLists.ts");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        for needed in [SCP_SOURCE, CALL_HISTORY_SOURCE] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources()"
+            );
+            assert!(
+                ts.contains(&format!("= '{needed}'")),
+                "contestLists.ts no longer mirrors {needed:?}: the strip would never see it on"
+            );
+        }
+        // Control: the reader is reading the real file, not an empty haystack.
+        assert!(ts.contains("export function useScpList"));
     }
 
     /// Default false, and nothing but the operator's toggle may set it — same doctrine as

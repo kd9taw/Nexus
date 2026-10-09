@@ -50,7 +50,7 @@ impl Cache {
     pub(super) fn read(&mut self, engine: &crate::SharedEngine) -> Result<Value, &'static str> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let lock = || loop {
-            if Instant::now() >= deadline {
+            if super::picture::past(deadline) {
                 return Err("applicationBusy");
             }
             match tempo_app::engine::engine_try_lock(engine) {
@@ -255,7 +255,9 @@ mod tests {
     /// An edit landing while the history is read is not half in it, and does not refuse it:
     /// the answer is the log the read found, and the next read — the log's revision has moved
     /// — has the edit. On the database the edits commit while the read runs, beside its
-    /// picture. A store in memory commits nothing until the read ends, so there the edits are
+    /// picture, with the read's clock held: the hook commits on the read's own thread, and a
+    /// commit beside the read never spends its two seconds, however slow the disk. A store in
+    /// memory commits nothing until the read ends, so there the edits are
     /// made as a command makes them, the first while the read runs and the second after it
     /// ([`changed_by_a_command`](super::super::log_tests::changed_by_a_command)). An oversized
     /// field of a heard call's contact refuses the whole context rather than showing a station
@@ -263,7 +265,7 @@ mod tests {
     #[test]
     fn an_edit_during_the_read_belongs_to_the_next_read_and_oversized_context_is_refused() {
         use super::super::log_tests::changed_by_a_command;
-        use super::super::picture::{at_seams, Seam};
+        use super::super::picture::{at_seams, with_the_read_clock_held, Seam};
         let d = Dir::new("js8-edit-during-read");
         for (arm, engine) in [
             ("the database", engine_on_file(&d)),
@@ -289,10 +291,12 @@ mod tests {
                     let mut first = log[0].as_ref().clone();
                     first.call = "K9ZZZ".into();
                     if arm == "the database" {
-                        assert!(e.update_qso(latest.id.unwrap(), latest));
-                        assert!(e.update_qso(first.id.unwrap(), first));
-                        e.flush_log_store(Duration::from_secs(60))
-                            .expect("committed to the store");
+                        with_the_read_clock_held(|| {
+                            assert!(e.update_qso(latest.id.unwrap(), latest));
+                            assert!(e.update_qso(first.id.unwrap(), first));
+                            e.flush_log_store(Duration::from_secs(60))
+                                .expect("committed to the store");
+                        });
                     } else {
                         drop(e);
                         let edit = |r: tempo_core::logbook::QsoRecord| {
@@ -344,6 +348,10 @@ mod tests {
                 q.comment = Some("x".repeat(1025));
                 assert!(e.update_qso(q.id.unwrap(), q));
             }
+            // Read once the store holds the oversized field, which is this read's premise: a read
+            // straight after the edit waits two seconds for it and, on a slow disk, is refused
+            // busy (P4) before it sees the field.
+            settle(&engine);
             assert_eq!(
                 Cache::default().read(&engine).unwrap_err(),
                 "applicationTooLarge",

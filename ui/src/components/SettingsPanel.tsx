@@ -154,6 +154,10 @@ import {
   setLaunchAtLogin,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
+import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory, scpEnsure } from '../api'
+import type { CallHistoryStatus, ScpStatus } from '../types'
+import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
+import { fmtUtc } from '../features/logQuery'
 import { EsmRolePicker } from './EsmRolePicker'
 import {
   CW_BUILT_IN_ROLES,
@@ -1622,6 +1626,22 @@ export function SettingsPanel({
   // target leaves the default landing rather than doing nothing.
   const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target, targetSeq])
   const [tab, setTab] = useState<SettingsTab>(resolvedTarget?.tab ?? 'station')
+  // Super Check Partial and call history: what is held, read when the Contesting tab opens. The
+  // station decides when the site is asked; this only reports, and "Update now" asks it to try.
+  const [scpStatus, setScpStatus] = useState<ScpStatus | null>(null)
+  const [scpBusy, setScpBusy] = useState(false)
+  const [historyStatus, setHistoryStatus] = useState<CallHistoryStatus | null>(null)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const historyFileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (remote || tab !== 'contesting') return
+    let live = true
+    getScpStatus().then((s) => live && setScpStatus(s)).catch(() => {})
+    getCallHistoryStatus().then((s) => live && setHistoryStatus(s)).catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [remote, tab])
   useEffect(() => {
     if(remote)return
     if (tab !== 'contesting' || !form?.fdScoreboard) {
@@ -12432,6 +12452,181 @@ export function SettingsPanel({
                   </span>
                 </div>
               )}
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
+            <fieldset className="settings-section" id="settings-scp-call-history">
+              <legend>{t('settings.contestAids.legend')}</legend>
+              {/* Both are help finding and copying stations, so Unassisted mode turns them off,
+                  overriding these switches rather than rewriting them (`Settings::scp_active`).
+                  Said here so a switch that reads ON does not look broken during that entry. */}
+              {form.unassistedMode && (
+                <p className="settings-note">{t('settings.contestAids.unassisted')}</p>
+              )}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.scp.label')}</span>
+                <button disabled={remote}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.scpEnabled !== false}
+                  className={`toggle${form.scpEnabled !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('scpEnabled', form.scpEnabled === false)}
+                  aria-label={t('settings.contestAids.scp.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {/* What is downloaded, from where and when, in plain words (operator, 2026-10-08). */}
+                <span className="settings-hint">{t('settings.contestAids.scp.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.auto.label')}</span>
+                <button disabled={remote || form.scpEnabled === false}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.scpAutoUpdate !== false}
+                  className={`toggle${form.scpAutoUpdate !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('scpAutoUpdate', form.scpAutoUpdate === false)}
+                  aria-label={t('settings.contestAids.auto.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.contestAids.auto.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-hint">
+                  {scpStatus && scpStatus.count > 0
+                    ? t('settings.contestAids.status.held', {
+                        count: scpStatus.count,
+                        date: fmtUtc(scpStatus.fetchedAt),
+                      })
+                    : t('settings.contestAids.status.none')}
+                  {scpStatus?.lastError
+                    ? ` ${t('settings.contestAids.status.failed', { error: scpStatus.lastError })}`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={remote || scpBusy || form.scpEnabled === false || !!form.unassistedMode}
+                  onClick={() => {
+                    setScpBusy(true)
+                    scpEnsure(true)
+                      .then((s) => {
+                        setScpStatus(s)
+                        window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                      })
+                      .catch(() => {})
+                      .finally(() => setScpBusy(false))
+                  }}
+                >
+                  {scpBusy
+                    ? t('settings.contestAids.update.busy')
+                    : t('settings.contestAids.update.action')}
+                </button>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.history.fill.label')}</span>
+                <button disabled={remote}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.callHistoryEnabled !== false}
+                  className={`toggle${form.callHistoryEnabled !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('callHistoryEnabled', form.callHistoryEnabled === false)}
+                  aria-label={t('settings.contestAids.history.fill.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.contestAids.history.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.history.label')}</span>
+                <span className="settings-hint">
+                  {historyStatus
+                    ? t('settings.contestAids.history.held', {
+                        file: historyStatus.fileName,
+                        count: historyStatus.count,
+                        contest: contestName(historyStatus.contest),
+                      })
+                    : t('settings.contestAids.history.none')}
+                  {historyStatus && historyStatus.contest !== ((form.fdEvent ?? '').trim() || 'arrlfd')
+                    ? ` ${t('settings.contestAids.history.otherContest', {
+                        contest: contestName(historyStatus.contest),
+                      })}`
+                    : ''}
+                </span>
+                <span>
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={remote || historyBusy}
+                    onClick={() => historyFileRef.current?.click()}
+                    title={t('settings.contestAids.history.import.title', {
+                      contest: contestName(form.fdEvent?.trim()),
+                    })}
+                  >
+                    {historyBusy
+                      ? t('settings.contestAids.history.import.busy')
+                      : t('settings.contestAids.history.import.action')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={remote || historyBusy || !historyStatus}
+                    onClick={() => {
+                      clearCallHistory()
+                        .then(() => {
+                          setHistoryStatus(null)
+                          window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                        })
+                        .catch(() => {})
+                    }}
+                  >
+                    {t('settings.contestAids.history.clear.action')}
+                  </button>
+                </span>
+                {/* The TLE import's pattern: the file is read here and handed over as text, and
+                    it is bound to the contest picked above at this moment. */}
+                <input disabled={remote}
+                  ref={historyFileRef}
+                  type="file"
+                  accept=".txt,.csv"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    e.target.value = ''
+                    if (!f) return
+                    // The id the strip compares against: a blank picker is ARRL Field Day, as
+                    // `canonical_contest` reads it (the station canonicalises it again).
+                    const contest = (form.fdEvent ?? '').trim() || 'arrlfd'
+                    setHistoryBusy(true)
+                    f.text()
+                      .then((text) => importCallHistory(text, f.name, contest))
+                      .then((st) => {
+                        setHistoryStatus(st)
+                        window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                        pushToast(
+                          t('settings.contestAids.history.import.ok', {
+                            count: st.count,
+                            contest: contestName(st.contest),
+                          }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((err) =>
+                        pushToast(
+                          t('settings.contestAids.history.import.failed', {
+                            error: `${err instanceof Error ? err.message : err}`,
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setHistoryBusy(false))
+                  }}
+                />
+              </div>
             </fieldset>
           )}
 

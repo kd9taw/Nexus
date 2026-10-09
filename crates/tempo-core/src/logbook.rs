@@ -2047,8 +2047,8 @@ impl Logbook {
     /// lacks AND upgrades confirmations on the ones already present — in a single
     /// consume-once pass keyed at reconcile (mode-class) granularity, so a mode-spelling
     /// difference can't double-log the same contact. A row confirms with QRZ's own
-    /// confirmation alone, never with its copies of other services'
-    /// ([`crate::reconcile::merge_and_add`]). Returns `(added_records, summary)`; call
+    /// confirmation alone, never with its copies of other services', and brings no LoTW
+    /// upload mark ([`crate::reconcile::merge_and_add`]). Returns `(added_records, summary)`; call
     /// [`save`](Self::save) to persist.
     pub fn merge_downloaded(
         &mut self,
@@ -4395,7 +4395,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         // wrote the ADIF, so an imported log isn't counted as needing a LoTW upload it
         // already had (the inflated "Upload to LoTW (N)" count on an imported log).
         // LOTW_QSL_SENT itself is only INSPECTED (get, not remove): it stays in
-        // `extra` and round-trips verbatim for other loggers.
+        // `extra` and round-trips verbatim for other loggers. QRZ's book re-reports it, and
+        // it parses the same here; the merge of a QRZ download takes no LoTW mark from a row,
+        // and drops the field (`reconcile::merge_and_add`).
         lotw: take_upload(f, "APP_TEMPO_UL_LOTW").or_else(|| {
             f.get("LOTW_QSL_SENT")
                 .is_some_and(|v| v.eq_ignore_ascii_case("Y"))

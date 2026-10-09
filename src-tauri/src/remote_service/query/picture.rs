@@ -192,11 +192,19 @@ fn holds(scope: Scope<'_>, q: &QsoRecord) -> bool {
 /// lock: checked every 128 contacts — once per chunk of the reads this replaced, which checked it
 /// as they took the lock for each — a pass past it is refused as busy, as theirs were.
 pub(super) fn within(deadline: std::time::Instant, pick: Pick) -> Result<(), &'static str> {
-    if pick.at.is_multiple_of(128) && std::time::Instant::now() >= deadline {
+    if pick.at.is_multiple_of(128) && past(deadline) {
         Err("applicationBusy")
     } else {
         Ok(())
     }
+}
+
+/// Whether a Remote read's `deadline` has passed, on the box's clock — in a test, less the time a
+/// hook held the read's clock ([`with_the_read_clock_held`]).
+pub(super) fn past(deadline: std::time::Instant) -> bool {
+    #[cfg(test)]
+    let deadline = deadline + HELD.with(std::cell::Cell::get);
+    std::time::Instant::now() >= deadline
 }
 
 /// Run `f` against ONE picture of the log `rows` names — taken under the Engine lock by the
@@ -241,6 +249,22 @@ thread_local! {
     // A test's hook into the reads this thread makes ([`at_seams`]). Per thread: a Remote read
     // runs on the thread that asks, and the harness runs tests in parallel.
     static SEAM: std::cell::RefCell<Option<SeamHook>> = const { std::cell::RefCell::new(None) };
+    // How long the hook held the clock of this thread's reads while `at_seams` runs.
+    static HELD: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// Run `f` with the clock of the read it interrupts held ([`past`]). For a hook that does what
+/// would happen BESIDE a read — another window's commit — on the read's own thread: there the
+/// time it takes, a slow disk's flushes, was spent from the read's own two seconds, which a
+/// commit on another thread never touches. What `f` does still lands inside the read; only the
+/// read's budget does not pay for it.
+#[cfg(test)]
+pub(in crate::remote_service) fn with_the_read_clock_held<T>(f: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let answer = f();
+    HELD.with(|held| held.set(held.get() + start.elapsed()));
+    answer
 }
 
 #[cfg(test)]
@@ -262,9 +286,11 @@ pub(in crate::remote_service) fn at_seams<T>(
     impl Drop for Clear {
         fn drop(&mut self) {
             SEAM.with(|s| *s.borrow_mut() = None);
+            HELD.with(|held| held.set(std::time::Duration::ZERO));
         }
     }
     SEAM.with(|s| *s.borrow_mut() = Some(Box::new(hook)));
+    HELD.with(|held| held.set(std::time::Duration::ZERO));
     let _clear = Clear;
     body()
 }

@@ -527,6 +527,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'contesting',
     keywords: ['contest', 'assisted', 'unassisted', 'category', 'entry'],
   },
+  // The contest strip's two aids: the Super Check Partial list Nexus downloads and the
+  // call-history file the operator imports. Under Contest Category because its Unassisted
+  // switch turns both off, and above Field Day Setup because both serve every contest.
+  {
+    id: 'scp-call-history',
+    label: 'Super Check Partial and call history',
+    tab: 'contesting',
+    keywords: ['super check partial', 'scp', 'master.scp', 'supercheckpartial.com', 'w9kkn',
+      'call history', 'callhistory', 'n1mm call history', 'history file', 'prefill',
+      'exchange fill', 'partial match'],
+  },
   // Enter Sends Message: a switch per cockpit (CW, RTTY, Phone), off until the operator turns it
   // on, and the steps each cockpit's macro set sends. With the contest's own sections, above
   // Field Day's: it works in every contest the picker runs.

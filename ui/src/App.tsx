@@ -183,6 +183,7 @@ import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { pttRefusedLane } from './features/pttRefused'
 import { clockRepairHoldLane } from './features/clockRepairHold'
+import { askAgainWhileSaving } from './features/notAnswered'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -1054,8 +1055,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Refetch the needed board. Called on a 30 s poll AND immediately after any log so a
   // just-worked station drops off the roster/needs at once (the backend rebuilds needs
   // from the full log, excluding the QSO we just wrote) instead of lingering up to 30 s.
+  // On a slow disk the engine refuses the read until that QSO is saved; the refusal is
+  // asked again a second later (`askAgainWhileSaving`), not left to the poll.
   const refreshNeeds = useCallback(() => {
-    getNeedAlerts()
+    askAgainWhileSaving(getNeedAlerts)
       .then((alerts) => setNeedAlerts(alerts))
       .catch(() => { if (remote) setNeedAlerts([]) })
   }, [])

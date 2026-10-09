@@ -55,6 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
   or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
   lifts; a swipe still scrolls.
+- **Super Check Partial and call history in the contest strip.** As you type a call in any
+  contest's log strip, a line under the boxes lists the calls active in recent contests that
+  contain what you have typed: calls already in your log first, then the rest, then (from the
+  fourth character) calls one character different. Click one to put it in the Call box. The list
+  (`MASTER.SCP`, about 360 KB of callsigns) comes from supercheckpartial.com, maintained by W9KKN.
+  Nexus downloads it the first time a contest starts and checks for a newer copy at most once a
+  day, following the site's rules for logging software; it is never shipped with Nexus. Settings ▸
+  Contesting ▸ Super Check Partial and call history turns it off, turns the daily check off, and
+  has Update now. You can also import an N1MM-format call-history file for one contest: as you
+  type a call that is in it, the exchange boxes it can check (a county, state, section or zone the
+  contest accepts) fill from it and say **history** in their caption, and whatever you type wins.
+  A report, a serial number, a Field Day class or a Sweepstakes check never comes from the file.
+  Unassisted mode turns both off, and the assistance record lists them.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
@@ -237,6 +250,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station you had just worked could stay marked as needed and the counts were one short, with
   nothing to say so. Now, while the contact is still being saved, they give no answer rather than
   a short one, and the next look includes it.
+- **On a slow disk, a contact you just logged shows up within seconds in the Logbook list, the
+  Needed board, Awards, Journey and Statistics.** When saving it took more than two seconds, the
+  Logbook list left it out until you logged another contact, and the Needed board kept the
+  station you had just worked marked as needed until its next half-minute refresh. Nexus now asks
+  again each second, up to three times, and shows the contact as soon as it is saved.
+- **The Logbook no longer says your log is empty while it is still reading it.** Opening it showed
+  "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
+  and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
+  page, a search that matches nothing now says so, where it said the log was empty.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -453,6 +475,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
   eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
   adds that confirmation. Confirmations already in your log are not changed.
+- **Sync from QRZ no longer marks a contact as uploaded to LoTW.** Your QRZ logbook can also say
+  that a contact was sent to LoTW, and Sync from QRZ took that as LoTW's word: a contact could come
+  out of a sync marked as already on file at LoTW, including one whose mark Logbook ▸ Check
+  confirmations had just taken off, and Nexus then never uploaded it. Sync from QRZ and Pull
+  confirmations automatically now leave a contact's LoTW upload mark as it was, and a contact a
+  sync adds to your log starts without one. LoTW's own list of your uploads still marks them. The
+  contacts this affects go in your next LoTW upload; one LoTW already holds is a duplicate there
+  and changes nothing. Marks already in your log are not changed, and nothing changes in what goes
+  to QRZ, Club Log or eQSL.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the

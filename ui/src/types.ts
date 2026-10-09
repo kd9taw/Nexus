@@ -2794,6 +2794,40 @@ export interface AssistanceEvent {
   note: string
 }
 
+/** What Nexus holds of the Super Check Partial list (`tempo_app::scp::ScpMeta`). */
+export interface ScpStatus {
+  etag?: string | null
+  lastModified?: string | null
+  /** When the list in use was downloaded (Unix seconds; 0 = never). */
+  fetchedAt: number
+  /** When Nexus last asked the site, whatever the answer (0 = never). */
+  checkedAt: number
+  /** No automatic check before this. */
+  nextCheckAt: number
+  /** Calls in the list in use (0 = no list yet). */
+  count: number
+  /** Why the last check failed, until one succeeds. The list in use is kept. */
+  lastError?: string | null
+}
+
+/** What was imported as call history (`tempo_app::call_history::HistoryMeta`). */
+export interface CallHistoryStatus {
+  fileName: string
+  /** The contest it is for: a `FieldDayStatus.event` id. */
+  contest: string
+  importedAt: number
+  count: number
+  /** Its N1MM columns, in file order. */
+  fields: string[]
+}
+
+/** The imported call history as the strip reads it: call → N1MM column → value. */
+export interface CallHistoryFile {
+  contest: string
+  fileName: string
+  entries: Record<string, Record<string, string>>
+}
+
 /** Per-connector status: whether a credential is stored, and — the part the dot is painted
  *  from — what happened the last time Nexus actually talked to the service. The displayed
  *  state is derived in `settings/connHealth.ts`, not sent as a string, so the derivation is
@@ -3732,6 +3766,14 @@ export interface Settings {
    * keep the operator's own values, so ending it restores their station exactly. Default false;
    * only the operator's toggle sets it. */
   unassistedMode?: boolean
+  /** Super Check Partial in the contest strip. Default true: the list downloads the first time a
+   *  contest starts. Unassisted mode overrides it. */
+  scpEnabled?: boolean
+  /** The once-a-day check for a newer Super Check Partial list. Default true. */
+  scpAutoUpdate?: boolean
+  /** Fill the contest strip's exchange from the imported call history. Default true. Unassisted
+   *  mode overrides it. */
+  callHistoryEnabled?: boolean
   /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
   licenseClass: string
   /** Active operating mode ('digital' | 'phone' | 'cw') — set live via the section nav, but
