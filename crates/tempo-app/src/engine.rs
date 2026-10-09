@@ -33690,6 +33690,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// Enter Sends Message's RTTY mappings are the SETTINGS FORM's to write, as a CW profile's
+    /// mapping is: a form save adopts them, and the cockpit's one writer, which replaces only the
+    /// sets and the active set, leaves them exactly as they were — in memory and in the file.
+    #[test]
+    fn a_form_save_writes_the_rtty_esm_mapping_and_a_cockpit_macro_save_keeps_it() {
+        let (mut e, path, _lock) = rtty_macro_engine("esm");
+        let mapped =
+            serde_json::json!({"everyday": {"tu": ["F3"]}, "contest": {"exch": ["F6", "F7"]}});
+        let mut panel = e.settings().clone();
+        panel.macros.rtty_esm_roles = serde_json::from_value(mapped.clone()).unwrap();
+        e.apply_settings(panel);
+        let roles = |e: &Engine| {
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyEsmRoles"].clone()
+        };
+        assert_eq!(roles(&e), mapped, "a form save did not adopt the mapping");
+
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+        assert_eq!(
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyProfiles"],
+            contest_f1_edit(),
+            "control: the cockpit edit landed"
+        );
+        assert_eq!(
+            roles(&e),
+            mapped,
+            "the cockpit's macro save moved the ESM mapping"
+        );
+        let on_disk = serde_json::to_value(Settings::load(&path).macros).unwrap();
+        assert_eq!(
+            on_disk["rttyEsmRoles"], mapped,
+            "the mapping did not reach the file"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// The OTHER half of the one-writer carve-out, and the half a carve-out gets wrong: the two
     /// paths that REPLACE the settings must still move the macro sets. Both call
     /// `apply_restored_settings` — `reset_settings` sends `Settings::default()`, and

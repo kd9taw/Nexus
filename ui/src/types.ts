@@ -2,6 +2,9 @@
 // These shapes MUST match the Rust app-logic layer exactly so the web UI
 // interoperates with the Tempo core over Tauri `invoke`.
 
+import type { EsmRoleMap } from './features/esmRoles'
+import type { MacroSetId } from './features/macroSets'
+
 export type Presence = 'active' | 'idle' | 'stale'
 
 export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR' | 'JS8'
@@ -3736,6 +3739,9 @@ export interface Settings {
   operatingMode?: string
   /** Phone voice-keyer slots — declared so a settings Save round-trips them (don't wipe). */
   voiceMessages?: VoiceMessage[]
+  /** ENTER SENDS MESSAGE on the voice keyer: the slots the operator mapped to ESM's steps, over
+   * the built-in slot convention. Absent = the convention as it is. */
+  voiceEsmRoles?: EsmRoleMap
   // --- rig control ---
   /** PTT keying method: CAT (rigctld) / serial RTS / serial DTR / VOX. */
   pttMethod: string
@@ -4081,6 +4087,16 @@ export interface Settings {
   /** The power I SEND as an exchange field (ARRL DX: `KW`, `500`, `5`) — free text, and
    *  ⚠️ not `fdPowerMult`, which is a scoring tier picked from a legal set. */
   contestPower?: string
+  /** ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
+   *  message. OFF by default, and only the operator's own switch turns it on. */
+  contestEsmCw?: boolean
+  /** The same for the RTTY cockpit's contest strip. OFF by default. */
+  contestEsmRtty?: boolean
+  /** The same for the Phone cockpit's contest strip, through the voice keyer. OFF by default. */
+  contestEsmPhone?: boolean
+  /** ESM's "call once" in Search and Pounce: my call goes once per station, and the next Enter
+   *  asks for a repeat. OFF by default. */
+  contestEsmCallOnce?: boolean
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
@@ -4374,8 +4390,9 @@ export interface Settings {
      * (a "Default" profile) on load. New reads/writes go through the profiles. */
     cw?: { key: string; label: string; text: string }[]
     /** Named CW cockpit F-key macro sets (one per operator/purpose). Each profile's
-     * empty macro list = the cockpit's built-in defaults. */
-    cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[] }[]
+     * empty macro list = the cockpit's built-in defaults. `esmRoles` — which of the set's keys
+     * Enter Sends Message sends for each step, as the operator mapped them; absent = none. */
+    cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
     /** Index into `cwProfiles` of the active set. */
     activeCwProfile?: number
     /** The RTTY cockpit's F1–F8 sets by name (`everyday`, `contest`), each holding ONLY the keys
@@ -4384,6 +4401,10 @@ export interface Settings {
     rttyProfiles?: KeyboardMacroProfile[]
     /** The RTTY set the cockpit shows: `contest`, or Everyday for anything else. */
     activeRttyProfile?: string
+    /** ENTER SENDS MESSAGE on the RTTY sets, by set id: the steps the operator mapped to that
+     * set's keys, over the contest set's built-in layout. Written by the Settings form (the
+     * cockpit's `setRttyMacros` leaves it as it is); absent = nothing mapped. */
+    rttyEsmRoles?: Partial<Record<MacroSetId, EsmRoleMap>>
     /** The PSK cockpit's F1–F8 sets, exactly as `rttyProfiles` above — and SEPARATE STORAGE on
      * purpose: the two modes' built-in texts differ (PSK is mixed-case full ASCII), so one
      * shared field would make an edit in one cockpit rewrite the other's keys. Written only by
