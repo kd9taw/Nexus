@@ -819,6 +819,32 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         &source["settings"],
         &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
     );
+    // Winter Field Day's capture adds the two objective lists, which the page takes as optional.
+    let wfd = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+        tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "wfd".into(),
+            fd_class: "1O".into(),
+            fd_section: "EMA".into(),
+            fd_objectives: vec!["wfd-qrp".into()],
+            ..Default::default()
+        },
+    )));
+    wfd.lock().unwrap().restore_field_day_if_enabled();
+    // `self::` — the capture above is bound to a local named `page`.
+    let wfd_page = self::page(&wfd, &sources(), "fieldDay", "");
+    let wfd_settings = &wfd_page["meta"]["source"]["settings"];
+    assert_eq!(
+        wfd_settings["fdObjectives"],
+        serde_json::json!(["wfd-qrp"]),
+        "scene guard: Winter Field Day's capture carries its objectives"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's settings",
+        wfd_settings,
+        &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
+        &["fdObjectives", "fdObjectivesPlanned"],
+    );
     takes_optional(
         "fieldDay: the ruleset",
         &source["ruleset"],

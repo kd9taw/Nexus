@@ -10,6 +10,14 @@ struct DisplaySettings {
     fd_power_mult: u32,
     fd_bonuses: Vec<String>,
     fd_bonuses_planned: Vec<String>,
+    /// ⭐ The ticked and planned objectives, ONLY for a contest that scores by them (Winter
+    /// Field Day). The hosted page refuses a key it does not know, so every other contest's
+    /// capture keeps the four keys every published page accepts; the page that knows these
+    /// two must be deployed before a station release that sends them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fd_objectives: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fd_objectives_planned: Option<Vec<String>>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,13 +36,22 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
             || s.fd_event.len() > 1024
             || s.fd_bonuses.len() > 64
             || s.fd_bonuses_planned.len() > 64
+            || s.fd_objectives.len() > 64
+            || s.fd_objectives_planned.len() > 64
             || s.fd_bonuses
                 .iter()
                 .chain(&s.fd_bonuses_planned)
+                .chain(&s.fd_objectives)
+                .chain(&s.fd_objectives_planned)
                 .any(|v| v.len() > 1024)
         {
             return Err("applicationTooLarge");
         }
+        let objectives = tempo_core::fd_rules::ruleset_by_id(
+            s.fd_event.trim(),
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .is_some_and(|rs| !rs.objective_menu.is_empty());
         Capture {
             active: s.fd_active,
             field_day: e.bounded_field_day_status()?,
@@ -43,6 +60,8 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
                 fd_power_mult: s.fd_power_mult,
                 fd_bonuses: s.fd_bonuses.clone(),
                 fd_bonuses_planned: s.fd_bonuses_planned.clone(),
+                fd_objectives: objectives.then(|| s.fd_objectives.clone()),
+                fd_objectives_planned: objectives.then(|| s.fd_objectives_planned.clone()),
             },
             ruleset: crate::fd_ruleset_dto(&s.fd_event),
         }
@@ -72,6 +91,8 @@ mod tests {
             fd_power_mult: 2,
             fd_bonuses: vec!["emergency-power".into()],
             fd_bonuses_planned: vec!["natural-power".into()],
+            fd_objectives: vec!["wfd-qrp".into()],
+            fd_objectives_planned: vec!["wfd-six-hours".into()],
             ..Default::default()
         };
         let mut e = tempo_app::engine::Engine::with_settings(s);
@@ -94,10 +115,14 @@ mod tests {
                 value["ruleset"],
                 serde_json::to_value(crate::fd_ruleset_dto(event)).unwrap()
             );
-            assert_eq!(
-                value["settings"],
-                serde_json::json!({"fdOperator":"W1AW","fdPowerMult":2,"fdBonuses":["emergency-power"],"fdBonusesPlanned":["natural-power"]})
-            );
+            // The objective lists ride only Winter Field Day's capture: ARRL Field Day's keeps
+            // the four keys every published page accepts, whatever the settings hold.
+            let mut want = serde_json::json!({"fdOperator":"W1AW","fdPowerMult":2,"fdBonuses":["emergency-power"],"fdBonusesPlanned":["natural-power"]});
+            if event == "wfd" {
+                want["fdObjectives"] = serde_json::json!(["wfd-qrp"]);
+                want["fdObjectivesPlanned"] = serde_json::json!(["wfd-six-hours"]);
+            }
+            assert_eq!(value["settings"], want, "{event}");
             assert_eq!(e.lock().unwrap().field_day_log_adif(), original);
         }
     }

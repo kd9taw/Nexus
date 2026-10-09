@@ -255,4 +255,25 @@ describe('the role / category block', () => {
     // CHECKLOG is the third — a log sent to help the sponsor check others.
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
   })
+
+  // Winter Field Day has no high-power entry (2027 rules: 100 W PEP, and the Cabrillo takes QRP
+  // or LOW), so beside the Power category picker Settings says what a HIGH pick writes there.
+  it('says beside the Power picker that Winter Field Day takes QRP or LOW, and only for it', async () => {
+    const note = /Winter Field Day takes QRP or LOW/
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'wfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByText(note)).toBeTruthy()
+    cleanup()
+    // CONTROL: ARRL Field Day, whose power is a scoring tier, gets no such note.
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'arrlfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    await groupFor('Power category')
+    expect(screen.queryByText(note)).toBeNull()
+  })
 })

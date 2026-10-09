@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
+  screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
+  each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
+  sponsor's QSO points × (objective multipliers + 1): the contest screen and its pop-out, the club
+  line every position shows, the club TV scoreboard, the summary you download and the Cabrillo
+  `CLAIMED-SCORE`. 100% alternative power counts station equipment on alternative power with it,
+  and twelve bands counts six. For six bands, twelve bands and multiple modes, a hint from your log
+  says how far it shows you are; you tick them yourself, as the sponsor's form asks. A note says
+  when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
+  read-only, once its page has been updated.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
   Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),

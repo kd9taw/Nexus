@@ -11945,6 +11945,12 @@ export function SettingsPanel({
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* Winter Field Day has no high-power entry: its Cabrillo takes QRP or LOW, and a
+                  power left at HIGH writes no CATEGORY-POWER line rather than one it does not
+                  have. Said here, beside the picker that decides it. */}
+              {(form.fdEvent ?? '').trim() === 'wfd' && (
+                <span className="settings-hint">{t('settings.contestPick.power.wfd')}</span>
+              )}
               {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
                   when the log is exported rather than when a contest starts: nothing sent on
                   the air depends on it. NAME is the Station tab's operator name. */}

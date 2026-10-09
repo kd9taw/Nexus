@@ -3831,6 +3831,7 @@ export const EN = {
   // instead of the ARRL power×+bonus arithmetic — a different statement, not a shortened one.
   'fieldDay.score.wfd':
     'QSO pts {{points}} · WFD objective multipliers apply at submission (not tracked here)',
+  'fieldDay.score.wfdObjectives': 'QSO pts <b>{{qsoPts}}</b> × (OM <b>{{om}}</b> + 1) = <total>{{totalScore}}</total>',
   // The whole sum as ONE message: an equation assembled from eight fragments cannot be
   // reordered, and every language puts "power" and "bonuses" somewhere of its own.
   'fieldDay.score.math':
@@ -3929,6 +3930,22 @@ export const EN = {
   'fieldDay.bonus.plan.on': 'Planned',
   'fieldDay.bonus.plan.aria': 'Plan {{label}} \u2014 planned bonuses do not score',
   'fieldDay.bonus.plan.title': 'Planned = you mean to earn it. It scores only once you tick the box.',
+  'fieldDay.objectives.head': 'Objectives',
+  'fieldDay.objectives.count': '{{done}}/{{total}} completed · OM {{om}}',
+  'fieldDay.objectives.planned.count': '{{count}} planned · +OM {{om}}',
+  'fieldDay.objectives.chase.aria': 'Objective multiplier earned and planned',
+  'fieldDay.objectives.chase.earned': 'Earned OM {{om}}',
+  'fieldDay.objectives.chase.planned': 'Planned +OM {{om}}',
+  'fieldDay.objectives.chase.potential': 'If all land OM {{om}}',
+  'fieldDay.objectives.aria': 'Completed Winter Field Day objectives',
+  'fieldDay.objective.aria': '{{label}} — objective multiplier {{om}}',
+  'fieldDay.objective.om': '×{{om}}',
+  'fieldDay.objective.implied': 'comes with an objective you ticked',
+  'fieldDay.objective.hint.bands': 'log: {{count}} of {{need}} bands with 3+ contacts',
+  'fieldDay.objective.hint.modes': 'log: {{count}} modes',
+  'fieldDay.objective.plan.aria': 'Plan {{label}} — planned objectives do not count',
+  'fieldDay.objectives.qrp.undeclared': '“{{objective}}” is ticked, but your Power category (Settings ▸ Contesting ▸ Contest) is not QRP, so the Cabrillo file does not claim QRP.',
+  'fieldDay.objectives.qrp.unticked': 'Your Power category is QRP, but “{{objective}}” (×{{om}}) is not ticked.',
 
   // The log. Column headings name a CONCEPT; every value under them is a token. ARRL calls
   // the exchange field Class and WFD calls it Category — two words for two events, not one
@@ -4053,6 +4070,7 @@ export const EN = {
   'settings.contestPick.entryAxes.unset': 'Not set',
   'settings.contestPick.entryAxes.hint':
     'The rest of what your Cabrillo log declares about the entry. Sweepstakes also sends these on the air, as the precedence letter, so it will not start until you have picked one of each: ARRL counts 5 watts or less as QRP, 100 watts or less as low power, and anything above that as high power, and an entry using spots, a skimmer or a cluster is Single Operator Unlimited.',
+  'settings.contestPick.power.wfd': 'Winter Field Day takes QRP or LOW (its limit is 100 W PEP), and HIGH writes no CATEGORY-POWER line.',
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
     'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',

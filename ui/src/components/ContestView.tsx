@@ -12,6 +12,8 @@ import type {
 import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
+import { WfdObjectivesSection } from './WfdObjectivesSection'
+import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
 import { clubSyncRefusal, clubSyncRefusalText, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -285,6 +287,9 @@ interface SummaryArgs {
   bonusPoints: number
   totalScore: number
   claimedBonuses: FdBonus[]
+  /** Winter Field Day's completed objectives and the multiplier they earn, when the station
+   *  scores by them — `totalScore` is then QSO points × (om + 1). */
+  objectives?: { om: number; done: WfdObjective[] }
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
@@ -337,6 +342,21 @@ export function buildSummaryText(a: SummaryArgs): string {
   const secs = [...a.workedSet].sort()
   L.push(`Sections worked (${secs.length}):  ${secs.length ? secs.join(' ') : '—'}`)
   L.push('')
+  if (a.objectives) {
+    // WINTER FIELD DAY scores by its objectives: no power multiplier and no bonus menu, and
+    // the total is the sponsor's QSO points × (OM + 1).
+    L.push(`Objectives completed (${a.objectives.done.length}, OM ${a.objectives.om}):`)
+    if (a.objectives.done.length === 0) L.push('  (none)')
+    else for (const o of a.objectives.done) L.push(`  ${o.label} — ×${o.multiplier}`)
+    L.push('')
+    L.push('SCORE')
+    L.push(`  QSO points                 ${a.qsoPts}`)
+    L.push(`  × (OM ${a.objectives.om} + 1)`.padEnd(29) + `= ${a.totalScore}`)
+    L.push('  --------------------------------')
+    L.push(`  TOTAL                      ${a.totalScore}`)
+    L.push('')
+    return L.join('\n')
+  }
   L.push(`Power multiplier: ×${a.powerMult}`)
   L.push(`Bonuses claimed (${a.claimedBonuses.length}, ${a.bonusPoints} pts):`)
   if (a.claimedBonuses.length === 0) L.push('  (none)')
@@ -1456,10 +1476,22 @@ export function FieldDayScoreboard({
               />
             </span>
           </div>
+        ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
+          /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
+             three numbers the engine's, so the line and the total cannot disagree. */
+          <div className="fd-score-math">
+            <span className="fd-score-math-line">
+              <T
+                k="fieldDay.score.wfdObjectives"
+                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+                vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
+              />
+            </span>
+          </div>
         ) : isWfd ? (
-          /* WFD scores by OBJECTIVES (QSOs × (multipliers+1)) — we don't track
-             operator counts/objectives, so showing ARRL power×+bonus math would
-             claim a number WFD rules never produce. Show the honest raw counts. */
+          /* A station that does not score Winter Field Day's objectives (a Remote view of an
+             older one): its total is raw QSO points, so the honest line says so rather than
+             claiming ARRL power×+bonus arithmetic WFD never produces. */
           <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
         ) : (
           <div className="fd-score-math">
@@ -1615,6 +1647,12 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   const togglePlanned = (id: string) =>
     saveScoringPatch((s) => ({ fdBonusesPlanned: toggle(s.fdBonusesPlanned ?? [], id) }))
   const setPowerMult = (mult: number) => saveScoringPatch(() => ({ fdPowerMult: mult }))
+  /** Tick / untick a Winter Field Day objective: the list the score multiplies by. */
+  const toggleObjective = (id: string) =>
+    saveScoringPatch((s) => ({ fdObjectives: toggle(s.fdObjectives ?? [], id) }))
+  /** Put an objective on the plan (or take it off). Never touches the score. */
+  const toggleObjectivePlanned = (id: string) =>
+    saveScoringPatch((s) => ({ fdObjectivesPlanned: toggle(s.fdObjectivesPlanned ?? [], id) }))
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
   // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
@@ -1638,6 +1676,10 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   // rollover and the active→next transition need no client-side clock walk.
   const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
+  // ⭐ The station scores Winter Field Day by its objectives: the engine says so by sending
+  // the multiplier. A Remote view of an older station has none, and keeps the bonus checklist
+  // that station still scores.
+  const wfdOm = isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? fieldDay.objectiveMultiplier : null
   // ⭐ WHICH CONTEST THIS IS. Every Field Day word on this screen — the banner, the header,
   // the class/section, the log table's columns, the summary — used to be printed whatever
   // the picker said, so a CQ WW log sat under an "ARRL Field Day" banner with Class and
@@ -1698,6 +1740,13 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           bonusPoints,
           totalScore,
           claimedBonuses: FD_BONUSES.filter((b) => claimedBonuses.includes(b.id)),
+          objectives:
+            wfdOm === null
+              ? undefined
+              : {
+                  om: wfdOm,
+                  done: WFD_OBJECTIVES.filter((o) => wfdEarnedIds(settings?.fdObjectives ?? []).has(o.id)),
+                },
           contest: fdEventIsFieldDay
             ? undefined
             : { sending: composingText(fieldDay?.composing), multCount: fieldDay?.multCount ?? null },
@@ -1967,8 +2016,23 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           manual's, address for it) and is MIRRORED here on the same field: an operator
           meets scoring where the score is, and there is only ever one value. */}
       {/* Field Day's bonus menu and power tier. No other contest has either, so it is not
-          offered under a score it cannot change. */}
-      {fdEventIsFieldDay && (
+          offered under a score it cannot change — and Winter Field Day, which scores by its
+          objectives, has the objectives in their place. */}
+      {wfdOm !== null && (
+        <WfdObjectivesSection
+          earned={settings?.fdObjectives ?? []}
+          planned={settings?.fdObjectivesPlanned ?? []}
+          log={log}
+          om={wfdOm}
+          power={observed ? undefined : (nativeSettings?.contestCategoryPower ?? '')}
+          readOnly={observed}
+          open={bonusOpen}
+          onToggleOpen={() => setBonusOpen((v) => !v)}
+          onToggleEarned={(id) => void toggleObjective(id)}
+          onTogglePlanned={(id) => void toggleObjectivePlanned(id)}
+        />
+      )}
+      {fdEventIsFieldDay && wfdOm === null && (
       <div className="fd-bonuses-section">
         <button
           type="button"
