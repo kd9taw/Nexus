@@ -12093,18 +12093,23 @@ impl Engine {
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
     /// `Some` ONLY in the host role — a non-host position holds just the
-    /// compact `ClubMirror` (no per-QSO attribution), which is why the HTTP
-    /// scoreboard runs at the host.
+    /// compact `ClubMirror` (no per-QSO attribution), which is why the board is
+    /// built at the host.
     ///
-    /// ⚠️ And only for a FIELD DAY club. The spectator page scores by a Field Day event
-    /// (power tiers, the bonus menu, the sections globe), so a club running anything
-    /// else hands it nothing rather than a board that would show its contacts scored as
-    /// ARRL Field Day's.
+    /// ⭐ For ANY contest the club runs. A Field Day club hands the rows the Field Day
+    /// payload is built from, as it always has; any other club also hands its session and
+    /// merged rows (`contest`), which the board scores by that contest's own ruleset off
+    /// this lock. It used to hand a non-Field-Day club nothing, so hosting the Illinois QSO
+    /// Party put "served from the host station" on the host's own TV.
     pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
-        let club = self
-            .fd_club
-            .as_ref()
-            .filter(|c| c.field_day_event().is_some())?;
+        let club = self.fd_club.as_ref()?;
+        let contest =
+            club.field_day_event()
+                .is_none()
+                .then(|| crate::fd_scoreboard::ContestBoard {
+                    session: self.fd_club_session(club),
+                    rows: club.rows().to_vec(),
+                });
         let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
             .positions()
             .iter()
@@ -12133,6 +12138,9 @@ impl Engine {
             rows: club
                 .rows()
                 .iter()
+                // A non-Field-Day club's rows ride whole in `contest`; these are the
+                // Field Day payload's, so they are not cloned twice.
+                .filter(|_| contest.is_none())
                 .map(|r| crate::fd_scoreboard::FdBoardRow {
                     posid: r.posid.clone(),
                     seq: r.seq,
@@ -12146,6 +12154,7 @@ impl Engine {
                     operator: r.operator.clone(),
                 })
                 .collect(),
+            contest,
         })
     }
 
@@ -42467,9 +42476,25 @@ mod tests {
         );
         let adif = e.fd_club_export(false).expect("the club ADIF");
         assert!(adif.contains("IL QSO Party"), "the ADIF contest id: {adif}");
-        assert!(
-            e.fd_board_snapshot().is_none(),
-            "the spectator board scores by Field Day, so a party club hands it nothing"
+        // ⭐ …and the spectator board claims the SAME score, made of the same parts: the
+        // club's own unique log under the party's rules, never a Field Day reading of it.
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot()
+                    .expect("a party club hands the board its club"),
+                t + 600,
+            ))
+            .expect("the board's payload is JSON");
+        assert_eq!(
+            (
+                board["score"]["total"].as_u64(),
+                board["score"]["qso_points"].as_u64(),
+                board["score"]["mults"].as_u64(),
+                board["score"]["bonus_points"].as_u64(),
+                board["event"]["kind"].as_str(),
+            ),
+            (Some(115), Some(5), Some(3), Some(100), Some("ilqp")),
+            "the board claims what the club file and the positions' club line claim: {board}"
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);

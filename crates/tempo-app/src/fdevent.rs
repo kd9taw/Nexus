@@ -449,6 +449,19 @@ impl ClubLog {
         }
     }
 
+    /// ⭐ **This club's log rebuilt from rows it already merged** — the journal replay's
+    /// path (no arrival stamped, nothing journaled, no presence), for a read-only surface
+    /// that scores the club OFF the engine lock. The spectator scoreboard clones
+    /// [`rows`](Self::rows) under the lock and rebuilds here, so its dedupe, its exchange
+    /// resolution and its unique log are this type's own, never a second reading of them.
+    pub fn replayed(rs: &'static FdRuleset, rows: &[MergedRow]) -> Self {
+        let mut club = Self::for_ruleset(rs, "");
+        for row in rows {
+            club.merge_row(row.clone(), 0);
+        }
+        club
+    }
+
     /// The ruleset this club runs — through the RULES-FILE id, the one key that can
     /// name a contest `FdEvent` has no arm for. The fallback only keeps a default-built
     /// log answering; [`for_ruleset`](Self::for_ruleset) took the id from the table.
@@ -792,6 +805,13 @@ impl ClubLog {
         };
         keep.sort_by_key(|&i| (self.rows[i].when_unix, i));
         keep
+    }
+
+    /// The row each contact of [`unique_log_with`](Self::unique_log_with) is built from,
+    /// in that log's own order — an index into [`rows`](Self::rows) — so a surface can say
+    /// which position logged each of the club's contacts without re-deriving the dedupe.
+    pub fn unique_log_rows(&self) -> Vec<usize> {
+        self.export_indices()
     }
 
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the

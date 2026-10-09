@@ -23,6 +23,16 @@
 //! board goes stale, the radio side is untouched. The feature is default-off;
 //! enabling it is the deliberate LAN opt-in.
 //!
+//! **Any contest club sync runs.** A Field Day club's payload is built from its event
+//! exactly as it always was (the goldens below hold every number). A club running any
+//! other contest rides [`FdBoardData::contest`]: the host's club session and the merged
+//! rows, rebuilt OFF the engine lock into the club log's own unique log
+//! ([`ClubLog::replayed`]) and scored by that contest's ruleset — QSO points, the
+//! multiplier universes with their caps, the ticked menu and the bonus stations, the
+//! arithmetic `ClubLog::score_with` and the contest screen use, so the TV claims the
+//! number the club file claims. Its payload says how the score is made and what each
+//! universe has worked; the page draws the universe the ruleset counts.
+//!
 //! **Scoring honesty**: the score block is computed by replaying the merged
 //! rows through [`tempo_core::fieldday::FieldDayLog`] and asking the active
 //! [`tempo_core::fd_rules`] ruleset — the same dedupe and the same math every
@@ -44,6 +54,8 @@ use serde::Serialize;
 use tempo_core::contest::ContestSession;
 use tempo_core::fd_rules;
 use tempo_core::fieldday::{FdEvent, FieldDayLog};
+
+use crate::fdevent::{ClubLog, MergedRow};
 
 /// The whole spectator page — one self-contained HTML file (inline CSS + JS,
 /// no framework, no external reference; a test proves the zero-internet claim).
@@ -106,7 +118,7 @@ pub struct FdBoardPosition {
 /// The bounded clone the host engine hands the board: identity + settings the
 /// score needs + the merged rows. All aggregation (dedupe, counters, buckets)
 /// happens HERE, off the engine lock — the engine side is one clone.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FdBoardData {
     pub event: FdEvent,
     /// The club station identity (call + exchange), for the header.
@@ -120,6 +132,24 @@ pub struct FdBoardData {
     pub claimed: Vec<String>,
     pub positions: Vec<FdBoardPosition>,
     pub rows: Vec<FdBoardRow>,
+    /// The club's contest when it is NOT one of the two Field Days — `None` for a Field
+    /// Day club, whose payload is built from [`event`](Self::event) and the rows above
+    /// exactly as before. See [`ContestBoard`].
+    pub contest: Option<ContestBoard>,
+}
+
+/// ⭐ **A club running any contest but the two Field Days** — what the board scores it by,
+/// cloned under the engine lock: the host's club session (the contest, its exchange, the
+/// host's role and sent exchange — `Engine::fd_club_session`) and the club's merged rows,
+/// exchange included, as the club log holds them. Everything else is rebuilt from these
+/// off the lock ([`ClubLog::replayed`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContestBoard {
+    /// `Err` with the reason when Settings cannot build the host's session (a county
+    /// cleared mid-event) — the club then scores nothing, and the board says why rather
+    /// than showing a number the club file would not claim.
+    pub session: Result<ContestSession, String>,
+    pub rows: Vec<MergedRow>,
 }
 
 /// What the serve loop reads — snapshot JSON and the page, nothing else. The
@@ -468,6 +498,9 @@ fn event_ident(d: &FdBoardData, rs: &fd_rules::FdRuleset, now_unix: u64) -> Even
 /// the cache splices in). Public-in-crate so the golden tests hit the exact
 /// serialization the wire carries.
 pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
+    if let Some(c) = &d.contest {
+        return build_contest_core(d, c, now_unix);
+    }
     let rs = fd_rules::ruleset(d.event, fd_rules::CURRENT_RULES_YEAR);
     let window = rs.next_or_running(now_unix);
 
@@ -699,6 +732,9 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
 /// event identity — all from the ACTIVE fd_rules data, so a rules-year edit
 /// flows through to the board with zero page changes.
 pub fn build_meta(d: &FdBoardData, now_unix: u64) -> String {
+    if let Some(c) = &d.contest {
+        return build_contest_meta(d, c, now_unix);
+    }
     let rs = fd_rules::ruleset(d.event, fd_rules::CURRENT_RULES_YEAR);
     let menu = if rs.objectives.is_empty() {
         rs.bonuses
@@ -726,6 +762,524 @@ pub fn build_meta(d: &FdBoardData, now_unix: u64) -> String {
                 points: b.points,
             })
             .collect(),
+    };
+    serde_json::to_string(&meta).expect("board meta serializes")
+}
+
+// ---------------------------------------------------------------------------
+// Any contest club sync runs: its own ruleset, the club log's own dedupe
+// ---------------------------------------------------------------------------
+
+/// A non-Field-Day club's score block. Its own type rather than [`ScoreBlock`], whose
+/// fields are the two Field Days' shapes.
+#[derive(Serialize)]
+struct ContestScore {
+    /// `"multipliers"` (QSO points × the multiplier total) or `"points"` (a contest that
+    /// declares no multiplier).
+    model: &'static str,
+    qso_points: u32,
+    /// The power tier and the points after it, only for a ruleset that HAS tiers — absent
+    /// otherwise, so the page cannot draw power math for a contest that has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_mult: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    powered_points: Option<u32>,
+    /// The multiplier total, caps applied — absent for a contest with no multiplier,
+    /// never a `0` standing in for "not applicable".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mults: Option<u32>,
+    /// The ticked bonus menu plus the bonus stations the club worked.
+    bonus_points: u32,
+    total: u32,
+    /// The ruleset says its computed score leaves something out (a bonus the sponsor
+    /// computes from the log that the rules file cannot express), so the page says so
+    /// beside the total rather than letting the room read a short score as the claim.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    incomplete: bool,
+}
+
+/// One multiplier universe as the club has worked it.
+#[derive(Serialize)]
+struct MultRow {
+    /// The rule's id (`"county"`, `"mult"`, `"dxcc"`) — keys [`MetaMult`].
+    id: &'static str,
+    /// Distinct values counted at the rule's scope, caps applied: the scorer's own
+    /// number ([`tempo_core::contest::Scoring::mult_counts`]), which the total multiplies by.
+    count: u32,
+    /// What has been worked, sorted: the codes a slot rule's board lights, or the DXCC
+    /// entities. Empty for a prefix rule, whose universe has no end to list.
+    worked: Vec<String>,
+}
+
+/// A station worth points to whoever works it (ILQP's two club calls).
+#[derive(Serialize)]
+struct BonusStationRow {
+    call: &'static str,
+    points: u32,
+    worked: bool,
+}
+
+/// `data.json` for a non-Field-Day club. The keys it shares with [`DataCore`] mean what
+/// they mean there.
+#[derive(Serialize)]
+struct ContestCore {
+    event: EventIdent,
+    score: ContestScore,
+    qsos: QsoBlock,
+    ticker: Vec<TickerRow>,
+    band_mode: Vec<BandModeRow>,
+    positions: Vec<PositionRow>,
+    claimed: Vec<String>,
+    mults: Vec<MultRow>,
+    bonus_stations: Vec<BonusStationRow>,
+    /// Field Day's worked sections: always empty here, kept so a reader of the Field Day
+    /// shape still finds a list.
+    sections_worked: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct MetaValue {
+    code: &'static str,
+    name: &'static str,
+}
+
+/// One multiplier universe's definition.
+#[derive(Serialize)]
+struct MetaMult {
+    id: &'static str,
+    /// `"field"` (an exchange slot), `"dxcc"` (the worked station's entity) or `"prefix"`.
+    source: &'static str,
+    /// Once per what (`crate::dto::mult_scope_tag`'s words).
+    scope: &'static str,
+    /// The most this universe may count, however many were worked (ILQP's DX: 5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cap: Option<u32>,
+    /// The closed value set a slot rule counts from, with each value's name — empty for a
+    /// rule with none (a grid, a DXCC entity, a prefix).
+    values: Vec<MetaValue>,
+}
+
+/// `meta.json` for a non-Field-Day club.
+#[derive(Serialize)]
+struct ContestMeta {
+    event: EventIdent,
+    scoring_model: &'static str,
+    rules_year: u16,
+    rules_generated: &'static str,
+    /// The universe the page's map draws — the first board with a closed value set, as
+    /// the contest screen orders them ([`tempo_core::contest::boards`]). Absent when no
+    /// multiplier has one (ARRL VHF's grids).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    map: Option<&'static str>,
+    mults: Vec<MetaMult>,
+    /// The ruleset's tickable bonus menu (empty for every QSO party).
+    bonuses: Vec<MetaBonus>,
+    /// Field Day's section universe: always empty here.
+    sections: Vec<MetaSection>,
+}
+
+/// The ruleset a non-Field-Day club runs, read through the session's rules-file id as the
+/// club log reads its own ([`ClubLog::ruleset`]).
+fn contest_ruleset(session: &ContestSession) -> Option<&'static fd_rules::FdRuleset> {
+    fd_rules::ruleset_by_id(&session.event_id, fd_rules::CURRENT_RULES_YEAR)
+}
+
+/// A board that has nothing it can score, as a core the cache can splice `rev` and
+/// `now_unix` into (it must stay a non-empty object). `active: false` makes the page say
+/// why instead of drawing a board.
+fn inactive_core(reason: &str, detail: &str) -> String {
+    serde_json::json!({ "active": false, "reason": reason, "detail": detail }).to_string()
+}
+
+/// The multiplier rules this club's role counts, in the ruleset's order.
+fn counted_rules(
+    rs: &'static fd_rules::FdRuleset,
+    session: &ContestSession,
+) -> Vec<&'static tempo_core::contest::MultiplierRule> {
+    let role = session.role().id;
+    rs.scoring
+        .multipliers
+        .iter()
+        .filter(|m| m.roles.is_empty() || m.roles.contains(&role))
+        .collect()
+}
+
+/// The closed value set a slot rule counts from: the domain it names, or the slot's own
+/// when the slot is a single closed list. `None` for a slot with no closed set.
+fn rule_domain(
+    rs: &'static fd_rules::FdRuleset,
+    session: &ContestSession,
+    key: &str,
+    domain: Option<&'static str>,
+) -> Option<&'static tempo_core::contest::Domain> {
+    match domain {
+        Some(id) => rs.domains.iter().copied().find(|d| d.id == id),
+        None => match session.exchange.field(key).map(|f| f.kind) {
+            Some(tempo_core::contest::FieldKind::Enum { domain }) => Some(domain),
+            _ => None,
+        },
+    }
+}
+
+/// The slot whose received value says WHERE a contact was — the map's slot, else the
+/// first slot rule's, else none.
+fn place_slot(rs: &'static fd_rules::FdRuleset, session: &ContestSession) -> Option<&'static str> {
+    let boards = tempo_core::contest::boards(&rs.scoring, session.exchange, session.role());
+    boards
+        .iter()
+        .find(|b| b.domain.is_some())
+        .or_else(|| boards.first())
+        .map(|b| b.slot)
+}
+
+/// Build `data.json`'s core for a non-Field-Day club: the club log's own unique log under
+/// the host's session, scored by the club's ruleset.
+fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> String {
+    let session = match &c.session {
+        Ok(s) => s,
+        Err(why) => return inactive_core("club-session", why),
+    };
+    let Some(rs) = contest_ruleset(session) else {
+        return inactive_core("no-ruleset", &session.event_id);
+    };
+    let window = rs.next_or_running(now_unix);
+    let club = ClubLog::replayed(rs, &c.rows);
+    let log = club.unique_log_with(&d.call, session.clone());
+
+    // ⭐ THE SCORE: `ClubLog::score_with`'s arithmetic over the same unique log — QSO
+    // points, the power tier where there is one, the multipliers with their caps, then
+    // the ticked menu plus the bonus stations the club worked.
+    let (qso_points, powered, mults, scored) = rs.scoring.score(log.score_rows(), d.power_mult);
+    let bonus_points = rs.bonus_points(&d.claimed) + log.bonus_station_points();
+    let tiers = rs.scoring.power_tiers().is_some();
+    let score = ContestScore {
+        model: if rs.scoring.multipliers.is_empty() {
+            "points"
+        } else {
+            "multipliers"
+        },
+        qso_points,
+        power_mult: tiers.then(|| {
+            if qso_points > 0 {
+                powered / qso_points
+            } else {
+                1
+            }
+        }),
+        powered_points: tiers.then_some(powered),
+        mults,
+        bonus_points,
+        total: scored + bonus_points,
+        incomplete: !rs.score_note_key.is_empty(),
+    };
+
+    // Each counting contact, attributed to the row it was built from — the club log's
+    // own answer (`unique_log_rows`), never a second dedupe. A log that is not one row
+    // per contact (it cannot be: the club never refuses a row it exports) attributes
+    // nothing rather than the wrong position.
+    let from = club.unique_log_rows();
+    let aligned = from.len() == log.qsos().len();
+    let mut scored_rows = log.score_rows();
+    let mut unique: HashMap<&str, (u32, u32)> = HashMap::new();
+    let mut counted: Vec<u64> = Vec::new();
+    let mut bands: BTreeMap<String, BandModeRow> = BTreeMap::new();
+    for (k, q) in log.qsos().iter().enumerate() {
+        if q.dupe {
+            continue;
+        }
+        let row = scored_rows.next();
+        counted.push(q.when_unix);
+        let e = bands.entry(q.band.clone()).or_insert_with(|| BandModeRow {
+            band: q.band.clone(),
+            ph: 0,
+            cw: 0,
+            dig: 0,
+        });
+        match q.mode.as_str() {
+            "PH" | "PHONE" | "SSB" | "FM" => e.ph += 1,
+            "CW" => e.cw += 1,
+            _ => e.dig += 1,
+        }
+        if aligned {
+            let pos = unique.entry(c.rows[from[k]].posid.as_str()).or_default();
+            pos.0 += 1;
+            pos.1 += row.map_or(0, |r| rs.scoring.qso_points.points_for(&r));
+        }
+    }
+    let mut band_mode: Vec<BandModeRow> = bands.into_values().collect();
+    band_mode.sort_by(|a, b| match (band_meters(&a.band), band_meters(&b.band)) {
+        (Some(x), Some(y)) => y.total_cmp(&x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.band.cmp(&b.band),
+    });
+
+    // Rates and hourly buckets over the COUNTING contacts — the Field Day board's rule.
+    let rate = |secs: u64| {
+        counted
+            .iter()
+            .filter(|&&w| w + secs > now_unix && w <= now_unix)
+            .count() as u32
+    };
+    let bucket_end = now_unix.min(window.end_unix.saturating_sub(1));
+    let hourly = if bucket_end >= window.start_unix {
+        let mut buckets = vec![0u32; ((bucket_end - window.start_unix) / 3600 + 1) as usize];
+        for &w in &counted {
+            if w >= window.start_unix && w <= bucket_end {
+                buckets[((w - window.start_unix) / 3600) as usize] += 1;
+            }
+        }
+        buckets
+    } else {
+        Vec::new()
+    };
+
+    // Positions: presence from the known list, raw counts from every row, the unique
+    // count and points from the attribution above.
+    let labels: HashMap<&str, &FdBoardPosition> =
+        d.positions.iter().map(|p| (p.id.as_str(), p)).collect();
+    let mut pos: BTreeMap<&str, PositionRow> = d
+        .positions
+        .iter()
+        .map(|p| {
+            (
+                p.id.as_str(),
+                PositionRow {
+                    id: p.id.clone(),
+                    label: p.label.clone(),
+                    operator: p.operator.clone(),
+                    band: p.band.clone(),
+                    mode: p.mode.clone(),
+                    stale: now_unix.saturating_sub(p.last_seen_unix.min(now_unix))
+                        > tempo_net::fdsync::DEAD_SECS,
+                    qsos_raw: 0,
+                    qsos_unique: 0,
+                    points: 0,
+                    last_qso_unix: 0,
+                },
+            )
+        })
+        .collect();
+    for r in &c.rows {
+        let e = pos.entry(r.posid.as_str()).or_insert_with(|| PositionRow {
+            id: r.posid.clone(),
+            label: r.posid.clone(),
+            operator: String::new(),
+            band: String::new(),
+            mode: String::new(),
+            stale: true,
+            qsos_raw: 0,
+            qsos_unique: 0,
+            points: 0,
+            last_qso_unix: 0,
+        });
+        e.qsos_raw += 1;
+        e.last_qso_unix = e.last_qso_unix.max(r.when_unix);
+    }
+    for (id, (n, pts)) in &unique {
+        if let Some(e) = pos.get_mut(id) {
+            e.qsos_unique = *n;
+            e.points = *pts;
+        }
+    }
+    let mut positions: Vec<PositionRow> = pos.into_values().collect();
+    positions.sort_by(|a, b| {
+        (b.points, b.qsos_raw, a.label.as_str()).cmp(&(a.points, a.qsos_raw, b.label.as_str()))
+    });
+
+    // The multiplier universes: the scorer's own counts, and what each has worked.
+    let counts = rs.scoring.mult_counts(log.score_rows());
+    let counting: Vec<&tempo_core::fieldday::LoggedQso> =
+        log.qsos().iter().filter(|q| !q.dupe).collect();
+    let mults: Vec<MultRow> = counted_rules(rs, session)
+        .into_iter()
+        .map(|m| {
+            let mut worked: std::collections::BTreeSet<String> = Default::default();
+            for q in &counting {
+                let value = match m.source {
+                    tempo_core::contest::MultSource::Field { key, domain } => {
+                        q.rx.iter()
+                            .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
+                            .map(|v| v.raw.trim().to_ascii_uppercase())
+                    }
+                    tempo_core::contest::MultSource::DxccEntity => q.entity.clone(),
+                    tempo_core::contest::MultSource::Prefix => None,
+                };
+                if let Some(v) = value.filter(|v| !v.is_empty()) {
+                    if !m.excluding.iter().any(|x| *x == v) {
+                        worked.insert(v);
+                    }
+                }
+            }
+            MultRow {
+                id: m.id,
+                count: counts
+                    .iter()
+                    .find(|(id, _)| *id == m.id)
+                    .map_or(0, |(_, n)| *n as u32),
+                worked: worked.into_iter().collect(),
+            }
+        })
+        .collect();
+
+    let bonus_stations: Vec<BonusStationRow> = rs
+        .bonus_stations
+        .iter()
+        .map(|st| BonusStationRow {
+            call: st.call,
+            points: st.points,
+            worked: fd_rules::bonus_station_points(
+                std::slice::from_ref(st),
+                counting.iter().map(|q| q.call.as_str()),
+            ) > 0,
+        })
+        .collect();
+
+    // Ticker: the last 25 RAW rows (activity, not scoring), newest first, with the place
+    // each contact was (the map's slot) and the position label resolved here.
+    let slot = place_slot(rs, session);
+    let place = |r: &MergedRow| {
+        slot.and_then(|k| r.ex.iter().find(|f| f.k == k))
+            .map(|f| f.r.trim().to_ascii_uppercase())
+            .unwrap_or_default()
+    };
+    let mut newest: Vec<usize> = (0..c.rows.len()).collect();
+    newest.sort_by_key(|&i| std::cmp::Reverse((c.rows[i].when_unix, c.rows[i].seq)));
+    let ticker: Vec<TickerRow> = newest
+        .into_iter()
+        .take(25)
+        .map(|i| {
+            let r = &c.rows[i];
+            TickerRow {
+                when_unix: r.when_unix,
+                call: r.call.clone(),
+                class: String::new(),
+                section: place(r),
+                band: r.band.clone(),
+                mode: r.mode_class.to_ascii_uppercase(),
+                submode: r.submode.clone(),
+                position: labels
+                    .get(r.posid.as_str())
+                    .map(|p| p.label.clone())
+                    .unwrap_or_else(|| r.posid.clone()),
+                operator: r.operator.clone(),
+            }
+        })
+        .collect();
+
+    let core = ContestCore {
+        event: contest_ident(d, rs, session, now_unix),
+        score,
+        qsos: QsoBlock {
+            count: log.qso_count() as u32,
+            rate_hour: rate(3600),
+            rate_10min: rate(600),
+            hourly,
+        },
+        ticker,
+        band_mode,
+        positions,
+        claimed: d
+            .claimed
+            .iter()
+            .filter(|id| rs.bonuses.iter().any(|b| b.id == *id))
+            .cloned()
+            .collect(),
+        mults,
+        bonus_stations,
+        sections_worked: Vec::new(),
+    };
+    serde_json::to_string(&core).expect("board read-model serializes")
+}
+
+/// The event header for a non-Field-Day club: the ruleset's id and the sponsor's contest
+/// id (the page names it), the running-or-next window, and — in `section` — where the
+/// host itself is: its sent value of the map's slot (`MCLN`), which the page marks.
+fn contest_ident(
+    d: &FdBoardData,
+    rs: &'static fd_rules::FdRuleset,
+    session: &ContestSession,
+    now_unix: u64,
+) -> EventIdent {
+    let w = rs.next_or_running(now_unix);
+    let home = place_slot(rs, session)
+        .and_then(|k| session.my_exchange.iter().find(|v| v.key == k))
+        .map(|v| v.raw.trim().to_ascii_uppercase())
+        .unwrap_or_default();
+    EventIdent {
+        kind: rs.event,
+        name: rs.contest_id,
+        year: civil_year_of_unix(w.start_unix),
+        start_unix: w.start_unix,
+        end_unix: w.end_unix,
+        call: d.call.clone(),
+        class: String::new(),
+        section: home,
+    }
+}
+
+/// Build `meta.json` for a non-Field-Day club: each multiplier universe this club's role
+/// counts, with its values and their names, from the ACTIVE rules data.
+fn build_contest_meta(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> String {
+    let session = match &c.session {
+        Ok(s) => s,
+        Err(why) => return inactive_core("club-session", why),
+    };
+    let Some(rs) = contest_ruleset(session) else {
+        return inactive_core("no-ruleset", &session.event_id);
+    };
+    let mults: Vec<MetaMult> = counted_rules(rs, session)
+        .into_iter()
+        .map(|m| {
+            let (source, values) = match m.source {
+                tempo_core::contest::MultSource::Field { key, domain } => (
+                    "field",
+                    rule_domain(rs, session, key, domain)
+                        .map(|dm| {
+                            dm.values
+                                .iter()
+                                .map(|&(code, name)| MetaValue { code, name })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                ),
+                tempo_core::contest::MultSource::DxccEntity => ("dxcc", Vec::new()),
+                tempo_core::contest::MultSource::Prefix => ("prefix", Vec::new()),
+            };
+            MetaMult {
+                id: m.id,
+                source,
+                scope: crate::dto::mult_scope_tag(m.scope),
+                cap: m.cap,
+                values,
+            }
+        })
+        .collect();
+    let map = tempo_core::contest::boards(&rs.scoring, session.exchange, session.role())
+        .into_iter()
+        .find(|b| b.domain.is_some() && mults.iter().any(|m| m.id == b.id && !m.values.is_empty()))
+        .map(|b| b.id);
+    let meta = ContestMeta {
+        event: contest_ident(d, rs, session, now_unix),
+        scoring_model: if rs.scoring.multipliers.is_empty() {
+            "points"
+        } else {
+            "multipliers"
+        },
+        rules_year: rs.rules_year,
+        rules_generated: fd_rules::active_generated(),
+        map,
+        mults,
+        bonuses: rs
+            .bonuses
+            .iter()
+            .map(|b| MetaBonus {
+                id: b.id,
+                label: b.label,
+                points: b.points,
+            })
+            .collect(),
+        sections: Vec::new(),
     };
     serde_json::to_string(&meta).expect("board meta serializes")
 }
@@ -1069,6 +1623,7 @@ mod tests {
                     "W9AAA",
                 ),
             ],
+            contest: None,
         };
         (d, s + 7500) // "now": 2 h 5 min into the event
     }
@@ -1585,4 +2140,338 @@ mod tests {
             }
         }
     }
+
+    // -- any contest club sync runs ----------------------------------------
+
+    fn ilqp() -> &'static fd_rules::FdRuleset {
+        fd_rules::ruleset_by_id("ilqp", fd_rules::CURRENT_RULES_YEAR)
+            .expect("the Illinois QSO Party is in the rules table")
+    }
+
+    /// The host's club session: an Illinois station in McLean County, as
+    /// `Engine::fd_club_session` builds it from Settings when the host is not running it.
+    fn ilqp_session() -> ContestSession {
+        ContestSession::for_ruleset(
+            ilqp(),
+            &tempo_core::contest::StationData {
+                mycall: "W9XYZ".into(),
+                mygrid: "EN50".into(),
+                contest_qth_state: "IL".into(),
+                contest_qth_county: "MCLN".into(),
+                ..Default::default()
+            },
+        )
+        .expect("an in-state ILQP session")
+    }
+
+    /// One party contact as a position streams it: the county THEY sent and McLean,
+    /// each resolved through the ruleset's own exchange so the matched domain travels.
+    fn ilqp_wire(
+        pos: &str,
+        seq: u64,
+        call: &str,
+        band: &str,
+        mode: &str,
+        theirs: &str,
+        when: u64,
+    ) -> tempo_net::fdsync::WireQso {
+        let spec = ilqp().exchange;
+        let rst = if mode == "PH" { "59" } else { "599" };
+        let fields = |qth: &str| {
+            crate::fdevent::to_wire_fields(
+                &[("RST", rst), ("QTH", qth)]
+                    .iter()
+                    .filter_map(|(k, v)| spec.copied(k, v))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        tempo_net::fdsync::WireQso {
+            pos: pos.into(),
+            seq,
+            call: call.into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: fields(theirs),
+            mex: fields("MCLN"),
+            band: band.into(),
+            mode: mode.into(),
+            sub: if mode == "DIG" {
+                "RTTY".into()
+            } else {
+                String::new()
+            },
+            when,
+            op: "W9XYZ".into(),
+            sat: String::new(),
+            sat_fm: false,
+        }
+    }
+
+    /// The scripted party club, merged through `ClubLog::for_ruleset` like a real host:
+    /// two tents; K9AAA worked from Cook and again from Will (a county line is two
+    /// contacts), the bonus station W9AWE, an RTTY repeat of the Cook contact (CW and
+    /// digital are one mode) and the second tent's repeat of it (a club dupe). Three
+    /// contacts count: (2 + 2 + 1) points × 3 counties + 100 for W9AWE = 115.
+    fn ilqp_board() -> (FdBoardData, u64) {
+        let t = ilqp().event_window(2026).start_unix; // 1700Z, 18 October 2026
+        let mut club = ClubLog::for_ruleset(ilqp(), "W9XYZ ILQP");
+        for q in [
+            ilqp_wire("aaaa0001", 1, "K9AAA", "40m", "CW", "COOK", t + 180),
+            ilqp_wire("aaaa0001", 2, "K9AAA", "40m", "DIG", "COOK", t + 240),
+            ilqp_wire("aaaa0001", 3, "K9AAA", "40m", "CW", "WILL", t + 300),
+            ilqp_wire("bbbb0002", 1, "W9AWE", "20m", "PH", "MCDN", t + 360),
+            ilqp_wire("bbbb0002", 2, "K9AAA", "40m", "CW", "COOK", t + 420),
+        ] {
+            club.merge(&q, t + 600);
+        }
+        let tent = |id: &str, label: &str, op: &str, band: &str, mode: &str| FdBoardPosition {
+            id: id.into(),
+            label: label.into(),
+            operator: op.into(),
+            band: band.into(),
+            mode: mode.into(),
+            last_seen_unix: t + 595,
+        };
+        let d = FdBoardData {
+            call: "W9XYZ".into(),
+            power_mult: 1,
+            positions: vec![
+                tent("aaaa0001", "CW tent", "AA9XYZ", "40m", "CW"),
+                tent("bbbb0002", "SSB tent", "W9XYZ", "20m", "PH"),
+            ],
+            contest: Some(ContestBoard {
+                session: Ok(ilqp_session()),
+                rows: club.rows().to_vec(),
+            }),
+            ..Default::default()
+        };
+        (d, t + 600)
+    }
+
+    /// ⭐ **A club running the Illinois QSO Party gets its OWN board** — the score the
+    /// club file claims, made of the parts the sponsor's arithmetic names: QSO points ×
+    /// the multiplier universes (IL counties, states and provinces, DX up to five) + the
+    /// bonus stations worked. It used to get no board at all, so the host's own TV said
+    /// "served from the host station".
+    #[test]
+    fn an_ilqp_club_board_claims_the_club_score_by_the_partys_rules() {
+        let (d, now) = ilqp_board();
+        let v = parse(&build_data_core(&d, now));
+        assert_eq!(
+            (
+                v["score"]["model"].as_str(),
+                v["score"]["qso_points"].as_u64(),
+                v["score"]["mults"].as_u64(),
+                v["score"]["bonus_points"].as_u64(),
+                v["score"]["total"].as_u64(),
+            ),
+            (Some("multipliers"), Some(5), Some(3), Some(100), Some(115)),
+            "(model, QSO points, multipliers, bonus, total): {v}"
+        );
+        assert!(
+            v["score"].get("power_mult").is_none() && v["score"].get("powered_points").is_none(),
+            "a contest with no power tier carries no power math: {v}"
+        );
+        assert_eq!(
+            v["mults"],
+            serde_json::json!([
+                {"id": "county", "count": 3, "worked": ["COOK", "MCDN", "WILL"]},
+                {"id": "mult", "count": 0, "worked": []},
+                {"id": "dxcc", "count": 0, "worked": []},
+            ]),
+            "each universe the in-state role counts, the scorer's count and what it worked"
+        );
+        assert_eq!(
+            v["bonus_stations"],
+            serde_json::json!([
+                {"call": "W9AWE", "points": 100, "worked": true},
+                {"call": "W9OAB", "points": 100, "worked": false},
+            ])
+        );
+        assert_eq!(
+            (
+                v["qsos"]["count"].as_u64(),
+                v["qsos"]["rate_10min"].as_u64(),
+                v["qsos"]["rate_hour"].as_u64(),
+                v["qsos"]["hourly"].clone(),
+            ),
+            (Some(3), Some(3), Some(3), serde_json::json!([3])),
+            "contacts and rates count the three the club credits, not the five rows"
+        );
+        assert_eq!(
+            v["band_mode"],
+            serde_json::json!([
+                {"band": "40m", "ph": 0, "cw": 2, "dig": 0},
+                {"band": "20m", "ph": 1, "cw": 0, "dig": 0},
+            ])
+        );
+        let pos: Vec<(String, u64, u64, u64)> = v["positions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["label"].as_str().unwrap().to_string(),
+                    p["qsos_raw"].as_u64().unwrap(),
+                    p["qsos_unique"].as_u64().unwrap(),
+                    p["points"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pos,
+            vec![
+                ("CW tent".to_string(), 3, 2, 4),
+                ("SSB tent".to_string(), 2, 1, 1),
+            ],
+            "(label, rows, contacts the club credits, points): the earliest logger keeps Cook"
+        );
+        assert_eq!(
+            v["ticker"].as_array().unwrap().len(),
+            5,
+            "activity, every row"
+        );
+        assert_eq!(
+            (
+                v["ticker"][0]["call"].as_str(),
+                v["ticker"][0]["section"].as_str(),
+                v["ticker"][0]["position"].as_str(),
+            ),
+            (Some("K9AAA"), Some("COOK"), Some("SSB tent")),
+            "the latest contact says where it was"
+        );
+        assert_eq!(
+            (
+                v["event"]["kind"].as_str(),
+                v["event"]["name"].as_str(),
+                v["event"]["call"].as_str(),
+                v["event"]["section"].as_str(),
+                v["event"]["year"].as_u64(),
+                v["event"]["start_unix"].as_u64(),
+            ),
+            (
+                Some("ilqp"),
+                Some("IL QSO Party"),
+                Some("W9XYZ"),
+                Some("MCLN"),
+                Some(2026),
+                Some(ilqp().event_window(2026).start_unix),
+            )
+        );
+    }
+
+    /// The party's meta: the universes the in-state role counts, each with its values and
+    /// their names from the rules data, and the one the map draws.
+    #[test]
+    fn an_ilqp_club_meta_names_every_universe_it_counts() {
+        let (d, now) = ilqp_board();
+        let m = parse(&build_meta(&d, now));
+        assert_eq!(
+            (m["scoring_model"].as_str(), m["map"].as_str()),
+            (Some("multipliers"), Some("county"))
+        );
+        let shape: Vec<(String, String, String, usize, Option<u64>)> = m["mults"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                (
+                    x["id"].as_str().unwrap().to_string(),
+                    x["source"].as_str().unwrap().to_string(),
+                    x["scope"].as_str().unwrap().to_string(),
+                    x["values"].as_array().unwrap().len(),
+                    x["cap"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("county".into(), "field".into(), "perLog".into(), 102, None),
+                ("mult".into(), "field".into(), "perLog".into(), 66, None),
+                ("dxcc".into(), "dxcc".into(), "perLog".into(), 0, Some(5)),
+            ],
+            "(id, source, scope, values, cap)"
+        );
+        assert_eq!(
+            m["mults"][0]["values"][0],
+            serde_json::json!({"code": "ADAM", "name": "Adams"})
+        );
+        assert!(m["sections"].as_array().unwrap().is_empty());
+        assert_eq!(m["event"]["kind"], "ilqp");
+    }
+
+    /// A session Settings cannot build scores nothing (the club line shows 0 too), and the
+    /// board says why instead of drawing a number — through the cache, as valid JSON.
+    #[test]
+    fn a_club_session_settings_cannot_build_is_named_not_scored() {
+        let (mut d, _) = ilqp_board();
+        d.contest.as_mut().unwrap().session = Err("the county is blank".into());
+        let board = CachedBoard::with_ttl(move || Some(d.clone()), Duration::ZERO);
+        let v: serde_json::Value = serde_json::from_str(&board.data()).expect("valid JSON");
+        assert_eq!(
+            (
+                v["active"].as_bool(),
+                v["reason"].as_str(),
+                v["detail"].as_str()
+            ),
+            (
+                Some(false),
+                Some("club-session"),
+                Some("the county is blank")
+            )
+        );
+        assert!(
+            v["rev"].as_u64().is_some(),
+            "the cache still splices rev in"
+        );
+        let m: serde_json::Value = serde_json::from_str(&board.meta()).expect("valid JSON");
+        assert_eq!(m["reason"], "club-session");
+    }
+
+    /// ⭐ **The two Field Days keep every number they show.** ARRL Field Day's whole
+    /// payload and its meta (bar the rules file's own stamp) byte for byte, and Winter
+    /// Field Day's contacts, rates, band grid, sections, positions and ticker byte for
+    /// byte, as they were before the board learned any other contest. (Winter Field
+    /// Day's score block and ticks follow its own scoring rule, pinned above.)
+    #[test]
+    fn the_field_day_payloads_keep_every_number_they_show() {
+        let (d, now) = fixture(FdEvent::ArrlFd);
+        assert_eq!(build_data_core(&d, now), ARRL_FD_CORE_GOLDEN);
+        let mut meta = parse(&build_meta(&d, now));
+        let sections: Vec<String> = meta["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["code"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(sections.join(" "), ARRL_FD_SECTION_CODES_GOLDEN);
+        let obj = meta.as_object_mut().unwrap();
+        obj.remove("sections");
+        obj.remove("rules_generated");
+        assert_eq!(meta.to_string(), ARRL_FD_META_GOLDEN);
+
+        let (w, wnow) = fixture(FdEvent::WinterFd);
+        let v = parse(&build_data_core(&w, wnow));
+        let kept: Vec<String> = [
+            "qsos",
+            "band_mode",
+            "sections_worked",
+            "positions",
+            "ticker",
+        ]
+        .iter()
+        .map(|k| format!("{k}={}", v[*k]))
+        .collect();
+        assert_eq!(kept.join("\n"), WFD_CORE_GOLDEN);
+    }
+
+    const ARRL_FD_CORE_GOLDEN: &str = r##"{"event":{"kind":"arrlfd","name":"ARRL Field Day","year":2026,"start_unix":1782583200,"end_unix":1782680400,"call":"W9ABC","class":"3A","section":"WI"},"score":{"model":"powered","qso_points":6,"bonus_points":150,"power_mult":2,"powered_points":12,"total":162},"qsos":{"count":4,"rate_hour":1,"rate_10min":1,"hourly":[2,2,0]},"ticker":[{"when_unix":1782590200,"call":"VE3AAA","class":"2A","section":"ONE","band":"20m","mode":"DIG","submode":"FT8","position":"CW tent","operator":"W9AAA"},{"when_unix":1782587200,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782586900,"call":"W5XYZ","class":"2A","section":"STX","band":"40m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583400,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583300,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"CW tent","operator":"W9AAA"}],"band_mode":[{"band":"40m","ph":1,"cw":0,"dig":0},{"band":"20m","ph":1,"cw":1,"dig":1}],"sections_worked":["EMA","ONE","STX"],"positions":[{"id":"aaaa1111","label":"CW tent","operator":"W9AAA","band":"20m","mode":"CW","stale":false,"qsos_raw":2,"qsos_unique":2,"points":4,"last_qso_unix":1782590200},{"id":"bbbb2222","label":"Phone tent","operator":"W9BBB","band":"40m","mode":"PH","stale":true,"qsos_raw":3,"qsos_unique":2,"points":2,"last_qso_unix":1782587200}],"claimed":["emergency-power","web-submission"]}"##;
+    const ARRL_FD_SECTION_CODES_GOLDEN: &str = r##"DE EPA MDC NNY SNJ WNY WPA IL IN WI MN ND SD AR LA MS TN KY MI OH ENY NLI NNJ IA KS MO NE CT EMA ME NH RI VT WMA AK EWA ID MT OR WWA EB NV PAC SCV SF SJV SV NC SC VA WV CO NM UT WY AL GA NFL PR SFL VI WCF AZ LAX ORG SB SDG NTX OK STX WTX NL NB NS PE QC ONE ONN ONS GH MB SK AB BC TER"##;
+    const ARRL_FD_META_GOLDEN: &str = r##"{"bonuses":[{"id":"emergency-power","label":"100% emergency power","points":100},{"id":"media-publicity","label":"Media publicity","points":100},{"id":"public-location","label":"Public location","points":100},{"id":"public-info-table","label":"Public information table","points":100},{"id":"nts-message","label":"Message to ARRL SM/SEC","points":100},{"id":"w1aw-bulletin","label":"W1AW bulletin copied","points":100},{"id":"natural-power","label":"Natural power QSOs","points":100},{"id":"site-visit-official","label":"Site visit: elected official","points":100},{"id":"site-visit-agency","label":"Site visit: agency representative","points":100},{"id":"gota","label":"GOTA station max","points":100},{"id":"youth","label":"Youth participation","points":100},{"id":"web-submission","label":"Web submission","points":50},{"id":"safety-officer","label":"Safety officer","points":100},{"id":"social-media","label":"Social media","points":100},{"id":"educational","label":"Educational activity","points":100},{"id":"satellite","label":"Satellite QSO","points":100}],"event":{"call":"W9ABC","class":"3A","end_unix":1782680400,"kind":"arrlfd","name":"ARRL Field Day","section":"WI","start_unix":1782583200,"year":2026},"rules_year":2026,"scoring_model":"powered"}"##;
+    const WFD_CORE_GOLDEN: &str = r##"qsos={"count":4,"hourly":[2,2,0],"rate_10min":1,"rate_hour":1}
+band_mode=[{"band":"40m","cw":0,"dig":0,"ph":1},{"band":"20m","cw":1,"dig":1,"ph":1}]
+sections_worked=["EMA","ONE","STX"]
+positions=[{"band":"20m","id":"aaaa1111","label":"CW tent","last_qso_unix":1769277400,"mode":"CW","operator":"W9AAA","points":4,"qsos_raw":2,"qsos_unique":2,"stale":false},{"band":"40m","id":"bbbb2222","label":"Phone tent","last_qso_unix":1769274400,"mode":"PH","operator":"W9BBB","points":2,"qsos_raw":3,"qsos_unique":2,"stale":true}]
+ticker=[{"band":"20m","call":"VE3AAA","class":"2A","mode":"DIG","operator":"W9AAA","position":"CW tent","section":"ONE","submode":"FT8","when_unix":1769277400},{"band":"20m","call":"K1ABC","class":"2A","mode":"CW","operator":"W9BBB","position":"Phone tent","section":"EMA","submode":"","when_unix":1769274400},{"band":"40m","call":"W5XYZ","class":"2A","mode":"PH","operator":"W9BBB","position":"Phone tent","section":"STX","submode":"","when_unix":1769274100},{"band":"20m","call":"K1ABC","class":"2A","mode":"PH","operator":"W9BBB","position":"Phone tent","section":"EMA","submode":"","when_unix":1769270600},{"band":"20m","call":"K1ABC","class":"2A","mode":"CW","operator":"W9AAA","position":"CW tent","section":"EMA","submode":"","when_unix":1769270500}]"##;
 }
