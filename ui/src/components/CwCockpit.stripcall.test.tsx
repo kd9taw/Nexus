@@ -198,21 +198,21 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('the CW log strip and His Call are one field', () => {
-  it('F3 after a call typed only in the strip keys that call, not the last station', async () => {
+  it('F2 after a call typed only in the strip keys that call, not the last station', async () => {
     engine.peer = 'W1AW' // the station before
     await renderCockpit()
     expect(hisCall().value).toBe('W1AW')
     fireEvent.change(stripCall(), { target: { value: 'k9aaa' } })
-    await press('F3', stripCall())
-    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+    await press('F2', stripCall())
+    expect(engine.keyed).toEqual(['K9AAA 5NN COOK'])
     expect(hisCall().value, 'His Call shows the strip').toBe('K9AAA')
   })
 
   it('…and with no station before, the call is still the one typed', async () => {
     await renderCockpit()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
-    await press('F3', stripCall())
-    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+    await press('F2', stripCall())
+    expect(engine.keyed).toEqual(['K9AAA 5NN COOK'])
   })
 
   it('outside a contest too: the log strip\'s call is the one F2 keys', async () => {
@@ -230,7 +230,7 @@ describe('the CW log strip and His Call are one field', () => {
     expect(stripCall().value).toBe('N0CALL')
   })
 
-  it('logging the contact empties both, so the next F3 keys no call', async () => {
+  it('logging the contact empties both, so the next F2 keys no call', async () => {
     engine.peer = 'W1AW'
     await renderCockpit()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
@@ -240,29 +240,29 @@ describe('the CW log strip and His Call are one field', () => {
     await flush()
     expect(stripCall().value).toBe('')
     expect(hisCall().value).toBe('')
-    await press('F3')
-    expect(engine.keyed).toEqual(['DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['5NN COOK'])
   })
 
   // ── CONTROLS: what must not move ──────────────────────────────────────────────────────
 
-  it('His Call typed directly is what F3 keys', async () => {
+  it('His Call typed directly is what F2 keys', async () => {
     engine.peer = 'W1AW'
     await renderCockpit()
     fireEvent.change(hisCall(), { target: { value: 'N0CALL' } })
-    await press('F3', hisCall())
-    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+    await press('F2', hisCall())
+    expect(engine.keyed).toEqual(['N0CALL 5NN COOK'])
   })
 
-  it('a decoded-chip pick is what F3 keys', async () => {
+  it('a decoded-chip pick is what F2 keys', async () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
     await flush()
     fireEvent.click(screen.getByRole('button', { name: 'W2BBB' }))
     await settle()
-    await press('F3')
-    expect(engine.keyed).toEqual(['W2BBB DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['W2BBB 5NN COOK'])
   })
 
   it('…and it fills both fields, over a call typed in the strip', async () => {
@@ -323,12 +323,12 @@ describe('the decoder\'s best guess, in the one field', () => {
     expect(lookedUp()).toEqual(['K9AAA'])
   })
 
-  it('F3 keys the guess', async () => {
+  it('F2 keys the guess', async () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     await settle()
-    await press('F3')
-    expect(engine.keyed).toEqual(['W2BBB DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['W2BBB 5NN COOK'])
   })
 
   it('…and, once sent, it stays the call while the engine takes it, whatever the decoder guesses next', async () => {
@@ -336,22 +336,22 @@ describe('the decoder\'s best guess, in the one field', () => {
     await renderCockpit()
     await settle()
     const release = holdNextSelectPeer()
-    await press('F3')
+    await press('F2')
     decodeState.candidates = [{ call: 'W2BBX', best: true }]
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['W2BBB', 'W2BBB'])
     release()
     await settle()
-    expect(engine.keyed).toEqual(['W2BBB DE KD9TAW 5NN COOK COOK K'])
+    expect(engine.keyed).toEqual(['W2BBB 5NN COOK'])
   })
 
-  it('a call typed over it in the strip is the one F3 keys', async () => {
+  it('a call typed over it in the strip is the one F2 keys', async () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     await settle()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
-    await press('F3', stripCall())
-    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+    await press('F2', stripCall())
+    expect(engine.keyed).toEqual(['K9AAA 5NN COOK'])
   })
 
   it('…and in His Call', async () => {
@@ -359,8 +359,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     await renderCockpit()
     await settle()
     fireEvent.change(hisCall(), { target: { value: 'N0CALL' } })
-    await press('F3', hisCall())
-    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+    await press('F2', hisCall())
+    expect(engine.keyed).toEqual(['N0CALL 5NN COOK'])
   })
 
   it('a station worked wins over a guess', async () => {
@@ -369,8 +369,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     await renderCockpit()
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['W1AW', 'W1AW'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['W1AW DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['W1AW 5NN COOK'])
   })
 
   it('…and replaces one at once', async () => {
@@ -381,8 +381,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     engine.peer = 'N0CALL' // worked from elsewhere: the engine's peer changes under the guess
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['N0CALL', 'N0CALL'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['N0CALL 5NN COOK'])
   })
 
   it('a spot handoff replaces it', async () => {
@@ -393,8 +393,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     r.rerender(cockpit(ILQP, { call: 'K9SPT', ts: 1 }))
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['K9SPT', 'K9SPT'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['K9SPT DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['K9SPT 5NN COOK'])
   })
 
   it('a chip pick replaces it', async () => {
@@ -408,8 +408,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     fireEvent.click(screen.getByRole('button', { name: 'N3CCC' }))
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['N3CCC DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['N3CCC 5NN COOK'])
   })
 
   it('…and the pick holds while the engine takes it, whatever the decoder guesses next', async () => {
@@ -426,8 +426,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
     release()
     await settle()
-    await press('F3')
-    expect(engine.keyed).toEqual(['N3CCC DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['N3CCC 5NN COOK'])
   })
 
   it('follows a better guess while untouched, and stays put once a call is typed in the strip', async () => {
@@ -442,8 +442,8 @@ describe('the decoder\'s best guess, in the one field', () => {
     decodeState.candidates = [{ call: 'N3CCC', best: true }]
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['K9AAA', 'K9AAA'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['K9AAA 5NN COOK'])
   })
 
   it('…or in His Call', async () => {
@@ -458,34 +458,34 @@ describe('the decoder\'s best guess, in the one field', () => {
     decodeState.candidates = [{ call: 'N3CCC', best: true }]
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['N0CALL', 'N0CALL'])
-    await press('F3')
-    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+    await press('F2')
+    expect(engine.keyed).toEqual(['N0CALL 5NN COOK'])
   })
 
   it('logging empties both, and the next guess fills them again; the call just logged is not offered again', async () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     await settle()
-    // Logged while the engine is still taking W2BBB from F3, so the decode poll reports it as the
+    // Logged while the engine is still taking W2BBB from F2, so the decode poll reports it as the
     // station worked only after the strip was cleared.
     const release = holdNextSelectPeer()
-    await press('F3')
+    await press('F2')
     fireEvent.change(qthBox(), { target: { value: 'KANE' } })
     fireEvent.keyDown(qthBox(), { key: 'Enter' })
     await flush()
     release()
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['', ''])
-    // W2BBB, logged, is still the decoder's best guess: the next F3 keys no call.
-    await press('F3')
+    // W2BBB, logged, is still the decoder's best guess: the next F2 keys no call.
+    await press('F2')
     decodeState.candidates = [{ call: 'N3CCC', best: true }]
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
-    await press('F3')
+    await press('F2')
     expect(engine.keyed).toEqual([
-      'W2BBB DE KD9TAW 5NN COOK COOK K',
-      'DE KD9TAW 5NN COOK COOK K',
-      'N3CCC DE KD9TAW 5NN COOK COOK K',
+      'W2BBB 5NN COOK',
+      '5NN COOK',
+      'N3CCC 5NN COOK',
     ])
   })
 
@@ -495,7 +495,7 @@ describe('the decoder\'s best guess, in the one field', () => {
     await settle()
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
     const release = holdNextSelectPeer()
-    await press('F3', stripCall())
+    await press('F2', stripCall())
     fireEvent.change(qthBox(), { target: { value: 'KANE' } })
     fireEvent.keyDown(qthBox(), { key: 'Enter' })
     await settle() // logged within the half second the call typed takes to settle
@@ -507,15 +507,15 @@ describe('the decoder\'s best guess, in the one field', () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }] // the same guess, back
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['', ''])
-    await press('F3')
+    await press('F2')
     decodeState.candidates = [{ call: 'N3CCC', best: true }]
     await settle()
     expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
-    await press('F3')
+    await press('F2')
     expect(engine.keyed).toEqual([
-      'K9AAA DE KD9TAW 5NN COOK COOK K',
-      'DE KD9TAW 5NN COOK COOK K',
-      'N3CCC DE KD9TAW 5NN COOK COOK K',
+      'K9AAA 5NN COOK',
+      '5NN COOK',
+      'N3CCC 5NN COOK',
     ])
   })
 })

@@ -3,7 +3,6 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { EN, type MessageKey } from './i18n'
-import { CW_LAYOUT_ON_AIR } from './features/esmRoles'
 
 // DOCS-MATCH-CODE — published tables are checked against the code they describe.
 //
@@ -285,20 +284,18 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
       return { key: o.key, label, text: o.text }
     })
 
-  // THE ON-AIR SWITCH (`CW_LAYOUT_ON_AIR`, features/esmRoles.ts): the contest and Field Day keys
-  // send today's sets until the signed contest layout goes on the air with Enter Sends Message.
-  // The manual publishes the set the cockpit SENDS, so it is compared with whichever set the
-  // switch selects, and flipping the switch without the manual's three tables turns this red.
-  const onAir = (today: string, layout: string) =>
-    CW_LAYOUT_ON_AIR
-      ? { const: `${layout} (features/esmRoles.ts)`, macros: sourceSet(layout, ESM_ROLES_TS, 'esmRoles.ts') }
-      : { const: today, macros: sourceSet(today) }
+  // THE CONTEST AND FIELD DAY SETS ARE THE SIGNED LAYOUT (features/esmRoles.ts), which the
+  // cockpit's `CW_CONTEST_SETS` sends; the casual set is the cockpit's own.
+  const layout = (name: string) => ({
+    const: `${name} (features/esmRoles.ts)`,
+    macros: sourceSet(name, ESM_ROLES_TS, 'esmRoles.ts'),
+  })
 
   const SETS = {
     default: { const: 'DEFAULT_MACROS', macros: sourceSet('DEFAULT_MACROS') },
-    fieldDay: onAir('DEFAULT_FD_MACROS', 'CW_FIELD_DAY_LAYOUT'),
-    contest: onAir('DEFAULT_CONTEST_MACROS', 'CW_CONTEST_LAYOUT'),
-    contestNoReport: onAir('DEFAULT_CONTEST_NO_REPORT_MACROS', 'CW_CONTEST_NO_REPORT_LAYOUT'),
+    fieldDay: layout('CW_FIELD_DAY_LAYOUT'),
+    contest: layout('CW_CONTEST_LAYOUT'),
+    contestNoReport: layout('CW_CONTEST_NO_REPORT_LAYOUT'),
   }
 
   // A published CW macro table is any table headed Key | Label | … on a CW page (every
@@ -335,11 +332,11 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
       'docs/manual/CW.md',
     )
     const fd = macroTables.filter((t) => t.set === SETS.fieldDay).map((t) => `${t.file} — ${t.heading}`)
-    expect(fd, 'no Field Day macro table found — DEFAULT_FD_MACROS is unguarded').not.toEqual([])
+    expect(fd, 'no Field Day macro table found — CW_FIELD_DAY_LAYOUT is unguarded').not.toEqual([])
     const contest = macroTables.filter((t) => t.set === SETS.contest).map((t) => `${t.file} — ${t.heading}`)
-    expect(contest, 'no contest macro table found — DEFAULT_CONTEST_MACROS is unguarded').not.toEqual([])
+    expect(contest, 'no contest macro table found — CW_CONTEST_LAYOUT is unguarded').not.toEqual([])
     const noReport = macroTables.filter((t) => t.set === SETS.contestNoReport).map((t) => `${t.file} — ${t.heading}`)
-    expect(noReport, 'no no-report contest table found — DEFAULT_CONTEST_NO_REPORT_MACROS is unguarded').not.toEqual([])
+    expect(noReport, 'no no-report contest table found — CW_CONTEST_NO_REPORT_LAYOUT is unguarded').not.toEqual([])
   })
 
   it.each(macroTables.map((t) => [`${t.file} — ${t.heading}`, t] as const))(

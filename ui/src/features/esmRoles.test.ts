@@ -1,18 +1,12 @@
 // @vitest-environment jsdom
 // Enter Sends Message — which key sends each step, by value: the contest layout on RTTY's
-// contest set as it ships, the CW contest and Field Day sets re-laid out (SIGNED texts, not on
-// the air yet), the voice-slot convention, and the role picker's model of the operator's own
-// macros.
+// contest set as it ships, the CW contest and Field Day sets re-laid out (SIGNED texts, on the
+// air), the voice-slot convention, and the role picker's model of the operator's own macros.
 //
 // jsdom only because the CW cockpit's live sets are imported from the component that sends
 // them: the layout must be checked against what is on the air today, not a copy of it.
 import { describe, expect, it } from 'vitest'
-import {
-  CW_CONTEST_SETS,
-  DEFAULT_CONTEST_MACROS,
-  DEFAULT_CONTEST_NO_REPORT_MACROS,
-  DEFAULT_FD_MACROS,
-} from '../components/CwCockpit'
+import { CW_CONTEST_SETS } from '../components/CwCockpit'
 import { EN } from '../i18n'
 import { ESM_ROLES, type EsmRole } from './esm'
 import {
@@ -21,7 +15,6 @@ import {
   CW_CONTEST_LAYOUT,
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
-  CW_LAYOUT_ON_AIR,
   RTTY_SET_ROLES,
   VOICE_SLOT_ROLES,
   cwBuiltInRoles,
@@ -150,16 +143,16 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
     }
   })
 
-  it('keeps today\'s CQ and AGN, and today\'s his-call text, now on F5', () => {
-    const live = (set: typeof DEFAULT_CONTEST_MACROS, key: string) => set.find((m) => m.key === key)?.text
-    for (const [layout, today] of [
-      [CW_CONTEST_LAYOUT, DEFAULT_CONTEST_MACROS],
-      [CW_CONTEST_NO_REPORT_LAYOUT, DEFAULT_CONTEST_NO_REPORT_MACROS],
-      [CW_FIELD_DAY_LAYOUT, DEFAULT_FD_MACROS],
+  it('keeps the CQ and AGN the sets sent before, and moves their his-call text to F5', () => {
+    // What F1, F7 and F6 sent before the layout (the signature's "Today" column).
+    for (const [layout, cq] of [
+      [CW_CONTEST_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
+      [CW_CONTEST_NO_REPORT_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
+      [CW_FIELD_DAY_LAYOUT, 'CQ FD DE {MYCALL} {MYCALL} K'],
     ] as const) {
-      expect(layout.find((m) => m.key === 'F1')?.text).toBe(live(today, 'F1'))
-      expect(layout.find((m) => m.key === 'F7')?.text).toBe(live(today, 'F7'))
-      expect(layout.find((m) => m.key === 'F5')?.text).toBe(live(today, 'F6'))
+      expect(layout.find((m) => m.key === 'F1')?.text).toBe(cq)
+      expect(layout.find((m) => m.key === 'F7')?.text).toBe('AGN AGN')
+      expect(layout.find((m) => m.key === 'F5')?.text).toBe('! ')
     }
   })
 
@@ -172,22 +165,20 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
     expect(cwBuiltInRoles(CW_CONTEST_LAYOUT.slice(0, 7))).toBeNull()
   })
 
-  it('is not on the air: the switch is off, the CW cockpit sends today\'s sets, and ESM finds no role table in them', () => {
-    expect(CW_LAYOUT_ON_AIR).toBe(false)
+  it('is on the air: the CW cockpit sends the three layout sets, F3 is TU in each, and ESM finds the layout in them', () => {
     expect(CW_CONTEST_SETS).toEqual({
-      fieldDay: DEFAULT_FD_MACROS,
-      report: DEFAULT_CONTEST_MACROS,
-      noReport: DEFAULT_CONTEST_NO_REPORT_MACROS,
+      fieldDay: CW_FIELD_DAY_LAYOUT,
+      report: CW_CONTEST_LAYOUT,
+      noReport: CW_CONTEST_NO_REPORT_LAYOUT,
     })
-    expect(DEFAULT_CONTEST_MACROS.find((m) => m.key === 'F3')?.text).toBe('! DE {MYCALL} {RST} {EXCH} {EXCH} K')
-    expect(DEFAULT_CONTEST_NO_REPORT_MACROS.find((m) => m.key === 'F3')?.text).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
-    expect(DEFAULT_FD_MACROS.find((m) => m.key === 'F3')?.text).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
-    expect(cwBuiltInRoles(DEFAULT_CONTEST_MACROS)).toBeNull()
-    expect(cwBuiltInRoles(DEFAULT_CONTEST_NO_REPORT_MACROS)).toBeNull()
-    expect(cwBuiltInRoles(DEFAULT_FD_MACROS)).toBeNull()
+    for (const set of Object.values(CW_CONTEST_SETS)) {
+      expect(set.find((m) => m.key === 'F3')?.text).toBe('TU {MYCALL}')
+      expect(cwBuiltInRoles(set)).toBe(CONTEST_LAYOUT_ROLES)
+    }
   })
 
-  it('shows Settings the steps of the sets the cockpit actually sends, whichever way the switch is set', () => {
+  it('shows Settings the steps of the sets the cockpit actually sends', () => {
+    expect(CW_BUILT_IN_ROLES).toBe(CONTEST_LAYOUT_ROLES)
     for (const set of Object.values(CW_CONTEST_SETS)) expect(cwBuiltInRoles(set)).toBe(CW_BUILT_IN_ROLES)
   })
 })

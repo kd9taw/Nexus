@@ -498,7 +498,8 @@ const MIGRATED = [
   //
   // Two things this batch settles that the nineteen before it did not. A LABEL TABLE THAT
   // ANOTHER TEST PARSES OUT OF THE SOURCE moves its guard with it: `docs-match-code.test.ts`
-  // reads DEFAULT_MACROS/DEFAULT_FD_MACROS out of this file and compares the captions with
+  // reads DEFAULT_MACROS out of this file (and the contest and Field Day sets out of
+  // features/esmRoles.ts) and compares the captions with
   // the tables docs/manual/CW.md publishes, so the captions that are WORDS now carry a
   // `labelKey` and that guard resolves it through this catalog — asserting exactly what it
   // asserted before (proved by drifting one entry and watching both doc rows go red). And a

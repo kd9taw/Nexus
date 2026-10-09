@@ -243,14 +243,25 @@ describe('Settings ▸ Contesting ▸ Enter Sends Message', () => {
     expect(Object.keys(lastSaved().macros).filter((k) => /esmroles/i.test(k))).toEqual([])
   })
 
-  it('shows a profile on the built-in sets read-only: no control, and that ESM steps aside there today', async () => {
+  it('shows a profile on the built-in sets read-only: no control, and the contest layout’s key for each step', async () => {
     stored = { ...stored, macros: { ...(stored.macros as object), cwProfiles: [{ name: 'Default', macros: [] }], activeCwProfile: 0 } }
     renderPanel()
     await openContesting()
     const cw = document.querySelector('#settings-contest-keys .cw-macro-editor') as HTMLElement
     expect(cw.querySelectorAll('select')).toHaveLength(0)
-    expect(cw.querySelector('.esm-roles-none')?.textContent).toBe(
-      'This set has no step mapped, so ESM steps aside: Enter logs as it does with ESM off.',
-    )
+    expect(
+      [...cw.querySelectorAll('.esm-role-row')].map((r) => [
+        r.querySelector('.cw-macro-role')?.textContent,
+        r.querySelector('.esm-role-builtin')?.textContent,
+      ]),
+    ).toEqual([
+      ['CQ', 'F1'],
+      ['His call and your exchange', 'F2'],
+      ['TU', 'F3'],
+      ['Your call', 'F4'],
+      ['Your S&P exchange', 'F6'],
+      ['AGN', 'F7'],
+    ])
+    expect(cw.querySelector('.esm-roles-none')).toBeNull()
   })
 })

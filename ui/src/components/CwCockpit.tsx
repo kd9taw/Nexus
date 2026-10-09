@@ -34,7 +34,6 @@ import {
   CW_CONTEST_LAYOUT,
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
-  CW_LAYOUT_ON_AIR,
   cwBuiltInRoles,
   esmRoles,
   type EsmRoleMap,
@@ -370,61 +369,19 @@ const DEFAULT_MACROS: CwMacro[] = [
   { key: 'F8', label: '?', text: '? ' },
 ]
 
-/** Default Field Day CW macro set — replaces the casual defaults while FD mode is on.
- * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
- * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
- * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
-export const DEFAULT_FD_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
-
-/** Default CONTEST CW macro set — the Field Day cadence with the call every other contest
- * uses. Field Day's own `CQ FD` went on the air in any contest that was running, so an
- * Illinois QSO Party or CQ WW CW operator called CQ for somebody else's event; `CQ TEST` is
- * what a contest CQ is, and the exchange tokens are unchanged ({EXCH} is the running
- * contest's own exchange). Everything below F1 is Field Day's set, which is what a contest
- * needs, plus the REPORT: {EXCH} is the exchange without the signal report, which {RST}
- * keys, so F3 and F4 send {RST} before it. Without it the Illinois QSO Party's F3 keyed the
- * county alone, where the sponsor's exchange is RS(T) and county. */
-export const DEFAULT_CONTEST_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {RST} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {RST} {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
-
-/** The contest set for an exchange with NO signal report (Sweepstakes, the California QSO
- * Party, the ARRL VHF contests): the same keys with {RST} left out of F3 and F4, because a
- * 5NN there is a wrong exchange — Sweepstakes would copy it as the serial. */
-export const DEFAULT_CONTEST_NO_REPORT_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
-
 /** The built-in sets the cockpit's F-keys send in a contest: Field Day's, and the contest sets
- *  with and without a report. ⛔ Today's three sets above, until the signed contest layout goes
- *  on the air with Enter Sends Message: `CW_LAYOUT_ON_AIR` in `features/esmRoles.ts` is the one
- *  switch, and this is the one place the cockpit reads it. */
-export const CW_CONTEST_SETS: { fieldDay: CwMacro[]; report: CwMacro[]; noReport: CwMacro[] } = CW_LAYOUT_ON_AIR
-  ? { fieldDay: CW_FIELD_DAY_LAYOUT, report: CW_CONTEST_LAYOUT, noReport: CW_CONTEST_NO_REPORT_LAYOUT }
-  : { fieldDay: DEFAULT_FD_MACROS, report: DEFAULT_CONTEST_MACROS, noReport: DEFAULT_CONTEST_NO_REPORT_MACROS }
+ *  with and without a report — the signed contest layout (`features/esmRoles.ts`), N1MM's: F1 CQ
+ *  · F2 his call and my exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 AGN
+ *  · F8 QSO B4. It is the layout Enter Sends Message sends from. Field Day's set keeps its own
+ *  `CQ FD`, which belongs to Field Day; every other contest calls `CQ TEST`. {EXCH} is the running
+ *  contest's exchange WITHOUT the signal report, which {RST} keys, so the set for an exchange with
+ *  a report sends {RST} before it, and the set for one without (Sweepstakes would copy a 5NN as
+ *  the serial) does not. */
+export const CW_CONTEST_SETS: { fieldDay: CwMacro[]; report: CwMacro[]; noReport: CwMacro[] } = {
+  fieldDay: CW_FIELD_DAY_LAYOUT,
+  report: CW_CONTEST_LAYOUT,
+  noReport: CW_CONTEST_NO_REPORT_LAYOUT,
+}
 
 const WPM_MIN = 5
 const WPM_MAX = 50

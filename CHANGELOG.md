@@ -204,6 +204,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
+  every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
+  call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO
+  B4`. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
+  `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
+  and F7 send what they sent before. Your exchange now goes once, without "DE <your call> … K",
+  and your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now
+  sends TU, F4 pressed to confirm sends only your call, and F5 pressed for your call sends his.
+  The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
+  Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
+  unchanged, and a macro profile of your own keeps the texts it has.
+
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each

@@ -217,6 +217,7 @@ async function run() {
 }
 
 beforeEach(() => {
+  settings.macros.cwProfiles = [MINE]
   engine.peer = null
   engine.txEnabled = true
   engine.calls = []
@@ -232,6 +233,41 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('Enter Sends Message in the CW cockpit', () => {
+  it('runs the Illinois QSO Party on the built-in contest set: CQ TEST, his call and the exchange, TU and the log', async () => {
+    settings.macros.cwProfiles = [] // no profile: the built-in set, N1MM's layout
+    await renderCockpit()
+    await run()
+    expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K'])
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    expect(lit()).toEqual(['F2'])
+    await enter(stripCall())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('K9AAA 5NN COOK')
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    expect(lit()).toEqual(['F3'])
+    engine.calls = []
+    await enter(qthBox())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('TU KD9TAW')
+    expect(engine.calls.filter((c) => !c.startsWith('selectPeer'))).toEqual(['sendCwArmed', 'contestLogManual'])
+  })
+
+  it('searches and pounces on the built-in contest set: my call, then the S&P exchange and the log', async () => {
+    settings.macros.cwProfiles = []
+    await renderCockpit()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    expect(lit()).toEqual(['F4'])
+    await enter(stripCall())
+    expect(engine.keyed).toEqual(['KD9TAW'])
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    expect(lit()).toEqual(['F6'])
+    await enter(qthBox())
+    expect(engine.keyed).toEqual(['KD9TAW', 'TU 5NN COOK'])
+    expect(engine.calls).toContain('contestLogManual')
+  })
+
   it('sends through Enter’s own entry, never the F-keys’ re-arming one, with the strip’s call committed first', async () => {
     engine.peer = 'W1AW' // the station before
     await renderCockpit()
@@ -258,6 +294,31 @@ describe('Enter Sends Message in the CW cockpit', () => {
     ).toEqual(['sendCwArmed', 'contestLogManual'])
     expect(engine.keyed[engine.keyed.length - 1]).toBe('TU KD9TAW')
     expect(api.sendCw, 'Enter never used the send that turns TX on').toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for His Call to be committed before the send that expands `!` to it', async () => {
+    settings.macros.cwProfiles = []
+    engine.peer = 'W1AW'
+    await renderCockpit()
+    await run()
+    let release = () => {}
+    vi.mocked(api.selectPeer).mockImplementationOnce(
+      (p: string | null) =>
+        new Promise((resolve) => {
+          release = () => {
+            engine.peer = p
+            resolve(null)
+          }
+        }),
+    )
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    engine.keyed = []
+    await enter(stripCall())
+    expect(engine.keyed, 'nothing keys while His Call is still being committed').toEqual([])
+    await act(async () => release())
+    await flush()
+    expect(engine.keyed).toEqual(['K9AAA 5NN COOK'])
   })
 
   it('with TX off, Enter sends nothing, logs nothing, never turns TX on, and says why', async () => {

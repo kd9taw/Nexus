@@ -7,8 +7,9 @@
 // `CQ FD DE …` — Field Day's own call, on the air, in somebody else's contest. There is now a
 // third set: the same contest cadence with the universal contest call, `CQ TEST`.
 //
-// Field Day's set is unchanged, and that is asserted here rather than assumed: it is what its
-// operators have been keying for releases.
+// All three now follow N1MM's contest layout, the one Enter Sends Message sends from (F2 his call
+// and the exchange, F3 TU, …), and Field Day keeps its own `CQ FD`: that is asserted here rather
+// than assumed.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -153,9 +154,9 @@ describe('the CW macro set follows the contest that is running', () => {
   it('keys CQ TEST in another contest, CQ FD in Field Day, and CQ outside a contest', async () => {
     await renderCockpit({ fieldDay: ILQP })
     expect(macroRows()[0]).toEqual({ key: 'F1', label: 'CQ TEST' })
-    // The rest of the contest cadence is Field Day's, which is what a contest needs.
+    // The rest is N1MM's contest layout, F3 the TU.
     expect(macroRows().map((m) => m.key)).toEqual(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'])
-    expect(macroRows()[2].label).toBe('Exch')
+    expect(macroRows()[2].label).toBe('TU')
 
     // POSITIVE CONTROLS: Field Day still says CQ FD, and no contest still says CQ.
     cleanup()
@@ -188,17 +189,18 @@ describe('the CW macro set follows the contest that is running', () => {
 // THE REPORT IN A CONTEST EXCHANGE.
 //
 // `{EXCH}` is the running contest's exchange WITHOUT the signal report, which `{RST}` keys
-// (`Engine::contest_sent_exchange`). The contest set's F3 and F4 carried `{EXCH}` and no
-// `{RST}`, so in the Illinois QSO Party, whose exchange is "RS(T) and county", F3 keyed the
+// (`Engine::contest_sent_exchange`). The contest set's exchange keys once carried `{EXCH}` and
+// no `{RST}`, so in the Illinois QSO Party, whose exchange is "RS(T) and county", they keyed the
 // county with no 5NN. Where the exchange has no report (Sweepstakes, the California QSO Party,
 // the ARRL VHF contests) a 5NN is a wrong exchange — Sweepstakes would copy it as the serial —
-// so those keep the set without it.
+// so those keep the set without it. In the contest layout the exchange goes on F2 (his call and
+// the exchange) and F6 (the exchange in S&P).
 //
 // Every shipped ruleset is checked: its received slots are read off the rules seed the engine
 // loads, as the engine tags them, and its answer is what its sponsor's rules say. A ruleset
 // added to the seed with no entry below fails until somebody says which it is. The strings
 // these templates key through the real engine, contest by contest, are pinned on the Rust side
-// (`cw_contest_macros_key_each_built_in_contests_exchange`).
+// (`tempo-app/tests/cw_contest_macros.rs`).
 // ---------------------------------------------------------------------------
 
 type SeedRuleset = {
@@ -248,24 +250,28 @@ function fieldDayFor(r: SeedRuleset, role: number): FieldDayStatus {
   } as unknown as FieldDayStatus
 }
 
-const REPORT = { F3: '! DE {MYCALL} {RST} {EXCH} {EXCH} K', F4: '! TU {RST} {EXCH} DE {MYCALL} K' }
-const NO_REPORT = { F3: '! DE {MYCALL} {EXCH} {EXCH} K', F4: '! TU {EXCH} DE {MYCALL} K' }
+const REPORT = { F2: '! {RST} {EXCH}', F6: 'TU {RST} {EXCH}' }
+const NO_REPORT = { F2: '! {EXCH}', F6: 'TU {EXCH}' }
 
-/** What F3 and then F4 hand the keyer, pressed on the dock. */
-async function f3f4(): Promise<string[]> {
+/** What the keys at `indexes` hand the keyer, pressed on the dock in turn. */
+async function keyed(indexes: number[]): Promise<string[]> {
   const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>
   api.sendCw.mockClear()
-  for (const i of [2, 3]) {
+  for (const i of indexes) {
     await act(async () => {
       fireEvent.click([...document.querySelectorAll('.cw-macro')][i])
     })
   }
   return api.sendCw.mock.calls.map((c) => c[0] as string)
 }
+/** F2 and F6: his call and the exchange, and the exchange in S&P. */
+const f2f6 = () => keyed([1, 5])
+/** F3 and F4, which in the casual set send the report and the 73. */
+const f3f4 = () => keyed([2, 3])
 
 const contests = SEED.rulesets.filter((r) => !isFieldDay(r.event))
 
-describe('F3 and F4 key the report where the contest exchange carries one', () => {
+describe('F2 and F6 key the report where the contest exchange carries one', () => {
   it('reads every shipped contest that is not a Field Day', () => {
     expect(contests.map((r) => r.event).sort()).toEqual(Object.keys(EXCHANGE_HAS_REPORT).sort())
   })
@@ -275,15 +281,15 @@ describe('F3 and F4 key the report where the contest exchange carries one', () =
     async (_name, r, role) => {
       await renderCockpit({ fieldDay: fieldDayFor(r, role) })
       const want = EXCHANGE_HAS_REPORT[r.event] ? REPORT : NO_REPORT
-      expect(await f3f4()).toEqual([want.F3, want.F4])
+      expect(await f2f6()).toEqual([want.F2, want.F6])
     },
   )
 
-  it('leaves Field Day, no contest, and an operator\'s own macros as they were', async () => {
-    // Field Day's exchange (class and section) has no report, and its set is unchanged.
+  it('sends Field Day\'s exchange without a report, and leaves no contest and an operator\'s own macros as they were', async () => {
+    // Field Day's exchange (class and section) has no report.
     for (const event of ['arrlfd', 'wfd']) {
       await renderCockpit({ fieldDay: { event, running: true } as unknown as FieldDayStatus })
-      expect(await f3f4()).toEqual([NO_REPORT.F3, NO_REPORT.F4])
+      expect(await f2f6()).toEqual([NO_REPORT.F2, NO_REPORT.F6])
       cleanup()
     }
     // A casual QSO sends its report with F3 already.
@@ -309,25 +315,23 @@ describe('F3 and F4 key the report where the contest exchange carries one', () =
 })
 
 // ---------------------------------------------------------------------------
-// THE SIGNED CONTEST LAYOUT IS NOT ON THE AIR YET.
+// THE SIGNED CONTEST LAYOUT IS ON THE AIR.
 //
 // Enter Sends Message's layout for these sets (F2 his call and the exchange, F3 TU, …) is signed,
-// and it goes on the air WITH Enter Sends Message, never before: `CW_LAYOUT_ON_AIR` in
-// `features/esmRoles.ts` is the one switch. Until it is on, F3 keys today's exchange in the
-// contest sets and at Field Day, as their operators have keyed it for releases. Switching it on
-// turns this red, and the change that does so updates this test with it.
+// and it went on the air WITH Enter Sends Message: F3 is now TU in the contest sets and at Field
+// Day, where it used to key the exchange.
 // ---------------------------------------------------------------------------
 
-describe('the signed contest layout is not on the air yet', () => {
-  it('F3 still sends today\'s exchange in a contest with a report, one without, and at Field Day', async () => {
-    const f3 = async () => (await f3f4())[0]
+describe('the signed contest layout is on the air', () => {
+  it('F3 sends TU in a contest with a report, one without, and at Field Day', async () => {
+    const f3 = async () => (await keyed([2]))[0]
     await renderCockpit({ fieldDay: fieldDayFor(SEED.rulesets.find((r) => r.event === 'ilqp')!, 0) })
-    expect(await f3()).toBe('! DE {MYCALL} {RST} {EXCH} {EXCH} K')
+    expect(await f3()).toBe('TU {MYCALL}')
     cleanup()
     await renderCockpit({ fieldDay: fieldDayFor(SEED.rulesets.find((r) => r.event === 'arrlss_cw')!, 0) })
-    expect(await f3()).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
+    expect(await f3()).toBe('TU {MYCALL}')
     cleanup()
     await renderCockpit({ fieldDay: { event: 'arrlfd', running: true } as unknown as FieldDayStatus })
-    expect(await f3()).toBe('! DE {MYCALL} {EXCH} {EXCH} K')
+    expect(await f3()).toBe('TU {MYCALL}')
   })
 })

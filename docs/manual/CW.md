@@ -122,61 +122,71 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 
 **`F3` sends the report and `F4` ends the contact.**
 
+The contest sets and the Field Day set are laid out the way N1MM lays its keys out, one key per
+step of a contact, and they are what [Enter Sends Message](Field-Day.md#enter-sends-message-esm)
+sends from: `F1` calls CQ, `F2` sends his call and your exchange, `F3` is TU, `F4` your call,
+`F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` asks for a repeat
+and `F8` tells a dupe QSO B4. Your exchange goes once, and your call goes out on `F1`, `F3` and
+`F4`.
+
 ### The Field Day set
 
-Active in ARRL Field Day and Winter Field Day, where `{EXCH}` expands to your class and section.
+Active in ARRL Field Day and Winter Field Day, where `{EXCH}` expands to your class and section:
+working K9AAA as 3A WI, `F2` sends `K9AAA 3A WI` and `F6` sends `TU 3A WI`.
 
 | Key | Label | Content |
 |---|---|---|
 | `F1` | CQ FD | `CQ FD DE {MYCALL} {MYCALL} K` |
-| `F2` | Call | `! DE {MYCALL} K` |
-| `F3` | Exch | `! DE {MYCALL} {EXCH} {EXCH} K` |
-| `F4` | TU | `! TU {EXCH} DE {MYCALL} K` |
-| `F5` | My Call | `{MYCALL}` |
-| `F6` | His Call | `! ` |
+| `F2` | Exch | `! {EXCH}` |
+| `F3` | TU | `TU {MYCALL}` |
+| `F4` | My Call | `{MYCALL}` |
+| `F5` | His Call | `! ` |
+| `F6` | S&P exch | `TU {EXCH}` |
 | `F7` | AGN | `AGN AGN` |
-| `F8` | ? | `? ` |
+| `F8` | B4 | `! QSO B4` |
 
 ### The contest set
 
 Active in any other contest you pick on the Contesting tab whose exchange has a signal report:
-the QSO parties, CQ WW and CQ WPX. The same cadence with the call a contest uses — Field Day's
-`CQ FD` belongs to Field Day, and keying it in the Illinois QSO Party or CQ WW CW calls for
-somebody else's event. `{EXCH}` is that contest's own exchange without the signal report — your
-zone in CQ WW CW, your county in a QSO party — so `F3` and `F4` send `{RST}` before it: in the
-Illinois QSO Party, `F3` to K9AAA from Cook County sends `K9AAA DE <your call> 5NN COOK COOK K`.
+the QSO parties, CQ WW and CQ WPX. It calls `CQ TEST`: Field Day's `CQ FD` belongs to Field Day,
+and keying it in the Illinois QSO Party or CQ WW CW calls for somebody else's event. `{EXCH}` is
+that contest's own exchange without the signal report — your zone in CQ WW CW, your county in a
+QSO party — so the keys that send it send `{RST}` before it. In the Illinois QSO Party from Cook
+County, working K9AAA: `F2` sends `K9AAA 5NN COOK`, `F3` sends `TU <your call>`, `F6` sends
+`TU 5NN COOK` and `F8` sends `K9AAA QSO B4`.
 
 | Key | Label | Content |
 |---|---|---|
 | `F1` | CQ TEST | `CQ TEST DE {MYCALL} {MYCALL} K` |
-| `F2` | Call | `! DE {MYCALL} K` |
-| `F3` | Exch | `! DE {MYCALL} {RST} {EXCH} {EXCH} K` |
-| `F4` | TU | `! TU {RST} {EXCH} DE {MYCALL} K` |
-| `F5` | My Call | `{MYCALL}` |
-| `F6` | His Call | `! ` |
+| `F2` | Exch | `! {RST} {EXCH}` |
+| `F3` | TU | `TU {MYCALL}` |
+| `F4` | My Call | `{MYCALL}` |
+| `F5` | His Call | `! ` |
+| `F6` | S&P exch | `TU {RST} {EXCH}` |
 | `F7` | AGN | `AGN AGN` |
-| `F8` | ? | `? ` |
+| `F8` | B4 | `! QSO B4` |
 
 ### The contest set without a report
 
 Active in a contest whose exchange has no signal report: Sweepstakes, the California QSO Party
-and the ARRL VHF contests. A 5NN there would be a wrong exchange, so `F3` and `F4` leave
+and the ARRL VHF contests. A 5NN there would be a wrong exchange, so `F2` and `F6` leave
 `{RST}` out.
 
 | Key | Label | Content |
 |---|---|---|
 | `F1` | CQ TEST | `CQ TEST DE {MYCALL} {MYCALL} K` |
-| `F2` | Call | `! DE {MYCALL} K` |
-| `F3` | Exch | `! DE {MYCALL} {EXCH} {EXCH} K` |
-| `F4` | TU | `! TU {EXCH} DE {MYCALL} K` |
-| `F5` | My Call | `{MYCALL}` |
-| `F6` | His Call | `! ` |
+| `F2` | Exch | `! {EXCH}` |
+| `F3` | TU | `TU {MYCALL}` |
+| `F4` | My Call | `{MYCALL}` |
+| `F5` | His Call | `! ` |
+| `F6` | S&P exch | `TU {EXCH}` |
 | `F7` | AGN | `AGN AGN` |
-| `F8` | ? | `? ` |
+| `F8` | B4 | `! QSO B4` |
 
-If you copied the contest set into a macro profile of your own before this change, Nexus has
-not changed your copy: add `{RST}` before `{EXCH}` in its `F3` and `F4` yourself, for a
-contest whose exchange has a report.
+**These sets changed with Enter Sends Message: `F3` is now TU.** Before, `F2` answered with his
+call and yours, `F3` sent the exchange twice with "DE <your call> … K", `F4` the TU, `F5` your
+call, `F6` his call and `F8` a question mark. A macro profile you copied from one of these sets before keeps the texts it
+had: Nexus never changes a profile of your own.
 
 ### Macro Tokens
 

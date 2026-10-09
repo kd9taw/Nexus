@@ -3,13 +3,11 @@
 // RTTY's contest set already uses, and the role picker's model: the operator's own macros mapped
 // to ESM's steps. Pure: what a cockpit sends is still its own send path's business.
 //
-// ⚠️ THE CW LAYOUT BELOW IS SIGNED (operator, 2026-10-09), AND IT IS NOT ON THE AIR YET. Its
-// texts go out on the CW F-keys of every contest and Field Day that uses the built-in sets, and
-// they go on the air WITH Enter Sends Message, never before it. Until `CW_LAYOUT_ON_AIR` is
-// switched on, the CW cockpit keeps sending its own sets (`DEFAULT_CONTEST_MACROS`,
-// `DEFAULT_CONTEST_NO_REPORT_MACROS` and `DEFAULT_FD_MACROS` in `CwCockpit.tsx`), and
-// `cwBuiltInRoles` gives those no role table, so ESM could not send a key of theirs by this
-// layout's positions even if it were wired: today's F3 there is the exchange, not TU.
+// ⚠️ THE CW LAYOUT BELOW IS SIGNED (operator, 2026-10-09), AND IT IS ON THE AIR. Its texts go
+// out on the CW F-keys of every contest and Field Day that uses the built-in sets (`CW_CONTEST_SETS`
+// in `CwCockpit.tsx` is these three), and they went on the air WITH Enter Sends Message, never
+// before it. `docs/manual/CW.md` publishes all three, and `docs-match-code.test.ts` holds the
+// manual to them.
 //
 // Every character of a macro text goes on the air and is invariant: never translated.
 import type { EsmRefusal, EsmRole } from './esm'
@@ -60,19 +58,9 @@ export const RTTY_SET_ROLES: Record<MacroSetId, EsmRoleMap | null> = {
   contest: CONTEST_LAYOUT_ROLES,
 }
 
-/** ⛔ THE ON-AIR SWITCH for the signed CW layout below, and it is OFF. While it is off, the CW
- *  cockpit's contest and Field Day keys send today's sets; switched on, they send the three
- *  layout sets. It is switched on in the change that wires Enter to send, never before, and
- *  three things move with it: `docs/manual/CW.md`'s three tables (`docs-match-code.test.ts`
- *  compares the manual with whichever sets this selects), the tests that pin today's texts
- *  (`CwCockpit.contestmacros.test.tsx`, `esmRoles.test.ts`), and the CHANGELOG, which says that
- *  F3 is now TU. */
-export const CW_LAYOUT_ON_AIR: boolean = false
-
-/** SIGNED — on the air only with `CW_LAYOUT_ON_AIR`. The CW contest set for an exchange WITH a
- *  signal report (the QSO parties, CQ WW, CQ WPX) in the contest layout: today's CQ and AGN,
- *  today's his-call text moved to F5, and {RST} before {EXCH} wherever the exchange goes, as
- *  today's set has it. */
+/** SIGNED (operator, 2026-10-09). The CW contest set for an exchange WITH a signal report (the
+ *  QSO parties, CQ WW, CQ WPX) in the contest layout: the CQ and AGN it had before, its his-call
+ *  text moved to F5, and {RST} before {EXCH} wherever the exchange goes, as before. */
 export const CW_CONTEST_LAYOUT: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.exch.label', text: '! {RST} {EXCH}' },
@@ -84,7 +72,7 @@ export const CW_CONTEST_LAYOUT: BuiltinMacro[] = [
   { key: 'F8', label: 'B4', text: '! QSO B4' },
 ]
 
-/** SIGNED — on the air only with `CW_LAYOUT_ON_AIR`. The same for an exchange with NO signal
+/** SIGNED (operator, 2026-10-09). The same for an exchange with NO signal
  *  report (Sweepstakes, the California QSO Party, the ARRL VHF contests): {RST} left out,
  *  because a 5NN there is a wrong exchange — Sweepstakes would copy it as the serial. */
 export const CW_CONTEST_NO_REPORT_LAYOUT: BuiltinMacro[] = [
@@ -98,7 +86,7 @@ export const CW_CONTEST_NO_REPORT_LAYOUT: BuiltinMacro[] = [
   { key: 'F8', label: 'B4', text: '! QSO B4' },
 ]
 
-/** SIGNED — on the air only with `CW_LAYOUT_ON_AIR`. The CW Field Day set (ARRL Field Day and
+/** SIGNED (operator, 2026-10-09). The CW Field Day set (ARRL Field Day and
  *  Winter Field Day) in the same layout: Field Day's own CQ, and its exchange, class and
  *  section, which carries no report. */
 export const CW_FIELD_DAY_LAYOUT: BuiltinMacro[] = [
@@ -113,9 +101,8 @@ export const CW_FIELD_DAY_LAYOUT: BuiltinMacro[] = [
 ]
 
 /** The role table for the CW set in use: the contest layout when the set IS one of the three
- *  layout sets above, key for key and text for text, and none otherwise. Today's built-in sets
- *  (casual, Field Day, contest) have no Run TU message, and a set of the operator's own has the
- *  roles the operator maps — matching on the texts means ESM can never send a key by this
+ *  layout sets above, key for key and text for text, and none otherwise. The casual set has no
+ *  Run TU message, and a set of the operator's own has the roles the operator maps — matching on the texts means ESM can never send a key by this
  *  layout's position on a set laid out some other way. */
 export function cwBuiltInRoles(macros: readonly { key: string; text: string }[]): EsmRoleMap | null {
   const isLayout = (set: readonly BuiltinMacro[]) =>
@@ -125,11 +112,10 @@ export function cwBuiltInRoles(macros: readonly { key: string; text: string }[])
     : null
 }
 
-/** What ESM finds in the CW cockpit's built-in contest and Field Day sets: the contest layout's
- *  steps once those sets are the layout (`CW_LAYOUT_ON_AIR`), and none before, because today's
- *  sets have no Run TU. Settings shows it, read-only, for a CW profile on the built-in sets. The
- *  everyday set has no steps either way: ESM runs only in a contest. */
-export const CW_BUILT_IN_ROLES: EsmRoleMap | null = CW_LAYOUT_ON_AIR ? CONTEST_LAYOUT_ROLES : null
+/** What ESM finds in the CW cockpit's built-in contest and Field Day sets, which ARE the layout:
+ *  the contest layout's steps. Settings shows it, read-only, for a CW profile on the built-in sets.
+ *  The everyday set has no steps: ESM runs only in a contest. */
+export const CW_BUILT_IN_ROLES: EsmRoleMap | null = CONTEST_LAYOUT_ROLES
 
 /** The roles for a press: the operator's own mapping, role by role, over the built-in table of
  *  the set in use (null for a set of the operator's own). A role the operator left unmapped keeps
