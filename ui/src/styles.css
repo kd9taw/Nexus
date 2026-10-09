@@ -12607,6 +12607,47 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-faint);
 }
+/* Remove last while its first press waits (the verdict line names the contact), and the
+   contest screen's Remove on the newest row and Restore in its Removed list. The label never
+   changes, so neither button changes width while it asks. */
+.le-fd-remove[aria-pressed='true'],
+.fd-remove[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.fd-remove {
+  margin-left: var(--space-2);
+  font-size: calc(10px * var(--text-scale));
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.fd-removed {
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-2) var(--space-3);
+  font-size: calc(11px * var(--text-scale));
+}
+.fd-removed-note {
+  margin: 0 0 var(--space-1);
+  color: var(--text-dim);
+}
+.fd-removed-hint {
+  margin: var(--space-1) 0;
+  color: var(--text-faint);
+}
+.fd-removed-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 2px 0;
+}
+.fd-removed-at {
+  color: var(--text-faint);
+}
 /* Enlarged FD exchange form (Call / Class / Section) — big, readable, captioned
    so a logger beside the operator can read the exchange across the table at Field
    Day. Scoped to .log-entry-fd; the non-FD log strip is unaffected. */

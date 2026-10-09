@@ -66,6 +66,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { SliceIntent } from './types'
+import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { StreetPack } from './features/streetPack'
 import type {
@@ -736,6 +737,56 @@ export async function contestLogManualRows(
     mode,
     submode: submode ?? null,
   })
+}
+
+/** A contest contact the operator removed — kept, never deleted, and restorable: the contest
+ *  screen's Removed list. `rows` are as the log table shows them (a county line has one per
+ *  county); `id` is what `contestRestore` takes. */
+export interface RemovedContest {
+  id: number
+  removedUnix: number
+  rows: FieldDayQso[]
+}
+
+/** Why a removal or a restore changed nothing. */
+export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain' | 'clubSync'
+
+/** Where a removed contact had already gone — places Nexus cannot take it back from. */
+export interface ContestSentTo {
+  /** The N3FJP host it was pushed to. */
+  n3fjp?: string
+  /** The address of the N1MM broadcast it went out on. */
+  n1mm?: string
+  /** WSJT-X listeners had its "QSO Logged" datagram. */
+  wsjtx: boolean
+  /** The logbook holds a copy merged from the contest. */
+  logbook: boolean
+  /** The services holding that copy by its upload marks: 'lotw' | 'qrz' | 'clublog' | 'eqsl'. */
+  uploaded: string[]
+}
+
+export type ContestRemovalAnswer =
+  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo }
+  | { outcome: 'restored'; entry: RemovedContest }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Remove the newest contest contact** — when it is still the one named (`call` and
+ *  `whenUnix`, as the strip showed it), else `refused: changed`. It is kept, never deleted: its
+ *  serial and club seq stay spent, and `contestRestore` puts it back. Refused while club sync
+ *  runs. Answers once the contest journal holds the change. Never keys or stops TX. */
+export async function contestRemoveLast(call: string, whenUnix: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_remove_last', { call, whenUnix })
+}
+
+/** Put a removed contact back exactly as it was — refused when the station was worked again
+ *  since on that band and mode, and while club sync runs. */
+export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_restore', { id })
+}
+
+/** The removed contacts, oldest removal first. */
+export async function contestRemoved(): Promise<RemovedContest[]> {
+  return invoke<RemovedContest[]>('contest_removed')
 }
 
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
