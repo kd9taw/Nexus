@@ -13,7 +13,7 @@
 //! | rigctld | Typed command or intent | Gate |
 //! |---|---|---|
 //! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
-//! | `T 0` | `TxStop::Unkey` → `xmit 0` | never gated; sent only while something of ours may be keyed |
+//! | `T 0` | everything of ours (`Connection::end_ours`): the open operation's own stop (`xmit 0`, `transmit tune 0`, `cwx clear`, or the ATU's `xmit 0` and `transmit tune 0`); with none open, every stop the radio's status shows an earlier session of ours may need | never gated; sent only for what is ours |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send` | admission (refuses today: no readback) |
 //! | `\stop_morse` | `TxStop::CwxClear` → `cwx clear` | never gated |
@@ -70,7 +70,7 @@ use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
 use tempo_net::flex::admission::another_dax_feeder;
 use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
-use tempo_net::flex::session::{Connection, Snapshot, StopOutcome};
+use tempo_net::flex::session::{Connection, EndOutcome, Snapshot, StopOutcome};
 use tempo_net::flex::status::SliceDelta;
 
 use crate::baud_ladder::{RigCaps, SplitDetect};
@@ -360,6 +360,13 @@ impl FlexShim {
             )
         })
     }
+
+    /// End everything of ours, never gated: what `T 0` means here. Success as for [`Self::stop`].
+    fn end_ours(&self) -> bool {
+        self.conn
+            .upgrade()
+            .is_some_and(|conn| matches!(conn.end_ours(), EndOutcome::Sent(_)))
+    }
 }
 
 /// A 0..1 level as the radio's 0–100.
@@ -502,7 +509,7 @@ impl RigBackend for FlexShim {
             }
             self.start(TxStart::Key)
         } else {
-            self.stop(TxStop::Unkey)
+            self.end_ours()
         }
     }
 

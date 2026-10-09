@@ -733,16 +733,11 @@ fn dropping_the_daemon_unkeys_first_then_removes_what_it_made() {
     );
 }
 
-/// ⭐ A daemon that replaces a lost one knows the lost session's handle: when that session's
-/// transmitter is still keyed after a disconnect mid-over, the new one will not key under it, says
-/// so, and can stop it — which it could not if the handle were forgotten (a stop never ends
-/// another client's transmission).
-#[test]
-fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
-    // The radio reports itself idle when Nexus subscribes, and the new slice reports no
-    // interlock: the simulator remembers who holds the transmitter only in its answer to
-    // `sub tx all`, which it ends with that holder, so a scripted idle line after it would
-    // describe a radio that is not idle.
+/// The bundled session with the radio reported idle when Nexus subscribes, and no interlock on
+/// the new slice: the simulator remembers who holds the transmitter (or the tune carrier) only in
+/// its answer to `sub tx all`, which it ends with that holder, so a scripted idle line after it
+/// would describe a radio that is not idle.
+fn holder_kept() -> SimSession {
     let mut session = SimSession::v4_gui_client();
     for (pattern, rules) in &mut session.rules {
         let ready = "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= \
@@ -766,8 +761,121 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
             _ => {}
         }
     }
+    session
+}
+
+/// An earlier session of ours that started the radio's tune carrier and was lost, as a raw
+/// session plays it: keys `transmit tune 1` and drops. Under the simulator's StuckTune the carrier
+/// stays up under its handle, which this returns.
+fn tune_and_leave(sim: &Simulator) -> u32 {
+    let stream = TcpStream::connect(sim.tcp_addr()).expect("connect");
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    let handle = loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the prologue");
+        if let Some(h) = line.trim().strip_prefix('H') {
+            break u32::from_str_radix(h, 16).expect("a handle");
+        }
+    };
+    (&stream).write_all(b"C1|transmit tune 1\n").unwrap();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the reply");
+        if line.starts_with("R1|") {
+            assert_eq!(line.trim(), "R1|0|");
+            break;
+        }
+    }
+    handle
+}
+
+/// The commands a connection sent, pings left out.
+fn on_connection(sim: &Simulator, conn: usize) -> Vec<String> {
+    sim.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            SimEvent::Command { conn: c, text, .. } if c == conn && text != "ping" => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ⭐ Teardown sends every stop of ours first: with an earlier session's tune carrier still up,
+/// that is `transmit tune 0`, then the CWX buffer's clear and the unkey, before anything of ours is
+/// removed and the session closes. An unkey alone would leave the tune carrier up.
+#[test]
+fn dropping_the_daemon_sends_every_stop_of_ours() {
+    let sim = simulator(holder_kept(), vec![Fault::StuckTune]);
+    let lost = tune_and_leave(&sim);
+    let d = FlexDaemon::start_with(sim.tcp_addr(), 0, config(vec![lost])).expect("starts");
+    wait_session(&d, "the lost session's tune", |s| s.ours_on_air);
+    assert!(
+        d.keyed(),
+        "the client's belief: something of ours is on the air"
+    );
+    drop(d);
+    assert!(
+        sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+            l.event,
+            SimEvent::Closed {
+                conn: 1,
+                by: tempo_flexsim::Closer::Client
+            }
+        ))),
+        "the session closed"
+    );
+    let sent = on_connection(&sim, 1);
+    let at = |text: &str| {
+        sent.iter()
+            .position(|c| c == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {sent:?}"))
+    };
+    assert!(at("transmit tune 0") < at("cwx clear"), "{sent:?}");
+    assert!(at("cwx clear") < at("xmit 0"), "{sent:?}");
+    assert!(at("xmit 0") < at("slice remove 0"), "{sent:?}");
+}
+
+/// ⭐ `T 0` ends everything of ours, whatever kind: an earlier session's tune carrier gets
+/// `transmit tune 0`, the CWX buffer's clear and the unkey, in that order.
+#[test]
+fn t_0_through_the_shim_ends_an_earlier_sessions_tune() {
+    let sim = simulator(holder_kept(), vec![Fault::StuckTune]);
+    let lost = tune_and_leave(&sim);
+    let d = FlexDaemon::start_with(sim.tcp_addr(), 0, config(vec![lost])).expect("starts");
+    wait_session(&d, "the lost session's tune", |s| s.ours_on_air);
+    let mut c = Client::connect(&d);
+    let before = on_connection(&sim, 1).len();
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_count(&sim, "xmit 0", 1);
+    assert_eq!(
+        on_connection(&sim, 1)[before..],
+        ["transmit tune 0", "cwx clear", "xmit 0"]
+    );
+    // Another client's tune is never ours to end.
+    let sim = simulator(holder_kept(), vec![Fault::StuckTune]);
+    tune_and_leave(&sim);
+    let d = daemon(&sim);
+    wait_session(&d, "the other client's tune", |s| {
+        s.model.transmit.tune == Some(true)
+    });
+    assert!(!d.keyed());
+    let mut c = Client::connect(&d);
+    let before = on_connection(&sim, 1).len();
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(on_connection(&sim, 1)[before..], [] as [&str; 0]);
+}
+
+/// ⭐ A daemon that replaces a lost one knows the lost session's handle: when that session's
+/// transmitter is still keyed after a disconnect mid-over, the new one will not key under it, says
+/// so, and can stop it — which it could not if the handle were forgotten (a stop never ends
+/// another client's transmission).
+#[test]
+fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
     let sim = simulator(
-        session,
+        holder_kept(),
         vec![Fault::DisconnectMidOver {
             after: Duration::from_millis(100),
             radio_stays_keyed: true,

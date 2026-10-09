@@ -80,7 +80,12 @@ impl FlexScene {
         faults: Vec<tempo_flexsim::Fault>,
         config: tempo_net::flex::session::Config,
     ) -> FlexScene {
-        let sim = Simulator::start(
+        FlexScene::on(FlexScene::radio(session, faults), native, config)
+    }
+
+    /// The scene's simulated radio, before any client: a test can act on it first.
+    fn radio(session: SimSession, faults: Vec<tempo_flexsim::Fault>) -> Simulator {
+        Simulator::start(
             session,
             SimConfig {
                 streams: vec![Stream {
@@ -99,7 +104,11 @@ impl FlexScene {
                 faults,
             },
         )
-        .expect("the simulator starts");
+        .expect("the simulator starts")
+    }
+
+    /// The scene on `sim`, its client on `config`.
+    fn on(sim: Simulator, native: bool, config: tempo_net::flex::session::Config) -> FlexScene {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let settings = {
             let mut e = engine.lock().unwrap();
@@ -2393,4 +2402,206 @@ fn flex_dax_tx_ft_timing_measurement() {
         std::fs::write(&path, csv).expect("write the samples");
         println!("samples: {path}");
     }
+}
+
+// ── The client's belief in the loop's keyed set ──────────────────────────────────────────────
+
+/// The bundled session with the radio reported idle when Nexus subscribes and no interlock on the
+/// new slice, so the transmitter's holder the simulator remembers (its answer to `sub tx all`) is
+/// the last word.
+fn holder_kept() -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    for (pattern, rules) in &mut session.rules {
+        match pattern {
+            Pattern::Prefix(p) if p == "slice create " => {
+                for r in rules.iter_mut() {
+                    r.items
+                        .retain(|i| !matches!(i, Item::Send(l) if l.contains("|interlock ")));
+                }
+            }
+            Pattern::Exact(p) if p == "sub tx all" => {
+                for r in rules.iter_mut() {
+                    for item in r.items.iter_mut() {
+                        if matches!(item, Item::Send(l) if l.contains("state=RECEIVE")) {
+                            *item = Item::Send(
+                                "S0|interlock tx_client_handle=0x00000000 state=READY reason= \
+                                 source= tx_allowed=1 amplifier="
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    session
+}
+
+/// An earlier session of ours that started the radio's tune carrier and was lost, played by a raw
+/// session: `transmit tune 1`, then gone. Under StuckTune the carrier stays up under its handle.
+fn tune_and_leave(sim: &Simulator) -> u32 {
+    use std::io::{BufRead, BufReader, Write};
+    let stream = std::net::TcpStream::connect(sim.tcp_addr()).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    let handle = loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the prologue");
+        if let Some(h) = line.trim().strip_prefix('H') {
+            break u32::from_str_radix(h, 16).expect("a handle");
+        }
+    };
+    (&stream).write_all(b"C1|transmit tune 1\n").unwrap();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the reply");
+        if line.starts_with("R1|") {
+            assert_eq!(line.trim(), "R1|0|");
+            break handle;
+        }
+    }
+}
+
+/// The scene with an earlier session's tune carrier still up: the client knows that session's
+/// handle, as a client that replaces it does, and believes something of ours is on the air; the
+/// loop's own state does not.
+fn with_a_lost_tune() -> FlexScene {
+    let sim = FlexScene::radio(holder_kept(), vec![tempo_flexsim::Fault::StuckTune]);
+    let lost = tune_and_leave(&sim);
+    crate::flex::remember_handle(sim.tcp_addr(), lost);
+    let mut config = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    config.previous_handles = vec![lost];
+    let s = FlexScene::on(sim, false, config);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.state.flex_keyed() {
+        assert!(
+            Instant::now() < deadline,
+            "the client never saw the lost tune"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!s.rig.keyed, "the loop never keyed it");
+    s
+}
+
+/// The commands one connection has sent so far, pings left out.
+fn sent(log: &[tempo_flexsim::Logged], conn: usize) -> Vec<String> {
+    log.iter()
+        .filter_map(|l| match &l.event {
+            SimEvent::Command { conn: c, text, .. } if *c == conn && text != "ping" => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`sent`], once `want` is among them (or the wait ends).
+fn sent_on(s: &FlexScene, conn: usize, want: &str) -> Vec<String> {
+    s.sim.wait_for(Duration::from_secs(10), |log| {
+        sent(log, conn).iter().any(|c| c == want)
+    });
+    sent(&s.sim.log(), conn)
+}
+
+/// A saved CAT change: the transport differs, so the next tick rebuilds the link.
+fn save_a_cat_change(s: &FlexScene) {
+    let mut e = s.engine.lock().unwrap();
+    let mut settings = e.settings().clone();
+    settings.rig_addr = "127.0.0.1:5003".into();
+    e.apply_settings(settings);
+}
+
+/// ⭐ A REBUILD WHILE A NATIVE TUNE IS UP STOPS IT THROUGH THE NEW SESSION. The radio still holds
+/// an earlier session's tune carrier; the loop rebuilds the link and its unkey through the fresh
+/// client is `T 0`, which must end the tune with the tune's own stop: an `xmit 0` alone would leave
+/// the carrier up. The loop believes the radio keyed until that unkey has gone through.
+#[test]
+fn a_rebuild_while_a_native_tune_is_keyed_stops_it_through_the_new_session() {
+    let mut s = with_a_lost_tune();
+    s.replace_on_rebuild = true;
+    save_a_cat_change(&s);
+    s.step(now_unix_ms());
+    assert!(s.rebuilt.load(std::sync::atomic::Ordering::Relaxed));
+    // The connections: the lost session, the scene's client, the fresh client.
+    let fresh = sent_on(&s, 2, "xmit 0");
+    let at = |text: &str| {
+        fresh
+            .iter()
+            .position(|c| c == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {fresh:?}"))
+    };
+    assert!(at("transmit tune 0") < at("cwx clear"), "{fresh:?}");
+    assert!(at("cwx clear") < at("xmit 0"), "{fresh:?}");
+    assert!(!s.rig.keyed, "the unkey went through the fresh client");
+}
+
+/// ⭐ …and the belief is carried onto the fresh rig when its channel refuses that unkey, so the idle
+/// self-heal goes on sending it: the client's belief is part of the loop's keyed set, which a
+/// rebuild must never forget.
+#[test]
+fn a_rebuild_carries_the_flex_clients_belief_onto_the_fresh_rig() {
+    let mut s = with_a_lost_tune();
+    save_a_cat_change(&s);
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (addr, _, log) = mock_logging_rigctld_refusing_unkey(refuse);
+    let sinks = no_sinks();
+    let mut station = StationSinks::new();
+    let backend = s.backend.clone();
+    let mut reopen_audio = move |_t: &Transport| Ok::<_, String>(backend.clone());
+    let mut reopen_rig = move |_t: &Transport, _coexist: bool| {
+        (
+            Rig::rigctld(&addr),
+            None,
+            CatProbe::status(Some(true), "reopened"),
+        )
+    };
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &sinks,
+            now_unix_ms(),
+            &mut reopen_audio,
+            &mut reopen_rig,
+            &mut station,
+        )
+        .unwrap();
+    assert!(
+        log.lock().unwrap().iter().any(|l| l == "T 0"),
+        "the post-reopen unkey reached the fresh channel: {:?}",
+        log.lock().unwrap()
+    );
+    assert!(
+        s.rig.keyed,
+        "the fresh channel refused the unkey: the loop still believes the radio keyed"
+    );
+}
+
+/// ⭐ STOP TX REACHES A FLEX TRANSMISSION THE LOOP DID NOT KEY. The loop's own state is idle, but
+/// the client believes something of ours is on the air (here an earlier session's tune carrier):
+/// the hard stop sends `T 0`, and the client ends it with the tune's own stop. Stop TX's CW stop
+/// (`\stop_morse`) goes first, as it always has; it reaches the earlier session's CWX buffer.
+#[test]
+fn stop_tx_reaches_a_flex_transmission_the_loop_did_not_key() {
+    let mut s = with_a_lost_tune();
+    s.step(now_unix_ms());
+    let before = sent(&s.sim.log(), 1).len();
+    s.engine.lock().unwrap().halt_tx();
+    s.step(now_unix_ms());
+    let after: Vec<String> = sent_on(&s, 1, "xmit 0")[before..]
+        .iter()
+        .filter(|c| c.starts_with("xmit") || c.starts_with("transmit tune") || c.starts_with("cwx"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        after,
+        ["cwx clear", "transmit tune 0", "cwx clear", "xmit 0"],
+        "the CW stop, then the hard stop's T 0"
+    );
 }

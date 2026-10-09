@@ -5218,6 +5218,17 @@ impl RadioLoop {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
     }
 
+    /// Whether Nexus's own Flex client believes a transmission of ours may be on the air
+    /// ([`crate::flex::FlexDaemon::keyed`]): part of this loop's true keyed set for the teardown
+    /// and the hard stop. The client sees what this loop cannot: a stop the radio has not yet
+    /// proven, a transmission the radio keys for Nexus by itself, an earlier session's carrier.
+    fn flex_keyed(&self) -> bool {
+        self.rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(crate::flex::FlexDaemon::keyed)
+    }
+
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
     /// modes): the two slot keying sites stamp its deadline on `slot_tx_until_ms` as well, and
     /// every other keyed source leaves that behind. The unkey that drops it follows WSJT-X when the
@@ -6368,8 +6379,10 @@ impl RadioLoop {
                 // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
                 // starts keyed=false, which would disarm the idle self-heal that is the only thing
                 // that unkeys a wedged rig on the external-Hamlib path (it has no daemon fail-safe,
-                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX.
-                let was_keyed = rig.keyed;
+                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX. Nexus's
+                // own Flex client counts too: it knows what the radio keyed for Nexus that `rig`
+                // never did.
+                let was_keyed = rig.keyed || self.flex_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
                 self.unkey_before_letting_go(
@@ -11471,9 +11484,11 @@ impl RadioLoop {
         // which `contended_switch_never_commands_the_old_rig_with_the_new_radios_settings`
         // pins at exactly one. `manual_ptt_applied` is excluded for the same reason the
         // self-heal excludes it: a physically held mic owns its own unkey path. A tune
-        // can never reach here — the tune branch above returns first.
-        let abort_has_something_to_cut =
-            self.tx_until_ms.is_some() || (rig.keyed && !self.manual_ptt_applied);
+        // can never reach here — the tune branch above returns first. Nexus's own Flex client's
+        // belief counts as `rig.keyed` does (`flex_keyed`): its `T 0` then ends everything of
+        // ours, whatever kind it is.
+        let abort_has_something_to_cut = self.tx_until_ms.is_some()
+            || ((rig.keyed || self.flex_keyed()) && !self.manual_ptt_applied);
         if (slot_tx_abort && abort_has_something_to_cut)
             || (self.tx_until_ms.is_some() && tx_off_cut)
         {
