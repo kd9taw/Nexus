@@ -600,6 +600,14 @@ impl RigBackend for FlexShim {
         matches!(vfo, "VFOA" | "currVFO")
     }
 
+    /// UNKNOWN: the client declares no receive range, so `\dump_state` carries an empty RX list,
+    /// which Nexus's reader takes as unknown: every caller fails open, and the radio is tuned and
+    /// answers for itself. Left at the trait's `None`, the reply carried the CAT broker's wide row
+    /// for WSJT-X, and the app took 135.7 kHz to 1.3 GHz as this radio's range.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        Some(Vec::new())
+    }
+
     fn level(&self, name: &str) -> Option<String> {
         match name {
             "RFPOWER" => {

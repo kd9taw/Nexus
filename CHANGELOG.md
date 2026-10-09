@@ -468,6 +468,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
   is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
   on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
+- **A native CI-V Icom that does not answer a frequency change is no longer reported as refusing
+  it.** On Nexus's own CI-V connection (USB or the Icom network connection), a frequency change
+  the radio did not answer at all was counted as a refusal: after three, the CAT status said "the
+  radio refused … — it does not cover that frequency", the dial went back to where the radio was,
+  and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
+  frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
+  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig",
+  the words Nexus already used for a radio on Hamlib's rigctld, and the frequency goes out when the
+  radio answers again. NEEDS-BENCH: an Icom that stops answering during a QSY (switched off, or its
+  CI-V lead pulled) should say no reply from the rig, never that it refused the frequency, and the
+  QSY should land once the radio answers again.
+- **Nexus's own FlexRadio and OmniRig connections no longer give the radio a frequency range it
+  does not have.** Both reported 135.7 kHz to 1.3 GHz as the radio's receive range: the range the
+  CAT broker gives WSJT-X so that it will set any frequency, never the radio's own. So a FLEX-6400
+  was taken to receive 2 m, and a frequency above 1.3 GHz (a satellite downlink or a transverter's
+  band) was refused with "This radio doesn't cover…" before the radio was asked. Nexus now treats
+  their range as unknown, as it does a native CI-V radio's: the frequency goes to the radio, which
+  answers for itself. What WSJT-X and other programs read through the CAT broker is unchanged, and
+  so is the check against your licence privileges. NEEDS-BENCH: a FLEX radio, and a radio on
+  OmniRig, asked for a frequency it cannot tune should say that the radio refused it.
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn

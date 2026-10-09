@@ -2,11 +2,12 @@
 //! `\dump_state` carries for WSJT-X (135.7 kHz to 1.3 GHz). Checked through the real
 //! `RadioLoop::step`, a `Rig` over TCP and Nexus's own CI-V daemon in front of a fake radio: what
 //! the loop's capability probe hands the engine, what that does to a satellite pick, and what the
-//! operator is told when the radio itself refuses a frequency.
+//! operator is told when the radio itself refuses a frequency, or does not answer at all.
 //!
 //! The fake radio takes every dial unless a scene gives it `covers_hz`; then it answers NG (`FA`)
 //! outside those ranges. That a real radio NGs a dial it cannot tune is the fixture's model of
-//! CI-V, not a bench measurement.
+//! CI-V, not a bench measurement. Its `drop_dial_writes` makes it say nothing to a dial write: a
+//! radio that went quiet, which is not a refusal.
 use super::*;
 use crate::civ::broker::CivDaemon;
 use crate::civ::commands::IcomModel;
@@ -115,6 +116,30 @@ impl Scene {
             self.step();
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Step as [`Self::settle`] does, noting the CAT status line each time it changes: the words
+    /// the operator was shown, in order, from the first step on.
+    fn said_until(&mut self, done: impl Fn(&Self) -> bool) -> Vec<String> {
+        let mut said = Vec::new();
+        let mut last = self.told().0;
+        let mut step = |s: &mut Self| {
+            s.step();
+            let line = s.told().0;
+            if line != last {
+                said.push(line.clone());
+                last = line;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !done(self) && Instant::now() < deadline {
+            step(self);
+        }
+        for _ in 0..10 {
+            step(self);
+        }
+        said
     }
 
     fn wire_len(&self) -> usize {
@@ -350,5 +375,71 @@ fn the_licence_gate_still_refuses_phone_in_the_2_m_cw_segment_on_an_ic905() {
             (144.05, "2m".to_string(), false),
             (true, false),
         )
+    );
+}
+
+/// ⭐ A RADIO THAT DOES NOT ANSWER A DIAL WRITE IS NOT REFUSING IT. An IC-7300 on 20 m is asked for
+/// 28.400 MHz, a dial it takes, and says nothing to the write. The operator is told the dial was
+/// not sent because the rig did not reply, the loop keeps asking, and nothing records a refusal or
+/// gives the dial up; when the radio answers again, the dial lands. The silence was counted as
+/// three refusals: "the radio refused 28.4000 MHz — it does not cover that frequency", the dial
+/// given up and healed back to 20 m, and the radio never asked again.
+#[test]
+fn a_dial_write_the_radio_does_not_answer_is_not_reported_as_refused() {
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+    s.regs.lock().unwrap().drop_dial_writes = u32::MAX;
+    let n = s.wire_len();
+    s.engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+    let past_the_budget = |s: &Scene| s.dial_writes(n).len() > DIAL_SET_MAX_TRIES as usize;
+    let said = s.said_until(|s| past_the_budget(s) || s.told().1.is_some());
+    let quiet = (said, past_the_budget(&s), s.told().1, s.state.dial_giveup);
+    // The radio answers again.
+    s.regs.lock().unwrap().drop_dial_writes = 0;
+    s.settle(|s| s.main_hz() == 28_400_000);
+    assert_eq!(
+        (quiet, s.main_hz(), s.judged().0),
+        (
+            (
+                vec!["28.4000 MHz not sent — no reply from the rig".to_string()],
+                true,
+                None,
+                None,
+            ),
+            28_400_000,
+            28.4,
+        )
+    );
+}
+
+/// ⭐ AN UNANSWERED DIAL WRITE FEEDS THE CIRCUIT BREAKER, NOT THE GIVE-UP. Counted at the loop's
+/// second write, its first retry, where only the dial goes out: the QSY's own write comes with the
+/// mode, whose ack proves the link and clears the breaker's misses. A silence is then one miss and
+/// no refusal toward giving the dial up. An NG, the control, is two refusals and no miss. The
+/// silence counted as a refusal.
+#[test]
+fn an_unanswered_dial_write_counts_toward_the_breaker_and_an_ng_toward_the_give_up() {
+    let second_write = |covers_hz: &[(u64, u64)], silent: u32, to: (f64, &str)| {
+        let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), covers_hz);
+        s.regs.lock().unwrap().drop_dial_writes = silent;
+        let n = s.wire_len();
+        s.engine.lock().unwrap().set_frequency(to.0, to.1, "USB");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while s.dial_writes(n).len() < 2 && Instant::now() < deadline {
+            s.step();
+            // No heavy poll between the writes: its good read would clear the miss being counted.
+            s.state.last_rig_poll = now_unix_ms() + 60_000.0;
+        }
+        (
+            s.dial_writes(n).len(),
+            s.state.freq_misses,
+            s.state.dial_fail_count,
+        )
+    };
+    assert_eq!(
+        (
+            second_write(&[], u32::MAX, (28.4, "10m")),
+            second_write(&[(30_000, 74_800_000)], 0, (145.0, "2m")),
+        ),
+        ((2, 1, 0), (2, 0, 2))
     );
 }

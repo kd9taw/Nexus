@@ -16,6 +16,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
+/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetFault {
+    /// The radio, or the backend, said no: `RPRT -1`.
+    Refused,
+    /// The radio said nothing: `RPRT -5`, Hamlib's ETIMEOUT.
+    NoAnswer,
+}
+
 /// The rig state the broker serves + the setters it relays. Implemented by Nexus's
 /// live rig bridge (real radio), the native CI-V daemon, and by a mock in tests.
 ///
@@ -43,6 +52,22 @@ pub trait RigBackend: Send + Sync {
     }
     /// Setters return true on success (→ `RPRT 0`), false → `RPRT -1`.
     fn set_freq(&self, hz: u64) -> bool;
+    /// The dial write as `F` relays it: [`Self::set_freq`], for a backend that can tell a radio
+    /// that REFUSED the dial from one that did not ANSWER. Hamlib's own codes carry the
+    /// difference (`rig.h`): the refusal is `RPRT -1`, the silence `RPRT -5` (ETIMEOUT), and
+    /// Nexus's client reads `-5` as the link rather than the radio
+    /// ([`crate::rig::rprt_is_link_fault`]). So the radio loop says the radio did not answer and
+    /// counts it toward its circuit breaker; only a refusal counts toward giving the dial up.
+    ///
+    /// The default is [`Self::set_freq`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon overrides it.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        if self.set_freq(hz) {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        }
+    }
     fn set_mode(&self, mode: &str, passband_hz: u32) -> bool;
     fn set_ptt(&self, on: bool) -> bool;
     fn set_vfo(&self, _vfo: &str) -> bool {
@@ -323,6 +348,16 @@ fn rprt(ok: bool) -> String {
     }
 }
 
+/// Map a write's outcome where the backend can tell a radio that did not answer from one that
+/// refused ([`RigBackend::try_set_freq`]): the silence is Hamlib's `RPRT -5` (ETIMEOUT).
+fn rprt_set(r: Result<(), SetFault>) -> String {
+    match r {
+        Ok(()) => rprt(true),
+        Err(SetFault::Refused) => rprt(false),
+        Err(SetFault::NoAnswer) => "RPRT -5\n".into(),
+    }
+}
+
 /// Map an extended-verb outcome: `None` = the backend doesn't implement it → Hamlib's
 /// `RPRT -11` (not implemented), otherwise RPRT 0/-1.
 fn rprt_ext(r: Option<bool>) -> String {
@@ -460,15 +495,15 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 ),
                 // Hamlib sends freq as printf %lf ("F 14074000.000000"), so parse
                 // as f64 and round to Hz — a u64 parse rejects every real client.
-                Some("F") => rprt(
+                Some("F") => rprt_set(
                     p.next()
                         .and_then(|s| s.parse::<f64>().ok())
                         // Reject NaN/±inf and absurd magnitudes: `f.round() as u64`
                         // saturates inf/huge to u64::MAX (a garbage dial with a
                         // false RPRT 0). Cap at 1 THz — far above any ham band.
                         .filter(|f| f.is_finite() && (0.0..=1e12).contains(f))
-                        .map(|f| backend.set_freq(f.round() as u64))
-                        .unwrap_or(false),
+                        .map(|f| backend.try_set_freq(f.round() as u64))
+                        .unwrap_or(Err(SetFault::Refused)),
                 ),
                 Some("m") => {
                     let (mode, pbw) = backend.mode();

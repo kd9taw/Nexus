@@ -14943,6 +14943,7 @@ mod tests {
     mod flex_audio;
     mod ic905_ten_ghz;
     mod icom_lan;
+    mod omnirig_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;

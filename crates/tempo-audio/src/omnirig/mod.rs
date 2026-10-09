@@ -707,6 +707,15 @@ impl RigBackend for OmniBackend {
         }
         Some(self.link.call(move |c| c.set_split(on)).is_ok())
     }
+
+    /// UNKNOWN: the shim reads no receive range through its COM boundary ([`OmniRigClient`]),
+    /// so it declares none, and `\dump_state` carries an empty RX list, which Nexus's reader
+    /// takes as unknown: every caller fails open, and the radio is tuned and answers for itself.
+    /// Left at the trait's `None`, the reply carried the CAT broker's wide row for WSJT-X, and the
+    /// app took 135.7 kHz to 1.3 GHz as this radio's range.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        Some(Vec::new())
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -839,7 +848,7 @@ impl Drop for OmniDaemon {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::rigctld_server::{handle_command, Handled};
     use std::io::{BufRead, BufReader, Write};
@@ -901,7 +910,7 @@ mod tests {
     }
 
     impl MockOmni {
-        fn online() -> Self {
+        pub(crate) fn online() -> Self {
             MockOmni {
                 status: StdMutex::new((OmniStatus::Online, "on-line".into())),
                 freq: StdMutex::new(14_074_000),

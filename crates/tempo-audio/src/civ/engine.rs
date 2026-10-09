@@ -551,6 +551,10 @@ pub(crate) mod tests_support {
         /// is answered NG (`FA`) and the radio stays where it was: this fixture's model of a
         /// radio asked for a frequency it cannot tune, not a bench measurement.
         pub covers_hz: Vec<(u64, u64)>,
+        /// Fault injection — the next N `05` dial WRITES get no answer at all, neither the ack
+        /// nor NG, and the radio stays where it was: a radio that went silent, or a frame lost
+        /// on the bus. The write times out, which is not a refusal.
+        pub drop_dial_writes: u32,
         /// THE IF FILTER WIDTH (`1A 03`) per band — THE RAW WIRE BYTE, like [`Self::att_raw`], so
         /// a test reads the encoding itself: code 22 (1.8 kHz) is `0x22`, and a binary encoder's
         /// `0x16` would sit here as exactly that. Main defaults to `0x28` (code 28, 2.4 kHz SSB).
@@ -641,6 +645,10 @@ pub(crate) mod tests_support {
                 Some((0x03, dial_field(r, hz)))
             }
             (0x05, _) => {
+                if r.drop_dial_writes > 0 {
+                    r.drop_dial_writes -= 1;
+                    return Some((SILENT, Vec::new()));
+                }
                 let hz = bcd_to_freq(data);
                 if !r.covers_hz.is_empty()
                     && !r.covers_hz.iter().any(|(lo, hi)| (*lo..=*hi).contains(&hz))
@@ -1053,6 +1061,7 @@ pub(crate) mod tests_support {
                         ten_ghz_12_digits: addr == 0xAC, // the IC-905's 10 GHz band
                         drop_dial_reads: 0,
                         covers_hz: Vec::new(),
+                        drop_dial_writes: 0,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
                         nak_filter_width: 0,
