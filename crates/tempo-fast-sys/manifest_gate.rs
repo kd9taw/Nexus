@@ -13,8 +13,9 @@
 //!
 //! # What it does and does not catch
 //!
-//! In Fortran it scans for the *greppable* declaration forms — `save`, `data`, `common`, and
-//! module-scope declarations between `module` and `contains`. In C it scans every `static`
+//! In Fortran it scans for the *greppable* declaration forms — `save` (the statement and the
+//! `<type>, save :: x` attribute), `data`, `common`, and module-scope declarations between
+//! `module` and `contains`. In C it scans every `static`
 //! (at any brace depth, since a function-local static is just as shared) plus file-scope
 //! globals; see [`scan_c`] for why `const` is not treated the way Fortran's `parameter` is.
 //! It deliberately does **not** try to re-derive
@@ -104,6 +105,16 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
     let mut header_buf = String::new();
     let mut unit_decls: Vec<String> = Vec::new();
     let mut unit_args: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // ⭐ THE ATTRIBUTE FORM. `real, allocatable, save :: pulse(:)` saves its names as
+    // surely as `save pulse` does, but it opens with a TYPE, so the statement test
+    // below never fires, and inside a subprogram it is not module scope either.
+    // gen_fst4wave's `pulse` — FST4's GFSK shape, rebuilt per symbol length — sat
+    // unclassified behind it.
+    //
+    // The attribute list and the names can each run onto continuation lines, so the
+    // statement is joined before it is read: the continued-header lesson below,
+    // applied before it costs a fourth miss.
+    let mut stmt = String::new();
     for raw in src.lines() {
         let line = raw.split('!').next().unwrap_or("").trim(); // strip comments
         let low = line.to_ascii_lowercase();
@@ -198,6 +209,27 @@ pub fn scan_fortran(src: &str) -> Vec<String> {
         if low == "save" {
             bare_save_unit = true;
             continue;
+        }
+        // SAVE, read once its statement is whole: the attribute form, and the statement
+        // form's names on a continuation line (`save a, &` then `b`), which the per-line
+        // test below reads only up to the `&`. A comment or blank line between
+        // continuation lines does not end the statement.
+        if !line.is_empty() || stmt.is_empty() {
+            let piece = line.strip_prefix('&').unwrap_or(line);
+            if let Some(head) = piece.strip_suffix('&') {
+                stmt.push_str(head);
+                stmt.push(' ');
+            } else {
+                stmt.push_str(piece);
+                let slow = stmt.to_ascii_lowercase();
+                if saves_by_attribute(&stmt)
+                    || slow.starts_with("save ")
+                    || slow.starts_with("save::")
+                {
+                    out.extend(names_in_decl(&stmt));
+                }
+                stmt.clear();
+            }
         }
 
         // `save ::`, `data x/…/`, `common /blk/ a,b` carry state wherever they appear —
@@ -332,6 +364,38 @@ fn is_type_keyword_line(low: &str) -> bool {
                 rest.starts_with(|c: char| c.is_whitespace() || c == '*' || c == '(' || c == ',')
             })
     })
+}
+
+/// True when a declaration carries SAVE as an ATTRIBUTE (`real, allocatable, save ::
+/// pulse(:)`) rather than opening with the `save` statement. The attributes are the items
+/// between the type and `::`, split only at the top level so `character(len=8, kind=1)`
+/// and `dimension(nsave)` stay whole, and one of them must BE `save`: a name or a bound
+/// that merely contains the word is not one.
+fn saves_by_attribute(stmt: &str) -> bool {
+    let Some((spec, _)) = stmt.split_once("::") else {
+        return false;
+    };
+    let mut items = vec![String::new()];
+    let mut depth = 0i32;
+    for ch in spec.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(item) = items.last_mut() {
+            item.push(ch);
+        }
+    }
+    // The first item is the type itself; `save :: x` is the statement form, read above.
+    items
+        .iter()
+        .skip(1)
+        .any(|a| a.trim().eq_ignore_ascii_case("save"))
 }
 
 /// Identifier names from one declaration line, ignoring types, attributes, dimensions and
@@ -925,6 +989,125 @@ end subroutine
         let n = scan_fortran(src);
         assert!(n.contains(&"x".to_string()), "{n:?}");
         assert!(n.contains(&"first".to_string()), "{n:?}");
+    }
+
+    /// The ATTRIBUTE form, `<type>, save :: x`, saves its names exactly as `save x`
+    /// does. The scanner matched only a statement that OPENS with `save`, and inside a
+    /// subprogram a typed declaration is not module scope, so this form was invisible:
+    /// gen_fst4wave's `real, allocatable, save :: pulse(:)` sat unclassified behind it.
+    /// Each case is one variant the grammar allows, and must yield exactly its names; a
+    /// miss is reported by variant and name.
+    #[test]
+    fn the_attribute_form_of_save_is_found() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("the only attribute", "integer, save :: ncalls", &["ncalls"]),
+            (
+                "after another attribute",
+                "real, allocatable, save :: pulse(:)",
+                &["pulse"],
+            ),
+            (
+                "not the last attribute",
+                "real, save, allocatable :: work(:)",
+                &["work"],
+            ),
+            (
+                "two names on one line",
+                "integer, save :: nhits, nmiss",
+                &["nhits", "nmiss"],
+            ),
+            ("upper case", "INTEGER, SAVE :: NUPPER", &["NUPPER"]),
+            ("mixed case", "Real, Save :: MixedGain", &["MixedGain"]),
+            (
+                "names on a continuation line",
+                "integer, save :: nfirst, &\n                   nsecond",
+                &["nfirst", "nsecond"],
+            ),
+            (
+                "the statement broken after save",
+                "integer, save, &\n     dimension(8) :: ring",
+                &["ring"],
+            ),
+            (
+                "a continuation line that opens with &",
+                "real, allocatable, &\n     & save :: lead(:)",
+                &["lead"],
+            ),
+            (
+                "a comment line inside the continuation",
+                "integer, save :: nleft, &\n    ! the second name\n                   nright",
+                &["nleft", "nright"],
+            ),
+        ];
+        let mut missed = Vec::new();
+        for (variant, decl, want) in cases {
+            let src =
+                format!("subroutine sv(n)\n  integer n\n  {decl}\n  return\nend subroutine sv\n");
+            let got = scan_fortran(&src);
+            let mut want: Vec<String> = want.iter().map(|w| w.to_string()).collect();
+            want.sort();
+            if got != want {
+                missed.push(format!("{variant}: want {want:?}, got {got:?}"));
+            }
+        }
+        // A MODULE procedure is past `contains`, so it is not module scope either.
+        let src = "\
+module m
+contains
+  subroutine p()
+    real, save :: xmod
+  end subroutine p
+end module m
+";
+        let got = scan_fortran(src);
+        if got != ["xmod"] {
+            missed.push(format!(
+                "in a module procedure: want [\"xmod\"], got {got:?}"
+            ));
+        }
+        assert!(
+            missed.is_empty(),
+            "attribute-form SAVE not seen: {missed:#?}"
+        );
+    }
+
+    /// The control for the test above: a unit with NO saved symbol reports none. Each
+    /// line is something the attribute rule must not mistake for SAVE — the word inside
+    /// a name, a parameter, a dimension bound, a comment and a string, and typed
+    /// declarations that carry other attributes.
+    #[test]
+    fn a_unit_with_no_saved_symbol_reports_none() {
+        let src = "\
+subroutine nosave(n, x)
+  integer, intent(in) :: n
+  real, intent(inout) :: x(n)
+  integer :: nsave, isave
+  integer, parameter :: NSAVED = 4
+  real, allocatable :: work(:)
+  real, dimension(NSAVED) :: saved
+  character(len=8) :: label
+  ! real, save :: fake(10)
+  label = 'save'
+  return
+end subroutine nosave
+";
+        assert_eq!(scan_fortran(src), Vec::<String>::new());
+    }
+
+    /// A `save` LIST continued onto another line. The per-line test reads the names up
+    /// to the `&` and never sees the rest, so msk144signalquality, mskrtd and
+    /// gen_tempofastwave each had saved names on a continuation line that the gate could
+    /// not see (their rows came from nm, not from the gate).
+    #[test]
+    fn a_continued_save_list_is_read_whole() {
+        let src = "\
+subroutine sl()
+  real a, b, c
+  save a, b, &
+       c
+end subroutine sl
+";
+        assert_eq!(scan_fortran(src), ["a", "b", "c"]);
     }
 
     #[test]
