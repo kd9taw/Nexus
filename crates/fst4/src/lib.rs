@@ -430,4 +430,57 @@ mod tests {
             );
         }
     }
+
+    /// FNV-1a-64 over every sample's IEEE-754 bit pattern, so a change to any bit of
+    /// any sample (the sign of a zero included) changes the digest, barring a 64-bit
+    /// collision.
+    fn digest(wave: &[f32]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for s in wave {
+            for b in s.to_bits().to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    /// What FST4 transmits, pinned sample for sample at every period: "K1ABC W9XYZ
+    /// EN37", hmod 1, f0 1500 Hz at 12 kHz, the way the engine calls it. Taken from
+    /// the tree before `fst4_gen_wave` gained its work array.
+    ///
+    /// ⚠️ The bits belong to the toolchain as well as to the code: gfortran's
+    /// floating-point contraction and libm's sinf/cosf/erff all reach them. These were
+    /// taken with the toolchain CI's test job uses (Ubuntu 24.04, x86_64, gfortran
+    /// 13.3, glibc 2.39). A red on another toolchain alone proves nothing; compare
+    /// against the base commit on that toolchain, and never re-pin from it.
+    const GOLDEN: [(u16, u64); 7] = [
+        (15, 0xa9fa_b6a3_2519_4b0d),
+        (30, 0x2768_52b2_6ee3_7960),
+        (60, 0x569b_7da9_17d0_3d7e),
+        (120, 0xb6c2_cdba_2109_0a46),
+        (300, 0x1469_2518_05bf_205f),
+        (900, 0x26b3_c54f_2d64_081b),
+        (1800, 0x7a33_b2a5_8ce1_4bfd),
+    ];
+
+    #[test]
+    fn the_transmitted_samples_are_pinned_at_every_period() {
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let got: Vec<(u16, u64)> = PERIODS
+            .iter()
+            .map(|&p| {
+                let wave = gen_wave(&itone, p, 1, SAMPLE_RATE, 1500.0).expect("supported");
+                (p, digest(&wave))
+            })
+            .collect();
+        assert_eq!(
+            got,
+            GOLDEN,
+            "FST4 no longer transmits the pinned samples: {}",
+            got.iter()
+                .map(|(p, h)| format!("({p}, 0x{h:016x})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 }
