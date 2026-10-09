@@ -95,6 +95,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
+  log strip was not the one the keys sent: they sent the call in His Call, which was the last
+  station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
+  pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
+  field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
+  in a contest and out of one, and logging a contact empties both. A decoded call goes into both
+  when you click its chip; the decoder's best guess no longer fills the log strip by itself.
 - **CW contest keys send your report.** In a contest whose exchange includes a signal report
   (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
   cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois

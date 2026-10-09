@@ -185,7 +185,7 @@ contest whose exchange has a report.
 | `{MYGRID}` | Your Maidenhead grid square |
 | `{RST}` | `5NN` (hardcoded 599 with cut numbers: 9→N, 0→T) |
 | `{EXCH}` | Your contest exchange without the report: class and section in Field Day, the running contest's own exchange otherwise, with the serial number where the contest has one. Empty outside a contest. |
-| `!` | The worked callsign (the callsign prefilled by a Needed-board click or typed by you) |
+| `!` | The worked callsign: the call in His Call, which is also the log strip's call (typed in either, a decoded call you clicked, or a Needed-board click) |
 
 If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is normalized — no double-space appears mid-message.
 
@@ -259,6 +259,11 @@ The log strip at the bottom of the CW cockpit pre-fills:
 
 - **Mode:** `CW`
 - **RST sent/received:** `599`
+
+**Its callsign is His Call.** The log strip's callsign and His Call, on the send row, are one
+field shown twice: a call typed in either shows in both, and it is the call every F-key sends for
+`!`, in a contest and out of one. A decoded call goes into both when you click its chip; the
+decoder's best guess stays on its chip until you do. Logging a contact empties both.
 
 Complete the callsign (or accept the prefill from a Needed click), adjust RST if needed, and press **Log** to commit the QSO. The entry goes to the main logbook, triggers LoTW/QRZ/eQSL/ClubLog sync if connectors are configured, and updates awards tracking.
 

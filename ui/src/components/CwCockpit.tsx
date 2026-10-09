@@ -949,13 +949,36 @@ export function CwCockpit({
   // use it too). The field shows that call — a decode fills it — and an overtype commits through
   // the same `selectPeer` on Enter, on blur, or just before a macro sends, so "type the call, press
   // F2" keys the TYPED call and never the stale one. Nothing here keys the rig on its own.
+  //
+  // ⭐ HIS CALL AND THE LOG STRIP'S CALL ARE ONE FIELD, shown twice (RTTY's shape). The strip bound
+  // its call to the contest session and never to the peer, so a call typed only in the strip was
+  // not the call the F-keys keyed: they keyed His Call, the last station or none. Now a call the
+  // strip reports (typed, a spot handoff's prefill, the clear after a contact is logged) is an
+  // edit of His Call, committed like one before the next send; and His Call, settled, is what the
+  // strip shows (`cwLive`). DEBOUNCED as RTTY's is: the strip spends a callbook lookup on a call
+  // it is given, so typing K, K9, K9A… waits out the typing. A call that arrives whole is settled
+  // at once. The decoder's unconfirmed best guess is in neither field until its chip is picked: in
+  // the strip alone it was a call shown and not keyed, the very mismatch this ends.
   const [hisCallDraft, setHisCallDraft] = useState('')
   const hisCallEditing = useRef(false)
   const hisCallRef = useRef({ draft: '', worked: null as string | null })
   hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall }
+  const [settledHisCall, setSettledHisCall] = useState('')
   useEffect(() => {
-    if (!hisCallEditing.current) setHisCallDraft(guide.workedCall ?? '')
+    const id = setTimeout(() => setSettledHisCall(callsignChars(hisCallDraft)), 500)
+    return () => clearTimeout(id)
+  }, [hisCallDraft])
+  const setCallNow = (call: string) => {
+    setHisCallDraft(call)
+    setSettledHisCall(call)
+  }
+  useEffect(() => {
+    if (!hisCallEditing.current) setCallNow(guide.workedCall ?? '')
   }, [guide.workedCall])
+  const onStripCall = (call: string) => {
+    hisCallEditing.current = true
+    setCallNow(call)
+  }
   const commitHisCall = async (raw?: string) => {
     if (!control) return
     hisCallEditing.current = false
@@ -1048,6 +1071,10 @@ export function CwCockpit({
   // prefill the log with the read call/RST/name. Never transmits — the operator still keys.
   const workCall = (call: string) => {
     if (!control) return
+    // The pick replaces an edit in progress in either field, rather than waiting under it to
+    // be overwritten by that edit's commit at the next send.
+    hisCallEditing.current = false
+    setCallNow(call)
     void selectPeer(call)
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
@@ -1578,12 +1605,15 @@ export function CwCockpit({
         }}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
-        cwLive={{
-          call: guide.workedCall ?? cand.find((c) => c.best)?.call ?? null,
-          rst: guide.rst,
-          name: guide.name,
-          confirmed: guide.workedCall != null,
-        }}
+        // His Call, settled, and the strip's call back into it: one field. See `settledHisCall`.
+        // `confirmed: true` because it is the operator's call (typed or picked), never a guess;
+        // the RST and name are still the decoder's read of the worked station.
+        cwLive={
+          settledHisCall
+            ? { call: settledHisCall, rst: guide.rst, name: guide.name, confirmed: true }
+            : null
+        }
+        onCallChange={onStripCall}
         fieldDay={fieldDay}
         fdMode="CW"
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
