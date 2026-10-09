@@ -196,6 +196,9 @@ pub struct CabrilloEntrant {
     /// More `OPERATORS`, typed: callsigns separated by spaces or commas, added after the
     /// operators the rows themselves carry.
     pub operators: String,
+    /// The objectives ticked, for a contest that scores by them: what its `CLAIMED-SCORE`
+    /// multiplies by.
+    pub objectives: Vec<String>,
 }
 
 /// ⭐ **One column of a sponsor's own Cabrillo exchange template**, where its QSO line is

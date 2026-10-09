@@ -1826,10 +1826,12 @@ impl FieldDayLog {
             category_mode: declared("CATEGORY-MODE", cabrillo_category_mode(&self.qsos)),
             // The claimed score is the one the screen shows, and only when that score is
             // the whole score: no power tier or ticked bonus after it, and no note saying
-            // it leaves something out.
+            // it leaves something out. An objectives contest WITH its menu (Winter Field
+            // Day) is whole too: the sponsor asks for "your calculated total score
+            // including multipliers", and the objectives ticked are the entrant's own.
             claimed_score: (rs.cabrillo_headers.contains(&"CLAIMED-SCORE")
                 && !self.qsos.is_empty()
-                && rs.scoring.post.is_empty()
+                && (rs.scoring.post.is_empty() || !rs.objective_menu.is_empty())
                 && rs.score_note_key.is_empty())
             .then(|| {
                 // ⭐ …plus the bonus stations this LOG earned, which the sponsor adds
@@ -1838,7 +1840,13 @@ impl FieldDayLog {
                 // would claim 100 or 200 points less than the club will credit. The
                 // ticked-bonus menu is the other thing entirely, and a ruleset carrying
                 // one takes the `post` arm above and writes no claimed score at all.
-                rs.scoring.score(self.score_rows(), 1).3 + self.bonus_station_points()
+                let (qso_points, _, _, scored) = rs.scoring.score(self.score_rows(), 1);
+                rs.claimed_total(
+                    qso_points,
+                    scored,
+                    self.bonus_station_points(),
+                    &entrant.objectives,
+                )
             }),
             email: declared("EMAIL", entrant.email.trim().to_string()),
             name: declared("NAME", entrant.name.trim().to_string()),

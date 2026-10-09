@@ -1055,6 +1055,19 @@ pub struct Settings {
     /// same points it always did.
     #[serde(default)]
     pub fd_bonuses_planned: Vec<String>,
+    /// ⭐ Ticked OBJECTIVE ids — the objectives a contest that scores by them (Winter Field
+    /// Day) has completed, from its rules file's `objective_menu`. What the claimed score
+    /// MULTIPLIES by: QSO points × (the objectives' multipliers + 1).
+    ///
+    /// A setting of its own, not more ids in [`Self::fd_bonuses`]: a bonus adds points and an
+    /// objective multiplies them, and an id that means one in one contest must not be read as
+    /// the other in the next. `#[serde(default)]`, so an older settings file loads with none.
+    #[serde(default)]
+    pub fd_objectives: Vec<String>,
+    /// PLANNED objective ids — the same rule as [`Self::fd_bonuses_planned`]: what the club
+    /// means to complete, which no scoring path, export or club report reads.
+    #[serde(default)]
+    pub fd_objectives_planned: Vec<String>,
     /// N3FJP real-time push: each FD QSO lands in the club's N3FJP master log
     /// over its TCP API. Empty host = off.
     #[serde(default)]
@@ -4229,6 +4242,8 @@ impl Default for Settings {
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
+            fd_objectives: Vec::new(),
+            fd_objectives_planned: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n3fjp_use_enter: true,

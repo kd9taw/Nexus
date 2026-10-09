@@ -11880,6 +11880,7 @@ impl Engine {
             club: self.settings.contest_club.trim().to_string(),
             entry_class: self.settings.contest_entry_class.trim().to_string(),
             operators: self.settings.contest_operators.trim().to_string(),
+            objectives: self.settings.fd_objectives.clone(),
         }
     }
 
@@ -12038,6 +12039,7 @@ impl Engine {
                     session,
                     self.settings.fd_power_mult,
                     &self.settings.fd_bonuses,
+                    &self.settings.fd_objectives,
                 )
                 .total
             })
@@ -12129,6 +12131,7 @@ impl Engine {
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
             claimed: self.settings.fd_bonuses.clone(),
+            objectives: self.settings.fd_objectives.clone(),
             positions,
             rows: club
                 .rows()
@@ -43195,6 +43198,110 @@ mod tests {
         assert!(fd.event_start_unix > 0);
         assert_eq!(fd.rules_year, 2027);
         assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// ⭐ **ONE WINTER FIELD DAY TOTAL, ON EVERY SURFACE THAT SHOWS OR FILES ONE.** The
+    /// sponsor's formula — QSO points × (the ticked objectives' multipliers + 1), 2027 rules
+    /// p.7 — on the station's own snapshot, the club line every position shows, the spectator
+    /// board, and the `CLAIMED-SCORE` of both Cabrillo files, the position's and the club's.
+    ///
+    /// The shared fixture: W9XYZ `3O WI`; CW K1ABC on 20 m, phone N0XYZ on 40 m, RTTY N7OUT on
+    /// 80 m (2 + 1 + 2 = 5 points); 100% alternative power (×2, which brings station equipment
+    /// on alternative power, ×1) and QRP (×4) ticked, so OM 7 and 5 × 8 = 40.
+    #[test]
+    fn wfd_claims_points_times_objectives_plus_one_on_every_surface() {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "wfd".into();
+            s.fd_class = "3O".into();
+            s.fd_section = "WI".into();
+            s.contest_category_power = "QRP".into();
+            s.fd_objectives = vec!["wfd-alt-power-100".into(), "wfd-qrp".into()];
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let contacts = [
+            ("K1ABC", "2O", "CT", 14.030, "20m", "CW", ""),
+            ("N0XYZ", "1H", "MN", 7.200, "40m", "PH", ""),
+            ("N7OUT", "4I", "AZ", 3.580, "80m", "DIG", "RTTY"),
+        ];
+        for (call, class, section, dial, band, mode, sub) in contacts {
+            e.set_frequency(dial, band, "USB");
+            assert!(e
+                .fd_log_manual_submode(call, class, section, mode, sub)
+                .unwrap());
+        }
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+
+        // The club: the same three contacts, as a position streams them.
+        let dir = std::env::temp_dir().join(format!("wfd-objectives-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join(
+            tempo_net::fdsync::PROTO_VERSION,
+            "aaaa0001",
+            "Tent",
+            "W9XYZ",
+            "wfd",
+        );
+        for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
+            e.fd_club_merge(&tempo_net::fdsync::WireQso {
+                pos: "aaaa0001".into(),
+                seq,
+                call: call.into(),
+                class: class.into(),
+                sect: section.into(),
+                ex: vec![],
+                mex: vec![],
+                band: band.into(),
+                mode: mode.into(),
+                sub: sub.into(),
+                when: 1_800_727_200 + seq * 60,
+                op: "W9XYZ".into(),
+                sat: String::new(),
+                sat_fm: false,
+            });
+        }
+        let club = e.fd_club_state(0, 0, "aaaa0001").score;
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot().expect("host role"),
+                1_800_727_200,
+            ))
+            .unwrap();
+        let claimed = |cab: &str| {
+            cab.lines()
+                .find_map(|l| l.strip_prefix("CLAIMED-SCORE: "))
+                .map(str::to_string)
+        };
+        let own = e.export_log("cabrillo").expect("one entry");
+        let club_file = e.fd_club_export(true).expect("one entry");
+        assert_eq!(
+            (
+                fd.points,
+                fd.objective_multiplier,
+                fd.total_score,
+                club,
+                board["score"]["total"].as_u64(),
+                claimed(&own),
+                claimed(&club_file),
+            ),
+            (
+                5,
+                Some(7),
+                40,
+                40,
+                Some(40),
+                Some("40".to_string()),
+                Some("40".to_string())
+            ),
+            "(QSO points, OM, snapshot total, club line, board, position Cabrillo, club \
+             Cabrillo)\n{own}\n{club_file}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects

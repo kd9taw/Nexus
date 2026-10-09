@@ -183,3 +183,43 @@ it('accepts the W/VE location warning, and still bounds it',()=>{
   expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
  }
 })
+
+// Winter Field Day's objective multiplier rides the status beside the claimed total it
+// multiplies. A station sends it only for a contest that scores by objectives, and this page
+// refuses keys it does not know, so it is taught here (and must be deployed before a station
+// that sends it) or that station's Field Day view goes blank through Remote.
+it('accepts the objective multiplier a Winter Field Day station sends, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.objectiveMultiplier=7
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative controls: not a count, and not a number at all.
+ for(const bad of [-1,1.5,'7']){
+  fd.objectiveMultiplier=bad
+  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ }
+})
+
+// Winter Field Day's objectives are a setting of their own, ticked and planned like the bonuses.
+// A station sends the two lists only for a contest that scores by objectives; an older station
+// sends neither, and both shapes must validate.
+it('accepts the objective lists a Winter Field Day station sends, and still bounds them',()=>{
+ const page=fieldDayPage()
+ const settings=(page.meta as {source:{settings:Record<string,unknown>}}).source.settings
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ settings.fdObjectives=['wfd-alt-power-100','wfd-qrp']
+ settings.fdObjectivesPlanned=['wfd-six-hours']
+ expect(parseFieldDay(page).settings.fdObjectives).toEqual(['wfd-alt-power-100','wfd-qrp'])
+ // Negative controls: too many ids, an id that is not a string, and a key the page still refuses.
+ for(const mutate of [
+  ()=>{settings.fdObjectives=Array.from({length:65},(_,i)=>`o${i}`)},
+  ()=>{settings.fdObjectivesPlanned=[7]},
+  ()=>{settings.fdObjectiveNotes=['x']},
+ ]){
+  const before=structuredClone(settings)
+  mutate()
+  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+  for(const k of Object.keys(settings)) delete settings[k]
+  Object.assign(settings,before)
+ }
+})

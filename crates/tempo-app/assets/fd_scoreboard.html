@@ -161,6 +161,7 @@ body {
 .bonus .tick { width: clamp(10px, 0.9vw, 16px); text-align: center; font-weight: 800; }
 .bonus.claimed { color: var(--text); }
 .bonus.claimed .tick { color: var(--lit); }
+.bonus .om { margin-left: auto; padding-left: 6px; font-variant-numeric: tabular-nums; }
 
 /* footer / ticker */
 #ftr { border-top: 1px solid var(--line); padding-top: clamp(4px, 0.6vh, 10px); }
@@ -263,14 +264,15 @@ body {
 var STRINGS = {
   scoreTitle: 'Score',
   rawPoints: 'QSO points (raw) — multipliers apply at submission',
+  claimedPoints: 'claimed score: QSO points × (objective multiplier + 1)',
   totalPoints: 'total points',
   qsoPointsLine: 'QSO points',
   powerLine: 'power multiplier',
   poweredLine: 'powered points',
   bonusLine: 'bonus points',
   objectivesLine: 'objectives completed',
-  atSubmission: 'at submission',
-  projectedWord: 'projected',
+  objectiveMultLine: 'objective multiplier',
+  formulaLine: 'QSO points × (multiplier + 1)',
   qsoTitle: 'Contacts',
   perHour: '/hr',
   last10: 'in last 10 min',
@@ -384,14 +386,17 @@ function renderMeta(meta) {
   addLeg('', STRINGS.legendUnworked);
   initGlobe();
 
-  /* Bonus / objective checklist skeleton. */
+  /* Bonus / objective checklist skeleton: an objectives event's objectives with
+     their multipliers, else the bonus menu. */
   var bl = $('bonus-list');
   bl.textContent = '';
-  meta.bonuses.forEach(function (b) {
+  var menu = meta.objectives && meta.objectives.length ? meta.objectives : meta.bonuses;
+  menu.forEach(function (b) {
     var row = el('div', 'bonus');
     row.setAttribute('data-id', b.id);
     row.appendChild(el('span', 'tick', '☐'));
     row.appendChild(el('span', '', b.label));
+    if (typeof b.multiplier === 'number') row.appendChild(el('span', 'om', '×' + b.multiplier));
     bl.appendChild(row);
   });
 
@@ -409,19 +414,21 @@ function renderScore(score) {
   };
   $('score-total').textContent = String(score.total);
   if (score.model === 'objectives') {
-    /* WFD: the headline is RAW QSO points — the payload carries no power
-       fields at all, so power math cannot be rendered here even by mistake.
-       The ×(n+1) projection is a labelled, provisional secondary. */
-    $('score-caption').textContent = STRINGS.rawPoints;
-    var n = score.objectives_claimed || 0;
-    addLine(STRINGS.objectivesLine, String(n));
+    /* WFD: the payload carries no power fields at all, so power math cannot be
+       rendered here even by mistake. With its objectives the headline is the
+       CLAIMED total, the sponsor's QSO points × (objective multiplier + 1);
+       without them, the raw QSO points. */
+    var om = score.objective_multiplier;
+    var hasOm = typeof om === 'number';
+    $('score-caption').textContent = hasOm ? STRINGS.claimedPoints : STRINGS.rawPoints;
+    addLine(STRINGS.qsoPointsLine, String(score.qso_points));
+    if (hasOm) {
+      addLine(STRINGS.objectivesLine, String(score.objectives_claimed || 0));
+      addLine(STRINGS.objectiveMultLine, String(om));
+      addLine(STRINGS.formulaLine,
+        score.qso_points + ' × (' + om + ' + 1) = ' + score.total);
+    }
     if (score.bonus_points) addLine(STRINGS.bonusLine, String(score.bonus_points));
-    addLine(
-      STRINGS.atSubmission,
-      score.qso_points + ' × ' + (n + 1) + ' → ' +
-        score.projected_at_submission + ' ' + STRINGS.projectedWord,
-      'provisional'
-    );
   } else {
     $('score-caption').textContent = STRINGS.totalPoints;
     addLine(STRINGS.qsoPointsLine, String(score.qso_points));

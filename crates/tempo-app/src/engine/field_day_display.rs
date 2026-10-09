@@ -55,7 +55,11 @@ impl Engine {
             event: log.session.event_id.clone(),
             powered_points: scored,
             bonus_points: bonus,
-            total_score: scored + bonus,
+            // ⭐ The ONE formula: a contest that scores by objectives (Winter Field Day) claims
+            // QSO points × (OM + 1), every other contest what it always claimed.
+            total_score: rs.claimed_total(qso_pts, scored, bonus, &self.settings.fd_objectives),
+            objective_multiplier: (!rs.objective_menu.is_empty())
+                .then(|| rs.objective_multiplier(&self.settings.fd_objectives)),
             event_start_unix: event_window.start_unix,
             event_end_unix: event_window.end_unix,
             rules_year: rs.rules_year,

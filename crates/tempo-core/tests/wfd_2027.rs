@@ -228,3 +228,34 @@ fn the_objective_total_is_the_sponsors_formula() {
         (0, 110)
     );
 }
+
+/// ⭐ **The WFD Cabrillo claims the sponsor's total** — `CLAIMED-SCORE` is *"your calculated
+/// total score including multipliers"* (p.10): the shared fixture's 5 × (7 + 1) = 40.
+#[test]
+fn wfd_cabrillo_claims_the_objective_total() {
+    let me = CabrilloEntrant {
+        objectives: ticked(&TICKED),
+        ..Default::default()
+    };
+    let cab = fixture("wfd", "QRP")
+        .cabrillo_with(14_000, &me)
+        .expect("one entry");
+    let claimed = |cab: &str| {
+        cab.lines()
+            .find_map(|l| l.strip_prefix("CLAIMED-SCORE: "))
+            .map(str::to_string)
+    };
+    // CONTROL: nothing ticked claims the QSO points × 1, and ARRL Field Day, whose rules list
+    // no CLAIMED-SCORE, writes none whatever is ticked.
+    let bare = fixture("wfd", "QRP")
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry");
+    let arrl = fixture("arrlfd", "QRP")
+        .cabrillo_with(14_000, &me)
+        .expect("one entry");
+    assert_eq!(
+        (claimed(&cab), claimed(&bare), claimed(&arrl)),
+        (Some("40".to_string()), Some("5".to_string()), None),
+        "(ticked, nothing ticked, ARRL Field Day):\n{cab}"
+    );
+}

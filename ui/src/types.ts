@@ -3250,8 +3250,12 @@ export interface FieldDayStatus {
   poweredPoints?: number
   /** Claimed bonus points. */
   bonusPoints?: number
-  /** poweredPoints + bonusPoints. */
+  /** The claimed total: poweredPoints + bonusPoints, or, for a contest that scores by
+   *  objectives (Winter Field Day), QSO points × (objectiveMultiplier + 1). */
   totalScore?: number
+  /** The objective multiplier (OM) the ticked objectives earn — present only for a contest
+   *  that scores by objectives (Winter Field Day). */
+  objectiveMultiplier?: number
   /** The active-or-next occurrence of this event's window (Unix UTC), computed in Rust
    *  from the ruleset data — the single source the banner/countdown reads (the old TS
    *  date math hardcoded 24 h and dropped WFD's final six hours). */
@@ -4064,6 +4068,11 @@ export interface Settings {
   /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
    *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
   fdBonusesPlanned?: string[]
+  /** Ticked OBJECTIVE ids — Winter Field Day's completed objectives, what its claimed score
+   *  multiplies by. Its own list: a bonus adds points, an objective multiplies them. */
+  fdObjectives?: string[]
+  /** PLANNED objective ids — the club's intent; nothing that scores reads this one. */
+  fdObjectivesPlanned?: string[]
   /** Host a Nexus↔Nexus club event: while on, the sync listener binds the LAN
    * (this toggle IS the opt-in — data-plane only) + a discovery beacon runs. */
   fdHostEnable?: boolean

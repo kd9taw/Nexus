@@ -47,7 +47,10 @@
 //! `.adi` file: ADIF carries no rules year. One pinned number moved with it: WFD's bonus in
 //! `both_events_score_exactly_what_head_scored`, from 150 to 0. The two bonuses that test
 //! claims are ARRL Field Day's, and Winter Field Day no longer carries a copy of ARRL's
-//! menu; its objectives multiply instead (2027 rules, p.7).
+//! menu; its objectives multiply instead (2027 rules, p.7). With the objectives modelled,
+//! both WFD files also gained line 6, `CLAIMED-SCORE: 11` and `CLAIMED-SCORE: 6`: the sponsor
+//! asks for *"your calculated total score including multipliers"* (p.10), and with no
+//! objective ticked that is the QSO points × 1.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
