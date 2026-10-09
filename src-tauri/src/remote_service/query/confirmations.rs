@@ -42,11 +42,18 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
     if log_count > LOG_ROWS {
         return Err("applicationTooLarge");
     }
+    // A diagnosis the store has not caught up with is refused as busy, which the page asks again.
     let (report, log_count) = inputs
         .diagnose(now, |call| {
             propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
         })
-        .map_err(|_| "applicationUnavailable")?;
+        .map_err(|e| {
+            if e.starts_with(tempo_app::logstore::NOT_ANSWERED) {
+                "applicationBusy"
+            } else {
+                "applicationUnavailable"
+            }
+        })?;
     project(DiagnosticsReportDto::from(report), log_count)
 }
 
@@ -265,5 +272,32 @@ mod tests {
         );
         let _held = engine.lock().unwrap();
         assert_eq!(read_engine(&engine), Err("applicationBusy"));
+    }
+
+    /// ★ P4: a diagnosis the store has not caught up with — the contact logged before it still on
+    /// its way to disk for the whole of the read's wait — is refused as busy, which the page asks
+    /// again, and never sent without the contact. The control: once written, it is read, with it.
+    #[test]
+    fn a_diagnosis_the_writer_has_not_caught_up_with_is_refused_as_busy() {
+        use crate::remote_service::query::log_tests::{
+            launch, parse_one, settle, synthetic_log, Dir,
+        };
+        use tempo_core::logbook::sqlite::WriteHold;
+        let d = Dir::new("confirmations-stale");
+        std::fs::write(d.log(), synthetic_log(50, 0x000C_0F1A)).unwrap();
+        let e = launch(&d);
+        let hold = WriteHold::take(&d.db()).unwrap();
+        e.lock().unwrap().log_qso(parse_one(
+            "<CALL:5>ZD7AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260829<TIME_ON:6>030000<EOR>",
+        ));
+        let stale = read_engine(&e);
+        drop(hold);
+        assert_eq!(stale.err(), Some("applicationBusy"));
+        settle(&e);
+        assert_eq!(
+            read_engine(&e).unwrap()["logCount"],
+            51,
+            "control: once written, the read answers with the contact"
+        );
     }
 }
