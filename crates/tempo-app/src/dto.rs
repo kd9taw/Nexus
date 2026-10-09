@@ -2591,8 +2591,9 @@ pub struct FdClubBoardRow {
     /// rows past 15 s (readings are never silently stale).
     pub last_seen_secs: u64,
     /// That position's clock minus the host's, in ms, as it measured it over the club
-    /// link; `None` when it has not (a Nexus older than the measurement, or no round
-    /// trip yet). Shown on the board, never applied to anything.
+    /// link and reported it to the host. Filled on the HOST's board only; `None` on a
+    /// position's, and for a position that has not measured one (a Nexus older than the
+    /// measurement, or no round trip yet). Shown on the board, never applied to anything.
     ///
     /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends
     /// it (`ui/src/remote-web/field-day.ts` refuses any board key it does not), so the page

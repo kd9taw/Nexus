@@ -160,8 +160,9 @@ describe('ContestView club sync section', () => {
   })
 
   // The host's board lists every position's clock, in the club line's own terms and with
-  // its rounding (half away from zero, so a row and that position's own line agree).
-  it('gives the board a Clock column: in step, ahead or behind, warned past 30 s, a dash unmeasured', () => {
+  // its rounding (half away from zero, so a row and that position's own line agree). A
+  // position's board has no such column: the clock reached the host, not the other tents.
+  it('gives the host\'s board a Clock column: in step, ahead or behind, warned past 30 s, a dash unmeasured', () => {
     const row = (posid: string, posName: string, clockMs?: number | null) => ({
       ...CLUB.board[0],
       posid,
@@ -173,6 +174,7 @@ describe('ContestView club sync section', () => {
       <ContestView
         fieldDay={fd({
           ...CLUB,
+          hosting: true,
           board: [
             row('a', 'A tent', 0),
             row('b', 'B tent', 1_499),
@@ -201,6 +203,13 @@ describe('ContestView club sync section', () => {
     expect(clockOf('D tent').style.color).toBe('')
     expect(clockOf('F tent').getAttribute('title')).toMatch(/^Not measured/)
     expect(clockOf('A tent').getAttribute('title')).toBeNull()
+    cleanup()
+    // A position's board: the same rows, no Clock column.
+    render(<ContestView fieldDay={fd({ ...CLUB, board: [row('a', 'A tent', 0)] })} onSetMode={() => {}} />)
+    const theirs = screen.getByLabelText('Club sync').querySelector('[data-club-board]') as HTMLElement
+    expect(within(theirs).queryByText('Clock')).toBeNull()
+    expect(within(theirs).queryByText('in step')).toBeNull()
+    expect(theirs.children.length).toBe(12) // six heads and one row of six
   })
 
   it('counts a party club by its score and QSOs — a party has no sections to count', () => {

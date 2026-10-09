@@ -347,7 +347,9 @@ pub struct ClubPosition {
     /// High-water acked seq (what `welcome` reports back on a rejoin).
     pub acked: u64,
     /// The position's clock minus this host's, in ms, as its last measured report said;
-    /// `None` until one does (a Nexus older than the measurement never will).
+    /// `None` until one does (a Nexus older than the measurement never will). The host's
+    /// own board shows it ([`ClubLog::clock_ms`]); it rides no board line, so the lines
+    /// every position is sent are no longer for it.
     pub clock_ms: Option<i64>,
 }
 
@@ -733,6 +735,12 @@ impl ClubLog {
         pos.last_seen_unix = now;
     }
 
+    /// A position's clock minus this host's, in ms, as its last measured report said —
+    /// the host's board column. `None` for a position that has not measured one.
+    pub fn clock_ms(&self, posid: &str) -> Option<i64> {
+        self.positions.get(posid).and_then(|p| p.clock_ms)
+    }
+
     /// Stamp a position's liveness (any socket activity counts — the board's
     /// stale marks are about the LINK, not about logging cadence).
     pub fn mark_seen(&mut self, posid: &str, now: u64) {
@@ -1001,7 +1009,6 @@ impl ClubLog {
                     uniq: uniq.get(id.as_str()).copied().unwrap_or(0),
                     rate: rate.get(id.as_str()).copied().unwrap_or(0),
                     age: now.saturating_sub(p.last_seen_unix.min(now)),
-                    clock_ms: p.clock_ms,
                 }
             })
             .collect()
@@ -1442,11 +1449,11 @@ mod tests {
         assert_eq!(rows.iter().find(|r| r.pos == "aaaa").unwrap().rate, 0);
     }
 
-    /// Each position's row carries its clock as its last MEASURED report said. An unmeasured
+    /// The host keeps each position's clock as its last MEASURED report said. An unmeasured
     /// report (a reconnect's first, or every one from an older Nexus) leaves it alone, a
     /// position that never measured has none, and a new measurement replaces the old.
     #[test]
-    fn the_board_carries_each_positions_last_measured_clock() {
+    fn the_host_keeps_each_positions_last_measured_clock() {
         let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
         club.join("aaaa", "CW tent", "KD9TAW", 1000);
         club.join("bbbb", "SSB tent", "KD9TAW", 1000);
@@ -1457,17 +1464,15 @@ mod tests {
         club.position_status("aaaa", &clocked(Some(-3_000)), 1001);
         club.position_status("aaaa", &clocked(None), 1002);
         club.position_status("bbbb", &report("", "40m", "ph", "op2"), 1002);
-        let clock = |club: &ClubLog, id: &str| {
-            club.board_rows(1003)
-                .into_iter()
-                .find(|r| r.pos == id)
-                .unwrap()
-                .clock_ms
-        };
-        assert_eq!(clock(&club, "aaaa"), Some(-3_000));
-        assert_eq!(clock(&club, "bbbb"), None);
+        assert_eq!(club.clock_ms("aaaa"), Some(-3_000));
+        assert_eq!(club.clock_ms("bbbb"), None);
+        assert_eq!(
+            club.clock_ms("cccc"),
+            None,
+            "a position the host never heard of"
+        );
         club.position_status("aaaa", &clocked(Some(400)), 1004);
-        assert_eq!(clock(&club, "aaaa"), Some(400));
+        assert_eq!(club.clock_ms("aaaa"), Some(400));
     }
 
     #[test]

@@ -395,7 +395,6 @@ mod tests {
                 uniq: 2,
                 rate: 1,
                 age: 17,
-                clock_ms: None,
             })
             .collect();
         let before = serde_json::to_value(e.snapshot().field_day).unwrap();

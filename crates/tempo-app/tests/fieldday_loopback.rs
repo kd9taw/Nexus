@@ -381,8 +381,9 @@ fn a_position_measures_its_clock_against_the_host_through_the_real_pump() {
 }
 
 /// The host's own board, through real engines and sockets: every position's row carries
-/// the clock it measured. Here all three run on one PC, so each is within a whisker of 0
-/// (the host's own position included: it joins itself over loopback).
+/// the clock it measured. Here both run on one PC, so each is within a whisker of 0 (the
+/// host's own position included: it joins itself over loopback). A position's board shows
+/// the same rows with no clock: the column is the host's, and no board line carries it.
 #[test]
 fn the_hosts_board_carries_each_positions_measured_clock() {
     let dir = std::env::temp_dir().join(format!("fd-clock-board-{}", std::process::id()));
@@ -413,6 +414,20 @@ fn the_hosts_board_carries_each_positions_measured_clock() {
         let ms = ms.unwrap();
         assert!(ms.abs() < 2_000, "{posid} runs on this PC's clock: {ms} ms");
     }
+    let p2_board = || -> Vec<Option<i64>> {
+        engine_lock(&p2)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| c.board.into_iter().map(|r| r.clock_ms).collect())
+            .unwrap_or_default()
+    };
+    wait_until("the position holds both rows", 10, || p2_board().len() == 2);
+    assert_eq!(
+        p2_board(),
+        [None, None],
+        "a position's board has no clock column"
+    );
     for sd in [host_sd, host_pump_sd, p2_sd] {
         sd.store(true, Ordering::Relaxed);
     }

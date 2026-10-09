@@ -186,12 +186,6 @@ pub struct WireBoardRow {
     /// Merged rows in the trailing 60 min (the contest rate meter).
     pub rate: u64,
     pub age: u64,
-    /// That position's clock minus the host's, in ms, as its last report said
-    /// ([`Msg::Pos`]'s `clock_ms`). `None` = not measured: a Nexus older than the
-    /// field, or no round trip closed yet. Absent on the wire then, so an older host's
-    /// rows and a row nobody measured read the same; an older position ignores it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clock_ms: Option<i64>,
 }
 
 /// Club state pushed host→position in `snap` (full, on join) and `club`
@@ -1207,7 +1201,6 @@ mod tests {
                     uniq: 55,
                     rate: 23,
                     age: 2,
-                    clock_ms: Some(-3_000),
                 }],
             }),
             Msg::Club(ClubState::default()),
@@ -1320,7 +1313,7 @@ mod tests {
             }),
             "{\"t\":\"pong\"}\n"
         );
-        // The presence report and the board row, with the clock and without it.
+        // The presence report, with the clock and without it.
         let pos = |clock_ms| Msg::Pos {
             band: "20m".into(),
             mode: "CW".into(),
@@ -1336,27 +1329,6 @@ mod tests {
         assert_eq!(
             encode_line(&pos(None)),
             "{\"t\":\"pos\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"freq\":14032100,\"name\":\"CW tent\"}\n"
-        );
-        let club = Msg::Club(ClubState {
-            score: 12,
-            qsos: 3,
-            board: vec![WireBoardRow {
-                pos: "a1b2c3d4".into(),
-                name: "CW tent".into(),
-                band: "20m".into(),
-                mode: "CW".into(),
-                op: "KD9TAW".into(),
-                qsos: 3,
-                uniq: 3,
-                rate: 3,
-                age: 2,
-                clock_ms: Some(-3_000),
-            }],
-            ..ClubState::default()
-        });
-        assert_eq!(
-            encode_line(&club),
-            "{\"t\":\"club\",\"reset\":false,\"dupes\":[],\"dkeys\":[],\"sections\":[],\"score\":12,\"qsos\":3,\"board\":[{\"pos\":\"a1b2c3d4\",\"name\":\"CW tent\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"qsos\":3,\"uniq\":3,\"rate\":3,\"age\":2,\"clock_ms\":-3000}]}\n"
         );
     }
 

@@ -761,12 +761,14 @@ function clubChipStyle(state: string): CSSProperties {
 }
 const CLUB_BOARD_GRID: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr minmax(0,0.9fr)',
+  gridTemplateColumns: 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr',
   columnGap: 10,
   rowGap: 3,
   fontSize: textPx(13),
   alignItems: 'baseline',
 }
+/** The host's board has one more column: each position's clock. */
+const CLUB_BOARD_COLUMNS_HOST = 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr minmax(0,0.9fr)'
 const CLUB_COL_HEAD: CSSProperties = {
   fontSize: textPx(10),
   fontWeight: 700,
@@ -1149,7 +1151,10 @@ export function FdClubSection({
       ) : (
         <div
           data-club-board=""
-          style={big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+          style={{
+            ...(big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID),
+            ...(club.hosting ? { gridTemplateColumns: CLUB_BOARD_COLUMNS_HOST } : {}),
+          }}
         >
           <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
@@ -1157,9 +1162,12 @@ export function FdClubSection({
           <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
-          <span style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
-            {t('fieldDay.club.board.column.clock')}
-          </span>
+          {/* The host's column: each position's clock, as it reported it to the host. */}
+          {club.hosting && (
+            <span style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
+              {t('fieldDay.club.board.column.clock')}
+            </span>
+          )}
           {club.board.map((row) => {
             // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
             // screen but never silently stale.
@@ -1189,21 +1197,23 @@ export function FdClubSection({
                 <span className="mono" style={dim}>
                   {t('fieldDay.club.board.rate', { rate: row.rate })}
                 </span>
-                <span
-                  className="mono"
-                  style={{
-                    ...dim,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    ...(row.clockMs != null && Math.abs(clockSecs(row.clockMs)) > CLOCK_WARN_SECS
-                      ? { color: 'var(--status-new-entity)' }
-                      : {}),
-                  }}
-                  title={row.clockMs == null ? t('fieldDay.club.board.clock.unknown') : undefined}
-                >
-                  {clockCell(row.clockMs)}
-                </span>
+                {club.hosting && (
+                  <span
+                    className="mono"
+                    style={{
+                      ...dim,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      ...(row.clockMs != null && Math.abs(clockSecs(row.clockMs)) > CLOCK_WARN_SECS
+                        ? { color: 'var(--status-new-entity)' }
+                        : {}),
+                    }}
+                    title={row.clockMs == null ? t('fieldDay.club.board.clock.unknown') : undefined}
+                  >
+                    {clockCell(row.clockMs)}
+                  </span>
+                )}
               </Fragment>
             )
           })}

@@ -12426,7 +12426,9 @@ impl Engine {
                 qsos: r.qsos,
                 rate: r.rate,
                 last_seen_secs: r.age,
-                clock_ms: r.clock_ms,
+                // The HOST's column: each position's clock as it reported it to this host's
+                // club log. A position holds only the rows the host sent, which carry none.
+                clock_ms: self.fd_club.as_ref().and_then(|c| c.clock_ms(&r.pos)),
             })
             .collect();
         // Named positions first, alphabetically; unnamed ones after, in id order so
@@ -42186,6 +42188,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ The clock column is the HOST's: its board rows carry each position's clock as that
+    /// position reported it to this host's club log, through the rows its own loopback
+    /// position holds (the board its club server sent it).
+    #[test]
+    fn the_hosts_board_rows_carry_each_positions_reported_clock() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd");
+        e.fd_club_pos_status(
+            "bbbb0002",
+            &tempo_net::fdsync::PosReport {
+                band: "40m".into(),
+                mode: "ph".into(),
+                op: "w9bbb".into(),
+                freq: 7_200_000,
+                name: "SSB tent".into(),
+                clock_ms: Some(-3_000),
+            },
+        );
+        e.fd_mirror.board = ["bbbb0002", "cccc0003"]
+            .into_iter()
+            .map(|pos| tempo_net::fdsync::WireBoardRow {
+                pos: pos.into(),
+                age: 1,
+                ..Default::default()
+            })
+            .collect();
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert!(club.hosting, "scene: this is the host's board");
+        let clock = |id: &str| club.board.iter().find(|r| r.posid == id).unwrap().clock_ms;
+        assert_eq!(
+            clock("bbbb0002"),
+            Some(-3_000),
+            "as that position reported it"
+        );
+        assert_eq!(
+            clock("cccc0003"),
+            None,
+            "a position that has not measured one"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
     /// the host already holds per position — the scoreboard seam simply
     /// dropped it, carrying label + operator only, so the club TV could not
@@ -42309,7 +42368,6 @@ mod tests {
                     uniq: 5,
                     rate: 12,
                     age: 3,
-                    clock_ms: Some(-3_000),
                 }],
             });
         }
@@ -42326,9 +42384,8 @@ mod tests {
         assert_eq!(club.board[0].pos_name, "SSB tent");
         assert_eq!(club.board[0].last_seen_secs, 3);
         assert_eq!(
-            club.board[0].clock_ms,
-            Some(-3_000),
-            "the position's measured clock reaches the board"
+            club.board[0].clock_ms, None,
+            "a position's board has no clock column: the column is the host's"
         );
 
         // A second local contact while connected but unacked → BEHIND, queued 1.
