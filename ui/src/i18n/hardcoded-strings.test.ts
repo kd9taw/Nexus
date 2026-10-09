@@ -587,6 +587,8 @@ const MIGRATED = [
   // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
   // are typed, and the strip words them from the catalog.
   'features/esm.ts',
+  // …and its role tables, the same way. A macro text is an on-air token, never prose.
+  'features/esmRoles.ts',
 ]
 
 /**

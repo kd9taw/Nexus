@@ -9,13 +9,18 @@ import { describe, expect, it } from 'vitest'
 import {
   esmEvent,
   esmInert,
+  esmPress,
   esmStart,
   esmStep,
   esmTxRefusal,
+  type EsmDecision,
   type EsmGuards,
+  type EsmPressInput,
   type EsmState,
   type EsmStrip,
 } from './esm'
+import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT_DRAFT, VOICE_SLOT_ROLES, esmRoles } from './esmRoles'
+import { resolveRttySet } from './rttyMacros'
 
 const RUN: EsmState = { mode: 'run', exchTo: null, myCallTo: null }
 const SP: EsmState = { mode: 'sp', exchTo: null, myCallTo: null }
@@ -307,5 +312,143 @@ describe('esmTxRefusal — each refusal by its reason', () => {
     // Stepping aside is not a refusal: the transmit guards say nothing about it.
     expect(esmTxRefusal(phone({ keyerShown: false }))).toBeNull()
     expect(esmTxRefusal(rtty({ autoRunning: true, continuousTx: true }))).toBeNull()
+  })
+})
+
+describe('esmPress — the step, its message and the guards, in one answer', () => {
+  const tx = { txEnabled: true, txAllowed: true, clockRepair: false }
+  const cw: EsmGuards = { cockpit: 'cw', ...tx }
+  const press = (over: Partial<EsmPressInput>): EsmDecision =>
+    esmPress({
+      state: RUN,
+      strip: strip(''),
+      callOnce: false,
+      guards: cw,
+      roles: CONTEST_LAYOUT_ROLES,
+      slots: CW_CONTEST_LAYOUT_DRAFT,
+      ...over,
+    })
+  const last = { state: { ...RUN, exchTo: 'K9AAA' }, strip: strip('K9AAA', true) }
+
+  it('sends the key the step is on, and logs at the same press on the last step', () => {
+    expect(press(last)).toEqual({
+      kind: 'send',
+      role: 'tu',
+      keys: ['F3'],
+      text: 'TU {MYCALL}',
+      log: true,
+      caret: 'call',
+      next: RUN,
+    })
+    expect(press({ strip: strip('K9AAA', true) })).toEqual({
+      kind: 'send',
+      role: 'callExch',
+      keys: ['F2'],
+      text: '! {RST} {EXCH}',
+      log: false,
+      caret: 'stay',
+      next: { ...RUN, exchTo: 'K9AAA' },
+    })
+    expect(press({ state: SP, strip: strip('K9AAA', true) })).toEqual({
+      kind: 'send',
+      role: 'exch',
+      keys: ['F6'],
+      text: 'TU {RST} {EXCH}',
+      log: true,
+      caret: 'call',
+      next: SP,
+    })
+  })
+
+  it('a refused press never logs: each transmit guard refuses the logging step outright', () => {
+    expect(press({ ...last, guards: { ...cw, txEnabled: false } })).toEqual({ kind: 'refuse', refusal: { why: 'txOff' } })
+    expect(press({ ...last, guards: { ...cw, txAllowed: false } })).toEqual({ kind: 'refuse', refusal: { why: 'txLocked' } })
+    expect(press({ ...last, guards: { ...cw, clockRepair: true } })).toEqual({
+      kind: 'refuse',
+      refusal: { why: 'clockRepair' },
+    })
+  })
+
+  it('an own dupe is refused as a dupe, before any guard is asked', () => {
+    expect(press({ strip: strip('K9AAA', true, 'own'), guards: { ...cw, txEnabled: false } })).toEqual({
+      kind: 'refuse',
+      refusal: { why: 'dupe' },
+    })
+  })
+
+  it('steps aside on a set with no step mapped', () => {
+    expect(press({ roles: {} })).toEqual({ kind: 'inert', why: 'noRoles' })
+    expect(press({ roles: esmRoles(null, undefined), ...last })).toEqual({ kind: 'inert', why: 'noRoles' })
+  })
+
+  it('refuses, by name, a step the set has no message for — and still sends the steps it has', () => {
+    const noTu = esmRoles(null, { cq: ['F1'], callExch: ['F2'], myCall: ['F4'], exch: ['F6'], again: ['F7'] })
+    expect(press({ roles: noTu, ...last })).toEqual({ kind: 'refuse', refusal: { why: 'unmapped', role: 'tu' } })
+    expect(press({ roles: noTu, strip: strip('K9AAA') })).toMatchObject({ kind: 'send', role: 'callExch', keys: ['F2'] })
+  })
+
+  it('RTTY sends its contest set\'s keys, and steps aside while the auto sequence runs or Continuous TX is latched', () => {
+    const rtty: EsmGuards = { cockpit: 'rtty', ...tx, autoRunning: false, continuousTx: false }
+    const slots = resolveRttySet(undefined, 'contest', (k) => k)
+    expect(press({ guards: rtty, slots, strip: strip('K9AAA') })).toEqual({
+      kind: 'send',
+      role: 'callExch',
+      keys: ['F2'],
+      text: '{CALL} 599 {EXCH} {EXCH}',
+      log: false,
+      caret: 'ex0',
+      next: { ...RUN, exchTo: 'K9AAA' },
+    })
+    expect(press({ guards: { ...rtty, autoRunning: true }, slots })).toEqual({ kind: 'inert', why: 'auto' })
+    expect(press({ guards: { ...rtty, continuousTx: true }, slots })).toEqual({ kind: 'inert', why: 'continuousTx' })
+  })
+
+  describe('Phone', () => {
+    const phone: EsmGuards = {
+      cockpit: 'phone',
+      ...tx,
+      keyerShown: true,
+      pttHeld: false,
+      recording: false,
+      radioHasMic: false,
+    }
+    const slots = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].map((key) => ({ key, text: `${key}.wav` }))
+    const ph = (over: Partial<EsmPressInput>) => press({ guards: phone, roles: VOICE_SLOT_ROLES, slots, ...over })
+
+    it('plays the slot the step is on, and logs at the press that plays TU or the S&P exchange', () => {
+      expect(ph({})).toMatchObject({ kind: 'send', role: 'cq', keys: ['F1'], log: false })
+      expect(ph(last)).toMatchObject({ kind: 'send', role: 'tu', keys: ['F3'], log: true })
+      expect(ph({ state: SP, strip: strip('K9AAA', true) })).toMatchObject({ kind: 'send', role: 'exch', keys: ['F2'], log: true })
+    })
+
+    it('running, a call typed: nothing plays, so no transmit guard is asked', () => {
+      expect(ph({ strip: strip('K9AAA'), guards: { ...phone, txEnabled: false } })).toEqual({
+        kind: 'speak',
+        caret: 'ex0',
+        next: { ...RUN, exchTo: 'K9AAA' },
+      })
+    })
+
+    it('names the slot to record, and refuses a step mapped to two recordings', () => {
+      const noTu = slots.map((s) => (s.key === 'F3' ? { ...s, text: '' } : s))
+      expect(ph({ ...last, slots: noTu })).toEqual({ kind: 'refuse', refusal: { why: 'empty', role: 'tu', key: 'F3' } })
+      expect(ph({ roles: { ...VOICE_SLOT_ROLES, cq: ['F1', 'F6'] } })).toEqual({
+        kind: 'refuse',
+        refusal: { why: 'oneSlot', role: 'cq' },
+      })
+    })
+
+    it('refuses while recording, while PTT is held, and while the radio has the mic', () => {
+      expect(ph({ guards: { ...phone, recording: true } })).toEqual({ kind: 'refuse', refusal: { why: 'recording' } })
+      expect(ph({ guards: { ...phone, pttHeld: true } })).toEqual({ kind: 'refuse', refusal: { why: 'pttHeld' } })
+      expect(ph({ guards: { ...phone, radioHasMic: true } })).toEqual({ kind: 'refuse', refusal: { why: 'radioHasMic' } })
+    })
+
+    it('steps aside while the keyer is hidden, before anything else is asked', () => {
+      expect(ph({ guards: { ...phone, keyerShown: false, txEnabled: false }, strip: strip('K9AAA', true, 'own') })).toEqual({
+        kind: 'inert',
+        why: 'noKeyer',
+      })
+    })
   })
 })

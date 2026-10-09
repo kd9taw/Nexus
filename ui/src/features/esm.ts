@@ -17,6 +17,8 @@
 // When ESM does not know whether the exchange went out, it sends it again rather than logs — at
 // worst the runner hears the exchange twice.
 import type { ContestDupeVerdict } from './contestDupe'
+import { resolveEsmRole, type EsmRoleMap, type EsmSlot } from './esmRoles'
+import type { MacroKey } from './macroSets'
 
 /** Running (calling CQ) or Search and Pounce (answering someone else's CQ). */
 export type EsmMode = 'run' | 'sp'
@@ -30,6 +32,9 @@ export type EsmMode = 'run' | 'sp'
  *  There is no QSO B4: on a dupe of the operator's own log ESM sends nothing (operator,
  *  2026-10-08), so no step would ever send one. */
 export type EsmRole = 'cq' | 'callExch' | 'tu' | 'myCall' | 'exch' | 'again'
+
+/** Every role, in the order a contact meets them. */
+export const ESM_ROLES: readonly EsmRole[] = ['cq', 'callExch', 'tu', 'myCall', 'exch', 'again']
 
 /** The three cockpits ESM lives in. FT and every other mode never have it. */
 export type EsmCockpit = 'cw' | 'rtty' | 'phone'
@@ -76,6 +81,12 @@ export type EsmRefusal =
   | { why: 'pttHeld' }
   /** Phone: the radio has the mic (Nexus's own Flex audio), so a recording would not go out. */
   | { why: 'radioHasMic' }
+  /** The set has no message for this step: no key is mapped to it. */
+  | { why: 'unmapped'; role: EsmRole }
+  /** The key this step is on sends nothing (an empty macro, a voice slot with no recording). */
+  | { why: 'empty'; role: EsmRole; key: MacroKey }
+  /** Phone: this step is mapped to two recordings, and the keyer plays one per press. */
+  | { why: 'oneSlot'; role: EsmRole }
 
 /** One Enter press, decided.
  *
@@ -136,7 +147,7 @@ export function esmStep(
   opts: { cockpit: EsmCockpit; callOnce: boolean },
 ): EsmStep {
   const call = strip.call.trim().toUpperCase()
-  if (call && strip.dupe === 'own') return { kind: 'refuse', refusal: { why: 'dupe' } }
+  if (strip.dupe === 'own') return { kind: 'refuse', refusal: { why: 'dupe' } }
   const send = (role: EsmRole, log: boolean, caret: EsmCaret, next: EsmState): EsmStep => ({
     kind: 'send',
     role,
@@ -194,10 +205,12 @@ export type EsmGuards =
     } & TxGuards)
 
 /** Why ESM steps aside: Enter logs exactly as it does with ESM off, sends nothing, and the ESM
- *  plate says why. */
-export type EsmInert = 'noKeyer' | 'auto' | 'continuousTx'
+ *  plate says why. `noRoles` — the set in use has no step mapped at all (today's CW sets, RTTY's
+ *  Everyday, a set of the operator's own nobody has mapped). */
+export type EsmInert = 'noKeyer' | 'auto' | 'continuousTx' | 'noRoles'
 
-/** Why ESM cannot work in this cockpit right now, or null. */
+/** Why ESM cannot work in this cockpit right now, or null. (`noRoles` is the set's, not the
+ *  cockpit's: `esmPress` asks it.) */
 export function esmInert(guards: EsmGuards): EsmInert | null {
   if (guards.cockpit === 'phone' && !guards.keyerShown) return 'noKeyer'
   if (guards.cockpit === 'rtty' && guards.autoRunning) return 'auto'
@@ -216,4 +229,59 @@ export function esmTxRefusal(guards: EsmGuards): EsmRefusal | null {
     if (guards.radioHasMic) return { why: 'radioHasMic' }
   }
   return null
+}
+
+/** Everything one Enter press is decided on. */
+export interface EsmPressInput {
+  state: EsmState
+  strip: EsmStrip
+  /** "Call once" (S&P): my call goes once per call, then Enter asks for a repeat. */
+  callOnce: boolean
+  guards: EsmGuards
+  /** The set's roles: `esmRoles(builtIn, own)`. */
+  roles: EsmRoleMap
+  /** The set's keys as the dock shows them, the operator's own texts included. */
+  slots: readonly EsmSlot[]
+}
+
+/** One Enter press, decided.
+ *
+ *  `inert` — ESM steps aside: Enter logs exactly as it does with ESM off; the plate says why.
+ *  `refuse` — nothing is sent and nothing logs; the strip says why.
+ *  `speak` — Phone, Run: nothing plays; the operator says his call and the exchange.
+ *  `send` — send `text` (the keys' messages joined) as `role`, through the cockpit's own send
+ *  path; when `log`, the contact logs at this press as soon as that path takes the message — and
+ *  stays logged if the message is then stopped. `next` is kept only if the message was taken. */
+export type EsmDecision =
+  | { kind: 'inert'; why: EsmInert }
+  | { kind: 'refuse'; refusal: EsmRefusal }
+  | { kind: 'speak'; caret: EsmCaret; next: EsmState }
+  | {
+      kind: 'send'
+      role: EsmRole
+      keys: MacroKey[]
+      text: string
+      log: boolean
+      caret: EsmCaret
+      next: EsmState
+    }
+
+/** One Enter press: the step, its message, then the transmit guards — in that order, so the
+ *  strip names the most useful reason (a dupe before an empty key, an empty key before TX off),
+ *  and every refusal comes before anything could log. */
+export function esmPress(input: EsmPressInput): EsmDecision {
+  const { guards } = input
+  const aside =
+    esmInert(guards) ?? (ESM_ROLES.some((role) => (input.roles[role]?.length ?? 0) > 0) ? null : 'noRoles')
+  if (aside) return { kind: 'inert', why: aside }
+  const step = esmStep(input.state, input.strip, { cockpit: guards.cockpit, callOnce: input.callOnce })
+  if (step.kind !== 'send') return step
+  const message = resolveEsmRole(input.roles, step.role, input.slots)
+  if ('why' in message) return { kind: 'refuse', refusal: message }
+  // The keyer plays one recording per press; two cannot be one message.
+  if (guards.cockpit === 'phone' && message.keys.length > 1)
+    return { kind: 'refuse', refusal: { why: 'oneSlot', role: step.role } }
+  const refusal = esmTxRefusal(guards)
+  if (refusal) return { kind: 'refuse', refusal }
+  return { kind: 'send', ...message, role: step.role, log: step.log, caret: step.caret, next: step.next }
 }
