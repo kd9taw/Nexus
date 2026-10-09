@@ -372,6 +372,7 @@ mod tests {
             "atu start",
             "cwx send \"CQ\" 1",
             "cwx clear",
+            "cw wpm 28",
         ] {
             assert!(s.lookup(command).is_some(), "no rule answers {command:?}");
         }

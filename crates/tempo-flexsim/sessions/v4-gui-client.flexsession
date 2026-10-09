@@ -196,6 +196,13 @@ on transmit set dax=0
 reply 0
 send S0|transmit dax=0
 
+# D (TCPIP-cw): `cw wpm <5-100>`, the keyer's speed, which CWX keys at too (TCPIP-cwx repeats it).
+# A (the transmit decoder): the radio reports it as the transmit status's `speed`. A rule cannot
+# echo the command's own value, so this one only answers; a test that reads the speed back adds
+# a rule of its own for the value it sets.
+on cw wpm *
+reply 0
+
 # D (TCPIP-xmit, SmartSDR-Status-Responses): each interlock transition is reported, with the
 # client assigned the transmitter. A (the FLEX-6700 captures the plan cites, §3.4): PTT_REQUESTED
 # then TRANSMITTING with our handle; after xmit 0, UNKEY_REQUESTED then READY still naming us, and

@@ -595,6 +595,71 @@ fn a_stuck_tune_acknowledges_tune_off_and_stays_up_across_a_reconnect() {
     }
 }
 
+/// The two faults that change a rule's statuses, each against its control: a reason on every
+/// keying report (the PGXL profile), and a radio that holds transmit after a CWX send until
+/// `xmit 0`.
+#[test]
+fn a_held_cwx_and_a_keying_reason_reach_the_wire_as_their_faults_say() {
+    // A reason on every keying report, and its control.
+    for reason in [None, Some(crate::fault::PGXL)] {
+        let faults = reason
+            .map(|r| Fault::KeyingReason { reason: r.into() })
+            .into_iter()
+            .collect();
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("xmit 1");
+        let keyed = c.until(|l| l.contains("state=TRANSMITTING"));
+        let requested = keyed
+            .iter()
+            .find(|l| l.contains("state=PTT_REQUESTED"))
+            .unwrap();
+        let want = format!(" reason={} source=SW ", reason.unwrap_or(""));
+        assert!(requested.contains(&want), "{requested}");
+        assert_eq!(
+            keyed
+                .last()
+                .unwrap()
+                .ends_with(" amplifier=0x5A0F0001,0x5A0F0002"),
+            reason.is_some(),
+            "{keyed:?}"
+        );
+    }
+    // A radio that holds transmit after a CWX send, and its control.
+    for held in [false, true] {
+        let faults = if held {
+            vec![Fault::HoldsCwx]
+        } else {
+            Vec::new()
+        };
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("cwx send \"CQ\" 1");
+        c.until(|l| l.contains("state=TRANSMITTING"));
+        c.ask("cwx clear");
+        // The free radio lets go 600 ms after it keys; this one keeps not doing so.
+        std::thread::sleep(Duration::from_millis(1_000));
+        let lines = c.ask("ping");
+        assert_eq!(
+            lines.iter().any(|l| l.contains("state=UNKEY_REQUESTED")),
+            !held,
+            "{lines:?}"
+        );
+        if held {
+            c.send("xmit 0");
+            let released = c.until(|l| l.contains("tx_client_handle=0x00000000 state=READY"));
+            assert!(
+                released.iter().any(|l| l.contains("state=UNKEY_REQUESTED")),
+                "{released:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_foreign_client_owns_a_slice_a_pan_and_the_transmitter() {
     let foreign = Foreign {

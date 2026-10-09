@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use crate::session::Item;
+
 /// A fault, set in [`crate::server::Config::faults`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
@@ -84,6 +86,31 @@ pub enum Fault {
     /// `transmit tune 0` again and `xmit 0`, closes the session and tells the operator.
     StuckTune,
 
+    /// **A radio that holds transmit after a CWX send.** With `synccwx=1` the radio holds
+    /// transmit after the text until it is told to stop (AetherSDR's notes, `RadioModel.cpp`):
+    /// here a `cwx send` keys the radio and its release is withheld, so the radio stays
+    /// TRANSMITTING under that handle. `cwx clear` is acknowledged and changes nothing; `xmit 0`
+    /// releases it with its own rule's statuses.
+    ///
+    /// *Guard:* Stop TX in the middle of a CW message. If the radio still shows our CWX
+    /// transmitting break-in delay + 300 ms after the clear's reply, the client sends `xmit 0`;
+    /// if the radio then does not confirm the end, the client escalates, closes the session and
+    /// tells the operator.
+    HoldsCwx,
+
+    /// **A reason on every keying report**, as the radio sends it with an amplifier in line.
+    /// AetherSDR's notes captured it on a FLEX-8600 on SmartSDR 4.2.20.41343 with a PowerGeniusXL
+    /// (`docs/pgxl-telemetry-source-evidence.md`): during a TUNE the radio's PTT_REQUESTED carried
+    /// `reason=AMP:PG-XL`, and its TRANSMITTING listed the amplifiers. Here every PTT_REQUESTED a
+    /// rule sends carries `reason`, and every TRANSMITTING lists [`AMPLIFIERS`] (invented
+    /// handles). With [`PGXL`] it is the notes' capture, for every kind; any other reason is a
+    /// control.
+    ///
+    /// *Guard:* the readback takes a keying report whose only reason names an amplifier
+    /// (`AMP:<name>`) as ours when its source and the state order are ours (operator ruling,
+    /// 2026-10-09), for every kind, `xmit` included. Any other reason still fails the attempt.
+    KeyingReason { reason: String },
+
     /// **A foreign client's slice and pan.** Another GUI client is on the radio: its `client`,
     /// `slice`, `display pan` and `display waterfall` status lines follow the session's own
     /// answers to `sub client all`, `sub slice all` and `sub pan all`, and `sub tx all` reports
@@ -158,6 +185,64 @@ pub fn withholds(faults: &[Fault], command: &str) -> bool {
             (Fault::StuckTransmit, "xmit 0") | (Fault::StuckTune, "transmit tune 0")
         )
     })
+}
+
+/// The reason [`Fault::KeyingReason`] gives for AetherSDR's capture: a PowerGeniusXL in line.
+pub const PGXL: &str = "AMP:PG-XL";
+
+/// The amplifiers [`Fault::KeyingReason`] lists on TRANSMITTING. Invented handles.
+pub const AMPLIFIERS: &str = "0x5A0F0001,0x5A0F0002";
+
+/// What `command`'s rule sends once the faults have acted on its `items`: nothing when a fault
+/// withholds them all ([`withholds`]); for [`Fault::HoldsCwx`], a `cwx send`'s items up to its
+/// TRANSMITTING; for [`Fault::KeyingReason`], each keying report carrying its reason or the
+/// amplifiers. The simulator applies this, and so does a test that answers for the radio on its
+/// own clock.
+pub fn statuses(faults: &[Fault], command: &str, mut items: Vec<Item>) -> Vec<Item> {
+    if withholds(faults, command) {
+        return Vec::new();
+    }
+    let holds = faults.iter().any(|f| matches!(f, Fault::HoldsCwx));
+    if holds && command.starts_with("cwx send ") {
+        let keyed = items
+            .iter()
+            .position(|i| matches!(i, Item::Send(l) if is_interlock(l, "TRANSMITTING")));
+        if let Some(at) = keyed {
+            items.truncate(at + 1);
+        }
+    }
+    for fault in faults {
+        let Fault::KeyingReason { reason } = fault else {
+            continue;
+        };
+        for item in &mut items {
+            let Item::Send(line) = item else { continue };
+            let (key, value) = if is_interlock(line, "PTT_REQUESTED") {
+                ("reason=", reason.as_str())
+            } else if is_interlock(line, "TRANSMITTING") {
+                ("amplifier=", AMPLIFIERS)
+            } else {
+                continue;
+            };
+            *line = line
+                .split(' ')
+                .map(|t| {
+                    if t == key {
+                        format!("{key}{value}")
+                    } else {
+                        t.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    items
+}
+
+/// Whether `line` is an interlock state line in `state`.
+fn is_interlock(line: &str, state: &str) -> bool {
+    line.contains("|interlock ") && line.split(' ').any(|t| t == format!("state={state}"))
 }
 
 /// The other program of [`Fault::ForeignDaxTx`].
@@ -342,6 +427,78 @@ mod tests {
         for other in ["xmit 1", "transmit tune 1", "cwx clear", "atu start"] {
             assert!(!withholds(&both, other), "{other}");
         }
+    }
+
+    /// The bundled session's rule for `command`, through [`statuses`] with `faults`.
+    fn sent(faults: &[Fault], command: &str) -> Vec<Item> {
+        let s = crate::Session::v4_gui_client();
+        let group = s.lookup(command).expect("a rule");
+        statuses(faults, command, s.rule(group, 0).items.clone())
+    }
+
+    fn lines(items: &[Item]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Send(l) => Some(l.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_status_fault_changes_its_own_lines_and_nothing_else() {
+        let none: &[Fault] = &[];
+        // Held CWX: the send's statuses stop at TRANSMITTING, waits after it included.
+        let held = sent(&[Fault::HoldsCwx], "cwx send \"CQ\" 1");
+        assert_eq!(
+            lines(&held),
+            [
+                "S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=SW \
+                 tx_allowed=1 amplifier=",
+                "S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=SW \
+                 tx_allowed=1 amplifier=",
+            ]
+        );
+        assert!(matches!(held.last(), Some(Item::Send(_))), "{held:?}");
+        assert_eq!(lines(&sent(none, "cwx send \"CQ\" 1")).len(), 5);
+        for other in ["xmit 1", "xmit 0", "transmit tune 1", "cwx clear"] {
+            assert_eq!(
+                sent(&[Fault::HoldsCwx], other),
+                sent(none, other),
+                "{other}"
+            );
+        }
+        // A reason on every keying report: PTT_REQUESTED carries it, TRANSMITTING the
+        // amplifiers, and every other line is as it was.
+        let pgxl = [Fault::KeyingReason {
+            reason: PGXL.into(),
+        }];
+        for (command, source) in [("xmit 1", "SW"), ("transmit tune 1", "TUNE")] {
+            let changed = sent(&pgxl, command);
+            let keyed: Vec<&str> = lines(&changed)
+                .into_iter()
+                .filter(|l| l.contains("|interlock "))
+                .collect();
+            assert_eq!(
+                keyed,
+                [
+                    format!(
+                        "S0|interlock tx_client_handle=0x{{h}} state=PTT_REQUESTED \
+                         reason=AMP:PG-XL source={source} tx_allowed=1 amplifier="
+                    ),
+                    format!(
+                        "S0|interlock tx_client_handle=0x{{h}} state=TRANSMITTING reason= \
+                         source={source} tx_allowed=1 amplifier=0x5A0F0001,0x5A0F0002"
+                    ),
+                ],
+                "{command}"
+            );
+        }
+        assert_eq!(sent(&pgxl, "xmit 0"), sent(none, "xmit 0"), "a release");
+        assert_eq!(sent(&pgxl, "sub tx all"), sent(none, "sub tx all"));
+        // The stuck faults still withhold everything.
+        assert!(sent(&[Fault::StuckTransmit], "xmit 0").is_empty());
     }
 
     #[test]

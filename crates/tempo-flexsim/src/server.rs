@@ -37,7 +37,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::fault::{interlock_line, withholds, Fault, REFUSED};
+use crate::fault::{interlock_line, statuses, withholds, Fault, REFUSED};
 use crate::line::{self, LineBuf};
 use crate::session::{Item, Session};
 use crate::vita::{self, Start, Stream};
@@ -706,8 +706,8 @@ impl Reader<'_> {
                 command: text.to_string(),
                 lines,
             });
-            items.clear();
         }
+        let mut items = statuses(&shared.config.faults, text, items);
         self.augment(text, &mut items);
         let end = {
             let base = lock(&conn.out).last_status_due.max(now);
