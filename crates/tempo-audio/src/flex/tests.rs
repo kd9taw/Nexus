@@ -594,6 +594,7 @@ fn a_cw_word_nexus_cannot_time_is_refused_by_name() {
     }
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
     assert_eq!(c.ask("b W9XYZ", 1), "RPRT 0\n", "the control");
+    wait_count(&sim, "cwx send \"W9XYZ\" 1", 1);
     assert_eq!(cwx_wire(&sim), ["cwx send \"W9XYZ\" 1"]);
 }
 
