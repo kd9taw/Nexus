@@ -1391,6 +1391,11 @@ pub struct RadioStatus {
     /// Defaults true (Open / no-lockout) so an old snapshot never shows a phantom lock.
     #[serde(default = "default_true")]
     pub tx_allowed: bool,
+    /// Why the radio's CAT connection refuses every transmission, when it does (the Icom network
+    /// connection, receive and control only in its Beta). `tx_allowed` is false with it, and the
+    /// cockpit names this reason rather than the licence's. `None` on an old snapshot.
+    #[serde(default)]
+    pub tx_refusal: Option<String>,
     /// The dial the next over would be EMITTED on — the confirmed split TX frequency when the
     /// rig has acknowledged one, else the operator's dial.
     ///

@@ -2395,6 +2395,7 @@ fn check_of(
 ) -> tempo_core::reconcile::check::ConfirmationCheck {
     station::check_lotw_confirmations(&crate::engine::log_plan(engine), report, own, Some("K2DEF"))
         .expect("the check reads the log")
+        .check
 }
 
 /// The contact `call` at `hhmmss`, as the store holds it.
@@ -2459,6 +2460,24 @@ fn misplaced_scene() -> (Vec<QsoRecord>, String, String) {
 /// When the tests' Apply happens: 2026-10-07 18:00:00 UTC.
 const APPLIED_AT: u64 = 1_791_396_000;
 
+/// LoTW's confirmation download, as Apply is handed it when LoTW is the one service checked.
+fn lotw_only(report: &str) -> Vec<(tempo_core::reconcile::check::Channel, String)> {
+    vec![(
+        tempo_core::reconcile::check::Channel::Lotw,
+        report.to_string(),
+    )]
+}
+
+/// The LoTW confirmations Apply took off.
+fn taken_off(applied: &ConfirmationsApplied) -> usize {
+    applied
+        .services
+        .iter()
+        .filter(|s| s.channel == tempo_core::reconcile::check::Channel::Lotw)
+        .map(|s| s.confirmations)
+        .sum()
+}
+
 /// The ticked contacts of `ticked` that are not, as the store holds them, exactly what `before`
 /// held of them: each named by its call and time.
 fn not_as_before(
@@ -2510,10 +2529,11 @@ fn the_before_file_imported_puts_every_change_back() {
     assert_eq!(ticked.len(), 3, "{:#?}", check.lines);
     let before = engine.stored_records();
 
-    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
     durability.wait(DURABLE_WAIT).expect("on disk");
     let applied = applied.expect("applied");
-    assert_eq!((applied.confirmations, applied.uploads), (2, 1));
+    assert_eq!((taken_off(&applied), applied.uploads), (2, 1));
     let file = applied.before_file.expect("a before-file");
     assert_eq!(
         file,
@@ -2581,11 +2601,12 @@ fn a_contact_changed_after_the_check_is_left_alone() {
     written.wait(DURABLE_WAIT).expect("on disk");
     assert!(matches!(made, Ok(Ok(_))), "{made:?}");
 
-    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
     durability.wait(DURABLE_WAIT).expect("on disk");
     let applied = applied.expect("applied");
     assert_eq!(
-        (applied.confirmations, applied.uploads),
+        (taken_off(&applied), applied.uploads),
         (1, 1),
         "W1AW's two lines are made; K1ABC's is not"
     );
@@ -2727,4 +2748,240 @@ fn the_check_counts_the_marks_no_download_names() {
         1,
         "W1AW at 18:00 gains LoTW's confirmation"
     );
+}
+
+/// eQSL's InBox as its download reads: the banner, then `rows`, the cards sent to the operator.
+fn eqsl_answer(rows: &[String]) -> String {
+    format!(
+        "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<ADIF_Ver:5>3.1.6\n<EOH>\n{}",
+        rows.concat()
+    )
+}
+
+/// The three services' checks of the log `engine` holds, for K2DEF, as the commands read them.
+fn checks_of(
+    engine: &Mutex<Engine>,
+    lotw: &str,
+    inbox: &str,
+    book: &str,
+) -> Vec<tempo_core::reconcile::check::CheckLine> {
+    let plan = || crate::engine::log_plan(engine);
+    let own = Some("K2DEF");
+    [
+        station::check_lotw_confirmations(&plan(), lotw, &lotw_answer(&[]), own),
+        station::check_eqsl_confirmations(&plan(), inbox, own),
+        station::check_qrz_confirmations(&plan(), book, own),
+    ]
+    .into_iter()
+    .flat_map(|checked| checked.expect("the check reads the log").check.lines)
+    .collect()
+}
+
+/// ★ Apply takes off only what the operator ticked, service by service. #400's pair on W1AW has
+/// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
+/// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is
+/// ticked: 06:00 loses eQSL's confirmation and keeps LoTW's, its DXCC and QRZ's; K1ABC keeps its
+/// card; and 18:00 gains each service's confirmation from the merges. N0SUP, which LoTW confirms,
+/// takes the DXCC its row brings since, and that is no gain. Nothing else moves.
+#[test]
+fn apply_takes_off_only_the_ticked_lines_of_each_service() {
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel, Mark};
+    let d = Dir::new("check-each-service");
+    let w1aw = adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    );
+    // What LoTW sent the old sync, and what it holds now: N0SUP's DXCC was granted since.
+    let lotw_then = lotw_answer(std::slice::from_ref(&w1aw));
+    let lotw = lotw_answer(&[
+        w1aw,
+        adif_row(
+            "N0SUP",
+            "20m",
+            "FT8",
+            "120100",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        ),
+    ]);
+    let inbox = eqsl_answer(&[
+        adif_row("W1AW", "20m", "FT8", "180100", "<EQSL_QSL_RCVD:1>Y"),
+        adif_row("K1ABC", "20m", "FT8", "150000", "<EQSL_QSL_RCVD:1>Y"),
+    ]);
+    let book = [
+        adif_row("W1AW", "20m", "FT8", "180000", "<APP_QRZLOG_STATUS:1>C"),
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+    ]
+    .concat();
+    let mut log = contacts(&[
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+        adif_row("W1AW", "20m", "FT8", "180000", ""),
+        adif_row("K1ABC", "20m", "FT8", "100000", ""),
+        adif_row("N0SUP", "20m", "FT8", "120000", "<LOTW_QSL_RCVD:1>Y"),
+    ]);
+    for text in [&lotw_then, &inbox, &book] {
+        log = left_by_1_17(log, &tempo_core::logbook::report_rows(text));
+    }
+    let engine = holding(&d, &log);
+    let lines = checks_of(&engine, &lotw, &inbox, &book);
+    let listed: Vec<(&str, Mark, bool)> = lines
+        .iter()
+        .map(|l| (l.contact.call.as_str(), l.mark, l.decisive()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("W1AW", Mark::Confirmation(Channel::Lotw), true),
+            ("W1AW", Mark::Confirmation(Channel::Eqsl), true),
+            ("K1ABC", Mark::Confirmation(Channel::Eqsl), false),
+            ("W1AW", Mark::Confirmation(Channel::Qrz), true),
+        ]
+    );
+    let before = engine.stored_records();
+    let ticked = vec![lines[1].clone()];
+    let downloads = vec![
+        (Channel::Lotw, lotw),
+        (Channel::Eqsl, inbox),
+        (Channel::Qrz, book),
+    ];
+    let (applied, durability) = apply_confirmation_check(&engine, &downloads, &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(
+        made,
+        [
+            (Channel::Lotw, 0, 1),
+            (Channel::Eqsl, 1, 1),
+            (Channel::Qrz, 0, 1)
+        ]
+    );
+    assert_eq!(applied.uploads, 0);
+
+    let at = |call: &str, hhmmss: &str| {
+        let when = contacts(&[adif_row(call, "20m", "FT8", hhmmss, "")])[0].when_unix;
+        before
+            .iter()
+            .find(|r| r.call == call && r.when_unix == when)
+            .cloned()
+            .expect("held before")
+    };
+    let mut expected = Vec::new();
+    let mut early = at("W1AW", "060000");
+    early.qsl_rcvd.eqsl = false;
+    expected.push(early.clone());
+    let mut late = at("W1AW", "180000");
+    late.qsl_rcvd.lotw = true;
+    late.qsl_rcvd.eqsl = true;
+    late.qsl_rcvd.qrz = true;
+    late.confirmed = true;
+    late.award_confirmed = true;
+    late.credit_granted = vec!["DXCC".into()];
+    expected.push(late);
+    expected.push(at("K1ABC", "100000"));
+    let mut credited = at("N0SUP", "120000");
+    credited.credit_granted = vec!["DXCC".into()];
+    expected.push(credited);
+    let mut now = engine.stored_records();
+    now.sort_by_key(|r| (r.call.clone(), r.when_unix));
+    expected.sort_by_key(|r| (r.call.clone(), r.when_unix));
+    assert_eq!(
+        now, expected,
+        "06:00 loses eQSL's alone; 18:00 gains each service's; K1ABC is untouched; N0SUP is credited"
+    );
+    assert!(
+        early.qsl_rcvd.lotw && early.qsl_rcvd.qrz && early.credit_granted == ["DXCC"],
+        "premise: the unticked lines' marks are there to keep: {early:?}"
+    );
+    let file = applied.before_file.expect("a before-file");
+    let kept = tempo_core::logbook::parse_adif(&std::fs::read_to_string(&file).unwrap());
+    let kept: Vec<(&str, u64)> = kept
+        .iter()
+        .map(|r| (r.call.as_str(), r.when_unix))
+        .collect();
+    assert_eq!(
+        kept,
+        [("W1AW", early.when_unix)],
+        "the one contact that changed"
+    );
+}
+
+/// ★ QRZ's copies of other services' confirmations never reach a contact at Apply. QRZ's book
+/// re-reports LoTW's, eQSL's and a card's confirmation, LoTW's credit, and a QSO this log lacks.
+/// Apply takes LoTW's misplaced confirmation off 06:00, as ticked, though QRZ's copy of 06:00
+/// says LoTW confirms it; 18:00 gains QRZ's own confirmation and LoTW's, and no card or eQSL
+/// from QRZ's copies; and no contact is added (Sync from QRZ adds those).
+#[test]
+fn qrz_s_copies_of_other_services_never_reach_a_contact_at_apply() {
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel};
+    let d = Dir::new("check-qrz-copies");
+    let lotw = lotw_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let copies = "<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC";
+    let book = [
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+        adif_row("W1AW", "20m", "FT8", "060000", copies),
+        adif_row("K5NEW", "20m", "FT8", "090000", "<APP_QRZLOG_STATUS:1>C"),
+    ]
+    .concat();
+    let log = left_by_1_17(
+        contacts(&[
+            adif_row("W1AW", "20m", "FT8", "060000", ""),
+            adif_row("W1AW", "20m", "FT8", "180000", ""),
+        ]),
+        &tempo_core::logbook::report_rows(&lotw),
+    );
+    let engine = holding(&d, &log);
+    let lines = checks_of(&engine, &lotw, &eqsl_answer(&[]), &book);
+    assert_eq!(lines.len(), 1, "06:00's LoTW line alone: {lines:#?}");
+    let (applied, durability) = apply_confirmation_check(
+        &engine,
+        &[(Channel::Lotw, lotw), (Channel::Qrz, book)],
+        &lines,
+        APPLIED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(made, [(Channel::Lotw, 1, 1), (Channel::Qrz, 0, 1)]);
+    let now = engine.stored_records();
+    assert_eq!(now.len(), 2, "K5NEW is not added: {now:#?}");
+    let early = contact_at(&engine, "W1AW", "060000");
+    assert_eq!(
+        (early.qsl_rcvd, early.credit_granted.as_slice()),
+        (Default::default(), &[] as &[String]),
+        "06:00 is as it was before 1.17.0: {early:?}"
+    );
+    let late = contact_at(&engine, "W1AW", "180000");
+    assert_eq!(
+        late.qsl_rcvd,
+        tempo_core::logbook::QslRcvd {
+            lotw: true,
+            qrz: true,
+            ..Default::default()
+        },
+        "18:00 holds LoTW's word and QRZ's own, and no copy: {late:?}"
+    );
+    assert_eq!(late.credit_granted, ["DXCC"], "LoTW's row brought it");
 }

@@ -2059,6 +2059,16 @@ impl Logbook {
         merged
     }
 
+    /// Logbook ▸ Check confirmations' gains from a downloaded QRZ book (a QRZ Logbook FETCH):
+    /// QRZ's own confirmation put on each contact one of its confirming rows pairs with, and
+    /// nothing else ([`crate::reconcile::check::gain_qrz_confirmations`]). Unlike
+    /// [`merge_downloaded`](Self::merge_downloaded), it adds no contact and carries none of QRZ's
+    /// copies of other services' confirmations. How many contacts gained it. Pure merge — call
+    /// [`save`](Self::save) to persist.
+    pub fn gain_qrz_confirmations(&mut self, text: &str) -> usize {
+        crate::reconcile::check::gain_qrz_confirmations(&mut self.records[..], &report_rows(text))
+    }
+
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
     /// but the partner hasn't matched). Promotes matched QSOs' LoTW upload state to
     /// `Accepted` (your side is on file → "waiting on partner"). Returns the count

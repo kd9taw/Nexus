@@ -120,15 +120,17 @@ beforeEach(() => {
 afterEach(cleanup)
 
 /** Open Radio ▸ Rig & CAT ▸ Advanced, where the native CI-V controls live, and hand back the
- *  Data mode picker, or null when it is not offered. */
-async function pickerOnScreen(): Promise<HTMLSelectElement | null> {
+ *  Data mode picker, or null when it is not offered. `rendered` is a label that must be on screen
+ *  first, so an absent picker is an answer and not a missing render: the native CI-V switch, or for
+ *  a radio that has none (the IC-7760 and IC-7300MK2), the SSTV switch beside it. */
+async function pickerOnScreen(rendered: RegExp = /Native Icom CI-V/): Promise<HTMLSelectElement | null> {
   fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
   const grp = document.querySelector('#settings-rig-advanced .settings-group-toggle') as HTMLButtonElement | null
   expect(grp, 'the Advanced group exists in Rig & CAT').toBeTruthy()
   if (grp!.getAttribute('aria-expanded') === 'false') fireEvent.click(grp!)
   expect(
-    [...document.querySelectorAll('.settings-label')].some((e) => /Native Icom CI-V/.test(e.textContent ?? '')),
-    'the native CI-V controls are on screen, so an absent picker is an answer',
+    [...document.querySelectorAll('.settings-label')].some((e) => rendered.test(e.textContent ?? '')),
+    `${rendered} is on screen, so an absent picker is an answer`,
   ).toBe(true)
   const label = [...document.querySelectorAll('.settings-label')].find((e) => e.textContent?.trim() === 'Data mode')
   return (label?.parentElement?.querySelector('select') as HTMLSelectElement | null) ?? null
@@ -148,5 +150,42 @@ describe('the D1/D2/D3 picker', () => {
     const picker = await pickerOnScreen()
     expect(picker, 'IC-7610').not.toBeNull()
     expect(picker!.value).toBe('2')
+  })
+})
+
+// THE ICOM NETWORK CONNECTION DRIVES THE RADIO WITH NEXUS'S OWN CI-V, whatever the native switch says, and
+// it applies the saved D1/D2/D3 there too. So the picker follows each radio's own DATA count (the IC-7760
+// has three, A7788-8EX-2, PDF p. 23; the IC-7300MK2 one, rev 0, PDF p. 22) and can be changed on that
+// connection. Over USB, Hamlib drives an IC-7760 and always selects D1, and the radio has no native switch
+// to turn on, so there the picker says which connection makes it work.
+describe('the D1/D2/D3 picker on the Icom network connection', () => {
+  const SSTV = /Hold the data mode while SSTV/
+  const net = { rigConn: 'icomlan', icomNativeCat: false }
+
+  it('is offered on an IC-7760 and an IC-7610, showing the saved choice, and can be changed', async () => {
+    for (const [rigModel, rigModelName] of [[3092, 'Icom IC-7760'], [3078, 'Icom IC-7610']] as const) {
+      renderPanel(settingsFor({ ...net, rigModel, rigModelName, icomDataMode: 2 }))
+      const picker = await pickerOnScreen(SSTV)
+      expect(picker, rigModelName).not.toBeNull()
+      expect(picker!.value, rigModelName).toBe('2')
+      expect(picker!.disabled, `${rigModelName}: the network connection applies it`).toBe(false)
+      cleanup()
+    }
+  })
+
+  it('is not offered on an IC-7300MK2, even with a D2 or D3 saved there', async () => {
+    for (const d of [2, 3]) {
+      renderPanel(settingsFor({ ...net, rigModel: 3094, rigModelName: 'Icom IC-7300MK2', icomDataMode: d }))
+      expect(await pickerOnScreen(SSTV), `IC-7300MK2 holding D${d}`).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('is greyed on an IC-7760 over USB, naming the connection that applies it, even with a native switch left on', async () => {
+    renderPanel(settingsFor({ rigModel: 3092, rigModelName: 'Icom IC-7760', rigConn: 'serial', icomNativeCat: true, icomDataMode: 2 }))
+    const picker = await pickerOnScreen(SSTV)
+    expect(picker, 'IC-7760 over USB').not.toBeNull()
+    expect(picker!.disabled, 'Hamlib drives it over USB and always selects D1').toBe(true)
+    expect(picker!.parentElement?.querySelector('.settings-hint')?.textContent).toMatch(/Icom network connection/)
   })
 })

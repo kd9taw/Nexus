@@ -46,6 +46,11 @@ import { BOX_IDS, PHONE_PANELS, PHONE_PANEL_IDS, usePanelLayout } from '../featu
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 import type { BoxSource } from './panes/CockpitBox'
 
+// THE BUDGET (2026-10-08). The Phone cockpit renders for real here, and the WIRE case's time scales with the CPU it
+// gets: 0.85–1.0 s alone on a quiet box, but past vitest's 5 s default twice in full-suite runs at a load of 20–30.
+// 15 s is the budget the other real-render files carry; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // vi.hoisted, not a bare const: the vi.mock factory below is hoisted above every
 // top-level binding, so a plain const would be in its temporal dead zone when it runs.
 // These are the WIRE calls that end or destroy something — the sweep below treats a hide

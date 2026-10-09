@@ -984,7 +984,7 @@ export function CwCockpit({
     if (!line.trim()) return
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (!snapRef.current.radio.txAllowed) {
-      pushToast(t('cw.send.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('cw.send.txLocked'), 'info', 3500)
       return
     }
     // #286: an edited His Call lands BEFORE the send that may expand `!` to it.

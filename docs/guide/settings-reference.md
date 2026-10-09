@@ -441,6 +441,12 @@ Baud continue across to the right.*
   Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC
   (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld." For a Hermes
   Lite 2, see [Hermes Lite 2 and SDR Program Setup](../rigs/sdr-programs.md).
+  For the six Icoms with a network port (IC-7610, IC-9700, IC-705, IC-905,
+  IC-7760, IC-7300MK2) there is also **Icom network (LAN / Wi-Fi) — Beta**:
+  receive and control only, with the **Radio address**, **Network user**,
+  **Network password** (stored in the keychain, write-only) and **Control port
+  (UDP)** in place of Serial Port and Baud. See the
+  [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of

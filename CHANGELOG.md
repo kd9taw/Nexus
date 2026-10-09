@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
+  straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
+  has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
+  RS-BA1 and wfview use, with no bridge program in between, and runs its own CI-V control over it:
+  frequency and mode both ways, the dial followed as you turn it, the meters, and the radio's own
+  panadapter (one frame a sweep over the network, so no CI-V baud applies). On the IC-7610 and
+  IC-7760, which have three DATA modes, the Data mode picker (D1, D2 or D3) in Rig & CAT works on
+  this connection too; the other four have one and are always sent it. **Nothing transmits on
+  this connection yet**: every transmit path (FT, Tune, CW, the voice keyer, PTT, APRS, RTTY, PSK,
+  SSTV and another program's PTT through Nexus) says so and stops before the radio is keyed, and the
+  radio is never sent a key. There is no audio over it yet: keep the USB cable for audio. The
+  network password is kept in your computer's keychain, one per radio profile, never in Settings or
+  a log. At connect Nexus reads, and never changes, the radio's time-out timer and MOD Input
+  settings and shows them in Rig & CAT. The radio takes one network program at a time; use it on
+  your own network, or through a VPN. If the session drops, Nexus reconnects by itself after 1, 2,
+  4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
+  Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
+  Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
 - **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
   screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
   each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
@@ -62,17 +80,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
   Nexus Remote.
 
-- **Check confirmations, for LoTW confirmations earlier versions put on the wrong contact (#400).**
+- **Check confirmations, for confirmations earlier versions put on the wrong contact (#400).**
   If you worked a station twice on one band and mode in a UTC day, the earlier contact could take
-  the later one's LoTW confirmation, or LoTW's mark that it holds the later one's upload.
-  Logbook ▸ Check confirmations downloads your whole LoTW history once and lists each contact
-  holding a LoTW confirmation or upload mark that LoTW's own records give another of your contacts,
-  or none. Each line says why it is listed and what the change keeps or costs, and starts ticked
-  only when LoTW's records decide it. Nothing changes until you press Change, and nothing is
-  uploaded. The contacts it changes are first saved, as they were, to a file beside your log, and
-  importing that file with Logbook ▸ Import ADIF puts them back. A paper card is never touched,
-  and a contact that loses a false LoTW confirmation and was never uploaded goes in your next LoTW
-  upload. It checks LoTW; eQSL and QRZ confirmations are not checked.
+  the later one's LoTW, eQSL or QRZ confirmation, or LoTW's mark that it holds the later one's
+  upload. Logbook ▸ Check confirmations downloads your whole history once from each of these
+  services you have set up, and lists under each one the contacts holding its confirmation, or
+  LoTW's upload mark, that its own records give another of your contacts, or none. Each line says
+  why it is listed and what the change keeps or costs, and starts ticked only when the service's
+  records decide it. Your QRZ logbook's copies of what LoTW, eQSL and paper cards say never count
+  as QRZ's. Nothing changes until you press Change, and nothing is uploaded. The contacts it
+  changes are first saved, as they were, to a file beside your log, and importing that file with
+  Logbook ▸ Import ADIF puts them back. A paper card is never touched, and a contact that loses a
+  false LoTW confirmation and was never uploaded goes in your next LoTW upload.
 
 - **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a
   station on the border of two to four counties once per county. Type its counties into the QTH
@@ -165,8 +184,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates), at the next launch.
 - **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
   warning is advisory, as before: the log strip warns and nothing is refused.
-- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
-  IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
+- **The Data mode picker (D1/D2/D3) is offered only on the Icoms that have D2 and D3, and the
+  IC-9700, IC-705 and IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT
+  offered the picker on
   the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
   a value Icom does not define for those radios into the command that sets their DATA mode for the
   digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA

@@ -180,6 +180,7 @@
     "txOffsetHz": 1500.0,
     "txPoW": null,
     "txPowerZero": false,
+    "txRefusal": null,
     "txSwr": null,
     "txWatchdog": false,
     "vox": null,

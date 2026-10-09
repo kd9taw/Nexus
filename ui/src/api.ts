@@ -1082,13 +1082,17 @@ export async function applyParkStates(
   return invoke<number>('apply_park_states', { changes })
 }
 
-/** One line of "Check confirmations": a contact holding LoTW's confirmation (`lotw`), or its LoTW
- *  upload mark (`lotwUpload`), that LoTW's own downloads give another contact, or none. */
+/** The services "Check confirmations" checks, in the order it lists them. */
+export type CheckedService = 'lotw' | 'eqsl' | 'qrz'
+
+/** One line of "Check confirmations": a contact holding a service's confirmation (`lotw`, `eqsl`,
+ *  `qrz`), or its LoTW upload mark (`lotwUpload`), that the service's own download gives another
+ *  contact, or none. */
 export interface ConfirmationLine {
   id: string
-  mark: 'lotw' | 'lotwUpload'
-  /** `moved`: the row it rests on pairs with another contact, the sibling; `contradicted`: LoTW
-   *  holds this contact itself, unconfirmed; `orphan`: the row pairs with no contact. */
+  mark: CheckedService | 'lotwUpload'
+  /** `moved`: the row it rests on pairs with another contact, the sibling; `contradicted`: the
+   *  service holds this contact itself, unconfirmed; `orphan`: the row pairs with no contact. */
   class: 'moved' | 'contradicted' | 'orphan'
   call: string
   whenUnix: number
@@ -1099,7 +1103,7 @@ export interface ConfirmationLine {
   rowUnix: number
   siblingId: string | null
   siblingUnix: number | null
-  /** LoTW's own unconfirmed record of this contact (`contradicted` only). */
+  /** The service's own unconfirmed record of this contact (`contradicted` only). */
   ownUnix: number | null
   /** The evidence decides it: the line starts ticked. */
   decisive: boolean
@@ -1110,50 +1114,72 @@ export interface ConfirmationLine {
   removeSubmitted: string[]
   /** A paper card it keeps, with its award credit. */
   cardHeld: boolean
-  /** Owed to LoTW once every line listed for this contact is applied. */
+  /** Owed to LoTW once every line listed for this contact is applied, and not before. */
   owedAfter: boolean
 }
 
-/** What "Check confirmations" found: its lines, newest first, and what it leaves alone. */
+/** What "Check confirmations" found for one service: its lines, newest first, and what it leaves
+ *  alone. */
 export interface ConfirmationCheck {
-  /** This check, which its Apply names. */
+  /** The check, which its Apply names. */
   session: number
+  service: CheckedService
+  /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
+   *  book), as the Connections log says them. */
+  records: number
   lines: ConfirmationLine[]
-  /** Contacts LoTW confirms that lack its confirmation: Apply adds it. */
-  gains: number
-  /** LoTW confirmations it leaves alone: no LoTW row within a day of them, or logged under
-   *  another call than the one LoTW was asked about. */
+  /** The contacts the service confirms that lack its confirmation: Apply adds it. */
+  gainIds: string[]
+  /** The service's confirmations it leaves alone: no row of it within a day of them, or logged
+   *  under another call than the one in Settings. */
   unreached: number
   outOfScope: number
-  /** LoTW upload marks it leaves alone, the same two ways. */
+  /** LoTW upload marks it leaves alone, the same two ways (LoTW only). */
   uploadsUnreached: number
   uploadsOutOfScope: number
+}
+
+/** What Apply in "Check confirmations" made of one service's check. */
+export interface ServiceApplied {
+  service: CheckedService
+  /** Contacts whose confirmation from this service was taken off. */
+  confirmations: number
+  /** Contacts that gained the service's confirmation from its download. */
+  gained: number
 }
 
 /** What Apply in "Check confirmations" made. */
 export interface ConfirmationApplied {
   /** The lines ticked. */
   ticked: number
-  /** Contacts whose LoTW confirmation was taken off, and whose upload mark was cleared: fewer than
-   *  ticked when a contact changed after the check. */
-  confirmations: number
+  /** Each service checked, LoTW, eQSL, QRZ: fewer confirmations taken off than ticked when a
+   *  contact changed after the check. */
+  services: ServiceApplied[]
+  /** Contacts whose LoTW upload mark was cleared. */
   uploads: number
-  /** What merging the download added. */
-  newlyConfirmed: number
-  newlyCredited: number
   /** The changed contacts as they were: Logbook ▸ Import ADIF puts them back. */
   beforeFile: string | null
 }
 
-/** The Logbook's "Check confirmations": LoTW's whole confirmation history and own-QSO list,
- *  downloaded once (minutes, on a long history) and checked against the log. It changes nothing:
- *  the download is held at the station for this check's Apply, or its Cancel. */
-export async function confirmationCheck(): Promise<ConfirmationCheck> {
-  return invoke<ConfirmationCheck>('confirmation_check')
+/** Start the Logbook's "Check confirmations": a new check at the station, which drops one it holds
+ *  and any still downloading. Each service is then checked in it. Its session. */
+export async function startConfirmationCheck(): Promise<number> {
+  return invoke<number>('start_confirmation_check')
+}
+
+/** One service's whole history in check `session` (LoTW's confirmations and own-QSO list, eQSL's
+ *  InBox, QRZ's book), downloaded once (minutes, for LoTW on a long history) and checked against
+ *  the log. It changes nothing: the download is held at the station for the check's Apply, or its
+ *  Cancel. */
+export async function confirmationCheck(
+  session: number,
+  service: CheckedService,
+): Promise<ConfirmationCheck> {
+  return invoke<ConfirmationCheck>('confirmation_check', { session, service })
 }
 
 /** Apply check `session`'s ticked lines, each only while its contact still holds what the check
- *  read, after merging the held download. Nothing is uploaded. */
+ *  read, after merging each service's held download. Nothing is uploaded. */
 export async function applyConfirmationCheck(
   session: number,
   ticked: { id: string; mark: ConfirmationLine['mark'] }[],
@@ -1353,6 +1379,22 @@ export async function setLotwPassword(password: string): Promise<void> {
 /** Remove the stored LoTW password from the OS keychain (idempotent). */
 export async function clearLotwPassword(): Promise<void> {
   await invoke<void>('clear_lotw_password')
+}
+
+/** Store a radio profile's Icom network password in the OS keychain (write-only; an empty string
+ *  clears it). The radio takes 16 printable characters at most. */
+export async function setIcomLanPassword(radioId: number, password: string): Promise<void> {
+  await invoke<void>('set_icom_lan_password', { radioId, password })
+}
+
+/** Remove a radio profile's Icom network password from the OS keychain (idempotent). */
+export async function clearIcomLanPassword(radioId: number): Promise<void> {
+  await invoke<void>('clear_icom_lan_password', { radioId })
+}
+
+/** Whether a radio profile has an Icom network password saved (never the password). */
+export async function icomLanPasswordSaved(radioId: number): Promise<boolean> {
+  return invoke<boolean>('icom_lan_password_saved', { radioId })
 }
 
 /** Sync your LoTW state into the log: pull new confirmations AND mark which of your
@@ -2458,6 +2500,11 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's address, network user and control port for the Icom network connection (Beta;
+   *  per-radio, as above). Its password is never here: the OS keychain holds it. */
+  icomLanHost: string
+  icomLanUser: string
+  icomLanPort: number
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio

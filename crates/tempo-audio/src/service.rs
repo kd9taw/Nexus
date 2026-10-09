@@ -60,6 +60,9 @@ enum CatDaemon {
     /// Nexus's own FlexRadio client (`crate::flex`, opt-in per radio, Beta): the same rigctld
     /// protocol on the same port, served from a SmartSDR session to the radio itself.
     Flex(crate::flex::FlexDaemon),
+    /// Nexus's own Icom network client (`crate::icomlan`, the "Icom network" Connection, Beta):
+    /// the native CI-V daemon, carried over a network session to the radio, keying refused.
+    IcomLan(crate::icomlan::IcomLanDaemon),
 }
 
 impl CatDaemon {
@@ -69,27 +72,44 @@ impl CatDaemon {
             CatDaemon::Native(d) => d.is_alive(),
             CatDaemon::Omni(d) => d.is_alive(),
             CatDaemon::Flex(d) => d.is_alive(),
+            CatDaemon::IcomLan(d) => d.is_alive(),
         }
     }
-    /// The native daemon, when that's what this is (scope drain / enable).
+    /// The native daemon, when that's what this is (scope drain / enable) — the one carried over
+    /// the Icom network session too, so the scope, the Sub levels and the receiver naming work
+    /// there unchanged.
     fn native(&self) -> Option<&crate::civ::broker::CivDaemon> {
         match self {
             CatDaemon::Native(d) => Some(d),
+            CatDaemon::IcomLan(d) => Some(d.native()),
             CatDaemon::Spawned(_) | CatDaemon::Omni(_) | CatDaemon::Flex(_) => None,
+        }
+    }
+    /// Nexus's own Icom network client, when that's what this is — for its status and findings.
+    fn icom_lan(&self) -> Option<&crate::icomlan::IcomLanDaemon> {
+        match self {
+            CatDaemon::IcomLan(d) => Some(d),
+            _ => None,
         }
     }
     /// The OmniRig shim, when that's what this is — for the status detail and TX intent.
     fn omni(&self) -> Option<&crate::omnirig::OmniDaemon> {
         match self {
             CatDaemon::Omni(d) => Some(d),
-            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Flex(_) => None,
+            CatDaemon::Native(_)
+            | CatDaemon::Spawned(_)
+            | CatDaemon::Flex(_)
+            | CatDaemon::IcomLan(_) => None,
         }
     }
     /// Nexus's own Flex client, when that's what this is — for the slices and the TX intent.
     fn flex(&self) -> Option<&crate::flex::FlexDaemon> {
         match self {
             CatDaemon::Flex(d) => Some(d),
-            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Omni(_) => None,
+            CatDaemon::Native(_)
+            | CatDaemon::Spawned(_)
+            | CatDaemon::Omni(_)
+            | CatDaemon::IcomLan(_) => None,
         }
     }
 }
@@ -115,7 +135,10 @@ fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
     // OmniRig joins `is_network()` as a transport the CI-V daemon can never serve: OmniRig
     // holds the COM port, so Nexus cannot open it to speak CI-V. Mirrored in tempo-app's
     // `native_civ_reachable`, which is what tells the operator the cure does not exist here.
-    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.rig_model == 0 {
+    // The Icom network connection carries the same daemon over its own session
+    // (`CatDaemon::IcomLan`); the serial one must never open a COM port for it.
+    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.is_icom_lan() || t.rig_model == 0
+    {
         return None;
     }
     crate::rigmodels::icom_scope_model(t.rig_model)
@@ -164,6 +187,8 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
         // through a daemon that does not exist would be a rig that tunes and never keys.
         // `open_serial_ptt` has the matching branch; the two must stay in step (see the ⚠️).
         && !t.is_omnirig()
+        // Nor the Icom network connection: there is no CAT serial port, and it keys nothing.
+        && !t.is_icom_lan()
         && !t.serial_port.trim().is_empty()
         && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
 }
@@ -212,6 +237,20 @@ fn spawn_cat_daemon(
     if t.is_omnirig() {
         return crate::omnirig::OmniDaemon::start(t.omnirig_slot(), t.rigctld_port)
             .map(|d| (CatDaemon::Omni(d), None));
+    }
+    // Nexus's own Icom network client, when the operator chose that connection. Nothing falls
+    // back from it: rigctld has no network model for these radios, and the serial port the
+    // profile last had is not where the operator said the radio is.
+    if t.is_icom_lan() {
+        let Some(target) = t.icom_lan_target() else {
+            return Err(std::io::Error::other(
+                "The Icom network connection needs an IC-7610, IC-9700, IC-705, IC-905, IC-7760 \
+                 or IC-7300MK2 and the radio's IPv4 address (Settings ▸ Radio ▸ Rig & CAT)",
+            ));
+        };
+        return crate::icomlan::IcomLanDaemon::start(&target)
+            .map(|d| (CatDaemon::IcomLan(d), None))
+            .map_err(std::io::Error::other);
     }
     let mut native_fallback: Option<String> = None;
     // Nexus's own Flex client, when the operator opted this radio in (Beta). It talks to the radio
@@ -315,6 +354,27 @@ fn cat_backend_label(native_wanted: bool, daemon: Option<bool>) -> &'static str 
         Some(false) if native_wanted => "Hamlib rigctld — the native CI-V daemon didn't start",
         Some(false) => "Hamlib rigctld",
         None => "a shared external rigctld",
+    }
+}
+
+/// Can this link carry the radio's scope waveform at all? Over USB the radio refuses it below
+/// CI-V USB baud 115200 (the IC-9700 NAKs `27 11 01` at 57600); over the network "all data is
+/// sent together" and no baud applies.
+fn link_carries_the_scope(t: &Transport) -> bool {
+    t.is_icom_lan() || t.baud >= 115_200
+}
+
+/// When the radio loop next tries a radio on the Icom network connection whose open failed:
+/// when the retry ladder allows (`crate::icomlan::registry`), never while the radio waits for
+/// the operator, and on the ordinary reopen backoff (`default_at`) when the ladder has nothing to
+/// say (a failure before anything was sent, such as no saved password).
+fn icom_lan_reopen_at(key: std::net::SocketAddrV4, now: f64, default_at: f64) -> f64 {
+    if crate::icomlan::registry::held(key) {
+        return f64::INFINITY;
+    }
+    match crate::icomlan::registry::retry_in(key, crate::icomlan::now_ms()) {
+        Some(ms) => now + ms as f64,
+        None => default_at,
     }
 }
 
@@ -452,6 +512,12 @@ fn clip(line: &str) -> String {
 /// glance, and for an Icom adds the dual-USB-port gotcha (the IC-7610/9700 expose two serial ports,
 /// only one of which carries CI-V — picking the wrong one looks exactly like this).
 fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
+    if t.is_icom_lan() {
+        return format!(
+            "CAT can't reach the radio over the network ({err}). If the session was lost, Nexus \
+             reconnects by itself; the radio may hold the old session for up to 3 minutes."
+        );
+    }
     if t.is_network() {
         // A network CAT address is very often an SDR console on the same PC, not a radio with
         // a power switch — telling that operator to check the rig is powered on is advice for
@@ -1357,6 +1423,14 @@ pub struct RadioConfig {
     /// CAT daemon a tick later.
     pub flex_native_cat: bool,
     pub flex_radio_ip: String,
+    /// The radio's address, network user and control port for Nexus's Icom network client (the
+    /// "Icom network" Connection; `RadioProfile::icom_lan_host`), and the radio profile whose
+    /// keychain entry holds the password, so the first launch connects rather than failing a
+    /// tick early.
+    pub icom_lan_host: String,
+    pub icom_lan_user: String,
+    pub icom_lan_port: u16,
+    pub radio_id: u32,
     /// The port our OWN CAT broker serves on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     pub broker_self_port: Option<u16>,
@@ -1409,6 +1483,10 @@ impl Default for RadioConfig {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            radio_id: 0,
             broker_self_port: Some(4532),
             dial_hz: 14_090_500,
             mode: "USB".to_string(),
@@ -2206,6 +2284,10 @@ impl Transport {
             icom_native_cat: p.icom_native_cat,
             flex_native_cat: p.flex_native_cat,
             flex_radio_ip: p.flex_radio_ip.clone(),
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
+            radio_id: p.id,
             broker_self_port: None,
             audio_in: String::new(),
             audio_out: String::new(),
@@ -2274,7 +2356,10 @@ fn open_read_only(
             // ~1.3 s (engine queue) — the client deadline must outlast it or every busy
             // moment reads as CAT-dead (the flapping pill).
             rig.set_slow_transport(
-                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
+                network
+                    || native_civ_addr(t).is_some()
+                    || t.is_icom_lan()
+                    || t.is_slow_serial_link(),
             );
             let ok = probe_cat(&mut rig, t).ok;
             (rig, Some(proc), ok)
@@ -4180,7 +4265,10 @@ impl RadioLoop {
     /// Capture the USB identity of the configured serial port while it is present, so a rig
     /// that later comes back under a new port name can be recognised. Once per port.
     fn remember_port_identity(&mut self) {
-        if self.cat_port_identity.is_some() || self.applied.is_network() {
+        if self.cat_port_identity.is_some()
+            || self.applied.is_network()
+            || self.applied.is_icom_lan()
+        {
             return;
         }
         let name = self.effective_port_name();
@@ -4212,6 +4300,7 @@ impl RadioLoop {
             return false;
         }
         let port_returned = if !want.is_network()
+            && !want.is_icom_lan()
             && !want.serial_port.is_empty()
             && now >= self.cat_port_check_at
         {
@@ -4289,7 +4378,7 @@ impl RadioLoop {
     /// identity we remembered, follow the rig there. Anything ambiguous is left alone.
     fn resolve_port_alias(&mut self, want: &Transport) -> Transport {
         let mut want = want.clone();
-        if want.is_network() || want.serial_port.is_empty() {
+        if want.is_network() || want.is_icom_lan() || want.serial_port.is_empty() {
             return want;
         }
         let Some(identity) = self.cat_port_identity.clone() else {
@@ -4362,6 +4451,14 @@ impl RadioLoop {
     /// health messages (see [`cat_backend_label`]). `t` is the transport the channel was
     /// built for (`applied`, or `want` when they compare equal).
     fn live_backend_label(&self, t: &Transport) -> &'static str {
+        if self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::icom_lan)
+            .is_some()
+        {
+            return "Nexus's Icom network client (Beta)";
+        }
         let native_wanted = native_civ_addr(t).is_some() && !keys_on_the_cat_port(t);
         cat_backend_label(
             native_wanted,
@@ -6143,6 +6240,15 @@ impl RadioLoop {
             // a rig that is merely off, and the breaker's re-probe asks that same daemon forever.
             // Two independent triggers reopen the port: the configured port coming BACK, and
             // sustained silence past a few failed re-probes (with backoff between rebuilds).
+            // Test CAT on the Icom network connection is the operator acting: a radio waiting on
+            // the retry ladder, or for the operator after it ended the session or refused the
+            // login, is tried again now, through a fresh session rather than a probe of nothing.
+            if reprobe_req && self.rigctld_proc.is_none() {
+                if let Some(t) = want.icom_lan_target() {
+                    crate::icomlan::registry::operator_acted(t.key());
+                    self.cat_reopen_at = 0.0;
+                }
+            }
             let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
             // Nexus's Flex client says what the operator must know about the transmitter. Once its
             // session has ended, why, when the transmitter is the reason (the radio did not confirm
@@ -6251,6 +6357,13 @@ impl RadioLoop {
                 || suspect_rebuild
             {
                 self.cat_hold_active = false;
+                // A saved change to the Icom network connection is the operator acting too: the
+                // new configuration is tried at once, whatever the old one was waiting for.
+                if want.rig_differs(&self.applied) {
+                    if let Some(t) = want.icom_lan_target() {
+                        crate::icomlan::registry::operator_acted(t.key());
+                    }
+                }
                 // The keyed belief at teardown entry, carried onto the fresh rig below. A rebuild
                 // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
                 // starts keyed=false, which would disarm the idle self-heal that is the only thing
@@ -6279,6 +6392,12 @@ impl RadioLoop {
                 // it served, which `remote_radio_id` still names.
                 let served = self.remote_radio_id.unwrap_or(remote_want_radio);
                 raise_flex_alarm(self.rigctld_proc.as_ref(), served, engine);
+                // What the Icom network session said as it ended, before it goes.
+                let lan_loss = self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::icom_lan)
+                    .and_then(crate::icomlan::IcomLanDaemon::loss);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
@@ -6297,12 +6416,14 @@ impl RadioLoop {
                 // A daemon death must SURVIVE in the message the rebuild publishes, not just
                 // flash before it: the probe detail lands on the same status line a moment
                 // later, so a pre-rebuild note alone would be gone before anyone read it.
-                let detail = if daemon_died {
-                    format!("the CAT helper (rigctld) stopped and was restarted. {detail}")
-                        .trim_end()
-                        .to_string()
-                } else {
-                    detail
+                let detail = match (daemon_died, lan_loss) {
+                    (true, Some(loss)) => format!("{loss}. {detail}").trim_end().to_string(),
+                    (true, None) => {
+                        format!("the CAT helper (rigctld) stopped and was restarted. {detail}")
+                            .trim_end()
+                            .to_string()
+                    }
+                    (false, _) => detail,
                 };
                 // …and so must the Flex client's alarm, ahead of it: the operator reads that the
                 // radio may still be transmitting before anything about the restart.
@@ -6349,6 +6470,14 @@ impl RadioLoop {
                 self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
                 self.cat_reopen_backoff_ms =
                     (self.cat_reopen_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
+                // …except on the Icom network connection, whose next try is the radio's retry
+                // ladder, or the operator's own after the radio ended the session or refused
+                // the login.
+                if self.rigctld_proc.is_none() {
+                    if let Some(t) = want.icom_lan_target() {
+                        self.cat_reopen_at = icom_lan_reopen_at(t.key(), now, self.cat_reopen_at);
+                    }
+                }
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -6364,6 +6493,10 @@ impl RadioLoop {
                     || keys_on_the_cat_port(&want);
                 if ok.is_some() && probed_cat && rig.has_control() {
                     detail = with_backend(detail, self.live_backend_label(&want));
+                }
+                // The Icom network client's reading of the radio, as at connect.
+                if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::icom_lan) {
+                    detail = format!("{detail} {}", d.status());
                 }
                 // Test CAT is the button an operator presses precisely BECAUSE the rig isn't
                 // answering, so this is the most valuable place of all for Hamlib's own words
@@ -6819,7 +6952,9 @@ impl RadioLoop {
                 // now a DATA submode too (see `RadioLoop::scope_yields_to_audio_waterfall`).
                 let stand_down =
                     self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted();
-                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !stand_down);
+                d.set_scope_enabled(
+                    link_carries_the_scope(&self.applied) && !keyed_now && !stand_down,
+                );
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -13435,6 +13570,13 @@ struct Transport {
     /// radio's own address it connects to. Read through [`flex_client_ip`] only.
     flex_native_cat: bool,
     flex_radio_ip: String,
+    /// The Icom network connection's address, network user and control port, and the radio
+    /// profile whose keychain entry holds its password. Read through [`Transport::icom_lan_target`]
+    /// only.
+    icom_lan_host: String,
+    icom_lan_user: String,
+    icom_lan_port: u16,
+    radio_id: u32,
     /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
@@ -13495,6 +13637,10 @@ impl Transport {
             icom_native_cat: c.icom_native_cat,
             flex_native_cat: c.flex_native_cat,
             flex_radio_ip: c.flex_radio_ip.clone(),
+            icom_lan_host: c.icom_lan_host.clone(),
+            icom_lan_user: c.icom_lan_user.clone(),
+            icom_lan_port: c.icom_lan_port,
+            radio_id: c.radio_id,
             broker_self_port: c.broker_self_port,
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
@@ -13547,6 +13693,10 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             flex_native_cat: s.flex_native_cat,
             flex_radio_ip: s.flex_radio_ip.clone(),
+            icom_lan_host: s.icom_lan_host.clone(),
+            icom_lan_user: s.icom_lan_user.clone(),
+            icom_lan_port: s.icom_lan_port,
+            radio_id: s.active_radio,
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
             omnirig_slot: s.omnirig_slot,
@@ -13600,7 +13750,43 @@ impl Transport {
             // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
             // before the client existed.
             || flex_client_ip(self) != flex_client_ip(o)
+            // The Icom network client's radio, compared only where that connection is in play,
+            // like the Flex client's: an address edit on a serial radio restarts nothing.
+            || self.icom_lan_target() != o.icom_lan_target()
             || self.broker_self_port != o.broker_self_port
+    }
+
+    /// Is CAT for this radio Nexus's own Icom network client? The rule lives in tempo-app
+    /// ([`tempo_app::settings::rig_conn_is_icom_lan`]), as [`Self::is_omnirig`]'s does, and
+    /// the engine's transmit refusal reads the same rule.
+    fn is_icom_lan(&self) -> bool {
+        tempo_app::settings::rig_conn_is_icom_lan(&self.rig_conn)
+    }
+
+    /// What the Icom network client connects to: `Some` only on that connection, for one of the
+    /// six network Icoms ([`tempo_app::settings::icom_lan_reachable`], the single source of
+    /// truth) with an IPv4 address.
+    fn icom_lan_target(&self) -> Option<crate::icomlan::Target> {
+        if !tempo_app::settings::icom_lan_reachable(
+            self.rig_model,
+            &self.rig_conn,
+            &self.icom_lan_host,
+        ) {
+            return None;
+        }
+        Some(crate::icomlan::Target {
+            host: self.icom_lan_host.trim().parse().ok()?,
+            control_port: if self.icom_lan_port == 0 {
+                tempo_app::settings::ICOM_LAN_DEFAULT_PORT
+            } else {
+                self.icom_lan_port
+            },
+            model: crate::rigmodels::icom_lan_model(self.rig_model)?,
+            user: self.icom_lan_user.trim().to_string(),
+            profile_id: self.radio_id,
+            rigctld_port: self.rigctld_port,
+            data_mode: self.icom_data_mode,
+        })
     }
 
     /// A networked rig (FlexRadio/SmartSDR or a remote rigctld): rigctld connects to
@@ -14162,6 +14348,7 @@ fn cat_ptt_mode(t: &Transport) -> PttMode {
     if tempo_app::settings::tx_audio_source_is_rear(&t.tx_audio_source)
         && crate::rigmodels::hamlib_ptt_mic_data(t.rig_model)
         && !t.is_omnirig()
+        && !t.is_icom_lan()
         && native_civ_addr(t).is_none()
     {
         PttMode::CatData
@@ -14342,7 +14529,8 @@ fn open_cat(
     // already on this port is not our shim, so attaching to it would drive whatever radio
     // THAT daemon serves while the operator believes they are on OmniRig. We must own the
     // listener. If the port is genuinely taken, the bind below fails and says so.
-    let allow_coexist = allow_coexist && !t.is_omnirig();
+    // The Icom network client never coexists either: whatever is on the port is not its daemon.
+    let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
     let listening = if allow_coexist {
         crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
     } else {
@@ -14406,7 +14594,10 @@ fn open_cat(
             std::thread::sleep(Duration::from_millis(700));
             let mut rig = Rig::with_control(Some(addr), ptt_mode);
             rig.set_slow_transport(
-                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
+                network
+                    || native_civ_addr(t).is_some()
+                    || t.is_icom_lan()
+                    || t.is_slow_serial_link(),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
@@ -14417,6 +14608,7 @@ fn open_cat(
             probe.detail = with_backend(
                 probe.detail,
                 match (proc.omni(), proc.flex()) {
+                    _ if proc.icom_lan().is_some() => "Nexus's Icom network client (Beta)",
                     (Some(d), _) => omnirig_backend_label(d.slot()),
                     (None, Some(_)) => "Nexus's Flex client (Beta)",
                     (None, None) if flex_client_ip(t).is_some() => {
@@ -14450,8 +14642,12 @@ fn open_cat(
                             probe.detail = format!("{} {e}", probe.detail);
                         }
                     }
-                    CatDaemon::Native(_) | CatDaemon::Flex(_) => {}
+                    CatDaemon::Native(_) | CatDaemon::Flex(_) | CatDaemon::IcomLan(_) => {}
                 }
+            }
+            // What the Icom network client read from the radio, and what may need a look.
+            if let Some(d) = proc.icom_lan() {
+                probe.detail = format!("{} {}", probe.detail, d.status());
             }
             (rig, Some(proc), probe)
         }
@@ -14459,6 +14655,12 @@ fn open_cat(
             Rig::vox(),
             None,
             CatProbe::status(Some(false), omnirig_start_failed(t, &e)),
+        ),
+        // The Icom network client's own words: no answer, a refused login, busy, a wait.
+        Err(e) if t.is_icom_lan() => (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), e.to_string()),
         ),
         Err(e) => (
             Rig::vox(),
@@ -14682,6 +14884,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod icom_lan;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
@@ -29724,6 +29927,10 @@ mod tests {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            radio_id: 0,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,

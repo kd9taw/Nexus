@@ -883,6 +883,14 @@ pub fn parse_fetch(body: &str) -> QrzFetch {
     }
 }
 
+/// Whether a FETCH's answer is the whole of what QRZ sent: as many records as its `COUNT` says. An
+/// answer cut short, inside a record or at the end of one, holds fewer. Logbook ▸ Check
+/// confirmations checks nothing from one, since it would take a confirmation that was cut off for
+/// a misplaced one.
+pub fn is_whole_fetch(f: &QrzFetch) -> bool {
+    crate::logbook::parse_adif(&f.adif).len() == f.count as usize
+}
+
 /// Parse a QRZ Logbook `name=value` response. A `RESULT=FAIL` whose `REASON`
 /// mentions "duplicate" maps to [`QrzPushResult::Duplicate`] (benign).
 pub fn parse_push_response(body: &str) -> QrzPush {
@@ -1859,6 +1867,18 @@ mod tests {
         assert!(!f.ok);
         assert_eq!(f.adif, "");
         assert_eq!(f.reason.as_deref(), Some("invalid api key"));
+    }
+
+    #[test]
+    fn a_fetch_is_whole_only_with_every_record_its_count_says() {
+        let two = "<CALL:4>W1AW<QSO_DATE:8>20240101<eor>\n<CALL:5>K1ABC<QSO_DATE:8>20240102<eor>\n";
+        let answer =
+            |count: u32, adif: &str| parse_fetch(&format!("RESULT=OK&COUNT={count}&ADIF={adif}"));
+        assert!(is_whole_fetch(&answer(2, two)));
+        assert!(is_whole_fetch(&answer(0, "")), "an empty book is whole");
+        // Cut at the end of a record, or inside one: fewer records than the count.
+        assert!(!is_whole_fetch(&answer(3, two)));
+        assert!(!is_whole_fetch(&answer(2, &two[..two.len() - 8])));
     }
 
     #[test]

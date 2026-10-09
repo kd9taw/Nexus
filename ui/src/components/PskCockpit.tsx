@@ -295,7 +295,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       return
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(t('psk.send.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('psk.send.txLocked'), 'info', 3500)
       return
     }
     const expanded = line
