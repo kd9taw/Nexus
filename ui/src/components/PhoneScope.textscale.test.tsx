@@ -23,6 +23,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 
+// THE BUDGET (2026-10-09). The slowest case here, "the DIAL plate is drawn 1.5× larger when the UI is…", takes 0.64 s
+// and 0.64 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
 
 let rowsServed = 0

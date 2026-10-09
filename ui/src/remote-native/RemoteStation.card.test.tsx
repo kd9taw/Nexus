@@ -3,10 +3,15 @@
 // "a "Stream this station from my browser" switch, your approved browsers with their keys, and the
 // sign-in status. The old pairing and permission options fold under "Advanced" (kept, not deleted).").
 // RemoteStation.test.tsx keeps proving the old options' behaviour, now under Advanced.
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
+
+// THE BUDGET (2026-10-09). The slowest case here, "one card: the sign-in status, then each browser with…", takes
+// 0.37 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 afterEach(() => { cleanup(); delete window.__TAURI_INTERNALS__ })
 const fingerprint = (c: string) => c.repeat(64)

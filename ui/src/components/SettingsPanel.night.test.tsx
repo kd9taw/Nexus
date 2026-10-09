@@ -17,6 +17,11 @@ import type { FeaturesApi } from '../useFeatures'
 import type { NightChoice } from '../useNight'
 import { EN } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "offers Off / On / Auto and presses only the current…", takes
+// 0.42 s and 1.05 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {

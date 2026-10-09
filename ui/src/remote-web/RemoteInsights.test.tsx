@@ -9,6 +9,11 @@ import type { ApplicationClient } from './application-client'
 import type { InsightCollection, QueryPage } from './application-query-protocol'
 import fixture from './__fixtures__/insights.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "expires displayed summaries and a failed refresh never…", takes
+// 0.61 s and 0.61 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear() })
 const page = (kind = 'statistics'): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), snapshotId: crypto.randomUUID(),
   collection: kind as InsightCollection, offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [],

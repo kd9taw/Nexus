@@ -89,6 +89,11 @@ import * as api from './api'
 import { spotNeed } from './remote-web/remote-work'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 
+// THE BUDGET (2026-10-09). The slowest case here, "K1CW: the same backend traffic as the Needed pop-out…", takes
+// 0.57 s and 0.44 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 type Call = [string, unknown[]]
 function traffic(): Call[] {
   const out: Array<{ order: number; call: Call }> = []

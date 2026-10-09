@@ -29,6 +29,11 @@ import { makeProjection, moonAt, project, subsolarPoint } from '../mapGeo'
 import { gridToLatLon } from '../grid'
 import { STANDARD_SKY } from '../features/skins'
 
+// THE BUDGET (2026-10-09). The slowest case here, "on a quiet sun it is drawn where it is overhead (world)", takes
+// 0.22 s and 0.28 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 class RO {
   observe() {}
   unobserve() {}

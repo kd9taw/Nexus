@@ -6,7 +6,7 @@
 // side on and off, many arrangements and visibilities, every pane and every arrow — the drop onto the place
 // the arrow puts the pane gives the arrow's arrangement, field for field. Then hand-worked drops that need
 // several arrows, the drops no arrow can make (null), and the hook's one undoable step into the same record.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import {
   PANE_COLUMNS,
@@ -32,6 +32,11 @@ import {
   type OperatePanelId,
   type PhonePanelId,
 } from './panelState'
+
+// THE BUDGET (2026-10-09). The slowest case here, "Phone, the left side showing: every pane, every arrow…", takes
+// 0.57 s and 0.58 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const MOVES: PaneMove[] = ['up', 'down', 'left', 'right']
 const last = <T,>(xs: readonly T[]): T | undefined => xs[xs.length - 1]

@@ -25,9 +25,14 @@
 // Nobody's scope may change because they installed a build that moved a control. A stored value
 // is read as an OPT-IN, and every other state of storage — absent, blank, stale, written by some
 // other build, naming a length this build does not ship — is the default.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
+
+// THE BUDGET (2026-10-09). The slowest case here, "a stale, blank or foreign stored value is the default…", takes
+// 0.26 s and 0.17 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 /** The window each rig scope used before the scale record (per window, shared by Phone and CW). */
 const LEGACY_WIN_KEY = 'nexus.phonescope.win'

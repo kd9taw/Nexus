@@ -15,6 +15,11 @@ import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, PskState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "draws it in the header, and → CALL and LP point at the…", takes
+// 0.81 s and 1.41 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const IDLE = {
   armed: true, afcHz: 0, signal: false, centerHz: 1000, text: '', charConf: [], sending: false,
   latched: false, keyerError: null,

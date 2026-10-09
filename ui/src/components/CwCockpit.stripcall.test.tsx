@@ -27,6 +27,11 @@ import { EN } from '../i18n'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
 
+// THE BUDGET (2026-10-09). The slowest case here, "…and neither the call just logged nor the guess the…", takes
+// 3.68 s and 3.68 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const engine = { peer: null as string | null, keyed: [] as string[] }
 
 /** `expand_cw` for the tokens these macros carry, in the Illinois QSO Party from Cook County. */

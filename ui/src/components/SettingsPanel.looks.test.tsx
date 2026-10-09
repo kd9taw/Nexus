@@ -19,6 +19,11 @@ import { LOOKS, lookAxesOf, type LookAxes } from '../features/looks'
 import { DEFAULT_SELECTION } from '../features/paletteRoles'
 import { EN } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "offers the six looks in order, and names the one on…", takes
+// 0.55 s and 0.58 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {

@@ -70,6 +70,11 @@ import { ConnectView } from './ConnectView'
 import { t } from '../i18n'
 import { __resetStreetMapsForTests, STREET_MAP_MANIFEST_URL } from '../features/streetMaps'
 
+// THE BUDGET (2026-10-09). The slowest case here, "shows a running download's percent on the choice", takes 0.57 s
+// and 0.55 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 class RO {
   observe() {}
   unobserve() {}

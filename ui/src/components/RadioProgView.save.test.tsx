@@ -29,6 +29,11 @@ vi.mock('../toast', async (importOriginal) => ({
 
 import { RadioProgView } from './RadioProgView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "saves the machine with every field the operator listed…", takes
+// 0.26 s and 0.32 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** One machine. Out `mhz`, in 600 kHz below, a CTCSS tone, at Janesville unless told otherwise. */
 function machine(call: string, mhz: number, over: Partial<RepeaterRecord> = {}, chan: Partial<RepeaterSearchRow['channel']> = {}): RepeaterSearchRow {
   const record: RepeaterRecord = {

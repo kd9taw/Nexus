@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
@@ -12,6 +12,11 @@ import { useSkin } from './useSkin'
 import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
 import { SKINS } from './features/skins'
 import { usePaneWidths } from './usePaneWidths'
+
+// THE BUDGET (2026-10-09). The slowest case here, "seeds exactly the widths the hook publishes, for every…", takes
+// 0.28 s and 0.25 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY

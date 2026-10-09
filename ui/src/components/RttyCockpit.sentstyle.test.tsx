@@ -26,6 +26,11 @@ import { parseRules, cmpSpec, type Rule } from '../cssCascade'
 import { RttyCockpit } from './RttyCockpit'
 import type { RttyState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "draws a character WE keyed in the accent colour with a…", takes
+// 0.37 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 
 // A CQ off the air, then our answer — the second half keyed by this station.

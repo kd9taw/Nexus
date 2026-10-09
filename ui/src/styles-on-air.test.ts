@@ -60,6 +60,11 @@ import {
 } from './cssCascade'
 import type { QsoStatus, RadioStatus } from './types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Operate's strip caption stays quiet when not keyed: no…", takes
+// 0.35 s and 0.32 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('./api', () => ({
   appVersion: vi.fn(() => Promise.resolve('0.0.0')),
   haltTx: vi.fn(() => Promise.resolve(null)),

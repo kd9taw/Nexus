@@ -47,6 +47,11 @@ vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (ru
 import { getSettings, setFlexPanSpan, setScopeRef, setScopeSpan, setYaesuScopeMode } from '../api'
 import { pushToast } from '../toast'
 
+// THE BUDGET (2026-10-09). The slowest case here, "the Icom span chips and reference are live with…", takes 0.27 s
+// and 0.26 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const clients: OperationClient[] = []
 beforeAll(() => {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver

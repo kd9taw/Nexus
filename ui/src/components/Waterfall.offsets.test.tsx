@@ -34,6 +34,11 @@ import { setRxOffset, setTxOffset } from '../api'
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import type { SpectrumRenderer } from '../spectrum'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Std view, the RX marker walked across the passband", takes 0.35 s
+// and 0.23 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', () => ({
   getSpectrumRow: vi.fn(() => Promise.resolve({ row: [], loHz: 200, hiHz: 4000 })),
   setRxOffset: vi.fn(() => Promise.resolve(null)),

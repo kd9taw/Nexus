@@ -26,6 +26,11 @@ import { setFrequency } from '../api'
 import { pushToast } from '../toast'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
+// THE BUDGET (2026-10-09). The slowest case here, "tunes to a typed OFF-BAND frequency, with an empty band…", takes
+// 0.25 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', async (importOriginal) => {
   const nada = () => Promise.resolve(null)
   // ⭐ DERIVED FROM THE REAL MODULE — see the note in stop-line.test.tsx. A hand-kept list omits

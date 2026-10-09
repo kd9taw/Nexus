@@ -18,6 +18,11 @@ import * as api from '../api'
 import { EN } from '../i18n/en'
 import { SstvViewer, SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY, setViewerPicture } from './SstvViewer'
 
+// THE BUDGET (2026-10-09). The slowest case here, "steps to a neighbour rather than going blank when the…", takes
+// 4.00 s and 4.00 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   closePanelWindow: vi.fn(async () => {}),

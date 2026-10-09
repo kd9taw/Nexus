@@ -8,6 +8,12 @@ import { StationDataContext } from '../stationAccess'
 import { installApplicationTransport } from '../applicationTransport'
 import { fieldDayPage } from './__fixtures__/field-day-page'
 import { t } from '../i18n'
+
+// THE BUDGET (2026-10-09). The slowest case here, "uses the real event boards and disclosures without…", takes 0.34 s
+// and 0.37 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 afterEach(()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks()})
 function setup(invoke=vi.fn(async():Promise<unknown>=>fieldDayPage())) {
  const source=new RemoteCollections({invoke,supports:()=>true,getPhase:()=> 'ready'} as unknown as ApplicationClient)

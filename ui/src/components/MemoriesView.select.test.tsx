@@ -19,6 +19,11 @@ import { MemoriesView } from './MemoriesView'
 import { ConfirmHost } from '../confirm'
 import { addMemory, emptyBank, memoriesStore, type MemoriesBank } from '../features/memories'
 
+// THE BUDGET (2026-10-09). The slowest case here, "counts what is selected and deletes exactly that", takes 0.33 s
+// and 0.56 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const toast = vi.hoisted(() => ({ push: vi.fn() }))
 vi.mock('../toast', () => ({ pushToast: toast.push }))
 

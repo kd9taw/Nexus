@@ -19,6 +19,11 @@ import type { OperationState } from './operation-protocol'
 import type { ControlCapability } from './station-operation'
 import type { AppSnapshot, BandChannel } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "a band dropdown stays enabled and keeps its options…", takes
+// 0.28 s and 0.26 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const plan: BandChannel[] = [
   { band: '40m', dialMhz: 7.15, mode: 'LSB', label: '40m', group: 'HF', tx: true, note: '' },
   { band: '20m', dialMhz: 14.2, mode: 'USB', label: '20m', group: 'HF', tx: true, note: '' },

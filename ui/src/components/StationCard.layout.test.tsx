@@ -32,7 +32,7 @@
 // own CSSOM cannot be the source of values: it silently DROPS a declaration it cannot parse, and
 // `flex: 1 1 min(6.5em, 100% - 20px)` — the call column's floor — is one (checked: it reads back
 // as ''). Its getComputedStyle also never expands `flex`, `flex-flow` or `overflow`.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -41,6 +41,11 @@ import { saveWatchlist } from '../watchlist'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { NEED_TIER } from '../features/needs'
 import { cmpSpec, parseRules } from '../cssCascade'
+
+// THE BUDGET (2026-10-09). The slowest case here, "1. line 1 wraps, so a chip that does not fit starts a…", takes
+// 0.29 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 // jsdom leaves `import.meta.url` a non-file URL; vitest's cwd is the `ui` project root. Comment
 // bodies are blanked first, so prose can never read as a declaration.

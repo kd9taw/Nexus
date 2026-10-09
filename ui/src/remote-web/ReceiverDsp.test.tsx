@@ -31,6 +31,11 @@ vi.mock('../components/SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))
 import { getSettings, getCatCwUnprovenRigModels, cwDecode, setAgc, setFrequency, setRigFunc, setPtt } from '../api'
 
+// THE BUDGET (2026-10-09). The slowest case here, "the actual cw nb toggle waits for radio readback and a…", takes
+// 0.29 s and 0.31 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const clients: OperationClient[] = []
 beforeAll(() => {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver

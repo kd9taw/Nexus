@@ -50,6 +50,11 @@ import { DEFAULT_SLOTS, type PaneId, type SlotId } from '../features/connectConf
 import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
 import { pastTheSwitch } from './ConnectView.testkit'
 
+// THE BUDGET (2026-10-09). The slowest case here, "is the Spots board in the slot: its rows, every mode on…", takes
+// 0.40 s and 0.37 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const spot = (call: string, band: string, freqMhz: number, mode: string, submode: string | null = null): SpotRow =>
   ({
     call, entity: 'Somewhere', zone: 5, state: null, band, freqMhz, mode, submode,

@@ -20,7 +20,7 @@
 // the app has: MODES (the base modes, every colour-role set, the worst-case themes) and SKIN_MODES
 // (all ten themes in each of their modes). The positive controls at the end put back what shipped
 // and watch each check refuse it.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -44,6 +44,12 @@ import {
   type Rgb,
   type Rule,
 } from '../../cssCascade'
+
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "every band name is drawn in the theme’s
+// --text, never…", takes 0.57 s and 0.48 s on one core (two runs); a loaded full suite on this box has run cases up
+// to 20 times slower than one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still
+// fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const blank = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 // By path, not `new URL(…, import.meta.url)`: under jsdom Vite rewrites that form as an asset URL.

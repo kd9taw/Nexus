@@ -23,6 +23,11 @@ import { agcRange, applyGainZero, flattenRow, parkFloor, WF_DB_SPAN, WF_FLOOR_PC
 import { autoRange } from '../spectrum/scaleRange'
 import type { DisplayRange, SpectrumFrame, SpectrumRenderer, SpectrumScene } from '../spectrum'
 
+// THE BUDGET (2026-10-09). The slowest case here, "one draw per committed row, and none while the source…", takes
+// 0.57 s and 0.57 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', () => ({ getSpectrumRow: vi.fn() }))
 
 /** Which rule the waterfall reads, switched per case (the shipped value is checked below). */

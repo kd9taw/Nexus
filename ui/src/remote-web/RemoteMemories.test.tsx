@@ -12,6 +12,11 @@ import type { ApplicationClient } from './application-client'
 import type { QueryPage } from './application-query-protocol'
 import fixture from './__fixtures__/memories.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "uses the real Memories list/grid, groups, favorites and…", takes
+// 0.26 s and 0.29 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); localStorage.clear() })
 const page = (): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), snapshotId: crypto.randomUUID(),
   collection: 'memories', offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [],

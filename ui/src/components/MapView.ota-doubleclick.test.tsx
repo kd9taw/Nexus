@@ -53,6 +53,11 @@ vi.mock('../api', () => ({
 
 import { callStation, setPtt, setTxEnabled, startCq, callCq, haltTx } from '../api'
 
+// THE BUDGET (2026-10-09). The slowest case here, "tunes and tags the park, and never touches the…", takes 0.26 s and
+// 0.31 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core,
+// past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // jsdom has no ResizeObserver; MapView installs one on its wrap ref on mount.
 class RO {
   observe() {}

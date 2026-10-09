@@ -14,6 +14,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { chainOf, contrast, expandWith, parseRules, toRgb, tokensAt, winnerAt, type Mode } from '../cssCascade'
 
+// THE BUDGET (2026-10-09). The slowest case here, "THE DEAD-MAN, the page's half: what is held on the…", takes 0.52 s
+// and 0.52 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
 function state(phase: OperationState['phase'], extra: Partial<OperationState> = {}): OperationState {

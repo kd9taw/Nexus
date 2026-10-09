@@ -27,6 +27,11 @@ import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/
 import type { QueryPage } from '../remote-web/application-query-protocol'
 import type { LoggedQso } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "a Remote browser without the station’s edit gets the…", takes
+// 0.35 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()

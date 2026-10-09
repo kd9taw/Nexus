@@ -31,6 +31,11 @@ import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-libra
 import { SatellitesView } from './SatellitesView'
 import type { AppSnapshot, SatDetail, SatTrackStatus, SatTransponderHeld } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "survives a pass ARMING and reaching AOS under it", takes 2.03 s
+// and 2.03 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn(() => Promise.resolve(null)),
   getSatPassNeeds: vi.fn(() => Promise.resolve([])),

@@ -15,6 +15,11 @@ import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, Settings } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "'use one radio' chosen after the view opened stays…", takes 0.33 s
+// and 0.31 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 let station: Record<string, unknown> = {}
 /** How long a save takes to land at the backend, in ms (0: at once). */
 let writeDelay = 0

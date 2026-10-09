@@ -63,6 +63,11 @@ vi.mock('../api', () => ({
 }))
 import { MapView, DEFAULT_LAYERS } from './MapView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "not a flip in the main window", takes 1.21 s and 1.20 s on one
+// core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core, past vitest's
+// 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** Every string the map measured: a drawn bird's label is measured once per draw. */
 const measured: string[] = []
 function recordingCtx(): CanvasRenderingContext2D {

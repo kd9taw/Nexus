@@ -18,6 +18,11 @@ import { STREAM_INTERVAL } from './application-stream-protocol'
 import type { StreamTopic } from './application-stream-protocol'
 import { OTA_COMMAND, POUNCE_COMMAND, QUERY_COMMAND } from './application-query-protocol'
 
+// THE BUDGET (2026-10-09). The slowest case here, "alert polls never age get_snapshot into 'stale', and…", takes
+// 0.66 s and 1.72 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 afterEach(() => vi.useRealTimers())
 
 const TOPICS: StreamTopic[] = ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters']

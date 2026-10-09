@@ -31,7 +31,7 @@
 // `color` an ANCESTOR sets is not modelled (the Settings suite mounts the real nesting); and
 // nothing here can see a UA sheet, so "the browser's default placeholder colour" is inferred
 // from the spec, not observed.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
@@ -48,6 +48,11 @@ import {
   type Rgb,
   type Rule,
 } from './cssCascade'
+
+// THE BUDGET (2026-10-09). The slowest case here, "it is subordinate to the entered value, and still…", takes 0.40 s
+// and 2.30 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 // jsdom leaves `import.meta.url` a non-file URL, so paths come off the vitest root (ui/).
 const SRC_DIR = resolve(process.cwd(), 'src') + '/'

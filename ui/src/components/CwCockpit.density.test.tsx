@@ -47,6 +47,12 @@ import { CwCockpit } from './CwCockpit'
 import { loadSheets, css, pxOf, borderY, padY, marginY, lineBox, fontSizeOf, atToken } from '../cssCascade.testkit'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "the leading column leaves DECODE more than four lines…", takes
+// 0.81 s and 0.80 s on one core (two runs), nearly all of it CPU work (3.31 s at a third of a CPU); a loaded full
+// suite on this box has run cases up to 20 times slower than one core, 16.0 s for this one. 20 s holds that; a test
+// that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
   wpm: 22,

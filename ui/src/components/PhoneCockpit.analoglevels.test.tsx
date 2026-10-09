@@ -25,6 +25,11 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "offers an AF gain slider in the header when the rig…", takes
+// 0.18 s and 0.52 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Auto-mock every api export rather than listing the ones this file uses. THE AF SLIDER IS A
 // CHILD OF `CockpitHeader`, so unlike `PhoneCockpit.notch.test.tsx` the header cannot be
 // stubbed away here — and mounting it for real pulls in RotorStrip and the band plan, whose

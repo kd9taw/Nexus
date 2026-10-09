@@ -17,6 +17,11 @@ import type { FeaturesApi } from '../useFeatures'
 import type { Settings } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Save: 'use one radio' chosen after Settings opened…", takes 0.52 s
+// and 0.48 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {

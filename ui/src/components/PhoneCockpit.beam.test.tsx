@@ -30,6 +30,11 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { pointRotatorAtCall } from '../api'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "hands the strip the call the operator typed, so the…", takes
+// 0.37 s and 0.41 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({})),
   setPtt: vi.fn(async () => {}),

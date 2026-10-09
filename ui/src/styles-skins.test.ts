@@ -37,7 +37,7 @@
 // watch each check refuse it: a TX-red accent, a Nord-grey panel (#2e3440: its ON AIR fill stands
 // only 2.6:1 off it), a block that names --tx, a stray value, a night that does not dim, a
 // contrast-mode surface a theme took over, and an accent fill its own ink cannot be read on.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
@@ -73,6 +73,11 @@ import {
 } from './cssCascade'
 import { PALETTE_ROLES, isLockedToken, type PaletteRole } from './features/paletteRoles'
 import { MAP_TOKENS, SKINS, SKIN_TOKENS, SKY_TOKENS, STANDARD_MAP, STANDARD_SKY, type Skin } from './features/skins'
+
+// THE BUDGET (2026-10-09). The slowest case here, "an accent fill its own ink cannot be read on is refused", takes
+// 0.71 s and 0.65 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const blank = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const read = (name: string) => readFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), 'utf8')

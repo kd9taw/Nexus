@@ -20,6 +20,11 @@ import { StationControlContext } from '../stationAccess'
 import * as toast from '../toast'
 import type { AppSnapshot, LoggedQso, RttyState } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "clearing the Call box clears the log callsign", takes 1.05 s and
+// 1.04 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core,
+// past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Solid copy with a faint run through the middle of the compound call, so the transcript
 // renders as SEVERAL spans and the call straddles two of them.
 const TEXT = 'CQ TEST DE VE3/K1ABC VE3/K1ABC CQ\r\n'
