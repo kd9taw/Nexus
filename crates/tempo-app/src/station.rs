@@ -171,7 +171,9 @@ impl DiagnosticsInputs {
                     std::ops::ControlFlow::Continue(())
                 },
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            // Never a diagnosis without a contact logged before it was asked (P4).
+            .or_refuse()?;
         let recents: Vec<&tempo_core::reconcile::ReconcileSummary> = self.recents.iter().collect();
         let report = tempo_core::diagnostics::diagnose_rows(
             &rows,

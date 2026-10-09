@@ -22,8 +22,9 @@
 //! 3. **Read your writes (P4).** A read first waits for every change made before its rows were
 //!    taken, so a fold asked for straight after a contact is logged sees the contact. If the
 //!    writer is behind (a bulk import, a slow disk) past [`tempo_app::logstore::READ_WAIT`], the
-//!    fold answers from the store as it stands — and that answer is NOT kept, so the next ask
-//!    reads again.
+//!    fold is REFUSED ([`Freshness::or_refuse`]) and nothing is kept, so the caller's next ask
+//!    reads again. It never answers from the store as it stands: that answer left out the
+//!    contact just logged, and the operator saw needs and statistics without it.
 //! 4. **Kept against the narrowest watermark that is still correct** ([`Tally`]).
 //!
 //! # The watermarks, and where SPEC-2 v3 §4.4 had two of them wrong
@@ -148,22 +149,17 @@ const PENDING: Narrow = Narrow {
 };
 
 /// Keep a fold's answer against `mark`, and hand it back — unless the read behind it was stale
-/// (the writer had not taken every change made before it was asked), when the answer is handed
-/// back and NOT kept, so the next asker reads the store again.
+/// (the writer had not taken every change made before it was asked), when the fold is refused
+/// ([`Freshness::or_refuse`]) and nothing is kept, so the next asker reads the store again.
 fn keep<K: PartialEq, V>(
     tally: &Tally<K, V>,
     mark: u64,
     key: K,
     value: V,
-    fresh: &Freshness,
-) -> Arc<V> {
-    match fresh {
-        Freshness::Current => tally.put(mark, key, value),
-        Freshness::Stale(_) => {
-            crate::note_log_tally();
-            Arc::new(value)
-        }
-    }
+    fresh: Freshness,
+) -> Result<Arc<V>, String> {
+    fresh.or_refuse()?;
+    Ok(tally.put(mark, key, value))
 }
 
 /// What a pass says when the store could not be read. A fold that fails says so — it never
@@ -234,7 +230,7 @@ pub(crate) fn needs_finish(
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    Ok(keep(kept, mark, (), needs, &fresh))
+    keep(kept, mark, (), needs, fresh)
 }
 
 /// The award-needs model of the whole log, folded again only when the log's content moves, with
@@ -276,13 +272,7 @@ pub(crate) fn awards_kept(
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    Ok(keep(
-        &tallies.awards,
-        mark,
-        my_call,
-        awards.summary(),
-        &fresh,
-    ))
+    keep(&tallies.awards, mark, my_call, awards.summary(), fresh)
 }
 
 /// The native award fold over records in hand — the reference Remote's read is held to in its
@@ -349,7 +339,7 @@ pub(crate) fn log_stats(
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    Ok(keep(&tallies.stats, mark, my_call, stats.summary(), &fresh))
+    keep(&tallies.stats, mark, my_call, stats.summary(), fresh)
 }
 
 // ── the Journey ─────────────────────────────────────────────────────────────
@@ -395,7 +385,7 @@ pub(crate) fn journey_kept(
         .map_err(unreadable)?;
     let grid = (!key.grid.is_empty()).then_some(key.grid.as_str());
     let model = propagation::journey_model(&qsos, &key.call, grid, key.power_w, key.streak);
-    Ok(keep(&tallies.journey, mark, key, model, &fresh))
+    keep(&tallies.journey, mark, key, model, fresh)
 }
 
 /// One logged record as the Journey reads it.
@@ -480,7 +470,8 @@ pub(crate) fn hunted_today(
         }
         ControlFlow::Continue(())
     })
-    .map_err(unreadable)?;
+    .map_err(unreadable)?
+    .or_refuse()?;
     Ok(propagation::HuntedActivations::from_log(worked))
 }
 
@@ -514,7 +505,8 @@ pub(crate) fn newest_logged_grid(rows: &LogRows, peer: &str) -> Result<Option<St
             ControlFlow::Continue(())
         },
     )
-    .map_err(unreadable)?;
+    .map_err(unreadable)?
+    .or_refuse()?;
     Ok(best.map(|(_, g)| g))
 }
 
@@ -544,7 +536,7 @@ pub(crate) fn upload_health_kept(
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    Ok(keep(&tallies.upload_health, mark, (), health, &fresh))
+    keep(&tallies.upload_health, mark, (), health, fresh)
 }
 
 // ── the oldest LoTW upload awaiting its echo ────────────────────────────────
@@ -563,7 +555,8 @@ pub(crate) fn oldest_pending_lotw_date(rows: &LogRows) -> Result<Option<String>,
         }
         ControlFlow::Continue(())
     })
-    .map_err(unreadable)?;
+    .map_err(unreadable)?
+    .or_refuse()?;
     Ok(oldest.map(tempo_core::logbook::lotw_pull_date))
 }
 
@@ -589,7 +582,8 @@ pub(crate) fn compound_calls_to_seed(rows: &LogRows) -> Result<Vec<String>, Stri
             ControlFlow::Continue(())
         }
     })
-    .map_err(unreadable)?;
+    .map_err(unreadable)?
+    .or_refuse()?;
     Ok(calls)
 }
 
@@ -604,6 +598,7 @@ mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
     use propagation::model::Band;
     use propagation::OperatorNeeds;
+    use tempo_app::logstore::NOT_ANSWERED;
     use tempo_core::logbook::sqlite::{Resolved, WriteHold};
     use tempo_core::logbook::{UploadDetail, UploadOutcome};
 
@@ -1348,17 +1343,18 @@ mod tests {
     /// Ask `fold` straight after `contact` is logged — with the store's write lock held
     /// elsewhere, so the contact is not on disk yet — and check from another thread, while the
     /// fold waits, that the Engine lock is free; then let the write through. What the fold
-    /// answered, and whether it had to wait.
+    /// answered, and whether it had to wait. Its caller's part too: a fold refused because the
+    /// write had still not landed when its wait ran out (a loaded machine) is asked again.
     fn asked_straight_after<T: Send>(
         d: &Dir,
         e: &crate::SharedEngine,
         contact: QsoRecord,
-        fold: impl FnOnce() -> T + Send,
+        mut fold: impl FnMut() -> Result<T, String> + Send,
     ) -> T {
         let hold = WriteHold::take(&d.db()).unwrap();
         e.lock().unwrap().log_qso(contact);
         std::thread::scope(|s| {
-            let asked = s.spawn(fold);
+            let asked = s.spawn(move || answered(&mut fold));
             std::thread::sleep(std::time::Duration::from_millis(250));
             assert!(
                 !asked.is_finished(),
@@ -1374,6 +1370,21 @@ mod tests {
             drop(hold);
             asked.join().unwrap()
         })
+    }
+
+    /// `fold`'s answer, asked again while it is refused for a change still on its way to disk
+    /// ([`NOT_ANSWERED`]), for up to a test's budget ([`tempo_app::test_util::TEST_WAIT`]). Any
+    /// other refusal fails, and the first answer is the one returned: never a retry until green.
+    fn answered<T>(fold: &mut impl FnMut() -> Result<T, String>) -> T {
+        let deadline = std::time::Instant::now() + tempo_app::test_util::TEST_WAIT;
+        loop {
+            match fold() {
+                Ok(answer) => return answer,
+                Err(why)
+                    if why.starts_with(NOT_ANSWERED) && std::time::Instant::now() < deadline => {}
+                Err(why) => panic!("the fold was refused: {why}"),
+            }
+        }
     }
 
     /// A contact to log in the P4 checks: FT8 on 20 m, now, with a grid.
@@ -1415,23 +1426,23 @@ mod tests {
         );
 
         let needs = asked_straight_after(&d, &e, contact("ZD7AA", NOW as u64), || {
-            needs_kept(&e, &tallies).unwrap().0
+            needs_kept(&e, &tallies).map(|(needs, _)| needs)
         });
         assert!(worked(&needs), "the needs model has the contact");
 
         let awards = asked_straight_after(&d, &e, contact("ZD7AB", NOW as u64), || {
-            awards_kept(&e, &tallies).unwrap()
+            awards_kept(&e, &tallies)
         });
         assert_eq!(*awards, awards_old(&records(&e), MY_CALL), "the awards");
 
         let before = log_stats(&e, &tallies).unwrap().total;
         let stats = asked_straight_after(&d, &e, contact("ZD7AC", NOW as u64), || {
-            log_stats(&e, &tallies).unwrap()
+            log_stats(&e, &tallies)
         });
         assert_eq!(stats.total, before + 1, "the statistics count it");
 
         let journey = asked_straight_after(&d, &e, contact("ZD7AD", NOW as u64), || {
-            journey_kept(&e, &tallies).unwrap().summary(NOW).total_qsos
+            journey_kept(&e, &tallies).map(|model| model.summary(NOW).total_qsos)
         });
         assert_eq!(journey as usize, records(&e).len(), "the Journey counts it");
 
@@ -1440,7 +1451,7 @@ mod tests {
         park.ota.their_ref = Some("US-9999".into());
         let hunted = asked_straight_after(&d, &e, park, || {
             let rows = e.lock().unwrap().log_rows();
-            hunted_today(&rows, NOW).unwrap()
+            hunted_today(&rows, NOW)
         });
         assert!(
             !hunted.needed("US-9999", "K9PRK", NOW),
@@ -1449,7 +1460,7 @@ mod tests {
 
         let grid = asked_straight_after(&d, &e, contact("K9GRD", NOW as u64), || {
             let rows = e.lock().unwrap().log_rows();
-            newest_logged_grid(&rows, "K9GRD").unwrap()
+            newest_logged_grid(&rows, "K9GRD")
         });
         assert_eq!(grid.as_deref(), Some("RH91"), "its grid is found");
 
@@ -1459,9 +1470,7 @@ mod tests {
             when_unix: 1_999_999_999,
             detail: None,
         });
-        let health = asked_straight_after(&d, &e, stamped, || {
-            upload_health_kept(&e, &tallies).unwrap()
-        });
+        let health = asked_straight_after(&d, &e, stamped, || upload_health_kept(&e, &tallies));
         assert_eq!(
             health.qrz.last_success_unix,
             Some(1_999_999_999),
@@ -1476,7 +1485,7 @@ mod tests {
         });
         let oldest = asked_straight_after(&d, &e, pending, || {
             let rows = e.lock().unwrap().log_rows();
-            oldest_pending_lotw_date(&rows).unwrap()
+            oldest_pending_lotw_date(&rows)
         });
         assert_eq!(
             oldest.as_deref(),
@@ -1486,7 +1495,7 @@ mod tests {
 
         let seeded = asked_straight_after(&d, &e, contact("K9SED/P", NOW as u64), || {
             let rows = e.lock().unwrap().log_rows();
-            compound_calls_to_seed(&rows).unwrap()
+            compound_calls_to_seed(&rows)
         });
         assert_eq!(
             seeded.first().map(String::as_str),
@@ -1496,13 +1505,111 @@ mod tests {
 
         let diagnosed = asked_straight_after(&d, &e, contact("K9DGN", NOW as u64), || {
             let inputs = e.lock().unwrap().confirmation_diagnostics_inputs();
-            inputs.diagnose(NOW, test_country).unwrap().1
+            inputs.diagnose(NOW, test_country).map(|(_, n)| n)
         });
         assert_eq!(
             diagnosed,
             records(&e).len(),
             "every contact diagnosed, the new one too"
         );
+        settle(&e);
+    }
+
+    /// ★ P4 WHEN THE WRITER IS BEHIND: every pass asked while the contact logged before it is
+    /// still on its way to disk — held there for the whole of `READ_WAIT` — is REFUSED, never
+    /// answered without the contact; asked again once the store holds it, each answers with it.
+    /// What a slow disk did before: the pass answered from the store as it stood, and the
+    /// operator saw needs and statistics that left out the contact just logged.
+    #[test]
+    fn a_fold_whose_wait_runs_out_is_refused_never_answered_without_the_contact() {
+        let d = Dir::new("p4-behind");
+        std::fs::write(d.log(), synthetic_log(200, 0xFEED)).unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let before = log_stats(&e, &tallies).unwrap().total;
+        let hold = WriteHold::take(&d.db()).unwrap();
+        e.lock().unwrap().log_qso(contact("ZD7AA", NOW as u64));
+        let rows = || e.lock().unwrap().log_rows();
+        // Every pass at once, each saying what it answered: they all wait on the one held write.
+        let asked: Vec<(&str, Result<String, String>)> = std::thread::scope(|s| {
+            let passes = [
+                (
+                    "the needs model",
+                    s.spawn(|| {
+                        needs_kept(&e, &tallies)
+                            .map(|(n, _)| format!("{} entities", n.worked_entity_names().len()))
+                    }),
+                ),
+                (
+                    "the awards",
+                    s.spawn(|| awards_kept(&e, &tallies).map(|a| format!("{} contacts", a.qsos))),
+                ),
+                (
+                    "the statistics",
+                    s.spawn(|| log_stats(&e, &tallies).map(|st| format!("{} contacts", st.total))),
+                ),
+                (
+                    "the Journey",
+                    s.spawn(|| {
+                        journey_kept(&e, &tallies)
+                            .map(|j| format!("{} contacts", j.summary(NOW).total_qsos))
+                    }),
+                ),
+                (
+                    "today's parks",
+                    s.spawn(|| hunted_today(&rows(), NOW).map(|_| "today's parks".to_string())),
+                ),
+                (
+                    "a grid",
+                    s.spawn(|| newest_logged_grid(&rows(), "ZD7AA").map(|g| format!("{g:?}"))),
+                ),
+                (
+                    "the upload health",
+                    s.spawn(|| upload_health_kept(&e, &tallies).map(|_| "the health".to_string())),
+                ),
+                (
+                    "the oldest pending upload",
+                    s.spawn(|| oldest_pending_lotw_date(&rows()).map(|o| format!("{o:?}"))),
+                ),
+                (
+                    "the compound calls",
+                    s.spawn(|| compound_calls_to_seed(&rows()).map(|c| format!("{c:?}"))),
+                ),
+                (
+                    "the diagnosis",
+                    s.spawn(|| {
+                        let inputs = e.lock().unwrap().confirmation_diagnostics_inputs();
+                        inputs
+                            .diagnose(NOW, test_country)
+                            .map(|(_, n)| format!("{n} contacts"))
+                    }),
+                ),
+            ];
+            passes
+                .map(|(pass, asked)| (pass, asked.join().unwrap()))
+                .into()
+        });
+        drop(hold);
+        let answered: Vec<String> = asked
+            .iter()
+            .filter_map(|(pass, a)| a.as_ref().ok().map(|what| format!("{pass} ({what})")))
+            .collect();
+        assert!(
+            answered.is_empty(),
+            "answered without the contact: {}",
+            answered.join(", ")
+        );
+        for (pass, answer) in &asked {
+            let why = answer.as_ref().unwrap_err();
+            assert!(why.starts_with(NOT_ANSWERED), "{pass}: {why}");
+        }
+        e.caught_up();
+        assert_eq!(
+            log_stats(&e, &tallies).unwrap().total,
+            before + 1,
+            "asked again, the statistics count it"
+        );
+        assert_every_fold_agrees(&e, &tallies, "asked again once the store holds the contact");
         settle(&e);
     }
 
