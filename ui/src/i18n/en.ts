@@ -11282,6 +11282,11 @@ export const EN = {
   'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
   'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
   'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
+  'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
+  'rotor.pane.aim.point.label': 'Point',
+  'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.unknown': 'location unknown',
+  'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

@@ -1363,6 +1363,33 @@ button.nb-chip:hover {
   background: var(--state-weak);
   color: var(--panel);
 }
+/* Line 2 beside a cockpit: the call in its log entry, the bearing and distance to it, and Point.
+   It wraps inside the column like the entry row above it, and Point is drawn as Connect's ▶ Work. */
+.rotor-aim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-aim-to {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.rotor-aim-why {
+  color: var(--text-dim);
+}
+.rotor-aim-point {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rotor-aim-point:hover {
+  border-color: var(--accent);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);

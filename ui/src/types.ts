@@ -2728,6 +2728,15 @@ export interface PointedAt {
   country: string | null
 }
 
+/** What `rotator_bearing_to_call` answers for a call, without turning anything: what a short-path
+ *  point at it answers (`pointed`, the same resolver), and the great-circle distance to the same
+ *  point in km. When there is no bearing it refuses with a code instead: `noGrid` (the operator's
+ *  own grid is not set) or `unknownStation` (nothing places the station). */
+export interface CallBearing {
+  pointed: PointedAt
+  km: number
+}
+
 /** Result of a QRZ Logbook push (one-QSO upload). `result` is the outcome tag;
  *  `duplicate` is the benign "already in your QRZ logbook". */
 export interface QrzPushResult {
