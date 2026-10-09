@@ -584,6 +584,9 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
+  // are typed, and the strip words them from the catalog.
+  'features/esm.ts',
 ]
 
 /**
