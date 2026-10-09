@@ -1388,7 +1388,7 @@ mod tests {
         // …and ARRL Field Day's meta lists no objectives.
         assert!(v
             .get("objectives")
-            .map_or(true, |o| o.as_array().unwrap().is_empty()));
+            .is_none_or(|o| o.as_array().unwrap().is_empty()));
     }
 
     // -- the cached source -------------------------------------------------

@@ -345,9 +345,11 @@ fn post_pota(spot: &SpotPost) -> Result<SpotAnswer, String> {
     propagation::live::pota::post_spot(env!("CARGO_PKG_VERSION"), spot)
 }
 
+/// The cluster half, after [`Context::confirmed`] — which refuses first while a contest that
+/// allows spotting only over amateur RF runs — so it queues without asking again.
 #[cfg(not(test))]
 fn post_cluster(freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-    crate::post_spot(freq_mhz, call.into(), comment.into())
+    crate::queue_spot(freq_mhz, call.into(), comment.into())
 }
 
 /// The test build's doors. Neither names the cluster, so a refusal reads as `failed`, never as
