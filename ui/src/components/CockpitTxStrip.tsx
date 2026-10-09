@@ -5,6 +5,7 @@ import { useStationControl, useStationStopControl, useStationStopProgress } from
 import { t } from '../i18n'
 import type { AppSnapshot, RadioStatus } from '../types'
 import { isOnAir } from '../types'
+import { RadioTuneNote } from './RadioTuneNote'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -194,6 +195,9 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
               ? t('operate.strip.state.receiving')
               : t('operate.strip.state.txOff')}
       </span>
+      {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
+          child, on a line of its own, so it never moves the controls or the TX state. */}
+      {onTune && <RadioTuneNote radio={radio} />}
     </div>
   )
 }

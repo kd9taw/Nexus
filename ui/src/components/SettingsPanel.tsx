@@ -7461,6 +7461,15 @@ export function SettingsPanel({
                     />
                   </label>
                   <span className="settings-hint">{t('settings.digital.tunePower.hint')}</span>
+                  {/* On the Flex native client with Tune as the radio's own carrier, the radio's
+                      tune power is used and Nexus writes none: the row says so, with the value. */}
+                  {radio?.flexTune && (
+                    <span className="settings-hint">
+                      {radio.flexTune.powerPct != null
+                        ? t('settings.digital.tunePower.flexHint', { pct: radio.flexTune.powerPct })
+                        : t('settings.digital.tunePower.flexHintNoValue')}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

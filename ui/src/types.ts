@@ -1458,6 +1458,14 @@ export interface RadioStatus {
    * then ignores, so the voice keyer, APRS and SSTV refuse with a message and key nothing.
    * Absent when false. */
   flexRadioHasMic?: boolean
+  /** While Nexus's own Flex client tunes with the radio's own carrier (Beta, off until a
+   * tester's bench): the radio's tune power and its own transmit timeout, shown beside Tune
+   * (`RadioTuneNote`). Absent on every other station. */
+  flexTune?: FlexTune | null
+  /** Tune is the radio's own carrier here, and the licence refuses it where the radio transmits
+   * (judged as CW there too) though it allows the mode's own emission: Tune keys nothing, and the
+   * note beside it says why. Absent when false. */
+  flexTuneRefused?: boolean
   /** The Flex VITA **meter** worker is running — on a Flex the only producer of a
    * FlexLib-scaled SWR. Observed from the worker, never read from `flexNativePan` (the toggle
    * stands with no radio address, or with a start that failed). Read it WITH
@@ -4678,6 +4686,15 @@ export interface AppSnapshot {
   /** The transmitter alarms the operator has not dismissed, oldest first (dismiss_tx_alarm).
    *  Absent while there are none, and from a station older than the alarm. */
   txAlarms?: TxAlarm[]
+}
+
+/** What a FlexRadio reports about its own tune carrier (mirror of the Rust FlexTune,
+ *  `RadioStatus.flexTune`). Read and shown; Nexus writes neither. */
+export interface FlexTune {
+  /** The radio's tune power, 0–100 %, as SmartSDR sets it; null until the radio reports it. */
+  powerPct?: number | null
+  /** The radio's own transmit timeout in milliseconds, 0 when it is off; null until reported. */
+  txTimeoutMs?: number | null
 }
 
 /** A slot over's key the radio did not accept (mirror of the Rust SlotKeyRefused). The words are

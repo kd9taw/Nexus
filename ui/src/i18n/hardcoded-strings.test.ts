@@ -586,6 +586,9 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
+  // birth.
+  'components/RadioTuneNote.tsx',
 ]
 
 /**
