@@ -96,7 +96,9 @@ It is a display only. Nexus never moves your dial to zero-beat for you.
 
 ## Eight F-Key Macros
 
-Eight macros are fired by `F1`–`F8` or the corresponding on-screen buttons. **Which eight depends
+Eight macros are fired by `F1`–`F8` or the corresponding on-screen buttons. One press sends once,
+however long you hold the key, and a key pressed with Ctrl, Alt or Cmd held sends nothing (Alt+F4
+closes the window, as it should). **Which eight depends
 on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 
 1. a saved **macro profile**, if one is active — see *Custom macro profiles* below;

@@ -95,6 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
+  too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
+  sent its macro, Alt+F4 (which closes the window) included. One press is now
+  one send, however long you hold the key, and a key with Ctrl, Alt or Cmd held is left to the
+  system, as on the RTTY and PSK screens. Esc and Stop TX stop exactly as before.
 - **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
   log strip was not the one the keys sent: they sent the call in His Call, which was the last
   station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and

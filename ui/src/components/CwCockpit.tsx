@@ -1096,7 +1096,10 @@ export function CwCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWork?.ts])
 
-  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4).
+  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
+  // macro key is one send, and never with Alt, Ctrl or Cmd held (RTTY's guard): a held F3's
+  // auto-repeat queued the exchange again on every repeat, and Alt+F4, the window's close,
+  // sent F4's macro. A modified key is left to the system; PgUp/PgDn still repeat.
   // Live ref so the document listener (bound once) always reads current state.
   // Esc's ABORT rides the shared capture listener (useEscStop, operator 2026-10-01), so no
   // control on the screen can swallow it; here its default is cancelled, as it always was, and it
@@ -1111,8 +1114,9 @@ export function CwCockpit({
       if (e.key === 'Escape') {
         e.preventDefault()
       } else if (macro) {
+        if (e.altKey || e.ctrlKey || e.metaKey) return
         e.preventDefault()
-        send(macro.text)
+        if (!e.repeat) send(macro.text)
       } else if (e.key === 'PageUp') {
         e.preventDefault()
         wpmTouched.current = true
