@@ -732,7 +732,8 @@ extern "C" {
     /// FST4 channel symbols → real audio at `fsample`, nominal carrier `f0`.
     ///
     /// `hmod` is upstream's tone-spacing multiplier (1 | 2 | 4). Returns samples
-    /// produced (`160 * nsps`), or -1 on refusal.
+    /// produced (`160 * nsps`), or -1 on refusal. `fsample` must be 12000: `nsps`
+    /// comes from the 12 kHz table, so any other rate is refused.
     ///
     /// Unlike Q65's plain MFSK this is GFSK-shaped (BT=2.0) with raised-cosine
     /// ramps, via upstream's own `gen_fst4wave`. `f0` is where the signal is

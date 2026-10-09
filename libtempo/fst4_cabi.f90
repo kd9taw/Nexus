@@ -325,7 +325,7 @@ contains
   !   nsym      : symbol count (FST4_NN)
   !   ntrperiod : T/R period, seconds - sets the symbol duration
   !   hmod      : tone-spacing multiplier, 1 | 2 | 4 (upstream's x2/x4 Tone Spacing)
-  !   fsample   : output sample rate (Hz)
+  !   fsample   : output sample rate (Hz); 12000 only, anything else is refused
   !   f0        : NOMINAL audio carrier (Hz) - see the offset note below
   !   wave_out  : caller buffer (capacity nwave_cap)
   !   returns   : samples produced (nsym*nsps), or -1 on refusal
@@ -366,6 +366,11 @@ contains
     nwave_out = -1
     if (nsym /= FST4_NN) return
     if (hmod /= 1 .and. hmod /= 2 .and. hmod /= 4) return
+    ! 12 kHz only. nsps comes from the 12 kHz table, and gen_fst4wave caches dt and
+    ! tsym under nsps alone (gen_fst4wave.f90:33-37): another rate would come out at
+    ! the wrong pitch and length, and leave every later 12 kHz over at this period
+    ! mistuned until the period changed. Refused here, it never reaches that cache.
+    if (fsample /= 12000.0) return
     ip = fst4_period_index(ntrperiod)
     if (ip < 1) return
 

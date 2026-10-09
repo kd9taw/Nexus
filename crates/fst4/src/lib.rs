@@ -135,6 +135,9 @@ pub fn encode(msg: &str, wspr: bool) -> Option<Vec<i32>> {
 /// GFSK-shaped with raised-cosine ramps, via upstream's own `gen_fst4wave` — not a
 /// plain MFSK synthesis like Q65's. `f0` is where the signal is REPORTED; the ABI
 /// applies the 1.5-tone offset that upstream's callers apply.
+///
+/// `fsample` must be [`SAMPLE_RATE`]: the symbol lengths are the 12 kHz table's, so
+/// any other rate is refused (`None`, which keys nothing) rather than mistuned.
 pub fn gen_wave(itone: &[i32], period_s: u16, hmod: u8, fsample: f32, f0: f32) -> Option<Vec<f32>> {
     if itone.len() != NN || !matches!(hmod, 1 | 2 | 4) {
         return None;
@@ -521,6 +524,28 @@ mod tests {
             hits.is_empty(),
             "fst4_gen_wave wrote past the caller's buffer: {}",
             hits.join("; ")
+        );
+    }
+
+    #[test]
+    fn gen_wave_refuses_a_sample_rate_it_cannot_honour() {
+        // nsps comes from the 12 kHz table, and gen_fst4wave caches dt and tsym under
+        // nsps alone (gen_fst4wave.f90:33-37). Another rate would come out at the
+        // wrong pitch and length, and leave the next 12 kHz over at that period
+        // mistuned too. Silence keys nothing, so the refusal must come before that
+        // cache: the 12 kHz control, run after the refused calls, is the pinned over.
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let rates = [48_000.0, 44_100.0, 0.0, f32::NAN];
+        let refused: Vec<Option<usize>> = rates
+            .iter()
+            .map(|&fs| gen_wave(&itone, 15, 1, fs, 1500.0).map(|w| w.len()))
+            .collect();
+        let control = gen_wave(&itone, 15, 1, SAMPLE_RATE, 1500.0).map(|w| digest(&w));
+        let pinned = GOLDEN.iter().find(|&&(p, _)| p == 15).map(|&(_, h)| h);
+        assert_eq!(
+            (refused, control),
+            (vec![None; rates.len()], pinned),
+            "gen_wave must refuse {rates:?} Hz, and the 12 kHz control after them must be the pinned FST4-15 over"
         );
     }
 }
