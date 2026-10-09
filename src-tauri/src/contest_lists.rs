@@ -129,13 +129,15 @@ pub async fn get_scp_calls(state: State<'_, SharedEngine>) -> Result<Vec<String>
         .map_err(|e| e.to_string())
 }
 
-/// Import a call-history file the operator picked, for one contest (a `FieldDayStatus::event` id).
+/// Import a call-history file the operator picked, for one contest. The id is stored as the strip
+/// compares it, `FieldDayStatus::event`: canonical, so a blank picker is ARRL Field Day.
 #[tauri::command(async)]
 pub fn import_call_history(
     text: String,
     file_name: String,
     contest: String,
 ) -> Result<HistoryMeta, String> {
+    let contest = tempo_app::fdevent::canonical_contest(&contest);
     call_history::import(&dir(), &text, &file_name, &contest, crate::now_unix())
 }
 
