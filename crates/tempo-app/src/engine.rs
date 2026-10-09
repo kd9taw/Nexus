@@ -37217,6 +37217,31 @@ mod tests {
         assert_eq!(e.stored_log()[0].call, "W9XYZ");
     }
 
+    /// ⭐ A CONTACT LOGGED ON THE DIAL THE RADIO REPORTED CARRIES THAT DIAL'S BAND AND FREQUENCY,
+    /// on 10 GHz too. An IC-905 on its 10 GHz band reports its dial in 12 digits, which the native
+    /// CI-V daemon reads whole (A7711-9EX-2, PDF p. 17). From that reading the log gets 3 cm and
+    /// 10368.150 MHz plus the signal's offset. From the 10-digit reading it used to get, 368.150
+    /// MHz, the log got that frequency and no band at all.
+    #[test]
+    fn a_contact_logged_on_the_ic905s_10_ghz_dial_carries_3_cm() {
+        for (reported_hz, band, dial_mhz) in
+            [(10_368_150_000, "3cm", 10368.15), (368_150_000, "", 368.15)]
+        {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.observe_rig_freq(reported_hz);
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            assert!(e.log_current_qso(), "{reported_hz} Hz: logged");
+            let rec = &e.stored_log()[0];
+            let on_air = dial_mhz + f64::from(e.tx_offset_hz) / 1e6;
+            assert_eq!(
+                (rec.band.as_str(), format!("{:.6}", rec.freq_mhz)),
+                (band, format!("{on_air:.6}")),
+                "{reported_hz} Hz"
+            );
+        }
+    }
+
     /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
     /// happen for Field Day. Master OFF with a live FD session → the engine truly leaves
     /// `Mode::FieldDay` even though a QSO-bearing mode now survives a save (spec §1.3 —

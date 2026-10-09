@@ -3114,3 +3114,259 @@ fn sync_from_qrz_never_puts_back_what_check_confirmations_took_off() {
     gained.qsl_rcvd.qrz = true;
     assert_eq!(contact_at(&engine, "W1AW", "180000"), gained);
 }
+
+/// Sync from QRZ's merge of a FETCH answer holding `rows`, read as `sync_qrz_since` reads it: how
+/// many contacts it added, and its summary.
+fn qrz_synced(
+    engine: &Mutex<Engine>,
+    rows: &[String],
+) -> (usize, tempo_core::reconcile::ReconcileSummary) {
+    let answer = format!(
+        "RESULT=OK&COUNT={}&ADIF={}",
+        rows.len(),
+        rows.concat().replace('<', "&lt;").replace('>', "&gt;")
+    );
+    let (merged, durability) =
+        merge_qrz_report(engine, &tempo_core::qrz::parse_fetch(&answer).adif);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    merged.expect("merged")
+}
+
+/// The contacts the next LoTW upload sends ([`station::lotw_unsent`], read from the store as the
+/// upload reads it), as `CALL HH:MM`, in log order.
+fn lotw_owed(engine: &Mutex<Engine>) -> Vec<String> {
+    let rows = engine_lock(engine).log_rows();
+    station::lotw_unsent(&rows)
+        .expect("the store reads")
+        .iter()
+        .map(|r| {
+            let (h, m) = (r.when_unix % 86_400 / 3_600, r.when_unix % 3_600 / 60);
+            format!("{} {h:02}:{m:02}", r.call)
+        })
+        .collect()
+}
+
+/// [`misplaced_scene`] after Logbook ▸ Check confirmations: its decisive lines applied, among them
+/// the upload line that takes 1.17.0's LoTW mark off 06:00, so 06:00 is owed to LoTW again, the
+/// only contact that is. The engine, and the ADIF Nexus's QRZ push sent of 06:00 before the check
+/// (`adif_record`), the mark in its `APP_TEMPO_UL_LOTW`.
+fn lotw_mark_taken_off(d: &Dir) -> (Arc<Mutex<Engine>>, String) {
+    use tempo_core::reconcile::check::{CheckLine, Mark};
+    let (log, report, own) = misplaced_scene();
+    let engine = holding(d, &log);
+    let pushed = adif_record(&contact_at(&engine, "W1AW", "060000"));
+    assert!(
+        pushed.contains("<APP_TEMPO_UL_LOTW:11>accepted|7|"),
+        "premise: the push carried 1.17.0's mark: {pushed}"
+    );
+    let ticked: Vec<CheckLine> = check_of(&engine, &report, &own)
+        .lines
+        .into_iter()
+        .filter(|l| l.decisive())
+        .collect();
+    assert!(
+        ticked.iter().any(|l| l.mark == Mark::LotwUpload),
+        "06:00's upload line: {ticked:#?}"
+    );
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(applied.expect("applied").uploads, 1);
+    assert_eq!(
+        lotw_owed(&engine),
+        ["W1AW 06:00"],
+        "premise: the check left 06:00 owed to LoTW"
+    );
+    (engine, pushed)
+}
+
+/// ★ Sync from QRZ never puts back the LoTW upload mark Check confirmations took off. 1.17.0's
+/// own-QSO pull marked 06:00 as on file at LoTW from 18:00's upload, and the check's upload line
+/// takes the mark off, so 06:00 is owed to LoTW again. QRZ's book then says 06:00 was sent to LoTW
+/// (`LOTW_QSL_SENT`): its copy, not LoTW's word, so 06:00 stays owed and goes in the next upload.
+/// QRZ's own confirmation on the same row still lands.
+#[test]
+fn sync_from_qrz_never_puts_back_the_lotw_mark_check_confirmations_took_off() {
+    let d = Dir::new("sync-qrz-lotw-sent");
+    let (engine, _) = lotw_mark_taken_off(&d);
+    let synced = qrz_synced(
+        &engine,
+        &[adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "060000",
+            "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+        )],
+    );
+    let early = contact_at(&engine, "W1AW", "060000");
+    assert_eq!(
+        (early.qsl_rcvd.qrz, early.upload.lotw, lotw_owed(&engine)),
+        (true, None, vec!["W1AW 06:00".to_string()]),
+        "QRZ's confirmation lands, its copy of LoTW's sent flag does not, and 06:00 is still owed"
+    );
+    assert_eq!((synced.0, synced.1.matched), (0, 1));
+}
+
+/// ★ Nor the stamp Nexus's own QRZ push carried there. Before the check, Nexus pushed 06:00 to QRZ
+/// with 1.17.0's mark in its `APP_TEMPO_UL_LOTW`. If QRZ's book keeps that field and hands it back
+/// (not measured), it is Nexus's old word passed back through QRZ, not LoTW's: 06:00 stays owed.
+/// LoTW's own-QSO list still marks it, once LoTW holds it.
+#[test]
+fn sync_from_qrz_never_puts_back_the_lotw_mark_its_push_carried() {
+    let d = Dir::new("sync-qrz-lotw-echo");
+    let (engine, pushed) = lotw_mark_taken_off(&d);
+    qrz_synced(&engine, &[pushed]);
+    let mark = |e: &Mutex<Engine>| contact_at(e, "W1AW", "060000").upload.lotw;
+    assert_eq!(
+        (mark(&engine), lotw_owed(&engine)),
+        (None, vec!["W1AW 06:00".to_string()]),
+        "the stamp QRZ handed back does not land, and 06:00 is still owed"
+    );
+
+    // The control: LoTW's own-QSO list, holding 06:00, marks it with LoTW's time.
+    const ECHOED_AT: i64 = APPLIED_AT as i64 + 3_600;
+    let (promoted, durability) = merge_lotw_own_echo(
+        &engine,
+        &lotw_answer(&[adif_row("W1AW", "20m", "FT8", "060000", "<QSL_RCVD:1>N")]),
+        ECHOED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(promoted, Ok(1));
+    assert_eq!(
+        (mark(&engine), lotw_owed(&engine)),
+        (
+            Some(UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: ECHOED_AT,
+                detail: None,
+            }),
+            vec![]
+        )
+    );
+}
+
+/// ★ Which contacts upload after Sync from QRZ: the LoTW marks QRZ's book no longer brings are the
+/// whole change. Owed to LoTW, and in the next upload: K1AAA, held with no LoTW mark, which the
+/// book says was sent; K1BBB, whose upload LoTW bounced, which the book hands a later "accepted"
+/// stamp; and K5NEW, which the sync adds, and which the book says was sent. Not owed, whatever the
+/// book says: K1CCC, uploaded and awaiting LoTW, and K1DDD, which LoTW confirms. What the catch-up
+/// sweep sends to QRZ, Club Log and eQSL is as it was: the stamps of those services the book hands
+/// back still land (K1EEE, and K5ADD, which the sync adds).
+#[test]
+fn sync_from_qrz_changes_only_which_contacts_go_to_lotw() {
+    use crate::engine::upload_legs::{CLUBLOG, EQSL, QRZ};
+    let d = Dir::new("sync-qrz-owed");
+    let stamp = |name: &str, value: &str| format!("<{name}:{}>{value}", value.len());
+    let row = |call: &str, hhmmss: &str, more: &str| adif_row(call, "20m", "FT8", hhmmss, more);
+    let bounced = "rejected|1791000000|record";
+    let log = contacts(&[
+        row("K1AAA", "010000", ""),
+        row("K1BBB", "020000", &stamp("APP_TEMPO_UL_LOTW", bounced)),
+        row(
+            "K1CCC",
+            "030000",
+            &stamp("APP_TEMPO_UL_LOTW", "pending|1791000000|"),
+        ),
+        row("K1DDD", "040000", "<LOTW_QSL_RCVD:1>Y"),
+        row(
+            "K1EEE",
+            "050000",
+            &(stamp("APP_TEMPO_UL_QRZ", "accepted|1791000000|")
+                + &stamp("APP_TEMPO_UL_EQSL", bounced)),
+        ),
+        row("K1FFF", "060000", ""),
+    ]);
+    let engine = holding(&d, &log);
+    let all = QRZ | CLUBLOG | EQSL;
+    let swept = |e: &Mutex<Engine>| -> Vec<(String, u8)> {
+        let rows = engine_lock(e).log_rows();
+        station::catch_up_records(&rows, all, 256)
+            .expect("the store reads")
+            .into_iter()
+            .map(|(r, legs)| (r.call, legs))
+            .collect()
+    };
+    let calls = |owed: &[(&str, u8)]| -> Vec<(String, u8)> {
+        owed.iter().map(|&(c, l)| (c.to_string(), l)).collect()
+    };
+    assert_eq!(
+        (lotw_owed(&engine), swept(&engine)),
+        (
+            vec![
+                "K1AAA 01:00".to_string(),
+                "K1BBB 02:00".into(),
+                "K1EEE 05:00".into(),
+                "K1FFF 06:00".into()
+            ],
+            calls(&[
+                ("K1AAA", all),
+                ("K1BBB", all),
+                ("K1CCC", all),
+                ("K1DDD", all),
+                ("K1EEE", CLUBLOG | EQSL),
+                ("K1FFF", all)
+            ])
+        ),
+        "premise"
+    );
+
+    let later = "accepted|1791100000|";
+    let (added, summary) = qrz_synced(
+        &engine,
+        &[
+            row("K1AAA", "010000", "<LOTW_QSL_SENT:1>Y"),
+            row("K1BBB", "020000", &stamp("APP_TEMPO_UL_LOTW", later)),
+            row(
+                "K1CCC",
+                "030000",
+                &("<LOTW_QSL_SENT:1>Y".to_string() + &stamp("APP_TEMPO_UL_LOTW", later)),
+            ),
+            row("K1DDD", "040000", "<LOTW_QSL_SENT:1>Y"),
+            row(
+                "K1EEE",
+                "050000",
+                &(stamp("APP_TEMPO_UL_CLUBLOG", later) + &stamp("APP_TEMPO_UL_EQSL", later)),
+            ),
+            row("K1FFF", "060000", "<APP_QRZLOG_STATUS:1>C"),
+            row(
+                "K5NEW",
+                "090000",
+                "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+            ),
+            row(
+                "K5ADD",
+                "100000",
+                &(stamp("APP_TEMPO_UL_QRZ", later)
+                    + &stamp("APP_TEMPO_UL_CLUBLOG", "duplicate|1791100000|")),
+            ),
+        ],
+    );
+    assert_eq!((added, summary.matched), (2, 6));
+    // QRZ, Club Log and eQSL first, so a LoTW red below is seen with these already as they were.
+    assert_eq!(
+        swept(&engine),
+        calls(&[
+            ("K1AAA", all),
+            ("K1BBB", all),
+            ("K1CCC", all),
+            ("K1DDD", all),
+            ("K1FFF", all),
+            ("K5NEW", all),
+            ("K5ADD", EQSL)
+        ]),
+        "QRZ, Club Log and eQSL: the sweep sends what it sent before"
+    );
+    assert_eq!(
+        lotw_owed(&engine),
+        [
+            "K1AAA 01:00",
+            "K1BBB 02:00",
+            "K1EEE 05:00",
+            "K1FFF 06:00",
+            "K5NEW 09:00",
+            "K5ADD 10:00"
+        ],
+        "LoTW: K1AAA, K1BBB and K5NEW are owed beside the rest"
+    );
+}

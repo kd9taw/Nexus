@@ -267,6 +267,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
   and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
   page, a search that matches nothing now says so, where it said the log was empty.
+- **The Logbook globe no longer says "0 grid squares worked" while it is still counting them.**
+  Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
+  worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
+  slow disk. The globe now shows its count once the squares are counted.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -364,6 +368,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
   for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
   IC-905 on 10 GHz.
+- **IC-905 on 10 GHz: the dial, a QSY and the log are on the frequency the radio is on.** On its
+  10 GHz band the IC-905 sends and takes its frequency with two more digits than on its other
+  bands, and Nexus's own CI-V connection read and wrote the usual ten. With the radio on 10368.150
+  MHz the dial read 368.150 MHz, a contact logged there went in at 368.150 MHz with no band, and a
+  QSY to 10368.150 MHz (or a split's transmit frequency there) sent the radio to 368.150 MHz.
+  Transmit stayed locked, because 368 MHz is outside every amateur band. Nexus now reads and
+  writes the longer form on 10 GHz, over USB and over the Icom network connection, as Icom's CI-V
+  reference for the IC-905 describes it: the dial reads 10368.150 MHz, the log gets 3 cm, and the
+  check against your licence privileges judges 3 cm, as it does every other band. Its other bands,
+  and every other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the
+  dial, a QSY and a logged contact, receiving or into a dummy load).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
@@ -378,6 +393,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
   radio that is only named like one of those, where Nexus's own CI-V never runs and the log
   would have nothing to record.
+- **The Data mode picker (D1/D2/D3) is greyed where it cannot reach the radio.** On an IC-7610
+  connected over Network or through OmniRig with Native Icom CI-V left on, Settings ▸ Radio ▸
+  Rig & CAT ▸ Advanced offered the picker and said the radio is put into the mode you pick, but
+  the pick was never sent: Nexus's own CI-V connection does not run there. The picker is now
+  greyed there, as the Native Icom CI-V switch above it is, and says it needs that connection.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
@@ -453,6 +473,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dial, the over on the air stops and TX turns off. The QSO stays where it was; turn TX on again to
   carry on in the new mode. A switch that leaves your Tx frequency on the waterfall, Tempo Fast to
   Tempo Deep (they share one channel), and a switch into WSPR leave TX as it was.
+- **FST4 and FST4W no longer write past the end of the audio they make for an over.** Making the
+  audio for every FST4 or FST4W transmission wrote one value just past the space Nexus had set
+  aside for it. On Linux, where it was measured, that did no harm. On Windows and macOS it could
+  damage the memory beside it and crash Nexus later, at some unrelated moment. The audio sent is
+  unchanged, sample for sample, at every period. NEEDS-BENCH: an FST4 and an FST4W transmit on
+  Windows into a dummy load.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
@@ -483,6 +509,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
   eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
   adds that confirmation. Confirmations already in your log are not changed.
+- **Sync from QRZ no longer marks a contact as uploaded to LoTW.** Your QRZ logbook can also say
+  that a contact was sent to LoTW, and Sync from QRZ took that as LoTW's word: a contact could come
+  out of a sync marked as already on file at LoTW, including one whose mark Logbook ▸ Check
+  confirmations had just taken off, and Nexus then never uploaded it. Sync from QRZ and Pull
+  confirmations automatically now leave a contact's LoTW upload mark as it was, and a contact a
+  sync adds to your log starts without one. LoTW's own list of your uploads still marks them. The
+  contacts this affects go in your next LoTW upload; one LoTW already holds is a duplicate there
+  and changes nothing. Marks already in your log are not changed, and nothing changes in what goes
+  to QRZ, Club Log or eQSL.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the

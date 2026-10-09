@@ -3525,9 +3525,9 @@ export function SettingsPanel({
   // inlined so the control and its explanation can never disagree about the condition.
   const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
   // Does Nexus's own CI-V engine drive this radio here, and so apply its D1/D2/D3? Always on the Icom
-  // network connection; over a cable only through the native switch, on a radio that has one.
-  const civAppliesDataMode =
-    form.rigConn === 'icomlan' || (!!form.icomNativeCat && NATIVE_CIV_MODELS.includes(form.rigModel))
+  // network connection; over a cable only through the native switch, asked the way the switch asks it
+  // (`civBlocked`): never on Network or through OmniRig, where a switch left on does nothing.
+  const civAppliesDataMode = form.rigConn === 'icomlan' || (civBlocked === null && !!form.icomNativeCat)
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`

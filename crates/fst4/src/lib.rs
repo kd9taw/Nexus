@@ -135,6 +135,9 @@ pub fn encode(msg: &str, wspr: bool) -> Option<Vec<i32>> {
 /// GFSK-shaped with raised-cosine ramps, via upstream's own `gen_fst4wave` — not a
 /// plain MFSK synthesis like Q65's. `f0` is where the signal is REPORTED; the ABI
 /// applies the 1.5-tone offset that upstream's callers apply.
+///
+/// `fsample` must be [`SAMPLE_RATE`]: the symbol lengths are the 12 kHz table's, so
+/// any other rate is refused (`None`, which keys nothing) rather than mistuned.
 pub fn gen_wave(itone: &[i32], period_s: u16, hmod: u8, fsample: f32, f0: f32) -> Option<Vec<f32>> {
     if itone.len() != NN || !matches!(hmod, 1 | 2 | 4) {
         return None;
@@ -411,9 +414,9 @@ mod tests {
     #[test]
     fn noise_decodes_to_nothing() {
         // Same property the C smoke test asserts, through the Rust surface: the
-        // decoder runs to completion on pure noise and invents nothing. With no
-        // FST4 TX in-tree there is no way to synthesise a signal, so this is a
-        // liveness + silence check, NOT a sensitivity test.
+        // decoder runs to completion on pure noise and invents nothing. This is a
+        // liveness + silence check, NOT a sensitivity test; that is
+        // encode_then_decode_recovers_the_message.
         // Both modes, at the shortest period so the suite stays quick.
         for wspr in [false, true] {
             let mut iwave = vec![0i16; nmax(15)];
@@ -429,5 +432,120 @@ mod tests {
                 d.len()
             );
         }
+    }
+
+    /// FNV-1a-64 over every sample's IEEE-754 bit pattern, so a change to any bit of
+    /// any sample (the sign of a zero included) changes the digest, barring a 64-bit
+    /// collision.
+    fn digest(wave: &[f32]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for s in wave {
+            for b in s.to_bits().to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    /// What FST4 transmits, pinned sample for sample at every period: "K1ABC W9XYZ
+    /// EN37", hmod 1, f0 1500 Hz at 12 kHz, the way the engine calls it. Taken from
+    /// the tree before `fst4_gen_wave` gained its work array.
+    ///
+    /// ⚠️ The bits belong to the toolchain as well as to the code: gfortran's
+    /// floating-point contraction and libm's sinf/cosf/erff all reach them. These were
+    /// taken with the toolchain CI's test job uses (Ubuntu 24.04, x86_64, gfortran
+    /// 13.3, glibc 2.39). A red on another toolchain alone proves nothing; compare
+    /// against the base commit on that toolchain, and never re-pin from it.
+    const GOLDEN: [(u16, u64); 7] = [
+        (15, 0xa9fa_b6a3_2519_4b0d),
+        (30, 0x2768_52b2_6ee3_7960),
+        (60, 0x569b_7da9_17d0_3d7e),
+        (120, 0xb6c2_cdba_2109_0a46),
+        (300, 0x1469_2518_05bf_205f),
+        (900, 0x26b3_c54f_2d64_081b),
+        (1800, 0x7a33_b2a5_8ce1_4bfd),
+    ];
+
+    #[test]
+    fn the_transmitted_samples_are_pinned_at_every_period() {
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let got: Vec<(u16, u64)> = PERIODS
+            .iter()
+            .map(|&p| {
+                let wave = gen_wave(&itone, p, 1, SAMPLE_RATE, 1500.0).expect("supported");
+                (p, digest(&wave))
+            })
+            .collect();
+        assert_eq!(
+            got,
+            GOLDEN,
+            "FST4 no longer transmits the pinned samples: {}",
+            got.iter()
+                .map(|(p, h)| format!("({p}, 0x{h:016x})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    #[test]
+    fn gen_wave_never_writes_past_the_callers_buffer() {
+        // gen_fst4wave's ramp-down ends at wave(nsym*nsps+1), one float past the
+        // samples it emits (gen_fst4wave.f90:82-84); every upstream caller hands it
+        // (nsym+2)*nsps (WSJT-X mainwindow.cpp:5370). Call the ABI exactly as
+        // gen_wave does, into exactly NN*nsps, and read what follows the buffer.
+        use std::os::raw::c_int;
+        const SENTINEL: f32 = 7.0;
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let mut hits = Vec::new();
+        for (&period_s, &nsps) in PERIODS.iter().zip(NSPS.iter()) {
+            let n = NN * nsps;
+            let mut buf = vec![SENTINEL; n + 4];
+            let got = {
+                let _guard = modem_lock();
+                unsafe {
+                    tempo_fast_sys::fst4_gen_wave(
+                        itone.as_ptr(),
+                        NN as c_int,
+                        c_int::from(period_s),
+                        1,
+                        SAMPLE_RATE,
+                        1500.0,
+                        buf.as_mut_ptr(),
+                        n as c_int,
+                    )
+                }
+            };
+            assert_eq!(got as usize, n, "FST4-{period_s} must emit {n} samples");
+            if buf[n..].iter().any(|s| s.to_bits() != SENTINEL.to_bits()) {
+                hits.push(format!("FST4-{period_s}: {:?}", &buf[n..]));
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "fst4_gen_wave wrote past the caller's buffer: {}",
+            hits.join("; ")
+        );
+    }
+
+    #[test]
+    fn gen_wave_refuses_a_sample_rate_it_cannot_honour() {
+        // nsps comes from the 12 kHz table, and gen_fst4wave caches dt and tsym under
+        // nsps alone (gen_fst4wave.f90:33-37). Another rate would come out at the
+        // wrong pitch and length, and leave the next 12 kHz over at that period
+        // mistuned too. Silence keys nothing, so the refusal must come before that
+        // cache: the 12 kHz control, run after the refused calls, is the pinned over.
+        let itone = encode("K1ABC W9XYZ EN37", false).expect("message packs");
+        let rates = [48_000.0, 44_100.0, 0.0, f32::NAN];
+        let refused: Vec<Option<usize>> = rates
+            .iter()
+            .map(|&fs| gen_wave(&itone, 15, 1, fs, 1500.0).map(|w| w.len()))
+            .collect();
+        let control = gen_wave(&itone, 15, 1, SAMPLE_RATE, 1500.0).map(|w| digest(&w));
+        let pinned = GOLDEN.iter().find(|&&(p, _)| p == 15).map(|&(_, h)| h);
+        assert_eq!(
+            (refused, control),
+            (vec![None; rates.len()], pinned),
+            "gen_wave must refuse {rates:?} Hz, and the 12 kHz control after them must be the pinned FST4-15 over"
+        );
     }
 }

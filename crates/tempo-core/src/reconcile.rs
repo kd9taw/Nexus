@@ -407,8 +407,8 @@ pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> Re
 /// double-logs the contact. Returns the newly-added records (so the caller persists
 /// exactly those) plus the reconcile summary.
 ///
-/// A row confirms with QRZ's own confirmation alone (`qrzs_own_word`), on a contact the log
-/// holds and on one the download adds.
+/// A row confirms with QRZ's own confirmation alone and brings no LoTW upload mark
+/// (`qrzs_own_word`), on a contact the log holds and on one the download adds.
 pub fn merge_and_add<R: StoredRecord>(
     local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
@@ -422,8 +422,16 @@ pub fn merge_and_add<R: StoredRecord>(
 /// none of what the book repeats from other services, its copies of LoTW's, eQSL's and a paper
 /// card's confirmation and of LoTW's credit codes. They are not QRZ's word. Taken as evidence, a
 /// copy put back a confirmation Logbook ▸ Check confirmations had taken off, with the award credit
-/// only LoTW or a card can give. [`check`] judges the book by the same rule. The rest of the row
-/// is as QRZ sent it.
+/// only LoTW or a card can give. [`check`] judges the book by the same rule.
+///
+/// Nor is the book LoTW's word on an upload: its `LOTW_QSL_SENT`, or the `APP_TEMPO_UL_LOTW` stamp
+/// a Nexus push carried to QRZ, if QRZ hands one back. Either reads as a LoTW upload mark, and a
+/// contact holding one is not owed to LoTW, so a copy put back the mark Check confirmations' upload
+/// line had taken off and the contact was never uploaded again. The row brings no LoTW mark, and
+/// `LOTW_QSL_SENT` goes with it, or a contact the download adds would get the mark back whenever
+/// its ADIF is read again (an export or a backup imported). Only LoTW's mark goes: the stamps of
+/// QRZ's, Club Log's and eQSL's uploads a row may hand back still merge, as they decide what the
+/// catch-up sweep sends those services. The rest of the row is as QRZ sent it.
 fn qrzs_own_word(mut row: QsoRecord) -> QsoRecord {
     let qrz = row.qsl_rcvd.qrz;
     row.qsl_rcvd = Default::default();
@@ -432,6 +440,8 @@ fn qrzs_own_word(mut row: QsoRecord) -> QsoRecord {
     row.award_confirmed = row.qsl_rcvd.award();
     row.credit_granted.clear();
     row.credit_submitted.clear();
+    row.upload.lotw = None;
+    row.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
     row
 }
 
@@ -1329,6 +1339,78 @@ mod tests {
         assert_eq!(
             (sum.matched, sum.newly_confirmed, sum.newly_submitted),
             (2, 0, 0)
+        );
+    }
+
+    #[test]
+    fn merge_add_takes_no_lotw_upload_mark_from_qrzs_book() {
+        use crate::logbook::{adif_record, parse_adif, UploadDetail};
+        // QRZ's book also says what LoTW holds of the upload: its `LOTW_QSL_SENT`, and the
+        // `APP_TEMPO_UL_LOTW` stamp a Nexus push carried to QRZ, if QRZ hands it back. 06:00 holds
+        // no LoTW mark (Check confirmations took it off), 18:00 holds an upload LoTW bounced, and
+        // K5NEW is not in the log. No row's mark reaches a contact, held or added, and QRZ's own
+        // confirmation on the same row still does.
+        let row = |call: &str, hhmmss: &str, more: &str| {
+            format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20241004\
+                 <TIME_ON:6>{hhmmss}{more}<EOR>\n",
+                call.len()
+            )
+        };
+        let book = parse_adif(
+            &[
+                row("W1AW", "060000", "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y"),
+                row(
+                    "W1AW",
+                    "180000",
+                    "<APP_TEMPO_UL_LOTW:20>accepted|1728100000|",
+                ),
+                row(
+                    "K5NEW",
+                    "090000",
+                    "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+                ),
+            ]
+            .concat(),
+        );
+        let declared = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 0,
+            detail: Some(UploadDetail::OperatorDeclared),
+        });
+        let echoed = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_728_100_000,
+            detail: None,
+        });
+        assert_eq!(
+            book.iter()
+                .map(|r| r.upload.lotw.clone())
+                .collect::<Vec<_>>(),
+            [declared.clone(), echoed, declared],
+            "premise: each row reads as a LoTW upload mark"
+        );
+        let early = w1aw_at(20_000, 6, 0);
+        let mut late = w1aw_at(20_000, 18, 0);
+        late.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Rejected,
+            when_unix: 1_728_050_000,
+            detail: Some(UploadDetail::RecordRefused),
+        });
+        let mut log = vec![early.clone(), late.clone()];
+        let (added, sum) = merge_and_add(&mut log, book);
+        let mut confirmed = early;
+        confirmed.qsl_rcvd.qrz = true;
+        confirmed.confirmed = true;
+        // K5NEW as QRZ's row would be without its word on LoTW.
+        let new = parse_adif(&row("K5NEW", "090000", "<APP_QRZLOG_STATUS:1>C")).remove(0);
+        assert_eq!(log, vec![confirmed, late, new.clone()]);
+        assert_eq!(added, vec![new]);
+        assert_eq!((sum.matched, sum.newly_confirmed_any), (2, 1));
+        assert_eq!(
+            parse_adif(&adif_record(&added[0]))[0].upload.lotw,
+            None,
+            "the added contact does not read a LoTW mark back from its own ADIF"
         );
     }
 

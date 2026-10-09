@@ -394,7 +394,7 @@ fn engine_loop(
             }
             // Everything else refreshes the live state (replies AND transceive pushes).
             if let Ok(mut s) = state.lock() {
-                s.apply(&f);
+                s.apply(&f, model);
             }
             // Resolve the in-flight request if this frame answers it.
             if let Some((req, _)) = &pending {
@@ -538,6 +538,11 @@ pub(crate) mod tests_support {
         /// p. 24): its reads are not modelled and are NAKed here, because nothing sends them to
         /// that radio, and its `25 01` / `26 01` writes land in the unselected-VFO registers.
         pub dial_by_band: bool,
+        /// Does this radio send its dial in 12 digits (6 bytes) on its 10 GHz band — "When the
+        /// 10 GHz band is selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz"
+        /// (IC-905 CI-V Reference Guide A7711-9EX-2, PDF p. 17)? True only at the IC-905's
+        /// address; see [`dial_field`].
+        pub ten_ghz_12_digits: bool,
         /// Fault injection — swallow the next N by-name dial/mode READ replies (`25`/`26`
         /// above): a lost CI-V reply, so the read times out while the rig's state stands.
         pub drop_dial_reads: u32,
@@ -628,7 +633,7 @@ pub(crate) mod tests_support {
         match (cmd, data.first().copied()) {
             (0x03, _) => {
                 let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
-                Some((0x03, freq_to_bcd(hz).to_vec()))
+                Some((0x03, dial_field(r, hz)))
             }
             (0x05, _) => {
                 let hz = bcd_to_freq(data);
@@ -956,6 +961,19 @@ pub(crate) mod tests_support {
         }
     }
 
+    /// The dial as this radio sends it in a `03` reply: 10 digits (5 bytes), and on the IC-905's
+    /// 10 GHz band ([`Regs::ten_ghz_12_digits`]) a sixth byte, its 100 GHz digit (always 0) over
+    /// its 10 GHz digit (A7711-9EX-2, PDF p. 17). The sixth byte is built here by hand from that
+    /// page, not by the encoder under test.
+    fn dial_field(r: &Regs, hz: u64) -> Vec<u8> {
+        let mut v = freq_to_bcd(hz).to_vec();
+        if r.ten_ghz_12_digits && hz >= 10_000_000_000 {
+            let (g100, g10) = ((hz / 100_000_000_000) % 10, (hz / 10_000_000_000) % 10);
+            v.push(((g100 << 4) | g10) as u8);
+        }
+        v
+    }
+
     /// Two decimal digits per byte, big-endian: `raw` 0..=9999 → the 2-byte BCD Icom's
     /// level and meter replies carry. By hand, like the decoder in the `0x14` arm.
     fn bcd2(raw: u16) -> [u8; 2] {
@@ -1022,6 +1040,7 @@ pub(crate) mod tests_support {
                         sub_smeter_raw: 60,
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
                         dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
+                        ten_ghz_12_digits: addr == 0xAC, // the IC-905's 10 GHz band
                         drop_dial_reads: 0,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
@@ -1193,7 +1212,10 @@ mod tests {
         };
         assert_eq!(late(None), Err(CivError::Timeout), "serial: 300 ms");
         let f = late(Some(Duration::from_millis(1_000))).expect("a 1 s deadline waits for it");
-        assert_eq!(super::super::commands::parse_freq(&f), Some(145_000_000));
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(145_000_000)
+        );
     }
 
     #[test]
@@ -1211,9 +1233,12 @@ mod tests {
                 },
             )
             .expect("freq read");
-        assert_eq!(super::super::commands::parse_freq(&f), Some(145_000_000));
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(145_000_000)
+        );
         // Set a new one (ack), read it back.
-        h.transact(set_freq(0xA2, 144_200_000), Expect::Ack)
+        h.transact(set_freq(0xA2, 144_200_000, None), Expect::Ack)
             .expect("freq set acked");
         let f = h
             .transact(
@@ -1224,7 +1249,10 @@ mod tests {
                 },
             )
             .expect("freq re-read");
-        assert_eq!(super::super::commands::parse_freq(&f), Some(144_200_000));
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(144_200_000)
+        );
         // The engine folded replies into the shared state too.
         assert_eq!(h.state().freq_hz, Some(144_200_000));
     }
@@ -1293,6 +1321,54 @@ mod tests {
             }
             assert!(Instant::now() < deadline, "transceive folded into state");
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The dial `push` folds into the state of an engine started for `model` at `addr`, once
+    /// the engine has read it (`None` if it never folds one in 2 s).
+    fn folded(addr: u8, model: Option<IcomModel>, push: &[u8]) -> Option<u64> {
+        let (radio, pushed) = FakeRadio::new(addr);
+        let eng = CivEngine::start(Box::new(radio), addr, model);
+        pushed.lock().unwrap().extend_from_slice(push);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while eng.handle().state().freq_hz.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        eng.handle().state().freq_hz
+    }
+
+    /// ⭐ THE IC-905'S TRANSCEIVE REPORT ON ITS 10 GHz BAND IS 12 DIGITS, like its `03` reply:
+    /// one format for `00, 03, 05, 1C 03` (A7711-9EX-2, PDF p. 17). The frame is that page's
+    /// layout typed out at 10368.150 MHz: 1 Hz first, the 10 GHz digit in the sixth byte. Read
+    /// as 10 digits it folded 368.150 MHz into the dial a timed-out read serves.
+    #[test]
+    fn the_ic905s_10_ghz_transceive_report_folds_12_digits() {
+        let push = [
+            0xFE, 0xFE, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01, 0xFD,
+        ];
+        assert_eq!(
+            folded(0xAC, Some(IcomModel::Ic905), &push),
+            Some(10_368_150_000)
+        );
+    }
+
+    /// The controls: the IC-905's report from a band at or below 5600 MHz is 10 digits, folded
+    /// as before; and a six-byte report from any other radio, or one the caller did not name,
+    /// is read as before, its first five bytes. No other guide here has a 10 GHz digit.
+    #[test]
+    fn a_10_digit_report_and_another_radios_report_fold_as_before() {
+        let ic905_2m = [
+            0xFE, 0xFE, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x20, 0x44, 0x01, 0xFD,
+        ];
+        assert_eq!(
+            folded(0xAC, Some(IcomModel::Ic905), &ic905_2m),
+            Some(144_200_000)
+        );
+        let six = [
+            0xFE, 0xFE, 0x00, 0xA2, 0x00, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01, 0xFD,
+        ];
+        for model in [Some(IcomModel::Ic9700), None] {
+            assert_eq!(folded(0xA2, model, &six), Some(368_150_000), "{model:?}");
         }
     }
 
