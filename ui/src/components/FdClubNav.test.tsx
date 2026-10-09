@@ -70,13 +70,34 @@ describe('the club band board has its own way in', () => {
     cleanup()
   })
 
-  it('it sits with Field Day in the rail, not stranded at the end', () => {
+  it('it sits with the Contest item in the rail, not stranded at the end', () => {
     renderNav({ fieldDay: true })
     const buttons = [...document.querySelectorAll('.mode-nav-top button')]
-    const fd = buttons.findIndex((b) => /Field Day/i.test(b.getAttribute('aria-label') ?? ''))
+    // The contest screen's item, which the rail calls "Contest" (its id is still `fieldDay`).
+    const fd = buttons.findIndex((b) => /^Contest/.test(b.getAttribute('aria-label') ?? ''))
     const club = buttons.findIndex((b) => /club band board/i.test(b.getAttribute('aria-label') ?? ''))
     expect(fd).toBeGreaterThanOrEqual(0)
     expect(club).toBe(fd + 1)
+    cleanup()
+  })
+
+  it('rides the master switch, not the Contest item: the item stays with the mode off, the board does not', () => {
+    // The Contest item is on the rail with Field Day mode off (its screen is where the mode
+    // is turned on), so the board is gated on the switch itself.
+    render(
+      <ModeNav
+        view="operate"
+        mode="chat"
+        enabled={{ fieldDay: true } as Record<FeatureId, boolean>}
+        onSelect={vi.fn()}
+        tier="FT8"
+        onDigitalMode={vi.fn()}
+        onClubBoard={vi.fn()}
+        clubBoard={false}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Contest' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /club band board/i })).toBeNull()
     cleanup()
   })
 

@@ -109,6 +109,7 @@ import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { markerWidthHz } from './waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
+import { contestName } from './fdEvent'
 import { OperateCockpit } from './components/OperateCockpit'
 import { NowBar } from './components/NowBar'
 import { AwardsJourney } from './components/AwardsJourney'
@@ -1147,8 +1148,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [settings?.popupNotifications])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
-  // the master switch off), so the fetch just re-runs when the configured event changes.
+  // the master switch off), so the fetch just re-runs when the configured event changes —
+  // and after every save made here (`settingsSaves`), because the same answer carries
+  // whether the picked contest can start (`problem`), and a class or a county filled in
+  // changes that without changing the event.
   const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
+  const [settingsSaves, setSettingsSaves] = useState(0)
   useEffect(() => {
     let live = true
     getFdRuleset()
@@ -1157,7 +1162,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     return () => {
       live = false
     }
-  }, [settings?.fdEvent])
+  }, [settings?.fdEvent, settingsSaves])
   // The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
   // need ICONS as well as the sound/toast — "I selected grids, vhf/uhf 6m and up ... and its
   // still showing the grid icons in ft8 in both roster and classic mode when on hf bands"
@@ -2427,9 +2432,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
       if (next === 'chat') handleSetMode('chat')
-      else if (next === 'fieldDay') handleSetMode('fieldday-sp')
+      // The contest only while its mode is on. With the mode off this is the screen that turns
+      // it on, and a session entered behind the master switch is one the snapshot hides: a
+      // Running started from it would call CQ unseen.
+      else if (next === 'fieldDay' && settings?.fdActive === true) handleSetMode('fieldday-sp')
     },
-    [handleSetMode, !!remote],
+    [handleSetMode, !!remote, settings?.fdActive],
   )
 
   /**
@@ -2561,6 +2569,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const handleSettingsSaved = useCallback(() => {
     getSnapshot().then(setSnap).catch(() => {})
     reloadSettings()
+    setSettingsSaves((n) => n + 1)
   }, [reloadSettings])
 
   const handleDismissOnboarding = useCallback(() => {
@@ -2627,12 +2636,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // no hook may live after the early return, or React unmounts the whole app once
   // snap loads and the hook count changes).
 
-  // Field Day visibility is owned by the persisted master switch (settings.fdActive),
-  // NOT the standalone feature flag — so the two can never diverge. Fold it into the
-  // enabled map that the nav and the redirect guard below both read: master off →
-  // Field Day is invisible (nav item hidden, view redirects away); master on → visible.
+  // ⭐ THE CONTEST SCREEN IS ON THE RAIL WITH FIELD DAY MODE OFF, because the mode switch is at
+  // the top of it: hidden while the mode is off, the screen could only ever turn the mode off.
+  // What the mode reveals still follows the persisted master switch (settings.fdActive) and
+  // nothing else: the Class/Section exchange in every cockpit, the Club Board button, and
+  // entering the contest when the screen opens (`handleView`). A Remote observer, who cannot
+  // press the switch, keeps the old rule: the screen only while the station's mode is on.
   const fdActive = settings?.fdActive === true
-  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
+  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: remote ? fdActive : true }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
   // A visible navigation item is not evidence that its station API is connected.
   // In particular, never mount SettingsPanel with the projected operating view:
@@ -3136,6 +3147,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             fdActive={settings?.fdActive ?? false}
             fdRuleset={fdRuleset}
             tier={tier}
+            onOpenSettings={openSettingsAt}
+            onSettingsSaved={handleSettingsSaved}
           />
         </main>
       )
@@ -3680,10 +3693,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onDigitalMode={handleDigitalMode}
           // The club band board is a WINDOW, not a section: the rail button opens the
           // `fdclub` pop-out straight onto a second monitor. It rides the Field Day
-          // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
-          // board used to be reachable only from inside ContestView once sync was
-          // already on, which is exactly why nobody found it.
+          // master switch (`clubBoard`) and NOT club sync — the board used to be
+          // reachable only from inside ContestView once sync was already on, which is
+          // exactly why nobody found it.
           onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
+          clubBoard={fdActive}
+          // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
+          // Day, as it is to the engine.
+          contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field

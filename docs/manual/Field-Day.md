@@ -17,7 +17,7 @@ A full weekend has both days in the month, so a Saturday whose Sunday falls in F
 
 ### Countdown
 
-The FieldDay header shows a live countdown as the event approaches:
+The banner at the top of the **Contest** screen (the tent item in the left bar) shows a live countdown as the event approaches:
 
 - **starts in N days** / **starts tomorrow** / **starts in Nh** / **starting soon** / **active**
 
@@ -136,12 +136,12 @@ The sponsor's 2027 rules: "You may spot yourself and others only via amateur RF.
 
 ## Scoreboard, Sections Board and Pop-Out
 
-The FieldDay view carries a live scoreboard: QSO and section counts, per-mode chips (DIG / CW / PH), and the score math for the active event (Winter Field Day shows its claimed total, QSO points × (OM + 1), never the ARRL power×+bonus formula).
+The Contest screen carries a live scoreboard: QSO and section counts, per-mode chips (DIG / CW / PH), and the score math for the active event (Winter Field Day shows its claimed total, QSO points × (OM + 1), never the ARRL power×+bonus formula).
 
 - **Operator field** — Field Day rotates operators; type the call of whoever is at the key. It persists across restarts, and each QSO pushed to N3FJP is attributed to that operator (falling back to the station call when empty).
 - **Sections board** — all 85 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
 - **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
-- **Club Board** — the **club band board** (position, band, mode, operator, QSOs, rate) has its own button in the left rail, directly under Field Day, and its own window. It appears whenever Field Day is on, whether or not club sync is running, and one click puts it on a second monitor: this is the board a multi-station club watches all event to see who is on what band before moving to another one. The same **Pop out board** button in the club header on the dashboard opens the same window. It is set in larger type than the docked copy because it is watched from the operating position rather than read at the keyboard, and it is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
+- **Club Board** — the **club band board** (position, band, mode, operator, QSOs, rate) has its own button in the left rail, directly under Contest, and its own window. It appears whenever Field Day is on, whether or not club sync is running, and one click puts it on a second monitor: this is the board a multi-station club watches all event to see who is on what band before moving to another one. The same **Pop out board** button in the club header on the dashboard opens the same window. It is set in larger type than the docked copy because it is watched from the operating position rather than read at the keyboard, and it is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
 - **With club sync off**, the window says so and names the route that turns it on (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event) instead of showing an empty board. With sync on and nobody else logging yet, it says it is waiting.
 - **Spectator scoreboard** — a web page for a TV or projector facing the room (Settings ▸ Contesting ▸ Field Day Club Sync ▸ **Spectator scoreboard**; the row shows the address to open on the TV). It reads across a room at 1080p and at 4K: the claimed score and how it is made, the rate, each position's band and mode, the contacts by band and mode, the latest contact, the time left, and a map of what the contest counts — the sections globe for both Field Days, the 102 counties for the Illinois QSO Party. It works for **any contest club sync runs**. The host shows its own club; a **position shows the host's board**, so the TV can sit at any table, as long as the host's Spectator scoreboard is on too, on the same port. If the host can't be reached the TV says so in plain words, keeps the last board, and comes back by itself; a station with no club says so, with what to do. Add `?theme=light` to the address for the light board, or `?theme=auto` to follow the TV.
 
@@ -149,7 +149,7 @@ The FieldDay view carries a live scoreboard: QSO and section counts, per-mode ch
 
 ## Bonus Checklist
 
-The bonus checklist contains ARRL Field Day's 16 bonuses. Toggle each one in the FieldDay view as your club achieves it:
+The bonus checklist contains ARRL Field Day's 16 bonuses. Toggle each one on the Contest screen as your club achieves it:
 
 | Bonus | Points |
 |---|---|
@@ -185,7 +185,7 @@ When the FD workspace is open and a digital contact is in progress, the TempoFas
 - **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
 - **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
 
-Entering Field Day from the nav always starts in **Search-and-Pounce**. Switch to Running via the button pair in the FieldDay header.
+Opening **Contest** in the left bar with Field Day mode on always starts in **Search-and-Pounce**; with the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
 The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
@@ -253,7 +253,7 @@ N1MM broadcast is **UDP emit-only**. Nexus does not receive or aggregate inbound
 
 ## Exports: Cabrillo, ADIF, Summary and Dupe Sheet
 
-All four exports are available at any time during or after the event from the FieldDay view export buttons.
+All four exports are available at any time during or after the event from the Contest screen's export buttons.
 
 ### Cabrillo 3.0
 
@@ -300,7 +300,7 @@ A plain-text check sheet: every section multiplier with the call and band that f
 
 ## Other Contests, and CQ WW RTTY
 
-The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Field Day mode** in Field Day Setup, which is the switch for every contest. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
+The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Field Day mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Field Day Setup. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
 
 **CQ WW RTTY** (last full weekend of September, 0000Z Saturday for 48 hours):
 
@@ -336,7 +336,7 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 
 Before the party, on every laptop:
 
-- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again).
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
 - [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.

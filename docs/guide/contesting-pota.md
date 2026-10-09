@@ -4,8 +4,9 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
-**Field Day mode is the exception**: it stays off until you switch it on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or
+**Field Day mode is the exception**: it stays off until you switch it on at the
+top of the **Contest** screen (the tent in the left bar), in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
 [Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
 reshapes the app for a weekend most operators are not having.
 
@@ -131,7 +132,7 @@ a club sync worked.*
   a lock (N3FJP semantics); your own log's dupes still refuse.
 - A live **band board** shows where every position is (band, mode, operator,
   rate), stale-marked the moment one goes quiet. It has its own **Club Board**
-  button in the left rail under Field Day, and its own window — one click, on a
+  button in the left rail under Contest, and its own window — one click, on a
   second monitor or a corner of the big one, in bigger type than the dashboard
   copy because it is watched from across the tent. **Pop out board** in the club
   header opens the same window. The rail button is there whenever Field Day is

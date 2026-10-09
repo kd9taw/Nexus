@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Field Day mode has a switch on the contest screen, and the left bar calls that screen
+  Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
+  contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar
+  order, and it stays on the bar with Field Day mode off: the top of its screen has the same Field
+  Day mode switch as Settings ▸ Contesting ▸ Field Day Setup, beside the picked contest and when it
+  runs (its dates in UTC and the countdown), and it saves at once. Opening the screen with the mode
+  off does not start the contest. If the contest cannot start yet, the switch stays off and the
+  screen says what is missing (your Class and Section for Field Day, or the field a QSO party
+  needs), with a button to that place in Settings. With the mode on, the screen says which
+  contest's rules apply, the modes it does not permit, and during Winter Field Day that no spots
+  are posted over the internet. With club sync on it says that turning the mode off keeps this
+  station in the club event, sends no contacts until the mode is back on, and loses nothing from
+  the log. A contest picked while another is running says that turning the mode off and on again
+  switches to it. The scoreboard's own window and the main window's title read Contest too. ARRL
+  Field Day and Winter Field Day keep their names.
 - **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
   its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
   enough for it) onto the left side. While you drag, the columns it can go to are outlined, a line

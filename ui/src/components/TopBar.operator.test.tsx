@@ -197,7 +197,7 @@ describe('setting the first operator, when Field Day is on', () => {
     renderBar(() => {}, { operator: '', fdActive: true, operatorRoster: [], onSetOperator: vi.fn() })
     fireEvent.pointerDown(screen.getByTitle(/who is at the key/i), { button: 0, ctrlKey: false })
     expect(
-      screen.getByText(/Field Day dashboard/),
+      screen.getByText(/on the Contest screen/),
       'the menu is empty on a log with no operators in it yet — the chip has to say where ' +
         'the first one is typed instead of opening onto nothing',
     ).toBeTruthy()
@@ -212,7 +212,7 @@ describe('setting the first operator, when Field Day is on', () => {
       onSetOperator: vi.fn(),
     })
     fireEvent.pointerDown(screen.getByTitle(/who is at the key/i), { button: 0, ctrlKey: false })
-    expect(screen.queryByText(/Field Day dashboard/)).toBeNull()
+    expect(screen.queryByText(/on the Contest screen/)).toBeNull()
   })
 
   it('keeps the narrow save — the chip never routes through the heavyweight settings write', () => {
