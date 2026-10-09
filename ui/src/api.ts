@@ -48,6 +48,7 @@ import type {
   NeedAlert,
   QrzLookup,
   PointedAt,
+  CallBearing,
   RotatorState,
   QrzPushResult,
   RouteMode,
@@ -2141,6 +2142,17 @@ export async function sendCw(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('send_cw', { text })
 }
 
+/** Queue CW for Enter Sends Message. Unlike `sendCw` it NEVER turns TX on: it rejects, with the
+ *  reason, while TX is off or any transmit gate refuses, and then nothing was taken. */
+export async function sendCwArmed(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw_armed', { text })
+}
+
+/** The ESM switch in a cockpit's TX dock, saved alone (never a settings-form save). */
+export async function setContestEsm(cockpit: 'cw' | 'rtty' | 'phone', on: boolean): Promise<void> {
+  await invoke('set_contest_esm', { cockpit, on })
+}
+
 /** Record the worked station's QRZ name + state for the {HISNAME}/{HISSTATE} CW-macro tokens,
  *  keyed to `call` (pass an empty call to clear). Fire-and-forget. */
 export async function setCwPeerInfo(call: string, name: string, peerState: string): Promise<void> {
@@ -2637,6 +2649,14 @@ export async function pointRotatorElevation(elDeg: number, azDeg?: number): Prom
  *  same great circle the other way. */
 export async function pointRotatorAtCall(call: string, longPath = false): Promise<PointedAt> {
   return invoke<PointedAt>('point_rotator_at_call', { call, longPath })
+}
+
+/** The bearing `pointRotatorAtCall(call)` turns the antenna to, and the distance to the same point,
+ *  without turning it: the station's own resolver, read only (the rotor box's line 2). Refuses with
+ *  `noGrid` or `unknownStation` when there is no bearing to give. The desktop's alone: a browser is
+ *  never offered it. */
+export async function rotatorBearingToCall(call: string): Promise<CallBearing> {
+  return invoke<CallBearing>('rotator_bearing_to_call', { call })
 }
 
 /** The grid the log form holds for the call it is logging — typed, or filled in from the

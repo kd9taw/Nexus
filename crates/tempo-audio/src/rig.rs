@@ -304,8 +304,9 @@ fn rprt_error(what: &str, reply: &str) -> std::io::Error {
 ///
 /// Deliberately strict: `None` unless the reply really looks like a dump_state (leading protocol
 /// version, then ≥1 well-formed 7-field range line, then the all-zero terminator). Everything
-/// else — an `RPRT` error, our own broker's shorter answer, a future format — reads as "unknown",
-/// and the caller must then fail OPEN rather than assume nothing is covered.
+/// else — an `RPRT` error, an empty list (Nexus's own CI-V daemon, which does not know its radio's
+/// range), a future format — reads as "unknown", and the caller must then fail OPEN rather than
+/// assume nothing is covered.
 pub fn parse_dump_state_rx_ranges(reply: &str) -> Option<Vec<(u64, u64)>> {
     let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
     // Line 1 is the protocol version. Accept only versions whose range-list layout we know

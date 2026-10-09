@@ -30,6 +30,16 @@ import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { isFieldDay } from '../fdEvent'
+import {
+  CW_CONTEST_LAYOUT,
+  CW_CONTEST_NO_REPORT_LAYOUT,
+  CW_FIELD_DAY_LAYOUT,
+  cwBuiltInRoles,
+  esmRoles,
+  type EsmRoleMap,
+} from '../features/esmRoles'
+import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
+import { EsmPlate } from './EsmPlate'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -57,6 +67,7 @@ import type { ModeClass } from '../neededFilters'
 import {
   getSettings,
   sendCw,
+  sendCwArmed,
   setCwKeyer,
   setCwWpm,
   stopCw,
@@ -273,6 +284,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
@@ -286,6 +299,8 @@ interface Props {
    *  rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted Remote page keeps
    *  its own panes (Phone's rule). */
   boxes?: BoxSource
+  /** Enter Sends Message's switch for this cockpit (App, from Settings). Absent on the hosted page. */
+  esmSetting?: EsmSetting
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -356,53 +371,19 @@ const DEFAULT_MACROS: CwMacro[] = [
   { key: 'F8', label: '?', text: '? ' },
 ]
 
-/** Default Field Day CW macro set — replaces the casual defaults while FD mode is on.
- * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
- * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
- * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
-export const DEFAULT_FD_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
-
-/** Default CONTEST CW macro set — the Field Day cadence with the call every other contest
- * uses. Field Day's own `CQ FD` went on the air in any contest that was running, so an
- * Illinois QSO Party or CQ WW CW operator called CQ for somebody else's event; `CQ TEST` is
- * what a contest CQ is, and the exchange tokens are unchanged ({EXCH} is the running
- * contest's own exchange). Everything below F1 is Field Day's set, which is what a contest
- * needs, plus the REPORT: {EXCH} is the exchange without the signal report, which {RST}
- * keys, so F3 and F4 send {RST} before it. Without it the Illinois QSO Party's F3 keyed the
- * county alone, where the sponsor's exchange is RS(T) and county. */
-export const DEFAULT_CONTEST_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {RST} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {RST} {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
-
-/** The contest set for an exchange with NO signal report (Sweepstakes, the California QSO
- * Party, the ARRL VHF contests): the same keys with {RST} left out of F3 and F4, because a
- * 5NN there is a wrong exchange — Sweepstakes would copy it as the serial. */
-export const DEFAULT_CONTEST_NO_REPORT_MACROS: CwMacro[] = [
-  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
-  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
-  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
-  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
-  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: '?', text: '? ' },
-]
+/** The built-in sets the cockpit's F-keys send in a contest: Field Day's, and the contest sets
+ *  with and without a report — the signed contest layout (`features/esmRoles.ts`), N1MM's: F1 CQ
+ *  · F2 his call and my exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 AGN
+ *  · F8 QSO B4. It is the layout Enter Sends Message sends from. Field Day's set keeps its own
+ *  `CQ FD`, which belongs to Field Day; every other contest calls `CQ TEST`. {EXCH} is the running
+ *  contest's exchange WITHOUT the signal report, which {RST} keys, so the set for an exchange with
+ *  a report sends {RST} before it, and the set for one without (Sweepstakes would copy a 5NN as
+ *  the serial) does not. */
+export const CW_CONTEST_SETS: { fieldDay: CwMacro[]; report: CwMacro[]; noReport: CwMacro[] } = {
+  fieldDay: CW_FIELD_DAY_LAYOUT,
+  report: CW_CONTEST_LAYOUT,
+  noReport: CW_CONTEST_NO_REPORT_LAYOUT,
+}
 
 const WPM_MIN = 5
 const WPM_MAX = 50
@@ -435,6 +416,7 @@ const CW_DSP_FUNCS = [
 ] as const
 
 export function CwCockpit({
+  esmSetting,
   active = true,
   snap,
   theme,
@@ -452,6 +434,7 @@ export function CwCockpit({
   onOpenMemories,
   onOpenSettings,
   onOpenLogbook,
+  onEntryCall,
   panels,
   spotsBoard,
   neededBoard,
@@ -799,9 +782,9 @@ export function CwCockpit({
   // Empty = rule unread (built without the `radio` feature, or the command failed), and no
   // caution is shown — an unreadable rule must not warn an operator off a keyer that works.
   const [catCwUnproven, setCatCwUnproven] = useState<number[]>([])
-  const [profiles, setProfiles] = useState<{ name: string; macros: { key: string; label: string; text: string }[] }[]>(
-    [],
-  )
+  const [profiles, setProfiles] = useState<
+    { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
+  >([])
   const [activeProfile, setActiveProfile] = useState(0)
   useEffect(() => {
     if (!active) return
@@ -828,14 +811,14 @@ export function CwCockpit({
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
   // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
   // for the two Field Day events and wrong on the air in every other contest. Among those,
-  // the exchange says whether F3 and F4 send a report: the strip's received slots, the same
+  // the exchange says whether the set sends a report: the strip's received slots, the same
   // `rst` slot it fills 599 into.
   const builtIn = fieldDay
     ? isFieldDay(fieldDay.event)
-      ? DEFAULT_FD_MACROS
+      ? CW_CONTEST_SETS.fieldDay
       : fieldDay.receives?.some((f) => f.kind === 'rst')
-        ? DEFAULT_CONTEST_MACROS
-        : DEFAULT_CONTEST_NO_REPORT_MACROS
+        ? CW_CONTEST_SETS.report
+        : CW_CONTEST_SETS.noReport
     : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
@@ -1061,6 +1044,37 @@ export function CwCockpit({
   // TX-allowed privilege state through send() — not whatever existed at mount.
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`). The set is the
+  // one the F-keys send, with the active profile's own step mapping over the built-in layout's;
+  // the guards are read at the press; and the send is the F-keys' own path but for the re-arm:
+  // His Call becomes the strip's call before the send that may expand `!` to it, and
+  // `sendCwArmed` refuses while TX is off where `sendCw` would turn it on (rule 5).
+  const esm = useEsmHost({
+    cockpit: 'cw',
+    on: !!esmSetting?.on && !!fieldDay && control,
+    callOnce: !!esmSetting?.callOnce,
+    roles: esmRoles(cwBuiltInRoles(macros), profiles[activeProfile]?.esmRoles),
+    slots: macros,
+    guards: () => ({
+      cockpit: 'cw',
+      txEnabled: snapRef.current.radio.txEnabled,
+      txAllowed: snapRef.current.radio.txAllowed,
+      clockRepair: snapRef.current.radio.clockRepairTxHeld === true,
+    }),
+    send: async ({ text, call }: EsmMessage) => {
+      await commitHisCall(call)
+      try {
+        await sendCwArmed(text)
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    },
+  })
+  // The keyboard handler is bound once: it reads the host through this.
+  const esmRef = useRef(esm)
+  esmRef.current = esm
+  const esmLit = esmLitKeys(esm.preview)
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else.
   const send = (line: string) => {
@@ -1089,6 +1103,8 @@ export function CwCockpit({
     // Stop the CW keyer AND drop any tune carrier / stray PTT — a true stop-everything (Esc).
     void stopCw()
     void haltTx()
+    // …and for Enter Sends Message, what went out to the call in the strip counts as not sent.
+    esm.noteStop()
   }
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
@@ -1159,7 +1175,10 @@ export function CwCockpit({
       } else if (macro) {
         if (e.altKey || e.ctrlKey || e.metaKey) return
         e.preventDefault()
-        if (!e.repeat) send(macro.text)
+        if (!e.repeat) {
+          send(macro.text)
+          esmRef.current.noteKey(macro.key)
+        }
       } else if (e.key === 'PageUp') {
         e.preventDefault()
         wpmTouched.current = true
@@ -1672,6 +1691,7 @@ export function CwCockpit({
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
       {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
+        onEntryCall={onEntryCall}
         snap={snap}
         mode="CW"
         defaultRst="599"
@@ -1697,6 +1717,7 @@ export function CwCockpit({
         fieldDay={fieldDay}
         active={active}
         fdMode="CW"
+        esm={esm.host}
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
@@ -2334,8 +2355,12 @@ export function CwCockpit({
             <button disabled={!control}
               key={m.key}
               type="button"
-              className="cw-macro"
-              onClick={() => send(m.text)}
+              // The key or keys the next Enter sends glow (Enter Sends Message).
+              className={`cw-macro${esmLit.includes(m.key) ? ' esm-lit' : ''}`}
+              onClick={() => {
+                send(m.text)
+                esm.noteKey(m.key)
+              }}
               title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
             >
               <span className="cw-macro-key">{m.key}</span>
@@ -2391,6 +2416,17 @@ export function CwCockpit({
           <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!control || (!text.trim())}>
             {t('cw.compose.send.label')}
           </button>
+          {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: last on the row, so
+              what it says never moves Send or His Call. */}
+          {esmSetting && fieldDay && control && (
+            <EsmPlate
+              on={esmSetting.on}
+              onSwitch={esmSetting.onSwitch}
+              mode={esm.host.state.mode}
+              onToggle={esm.toggle}
+              preview={esm.preview}
+            />
+          )}
         </div>
       </div>
       <SpotDialog

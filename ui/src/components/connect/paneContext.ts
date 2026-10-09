@@ -109,4 +109,9 @@ export interface PaneContext {
   /** Point the rotator at a call (present only when a rotator is configured). */
   onPoint?: (call: string) => void
   toggleFocusBand: (band: string) => void
+  /** The call in the LOG ENTRY of the cockpit this box stands beside, the call its Log action would
+   *  write, for the Rotor box's second line (its bearing, and Point). Absent or null where no log
+   *  entry stands beside the box: Connect, the TV page and the hosted Remote page, a cockpit with no
+   *  log entry (SSTV, APRS), and an empty entry. */
+  entryCall?: string | null
 }

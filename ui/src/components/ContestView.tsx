@@ -1215,6 +1215,24 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
+      {/* The host's alone: the positions it turned away, each with the sentence it was sent,
+          which that position's own screen shows as its host error. */}
+      {club.refused?.map((r, i) => (
+        <div key={i} style={CLUB_WARN} role="alert">
+          {r.posName
+            ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
+            : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+        </div>
+      ))}
+      {/* The host's alone: its board is as big as the club line every position is sent can
+          carry — said before one more position might not fit, and once it is cut. */}
+      {club.boardFull && (
+        <div style={CLUB_WARN} role="status">
+          {club.boardFull.shown < club.boardFull.positions
+            ? t('fieldDay.club.boardCut', { shown: club.boardFull.shown, positions: club.boardFull.positions })
+            : t('fieldDay.club.boardFull', { positions: club.boardFull.positions })}
+        </div>
+      )}
       {club.board.length === 0 ? (
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the
@@ -1294,6 +1312,27 @@ export function FdClubSection({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The contacts in this computer's contest journal that entering the contest did not load,
+ * by reason, and that nothing was deleted — the journal is one file per position whatever
+ * contest it last ran, and the session loads only its own contest's rows from this running.
+ */
+function FdKeptOutNote({
+  keptOut,
+  contest,
+}: {
+  keptOut: { otherContest: number; otherRunning: number }
+  contest: string
+}) {
+  return (
+    <p className="fd-score-note" role="note">
+      {keptOut.otherRunning > 0 && <>{t('fieldDay.keptOut.running', { count: keptOut.otherRunning, contest })} </>}
+      {keptOut.otherContest > 0 && <>{t('fieldDay.keptOut.contest', { count: keptOut.otherContest })} </>}
+      {t('fieldDay.keptOut.kept')}
+    </p>
   )
 }
 
@@ -1917,8 +1956,9 @@ export function ContestView({
   // Section columns empty on every row.
   const fdEventIsFieldDay = isFieldDay(shownEvent)
   // Why club sync is not running, when it is switched on for a contest it cannot run — read
-  // from the station's own settings, which a Remote observation does not carry.
-  const clubRefusal = clubSyncRefusal(nativeSettings)
+  // from the station's own settings, which a Remote observation does not carry, and the
+  // station's preview of that pick (a contest the loaded rules dropped resolves elsewhere).
+  const clubRefusal = clubSyncRefusal(nativeSettings, fdRuleset)
   const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(shownEvent)
   // The window: the session's, else the preview's. Both are the rules data's running-or-next
   // window, so the banner reads the same before the contest starts as during it.
@@ -2354,6 +2394,8 @@ export function ContestView({
       {!fieldDay?.club && clubRefusal && (
         <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} why={clubRefusal} />
       )}
+      {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
+      {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />

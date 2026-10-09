@@ -1598,6 +1598,16 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
      dropped. Send it again when you are ready.";
 
+/// Why [`Engine::send_cw_armed`] took nothing: the contest strip shows it, and logs nothing.
+/// English at the engine, like the refusals above.
+const CW_ARMED_NOT_CW: &str = "Not sent: this is not the CW screen.";
+const CW_ARMED_TX_OFF: &str = "Not sent: TX is off, and Enter never turns it on. Send with an \
+     F-key to turn TX back on.";
+const CW_ARMED_PRIVILEGES: &str = "Not sent: this frequency is outside your license privileges.";
+const CW_ARMED_CW_PRIVILEGES: &str =
+    "Not sent: where it would key is outside your license's CW privileges.";
+const CW_ARMED_EMPTY: &str = "Not sent: the message is empty.";
+
 /// …and what the RTTY cockpit's warning line says when [`Engine::poll_rtty_one`] drops refused
 /// overs, and when the auto-sequencer stops because one of them was its own.
 const RTTY_REFUSED_TX_OFF: &str = "RTTY stopped: transmit was turned off, so what was still \
@@ -6533,6 +6543,30 @@ impl Engine {
         self.save_remote_preferences(&values, &["macros"])
     }
 
+    /// The ESM switch in a cockpit's TX dock: `contest_esm_cw`, `contest_esm_rtty` or
+    /// `contest_esm_phone` (`cockpit` is `cw`, `rtty` or `phone`), saved alone.
+    ///
+    /// NEVER a form save: `apply_settings` clears the transmit queues and advances
+    /// `tx_gate_gen`, and this switch is flipped in the middle of a contest. This is the atomic
+    /// preference save [`Self::save_rtty_macros`] uses, so it writes the one switch and cannot
+    /// key, tune or touch the TX-enable latch. Settings ▸ Contesting saves the same three with
+    /// its form, as it saves every other field there.
+    pub fn set_contest_esm(
+        &mut self,
+        cockpit: &str,
+        on: bool,
+    ) -> Result<(), crate::remote_control::Reason> {
+        let key = match cockpit {
+            "cw" => "contestEsmCw",
+            "rtty" => "contestEsmRtty",
+            "phone" => "contestEsmPhone",
+            _ => return Err(crate::remote_control::Reason::InvalidAction),
+        };
+        let mut values = serde_json::Map::new();
+        values.insert(key.into(), serde_json::Value::Bool(on));
+        self.save_remote_preferences(&values, &[key])
+    }
+
     /// ⛔ **THE ONE WRITER of `launch_at_login`** (Settings ▸ Start at sign-in). The caller has
     /// already changed the operating system's login entry and calls this only when that worked;
     /// `apply_settings` keeps the live value, so a stale Settings payload cannot contradict it.
@@ -9458,17 +9492,78 @@ impl Engine {
             // it — keyed, then flushed away a tick later.
             self.cw_abort = false;
             self.slot_tx_abort = false;
-            // TX echo: show the operator what actually went out (tokens resolved).
-            self.cw_sent.push_back(expanded.clone());
-            while self.cw_sent.len() > 50 {
-                self.cw_sent.pop_front();
+            self.queue_cw(expanded);
+        }
+    }
+
+    /// ⭐ **Queue CW for Enter Sends Message: [`Self::send_cw`] WITHOUT its re-arm, and with
+    /// every refusal answered up front.**
+    ///
+    /// `send_cw` turns TX on by design, because an F-key or typed text IS the operator's transmit
+    /// act (`cw_send_re_arms_tx_after_a_halt`). An Enter in the contest strip may never be one:
+    /// "Enter never turns TX on. After Stop TX, Esc or the watchdog, Enter is refused until you
+    /// turn TX back on yourself" (ESM's signed rule 5). So this refuses while TX is off and
+    /// never writes the latch.
+    ///
+    /// It answers rather than drops, so the strip logs a contact only once this has taken its
+    /// message, and a refused send logs nothing. Every gate [`Self::poll_cw_one`] puts a word
+    /// through is asked here first: the clock-repair hold, the latch, a connection that refuses
+    /// TX, the licence privileges at the dial and as CW. So is the CW section, and a transmitter
+    /// another owner holds (a tune carrier). Taken, the message is queued exactly as an F-key's
+    /// is, and the poll checks every word again.
+    ///
+    /// ⛔ A PENDING STOP IS LEFT ALONE. `send_cw` clears `cw_abort` and `slot_tx_abort`, so the
+    /// macro fired after a Stop TX is not flushed by it; nothing here touches either, so a stop
+    /// the radio loop has not consumed yet still lands. After a Stop TX the latch is down anyway,
+    /// and this refuses.
+    pub fn send_cw_armed(&mut self, text: &str) -> Result<(), String> {
+        use crate::settings::OperatingMode;
+        if self.settings.operating_mode != OperatingMode::Cw {
+            return Err(CW_ARMED_NOT_CW.to_string());
+        }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
+        if !self.tx_enabled {
+            return Err(CW_ARMED_TX_OFF.to_string());
+        }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
+        if !self.tx_allowed() {
+            return Err(CW_ARMED_PRIVILEGES.to_string());
+        }
+        if !self.tx_allowed_as(OperatingMode::Cw) {
+            return Err(CW_ARMED_CW_PRIVILEGES.to_string());
+        }
+        // Behind CW's own words it queues, as an F-key does; behind anything else, never.
+        if let Some(owner) = self.tx_owner() {
+            if owner != TxOwner::Cw {
+                return Err(owner.busy_reason());
             }
-            // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
-            // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
-            // this queue) drops the rest of the macro instead of the rig playing it all out.
-            for word in expanded.split_whitespace() {
-                self.cw_queue.push_back(word.to_string());
-            }
+        }
+        let expanded = self.expand_cw(text);
+        if expanded.trim().is_empty() {
+            return Err(CW_ARMED_EMPTY.to_string());
+        }
+        tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
+        self.queue_cw(expanded);
+        Ok(())
+    }
+
+    /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
+    /// [`Self::send_cw_armed`], which have already decided it may go.
+    fn queue_cw(&mut self, expanded: String) {
+        // TX echo: show the operator what actually went out (tokens resolved).
+        self.cw_sent.push_back(expanded.clone());
+        while self.cw_sent.len() > 50 {
+            self.cw_sent.pop_front();
+        }
+        // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
+        // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
+        // this queue) drops the rest of the macro instead of the rig playing it all out.
+        for word in expanded.split_whitespace() {
+            self.cw_queue.push_back(word.to_string());
         }
     }
 
@@ -11990,7 +12085,7 @@ impl Engine {
         let rs = self.club_sync_refusal_reason().map_err(|why| {
             std::io::Error::other(format!(
                 "club sync cannot run {}: {}",
-                self.fd_club_contest(),
+                crate::fdevent::contest_name(&self.fd_club_contest()),
                 why.sentence()
             ))
         })?;
@@ -12066,10 +12161,17 @@ impl Engine {
     // --- host half (the ClubBackend impl calls these) ----------------------
 
     /// A position joined. Err when not hosting (a race with the toggle), Err with
-    /// §18.2's refusal when an OLDER position cannot run this club's contest, and Err
+    /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
-    /// rules-file id. The wording lives on `ClubLog` because only it knows the contest
-    /// to name.
+    /// rules-file id — and Err when it is set up in another exchange ROLE than the club's
+    /// (`role`, the JOIN's: in a QSO party, inside the state against outside it). The
+    /// wording lives on `ClubLog` and in `fdevent` because only they know the contest to
+    /// name. Every refusal is noted for the host's own screen too.
+    ///
+    /// A position that names no role is served as it always was: its contest has one role
+    /// (both Field Days), or it is older than the field and cannot say. So is any position
+    /// of a club whose own session Settings can no longer build — there is no role to hold
+    /// it to, and that club already scores nothing until Settings are put right.
     pub fn fd_club_join(
         &mut self,
         v: u32,
@@ -12077,12 +12179,26 @@ impl Engine {
         name: &str,
         call: &str,
         contest: &str,
+        role: &str,
     ) -> Result<tempo_net::fdsync::JoinAccept, String> {
         let now = now_unix_secs();
+        // The club's own role, read before the club is borrowed to change it.
+        let club_role = self
+            .fd_club
+            .as_ref()
+            .and_then(|club| self.fd_club_session(club).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default();
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
-        if let Some(msg) = club.join_refusal(v, contest) {
+        let theirs = role.trim();
+        let refusal = club.join_refusal(v, contest).or_else(|| {
+            (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
+                .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
+        });
+        if let Some(msg) = refusal {
+            club.note_refused(pos, name, call, &msg, now);
             return Err(msg);
         }
         let acked = club.join(pos, name, call, now);
@@ -12143,7 +12259,9 @@ impl Engine {
             .as_mut()
             .expect("checked above, under the same lock");
         club.mark_seen(mark_seen, now);
-        club.club_state(dupes_from, sections_from, total, now)
+        let st = club.club_state(dupes_from, sections_from, total, now);
+        club.note_board_sent(&st.board);
+        st
     }
 
     /// A position's presence report. `report.name` is its current friendly
@@ -12408,6 +12526,24 @@ impl Engine {
         }
     }
 
+    /// ⭐ **The exchange role this position's rows are sent under** — the JOIN's `role`: the
+    /// live session's in Field Day, and outside it the role Settings would start the picked
+    /// contest in (what the Contesting tab previews), so a position set up on the wrong side
+    /// of the state line hears so before its first contact. `""` for a contest with one role
+    /// (both Field Days), and for one Settings cannot start yet.
+    pub fn fd_position_role(&self) -> String {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.role().id.to_string(),
+            _ => tempo_core::fd_rules::ruleset_by_id(
+                &self.fd_club_contest(),
+                tempo_core::fd_rules::CURRENT_RULES_YEAR,
+            )
+            .and_then(|rs| ContestSession::for_ruleset(rs, &self.contest_station_data()).ok())
+            .map(|session| session.role().id.to_string())
+            .unwrap_or_default(),
+        }
+    }
+
     /// ⭐ **Whether this position may stream to a host running `contest`** (the welcome's,
     /// `""` from a host too old to name one) — `Err` with the sentence the club chip shows.
     ///
@@ -12544,6 +12680,28 @@ impl Engine {
             // of this DTO's dupe data; the mirror's unprojected keys need no work here.
             dkeys: Vec::new(),
             board,
+            // The host's alone: how full the board every position is sent has become.
+            board_full: self.fd_club.as_ref().and_then(|c| c.board_full()).map(
+                |(positions, shown)| crate::dto::FdBoardFullDto {
+                    positions: positions as u32,
+                    shown: shown as u32,
+                },
+            ),
+            // The host's alone: who it turned away, and what each was told.
+            refused: self
+                .fd_club
+                .as_ref()
+                .map(|c| {
+                    c.refused(now_unix_secs())
+                        .into_iter()
+                        .map(|r| crate::dto::FdClubRefusedDto {
+                            pos_name: r.label.clone(),
+                            call: r.call.clone(),
+                            reason: r.reason.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -25221,7 +25379,8 @@ contact yourself."
         if station.log.qsos().is_empty() && station.log.removed().is_empty() {
             return None;
         }
-        Some(station.log.adif())
+        // With the records the restore held: the journal is their only copy on disk.
+        Some(station.log.journal_adif())
     }
 
     /// One waterfall row: the Goertzel power spectrum of the **live** captured
@@ -26473,6 +26632,11 @@ pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
 /// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
 /// rewrites the journal from the log, which would drop the rest for good.
 ///
+/// Only the session's own rows are loaded: its contest's, from the running of it `now_unix`
+/// belongs to ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). The rest — a
+/// rehearsal's, another contest's — are held by the log, said on the contest screen, and
+/// written back with every rewrite of the journal ([`Engine::field_day_log_adif`]).
+///
 /// A journal kept in place is not read again; `carried`, the live log's own rows, crosses the
 /// rebuild instead (see `set_mode_with_decoder`).
 fn restore_fd_journal(
@@ -26482,9 +26646,10 @@ fn restore_fd_journal(
     carried: Option<&str>,
     now_unix: i64,
 ) {
+    let now = now_unix.max(0) as u64;
     if tempo_core::keep_aside::refuses(path) {
         if let Some(rows) = carried {
-            log.merge_adif(rows, min_when_unix);
+            log.restore_journal(rows, min_when_unix, now);
         }
         return;
     }
@@ -26499,7 +26664,7 @@ fn restore_fd_journal(
     // Lossy on purpose, as the logbook's own load: the ADIF structure is ASCII, so every record
     // survives a bad byte, and the file itself is kept below.
     let text = String::from_utf8_lossy(&bytes);
-    let merged = log.merge_adif(&text, min_when_unix);
+    let merged = log.restore_journal(&text, min_when_unix, now);
     let why = if matches!(text, std::borrow::Cow::Owned(_)) {
         Some("it is not UTF-8".to_string())
     } else if merged.unreadable > 0 {
@@ -33806,6 +33971,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// Enter Sends Message's RTTY mappings are the SETTINGS FORM's to write, as a CW profile's
+    /// mapping is: a form save adopts them, and the cockpit's one writer, which replaces only the
+    /// sets and the active set, leaves them exactly as they were — in memory and in the file.
+    #[test]
+    fn a_form_save_writes_the_rtty_esm_mapping_and_a_cockpit_macro_save_keeps_it() {
+        let (mut e, path, _lock) = rtty_macro_engine("esm");
+        let mapped =
+            serde_json::json!({"everyday": {"tu": ["F3"]}, "contest": {"exch": ["F6", "F7"]}});
+        let mut panel = e.settings().clone();
+        panel.macros.rtty_esm_roles = serde_json::from_value(mapped.clone()).unwrap();
+        e.apply_settings(panel);
+        let roles = |e: &Engine| {
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyEsmRoles"].clone()
+        };
+        assert_eq!(roles(&e), mapped, "a form save did not adopt the mapping");
+
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+        assert_eq!(
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyProfiles"],
+            contest_f1_edit(),
+            "control: the cockpit edit landed"
+        );
+        assert_eq!(
+            roles(&e),
+            mapped,
+            "the cockpit's macro save moved the ESM mapping"
+        );
+        let on_disk = serde_json::to_value(Settings::load(&path).macros).unwrap();
+        assert_eq!(
+            on_disk["rttyEsmRoles"], mapped,
+            "the mapping did not reach the file"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// The OTHER half of the one-writer carve-out, and the half a carve-out gets wrong: the two
     /// paths that REPLACE the settings must still move the macro sets. Both call
     /// `apply_restored_settings` — `reset_settings` sends `Settings::default()`, and
@@ -34893,6 +35094,218 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// An Extra in the CW section on 40 m CW, TX on, working K9AAA: where Enter's CW is sent from.
+    fn cw_for_enter() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        e.select_peer("K9AAA");
+        assert!(
+            e.tx_enabled() && e.tx_allowed(),
+            "premise: armed, inside the privileges"
+        );
+        e
+    }
+
+    /// What a refused Enter must leave exactly as it was: the latch, the queue, the SENT echo.
+    fn cw_untouched(e: &Engine) -> (bool, Vec<String>, usize) {
+        (
+            e.tx_enabled(),
+            e.cw_queue.iter().cloned().collect(),
+            e.cw_sent().len(),
+        )
+    }
+
+    /// ⛔ **ENTER NEVER TURNS TX ON** (Enter Sends Message's signed rule 5). `send_cw` re-arms by
+    /// design (`cw_send_re_arms_tx_after_a_halt`); Enter's entry refuses with TX off, says why,
+    /// and queues nothing, so the strip logs nothing. An F-key then turns TX back on, as the rule
+    /// says, and Enter sends again.
+    #[test]
+    fn the_enter_cw_send_refuses_with_tx_off_and_never_turns_it_on() {
+        let mut e = cw_for_enter();
+        // Control: taken, queued word by word exactly as an F-key's, `!` the strip's call.
+        assert_eq!(e.send_cw_armed("! 5NN {EXCH}"), Ok(()));
+        assert_eq!(e.poll_cw_one().as_deref(), Some("K9AAA"));
+        assert_eq!(e.poll_cw_one().as_deref(), Some("5NN"));
+        assert_eq!(e.cw_sent().last().map(String::as_str), Some("K9AAA 5NN"));
+        assert!(
+            e.tx_enabled(),
+            "taking a message leaves the latch as it was"
+        );
+
+        e.halt_tx(); // Stop TX, Esc, or the watchdog
+        let before = cw_untouched(&e);
+        assert_eq!(
+            e.send_cw_armed("TU {MYCALL}"),
+            Err(CW_ARMED_TX_OFF.to_string())
+        );
+        assert_eq!(cw_untouched(&e), before, "nothing queued, echoed or armed");
+        assert!(!e.tx_enabled(), "Enter never turns TX on");
+        assert_eq!(e.poll_cw_one(), None, "nothing keys");
+
+        e.send_cw("AGN"); // the operator's own act: an F-key
+        assert!(e.tx_enabled(), "an F-key turns TX back on, as before");
+        assert_eq!(e.poll_cw_one().as_deref(), Some("AGN"));
+        assert_eq!(
+            e.send_cw_armed("TU {MYCALL}"),
+            Ok(()),
+            "and Enter sends again"
+        );
+        assert_eq!(e.poll_cw_one().as_deref(), Some("TU"));
+    }
+
+    /// Every other gate a CW word passes at the poll is asked of Enter's send first, and a
+    /// refusal leaves everything as it was. Each is tried twice, refused and then not, so the
+    /// refusal is that gate's and no other's.
+    #[test]
+    fn the_enter_cw_send_refuses_up_front_outside_privileges_in_a_clock_repair_off_cw_and_under_a_tune(
+    ) {
+        // Outside the privileges: 7.020 is Extra-only CW and this is a General.
+        let mut e = cw_for_enter();
+        e.set_license_class("general");
+        e.set_frequency(7.020, "40m", "CW");
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(CW_ARMED_PRIVILEGES.to_string()));
+        assert_eq!(
+            cw_untouched(&e),
+            before,
+            "outside the privileges: nothing taken"
+        );
+        e.set_frequency(7.030, "40m", "CW");
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: inside them it is taken"
+        );
+
+        // A clock repair holds transmit.
+        let mut e = cw_for_enter();
+        e.hold_tx_for_clock_repair(std::time::Instant::now() + std::time::Duration::from_secs(600));
+        let before = cw_untouched(&e);
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Err(CLOCK_REPAIR_HOLDS_TX.to_string())
+        );
+        assert_eq!(cw_untouched(&e), before, "held: nothing taken");
+        e.end_clock_repair_hold();
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: once it ends, taken"
+        );
+
+        // Not the CW screen: Phone on 20 m phone, where an Extra may key phone and CW alike.
+        let mut e = cw_for_enter();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.25, "20m", "USB");
+        assert!(
+            e.tx_enabled() && e.tx_allowed(),
+            "premise: Phone is armed and allowed here"
+        );
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(CW_ARMED_NOT_CW.to_string()));
+        assert_eq!(cw_untouched(&e), before, "off the CW screen: nothing taken");
+        e.set_operating_mode("cw", false);
+        assert_eq!(e.send_cw_armed("TU"), Ok(()), "control: on it, taken");
+
+        // A tune carrier holds the transmitter.
+        let mut e = cw_for_enter();
+        e.set_tune(true);
+        assert_eq!(
+            e.tx_owner(),
+            Some(TxOwner::Tune),
+            "premise: the carrier is up"
+        );
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(TxOwner::Tune.busy_reason()));
+        assert_eq!(cw_untouched(&e), before, "under a tune: nothing taken");
+        e.set_tune(false);
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: carrier down, taken"
+        );
+
+        // An empty message is not taken, so it cannot be logged on.
+        let mut e = cw_for_enter();
+        e.select_peer("");
+        assert_eq!(e.send_cw_armed("! "), Err(CW_ARMED_EMPTY.to_string()));
+    }
+
+    /// ⛔ **A STOP STILL LANDS.** `send_cw` clears a pending `cw_abort` and `slot_tx_abort`, so a
+    /// macro fired after Stop TX is not flushed by it (`a_cw_send_supersedes_a_pending_slot_tx_abort`).
+    /// Enter's entry clears neither: a stop the radio loop has not consumed yet is still consumed,
+    /// and CW's own words queue behind it as type-ahead.
+    #[test]
+    fn the_enter_cw_send_never_clears_a_pending_stop() {
+        let mut e = cw_for_enter();
+        assert_eq!(e.send_cw_armed("CQ TEST"), Ok(()));
+        e.stop_cw(); // the CW Stop, before the loop has ticked
+        assert!(e.tx_enabled(), "premise: stop_cw alone leaves the latch up");
+        assert_eq!(e.send_cw_armed("TU {MYCALL}"), Ok(()));
+        assert!(
+            e.take_cw_abort(),
+            "the pending CW abort still reaches the loop"
+        );
+        assert!(e.take_slot_tx_abort(), "and so does the mid-over cut");
+        // Control: an F-key send supersedes both, as it always has.
+        e.stop_cw();
+        e.send_cw("AGN");
+        assert!(!e.take_cw_abort() && !e.take_slot_tx_abort());
+    }
+
+    /// The dock's ESM switch saves its one field and nothing else: no form save, so a CW message
+    /// already queued keeps going and the latch is untouched.
+    #[test]
+    fn the_esm_dock_switch_saves_one_switch_and_leaves_transmit_alone() {
+        let dir = std::env::temp_dir().join(format!("nexus-esm-switch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _lock = tempo_core::logbook::io_fence::EngineHeld::acquired();
+        let mut e = cw_for_enter();
+        e.configure_remote_settings_store(path.clone());
+        e.send_cw("CQ TEST");
+        let gen = e.tx_gate_gen;
+        let before = (
+            e.settings().contest_esm_rtty,
+            e.settings().contest_esm_phone,
+            e.settings().contest_esm_call_once,
+        );
+        e.set_contest_esm("cw", true).expect("saved");
+        assert!(e.settings().contest_esm_cw);
+        assert_eq!(
+            (
+                e.settings().contest_esm_rtty,
+                e.settings().contest_esm_phone,
+                e.settings().contest_esm_call_once
+            ),
+            before,
+            "the other switches are as they were"
+        );
+        assert_eq!(e.cw_queue.len(), 2, "the queued message keeps going");
+        assert!(e.tx_enabled(), "the latch is untouched");
+        assert_eq!(
+            e.tx_gate_gen, gen,
+            "no form save: the TX gate generation stands"
+        );
+        let saved: Settings =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.contest_esm_cw, "on disk");
+        e.set_contest_esm("phone", true).expect("saved");
+        e.set_contest_esm("rtty", true).expect("saved");
+        assert!(e.settings().contest_esm_phone && e.settings().contest_esm_rtty);
+        e.set_contest_esm("cw", false).expect("saved");
+        assert!(!e.settings().contest_esm_cw);
+        assert_eq!(
+            e.set_contest_esm("ft8", true),
+            Err(crate::remote_control::Reason::InvalidAction),
+            "no switch outside the three cockpits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -42345,6 +42758,7 @@ mod tests {
             "CW tent",
             "KD9TAW",
             "arrlfd",
+            "",
         );
         e.fd_club_merge(&tempo_net::fdsync::WireQso {
             pos: "aaaa0001".into(),
@@ -42408,8 +42822,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "bbbb0002",
             &tempo_net::fdsync::PosReport {
@@ -42455,6 +42869,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **The host's club board warns before the next position might not fit on the board
+    /// every position is sent, naming the count** — and once the club has more positions than
+    /// one club line carries, says how many of them the positions see.
+    ///
+    /// The board rides every club line, the heartbeat's too, and a line past 8 KB is one no
+    /// position can read. Nothing on the host said the club was nearing that.
+    #[test]
+    fn the_hosts_club_board_warns_before_the_next_position_would_not_fit() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut first_warned = None;
+        for n in 1..=90u32 {
+            let pos = format!("{n:08x}");
+            let _ = e.fd_club_join(
+                v,
+                &pos,
+                &format!("Position {n:02} tent"),
+                "W9ABC",
+                "arrlfd",
+                "",
+            );
+            e.fd_club_pos_status(
+                &pos,
+                &tempo_net::fdsync::PosReport {
+                    band: "160m".into(),
+                    mode: "dig".into(),
+                    op: format!("kd9t{n:04}"),
+                    freq: 1_840_000,
+                    name: format!("Position {n:02} tent"),
+                    clock_ms: None,
+                },
+            );
+            // What every connection's heartbeat asks for, and what the positions are sent.
+            let sent = e.fd_club_state(0, 0, &pos);
+            let shown = tempo_net::fdsync::board_fit(&sent.board).rows.len() as u32;
+            let full = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+            if n == 10 {
+                assert_eq!(full, None, "CONTROL: a club of 10 is nowhere near the line");
+            }
+            if let Some(f) = full {
+                assert_eq!(f.positions, n, "the warning names the club's positions");
+                assert_eq!(f.shown, shown, "and how many the positions are sent");
+                first_warned.get_or_insert(f);
+            }
+        }
+        let first = first_warned.expect("a club of 90 positions is warned");
+        assert_eq!(
+            first.shown, first.positions,
+            "warned BEFORE anyone is left out: all {} still on the board",
+            first.positions
+        );
+        let last = e.snapshot().field_day.unwrap().club.unwrap().board_full;
+        let last = last.expect("still warned at 90");
+        assert_eq!(last.positions, 90);
+        assert!(
+            last.shown < 90 && last.shown >= first.positions,
+            "past the line the board is cut, not dropped: {last:?}"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
     /// the host already holds per position — the scoreboard seam simply
     /// dropped it, carrying label + operator only, so the club TV could not
@@ -42474,8 +42962,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd");
-        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd");
+        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd", "");
         e.fd_club_pos_status(
             "aaaa0001",
             &tempo_net::fdsync::PosReport {
@@ -42617,6 +43105,116 @@ mod tests {
         assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
     }
 
+    /// An Illinois QSO Party club host in Cook County — the in-state role — hosting.
+    fn party_host(dir: &std::path::Path) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e.fd_host_start(dir.join("ilqp.ndjson"))
+            .expect("the Illinois QSO Party is hosted");
+        e
+    }
+
+    /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
+    /// on both screens** — in a QSO party a station inside the state sends its county and
+    /// one outside it sends its state, chosen by where Settings says it is. A club entry is
+    /// one station in one place, so a position set up out of state would send every contact
+    /// with the wrong exchange into an in-state club log, and nothing said so.
+    #[test]
+    fn a_party_club_refuses_a_position_set_up_in_another_role_by_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-role-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let err = e
+            .fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "w_ve")
+            .expect_err("a position set up out of state is refused");
+        assert!(
+            err.contains("in-state") && err.contains("out-of-state"),
+            "it says which value differs: {err}"
+        );
+        assert!(
+            err.contains("Your station data") && err.contains("Contesting tab"),
+            "and where to set it: {err}"
+        );
+        // The host's own screen says so too: who, and what they were told.
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        let refused: Vec<(&str, &str, &str)> = club
+            .refused
+            .iter()
+            .map(|r| (r.pos_name.as_str(), r.call.as_str(), r.reason.as_str()))
+            .collect();
+        assert_eq!(refused, vec![("SSB tent", "W9XYZ", err.as_str())]);
+        // A DX one, by its own word.
+        let dx = e
+            .fd_club_join(v, "cccc0003", "DX tent", "W9XYZ", "ilqp", "dx")
+            .expect_err("a position set up as DX is refused");
+        assert!(dx.contains("DX"), "{dx}");
+        // CONTROLS. The same position set up in the club's role joins, and the host's note
+        // for it goes; an older position, which cannot say its role, is served as before.
+        e.fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state")
+            .expect("the club's own role joins");
+        e.fd_club_join(v, "bbbb0002", "CW tent", "W9XYZ", "ilqp", "")
+            .expect("an older position joins as it always has");
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(
+            club.refused
+                .iter()
+                .map(|r| r.pos_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["DX tent"],
+            "the joined position's note is gone; the DX one's stays"
+        );
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The role a position's JOIN names is the one its rows are sent under** — the live
+    /// session's in Field Day mode, else the one Settings would start the picked contest
+    /// with — and nothing for a contest with one role.
+    #[test]
+    fn the_join_names_the_role_this_positions_exchange_is_sent_under() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        e.apply_settings(s.clone());
+        assert_eq!(e.fd_position_role(), "in_state", "previewed from Settings");
+        e.set_mode("fieldday-sp").unwrap();
+        assert_eq!(e.fd_position_role(), "in_state", "the live session's");
+        let mut out = Engine::new("W9XYZ", "EN61", 0);
+        s.contest_qth_state = "IN".into();
+        s.contest_qth_county.clear();
+        out.apply_settings(s);
+        out.set_mode("fieldday-sp").unwrap();
+        assert_eq!(
+            out.fd_position_role(),
+            "w_ve",
+            "an Indiana station is out of state"
+        );
+        // CONTROL: Field Day has one role, and says none.
+        let mut fd = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = fd.settings().clone();
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        fd.apply_settings(s);
+        fd.set_mode("fieldday-sp").unwrap();
+        assert_eq!(fd.fd_position_role(), "");
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -42692,6 +43290,14 @@ mod tests {
                 .fd_host_start(dir.join(format!("{event}.ndjson")))
                 .expect_err("refused");
             assert!(err.to_string().contains(why.sentence()), "{event}: {err}");
+            // The host's log line names the contest as its sponsor does, never by the
+            // rules-file id an operator has never seen.
+            assert!(
+                err.to_string()
+                    .contains(&crate::fdevent::contest_name(event))
+                    && !err.to_string().contains(event),
+                "{event}: {err}"
+            );
             assert!(!e.fd_hosting());
             assert_eq!(
                 e.fd_sync_targets(),
@@ -42777,7 +43383,7 @@ mod tests {
         // A Field Day club serves a v1 tent exactly as it always did.
         assert!(
             backend
-                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "")
+                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "", "")
                 .is_ok(),
             "a mixed-version FIELD DAY club must be unaffected by the gate"
         );
@@ -42790,7 +43396,7 @@ mod tests {
             club.event_id = "tnqp".into();
         }
         let msg = backend
-            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "")
+            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "", "")
             .expect_err("a v1 tent cannot run a QSO party");
         assert!(
             msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"),
@@ -42811,7 +43417,15 @@ mod tests {
         // gate that refused everybody would satisfy every assertion above while
         // locking every tent out of the QSO party.
         let accept = backend
-            .join(PROTO_VERSION, "cccc0003", "SSB tent", "KD9TAW", 0, "tnqp")
+            .join(
+                PROTO_VERSION,
+                "cccc0003",
+                "SSB tent",
+                "KD9TAW",
+                0,
+                "tnqp",
+                "",
+            )
             .expect("a v2 tent joins the QSO party");
         assert_eq!(accept.host_call, "W9ABC");
 
@@ -42833,6 +43447,150 @@ mod tests {
         e.apply_settings(s);
         e.set_mode("fieldday-sp").expect("the party runs");
         e
+    }
+
+    /// ⭐ **Entering the party restores this session's rows only, says how many it kept out
+    /// and why, and keeps them on disk** — through the engine's own restore, the shell's
+    /// journal file and the rewrite the next contact makes, on the real clock: an ARRL Field
+    /// Day contact from an hour ago, in the same per-position journal.
+    #[test]
+    fn the_party_keeps_another_contests_journal_rows_out_says_so_and_keeps_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-kept-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let mut fd = tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(tempo_core::fieldday::FdEvent::ArrlFd, "3A", "IL"),
+            "40m",
+        );
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert!(fd.log_fields_at(
+            "K1ABC",
+            &[pair("CLASS", "2A"), pair("SECTION", "EMA")],
+            "CW",
+            "",
+            0,
+            now_unix_secs() - 3600
+        ));
+        let fd_journal = fd.adif();
+        let fd_record = fd_journal[fd_journal.find("<CALL").unwrap()..]
+            .trim_end()
+            .to_string();
+        std::fs::write(&path, &fd_journal).unwrap();
+        let party = |path: &std::path::Path| {
+            let mut e = Engine::new("W9XYZ", "EN50", 0);
+            e.set_fd_log_path(path.to_path_buf());
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "COOK".into();
+            e.apply_settings(s);
+            e.set_mode("fieldday-sp").expect("the party runs");
+            e
+        };
+        let mut e = party(&path);
+        let st = e.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.qso_count, 0,
+            "the Field Day contact is not in the party's log"
+        );
+        assert_eq!(
+            st.kept_out,
+            Some(crate::dto::FdKeptOutDto {
+                other_contest: 1,
+                other_running: 0
+            }),
+            "and the screen is told how many, and why"
+        );
+        assert!(e
+            .contest_log_manual(
+                "N9AAA",
+                &[pair("RST", "599"), pair("QTH", "LAKE")],
+                "CW",
+                None
+            )
+            .unwrap());
+        e.journal_mark().wait();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains(&fd_record),
+            "kept, as Field Day wrote it:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("<CALL:5>N9AAA"),
+            "beside the party's own:\n{on_disk}"
+        );
+        // CONTROL: a restart from that file brings the party's contact back, and keeps the
+        // Field Day one out again.
+        let again = party(&path);
+        let st = again.snapshot().field_day.expect("the party runs");
+        assert_eq!(
+            st.log.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
+            vec!["N9AAA"]
+        );
+        assert_eq!(st.kept_out.map(|k| k.other_contest), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **…and a rehearsal days before the party, through the engine's own restore** at the
+    /// party's clock — the date the operator's question is about, which the real clock
+    /// cannot be set to. CONTROL: the rehearsal's own restart, at the rehearsal's clock,
+    /// loads it whole.
+    #[test]
+    fn the_engines_restore_keeps_a_rehearsal_out_of_the_party() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-journal-rehearsal-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fieldday_backup_eeee0001.adi");
+        let session = match &ilqp_engine("COOK", "eeee0001").mode {
+            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            _ => panic!("the party runs"),
+        };
+        // Wednesday 14 October 2026, 2300Z and 2301Z; the party starts Sunday the 18th 1700Z.
+        let (wed, sun) = (1_792_018_800u64, 1_792_351_800u64);
+        let mut rehearsal = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        for (i, call) in ["K9AAA", "K9BBB"].into_iter().enumerate() {
+            let ex = [
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), "KANE".to_string()),
+            ];
+            assert!(rehearsal.log_fields_at(call, &ex, "CW", "", 0, wed + 60 * i as u64));
+        }
+        std::fs::write(&path, rehearsal.adif()).unwrap();
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session.clone(), "40m");
+        restore_fd_journal(&mut log, &path, sun - 4 * 86_400, None, sun as i64);
+        assert!(
+            log.qsos().is_empty(),
+            "not one rehearsal contact in the party's log"
+        );
+        assert_eq!(log.held(), (0, 2), "two kept out, as another running");
+        let mut log = tempo_core::fieldday::FieldDayLog::new("W9XYZ", session, "40m");
+        restore_fd_journal(
+            &mut log,
+            &path,
+            wed + 3600 - 4 * 86_400,
+            None,
+            (wed + 3600) as i64,
+        );
+        assert_eq!(
+            log.qsos()
+                .iter()
+                .map(|q| q.call.as_str())
+                .collect::<Vec<_>>(),
+            vec!["K9AAA", "K9BBB"],
+            "CONTROL: the rehearsal's own restart"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// One party contact as a current position streams it, resolved through the
@@ -42904,16 +43662,16 @@ mod tests {
             .expect("the party is hosted");
         let v = tempo_net::fdsync::PROTO_VERSION;
         let accept = e
-            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp")
+            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp", "")
             .expect("a party position joins the party");
         assert_eq!(
             accept.contest, "ilqp",
             "the welcome names the club's contest"
         );
-        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp")
+        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp", "")
             .expect("a second party position");
         let refused = e
-            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd")
+            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd", "")
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
             refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
@@ -43797,6 +44555,7 @@ mod tests {
             "Tent",
             "W9XYZ",
             "wfd",
+            "",
         );
         for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
             e.fd_club_merge(&tempo_net::fdsync::WireQso {

@@ -672,7 +672,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdClubBoardRow, FdClubDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubRefusedDto, FdKeptOutDto,
+        FieldDayQso, FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -716,8 +717,16 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 "dupeRule",
                 "objectiveMultiplier",
                 "satelliteCredit",
+                "keptOut",
             ],
         );
+        if let Some(kept) = status.get("keptOut") {
+            takes(
+                &format!("{what}: what the journal restore kept out"),
+                kept,
+                &["otherContest", "otherRunning"],
+            );
+        }
         for contact in status["log"].as_array().unwrap() {
             takes_optional(
                 &format!("{what}: a contact"),
@@ -768,8 +777,27 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     "dupes",
                     "board",
                 ],
-                &["lastError", "dkeys"],
+                &["lastError", "dkeys", "boardFull", "refused"],
             );
+            if let Some(full) = club.get("boardFull") {
+                takes(
+                    &format!("{what}: the club's full board"),
+                    full,
+                    &["positions", "shown"],
+                );
+            }
+            for refused in club
+                .get("refused")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                takes(
+                    &format!("{what}: a position the club turned away"),
+                    refused,
+                    &["posName", "call", "reason"],
+                );
+            }
             for row in club["board"].as_array().unwrap() {
                 takes_optional(
                     &format!("{what}: a club board row"),
@@ -950,6 +978,15 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 last_seen_secs: 5,
                 clock_ms: Some(-3_000),
             }],
+            board_full: Some(FdBoardFullDto {
+                positions: 70,
+                shown: 59,
+            }),
+            refused: vec![FdClubRefusedDto {
+                pos_name: "SSB tent".into(),
+                call: "W1AW".into(),
+                reason: "this club sends the in-state exchange".into(),
+            }],
         }),
         upload: Default::default(),
         receives: Vec::new(),
@@ -973,6 +1010,10 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         }),
         role: String::new(),
         boards: Vec::new(),
+        kept_out: Some(FdKeptOutDto {
+            other_contest: 1,
+            other_running: 3,
+        }),
     };
     status(
         "fieldDay: every field",

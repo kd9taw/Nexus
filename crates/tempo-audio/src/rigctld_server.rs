@@ -48,10 +48,18 @@ pub trait RigBackend: Send + Sync {
     fn set_vfo(&self, _vfo: &str) -> bool {
         true
     }
-    /// The radio's RECEIVE frequency ranges (Hz, inclusive) for `\dump_state`. `None` = don't
-    /// answer the verb (`RPRT -1`), which every client must read as "capabilities unknown" and
-    /// therefore fail OPEN. Implement it to let a client know what this radio can and cannot reach
-    /// without having to command it there and see what happens.
+    /// The radio's RECEIVE frequency ranges (Hz, inclusive) for `\dump_state`. Implement it to let
+    /// a client know what this radio can and cannot reach without having to command it there and
+    /// see what happens.
+    ///
+    /// - `Some(ranges)`: the radio's own list, sent as the RX rows.
+    /// - `Some(vec![])`: this backend does not know the radio's ranges, and says so with an empty
+    ///   RX list. Nexus's reader ([`crate::rig::parse_dump_state_rx_ranges`]) takes that as
+    ///   unknown, so every caller fails OPEN: the radio is commanded and answers for itself.
+    /// - `None` (the default): the dump carries [`DUMP_STATE`]'s wide row instead. That row is what
+    ///   the CAT broker tells a NET-rigctl client (WSJT-X), wide so it may set any frequency. It is
+    ///   not a radio's range, but a reader cannot tell it from one: Nexus's reader takes it as the
+    ///   radio's list.
     fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
         None
     }
@@ -214,12 +222,13 @@ const DUMP_STATE: &str = concat!(
 
 /// The `\dump_state` reply for `backend`.
 ///
-/// Uses [`DUMP_STATE`] verbatim unless the backend declares real RX ranges, in which case its RX
-/// list is substituted. The wide default is deliberate for a broker fronting an arbitrary radio: a
-/// NET-rigctl client (WSJT-X) must be allowed to set any freq/mode, and a client reading these
-/// ranges as capability must therefore see "covers everything" rather than a guess.
+/// Uses [`DUMP_STATE`] verbatim unless the backend declares its RX ranges, in which case its RX
+/// list is substituted: an empty declaration is an empty list (see [`RigBackend::rx_ranges`]). The
+/// wide default is deliberate for a broker fronting an arbitrary radio: a NET-rigctl client
+/// (WSJT-X) must be allowed to set any freq/mode. It is not a range a capability reader can use:
+/// read as one, it says 135.7 kHz to 1.3 GHz.
 fn dump_state(backend: &dyn RigBackend) -> String {
-    let ranges = backend.rx_ranges().filter(|r| !r.is_empty());
+    let ranges = backend.rx_ranges();
     let preamp = backend.preamp_steps_db();
     let att = backend.attenuator_steps_db();
     if ranges.is_none() && preamp.is_empty() && att.is_empty() {

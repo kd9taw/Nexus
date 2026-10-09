@@ -4084,6 +4084,22 @@ export const EN = {
   'fieldDay.club.refused.chip': 'Not syncing',
   'fieldDay.club.refused.serial': 'Club sync does not run {{contest}}: its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refused.transmitter': 'Club sync does not run {{contest}}: its log must say which transmitter made each contact, and club sync does not number the transmitters. This station does not host or join a club event, and each position keeps its own log.',
+  'fieldDay.club.refused.unknown': 'Club sync does not run {{contest}}: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.',
+  'fieldDay.club.refusedPosition': 'Turned away {{name}} ({{call}}). It was told: “{{reason}}”',
+  'fieldDay.club.refusedCall': 'Turned away {{call}}. It was told: “{{reason}}”',
+  'fieldDay.club.boardFull':
+    "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
+  'fieldDay.club.boardCut':
+    "Each position's club board shows {{shown}} of this club's {{positions}} positions, as many as one club line carries, leaving out the ones heard from least recently. Contacts, dupe warnings and the score still sync.",
+  'fieldDay.keptOut.running': {
+    one: "{{count}} contact in this computer's contest journal was logged in another running of {{contest}}, a rehearsal before it for one, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal were logged in another running of {{contest}}, a rehearsal before it for one, so they are not in this log.",
+  },
+  'fieldDay.keptOut.contest': {
+    one: "{{count}} contact in this computer's contest journal belongs to another contest, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
+  },
+  'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -4223,6 +4239,81 @@ export const EN = {
   'settings.contestAids.history.held': '{{file}}: {{count}} calls, for {{contest}}.',
   'settings.contestAids.history.otherContest':
     'This file is for {{contest}}, not the contest picked above, so it is not used now.',
+  'settings.contestKeys.legend': 'Enter Sends Message',
+  'settings.contestKeys.hint':
+    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, as N1MM Logger+ does, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
+  'settings.contestKeys.remote':
+    'Enter Sends Message is set at the station and works only there, not on this page.',
+  'settings.contestKeys.cw.label': 'ESM in the CW cockpit',
+  'settings.contestKeys.rtty.label': 'ESM in the RTTY cockpit',
+  'settings.contestKeys.phone.label': 'ESM in the Phone cockpit',
+  'settings.contestKeys.phone.hint':
+    'Enter plays the voice keyer’s recordings. When you are running, you say his call and your exchange yourself: a recording cannot say a callsign.',
+  'settings.contestKeys.callOnce.label': 'Call once (S&P)',
+  'settings.contestKeys.callOnce.hint':
+    'In search and pounce, your call goes once per station. The next Enter asks for a repeat instead of sending your call again.',
+  'settings.contestKeys.cw.steps.label': 'CW steps: {{profile}}',
+  'settings.contestKeys.cw.steps.builtIn':
+    'This profile uses the built-in sets, so its steps in a contest are theirs. To map your own keys, customize the profile in Settings ▸ CW.',
+  'settings.contestKeys.cw.steps.own':
+    'Saved with this profile. A step with no key sends nothing, and the strip names it.',
+  'settings.contestKeys.rtty.steps.label': 'RTTY steps',
+  'settings.contestKeys.rtty.steps.hint':
+    'Each set keeps its own mapping. A key you changed in the cockpit keeps its place, so its step sends your text.',
+  'settings.contestKeys.phone.steps.label': 'Voice keyer steps',
+  'settings.contestKeys.phone.steps.hint':
+    'Record a slot for each step you want Enter to play. An empty slot plays nothing.',
+  'contest.esm.step.callExch': 'His call and your exchange',
+  'contest.esm.step.myCall': 'Your call',
+  'contest.esm.step.exch': 'Your S&P exchange',
+  'contest.esm.refused.dupe': 'A dupe of your own log: Enter sends nothing and logs nothing.',
+  'contest.esm.refused.txOff':
+    'TX is off, and Enter never turns it on. Turn TX on yourself, then press Enter.',
+  'contest.esm.refused.txLocked':
+    'TX is locked here: the dial is outside your license privileges, or this connection does not allow transmitting.',
+  'contest.esm.refused.clockRepair': 'A clock repair is holding transmit, so Enter sends nothing.',
+  'contest.esm.refused.recording': 'The voice keyer is recording, so Enter plays nothing.',
+  'contest.esm.refused.pttHeld': 'You are holding PTT, so Enter plays nothing.',
+  'contest.esm.refused.radioHasMic': 'The radio has the mic, so a recording would not go out.',
+  'contest.esm.refused.unmapped':
+    '{{step}}: no key is mapped, so Enter sends nothing and logs nothing at that step.',
+  'contest.esm.refused.empty':
+    '{{step}}: {{key}} is empty, so Enter sends nothing and logs nothing at that step.',
+  'contest.esm.refused.oneSlot': '{{step}}: mapped to two recordings, and the keyer plays one per press.',
+  'contest.esm.inert.noKeyer':
+    'ESM steps aside while the voice keyer is hidden: Enter logs as it does with ESM off.',
+  'contest.esm.inert.auto':
+    'ESM steps aside while the RTTY auto sequence runs: Enter logs as it does with ESM off.',
+  'contest.esm.inert.continuousTx':
+    'ESM steps aside while Continuous TX is latched: Enter logs as it does with ESM off.',
+  'contest.esm.inert.noRoles':
+    'This set has no step mapped, so ESM steps aside: Enter logs as it does with ESM off.',
+  'contest.esm.picker.builtIn.title': 'The built-in set’s key for this step',
+  'contest.esm.picker.builtIn.none': 'none',
+  'contest.esm.picker.useBuiltIn': 'Built in: {{keys}}',
+  'contest.esm.picker.none': 'None',
+  'contest.esm.picker.key.aria': 'Key for {{step}}',
+  'contest.esm.picker.then.aria': 'Second key for {{step}}',
+  'contest.esm.picker.thenNone': 'Nothing more',
+  'contest.esm.switch.label': 'Enter Sends Message',
+  'contest.esm.switch.title':
+    'Enter Sends Message: with it on, Enter in the contest strip sends the contact’s next message from your F-keys, and logs the contact at its last step. Enter never turns TX on. It is off until you turn it on, in each cockpit separately.',
+  'contest.esm.mode.run': 'Run',
+  'contest.esm.mode.sp': 'S&P',
+  'contest.esm.mode.title':
+    'Running or search and pounce: click to switch. The key that holds your CQ switches to running, and clicking a spot switches to S&P.',
+  'contest.esm.next': 'Enter sends {{keys}}',
+  'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
+  'contest.esm.phone.speak': 'Say his call and your exchange.',
+  'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',
+  'contest.esm.refused.history':
+    '{{field}} came from call history: type it to accept it, then press Enter. Alt+Enter logs it as it is.',
+  'contest.esm.stopped.logged': '{{step}} stopped. {{call}} is logged. Ctrl+D twice removes it.',
+  'contest.esm.stopped.loggedClubSync':
+    '{{step}} stopped. {{call}} is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
+  'contest.esm.stopped.again':
+    '{{step}} stopped, so it counts as not sent: the next Enter sends it again.',
+  'contest.esm.switch.failed': 'Enter Sends Message was not saved, so the switch is as it was.',
 
   'settings.fieldDay.legend': 'Field Day Setup',
   'settings.fieldDay.mode.label': 'Field Day mode',
@@ -10022,6 +10113,7 @@ export const EN = {
   'cw.macro.exch.label': 'Exch',
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
+  'cw.macro.spExch.label': 'S&P exch',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
   'cw.hisCall.label': 'His call',
   'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
@@ -11323,6 +11415,11 @@ export const EN = {
   'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
   'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
   'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
+  'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
+  'rotor.pane.aim.point.label': 'Point',
+  'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.unknown': 'location unknown',
+  'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

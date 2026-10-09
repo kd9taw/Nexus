@@ -1363,6 +1363,33 @@ button.nb-chip:hover {
   background: var(--state-weak);
   color: var(--panel);
 }
+/* Line 2 beside a cockpit: the call in its log entry, the bearing and distance to it, and Point.
+   It wraps inside the column like the entry row above it, and Point is drawn as Connect's ▶ Work. */
+.rotor-aim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-aim-to {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.rotor-aim-why {
+  color: var(--text-dim);
+}
+.rotor-aim-point {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rotor-aim-point:hover {
+  border-color: var(--accent);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);
@@ -9603,6 +9630,55 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-macro.recommended {
   border-color: var(--accent, #4ea1ff);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
+}
+/* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow, as N1MM
+   lights them — the CW and RTTY F-keys, and the voice keyer's slots. */
+.cw-macro.esm-lit,
+.vk-play.esm-lit {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* …and its plate in the TX dock: the ESM switch, Run or S&P, and what the next Enter does. The
+   host puts it LAST in its row, and it takes only the room left (`flex: 1 1 0`, `min-width: 0`):
+   a longer sentence is cut, never wraps the row or moves a control. In Phone that row holds PTT,
+   and a button that moved under a held pointer would end the over. */
+.esm-plate {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.esm-switch,
+.esm-mode {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.esm-switch.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Run and S&P are one width, so switching between them moves nothing. */
+.esm-mode {
+  min-width: 4.5em;
+}
+.esm-next {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
 }
 .cw-macros {
   display: grid;
@@ -23907,6 +23983,17 @@ button.sat-chip:disabled {
 }
 .cw-macro-text {
   flex: 1;
+}
+/* Enter Sends Message's role picker (Settings ▸ Contesting) reuses these rows. The step's name
+   takes one width so the keys line up, and wraps inside it; what the step sends takes the rest
+   of the row and wraps rather than pushing the row wider than its section. */
+.esm-role-row .cw-macro-role {
+  flex: 0 0 11em;
+}
+.esm-role-sends {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* --- Operator-resizable sub-panels (PaneSeam.tsx) --- */

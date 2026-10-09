@@ -160,6 +160,9 @@ export interface DashRailProps {
   spotsFeed?: SpotsFeed
   otaBoard?: OtaBoard
   neededBoard?: NeededBoard
+  /** The call in the log entry of the cockpit beside the rail (PaneContext `entryCall`), for the Rotor
+   *  box: App reads it off the cockpit on screen. */
+  entryCall?: string | null
   /** The rail beside this cockpit: its own records (`dashRailRecords`), which App owns. */
   rail: DashRailRecords
   /** Turn the rail off for this section: its ✕, and the crash panel's way out. */
@@ -303,6 +306,7 @@ function DashRailBody(p: DashRailProps) {
     spotsFeed,
     otaBoard: p.otaBoard,
     neededBoard,
+    entryCall: p.entryCall,
   })
   const frames = useMemo(
     () => Object.fromEntries(DASH_SLOT_IDS.map((s) => [s, createRef<HTMLElement>()])) as Record<DashSlotId, RefObject<HTMLElement>>,

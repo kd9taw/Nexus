@@ -1290,6 +1290,17 @@ impl RigBackend for CivBackend {
         self.set_vfo_on(ReceiverId::Main, vfo)
     }
 
+    /// UNKNOWN: this daemon has no receive range for any model, so it declares none, and
+    /// `\dump_state` carries an empty RX list. Nexus's reader takes that as unknown and every
+    /// caller fails open, so the radio is commanded and answers for itself: a frequency it cannot
+    /// tune comes back NG, which the radio loop reports as the radio's refusal. Left at the trait's
+    /// `None`, the reply carried the CAT broker's wide row for WSJT-X, and the app took 135.7 kHz
+    /// to 1.3 GHz as this radio's range: an IC-905 was refused 2.4, 5.7 and 10 GHz before it was
+    /// asked, and an IC-7300 was believed to receive 2 m.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        Some(Vec::new())
+    }
+
     /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
     /// values exist instead of trying them. Empty for a model this build has no list for —
     /// see [`CivBackend::model`].
@@ -2806,6 +2817,74 @@ mod tests {
             backend.set_level("PREAMP", "10"),
             Some(false),
             "not a 7610 preamp"
+        );
+    }
+
+    /// ⭐ THIS DAEMON DOES NOT KNOW WHAT ITS RADIO RECEIVES, AND ITS `\dump_state` SAYS SO: an empty
+    /// RX list, which Nexus's own reader takes as unknown, for every model and for an unnamed one.
+    /// It used to carry the CAT broker's wide row for WSJT-X, 135.7 kHz to 1.3 GHz, which the
+    /// reader took as the radio's range. The pads and preamps further down the same reply are
+    /// still each model's own, and the whole reply for a radio with none is pinned line by line:
+    /// every line but the RX row is the one it always was.
+    #[test]
+    fn the_dump_state_declares_no_receive_range_and_each_models_own_pads() {
+        use crate::rigctld_server::{handle_command, Handled};
+        use IcomModel::*;
+        let dump = |b: &CivBackend| match handle_command("\\dump_state", b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("\\dump_state closed the connection"),
+        };
+        let models = [
+            Some(Ic7300),
+            Some(Ic7610),
+            Some(Ic9700),
+            Some(Ic705),
+            Some(Ic905),
+            Some(Ic7760),
+            Some(Ic7300Mk2),
+            None,
+        ];
+        for model in models {
+            let (_e, b, _regs) = backend_on(model.map_or(0x94, IcomModel::default_civ_addr), model);
+            let ds = dump(&b);
+            assert_eq!(
+                (
+                    crate::rig::parse_dump_state_rx_ranges(&ds),
+                    crate::rig::parse_dump_state_db_lists(&ds)
+                        .map(|s| (s.preamp_db, s.attenuator_db)),
+                ),
+                (None, Some((b.preamp_steps_db(), b.attenuator_steps_db()))),
+                "{model:?}"
+            );
+        }
+        let (_e, b, _regs) = backend_on(0xAC, Some(Ic905));
+        assert_eq!(
+            dump(&b),
+            concat!(
+                "0\n",
+                "2\n",
+                "1\n",
+                "0 0 0 0 0 0 0\n",
+                "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "0xffffffff 1\n",
+                "0 0\n",
+                "0xffffffff 2700\n",
+                "0xffffffff 500\n",
+                "0 0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+            )
         );
     }
 

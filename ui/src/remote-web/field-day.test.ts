@@ -263,3 +263,36 @@ it('accepts a board row\'s measured clock, null or absent, and refuses anything 
  expect(parseFieldDay(page(-3000)).fieldDay?.club?.board[0].clockMs).toBe(-3000)
  for (const bad of [1.5,'-3000',Number.MAX_SAFE_INTEGER+2,true,{}]) expect(()=>parseFieldDay(page(bad)),String(bad)).toThrow('invalidFieldDay')
 })
+
+// Three keys a station sends only when they apply, so an older station sends none: what its
+// journal restore kept out of the session (`keptOut`), and, on a host, how full its club board
+// is (`boardFull`) and the positions it turned away (`refused`). This validator refuses a key it
+// does not know, so the page that takes them is deployed before the release that writes them.
+it('accepts what the journal restore kept out, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.keptOut={otherContest:1,otherRunning:3}
+ expect(parseFieldDay(page).fieldDay?.keptOut).toEqual({otherContest:1,otherRunning:3})
+ for(const bad of [{otherContest:1},{otherContest:-1,otherRunning:0},{otherContest:1,otherRunning:'3'},{otherContest:1,otherRunning:0,extra:1},null,[]]){
+  fd.keptOut=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+})
+it('accepts a host club\'s full board and the positions it turned away, and still bounds them',()=>{
+ const page=fieldDayPage()
+ const club=(page.meta as {source:{fieldDay:{club:Record<string,unknown>}}}).source.fieldDay.club
+ club.boardFull={positions:70,shown:59}
+ club.refused=[{posName:'SSB tent',call:'W9XYZ',reason:'this club sends the in-state IL QSO Party exchange (its county)'}]
+ const got=parseFieldDay(page).fieldDay?.club
+ expect(got?.boardFull).toEqual({positions:70,shown:59})
+ expect(got?.refused?.[0].call).toBe('W9XYZ')
+ for(const bad of [{positions:70},{positions:70,shown:1.5},{positions:70,shown:59,extra:0},null]){
+  club.boardFull=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+ club.boardFull={positions:70,shown:59}
+ for(const bad of [[{posName:'a',call:'b'}],[{posName:'a',call:'b',reason:7}],Array(17).fill({posName:'a',call:'b',reason:'c'}),{}]){
+  club.refused=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad).slice(0,60)).toThrow('invalidFieldDay')
+ }
+})

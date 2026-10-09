@@ -264,33 +264,38 @@ const rel = (abs: string) => abs.slice(repo('').length).replace(/\\/g, '/')
 
 describe('CW F-key macros match CwCockpit.tsx', () => {
   const CW_TSX = read(uiSrc('components/CwCockpit.tsx'))
+  const ESM_ROLES_TS = read(uiSrc('features/esmRoles.ts'))
 
   // A CAPTION IS EITHER WRITTEN IN THE SOURCE OR NAMED BY A CATALOG KEY (i18n phase 2): the
   // macro captions that are on-air shorthand — CQ, 73, AGN, TU, CQ FD, ? — are invariant and
   // stay written as `label`, and the ones that are words moved into `ui/src/i18n/en.ts` and
   // are named by `labelKey`. What the doc's Label column has to match is what the cockpit
   // SHOWS, so the key is resolved through the English catalog rather than compared as a key.
-  const sourceSet = (name: string) =>
-    objectsIn(declValue(CW_TSX, name)).map((span, i) => {
+  const sourceSet = (name: string, src = CW_TSX, file = 'CwCockpit.tsx') =>
+    objectsIn(declValue(src, name)).map((span, i) => {
       const o = parseObjectLiteral(span)
       for (const f of ['key', 'text']) {
-        if (!(f in o)) throw new Error(`CwCockpit.tsx ${name}[${i}] has no ${f}: ${span}`)
+        if (!(f in o)) throw new Error(`${file} ${name}[${i}] has no ${f}: ${span}`)
       }
       const label = 'labelKey' in o ? EN[o.labelKey as MessageKey] : o.label
       if (typeof label !== 'string') {
-        throw new Error(`CwCockpit.tsx ${name}[${i}] has no label (nor a catalog one): ${span}`)
+        throw new Error(`${file} ${name}[${i}] has no label (nor a catalog one): ${span}`)
       }
       return { key: o.key, label, text: o.text }
     })
 
+  // THE CONTEST AND FIELD DAY SETS ARE THE SIGNED LAYOUT (features/esmRoles.ts), which the
+  // cockpit's `CW_CONTEST_SETS` sends; the casual set is the cockpit's own.
+  const layout = (name: string) => ({
+    const: `${name} (features/esmRoles.ts)`,
+    macros: sourceSet(name, ESM_ROLES_TS, 'esmRoles.ts'),
+  })
+
   const SETS = {
     default: { const: 'DEFAULT_MACROS', macros: sourceSet('DEFAULT_MACROS') },
-    fieldDay: { const: 'DEFAULT_FD_MACROS', macros: sourceSet('DEFAULT_FD_MACROS') },
-    contest: { const: 'DEFAULT_CONTEST_MACROS', macros: sourceSet('DEFAULT_CONTEST_MACROS') },
-    contestNoReport: {
-      const: 'DEFAULT_CONTEST_NO_REPORT_MACROS',
-      macros: sourceSet('DEFAULT_CONTEST_NO_REPORT_MACROS'),
-    },
+    fieldDay: layout('CW_FIELD_DAY_LAYOUT'),
+    contest: layout('CW_CONTEST_LAYOUT'),
+    contestNoReport: layout('CW_CONTEST_NO_REPORT_LAYOUT'),
   }
 
   // A published CW macro table is any table headed Key | Label | … on a CW page (every
@@ -327,11 +332,11 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
       'docs/manual/CW.md',
     )
     const fd = macroTables.filter((t) => t.set === SETS.fieldDay).map((t) => `${t.file} — ${t.heading}`)
-    expect(fd, 'no Field Day macro table found — DEFAULT_FD_MACROS is unguarded').not.toEqual([])
+    expect(fd, 'no Field Day macro table found — CW_FIELD_DAY_LAYOUT is unguarded').not.toEqual([])
     const contest = macroTables.filter((t) => t.set === SETS.contest).map((t) => `${t.file} — ${t.heading}`)
-    expect(contest, 'no contest macro table found — DEFAULT_CONTEST_MACROS is unguarded').not.toEqual([])
+    expect(contest, 'no contest macro table found — CW_CONTEST_LAYOUT is unguarded').not.toEqual([])
     const noReport = macroTables.filter((t) => t.set === SETS.contestNoReport).map((t) => `${t.file} — ${t.heading}`)
-    expect(noReport, 'no no-report contest table found — DEFAULT_CONTEST_NO_REPORT_MACROS is unguarded').not.toEqual([])
+    expect(noReport, 'no no-report contest table found — CW_CONTEST_NO_REPORT_LAYOUT is unguarded').not.toEqual([])
   })
 
   it.each(macroTables.map((t) => [`${t.file} — ${t.heading}`, t] as const))(

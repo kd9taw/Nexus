@@ -140,6 +140,7 @@ import {
   sstvArm,
   sstvAutoDisarm,
   setSettings as apiSetSettings,
+  setContestEsm,
   setFdOperator,
   setSidebandOverride,
   testCat,
@@ -175,6 +176,7 @@ import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
+import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
@@ -2705,6 +2707,17 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
   useLayoutEffect(() => publishDashRailSwitch(railSwitch), [railSwitch])
   useLayoutEffect(() => () => publishDashRailSwitch(null), [])
+  // THE CALL IN EACH COCKPIT'S LOG ENTRY, the call its Log action would write, for the Rotor box
+  // beside it (the bearing to it, and Point). Phone, CW, RTTY, PSK and JS8 report their log strip's
+  // (LogEntry `onEntryCall`, settled, so this renders once per call rather than per keystroke); FT's
+  // is the QSO's, the one its Log QSO logs (`entryCallOf`, off the snapshot); SSTV and APRS have no
+  // log entry. Kept per cockpit, since every cockpit stays mounted behind the one on screen.
+  const [entryCalls, setEntryCalls] = useState<Partial<Record<DashRailSection, string>>>({})
+  const reportEntry = useMemo(() => {
+    const report = (section: DashRailSection) => (call: string) =>
+      setEntryCalls((m) => (m[section] === call ? m : { ...m, [section]: call }))
+    return { phone: report('phone'), cw: report('cw'), rtty: report('rtty'), psk: report('psk'), js8: report('js8') }
+  }, [])
 
   // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
   // Per-view window title + a polite "now on X" announcement (navigation is
@@ -3057,13 +3070,41 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             : undefined,
         }
       : undefined
-  /** What a cockpit's boxes are lent: the window's source, and the rail beside it while it is the one on screen. */
-  const boxesFor = (section: DashRailSection): BoxSource | undefined =>
-    cockpitBoxes && railLink && section === railSection ? { ...cockpitBoxes, rail: railLink } : cockpitBoxes
+  /** The call in a cockpit's log entry (`entryCalls`), or null where there is none. */
+  const entryCallOf = (section: DashRailSection): string | null =>
+    (section === 'operate' ? snap.qso?.dxcall : entryCalls[section]) || null
+  /** What a cockpit's boxes are lent: the window's source with the cockpit's own log entry call, and the
+   *  rail beside it while it is the one on screen. */
+  const boxesFor = (section: DashRailSection): BoxSource | undefined => {
+    const boxes = cockpitBoxes && { ...cockpitBoxes, entryCall: entryCallOf(section) }
+    return boxes && railLink && section === railSection ? { ...boxes, rail: railLink } : boxes
+  }
+  /** ENTER SENDS MESSAGE's switch for one cockpit, as Settings holds it, and the TX dock switch's
+   *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
+   *  transmit queues mid-contest. Shown at once and put back if the save fails. Never on the
+   *  hosted page: ESM is the station's own window's. */
+  const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
+    if (remote) return undefined
+    const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+    return {
+      on: settings?.[field] === true,
+      callOnce: settings?.contestEsmCallOnce === true,
+      voiceRoles: cockpit === 'phone' ? settings?.voiceEsmRoles : undefined,
+      onSwitch: (on) => {
+        setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
+        setContestEsm(cockpit, on).catch(() => {
+          setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
+          pushToast(t('contest.esm.switch.failed'), 'error')
+        })
+      },
+    }
+  }
   const cwWorkspace = (
     <CwCockpit
+      esmSetting={esmSettingFor('cw')}
       active={!remote || (effectiveView === 'cw' && !remote.stale)}
       onOpenLogbook={openLogbookFor}
+      onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       snap={snap}
@@ -3087,8 +3128,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
   const phoneWorkspace = (
     <PhoneCockpit
+      esmSetting={esmSettingFor('phone')}
       active={!remote || (effectiveView === 'phone' && !remote.stale)}
       onOpenLogbook={openLogbookFor}
+      onEntryCall={reportEntry.phone}
       snap={snap}
       panels={phonePanels}
       theme={theme}
@@ -3812,7 +3855,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           {isRemoteViewAvailable('rtty') && isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
+                esmSetting={esmSettingFor('rtty')}
                 onOpenLogbook={openLogbookFor}
+                onEntryCall={reportEntry.rtty}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
@@ -3831,6 +3876,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
                 onOpenLogbook={openLogbookFor}
+                onEntryCall={reportEntry.psk}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
@@ -3902,6 +3948,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             <div className="js8-host" hidden={effectiveView !== 'js8'}>
               <Js8Cockpit
                 onOpenLogbook={openLogbookFor}
+                onEntryCall={reportEntry.js8}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'js8'}
@@ -3927,6 +3974,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             section={railSection}
             // Everything its boxes are lent, exactly as the cockpits' boxes are (`boxSource`, above).
             {...boxSource}
+            entryCall={entryCallOf(railSection)}
             rail={{
               ...dashRailRecords(dashRailRec, railSection),
               // What this screen shows in each slot (once per screen), and the pick that moves an entry here.

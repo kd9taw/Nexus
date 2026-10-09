@@ -22,6 +22,16 @@
 // carries the other axis only while the mast is still on its way to it (features/rotorTargets);
 // otherwise the backend keeps that axis where the rotator reports it. The one ■ STOP stops both.
 // A browser on Nexus Remote keeps the azimuth-only pane it had.
+//
+// LINE 2, BESIDE A COCKPIT (`entryCall`): the call in that cockpit's log entry, the bearing and
+// distance to it, and Point. The bearing is the station's own answer to "where would a point at
+// this call turn the antenna" (`rotatorBearingToCall`: the point's resolver, read only), never one
+// worked out here, so the number shown is the number Point turns to. Point is the cockpits'
+// point-at-call (`rotorPointAt`), short path. It turns the antenna and nothing else: it keys
+// nothing, and this pane's ■ STOP stops rotation, never a transmission. No bearing is said in words
+// (the station is not placed, or the operator's own grid is not set), never drawn as a number
+// nobody resolved; no call, no line. A browser has no line 2 at all: the bearing read is the
+// desktop's, and Nexus Remote offers it nothing new.
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
@@ -31,16 +41,20 @@ import {
   pointRotatorElevation,
   readRotator,
   readRotatorState,
+  rotatorBearingToCall,
   stopRotator,
   stopSatTrack,
 } from '../../api'
-import type { RotatorState, SatTrackStatus } from '../../types'
+import type { CallBearing, RotatorState, SatTrackStatus } from '../../types'
 import { useStationControl } from '../../stationAccess'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
 import { pollSingleFlight } from '../../singleFlight'
 import { follow, pending, type Pending } from '../../features/rotorTargets'
+import { fmtDistanceKm, useUnits } from '../../units'
+import { ROTATOR_POLL_MS } from '../../remote-web/rotator'
+import { pointedTo, rotorPointAt } from '../rotorPointAt'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
@@ -60,7 +74,19 @@ function azFromClick(e: React.MouseEvent<SVGSVGElement>): number {
   return (Math.atan2(dx, -dy) * (180 / Math.PI) + 360) % 360
 }
 
-export function RotorPane() {
+/** Why the station has no bearing for a call: the code its bearing read refused with, or null for a
+ *  failure it did not name (then no bearing is drawn, and Point stays: the point says what it finds). */
+type NoBearing = 'noGrid' | 'unknownStation' | null
+
+function noBearing(e: unknown): NoBearing {
+  const code = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
+  return code === 'noGrid' || code === 'unknownStation' ? code : null
+}
+
+/** The station's last answer for line 2, and the call it answered for. */
+type EntryAim = { call: string } & ({ bearing: CallBearing } | { why: NoBearing })
+
+export function RotorPane({ entryCall = null }: { entryCall?: string | null } = {}) {
   // null = never read (no rotator / daemon down) → pane hides itself.
   const [az, setAz] = useState<number | null>(null)
   const [target, setTarget] = useState<number | null>(null)
@@ -91,6 +117,10 @@ export function RotorPane() {
   const [reading, setReading] = useState<RotatorState['reading'] | null>(null)
   const local = useStationControl()
   const alive = useRef(true)
+  const units = useUnits()
+  // LINE 2's call: the desktop's only (see the header).
+  const aimCall = local && entryCall ? entryCall : null
+  const [aim, setAim] = useState<EntryAim | null>(null)
 
   useEffect(() => {
     alive.current = true
@@ -141,6 +171,27 @@ export function RotorPane() {
       stop()
     }
   }, [local])
+
+  // Line 2's bearing: asked the moment the entry's call changes and again on every poll, because
+  // what the station knows of the call moves under it (the log form's grid lands from the callbook
+  // a moment after the call is typed, and the bearing moves with it). An answer goes with its poll.
+  useEffect(() => {
+    if (!aimCall) return
+    const stop = pollSingleFlight('rotor pane entry', ROTATOR_POLL_MS, (owns) =>
+      rotatorBearingToCall(aimCall).then(
+        (bearing) => {
+          if (owns()) setAim({ call: aimCall, bearing })
+        },
+        (e) => {
+          if (owns()) setAim({ call: aimCall, why: noBearing(e) })
+        },
+      ),
+    )
+    return () => {
+      stop()
+      setAim(null)
+    }
+  }, [aimCall])
 
   // ⭐ A ROTATOR YOU CANNOT READ IS STILL A ROTATOR YOU CAN POINT. This used to be
   // `if (az == null) return null`, which deleted the rose, the click-to-slew, the typed bearing
@@ -214,6 +265,20 @@ export function RotorPane() {
   const tgt = target != null ? needle(target, R - 2) : null
   const mag = az != null ? magneticDeg(az, declination) : null
   const silent = az == null && reading === 'notAnswering'
+  // An answer is for the call it was asked about: one for the call before is no answer.
+  const entryAim = aimCall != null && aim?.call === aimCall ? aim : null
+  const entryBearing = entryAim && 'bearing' in entryAim ? entryAim.bearing : null
+  const entryWhy = entryAim && 'why' in entryAim ? entryAim.why : null
+
+  const pointAtEntry = (call: string) => {
+    // The mast goes where the station sends it now, so nothing this pane sent before may be handed
+    // over after it (features/rotorTargets), and its own target needle and "→" lines no longer say
+    // where the mast is going.
+    pendingAz.current = pendingEl.current = null
+    setTarget(null)
+    setTargetEl(null)
+    rotorPointAt(local)(call)
+  }
 
   return (
     <section className="rotor-pane panel">
@@ -352,6 +417,36 @@ export function RotorPane() {
               {t('rotor.pane.stop.label')}
             </button>
           </div>
+          {/* Line 2, under the controls for the reason the lines below are: above them it would move
+              ■ STOP every time a call was entered or logged. */}
+          {aimCall && (
+            <div
+              className="rotor-aim"
+              title={
+                entryBearing
+                  ? t('rotor.pane.aim.title', { call: aimCall, to: pointedTo(entryBearing.pointed) })
+                  : undefined
+              }
+            >
+              <span className="rotor-aim-to mono">
+                → {aimCall}
+                {entryBearing &&
+                  ` ${Math.round(entryBearing.pointed.bearing) % 360}° (${fmtDistanceKm(entryBearing.km, units)})`}
+              </span>
+              {entryWhy === 'unknownStation' && <span className="rotor-aim-why">{t('rotor.pane.aim.unknown')}</span>}
+              {entryWhy === 'noGrid' && <span className="rotor-aim-why">{t('rotor.pane.aim.noGrid')}</span>}
+              {entryWhy == null && (
+                <button
+                  type="button"
+                  className="rotor-aim-point"
+                  onClick={() => pointAtEntry(aimCall)}
+                  title={t('rotor.pane.aim.point.title', { call: aimCall })}
+                >
+                  {t('rotor.pane.aim.point.label')}
+                </button>
+              )}
+            </div>
+          )}
           {/* What is on its way, UNDER the controls: above them, each line pushed ■ STOP down the
               moment a slew began, which is when it is wanted — and in a short rail, off the pane. */}
           {satTrack && (

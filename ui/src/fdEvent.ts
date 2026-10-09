@@ -98,8 +98,8 @@ export function contestShortName(id: string | undefined): string {
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
-/** Why club sync cannot run a contest — the two reasons the engine refuses one for. */
-export type ClubSyncRefusal = 'serial' | 'transmitter'
+/** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
+export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'
 
 /**
  * ⭐ **The contests club sync cannot run, and why**, by rules-file id.
@@ -140,14 +140,38 @@ export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
  */
 export function clubSyncRefusal(
   s: { fdHostEnable?: boolean; fdJoinAddr?: string; fdEvent?: string } | null | undefined,
+  preview?: { event: string } | null,
 ): ClubSyncRefusal | null {
   if (!s) return null
   const configured = s.fdHostEnable === true || (s.fdJoinAddr ?? '').trim() !== ''
-  return configured ? contestClubRefusal(s.fdEvent) : null
+  return configured ? contestClubRefusal(s.fdEvent, preview) : null
 }
 
-/** Why club sync cannot run this contest at all, switched on or not — `null` when it can. */
-export function contestClubRefusal(fdEvent: string | undefined): ClubSyncRefusal | null {
+/**
+ * Whether the contest rules the station LOADED carry `fdEvent` — `false` when a rules file
+ * it downloaded dropped the contest, which the engine refuses club sync for
+ * (`ClubRefusal::NoRuleset`, code `unknown`). Read off the station's preview of the picked
+ * contest (`get_fd_ruleset`), which resolves an id its rules do not carry to the ARRL Field
+ * Day that mode entry falls back to. `null` without a preview: nothing is known yet.
+ *
+ * ⚠️ The preview answers for the SAVED pick, so compare it with the saved pick: an unsaved
+ * choice held against a preview of the last one would name the wrong contest.
+ */
+export function rulesCarry(fdEvent: string | undefined, preview: { event: string } | null | undefined): boolean | null {
+  if (!preview) return null
+  return preview.event === (fdEvent?.trim() || 'arrlfd')
+}
+
+/**
+ * Why club sync cannot run this contest at all, switched on or not — `null` when it can.
+ * The rules first, as the engine asks: a contest the loaded rules do not carry is refused
+ * for that, whatever this table says of it.
+ */
+export function contestClubRefusal(
+  fdEvent: string | undefined,
+  preview?: { event: string } | null,
+): ClubSyncRefusal | null {
+  if (rulesCarry(fdEvent, preview) === false) return 'unknown'
   const id = fdEvent?.trim() || 'arrlfd'
   return Object.prototype.hasOwnProperty.call(CLUB_SYNC_REFUSED, id) ? CLUB_SYNC_REFUSED[id] : null
 }
@@ -159,6 +183,8 @@ export function clubSyncRefusalText(why: ClubSyncRefusal, contest: string): stri
       return t('fieldDay.club.refused.serial', { contest })
     case 'transmitter':
       return t('fieldDay.club.refused.transmitter', { contest })
+    case 'unknown':
+      return t('fieldDay.club.refused.unknown', { contest })
   }
 }
 
