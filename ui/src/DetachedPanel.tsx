@@ -878,6 +878,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         currentSlot={snap.radio.slot}
         activePeer={selected}
         dropAfterCycles={3}
+        // Its head is the grip FT's ⊞ Arrange drags it by in this window too (panes/PaneDrag).
+        grip="stations"
         unreadByPeer={{}}
         needByCall={needByCall}
         needAlertsByCall={needAlertsByCall}

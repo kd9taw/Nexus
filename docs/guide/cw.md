@@ -122,6 +122,10 @@ controls, Band Activity and the Copilot, with a divider between them that you
 drag to share the height. On a small window the column scrolls; hide a pane you
 do not need to give them more room.
 
+**Drag a pane.** As on [Phone](phone.md), a pane or a box can also be picked up by its title bar and
+dropped onto a column or between two panes; **Esc** or letting go anywhere else puts it back, and
+**Stop TX**, **Tune** and the dock cannot be dragged.
+
 **Boxes.** As on [Phone](phone.md), ⊞ Panels ▸ **Arrange** ends each column with **+ Add a
 box**, for up to six panes of [Conditions](connect.md) among this screen's own. Clicking a station
 in a box selects it in the boxes only, so the call a macro's **!** sends is never changed from a

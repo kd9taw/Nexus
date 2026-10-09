@@ -129,7 +129,11 @@ export function CockpitPaneFrame({
       // have, and an inline placement cannot be outranked or forked in either sheet.
       style={paneRoleStyle({ fit, weight, share, split })}
     >
-      <header className="pane-head">
+      {/* THE HEAD IS THE PANE'S GRIP (2026-10-08): in a cockpit that arranges by drag (panes/PaneDrag), a
+          pane is picked up by its title. Only a pane the operator can close is marked — one with an id in
+          the cockpit's vocabulary, as every pane ⊞ Arrange moves has — and the drag still checks the id
+          against the cockpit's ArrangeSpec, so the mark alone moves nothing. */}
+      <header className="pane-head" data-pane-grip={onRemove && paneId ? paneId : undefined}>
         <span className="pane-title">{title}</span>
         <div className="cockpit-pane-acts">
           {actions}

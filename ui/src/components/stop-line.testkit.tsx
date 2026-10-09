@@ -30,7 +30,21 @@ import {
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
 import type { BoxSource } from './panes/CockpitBox'
-import { arrangeIds, coerceLeftSide, coercePlacement, moveArranged, movePane, type Arrangement, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
+import {
+  arrangeIds,
+  coerceLeftSide,
+  coercePlacement,
+  columnsOf,
+  dropArranged,
+  moveArranged,
+  movePane,
+  placedColumns,
+  type Arrangement,
+  type ArrangeSpec,
+  type PaneColumn,
+  type PaneMove,
+  type PanePlacement,
+} from '../features/panelPlace'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 /** A panel record with every id shown but `removed`, and the placement given: the record's own, or, for a
@@ -421,7 +435,12 @@ const operateCase = (layout: 'classic' | 'roster'): Case<(typeof OPERATE_PANEL_I
         onSetTxEnabled={() => {}}
         onSetTune={() => {}}
         onSetHoldTxFreq={() => {}}
-        roster={<div data-testid="stations-roster" />}
+        // App's Stations list, as far as a sweep reads it: its head is the grip ⊞ Arrange drags it by.
+        roster={
+          <div data-testid="stations-roster">
+            <div data-pane-grip="stations">Stations</div>
+          </div>
+        }
         needByCall={new Map()}
         selectedCall="W1ABC"
         onSelect={() => {}}
@@ -540,11 +559,41 @@ export function randomPlacements<P extends string>(spec: ArrangeSpec<P>, n: numb
   return out
 }
 
-/** THE ARRANGEMENT SWEEP's tests for the case `c`: its fifty placements in five runs of ten, each the test
- *  title's parameters (the cockpit, the first and the last placement of the run), then the case and the run. */
+/** THE ARRANGEMENT SWEEP's tests for the case `c`: its fifty placements in five runs of ten, then (2026-10-08)
+ *  a sixth run of ten arrangements made by DRAGGING panes (`draggedArrangements`), each the test title's
+ *  parameters (the cockpit, what the run sweeps), then the case and the run. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function arrangementRuns(c: Case<any>) {
-  return [0, 1, 2, 3, 4].map((k) => [c.cockpit, k * 10 + 1, k * 10 + 10, c, k] as const)
+  return [
+    ...[0, 1, 2, 3, 4].map((k) => [c.cockpit, `random placements ${k * 10 + 1}–${k * 10 + 10} of 50`, c, k] as const),
+    [c.cockpit, 'ten arrangements made by dragging panes', c, DRAGGED_RUN] as const,
+  ]
+}
+/** The sixth run: arrangements made by drops, not by arrows (THE ARRANGEMENT SWEEP, above). */
+export const DRAGGED_RUN = 5
+
+/** `n` arrangements made by DROPS (⊞ Arrange by drag, 2026-10-08): each a run of random drops — any pane onto
+ *  any place, above any pane there or at its foot, the left side in play where the cockpit has one — through
+ *  the drop itself (`dropArranged`), so the sweep covers what a drag can make. */
+export function draggedArrangements<P extends string>(spec: ArrangeSpec<P>, n: number, seed: number): Array<Arrangement<P>> {
+  const next = rng(seed)
+  const ids = arrangeIds(spec)
+  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(next() * xs.length)]
+  const side = spec.leftSide != null
+  const areas: Array<PaneColumn | 'side'> = [...columnsOf(spec), ...(side ? (['side'] as const) : [])]
+  const out: Array<Arrangement<P>> = []
+  while (out.length < n) {
+    let arr: Arrangement<P> = {}
+    for (let k = 2 + Math.floor(next() * 12); k > 0; k--) {
+      const id = pick(ids)
+      const area = pick(areas)
+      const there = (area === 'side' ? (arr.leftSide ?? []) : placedColumns(spec, arr.place)[area]).filter((x) => x !== id)
+      const before = next() < 0.3 || there.length === 0 ? null : pick(there)
+      arr = dropArranged(spec, arr, id, { area, before }, () => true, side) ?? arr
+    }
+    out.push(arr)
+  }
+  return out
 }
 
 /** One run of THE ARRANGEMENT SWEEP (above) for the case `c`: placements 10k + 1 to 10k + 10 of the fifty,
@@ -568,13 +617,14 @@ export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
   const stock = order()
   cleanup()
   let differs = 0
-  const placements = randomPlacements(spec, 50, 20260929)
-  expect(placements.length).toBe(50)
-  for (const [j, place] of placements.slice(k * 10, k * 10 + 10).entries()) {
+  const placements: Array<Arrangement<string>> =
+    k === DRAGGED_RUN ? draggedArrangements(spec, 10, 20261008) : randomPlacements(spec, 50, 20260929).slice(k * 10, k * 10 + 10).map((place) => ({ place }))
+  expect(placements.length).toBe(10)
+  for (const [j, { place, leftSide }] of placements.entries()) {
     const i = k * 10 + j
     const combos: Array<readonly string[]> = [[], ...c.ids.map((id: string) => [id]), [...c.ids]]
     for (const removed of combos) {
-      c.render(panelsWith(removed, place, undefined, c.layout, extras))
+      c.render(panelsWith(removed, place, leftSide, c.layout, extras))
       await settle()
       if (removed.length === 0 && order().join() !== stock.join()) differs++
       // The added panes are on screen with nothing hidden, wherever the placement put them.
@@ -582,7 +632,7 @@ export async function arrangementRun(c: Case<any>, k: number): Promise<void> {
       const on = stopsOnScreen(c.stopControls)
       for (const [label] of c.stopControls) {
         const els = on.get(label)!
-        const where = `${c.cockpit}, placement #${i} ${JSON.stringify(place)}, hiding {${removed.join(', ')}}`
+        const where = `${c.cockpit}, placement #${i} ${JSON.stringify(leftSide ? { place, leftSide } : place)}, hiding {${removed.join(', ')}}`
         expect(els.length, `${where} took "${label}" with it`).toBeGreaterThan(0)
         expect(els.some((e) => !e.disabled), `${where} left "${label}" on screen but DISABLED`).toBe(baseline.get(label))
       }

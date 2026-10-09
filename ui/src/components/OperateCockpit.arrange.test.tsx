@@ -30,6 +30,7 @@ import { BOX_IDS, OPERATE_ARRANGE, OPERATE_PANELS, panelStorageKey, usePanelLayo
 import type { OperateLayout, OperatePanelId, PanelLayoutApi } from '../features/panelState'
 import { arrangeIds, type PaneMove } from '../features/panelPlace'
 import type { BoxSource } from './panes/CockpitBox'
+import { gripOf, paneBoxOf, pickUp, release, stubLayout } from './panes/PaneDrag.testkit'
 import { t } from '../i18n'
 import { startCq } from '../api'
 
@@ -636,4 +637,78 @@ describe('FT’s boxes', () => {
       expect(arrangeIds(spec).filter((id) => (BOX_IDS as readonly string[]).includes(id))).toEqual([...BOX_IDS])
     }
   })
+})
+
+// ── BY DRAG (2026-10-08): the same moves, made by dragging a pane by its title ──────────────────────────
+// The drop is the arrows' moves (cockpit-drag.test.tsx holds that for every arrow); here, over the REAL
+// record, what the screen does after one: a pane dragged up or down in its column is moved, not remounted;
+// the one dragged into another column is the only one remounted; the sorts and a double-click's call hold.
+describe('by drag: the same moves, by a pane’s title', () => {
+  let unstub: (() => void) | null = null
+  beforeEach(() => {
+    unstub = stubLayout('.cockpit-lower')
+  })
+  afterEach(async () => {
+    unstub?.()
+    unstub = null
+    await new Promise((r) => setTimeout(r, 0))
+  })
+  const above = (id: string) => {
+    const r = paneBoxOf('.cockpit-lower', id)!.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + 5 }
+  }
+  const below = (id: string) => {
+    const r = paneBoxOf('.cockpit-lower', id)!.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.bottom + 3 }
+  }
+  async function dragTo(id: string, to: { x: number; y: number }) {
+    pickUp(gripOf('.cockpit-lower', id)!, to)
+    release(to)
+    await settle()
+    // The click a release after a drag sends is held back until the next task.
+    await new Promise((r) => setTimeout(r, 0))
+  }
+  const bandSort = () => document.querySelector<HTMLSelectElement>('.cockpit-lower .operate-decodes:not(.compact) .od-sort select')!
+  const rosterSort = () => document.querySelector('.cockpit-lower .operate-roster .or-th.active')?.textContent
+
+  it('dragged in its column a pane is moved, not remounted; dragged into another it is the only one remounted; the sorts hold', async () => {
+    render(<Live layoutMode="roster" />)
+    await settle()
+    fireEvent.change(bandSort(), { target: { value: 'dt' } })
+    fireEvent.click(within(document.querySelector<HTMLElement>('.cockpit-lower .operate-roster')!).getByRole('button', { name: /^Call( [▲▼])?$/ }))
+    expect([bandSort().value, rosterSort()], 'fixture: the picks took').toEqual(['dt', 'Call ▲'])
+    // The first arranging act, by drag: Rx Frequency above Band Activity in the rail.
+    await dragTo('rxfreq', above('bandActivity'))
+    expect(lower().hasAttribute('data-arranged')).toBe(true)
+    expect(rendered()).toEqual([['callRoster'], ['rxfreq', 'bandActivity']])
+    const [cr, rx, ba] = ['callRoster', 'rxfreq', 'bandActivity'].map(pane)
+    await dragTo('rxfreq', below('bandActivity'))
+    expect(rendered()).toEqual([['callRoster'], ['bandActivity', 'rxfreq']])
+    expect([pane('callRoster') === cr, pane('rxfreq') === rx, pane('bandActivity') === ba], 'a drag within a column remounted a pane').toEqual([true, true, true])
+    await dragTo('rxfreq', above('callRoster'))
+    expect(rendered()).toEqual([['rxfreq', 'callRoster'], ['bandActivity']])
+    expect([pane('callRoster') === cr, pane('bandActivity') === ba], 'a drag into another column remounted another pane').toEqual([true, true])
+    expect(pane('rxfreq') === rx, 'the pane that changed column kept its node: React cannot carry it across').toBe(false)
+    expect([bandSort().value, rosterSort()], 'a sort was lost on the way').toEqual(['dt', 'Call ▲'])
+    // Undo takes the one drop back, as it takes one arrow back.
+    act(() => api!.undo())
+    await settle()
+    expect(rendered()).toEqual([['callRoster'], ['bandActivity', 'rxfreq']])
+    // A real FT mount and three drags, 0.8 s in the full suite on a loaded box: past the 5 s default only under
+    // far more load than that, the budget the real-render files in this tree carry.
+  }, 15_000)
+
+  it('a double-click on a decode still calls the station after a drag, through the cockpit’s own handler', async () => {
+    const calls: unknown[][] = []
+    render(<Live layoutMode="roster" snapOver={{ recentDecodes: [decode({})] }} onCall={(...a: unknown[]) => void calls.push(a)} />)
+    await settle()
+    const row = () => document.querySelector('.cockpit-lower .operate-decodes:not(.compact) .decode-row') as HTMLElement
+    fireEvent.doubleClick(row())
+    const stock = calls.splice(0)
+    expect(stock, 'fixture: the stock double-click called nobody').toHaveLength(1)
+    await dragTo('bandActivity', above('callRoster'))
+    expect(rendered()[0][0]).toBe('bandActivity')
+    fireEvent.doubleClick(row())
+    expect(calls.splice(0)).toEqual(stock)
+  }, 15_000)
 })
