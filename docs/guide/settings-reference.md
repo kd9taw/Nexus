@@ -2040,7 +2040,9 @@ claim right now; the record underneath is the evidence, kept across restarts.*
 ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
 the contact’s next message from your F-keys, as N1MM Logger+ does, and the
 contact logs at its last step. ESM is off until you turn it on, in each cockpit
-separately. Enter never turns TX on, and nothing is sent by a timer."
+separately. Enter never turns TX on, and nothing is sent by a timer." How a
+contact runs, step by step, and the rules ESM keeps are in the
+[Field Day manual](../manual/Field-Day.md#enter-sends-message-esm).
 
 - **ESM in the CW cockpit**, **in the RTTY cockpit**, **in the Phone cockpit** —
   one switch per cockpit, so you can run CW with it and leave Phone without it.

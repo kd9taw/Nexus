@@ -197,7 +197,9 @@ If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is n
 
 Macro text is editable and savable. A **macro profile** is a named set of all eight; save as many
 as you like and switch the active one from the CW cockpit (`ui/src/types.ts`, `cwProfiles`). An
-active profile takes precedence over every built-in set above, Field Day included.
+active profile takes precedence over every built-in set above, Field Day included. A profile also
+keeps which of its keys [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends for each
+step, mapped in Settings → Contesting ▸ Enter Sends Message.
 
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 
