@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
+  ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
+  and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
+  then TU, which logs it. Searching and pouncing: your call, then your exchange, which logs it. It
+  is off until you turn it on, for each cockpit separately, with the ESM switch in its TX dock or
+  in Settings ▸ Contesting ▸ Enter Sends Message, where you can also choose which of your own keys
+  sends each step. The dock shows **Run** or **S&P** (click it to switch; your CQ key switches to
+  Run, and clicking a spot to S&P), lights the key or keys the next Enter sends, and says why when
+  it sends nothing. Enter never turns TX on: after Stop TX, Esc or the watchdog it sends nothing
+  until you turn TX back on yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone.
+  It sends what that F-key sends, by the same path and with the same checks, and an Enter that is
+  refused logs nothing. One press is one message: holding Enter sends once, and Alt+Enter logs
+  without sending anything. A message you stop counts as not sent, so the next Enter sends it
+  again; if you stop the TU or the exchange whose Enter logged the contact, the contact stays
+  logged and the strip says so, and Ctrl+D twice takes it back. In Phone, Enter plays the voice
+  keyer's recordings (F1 CQ, F2 your exchange, F3 TU, F4 your call, F5 AGN), and when you are
+  running you say his call and your exchange yourself. A box filled from call history counts once
+  you type it, so Enter never logs last year's exchange on its own. ESM steps aside, and Enter logs
+  as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the voice keyer
+  is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
 - **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
   last** beside Clear on the log strip) names your newest contest contact on the strip's message
   line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
@@ -207,6 +227,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NEEDS-BENCH on a FLEX radio.
 
 ### Changed
+
+- **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
+  every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
+  call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO
+  B4`. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
+  `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
+  and F7 send what they sent before. Your exchange now goes once, without "DE <your call> … K",
+  and your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now
+  sends TU, F4 pressed to confirm sends only your call, and F5 pressed for your call sends his.
+  The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
+  Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
+  unchanged, and a macro profile of your own keeps the texts it has.
 
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in

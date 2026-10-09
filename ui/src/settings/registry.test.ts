@@ -372,6 +372,8 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('wpm')).toContain('cw')
     expect(ids('keps')).toContain('orbital-elements')
     expect(ids('atno')).toContain('pounce')
+    expect(ids('esm')).toContain('contest-keys') // heading says "Enter Sends Message"
+    expect(ids('search and pounce')).toContain('contest-keys')
     expect(ids('text size')).toContain('workspace')
     // The Display sections (2026-09-26): Night moved to Theme with its row; the looks are in
     // Workspace; the palettes, the Logbook globe and Motion each have a section of their own.

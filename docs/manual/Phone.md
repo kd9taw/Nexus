@@ -113,6 +113,8 @@ Press `F1`–`F6` (or click the slot play button) to transmit the message. Nexus
 
 Voice keyer playback requires the `radio` Cargo feature (the full rig-connected build). The headless/testing build returns an error.
 
+In a contest with [Enter Sends Message](Field-Day.md#enter-sends-message-esm) on, Enter plays the slots by step: `F1` CQ, `F2` your exchange, `F3` TU, `F4` your call and `F5` AGN, unless you map other slots in Settings → Contesting ▸ Enter Sends Message.
+
 ## QSO Recording
 
 The **Record QSO** button streams live RX audio directly to a timestamped WAV on disk in the `recordings/` folder (filename pattern `qso-{epoch_ms}.wav`). There is no RAM buffer — audio goes straight to disk. The WAV header is checkpointed approximately every second (~12,000 samples) so an abnormal app exit leaves a fully readable file.

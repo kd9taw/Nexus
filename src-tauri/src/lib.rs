@@ -18157,6 +18157,16 @@ fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, 
     Ok(eng.snapshot())
 }
 
+/// Queue CW for Enter Sends Message: `Engine::send_cw_armed`, which never turns TX on and asks
+/// every gate before it takes anything. `Err` is why nothing was taken, and the contest strip
+/// then logs nothing. No Remote operation reaches it: ESM is the station's own window's.
+#[tauri::command(async)]
+fn send_cw_armed(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.send_cw_armed(&text)?;
+    Ok(eng.snapshot())
+}
+
 /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW-macro
 /// tokens. Pushed by the log form when a callbook lookup resolves; `call` keys it to the contact
 /// so a stale lookup never keys the wrong name. Empty `call` clears it. Fire-and-forget (no
@@ -19076,6 +19086,20 @@ fn set_rtty_macros(
     eng.save_rtty_macros(profiles, active)
         .map_err(|reason| format!("RTTY macros were not saved ({reason:?})"))?;
     Ok(eng.settings().macros.clone())
+}
+
+/// The ESM switch in the CW, RTTY or Phone cockpit's TX dock (`cockpit`: `cw`, `rtty`, `phone`):
+/// one atomic write of that switch through `Engine::set_contest_esm`, NEVER the settings form,
+/// which clears the transmit queues and advances the TX gate generation mid-contest.
+#[tauri::command(async)]
+fn set_contest_esm(
+    state: State<'_, SharedEngine>,
+    cockpit: String,
+    on: bool,
+) -> Result<(), String> {
+    engine_lock(&state)
+        .set_contest_esm(&cockpit, on)
+        .map_err(|reason| format!("Enter Sends Message was not saved ({reason:?})"))
 }
 
 /// The PSK cockpit's macro editor and its Everyday/Contest switch (#316) — `set_rtty_macros`'
@@ -34512,6 +34536,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_lists::clear_call_history,
             get_credentials_status,
             send_cw,
+            send_cw_armed,
             set_cw_peer_info,
             set_cw_wpm,
             set_decode_depth,
@@ -34614,6 +34639,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hold_tx_freq,
             set_blocked_calls,
             set_rtty_macros,
+            set_contest_esm,
             set_psk_macros,
             set_beta_updates,
             retire_wanted_calls,

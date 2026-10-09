@@ -158,6 +158,18 @@ import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory
 import type { CallHistoryStatus, ScpStatus } from '../types'
 import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
 import { fmtUtc } from '../features/logQuery'
+import { EsmRolePicker } from './EsmRolePicker'
+import {
+  CW_BUILT_IN_ROLES,
+  RTTY_SET_ROLES,
+  VOICE_KEYS,
+  VOICE_SLOT_ROLES,
+  cwBuiltInRoles,
+  esmVoiceSlots,
+  type EsmRoleMap,
+} from '../features/esmRoles'
+import { MACRO_KEYS, macroSetId, type MacroSetId } from '../features/macroSets'
+import { resolveRttySet } from '../features/rttyMacros'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { getDxccEntityNames } from '../api'
 import { CONTINENT_CODES } from '../features/dxccGeo'
@@ -2204,6 +2216,44 @@ export function SettingsPanel({
         return { ...p, macros: p.macros.map((m, mi) => (mi === i ? { ...m, [field]: value } : m)) }
       })
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
+  }
+
+  // --- Enter Sends Message: each set's own mapping of its keys to ESM's steps ---
+  // A mapping describes its set, so it is saved WITH the set: on the active CW profile, per
+  // RTTY set id, and one for the voice keyer. Nothing mapped = no key at all, so a set nobody
+  // mapped saves exactly as it did before ESM existed. The RTTY cockpit's own save
+  // (`setRttyMacros`) writes its sets and leaves this mapping alone; a Save here writes it.
+  const [esmRttySet, setEsmRttySet] = useState<MacroSetId>('contest')
+  const setCwEsmRoles = (esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).map((p, i) => {
+        if (i !== idx) return p
+        const { esmRoles: _was, ...rest } = p
+        return esmRoles ? { ...rest, esmRoles } : rest
+      })
+      return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
+  }
+  const setRttyEsmRoles = (set: MacroSetId, esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { rttyEsmRoles, ...macros } = prev.macros
+      const { [set]: _was, ...others } = rttyEsmRoles ?? {}
+      const sets = esmRoles ? { ...others, [set]: esmRoles } : others
+      return { ...prev, macros: Object.keys(sets).length ? { ...macros, rttyEsmRoles: sets } : macros }
+    })
+  }
+  const setVoiceEsmRoles = (esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { voiceEsmRoles: _was, ...rest } = prev
+      return esmRoles ? { ...rest, voiceEsmRoles: esmRoles } : (rest as Settings)
     })
   }
 
@@ -12581,6 +12631,146 @@ export function SettingsPanel({
                   }}
                 />
               </div>
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
+            <fieldset className="settings-section" id="settings-contest-keys">
+              <legend>{t('settings.contestKeys.legend')}</legend>
+              {/* ENTER SENDS MESSAGE — off in every cockpit until the operator turns it on here, one
+                  switch per cockpit, then the steps each cockpit's set sends (the role picker). It
+                  all saves with the form. ESM never runs on the hosted Remote page, and its
+                  switches are not part of what the station sends there, so the page says so
+                  rather than showing switches that would read off. */}
+              <span className="settings-hint">{t('settings.contestKeys.hint')}</span>
+              {remote ? (
+                <span className="settings-hint">{t('settings.contestKeys.remote')}</span>
+              ) : (
+                <>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.cw.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmCw}
+                        className={`toggle${form.contestEsmCw ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmCw', !form.contestEsmCw)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.rtty.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmRtty}
+                        className={`toggle${form.contestEsmRtty ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmRtty', !form.contestEsmRtty)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.phone.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmPhone}
+                        className={`toggle${form.contestEsmPhone ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmPhone', !form.contestEsmPhone)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                    <span className="settings-hint">{t('settings.contestKeys.phone.hint')}</span>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.callOnce.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmCallOnce}
+                        className={`toggle${form.contestEsmCallOnce ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmCallOnce', !form.contestEsmCallOnce)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                    <span className="settings-hint">{t('settings.contestKeys.callOnce.hint')}</span>
+                  </div>
+                  {/* CW: the ACTIVE profile's steps. A profile on the built-in sets is not the
+                      operator's to map — its texts change with the contest — so it shows the
+                      built-in steps and no control; Customize in Settings ▸ CW makes it theirs. */}
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">
+                      {t('settings.contestKeys.cw.steps.label', {
+                        profile:
+                          cwProfiles[activeCwIdx]?.name ||
+                          t('settings.cw.macros.profiles.unnamed', { n: activeCwIdx + 1 }),
+                      })}
+                    </span>
+                    {activeCwMacros.length ? (
+                      <EsmRolePicker
+                        cockpit="cw"
+                        builtIn={cwBuiltInRoles(activeCwMacros)}
+                        own={cwProfiles[activeCwIdx]?.esmRoles}
+                        slots={activeCwMacros}
+                        keys={MACRO_KEYS}
+                        onChange={setCwEsmRoles}
+                      />
+                    ) : (
+                      <EsmRolePicker cockpit="cw" builtIn={CW_BUILT_IN_ROLES} keys={MACRO_KEYS} />
+                    )}
+                    <span className="settings-hint">
+                      {activeCwMacros.length
+                        ? t('settings.contestKeys.cw.steps.own')
+                        : t('settings.contestKeys.cw.steps.builtIn')}
+                    </span>
+                  </div>
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">{t('settings.contestKeys.rtty.steps.label')}</span>
+                    <div className="cw-macro-row">
+                      <select
+                        className="settings-input"
+                        aria-label={t('rtty.macroSet.aria')}
+                        value={esmRttySet}
+                        onChange={(e) => setEsmRttySet(macroSetId(e.target.value))}
+                      >
+                        <option value="everyday">{t('rtty.macroSet.everyday')}</option>
+                        <option value="contest">{t('rtty.macroSet.contest')}</option>
+                      </select>
+                    </div>
+                    <EsmRolePicker
+                      cockpit="rtty"
+                      builtIn={RTTY_SET_ROLES[esmRttySet]}
+                      own={form.macros.rttyEsmRoles?.[esmRttySet]}
+                      slots={resolveRttySet(form.macros.rttyProfiles, esmRttySet, t)}
+                      keys={MACRO_KEYS}
+                      onChange={(roles) => setRttyEsmRoles(esmRttySet, roles)}
+                    />
+                    <span className="settings-hint">{t('settings.contestKeys.rtty.steps.hint')}</span>
+                  </div>
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">{t('settings.contestKeys.phone.steps.label')}</span>
+                    <EsmRolePicker
+                      cockpit="phone"
+                      builtIn={VOICE_SLOT_ROLES}
+                      own={form.voiceEsmRoles}
+                      slots={esmVoiceSlots(form.voiceMessages ?? [])}
+                      keys={VOICE_KEYS}
+                      onChange={setVoiceEsmRoles}
+                    />
+                    <span className="settings-hint">{t('settings.contestKeys.phone.steps.hint')}</span>
+                  </div>
+                </>
+              )}
             </fieldset>
           )}
 

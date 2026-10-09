@@ -1598,6 +1598,16 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
      dropped. Send it again when you are ready.";
 
+/// Why [`Engine::send_cw_armed`] took nothing: the contest strip shows it, and logs nothing.
+/// English at the engine, like the refusals above.
+const CW_ARMED_NOT_CW: &str = "Not sent: this is not the CW screen.";
+const CW_ARMED_TX_OFF: &str = "Not sent: TX is off, and Enter never turns it on. Send with an \
+     F-key to turn TX back on.";
+const CW_ARMED_PRIVILEGES: &str = "Not sent: this frequency is outside your license privileges.";
+const CW_ARMED_CW_PRIVILEGES: &str =
+    "Not sent: where it would key is outside your license's CW privileges.";
+const CW_ARMED_EMPTY: &str = "Not sent: the message is empty.";
+
 /// …and what the RTTY cockpit's warning line says when [`Engine::poll_rtty_one`] drops refused
 /// overs, and when the auto-sequencer stops because one of them was its own.
 const RTTY_REFUSED_TX_OFF: &str = "RTTY stopped: transmit was turned off, so what was still \
@@ -6528,6 +6538,30 @@ impl Engine {
         self.save_remote_preferences(&values, &["macros"])
     }
 
+    /// The ESM switch in a cockpit's TX dock: `contest_esm_cw`, `contest_esm_rtty` or
+    /// `contest_esm_phone` (`cockpit` is `cw`, `rtty` or `phone`), saved alone.
+    ///
+    /// NEVER a form save: `apply_settings` clears the transmit queues and advances
+    /// `tx_gate_gen`, and this switch is flipped in the middle of a contest. This is the atomic
+    /// preference save [`Self::save_rtty_macros`] uses, so it writes the one switch and cannot
+    /// key, tune or touch the TX-enable latch. Settings ▸ Contesting saves the same three with
+    /// its form, as it saves every other field there.
+    pub fn set_contest_esm(
+        &mut self,
+        cockpit: &str,
+        on: bool,
+    ) -> Result<(), crate::remote_control::Reason> {
+        let key = match cockpit {
+            "cw" => "contestEsmCw",
+            "rtty" => "contestEsmRtty",
+            "phone" => "contestEsmPhone",
+            _ => return Err(crate::remote_control::Reason::InvalidAction),
+        };
+        let mut values = serde_json::Map::new();
+        values.insert(key.into(), serde_json::Value::Bool(on));
+        self.save_remote_preferences(&values, &[key])
+    }
+
     /// ⛔ **THE ONE WRITER of `launch_at_login`** (Settings ▸ Start at sign-in). The caller has
     /// already changed the operating system's login entry and calls this only when that worked;
     /// `apply_settings` keeps the live value, so a stale Settings payload cannot contradict it.
@@ -9438,17 +9472,78 @@ impl Engine {
             // it — keyed, then flushed away a tick later.
             self.cw_abort = false;
             self.slot_tx_abort = false;
-            // TX echo: show the operator what actually went out (tokens resolved).
-            self.cw_sent.push_back(expanded.clone());
-            while self.cw_sent.len() > 50 {
-                self.cw_sent.pop_front();
+            self.queue_cw(expanded);
+        }
+    }
+
+    /// ⭐ **Queue CW for Enter Sends Message: [`Self::send_cw`] WITHOUT its re-arm, and with
+    /// every refusal answered up front.**
+    ///
+    /// `send_cw` turns TX on by design, because an F-key or typed text IS the operator's transmit
+    /// act (`cw_send_re_arms_tx_after_a_halt`). An Enter in the contest strip may never be one:
+    /// "Enter never turns TX on. After Stop TX, Esc or the watchdog, Enter is refused until you
+    /// turn TX back on yourself" (ESM's signed rule 5). So this refuses while TX is off and
+    /// never writes the latch.
+    ///
+    /// It answers rather than drops, so the strip logs a contact only once this has taken its
+    /// message, and a refused send logs nothing. Every gate [`Self::poll_cw_one`] puts a word
+    /// through is asked here first: the clock-repair hold, the latch, a connection that refuses
+    /// TX, the licence privileges at the dial and as CW. So is the CW section, and a transmitter
+    /// another owner holds (a tune carrier). Taken, the message is queued exactly as an F-key's
+    /// is, and the poll checks every word again.
+    ///
+    /// ⛔ A PENDING STOP IS LEFT ALONE. `send_cw` clears `cw_abort` and `slot_tx_abort`, so the
+    /// macro fired after a Stop TX is not flushed by it; nothing here touches either, so a stop
+    /// the radio loop has not consumed yet still lands. After a Stop TX the latch is down anyway,
+    /// and this refuses.
+    pub fn send_cw_armed(&mut self, text: &str) -> Result<(), String> {
+        use crate::settings::OperatingMode;
+        if self.settings.operating_mode != OperatingMode::Cw {
+            return Err(CW_ARMED_NOT_CW.to_string());
+        }
+        if self.clock_repair_holds_tx() {
+            return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
+        }
+        if !self.tx_enabled {
+            return Err(CW_ARMED_TX_OFF.to_string());
+        }
+        if let Some(why) = self.connection_tx_refusal() {
+            return Err(why.to_string());
+        }
+        if !self.tx_allowed() {
+            return Err(CW_ARMED_PRIVILEGES.to_string());
+        }
+        if !self.tx_allowed_as(OperatingMode::Cw) {
+            return Err(CW_ARMED_CW_PRIVILEGES.to_string());
+        }
+        // Behind CW's own words it queues, as an F-key does; behind anything else, never.
+        if let Some(owner) = self.tx_owner() {
+            if owner != TxOwner::Cw {
+                return Err(owner.busy_reason());
             }
-            // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
-            // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
-            // this queue) drops the rest of the macro instead of the rig playing it all out.
-            for word in expanded.split_whitespace() {
-                self.cw_queue.push_back(word.to_string());
-            }
+        }
+        let expanded = self.expand_cw(text);
+        if expanded.trim().is_empty() {
+            return Err(CW_ARMED_EMPTY.to_string());
+        }
+        tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
+        self.queue_cw(expanded);
+        Ok(())
+    }
+
+    /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
+    /// [`Self::send_cw_armed`], which have already decided it may go.
+    fn queue_cw(&mut self, expanded: String) {
+        // TX echo: show the operator what actually went out (tokens resolved).
+        self.cw_sent.push_back(expanded.clone());
+        while self.cw_sent.len() > 50 {
+            self.cw_sent.pop_front();
+        }
+        // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
+        // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
+        // this queue) drops the rest of the macro instead of the rig playing it all out.
+        for word in expanded.split_whitespace() {
+            self.cw_queue.push_back(word.to_string());
         }
     }
 
@@ -33777,6 +33872,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// Enter Sends Message's RTTY mappings are the SETTINGS FORM's to write, as a CW profile's
+    /// mapping is: a form save adopts them, and the cockpit's one writer, which replaces only the
+    /// sets and the active set, leaves them exactly as they were — in memory and in the file.
+    #[test]
+    fn a_form_save_writes_the_rtty_esm_mapping_and_a_cockpit_macro_save_keeps_it() {
+        let (mut e, path, _lock) = rtty_macro_engine("esm");
+        let mapped =
+            serde_json::json!({"everyday": {"tu": ["F3"]}, "contest": {"exch": ["F6", "F7"]}});
+        let mut panel = e.settings().clone();
+        panel.macros.rtty_esm_roles = serde_json::from_value(mapped.clone()).unwrap();
+        e.apply_settings(panel);
+        let roles = |e: &Engine| {
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyEsmRoles"].clone()
+        };
+        assert_eq!(roles(&e), mapped, "a form save did not adopt the mapping");
+
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+        assert_eq!(
+            serde_json::to_value(&e.settings().macros).unwrap()["rttyProfiles"],
+            contest_f1_edit(),
+            "control: the cockpit edit landed"
+        );
+        assert_eq!(
+            roles(&e),
+            mapped,
+            "the cockpit's macro save moved the ESM mapping"
+        );
+        let on_disk = serde_json::to_value(Settings::load(&path).macros).unwrap();
+        assert_eq!(
+            on_disk["rttyEsmRoles"], mapped,
+            "the mapping did not reach the file"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// The OTHER half of the one-writer carve-out, and the half a carve-out gets wrong: the two
     /// paths that REPLACE the settings must still move the macro sets. Both call
     /// `apply_restored_settings` — `reset_settings` sends `Settings::default()`, and
@@ -34864,6 +34995,218 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// An Extra in the CW section on 40 m CW, TX on, working K9AAA: where Enter's CW is sent from.
+    fn cw_for_enter() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        e.select_peer("K9AAA");
+        assert!(
+            e.tx_enabled() && e.tx_allowed(),
+            "premise: armed, inside the privileges"
+        );
+        e
+    }
+
+    /// What a refused Enter must leave exactly as it was: the latch, the queue, the SENT echo.
+    fn cw_untouched(e: &Engine) -> (bool, Vec<String>, usize) {
+        (
+            e.tx_enabled(),
+            e.cw_queue.iter().cloned().collect(),
+            e.cw_sent().len(),
+        )
+    }
+
+    /// ⛔ **ENTER NEVER TURNS TX ON** (Enter Sends Message's signed rule 5). `send_cw` re-arms by
+    /// design (`cw_send_re_arms_tx_after_a_halt`); Enter's entry refuses with TX off, says why,
+    /// and queues nothing, so the strip logs nothing. An F-key then turns TX back on, as the rule
+    /// says, and Enter sends again.
+    #[test]
+    fn the_enter_cw_send_refuses_with_tx_off_and_never_turns_it_on() {
+        let mut e = cw_for_enter();
+        // Control: taken, queued word by word exactly as an F-key's, `!` the strip's call.
+        assert_eq!(e.send_cw_armed("! 5NN {EXCH}"), Ok(()));
+        assert_eq!(e.poll_cw_one().as_deref(), Some("K9AAA"));
+        assert_eq!(e.poll_cw_one().as_deref(), Some("5NN"));
+        assert_eq!(e.cw_sent().last().map(String::as_str), Some("K9AAA 5NN"));
+        assert!(
+            e.tx_enabled(),
+            "taking a message leaves the latch as it was"
+        );
+
+        e.halt_tx(); // Stop TX, Esc, or the watchdog
+        let before = cw_untouched(&e);
+        assert_eq!(
+            e.send_cw_armed("TU {MYCALL}"),
+            Err(CW_ARMED_TX_OFF.to_string())
+        );
+        assert_eq!(cw_untouched(&e), before, "nothing queued, echoed or armed");
+        assert!(!e.tx_enabled(), "Enter never turns TX on");
+        assert_eq!(e.poll_cw_one(), None, "nothing keys");
+
+        e.send_cw("AGN"); // the operator's own act: an F-key
+        assert!(e.tx_enabled(), "an F-key turns TX back on, as before");
+        assert_eq!(e.poll_cw_one().as_deref(), Some("AGN"));
+        assert_eq!(
+            e.send_cw_armed("TU {MYCALL}"),
+            Ok(()),
+            "and Enter sends again"
+        );
+        assert_eq!(e.poll_cw_one().as_deref(), Some("TU"));
+    }
+
+    /// Every other gate a CW word passes at the poll is asked of Enter's send first, and a
+    /// refusal leaves everything as it was. Each is tried twice, refused and then not, so the
+    /// refusal is that gate's and no other's.
+    #[test]
+    fn the_enter_cw_send_refuses_up_front_outside_privileges_in_a_clock_repair_off_cw_and_under_a_tune(
+    ) {
+        // Outside the privileges: 7.020 is Extra-only CW and this is a General.
+        let mut e = cw_for_enter();
+        e.set_license_class("general");
+        e.set_frequency(7.020, "40m", "CW");
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(CW_ARMED_PRIVILEGES.to_string()));
+        assert_eq!(
+            cw_untouched(&e),
+            before,
+            "outside the privileges: nothing taken"
+        );
+        e.set_frequency(7.030, "40m", "CW");
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: inside them it is taken"
+        );
+
+        // A clock repair holds transmit.
+        let mut e = cw_for_enter();
+        e.hold_tx_for_clock_repair(std::time::Instant::now() + std::time::Duration::from_secs(600));
+        let before = cw_untouched(&e);
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Err(CLOCK_REPAIR_HOLDS_TX.to_string())
+        );
+        assert_eq!(cw_untouched(&e), before, "held: nothing taken");
+        e.end_clock_repair_hold();
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: once it ends, taken"
+        );
+
+        // Not the CW screen: Phone on 20 m phone, where an Extra may key phone and CW alike.
+        let mut e = cw_for_enter();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.25, "20m", "USB");
+        assert!(
+            e.tx_enabled() && e.tx_allowed(),
+            "premise: Phone is armed and allowed here"
+        );
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(CW_ARMED_NOT_CW.to_string()));
+        assert_eq!(cw_untouched(&e), before, "off the CW screen: nothing taken");
+        e.set_operating_mode("cw", false);
+        assert_eq!(e.send_cw_armed("TU"), Ok(()), "control: on it, taken");
+
+        // A tune carrier holds the transmitter.
+        let mut e = cw_for_enter();
+        e.set_tune(true);
+        assert_eq!(
+            e.tx_owner(),
+            Some(TxOwner::Tune),
+            "premise: the carrier is up"
+        );
+        let before = cw_untouched(&e);
+        assert_eq!(e.send_cw_armed("TU"), Err(TxOwner::Tune.busy_reason()));
+        assert_eq!(cw_untouched(&e), before, "under a tune: nothing taken");
+        e.set_tune(false);
+        assert_eq!(
+            e.send_cw_armed("TU"),
+            Ok(()),
+            "control: carrier down, taken"
+        );
+
+        // An empty message is not taken, so it cannot be logged on.
+        let mut e = cw_for_enter();
+        e.select_peer("");
+        assert_eq!(e.send_cw_armed("! "), Err(CW_ARMED_EMPTY.to_string()));
+    }
+
+    /// ⛔ **A STOP STILL LANDS.** `send_cw` clears a pending `cw_abort` and `slot_tx_abort`, so a
+    /// macro fired after Stop TX is not flushed by it (`a_cw_send_supersedes_a_pending_slot_tx_abort`).
+    /// Enter's entry clears neither: a stop the radio loop has not consumed yet is still consumed,
+    /// and CW's own words queue behind it as type-ahead.
+    #[test]
+    fn the_enter_cw_send_never_clears_a_pending_stop() {
+        let mut e = cw_for_enter();
+        assert_eq!(e.send_cw_armed("CQ TEST"), Ok(()));
+        e.stop_cw(); // the CW Stop, before the loop has ticked
+        assert!(e.tx_enabled(), "premise: stop_cw alone leaves the latch up");
+        assert_eq!(e.send_cw_armed("TU {MYCALL}"), Ok(()));
+        assert!(
+            e.take_cw_abort(),
+            "the pending CW abort still reaches the loop"
+        );
+        assert!(e.take_slot_tx_abort(), "and so does the mid-over cut");
+        // Control: an F-key send supersedes both, as it always has.
+        e.stop_cw();
+        e.send_cw("AGN");
+        assert!(!e.take_cw_abort() && !e.take_slot_tx_abort());
+    }
+
+    /// The dock's ESM switch saves its one field and nothing else: no form save, so a CW message
+    /// already queued keeps going and the latch is untouched.
+    #[test]
+    fn the_esm_dock_switch_saves_one_switch_and_leaves_transmit_alone() {
+        let dir = std::env::temp_dir().join(format!("nexus-esm-switch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _lock = tempo_core::logbook::io_fence::EngineHeld::acquired();
+        let mut e = cw_for_enter();
+        e.configure_remote_settings_store(path.clone());
+        e.send_cw("CQ TEST");
+        let gen = e.tx_gate_gen;
+        let before = (
+            e.settings().contest_esm_rtty,
+            e.settings().contest_esm_phone,
+            e.settings().contest_esm_call_once,
+        );
+        e.set_contest_esm("cw", true).expect("saved");
+        assert!(e.settings().contest_esm_cw);
+        assert_eq!(
+            (
+                e.settings().contest_esm_rtty,
+                e.settings().contest_esm_phone,
+                e.settings().contest_esm_call_once
+            ),
+            before,
+            "the other switches are as they were"
+        );
+        assert_eq!(e.cw_queue.len(), 2, "the queued message keeps going");
+        assert!(e.tx_enabled(), "the latch is untouched");
+        assert_eq!(
+            e.tx_gate_gen, gen,
+            "no form save: the TX gate generation stands"
+        );
+        let saved: Settings =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.contest_esm_cw, "on disk");
+        e.set_contest_esm("phone", true).expect("saved");
+        e.set_contest_esm("rtty", true).expect("saved");
+        assert!(e.settings().contest_esm_phone && e.settings().contest_esm_rtty);
+        e.set_contest_esm("cw", false).expect("saved");
+        assert!(!e.settings().contest_esm_cw);
+        assert_eq!(
+            e.set_contest_esm("ft8", true),
+            Err(crate::remote_control::Reason::InvalidAction),
+            "no switch outside the three cockpits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -50,6 +50,9 @@ import {
 import { bandLabelForMhz } from '../band'
 import { contestDomain } from '../features/contestDomains'
 import { grabAt } from '../features/rttyGrab'
+import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
+import { RTTY_SET_ROLES, esmRoles } from '../features/esmRoles'
+import { EsmPlate } from './EsmPlate'
 import {
   expandRttyMacro,
   frameForAir,
@@ -108,6 +111,8 @@ interface Props {
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
    *  opens the Rotator section through it, as it does in the Phone, CW and FT cockpits. */
   onOpenSettings?: (target: string) => void
+  /** Enter Sends Message's switch for this cockpit (App, from Settings). Absent on the hosted page. */
+  esmSetting?: EsmSetting
 }
 
 /** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical
@@ -306,7 +311,7 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings, esmSetting }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
@@ -549,9 +554,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // like a {CALL} with no call. A token it does not know is refused too: RTTY cannot send
   // braces, so it would otherwise go out as a bare word. `macro` frames an F-key message for the
   // air (a line of its own, ending in a space); what is typed in the compose bar goes as typed.
-  const send = (line: string, macro = false) => {
-    if (!control) return
-    if (!line.trim()) return
+  //
+  // `prepare` is its expansion and its checks, and Enter Sends Message sends through them too:
+  // what an F-key would send, refused where the F-key would be, for the call `call`.
+  const prepare = (line: string, macro: boolean, call: string): { onAir: string } | { refusal: string; ms: number } => {
     // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
     // two Settings fields, which is what the CW expander read and which keyed last June's class
     // and section at every station in a QSO party. The field is on every snapshot and EMPTY
@@ -560,26 +566,32 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     const exch = snapRef.current?.fieldDay?.sentExchange?.trim()
     const expanded = expandRttyMacro(line, {
       mycall: snapRef.current?.mycall ?? '',
-      call: hisCall,
+      call,
       exch: exch ? exch : null,
     })
     if ('unknown' in expanded) {
-      pushToast(t('rtty.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
-      return
+      return { refusal: t('rtty.send.unknownToken', { token: expanded.unknown }), ms: 3500 }
     }
     if ('missing' in expanded) {
-      if (expanded.missing === 'mycall') pushToast(t('rtty.send.noCallsign'), 'info', 3500)
-      else if (expanded.missing === 'call') pushToast(t('rtty.send.noTheirCall'), 'info', 3000)
-      else pushToast(t('rtty.send.noExchange'), 'info', 3500)
-      return
+      if (expanded.missing === 'mycall') return { refusal: t('rtty.send.noCallsign'), ms: 3500 }
+      else if (expanded.missing === 'call') return { refusal: t('rtty.send.noTheirCall'), ms: 3000 }
+      else return { refusal: t('rtty.send.noExchange'), ms: 3500 }
     }
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(snapRef.current.radio.txRefusal ?? t('rtty.send.txLocked'), 'info', 3500)
+      return { refusal: snapRef.current.radio.txRefusal ?? t('rtty.send.txLocked'), ms: 3500 }
+    }
+    return { onAir: macro ? frameForAir(expanded.text) : expanded.text }
+  }
+  const send = (line: string, macro = false) => {
+    if (!control) return
+    if (!line.trim()) return
+    const ready = prepare(line, macro, hisCall)
+    if ('refusal' in ready) {
+      pushToast(ready.refusal, 'info', ready.ms)
       return
     }
-    const onAir = macro ? frameForAir(expanded.text) : expanded.text
-    void withErrorToast(() => rttySend(onAir), t('rtty.send.failed')).then((s) => {
+    void withErrorToast(() => rttySend(ready.onAir), t('rtty.send.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
@@ -596,6 +608,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       .then(setRtty)
       .catch(() => {})
     void haltTx()
+    // …and for Enter Sends Message, what went out to the call in the strip counts as not sent.
+    esm.noteStop()
   }
 
   const sending = rtty?.sending === true
@@ -668,6 +682,36 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   }, [macros?.rttyProfiles, macros?.activeRttyProfile])
   const macroSet = rttySetId(macroSets.active)
   const slots = resolveRttySet(macroSets.profiles, macroSet, t)
+  // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`): the set the
+  // F-keys send, with its own step mapping over the built-in table (`macros.rttyEsmRoles`), and
+  // THE ONE PATH above to send through. The auto sequence and Continuous TX make it step aside
+  // (decision 9): Enter then logs as it does with ESM off.
+  const esm = useEsmHost({
+    cockpit: 'rtty',
+    on: !!esmSetting?.on && !!snap?.fieldDay && control,
+    callOnce: !!esmSetting?.callOnce,
+    roles: esmRoles(RTTY_SET_ROLES[macroSet], macros?.rttyEsmRoles?.[macroSet]),
+    slots,
+    guards: () => ({
+      cockpit: 'rtty',
+      txEnabled: snapRef.current?.radio.txEnabled === true,
+      txAllowed: snapRef.current?.radio.txAllowed === true,
+      clockRepair: snapRef.current?.radio.clockRepairTxHeld === true,
+      autoRunning: auto && seqState !== 'idle' && seqState !== 'done',
+      continuousTx: latched,
+    }),
+    send: async ({ text, call }: EsmMessage) => {
+      const ready = prepare(text, true, call)
+      if ('refusal' in ready) return ready.refusal
+      try {
+        setRtty(await rttySend(ready.onAir))
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    },
+  })
+  const esmLit = esmLitKeys(esm.preview)
   const [editing, setEditing] = useState<RttyMacroKey | null>(null)
   const [editorLeft, setEditorLeft] = useState(0)
   const [confirmSetReset, setConfirmSetReset] = useState(false)
@@ -730,6 +774,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const sendMacro = (slot: RttyMacroSlot) => {
     if (!control || isEmptyRttySlot(slot)) return
     send(slot.text, true)
+    esm.noteKey(slot.key)
   }
   /** A key's hover text: the message with what is known filled in, tokens left where not. */
   const macroTitle = (message: string) => {
@@ -1234,6 +1279,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             active={active}
             fdMode="DIG"
             fdSubmode={RTTY}
+            esm={esm.host}
           />
           )}
         </CockpitPaneFrame>
@@ -1336,6 +1382,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             slot={slot}
             control={control}
             editing={editing === slot.key}
+            lit={esmLit.includes(slot.key)}
             title={macroTitle(slot.text)}
             onSend={() => sendMacro(slot)}
             onEdit={() => openEditor(slot.key)}
@@ -1365,6 +1412,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onSwitch={switchMacroSet}
           onReset={resetMacroSet}
         />
+        {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs. */}
+        {esmSetting && snap?.fieldDay && control && (
+          <EsmPlate
+            on={esmSetting.on}
+            onSwitch={esmSetting.onSwitch}
+            mode={esm.host.state.mode}
+            onToggle={esm.toggle}
+            preview={esm.preview}
+          />
+        )}
         {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
             tooltip is the wording that states what clicking it off does NOT do (it lets
             what was typed finish keying). Label and tooltips move with the stop line. */}

@@ -224,6 +224,59 @@ Remember that most sponsors check logs against each other: if the other station 
 
 ---
 
+## Enter Sends Message (ESM)
+
+With **Enter Sends Message** on, each press of Enter in the contest log strip sends the contact's next message from your F-keys, and the press for the contact's last step logs it, the way ESM works in N1MM Logger+. It works in the CW, RTTY and Phone cockpits while a contest runs. It is **off** until you turn it on, separately for each cockpit, in [Settings → Contesting ▸ Enter Sends Message](../guide/settings-reference.md#enter-sends-message) or with the ESM switch in the cockpit's TX dock.
+
+### How a contact runs
+
+ESM starts in search and pounce (S&P). Pressing the key that holds your CQ switches to running, and clicking a spot switches back to S&P.
+
+| You are | The strip holds | Enter sends |
+|---|---|---|
+| Running | no call | your CQ |
+| Running | a call, and your exchange has not gone to it | his call and your exchange; if his exchange is not complete yet, the cursor moves to his first exchange box |
+| Running | your exchange has gone, his is not complete | AGN |
+| Running | your exchange has gone, his is complete | TU, and the contact logs |
+| S&P | no call, or a call whose exchange is not complete | your call |
+| S&P | a complete exchange | your exchange, and the contact logs |
+
+With **Call once (S&P)** on, your call goes once per station: the next Enter sends AGN instead. If you correct a busted call after your exchange went out, the corrected call gets your exchange again. In Phone, when you are running, Enter plays nothing for his call and your exchange: you say them yourself, because a recording cannot say a callsign, and Enter moves the cursor to his exchange.
+
+His exchange counts as complete only with what you gave for this contact: what you typed or picked, the 5NN or 59 nobody changed, or a box filled from call history. A box filled from call history (marked **history**) is not accepted until you type it: at the step that would log the contact, Enter sends nothing and the strip names the box, and Alt+Enter logs it as it is. In Field Day, the class and section the strip keeps from your last contact count only once you type them for this one.
+
+**In the TX dock**, beside the ESM switch, the plate shows **Run** or **S&P** (click it to switch) and what the next Enter does: the key or keys it sends, which glow on the dock, or why it sends nothing, or why ESM steps aside. Its tooltip reminds you that Alt+Enter logs without sending anything.
+
+### The rules
+
+1. ESM is off until you turn it on, separately in the CW, RTTY and Phone cockpits. Nothing turns it on for you, and it remembers your choice.
+2. It works only in the contest log strip of those three cockpits while a contest runs. It does nothing in FT8, FT4 or any FT mode, nor in Digital, Tempo, PSK, SSTV or APRS, nor on the hosted Remote page.
+3. Enter sends the message of the next step: CQ, his call and your exchange, TU, your call, your S&P exchange, or AGN. The message comes from your own keys where you mapped them to that step, and otherwise from the built-in set's layout, and it goes out by the same path, with the same checks, as that F-key would send it.
+   - If your set has no message for the step, Enter sends nothing and logs nothing, and the strip names the step.
+   - If your set has no step mapped at all, ESM steps aside: Enter logs as it does with ESM off.
+4. Enter sends only when TX is already on, the dial is inside your license privileges, and no clock repair is running. In Phone it also needs you not to be holding PTT, the keyer not to be recording, and the radio not to have the mic. Otherwise Enter sends nothing and logs nothing, and the strip says why.
+   - While the RTTY auto sequence runs or Continuous TX is latched, or while the Phone voice keyer is hidden, ESM steps aside: Enter logs as it does with ESM off, and says why.
+5. Enter never turns TX on. After Stop TX, Esc or the watchdog, Enter is refused until you turn TX back on yourself: in CW by sending with an F-key, in RTTY with the TX button, in Phone with PTT.
+6. One press, one message. Holding Enter sends once. Alt+Enter logs without sending anything.
+7. The call it sends is the call in the strip.
+8. The contact logs the moment you press Enter for its last step, as N1MM does: TU when you are running, your exchange in S&P. It logs only a complete exchange that is not a dupe of your own log, and only once that last message has started. An Enter that is refused logs nothing.
+   - If you then stop that message, with Esc, Stop TX or the watchdog, the contact stays logged and the strip has already cleared for the next one. The strip says so. To take the contact back, press Ctrl+D twice: it leaves your contest log, score and exports, and you can restore it from the contest screen. While club sync is on it cannot be removed, because the club log already has it: edit the club's Cabrillo file before you send it in.
+   - If you stop an earlier message of the contact (his call and your exchange, or your call), it counts as not sent, and the next Enter sends it again rather than logging.
+9. On a dupe of your own log, Enter sends nothing and logs nothing. A club dupe (another position worked them) stays a warning, and Enter goes on as it would for a new call.
+10. A Super Check Partial match or a call-history hint is never sent or logged until you accept it.
+11. Esc and Stop TX stop it at any step, from anywhere in the cockpit.
+12. Nothing is sent by a timer. Every message is one press of yours.
+
+### Which key sends each step
+
+The built-in sets are laid out the way N1MM lays them out: **F1** CQ · **F2** his call and your exchange · **F3** TU · **F4** your call · **F6** your S&P exchange · **F7** AGN. **F5** (his call alone) and **F8** (QSO B4) stay keys you press yourself; ESM never sends F8, because on a dupe it sends nothing. RTTY's Contest set uses this layout, and so do CW's contest sets and its Field Day set; the [CW manual](CW.md#eight-f-key-macros) lists their texts. RTTY's Everyday set and CW's everyday set have no steps.
+
+The voice keyer's slots follow the same idea: **F1** CQ · **F2** your exchange · **F3** TU · **F4** your call · **F5** AGN. No slot holds his call and your exchange, because you say those yourself when you run, and **F6** stays yours. A slot with no recording plays nothing, and the strip names the slot to record.
+
+**Your own keys.** Settings → Contesting ▸ Enter Sends Message lists the steps for each cockpit: the active CW profile, each RTTY set, and the voice keyer. For each step, pick the key that sends it, or two keys that go out as one message (F5 then F2, as an N1MM-style set sends his call and then the exchange). Phone takes one slot per step. A step you leave on *Built in* uses the built-in key, and each row shows what Enter would send there, or why it would send nothing. The mapping is saved with its set: a CW profile carries its own, and so does each RTTY set. A CW profile still on the built-in sets shows their steps and has nothing to map until you customize it in Settings → CW.
+
+---
+
 ## Band Follows QSY
 
 When you change frequency — whether via a software dial command or by turning the rig's VFO knob — the active FD log's band field updates immediately. You do not need to manually change a "current band" setting mid-event. Without this, a QSY between bands would stamp subsequent contacts under the wrong band in Cabrillo, corrupting dupe keys and the band-column breakdown.

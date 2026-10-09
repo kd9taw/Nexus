@@ -140,6 +140,7 @@ import {
   sstvArm,
   sstvAutoDisarm,
   setSettings as apiSetSettings,
+  setContestEsm,
   setFdOperator,
   setSidebandOverride,
   testCat,
@@ -175,6 +176,7 @@ import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
+import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
@@ -3077,8 +3079,29 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     const boxes = cockpitBoxes && { ...cockpitBoxes, entryCall: entryCallOf(section) }
     return boxes && railLink && section === railSection ? { ...boxes, rail: railLink } : boxes
   }
+  /** ENTER SENDS MESSAGE's switch for one cockpit, as Settings holds it, and the TX dock switch's
+   *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
+   *  transmit queues mid-contest. Shown at once and put back if the save fails. Never on the
+   *  hosted page: ESM is the station's own window's. */
+  const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
+    if (remote) return undefined
+    const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+    return {
+      on: settings?.[field] === true,
+      callOnce: settings?.contestEsmCallOnce === true,
+      voiceRoles: cockpit === 'phone' ? settings?.voiceEsmRoles : undefined,
+      onSwitch: (on) => {
+        setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
+        setContestEsm(cockpit, on).catch(() => {
+          setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
+          pushToast(t('contest.esm.switch.failed'), 'error')
+        })
+      },
+    }
+  }
   const cwWorkspace = (
     <CwCockpit
+      esmSetting={esmSettingFor('cw')}
       active={!remote || (effectiveView === 'cw' && !remote.stale)}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
@@ -3105,6 +3128,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
   const phoneWorkspace = (
     <PhoneCockpit
+      esmSetting={esmSettingFor('phone')}
       active={!remote || (effectiveView === 'phone' && !remote.stale)}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
@@ -3831,6 +3855,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           {isRemoteViewAvailable('rtty') && isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
+                esmSetting={esmSettingFor('rtty')}
                 onOpenLogbook={openLogbookFor}
                 onEntryCall={reportEntry.rtty}
                 snap={snap}

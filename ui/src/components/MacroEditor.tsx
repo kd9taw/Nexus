@@ -36,6 +36,8 @@ interface ButtonProps {
   control: boolean
   /** This key's editor is open. */
   editing: boolean
+  /** The next Enter in the contest strip sends this key (Enter Sends Message): it glows. */
+  lit?: boolean
   /** Hover text for a filled key: the message as it will go out. */
   title: string
   /** Already-resolved captions for an empty key and for the ✎. */
@@ -53,6 +55,7 @@ export function MacroButton({
   slotAttr,
   control,
   editing,
+  lit = false,
   title,
   emptyLabel,
   emptyTitle,
@@ -65,7 +68,7 @@ export function MacroButton({
     <div className="rtty-macro-slot" {...{ [slotAttr]: slot.key }}>
       <button
         type="button"
-        className={`cw-macro${empty ? ' rtty-macro-empty' : ''}`}
+        className={`cw-macro${empty ? ' rtty-macro-empty' : ''}${lit ? ' esm-lit' : ''}`}
         disabled={!control}
         onClick={empty ? onEdit : onSend}
         title={empty ? emptyTitle : title}

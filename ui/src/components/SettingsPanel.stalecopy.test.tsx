@@ -367,6 +367,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'contest-station', ...field('contestQthState', '', 'WI', 'IL'), edit: setIn('contest-station', 'textbox', /^State or province/, 'il') },
     { section: 'contest-category', ...field('unassistedMode', false, false, true), edit: clickIn('contest-category', 'switch', 'Declare an unassisted contest entry') },
     { section: 'scp-call-history', ...field('scpEnabled', true, true, false), edit: clickIn('scp-call-history', 'switch', 'Super Check Partial') },
+    { section: 'contest-keys', ...field('contestEsmCw', false, false, true), edit: clickIn('contest-keys', 'switch', 'ESM in the CW cockpit') },
     { section: 'field-day', ...field('fdClass', '1A', '3A', '2A'), edit: setIn('field-day', 'textbox', /^FD Class/, '2a') },
     { section: 'field-day-identity', ...field('fdOperator', 'K1ABC', 'W9XYZ', 'N0AAA'), edit: setIn('field-day-identity', 'textbox', /^Operator at the key/, 'N0AAA') },
     {

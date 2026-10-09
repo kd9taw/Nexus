@@ -45,16 +45,19 @@ interface ButtonProps {
   slot: RttyMacroSlot
   control: boolean
   editing: boolean
+  /** The next Enter in the contest strip sends this key (Enter Sends Message). */
+  lit?: boolean
   title: string
   onSend: () => void
   onEdit: () => void
 }
 
 /** One F-key macro, captioned from RTTY's catalog. */
-export function RttyMacroButton({ slot, control, editing, title, onSend, onEdit }: ButtonProps) {
+export function RttyMacroButton({ slot, control, editing, lit, title, onSend, onEdit }: ButtonProps) {
   return (
     <MacroButton
       slot={slot}
+      lit={lit}
       slotAttr={RTTY_SLOT_ATTR}
       control={control}
       editing={editing}
