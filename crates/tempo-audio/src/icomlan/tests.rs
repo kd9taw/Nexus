@@ -46,6 +46,17 @@ struct Bench {
     push: Arc<Mutex<Vec<u8>>>,
 }
 
+impl Drop for Bench {
+    /// The registry forgets this radio while its sockets are still open (the fields drop after
+    /// this), so its port cannot reach another test's radio while the registry remembers it.
+    fn drop(&mut self) {
+        registry::forget(std::net::SocketAddrV4::new(
+            Ipv4Addr::LOCALHOST,
+            self.radio.control_port,
+        ));
+    }
+}
+
 fn bench_with(model: IcomModel, advertised: &str, tune: impl FnOnce(&mut SimRadio)) -> Bench {
     let addr = model.default_civ_addr();
     let (fake, push) = FakeRadio::new(addr);
@@ -604,6 +615,24 @@ fn a_refused_login_says_so_and_waits_for_the_operator() {
         logins + 1,
         "the operator's retry logged in"
     );
+}
+
+/// ⭐ NOTHING A SIMULATED RADIO LEFT IN THE REGISTRY OUTLIVES IT. The registry is one per process
+/// and knows a radio by its address and control port, and a simulated radio's port is an
+/// ephemeral loopback one that the next test's radio can be given once this one closes. A hold
+/// left behind there made an unrelated test's first start fail with this radio's refusal.
+#[test]
+fn nothing_a_simulated_radio_left_in_the_registry_outlives_it() {
+    let model = IcomModel::Ic7610;
+    let b = bench_with(model, "IC-7610", |r| r.login_error = 0xFFFF_FFFF);
+    let t = target(&b, model);
+    assert!(start(&t).is_err(), "refused");
+    assert!(
+        registry::held(t.key()),
+        "the control: the refusal holds while its radio is there"
+    );
+    drop(b);
+    assert!(!registry::held(t.key()), "the hold went with its radio");
 }
 
 /// The radio ending the session (another program took it) is a loss that waits for the operator.
