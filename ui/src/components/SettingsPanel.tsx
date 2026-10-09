@@ -12503,6 +12503,9 @@ export function SettingsPanel({
                 <span className="toggle-knob" />
               </button>
               <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
+              {/* The ports a club event needs through the firewall, said where the event is
+                  switched on: Nexus adds no firewall rule of its own. */}
+              <span className="settings-hint">{t('settings.fdClub.firewall.hint')}</span>
             </label>
             {form.fdHostEnable && (
               <p className="settings-note">{t('settings.fdClub.host.note')}</p>

@@ -217,3 +217,12 @@ describe('the Winter Field Day objectives checklist', () => {
     expect(container.querySelector('.fd-bonuses-body [role="note"]')).toBeNull()
   })
 })
+
+describe('the Winter Field Day log table', () => {
+  it('puts the H/I/M/O category letters on the class column, where they travel with the class number', async () => {
+    const { container } = await mount({})
+    const head = (col: string) => container.querySelector(`.fd-log-head .fd-col.${col}`)!.textContent
+    // The 2027 rules: class is the number of transmitters, category is H, I, O or M (2O).
+    expect([head('cls'), head('sec')]).toEqual(['Category (H/I/M/O)', 'Section'])
+  })
+})

@@ -256,6 +256,16 @@ describe('the role / category block', () => {
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
   })
 
+  // A club event needs ports through the firewall, and Nexus adds no rule of its own, so the
+  // ports are named where the event is switched on.
+  it('names the club event\'s firewall ports beside Host a club event', async () => {
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(/a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373/),
+    ).toBeTruthy()
+  })
+
   // While a contest that allows spotting only over amateur RF runs (Winter Field Day 2027), no PSK
   // Reporter report goes out whatever the switch says, so Settings says so beside the switch.
   it('says beside PSK Reporter that a contest allowing spots only over RF pauses the reports', async () => {

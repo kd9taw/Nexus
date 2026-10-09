@@ -34,8 +34,8 @@ In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day
 2. **Class / Category** and **ARRL Section** — these start **empty on purpose**,
    and Field Day refuses to start until you set yours. (An old default of "WI"
    sent the wrong exchange for everyone outside Wisconsin — now it's a one-time
-   deliberate step.) ARRL FD wants a class like `1D`; WFD wants a category like
-   `2O`.
+   deliberate step.) ARRL FD wants a class like `1D`; WFD wants its class number
+   and category letter, like `2O` (two transmitters, outdoor).
 3. **Power multiplier** — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W), or ×1 (> 100 W).
    It multiplies your QSO points; the engine clamps it to the legal values.
 
@@ -68,8 +68,11 @@ N1MM / N3FJP wire.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
-deliberately shows raw counts only** — its objectives math isn't ARRL's, and
-Nexus won't display a fake total.
+scores by its objectives instead**: QSO points × (the objective multipliers + 1),
+from the sponsor's thirteen 2027 objectives, which you tick on the contest screen
+in place of the bonuses (the [Field Day manual](../manual/Field-Day.md#winter-field-day-scoring)
+lists them). While Winter Field Day runs, Nexus posts no spot over the internet,
+as its rules ask.
 
 Opening **Bonuses** does not cost you the sections board. The board is the only
 part of the Field Day column that can give height, so it used to give it for
@@ -231,7 +234,8 @@ they're heard on the air.
 
 - **The POTA/SOTA section is hunter-only** — Nexus helps you *chase* activators;
   it isn't an activation logger for running your own park/summit.
-- **Winter Field Day shows raw counts, not a computed total** — by design.
+- **Winter Field Day's objectives are ticked by you** — the log-checkable ones show
+  a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club

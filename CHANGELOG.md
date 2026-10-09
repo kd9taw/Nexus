@@ -126,6 +126,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
   and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
   to normal when the event ends.
+- **Winter Field Day's words follow the 2027 rules, and the manual has its checklist.** The Field
+  Day Setup box is **WFD Class and Category**: the number of transmitters, then H, I, O or M, as the
+  sponsor now names them, and the contest log puts the H/I/M/O note on that column. Settings ▸
+  Contesting ▸ Field Day Club Sync names the firewall ports a club event uses. The Field Day manual
+  has a Winter Field Day 2027 checklist (the rules update and restart, class and category, LOW or
+  QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
+  the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
+  export sections now describe the objectives and the sponsor's submission.
 
 ### Fixed
 

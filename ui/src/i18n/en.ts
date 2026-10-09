@@ -4127,9 +4127,8 @@ export const EN = {
   'settings.fieldDay.class.label': 'FD Class',
   'settings.fieldDay.class.hint':
     'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.',
-  'settings.fieldDay.category.label': 'WFD Category',
-  'settings.fieldDay.category.hint':
-    'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).',
+  'settings.fieldDay.category.label': 'WFD Class and Category',
+  'settings.fieldDay.category.hint': 'The number of transmitters (your class), then your category letter: H=Home, I=Indoor, O=Outdoor, M=Mobile (e.g. 2O = 2 transmitters, outdoor).',
   'settings.fieldDay.section.label': 'ARRL Section',
   // `{{section}}` is what the operator typed and `{{count}}` the size of the section list.
   'settings.fieldDay.section.invalid':
@@ -4200,6 +4199,7 @@ export const EN = {
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
+  'settings.fdClub.firewall.hint': 'Allow Nexus through your computer\'s firewall (on Windows, on Private networks): a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373. Nexus adds no firewall rule of its own.',
   'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',

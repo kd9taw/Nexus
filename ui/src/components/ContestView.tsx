@@ -2169,9 +2169,11 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
           {fdEventIsFieldDay ? (
             <>
-              <span className="fd-col cls">{classLabel}</span>
-              {/* H/I/M/O are the WFD location letters — exchange codes, never translated. */}
-              <span className="fd-col sec">{t('fieldDay.log.column.section')}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
+              {/* H/I/M/O are Winter Field Day's category letters, which travel with the class
+                  number in this column (2O: two transmitters, outdoor) — exchange codes, never
+                  translated. */}
+              <span className="fd-col cls">{classLabel}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
+              <span className="fd-col sec">{t('fieldDay.log.column.section')}</span>
             </>
           ) : (
             slotColumns.map((f) => (
