@@ -305,6 +305,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
   span the radio was not showing. That edge is now read as negative. It only happens with the
   scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
+- **The CI-V bus diagnostic log is offered on every radio Nexus's own CI-V connection drives.**
+  Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the log by what the radio's model name looked
+  like, so an IC-7610 saved as "Icom 7610", as "IC-7610M" or with no name could turn on Native
+  Icom CI-V and never see the log. It now goes by the model itself, as the Native Icom CI-V
+  switch above it does: an IC-7300, IC-7610, IC-9700, IC-705 or IC-905 with that switch on, or
+  any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
+  radio that is only named like one of those, where Nexus's own CI-V never runs and the log
+  would have nothing to record.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
