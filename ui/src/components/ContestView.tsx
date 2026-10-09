@@ -840,6 +840,8 @@ const CLUB_BOARD_GRID: CSSProperties = {
   fontSize: textPx(13),
   alignItems: 'baseline',
 }
+/** The host's board has one more column: each position's clock. */
+const CLUB_BOARD_COLUMNS_HOST = 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr minmax(0,0.9fr)'
 const CLUB_COL_HEAD: CSSProperties = {
   fontSize: textPx(10),
   fontWeight: 700,
@@ -854,6 +856,32 @@ function colHead(big: boolean): CSSProperties {
 const CLUB_WARN: CSSProperties = {
   fontSize: textPx(12),
   color: 'var(--status-new-entity)',
+}
+const CLUB_NOTE: CSSProperties = {
+  fontSize: textPx(12),
+  color: 'var(--text-dim)',
+}
+
+/** The club line says this PC's clock against the host's from here, in whole seconds… */
+const CLOCK_SHOW_SECS = 2
+/** …and past here says it as the warning it has always been. */
+const CLOCK_WARN_SECS = 30
+
+/** A board row's clock, in ms, as whole seconds rounded half away from zero (the
+ *  position's own line rounds the same way, so the two never say different numbers). */
+function clockSecs(ms: number): number {
+  return Math.sign(ms) * Math.round(Math.abs(ms) / 1000)
+}
+
+/** A board row's clock in the club line's own terms: in step under 2 s, ahead or behind
+ *  from there, a dash when the position has not measured one. */
+function clockCell(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  const secs = clockSecs(ms)
+  if (Math.abs(secs) < CLOCK_SHOW_SECS) return t('fieldDay.club.board.clock.ok')
+  return secs > 0
+    ? t('fieldDay.club.board.clock.ahead', { secs })
+    : t('fieldDay.club.board.clock.behind', { secs: -secs })
 }
 
 /** The chip's text for each derived state (honesty rule: the queue is IN the
@@ -1168,11 +1196,19 @@ export function FdClubSection({
           </button>
         )}
       </div>
-      {Math.abs(club.skewSecs) > 30 && (
+      {/* This PC's clock against the host's: said from 2 s, a warning past 30 s. Shown
+          only — Nexus never changes a clock. */}
+      {Math.abs(club.skewSecs) > CLOCK_WARN_SECS ? (
         <div style={CLUB_WARN} role="alert">
           {t('fieldDay.club.skew', { secs: Math.abs(club.skewSecs) })}
         </div>
-      )}
+      ) : Math.abs(club.skewSecs) >= CLOCK_SHOW_SECS ? (
+        <div style={CLUB_NOTE}>
+          {club.skewSecs > 0
+            ? t('fieldDay.club.clock.ahead', { secs: club.skewSecs })
+            : t('fieldDay.club.clock.behind', { secs: -club.skewSecs })}
+        </div>
+      ) : null}
       {club.lastError && (
         <div style={CLUB_WARN} role="alert">
           {t('fieldDay.club.error', { msg: club.lastError })}
@@ -1188,7 +1224,10 @@ export function FdClubSection({
       ) : (
         <div
           data-club-board=""
-          style={big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+          style={{
+            ...(big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID),
+            ...(club.hosting ? { gridTemplateColumns: CLUB_BOARD_COLUMNS_HOST } : {}),
+          }}
         >
           <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
@@ -1196,6 +1235,12 @@ export function FdClubSection({
           <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
+          {/* The host's column: each position's clock, as it reported it to the host. */}
+          {club.hosting && (
+            <span style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
+              {t('fieldDay.club.board.column.clock')}
+            </span>
+          )}
           {club.board.map((row) => {
             // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
             // screen but never silently stale.
@@ -1225,6 +1270,23 @@ export function FdClubSection({
                 <span className="mono" style={dim}>
                   {t('fieldDay.club.board.rate', { rate: row.rate })}
                 </span>
+                {club.hosting && (
+                  <span
+                    className="mono"
+                    style={{
+                      ...dim,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      ...(row.clockMs != null && Math.abs(clockSecs(row.clockMs)) > CLOCK_WARN_SECS
+                        ? { color: 'var(--status-new-entity)' }
+                        : {}),
+                    }}
+                    title={row.clockMs == null ? t('fieldDay.club.board.clock.unknown') : undefined}
+                  >
+                    {clockCell(row.clockMs)}
+                  </span>
+                )}
               </Fragment>
             )
           })}

@@ -283,3 +283,154 @@ fn renaming_a_position_reaches_the_club_board_on_the_live_connection() {
     std::thread::sleep(Duration::from_millis(300));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A scripted host `ahead_ms` ahead of this PC, for one position. Its welcome's clock is IN
+/// STEP with this PC's, so only the round trips can move the position's number; it answers
+/// every timed ping with its stamps `ahead_ms` ahead, and keeps each presence line it hears.
+fn scripted_host(
+    listener: std::net::TcpListener,
+    ahead_ms: u64,
+    sd: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<Vec<String>> {
+    use std::io::Write;
+    std::thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut w = s.try_clone().unwrap();
+        let mut r = std::io::BufReader::new(s);
+        let mut heard = Vec::new();
+        while !sd.load(Ordering::Relaxed) {
+            let line = match fdsync::read_capped_line(&mut r) {
+                Ok(Some(l)) => l,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
+            let reply = match fdsync::decode_line(&line) {
+                Some(fdsync::Msg::Join { .. }) => fdsync::Msg::Welcome {
+                    v: fdsync::PROTO_VERSION,
+                    event: "TEST FD".into(),
+                    host_call: "W9ABC".into(),
+                    acked: 0,
+                    now_unix: now_ms() / 1000,
+                    contest: "arrlfd".into(),
+                },
+                Some(fdsync::Msg::Ping { t0 }) if t0 > 0 => {
+                    let t1 = now_ms() + ahead_ms;
+                    fdsync::Msg::Pong { t0, t1, t2: t1 }
+                }
+                Some(fdsync::Msg::Pos { .. }) => {
+                    heard.push(line.trim_end().to_string());
+                    continue;
+                }
+                _ => continue,
+            };
+            if w.write_all(fdsync::encode_line(&reply).as_bytes()).is_err() {
+                break;
+            }
+        }
+        heard
+    })
+}
+
+/// ⭐ **A position measures its clock against the host's through the real pump and bridge**,
+/// by value: the scripted host is 45 s ahead and its welcome says nothing of it, and the
+/// position's own club block says 45 s behind as soon as a round trip closes, and its next
+/// report tells the host so, in ms.
+#[test]
+fn a_position_measures_its_clock_against_the_host_through_the_real_pump() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let host_sd = Arc::new(AtomicBool::new(false));
+    let host = scripted_host(listener, 45_000, host_sd.clone());
+    let pos = fd_engine("W9ABC", "bbbb0002", "CW tent", &addr);
+    let pump_sd = start_pump(&pos, &addr);
+    let skew = || {
+        engine_lock(&pos)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| c.skew_secs)
+    };
+    wait_until("the position measured the host's clock", 5, || {
+        skew() == Some(-45)
+    });
+    // The report that follows the measurement carries it.
+    std::thread::sleep(Duration::from_millis(500));
+    pump_sd.store(true, Ordering::Relaxed);
+    host_sd.store(true, Ordering::Relaxed);
+    let heard = host.join().unwrap();
+    let reported: Vec<i64> = heard
+        .iter()
+        .filter_map(|l| match fdsync::decode_line(l) {
+            Some(fdsync::Msg::Pos { clock_ms, .. }) => clock_ms,
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !reported.is_empty() && reported.iter().all(|ms| (ms + 45_000).abs() < 1_000),
+        "the host heard this position is 45 s behind it: {heard:?}"
+    );
+}
+
+/// The host's own board, through real engines and sockets: every position's row carries
+/// the clock it measured. Here both run on one PC, so each is within a whisker of 0 (the
+/// host's own position included: it joins itself over loopback). A position's board shows
+/// the same rows with no clock: the column is the host's, and no board line carries it.
+#[test]
+fn the_hosts_board_carries_each_positions_measured_clock() {
+    let dir = std::env::temp_dir().join(format!("fd-clock-board-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9ABC", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_test.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let p2 = fd_engine("W9ABC", "bbbb0002", "CW tent", &addr);
+    let p2_sd = start_pump(&p2, &addr);
+    let clocks = || -> Vec<(String, Option<i64>)> {
+        engine_lock(&host)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| c.board.into_iter().map(|r| (r.posid, r.clock_ms)).collect())
+            .unwrap_or_default()
+    };
+    wait_until("both rows carry a measured clock", 10, || {
+        let c = clocks();
+        c.len() == 2 && c.iter().all(|(_, ms)| ms.is_some())
+    });
+    for (posid, ms) in clocks() {
+        let ms = ms.unwrap();
+        assert!(ms.abs() < 2_000, "{posid} runs on this PC's clock: {ms} ms");
+    }
+    let p2_board = || -> Vec<Option<i64>> {
+        engine_lock(&p2)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| c.board.into_iter().map(|r| r.clock_ms).collect())
+            .unwrap_or_default()
+    };
+    wait_until("the position holds both rows", 10, || p2_board().len() == 2);
+    assert_eq!(
+        p2_board(),
+        [None, None],
+        "a position's board has no clock column"
+    );
+    for sd in [host_sd, host_pump_sd, p2_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}

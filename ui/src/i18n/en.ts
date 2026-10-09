@@ -4037,6 +4037,8 @@ export const EN = {
   'fieldDay.club.popOut.label': '⧉ Pop out board',
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
+  'fieldDay.club.clock.ahead': 'This PC\'s clock is {{secs}} s ahead of the host\'s',
+  'fieldDay.club.clock.behind': 'This PC\'s clock is {{secs}} s behind the host\'s',
   'fieldDay.club.error': 'Host: {{msg}}',
   'fieldDay.club.refused.chip': 'Not syncing',
   'fieldDay.club.refused.serial': 'Club sync does not run {{contest}}: its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.',
@@ -4054,9 +4056,15 @@ export const EN = {
   'fieldDay.club.board.column.operator': 'Operator',
   'fieldDay.club.board.column.qsos': 'QSOs',
   'fieldDay.club.board.column.rate': 'Rate',
+  'fieldDay.club.board.column.clock': 'Clock',
   'fieldDay.club.board.stale': 'Last heard {{secs}} s ago',
   'fieldDay.club.board.unnamed': 'Unnamed position',
   'fieldDay.club.board.rate': '{{rate}}/hr',
+  'fieldDay.club.board.clock.title': 'Each position\'s clock against the host\'s, measured over the club link every 5 s. Nexus only shows it and never changes a clock: put a wrong one right in that PC\'s own date and time settings.',
+  'fieldDay.club.board.clock.ok': 'in step',
+  'fieldDay.club.board.clock.ahead': '{{secs}} s ahead',
+  'fieldDay.club.board.clock.behind': '{{secs}} s behind',
+  'fieldDay.club.board.clock.unknown': 'Not measured: that position runs an older Nexus, or has not answered yet',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
