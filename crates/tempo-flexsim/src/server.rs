@@ -16,7 +16,8 @@
 //!
 //! **What the radio remembers.** Who holds the transmitter: a successful `xmit 1` keys it under
 //! the connection's handle and a successful `xmit 0` releases it, unless a fault says otherwise.
-//! That is what lets a reconnect see a transmitter still keyed by a dropped handle. And the
+//! The tune carrier the same way: `transmit tune 1` and `transmit tune 0`. That is what lets a
+//! reconnect see a transmitter still keyed, or still tuning, under a dropped handle. And the
 //! transmitter's DAX source, which is radio-wide: after a successful `transmit set dax=<0|1>`,
 //! every later `sub tx all` reports it, so a reconnect sees what an earlier session left.
 //! Everything else a client hears comes from the session's rules: the simulator models no slices
@@ -36,7 +37,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::fault::{interlock_line, Fault, REFUSED};
+use crate::fault::{interlock_line, withholds, Fault, REFUSED};
 use crate::line::{self, LineBuf};
 use crate::session::{Item, Session};
 use crate::vita::{self, Start, Stream};
@@ -184,6 +185,8 @@ struct Radio {
     accepted: usize,
     /// The handle the transmitter is keyed under, if any.
     keyed_by: Option<u32>,
+    /// The handle the tune carrier is up under, if any.
+    tuned_by: Option<u32>,
     /// [`Fault::DisconnectMidOver`] fires once per simulator.
     disconnect_fired: bool,
     /// The transmitter's DAX source, once a client has set it.
@@ -376,6 +379,13 @@ impl Shared {
             .any(|f| matches!(f, Fault::StuckTransmit))
     }
 
+    fn stuck_tune(&self) -> bool {
+        self.config
+            .faults
+            .iter()
+            .any(|f| matches!(f, Fault::StuckTune))
+    }
+
     fn disconnect_mid_over(&self) -> Option<(Duration, bool)> {
         self.config.faults.iter().find_map(|f| match f {
             Fault::DisconnectMidOver {
@@ -442,6 +452,9 @@ fn close(shared: &Shared, conn: &Conn, by: Closer) {
             if !shared.stuck() && !stays {
                 radio.keyed_by = None;
             }
+        }
+        if radio.tuned_by == Some(conn.handle) && !shared.stuck_tune() {
+            radio.tuned_by = None;
         }
     }
     conn.out_cv.notify_all();
@@ -685,7 +698,7 @@ impl Reader<'_> {
         let reply = format!("R{}|{}|{}", cmd.seq, code, conn.expand(&message));
         self.reply(text, cmd.seq, reply, now);
 
-        let stuck = text == "xmit 0" && shared.stuck();
+        let stuck = withholds(&shared.config.faults, text);
         if stuck {
             let lines = items.iter().filter(|i| matches!(i, Item::Send(_))).count();
             shared.record(Event::StatusWithheld {
@@ -731,6 +744,15 @@ impl Reader<'_> {
             let mut radio = lock(&shared.radio);
             if radio.keyed_by == Some(conn.handle) {
                 radio.keyed_by = None;
+            }
+        }
+        if ok && text == "transmit tune 1" {
+            lock(&shared.radio).tuned_by = Some(conn.handle);
+        }
+        if ok && text == "transmit tune 0" && !stuck {
+            let mut radio = lock(&shared.radio);
+            if radio.tuned_by == Some(conn.handle) {
+                radio.tuned_by = None;
             }
         }
 
@@ -808,12 +830,22 @@ impl Reader<'_> {
             }
         }
         if text == "sub tx all" {
-            let (other, dax) = {
+            let (other, tuning, dax) = {
                 let radio = lock(&self.shared.radio);
-                (radio.keyed_by.filter(|h| *h != self.conn.handle), radio.dax)
+                let other = |h: &u32| *h != self.conn.handle;
+                (
+                    radio.keyed_by.filter(other),
+                    radio.tuned_by.filter(other),
+                    radio.dax,
+                )
             };
             if let Some(owner) = other {
                 items.push(Item::Send(interlock_line(owner, "TRANSMITTING", "SW")));
+            }
+            if let Some(owner) = tuning {
+                // The tune profile's source (the bundled session, from AetherSDR's notes).
+                items.push(Item::Send("S0|transmit tune=1".to_string()));
+                items.push(Item::Send(interlock_line(owner, "TRANSMITTING", "TUNE")));
             }
             if let Some(dax) = dax {
                 items.push(Item::Send(format!("S0|transmit dax={}", u8::from(dax))));

@@ -73,6 +73,17 @@ pub enum Fault {
     /// unkey (spec §10.5, "Wall-clock watchdog": "`tx=1` never clears → escalation").
     StuckTransmit,
 
+    /// **A tune carrier that never drops.** `transmit tune 0` is acknowledged with success, but
+    /// the carrier stays up: none of the rule's statuses is sent, and the radio stays tuning under
+    /// that handle, also after its connection closes. A later connection's `sub tx all` reports
+    /// `transmit tune=1` and the transmitter held by the old handle.
+    ///
+    /// *Guard:* the readback per kind, the tune's profile. A tune counts as ended only when the
+    /// transmit status says `tune=0` and the interlock is idle again, never on the reply to
+    /// `transmit tune 0`. When the stop is not proven within the deadline, the client sends
+    /// `transmit tune 0` again and `xmit 0`, closes the session and tells the operator.
+    StuckTune,
+
     /// **A foreign client's slice and pan.** Another GUI client is on the radio: its `client`,
     /// `slice`, `display pan` and `display waterfall` status lines follow the session's own
     /// answers to `sub client all`, `sub slice all` and `sub pan all`, and `sub tx all` reports
@@ -135,6 +146,19 @@ pub enum Fault {
 /// The reply code [`Fault::DaxTxRefused`] answers with: an error. Which code a radio uses for a
 /// refused create is not established here.
 pub const REFUSED: &str = "5000002C";
+
+/// Whether a fault withholds the statuses of `command`'s rule, so the radio acknowledges the
+/// command and does nothing else: [`Fault::StuckTransmit`] for `xmit 0`, [`Fault::StuckTune`] for
+/// `transmit tune 0`. The simulator asks this, and so does a test that answers for the radio on its
+/// own clock, so the two cannot disagree.
+pub fn withholds(faults: &[Fault], command: &str) -> bool {
+    faults.iter().any(|f| {
+        matches!(
+            (f, command),
+            (Fault::StuckTransmit, "xmit 0") | (Fault::StuckTune, "transmit tune 0")
+        )
+    })
+}
 
 /// The other program of [`Fault::ForeignDaxTx`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +324,23 @@ mod tests {
                 !f.is_named_by(not_named),
                 "{not_named:?} wrongly recognised"
             );
+        }
+    }
+
+    #[test]
+    fn each_stuck_fault_withholds_its_own_stop_and_nothing_else() {
+        let none: &[Fault] = &[];
+        let both = [Fault::StuckTransmit, Fault::StuckTune];
+        for command in ["xmit 0", "transmit tune 0"] {
+            assert!(!withholds(none, command), "{command} without a fault");
+            assert!(withholds(&both, command), "{command}");
+        }
+        assert!(withholds(&[Fault::StuckTransmit], "xmit 0"));
+        assert!(!withholds(&[Fault::StuckTransmit], "transmit tune 0"));
+        assert!(withholds(&[Fault::StuckTune], "transmit tune 0"));
+        assert!(!withholds(&[Fault::StuckTune], "xmit 0"));
+        for other in ["xmit 1", "transmit tune 1", "cwx clear", "atu start"] {
+            assert!(!withholds(&both, other), "{other}");
         }
     }
 

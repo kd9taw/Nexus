@@ -521,6 +521,80 @@ fn a_stuck_transmitter_acknowledges_xmit_0_and_stays_keyed_across_a_reconnect() 
     }
 }
 
+/// The tune carrier the same way: `transmit tune 0` acknowledged either way, its statuses (the
+/// transmit status's `tune=0` among them) withheld under the fault, and a later connection told
+/// the old handle still holds a tune.
+#[test]
+fn a_stuck_tune_acknowledges_tune_off_and_stays_up_across_a_reconnect() {
+    for stuck in [false, true] {
+        let faults = if stuck {
+            vec![Fault::StuckTune]
+        } else {
+            Vec::new()
+        };
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("transmit tune 1");
+        let up = c.until(|l| l.contains("state=TRANSMITTING"));
+        assert!(up.iter().any(|l| l == "S0|transmit tune=1"), "{up:?}");
+        assert!(
+            up.last().unwrap().contains("source=TUNE"),
+            "the tune profile's source: {up:?}"
+        );
+        let off = c.send("transmit tune 0");
+        let ping = c.send("ping");
+        let lines = c.through_reply(ping);
+        let reply = lines
+            .iter()
+            .position(|l| *l == format!("R{off}|0|"))
+            .expect("transmit tune 0 is acknowledged either way");
+        let after: Vec<&String> = lines[reply..].iter().collect();
+        if stuck {
+            assert!(
+                !after
+                    .iter()
+                    .any(|l| l.contains("tune=0") || l.contains("|interlock ")),
+                "{after:?}"
+            );
+            assert!(sim.events().contains(&Event::StatusWithheld {
+                conn: 0,
+                command: "transmit tune 0".into(),
+                lines: 4,
+            }));
+        } else {
+            let mut seen: Vec<String> = after.iter().map(|l| l.to_string()).collect();
+            seen.extend(c.until(|l| l.contains("tx_client_handle=0x00000000 state=READY")));
+            assert_eq!(
+                seen.iter().filter(|l| *l == "S0|transmit tune=0").count(),
+                1
+            );
+        }
+        drop(c);
+        assert!(closed(&sim, 0, Closer::Client));
+        let (mut d, handle) = Client::greeted(&sim);
+        assert_eq!(handle, "H2B6E1F41");
+        let tx = d.statuses("sub tx all");
+        assert_eq!(
+            tx.iter().any(|l| l == "S0|transmit tune=1"),
+            stuck,
+            "{tx:?}"
+        );
+        let last = tx
+            .iter()
+            .rev()
+            .find(|l| l.contains("|interlock tx_client_handle="))
+            .unwrap();
+        assert_eq!(
+            last.contains("tx_client_handle=0x2B6E1F40 state=TRANSMITTING")
+                && last.contains("source=TUNE"),
+            stuck,
+            "{last}"
+        );
+    }
+}
+
 #[test]
 fn a_foreign_client_owns_a_slice_a_pan_and_the_transmitter() {
     let foreign = Foreign {

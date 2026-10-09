@@ -268,8 +268,9 @@ impl Session {
     }
 
     /// The group whose pattern answers `command`: an exact pattern first, else the longest
-    /// matching prefix. `None` means the default reply.
-    pub(crate) fn lookup(&self, command: &str) -> Option<usize> {
+    /// matching prefix. `None` means the default reply. Public so that a test answering for the
+    /// radio on its own clock answers from the same rules as the simulator.
+    pub fn lookup(&self, command: &str) -> Option<usize> {
         let exact = self
             .rules
             .iter()
@@ -288,7 +289,7 @@ impl Session {
     }
 
     /// The rule a group gives on its `uses`-th match (0-based): in order, then the last again.
-    pub(crate) fn rule(&self, group: usize, uses: usize) -> &Rule {
+    pub fn rule(&self, group: usize, uses: usize) -> &Rule {
         let rules = &self.rules[group].1;
         &rules[uses.min(rules.len() - 1)]
     }
@@ -368,6 +369,9 @@ mod tests {
             "xmit 0",
             "transmit tune 1",
             "transmit tune 0",
+            "atu start",
+            "cwx send \"CQ\" 1",
+            "cwx clear",
         ] {
             assert!(s.lookup(command).is_some(), "no rule answers {command:?}");
         }
