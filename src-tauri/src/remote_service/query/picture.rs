@@ -307,7 +307,17 @@ mod tests {
         let hold = WriteHold::take(&d.db()).unwrap();
         e.lock().unwrap().log_qso(zd7());
         let found = std::thread::scope(|s| {
-            let asked = s.spawn(|| window(&e));
+            // The page's part too: a read refused busy because the write had still not landed
+            // when its wait ran out (a loaded machine) is asked again, as the page asks again.
+            let asked = s.spawn(|| {
+                let deadline = std::time::Instant::now() + tempo_app::test_util::TEST_WAIT;
+                loop {
+                    match window(&e) {
+                        Err("applicationBusy") if std::time::Instant::now() < deadline => {}
+                        answer => break answer,
+                    }
+                }
+            });
             std::thread::sleep(Duration::from_millis(250));
             assert!(
                 !asked.is_finished(),
