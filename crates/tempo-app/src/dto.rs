@@ -1104,6 +1104,22 @@ pub struct SlotKeyRefused {
     pub flex_audio: Option<FlexAudioRefusal>,
 }
 
+/// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
+/// ([`RadioStatus::flex_tune`]). Read and shown; Nexus writes neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexTune {
+    /// The radio's tune power, 0–100 % (`transmit tunepower`), as SmartSDR sets it: the level the
+    /// carrier keys at. `None` until the radio reports it.
+    #[serde(default)]
+    pub power_pct: Option<u8>,
+    /// The radio's own transmit timeout in milliseconds (`interlock timeout`), 0 when it is off:
+    /// the only thing that ends the carrier if Nexus or the network fails during a tune. `None`
+    /// until the radio reports it.
+    #[serde(default)]
+    pub tx_timeout_ms: Option<u64>,
+}
+
 /// Why Nexus's own Flex client kept a slot over's key off the air
 /// ([`SlotKeyRefused::flex_audio`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1676,6 +1692,19 @@ pub struct RadioStatus {
     /// snapshot every other radio sends is byte for byte what it was.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_radio_has_mic: bool,
+    /// While Nexus's own Flex client tunes with the radio's own carrier (Beta, off until a
+    /// tester's bench): the radio's tune power and its own transmit timeout, shown beside Tune.
+    /// See `Engine::observe_flex_tune`.
+    ///
+    /// Skipped when `None`, which is every other station, so their snapshots are byte for byte
+    /// what they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_tune: Option<FlexTune>,
+    /// While Tune is the radio's own carrier (`flex_tune`), the licence refuses it here though it
+    /// allows the mode's own emission: the carrier is judged as CW at the frequency the radio
+    /// transmits on too. Tune then keys nothing, and the screen says why beside it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flex_tune_refused: bool,
     /// The Flex VITA **meter** worker is running, which on a Flex is the only producer of a
     /// FlexLib-scaled SWR. OBSERVED from the worker, never read from `flex_native_pan` — see
     /// `Engine::observe_flex_meter_stream`. Read it with [`Self::swr_scale_verified`]: that

@@ -265,6 +265,8 @@ impl AppState {
                 rig_confirmed: false,
                 flex_dax_tx: false,
                 flex_radio_has_mic: false,
+                flex_tune: None,
+                flex_tune_refused: false,
                 flex_meter_stream: false,
                 rated_watts: 100,
                 dial_mhz: 14.074, // FT8 20m (default mode)
