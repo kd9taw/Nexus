@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
+  sync runs.** The claimed score is the biggest thing on the board, with how it is made beside it,
+  then the rate (the last hour, the last ten minutes and a bar for each hour), the contacts by band
+  and mode, each position's band and mode right now, the multipliers with their counts and caps,
+  the bonus stations, the latest contact, the clock and the time left. The map shows what the
+  contest counts: the sections globe for the two Field Days, and for the Illinois QSO Party the
+  state's 102 counties, each one lit when the club works it, with the host's own county outlined.
+  The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
+  address for the light board, or `?theme=auto` to follow the TV's own setting.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
   Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),
@@ -95,6 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A TV showing the spectator scoreboard on a position, or on a host running the Illinois QSO
+  Party, got a grey "served from the host station" overlay.** A position now shows the host's
+  board, from the host it joined (turn on Spectator scoreboard on the host too, on the same port),
+  and a host shows its club whatever contest it runs. If the host can't be reached, the TV says so
+  in plain words, keeps the last board it had and comes back by itself. A station with no club
+  says so, with what to do. Settings ▸ Contesting ▸ Field Day Club Sync says the same beside the
+  scoreboard's address.
 - **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
   joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
   selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station

@@ -12640,7 +12640,7 @@ export function SettingsPanel({
                     </span>
                   )}
                   {!form.fdHostEnable && (
-                    <span className="settings-hint">{t('settings.fdBoard.hostOnly')}</span>
+                    <span className="settings-hint">{t('settings.fdBoard.notHosting')}</span>
                   )}
                 </div>
               </div>
