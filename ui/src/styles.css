@@ -12172,12 +12172,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 
 
-/* Field Day event banner */
+/* Field Day event banner. It wraps rather than squeeze: the mode switch leads it, and at the
+   1024 floor a banned-mode advisory beside the contest's window would otherwise ellipsize the
+   window itself. The quiet rules line is what moves to a second row. */
 .fd-event-banner {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   padding: 10px var(--space-4);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-soft));
