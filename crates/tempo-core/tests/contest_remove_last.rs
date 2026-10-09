@@ -120,7 +120,7 @@ fn rows(log: &FieldDayLog) -> Vec<LoggedQso> {
     log.qsos().to_vec()
 }
 
-/// ⭐ **D2: the newest contact leaves every count and every export, and is kept.**
+/// ⭐ **The newest contact leaves every count and every export, and is kept.**
 ///
 /// Asserted against a TWIN — the same log that never had the contact — because "the score
 /// dropped by two" can be true of a log that lost the wrong row.
@@ -187,7 +187,7 @@ fn the_newest_contact_leaves_every_count_and_export_and_is_kept() {
     );
 }
 
-/// ⭐ **D1: a county line is ONE contact** — all its rows go, and come back, together. And
+/// ⭐ **A county line is ONE contact** — all its rows go, and come back, together. And
 /// the restore is BYTE-IDENTICAL: the rows by value, then the journal and the Cabrillo.
 #[test]
 fn a_county_line_goes_and_comes_back_as_one_contact_byte_identical() {
@@ -233,7 +233,7 @@ fn a_county_line_goes_and_comes_back_as_one_contact_byte_identical() {
     assert_eq!(log.cabrillo(14_000), cabrillo_before);
 }
 
-/// D6b: if the newest contact is not the one the strip showed, nothing is removed — and an
+/// If the newest contact is not the one the strip showed, nothing is removed — and an
 /// empty log has nothing to remove.
 #[test]
 fn a_changed_or_empty_log_refuses_and_changes_nothing() {
@@ -262,7 +262,7 @@ fn a_changed_or_empty_log_refuses_and_changes_nothing() {
     }
 }
 
-/// ⭐ **D3 and the restart trap: the journal keeps the contact REMOVED, and a restart never
+/// ⭐ **The restart trap: the journal keeps the contact REMOVED, and a restart never
 /// hands its serial or its club seq to the next contact.**
 ///
 /// Both numbers are rebuilt from the journal's rows on a restart. A contact deleted from the
@@ -308,7 +308,7 @@ fn a_restart_keeps_a_removed_contact_removed_and_never_reissues_its_numbers() {
     assert_eq!(restored.qsos().last().unwrap().seq, 4);
 }
 
-/// ⭐ **D2: Restore is refused once the same station was worked again on that band and mode.**
+/// ⭐ **Restore is refused once the same station was worked again on that band and mode.**
 #[test]
 fn restore_is_refused_once_the_station_is_worked_again() {
     let mut log = fd_log();
@@ -387,7 +387,7 @@ fn the_journal_keeps_a_removed_contact_whose_station_was_worked_again() {
     assert_eq!(restored.removed().len(), 1);
 }
 
-/// D9's half: a row removed BY SEQ (a Logbook delete of its merged copy) — and the dupe mark
+/// A row removed BY SEQ (a Logbook delete of its merged copy) — and the dupe mark
 /// of a LATER row is recomputed, because the mark is order-derived.
 #[test]
 fn removing_a_row_by_seq_recomputes_a_later_rows_dupe_mark() {

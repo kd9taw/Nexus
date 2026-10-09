@@ -78,7 +78,7 @@ fn transmit_state(e: &Engine) -> (bool, Option<TxOwner>, bool, bool, bool) {
     )
 }
 
-/// ⭐ **D4: refused while club sync runs — at the host and at a position — and nothing
+/// ⭐ **Refused while club sync runs — at the host and at a position — and nothing
 /// changes.** With sync off, the same removal is made: the control that says the refusal is
 /// club sync's and not some other gate's.
 #[test]
@@ -188,7 +188,7 @@ fn removing_the_only_contact_survives_a_mode_change_and_a_restart() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// ⭐ **D9: a Logbook delete of a contact merged from the RUNNING contest removes it from the
+/// ⭐ **A Logbook delete of a contact merged from the RUNNING contest removes it from the
 /// contest log too** — as a removal, restorable — through the command path every delete takes
 /// and the engine's own twin. While club sync runs the contest row stays.
 #[test]
@@ -282,7 +282,7 @@ fn a_logbook_delete_never_reaches_a_row_it_does_not_name() {
     assert!(logged(&e).is_empty());
 }
 
-/// ⭐ **D5: the answer names where the contact already went** — the forwarder's destinations
+/// ⭐ **The answer names where the contact already went** — the forwarder's destinations
 /// once a slot boundary had passed it, and the services holding the logbook's merged copy —
 /// and claims nothing for a contact that never left.
 #[test]
