@@ -1,18 +1,17 @@
-! Nexus: C ABI wrapper for native FST4 decode, built on the vendored WSJT-X GPL
-! modem sources (lib/fst4 + fst4_decode.f90). Modelled on ft4_cabi.f90, not
+! Nexus: C ABI wrapper for native FST4 decode and transmit, built on the vendored
+! WSJT-X GPL modem sources (lib/fst4 + fst4_decode.f90). Modelled on ft4_cabi.f90, not
 ! ft8_cabi.f90: like FT4, the WSJT-X FST4 decoder (fst4_decode::decode) is a clean
 ! self-contained OO decoder driven through a callback, with no nzhsym streaming
 ! ladder, no a7 cross-cycle table and no shared memory. So it is driven directly
 ! via a collector callback, exactly as ft4_cabi does.
 !
-! RX-ONLY, DELIBERATELY. There is no fst4_encode / fst4_gen_wave here. FST4 is
-! being added as a decode-only mode: `Capabilities { tx: false }` on the Rust side
-! means modes::tx_mode() refuses to hand it to the transmit path. Adding TX means
-! adding genfst4 + a gen_fst4wave wrapper here AND flipping that flag AND passing
-! the FT-mode TX hard gate — three deliberate steps, not an oversight.
+! TRANSMIT TOO. fst4_encode_msg (the vendored genfst4) and fst4_gen_wave (the
+! vendored gen_fst4wave) are the TX half, and both FST4 and FST4W transmit:
+! `Capabilities { tx: true }` on the Rust side, with FST4W marked beacon_only.
 !
-! (gen_fst4wave IS compiled into libtempo regardless: fst4_decode calls it to
-! regenerate and subtract a decoded signal, so it is on the RECEIVE path.)
+! gen_fst4wave's one call in the decoder is in dopspread (fst4_decode.f90:966), a
+! plotting aid nothing calls since its plotspec block was removed, so fst4_gen_wave
+! below is the generator's only live caller.
 !
 ! Underlying Fortran:
 !   fst4_decode  (fst4_decode.f90)  - OO decoder: get_candidates_fst4 -> sync_fst4
@@ -325,7 +324,7 @@ contains
   !   nsym      : symbol count (FST4_NN)
   !   ntrperiod : T/R period, seconds - sets the symbol duration
   !   hmod      : tone-spacing multiplier, 1 | 2 | 4 (upstream's x2/x4 Tone Spacing)
-  !   fsample   : output sample rate (Hz)
+  !   fsample   : output sample rate (Hz); 12000 only, anything else is refused
   !   f0        : NOMINAL audio carrier (Hz) - see the offset note below
   !   wave_out  : caller buffer (capacity nwave_cap)
   !   returns   : samples produced (nsym*nsps), or -1 on refusal
@@ -358,13 +357,19 @@ contains
     integer(c_int), value, intent(in)    :: nwave_cap
     integer(c_int) :: nwave_out
 
-    integer :: nsps, nwave, ip, icmplx, itone_l(FST4_NN), hmod_l
+    integer :: nsps, nwave, nwork, ip, icmplx, itone_l(FST4_NN), hmod_l
     real    :: fs_l, f0_l, dfreq
     complex :: cwave(1)                      ! icmplx=0: never written
+    real, allocatable :: work(:)             ! not saved: freed on return
 
     nwave_out = -1
     if (nsym /= FST4_NN) return
     if (hmod /= 1 .and. hmod /= 2 .and. hmod /= 4) return
+    ! 12 kHz only. nsps comes from the 12 kHz table, and gen_fst4wave caches dt and
+    ! tsym under nsps alone (gen_fst4wave.f90:33-37): another rate would come out at
+    ! the wrong pitch and length, and leave every later 12 kHz over at this period
+    ! mistuned until the period changed. Refused here, it never reaches that cache.
+    if (fsample /= 12000.0) return
     ip = fst4_period_index(ntrperiod)
     if (ip < 1) return
 
@@ -380,10 +385,18 @@ contains
     f0_l   = f0 + 1.5 * dfreq
     icmplx = 0
 
-    ! gen_fst4wave writes (nsym+2)*nsps of dphi internally but emits exactly
-    ! nsym*nsps samples (its output loop runs j=nsps..(nsym+1)*nsps-1).
-    call gen_fst4wave(itone_l, nsym, nsps, nwave, fs_l, hmod_l, f0_l, &
-                      icmplx, cwave, wave_out(1:nwave))
+    ! ⭐ THE HEADROOM. gen_fst4wave emits nsym*nsps samples (its output loop runs
+    ! j=nsps..(nsym+1)*nsps-1), but its ramp-down writes one more: wave(k1:k1+nsps/4)
+    ! with k1=(nsym-1)*nsps+3*nsps/4+1 ends at wave(nsym*nsps+1). Every upstream
+    ! caller passes nwave >= (nsym+2)*nsps (mainwindow.cpp:5370, fst4sim.f90:68), so
+    ! the generator gets a work array of that size and only the samples are copied
+    ! out. Handed wave_out(1:nsym*nsps) itself, it wrote one float past the caller's
+    ! buffer on every transmission. The copy changes no sample.
+    nwork = (nsym + 2) * nsps
+    allocate(work(nwork))
+    call gen_fst4wave(itone_l, nsym, nsps, nwork, fs_l, hmod_l, f0_l, &
+                      icmplx, cwave, work)
+    wave_out(1:nwave) = work(1:nwave)
     nwave_out = nwave
   end function fst4_gen_wave
 
