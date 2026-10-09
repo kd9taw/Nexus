@@ -55,6 +55,16 @@ show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), a
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
+**Super Check Partial and call history**, in every contest. As you type a call in a log
+strip, a line under the boxes lists the calls active in recent contests that contain what
+you have typed; click one to use it. The list is `MASTER.SCP` from supercheckpartial.com
+(maintained by W9KKN): Nexus downloads it the first time a contest starts and checks for a
+newer one at most once a day, and it is never shipped with Nexus. If you imported a
+call-history file for this contest, the boxes it can check (a county, state, section or zone
+the contest accepts) fill from it as you type, marked **history**, and whatever you type
+wins. Unassisted mode turns both off. Both are set up in
+[Settings › Contesting](settings-reference.md#super-check-partial-and-call-history).
+
 The log strip in the [Satellites](satellites.md) section switches too, and it is
 the one strip that does **not** take the band off your dial. It files each
 contact on the band of the transponder you were holding, so you can work the
@@ -66,6 +76,12 @@ Everywhere else, **log as you work**: the FD log stamps each contact with the
 band the radio is on at the moment you type it, so a contact entered after you
 have QSY'd away files on the wrong band, both in the Cabrillo and on the
 N1MM / N3FJP wire.
+
+Logged the wrong contact? **Press Ctrl+D twice**, or click **Remove last** beside Clear
+twice: the first press names your newest contest contact on the strip, the second removes
+it. It is kept under **Removed** on the contest screen, out of the score and every export,
+and **Restore** puts it back exactly. The [Field Day manual](../manual/Field-Day.md#take-back-the-last-contact)
+has the details, including where a contact may already have gone.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day

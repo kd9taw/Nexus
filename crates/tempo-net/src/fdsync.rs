@@ -344,7 +344,8 @@ pub enum Msg {
         t2: u64,
     },
     /// RESERVED (defined so a future ship needs no version bump; ignored on
-    /// receive today — `FieldDayLog` is append-only with no edit UI).
+    /// receive today, and never sent: a position can remove its newest contest
+    /// contact only while club sync is off, because no host takes one back yet).
     Retract { pos: String, seq: u64 },
     /// host→pos refusal (version mismatch etc.) — shown to the operator
     /// verbatim.

@@ -351,7 +351,7 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      ft4_decode_t *out, int max_out);
 
 /*===========================================================================
- * FST4: WSJT-X slow weak-signal mode. DECODE ONLY.
+ * FST4: WSJT-X slow weak-signal mode. Decode, and transmit (see below).
  *===========================================================================*/
 
 /* ⭐ ALL 7 T/R periods, and BOTH modes (FST4 + FST4W). ntrperiod and iwspr are
@@ -377,10 +377,10 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
 #define FST4_NMAX_MAX 21600000  /* ceiling: 1800 s @ 12 kHz                     */
 #define FST4_NPERIODS 7         /* {15, 30, 60, 120, 300, 900, 1800}            */
 
-/* NO fst4_encode / fst4_gen_wave, deliberately. FST4 ships receive-only: the
- * Rust ModeKind reports Capabilities{tx:false} and modes::tx_mode() refuses to
- * hand it to the transmit path. Adding TX means adding those two entry points,
- * flipping that flag, AND passing the FT-mode TX approval gate. */
+/* FST4 and FST4W transmit: the Rust ModeKind reports Capabilities{tx:true}. The
+ * two TX entry points, fst4_encode_msg and fst4_gen_wave (fst4_cabi.f90), are
+ * declared in crates/tempo-fast-sys/src/lib.rs, not prototyped here.
+ * fst4_gen_wave takes fsample 12000 only and writes exactly 160*nsps samples. */
 
 /* One decode result from FST4 acquisition (same 64-byte layout as
  * ft8_decode_t / ft4_decode_t). */

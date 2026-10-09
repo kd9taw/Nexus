@@ -395,6 +395,44 @@ pub struct AdifMerge {
     pub unreadable: usize,
 }
 
+/// ⭐ **A contact the operator took out of the live log — kept, never deleted.**
+///
+/// The rows are exactly as they stood in the log, so the entry IS the before-state and
+/// [`FieldDayLog::restore`] puts it back unchanged: same time, serial and seq. One entry per
+/// removal, so a county line (one contact logged as a row per county) goes and comes back as
+/// one contact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedQso {
+    /// The contact's rows, in log order — one for an ordinary contact, one per county for a
+    /// county line.
+    pub rows: Vec<LoggedQso>,
+    /// When the operator removed it, Unix seconds.
+    pub removed_unix: u64,
+}
+
+impl RemovedQso {
+    /// What the contest screen restores this entry by: its first row's seq, which no other
+    /// entry and no live row holds.
+    pub fn id(&self) -> u64 {
+        self.rows.first().map_or(0, |q| q.seq)
+    }
+}
+
+/// Why a removal or a restore changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoveRefusal {
+    /// The log holds no contact to remove.
+    Empty,
+    /// The newest contact is not the one the caller named: one was logged, removed or
+    /// restored in between.
+    Changed,
+    /// No removed contact has that id.
+    NotRemoved,
+    /// The same station was worked again since, on a band and mode the ruleset's dupe key
+    /// counts as the same contact — putting this one back would duplicate it.
+    WorkedAgain,
+}
+
 /// What became of one journal record ([`FieldDayLog::merge_adif`]).
 enum RowFate {
     Restored,
@@ -441,7 +479,17 @@ pub struct FieldDayLog {
     /// [`current_submode`](Self::current_submode) is — so every log path, the digital
     /// sequencer's own included, names whoever was at the key for that contact.
     pub operator: String,
+    /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
+    /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
+    /// ([`remove_last`](Self::remove_last)), in the order they were removed.
+    ///
+    /// Outside [`qsos`](Self::qsos) rather than flagged inside it, so every reader of the live
+    /// log is right without a filter: the score, the dupe index, the Cabrillo, the submitted
+    /// ADIF, the general-log merge, the club outbox and the snapshot's `log` (whose length the
+    /// hosted Remote page checks against the QSO count). The journal is the one writer that
+    /// reads both, so a restart keeps a removed contact removed — and its numbers spent.
+    removed: Vec<RemovedQso>,
     /// The dupe index, keyed by the ruleset's own [`DupeRule`](crate::contest::DupeRule)
     /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
     /// mobile in a new county is a new station, and a tuple cannot say so.
@@ -483,6 +531,7 @@ impl FieldDayLog {
             current_submode: String::new(),
             operator: String::new(),
             qsos: Vec::new(),
+            removed: Vec::new(),
             worked: HashSet::new(),
             constant_sent_warning: None,
             next_seq: 1,
@@ -770,6 +819,129 @@ impl FieldDayLog {
         // move the mark on rows it did not touch. Rebuild rather than patch.
         self.rebuild_dupe_index();
         true
+    }
+
+    /// The newest contact in the live log: the trailing rows sharing the newest row's call
+    /// and time, which is one row for an ordinary contact and one per county for a county
+    /// line. Empty when the log is.
+    pub fn newest_contact(&self) -> &[LoggedQso] {
+        let Some(last) = self.qsos.last() else {
+            return &[];
+        };
+        let n = self
+            .qsos
+            .iter()
+            .rev()
+            .take_while(|q| q.call == last.call && q.when_unix == last.when_unix)
+            .count();
+        &self.qsos[self.qsos.len() - n..]
+    }
+
+    /// ⭐ **Take the newest contact out of the live log — removed, never deleted** — when it is
+    /// still the contact the caller named: `call` (any case) and `when_unix`, which is what
+    /// the entry strip showed the operator. A county line goes with all its rows.
+    ///
+    /// `Changed` when the newest contact is another one (logged, removed or restored in
+    /// between), `Empty` when there is none; either way nothing changes. Only the NEWEST,
+    /// because that is the contact an operator who just stopped a TU means, and the strip
+    /// names it before anything happens.
+    ///
+    /// ⚠️ **The numbers stay spent.** [`next_seq`](Self::max_seq) and the session's serial run
+    /// are untouched, so the next contact gets the next number: the other station may already
+    /// hold this one's serial, and the club host treats a reissued seq as a repeat and drops
+    /// the next real contact. The journal keeps the rows (marked removed), so a restart, which
+    /// rebuilds both numbers from the rows, cannot reissue them either.
+    pub fn remove_last(
+        &mut self,
+        call: &str,
+        when_unix: u64,
+        removed_unix: u64,
+    ) -> Result<RemovedQso, RemoveRefusal> {
+        let newest = self.newest_contact();
+        let Some(first) = newest.first() else {
+            return Err(RemoveRefusal::Empty);
+        };
+        if !first.call.eq_ignore_ascii_case(call.trim()) || first.when_unix != when_unix {
+            return Err(RemoveRefusal::Changed);
+        }
+        let at = self.qsos.len() - newest.len();
+        let rows = self.qsos.split_off(at);
+        Ok(self.took_out(rows, removed_unix))
+    }
+
+    /// Take ONE row out of the live log by its seq — the contest half of a Logbook delete of
+    /// that row's merged copy, which names one row, never a whole county line. `None`, having
+    /// changed nothing, when no live row carries `seq` (`0` is unstamped and names none).
+    pub fn remove_row(&mut self, seq: u64, removed_unix: u64) -> Option<RemovedQso> {
+        if seq == 0 {
+            return None;
+        }
+        let at = self.qsos.iter().position(|q| q.seq == seq)?;
+        let row = self.qsos.remove(at);
+        Some(self.took_out(vec![row], removed_unix))
+    }
+
+    /// The one place rows leave the live log: kept as one entry, the dupe index and every
+    /// row's mark rebuilt (removing a row can make a LATER one stop being a duplicate), and
+    /// a showing `constant_sent` warning re-derived, since the row it described may be the
+    /// one that went.
+    fn took_out(&mut self, rows: Vec<LoggedQso>, removed_unix: u64) -> RemovedQso {
+        let entry = RemovedQso { rows, removed_unix };
+        self.removed.push(entry.clone());
+        self.rebuild_dupe_index();
+        if self.constant_sent_warning.is_some() {
+            self.constant_sent_warning = self.constant_sent_scan();
+        }
+        entry
+    }
+
+    /// ⭐ **Put a removed contact back exactly as it was** — same time, serial and seq, each
+    /// row in its seq place — by its [`id`](RemovedQso::id).
+    ///
+    /// `WorkedAgain`, having changed nothing, when the same station was worked again SINCE
+    /// the removal — a live row holding one of its dupe keys, logged at or after the removal.
+    /// Under a ruleset that refuses duplicates it is ANY live row holding one, because two
+    /// live rows never share a key there (a contact restored in between is one). Under one
+    /// that logs them, a duplicate of a contact worked BEFORE the removal was a dupe then and
+    /// restores as one. `NotRemoved` when no entry has that id.
+    pub fn restore(&mut self, id: u64) -> Result<RemovedQso, RemoveRefusal> {
+        let Some(at) = self.removed.iter().position(|r| r.id() == id) else {
+            return Err(RemoveRefusal::NotRemoved);
+        };
+        let rule = self.dupe_rule();
+        let credit = self.ruleset().satellite_credit;
+        // A satellite contact the ruleset gives no credit is a dupe of nothing, on either side.
+        let keyed = |q: &&LoggedQso| credit || q.sat.is_none();
+        let entry = &self.removed[at];
+        let worked_again = entry.rows.iter().filter(keyed).any(|r| {
+            let key = rule.key(r);
+            self.qsos.iter().filter(keyed).any(|q| {
+                (!rule.log_dupes || q.when_unix >= entry.removed_unix) && rule.key(q) == key
+            })
+        });
+        if worked_again {
+            return Err(RemoveRefusal::WorkedAgain);
+        }
+        let entry = self.removed.remove(at);
+        for row in entry.rows.iter().cloned() {
+            let place = self
+                .qsos
+                .iter()
+                .position(|q| q.seq > row.seq)
+                .unwrap_or(self.qsos.len());
+            self.qsos.insert(place, row);
+        }
+        self.rebuild_dupe_index();
+        if self.constant_sent_warning.is_none() {
+            self.constant_sent_warning = self.constant_sent_scan();
+        }
+        Ok(entry)
+    }
+
+    /// The removed contacts, oldest removal first — kept by the log and its journal, outside
+    /// every count and export.
+    pub fn removed(&self) -> &[RemovedQso] {
+        &self.removed
     }
 
     /// Log a contact.
@@ -1108,6 +1280,8 @@ impl FieldDayLog {
         self.counting().count()
     }
 
+    /// The live rows, in log order. A contact the operator removed is not here; it is in
+    /// [`removed`](Self::removed).
     pub fn qsos(&self) -> &[LoggedQso] {
         &self.qsos
     }
@@ -1223,28 +1397,54 @@ impl FieldDayLog {
         self.counting().map(|q| qso_points_for_mode(&q.mode)).sum()
     }
 
-    /// Export the log as ADIF records (one `<EOR>` per QSO).
+    /// Export the log as ADIF records (one `<EOR>` per QSO) — THE JOURNAL: every live row,
+    /// then every removed one marked `APP_NEXUS_REMOVED` with when it was removed.
+    ///
+    /// ⚠️ **Live rows first, and that order is the downgrade's.** A build that predates the
+    /// tag reads a removed row as an ordinary contact (the safe direction: nothing is lost),
+    /// and admits rows in file order — so where a removed contact's station was worked again,
+    /// the LIVE row reaches its dupe index first and the old build keeps the live log this
+    /// one has, passing over the removed row instead of the reverse.
     pub fn adif(&self) -> String {
-        self.adif_of(self.qsos.iter())
+        let removed = self
+            .removed
+            .iter()
+            .flat_map(|r| r.rows.iter().map(move |q| (q, Some(r.removed_unix))));
+        // A removed row that alone sent a moved exchange still needs every row's carrier, or
+        // a restart would give it the session's exchange and lose the serial it was sent.
+        let sent_moved = self
+            .qsos
+            .iter()
+            .chain(self.removed.iter().flat_map(|r| &r.rows))
+            .any(|q| q.tx != self.session.my_exchange);
+        self.adif_of(
+            self.qsos.iter().map(|q| (q, None)).chain(removed),
+            sent_moved,
+        )
     }
 
-    /// ⭐ **The ADIF the entry submits**: [`adif`](Self::adif) without the satellite contacts
-    /// a ruleset gives no credit (Winter Field Day: *"Do not log any such contacts"*, 2027
-    /// rules p.5). `adif` itself is the journal and keeps every row.
+    /// ⭐ **The ADIF the entry submits**: the live rows (a removed contact is not submitted)
+    /// without the satellite contacts a ruleset gives no credit (Winter Field Day: *"Do not
+    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif) is the journal and keeps
+    /// every row.
     pub fn submission_adif(&self) -> String {
-        self.adif_of(self.submitted())
+        let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
+        self.adif_of(self.submitted().map(|q| (q, None)), sent_moved)
     }
 
-    fn adif_of<'a>(&'a self, rows: impl Iterator<Item = &'a LoggedQso>) -> String {
+    /// ⭐ `sent_moved`: has the sent exchange moved at any point in the rows this file
+    /// describes? If not — and it has not, for either Field Day event, which send one
+    /// exchange all weekend — the session fallback gives every row back exactly and no row
+    /// needs a carrier. The moment ONE row disagrees, EVERY row gets its own
+    /// `APP_NEXUS_MYEX`, not just the ones that differ: a later move must not be able to
+    /// re-label the rows that happen to match the session today.
+    fn adif_of<'a>(
+        &'a self,
+        rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
+        sent_moved: bool,
+    ) -> String {
         let mut s = String::from("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n");
-        // ⭐ Has the sent exchange moved at any point in this log? If not — and it has
-        // not, for either Field Day event, which send one exchange all weekend — the
-        // session fallback gives every row back exactly and no row needs a carrier.
-        // The moment ONE row disagrees, EVERY row gets its own `APP_NEXUS_MYEX`, not
-        // just the ones that differ: a later move must not be able to re-label the rows
-        // that happen to match the session today.
-        let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        for q in rows {
+        for (q, removed_unix) in rows {
             s.push_str(&adif_field("CALL", &q.call));
             // ⚠️ A MODE OUTSIDE ADIF'S ENUMERATION IS A DROPPED RECORD, NOT A COSMETIC ONE.
             // This wrote `q.submode` raw, and the tiers stamp names ADIF has never heard of
@@ -1395,6 +1595,10 @@ impl FieldDayLog {
             if !q.operator.is_empty() {
                 s.push_str(&adif_field("OPERATOR", &q.operator));
             }
+            // A contact the operator removed: kept, with when (`restore_row` reads it back).
+            if let Some(at) = removed_unix {
+                s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
+            }
             s.push_str("<EOR>\n");
         }
         s
@@ -1406,7 +1610,9 @@ impl FieldDayLog {
     /// stamped before `min_when_unix` are skipped (a previous event's journal
     /// self-expires), rows already in the dupe index are skipped, and garbage
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
-    /// band, so they survive a mid-event QSY.
+    /// band, so they survive a mid-event QSY. A row the journal marks removed
+    /// (`APP_NEXUS_REMOVED`) comes back REMOVED ([`removed`](Self::removed)), outside the
+    /// dupe index, with its seq and serial still counted.
     ///
     /// Returns what it found ([`AdifMerge`]): the rows it restored, and the records it could not
     /// read — no CALL, or cut off before their `<EOR>` — which the journal's reader keeps the
@@ -1625,8 +1831,19 @@ impl FieldDayLog {
                 })
                 .unwrap_or_default(),
         );
-        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
-            return RowFate::Passed;
+        // ⭐ A REMOVED contact is outside the dupe check — that is what removing it means — so
+        // it is never offered to the index. Offered, a station worked again since would refuse
+        // it out of the journal right here, and the next save would drop it for good. Its
+        // numbers are still read below, which is what stops a restart reissuing them.
+        let removed_unix = f
+            .get("APP_NEXUS_REMOVED")
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        let dupe = match removed_unix {
+            Some(_) => false,
+            None => match self.admit_row(key, sat.is_some()) {
+                Some(dupe) => dupe,
+                None => return RowFate::Passed,
+            },
         };
         // The journaled sync seq round-trips; a legacy row without the tag
         // backfills the next free seq in row order (1..n on a whole legacy
@@ -1689,7 +1906,7 @@ impl FieldDayLog {
             down_hz: on_air_hz,
             ..s
         });
-        self.qsos.push(LoggedQso {
+        let row = LoggedQso {
             call: call.clone(),
             rx,
             tx,
@@ -1714,8 +1931,33 @@ impl FieldDayLog {
                 .get("OPERATOR")
                 .map(|o| o.trim().to_ascii_uppercase())
                 .unwrap_or_default(),
-        });
+        };
+        match removed_unix {
+            Some(at) => self.keep_removed(row, at),
+            None => self.qsos.push(row),
+        }
         RowFate::Restored
+    }
+
+    /// A removed row read back out of the journal joins the entry it was removed with: the
+    /// journal writes one removal's rows together (a county line: one call, one time, one
+    /// mark), so a row continuing the last entry is that entry's next row.
+    fn keep_removed(&mut self, row: LoggedQso, removed_unix: u64) {
+        match self.removed.last_mut() {
+            Some(last)
+                if last.removed_unix == removed_unix
+                    && last
+                        .rows
+                        .last()
+                        .is_some_and(|q| q.call == row.call && q.when_unix == row.when_unix) =>
+            {
+                last.rows.push(row)
+            }
+            _ => self.removed.push(RemovedQso {
+                rows: vec![row],
+                removed_unix,
+            }),
+        }
     }
 
     /// Export the log as a Cabrillo entry — headers (§6.1) then one QSO line per

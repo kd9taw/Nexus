@@ -1479,6 +1479,53 @@ impl LogPlan {
         Ok(seen)
     }
 
+    /// The upload marks on the log's copies of the contest rows `qids` names (a merged contest
+    /// contact's `qid`), as this process knows the log ([`Self::rows`]): what a removal from the
+    /// contest log reports and cannot take back. The same narrow pass as
+    /// [`Self::merge_identities`], with the upload stamps.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn merged_uploads(
+        &self,
+        qids: &HashSet<String>,
+    ) -> Result<Vec<tempo_core::logbook::UploadState>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const COPIES: Narrow = Narrow {
+            columns: &["contest_qid"],
+            uploads: true,
+        };
+        let named = |r: &QsoRecord| {
+            r.contest
+                .as_deref()
+                .is_some_and(|c| !c.qid.is_empty() && qids.contains(&c.qid))
+        };
+        let mut found = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            // This process's own version of the row, where one is on its way, as above.
+            match r.id.and_then(|id| self.pending.row(id)) {
+                Some(Some(mine)) if named(&mine) => found.push(mine.upload.clone()),
+                Some(_) => {}
+                None if named(r) => found.push(r.upload.clone()),
+                None => {}
+            }
+            ControlFlow::Continue(())
+        };
+        let crate::logstore::LogRows::Store(reads) = &self.rows;
+        reads
+            .read(std::time::Duration::ZERO, |db| {
+                db.each_narrow(COPIES, Scope::All, Order::Log, &mut keep)
+            })
+            .map_err(|e| e.to_string())?;
+        found.extend(
+            self.pending
+                .rows_matching(|r| named(r))
+                .iter()
+                .map(|r| r.upload.clone()),
+        );
+        Ok(found)
+    }
+
     /// The rows of the log whose call is one `calls` names — each a call as the store keys it,
     /// trimmed and ASCII-uppercased ([`tempo_core::logbook::sqlite::call_norm_of`]) — as this
     /// process knows them ([`Self::rows`]), in log order: the CANDIDATE SUB-LOG a bulk change is
@@ -3890,7 +3937,32 @@ impl StationCore {
     /// Another instance's commits are taken in BEFORE the delete is planned
     /// ([`Self::log_plan`]), so only THIS record goes and the other writer's QSOs stay.
     pub fn delete_qso(&mut self, id: RecordId) -> bool {
-        self.change_row(id, &[LogOp::Delete(id)], "delete_qso")
+        self.delete_row(id).is_some()
+    }
+
+    /// [`Self::delete_qso`], answering the contact as it was before it went — what the contest
+    /// log's own row is found by ([`crate::engine::Engine::delete_qso`]).
+    pub(crate) fn delete_row(&mut self, id: RecordId) -> Option<Arc<QsoRecord>> {
+        match self.change_by_id(id, "delete_qso", |_, row| {
+            Ok(ops_on(row, &[LogOp::Delete(id)]))
+        }) {
+            Ok(Ok(Some((before, None)))) => Some(before),
+            Ok(Err(RowRefusal::Busy)) => {
+                tempo_core::applog::warn(
+                    "logbook",
+                    "delete_qso: the contact kept changing under the change; not made",
+                );
+                None
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("delete_qso: the logbook could not be read: {e}"),
+                );
+                None
+            }
+        }
     }
 
     /// Purge the ENTIRE logbook (operator-confirmed, destructive, irreversible).

@@ -66,6 +66,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { SliceIntent } from './types'
+import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { StreetPack } from './features/streetPack'
 import type {
@@ -736,6 +737,56 @@ export async function contestLogManualRows(
     mode,
     submode: submode ?? null,
   })
+}
+
+/** A contest contact the operator removed — kept, never deleted, and restorable: the contest
+ *  screen's Removed list. `rows` are as the log table shows them (a county line has one per
+ *  county); `id` is what `contestRestore` takes. */
+export interface RemovedContest {
+  id: number
+  removedUnix: number
+  rows: FieldDayQso[]
+}
+
+/** Why a removal or a restore changed nothing. */
+export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain' | 'clubSync'
+
+/** Where a removed contact had already gone — places Nexus cannot take it back from. */
+export interface ContestSentTo {
+  /** The N3FJP host it was pushed to. */
+  n3fjp?: string
+  /** The address of the N1MM broadcast it went out on. */
+  n1mm?: string
+  /** WSJT-X listeners had its "QSO Logged" datagram. */
+  wsjtx: boolean
+  /** The logbook holds a copy merged from the contest. */
+  logbook: boolean
+  /** The services holding that copy by its upload marks: 'lotw' | 'qrz' | 'clublog' | 'eqsl'. */
+  uploaded: string[]
+}
+
+export type ContestRemovalAnswer =
+  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo }
+  | { outcome: 'restored'; entry: RemovedContest }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Remove the newest contest contact** — when it is still the one named (`call` and
+ *  `whenUnix`, as the strip showed it), else `refused: changed`. It is kept, never deleted: its
+ *  serial and club seq stay spent, and `contestRestore` puts it back. Refused while club sync
+ *  runs. Answers once the contest journal holds the change. Never keys or stops TX. */
+export async function contestRemoveLast(call: string, whenUnix: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_remove_last', { call, whenUnix })
+}
+
+/** Put a removed contact back exactly as it was — refused when the station was worked again
+ *  since on that band and mode, and while club sync runs. */
+export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_restore', { id })
+}
+
+/** The removed contacts, oldest removal first. */
+export async function contestRemoved(): Promise<RemovedContest[]> {
+  return invoke<RemovedContest[]>('contest_removed')
 }
 
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
@@ -2638,6 +2689,49 @@ export async function setUnassistedMode(on: boolean): Promise<AppSnapshot> {
 /** The assistance journal, newest first — what was running, and when. */
 export async function getAssistanceJournal(): Promise<import('./types').AssistanceEvent[]> {
   return invoke('get_assistance_journal')
+}
+
+/** Super Check Partial: download the list, or check for a newer one, when the site's rules for
+ *  logging software allow it now, and say what is held. The station decides: nothing is sent
+ *  while SCP is off or Unassisted mode is declared, and never more than once a day unless
+ *  `manual` (the operator's "Update now"). */
+export async function scpEnsure(manual: boolean): Promise<import('./types').ScpStatus> {
+  return invoke('scp_ensure', { manual })
+}
+
+/** What is held of the Super Check Partial list, without asking the site anything. */
+export async function getScpStatus(): Promise<import('./types').ScpStatus> {
+  return invoke('get_scp_status')
+}
+
+/** The Super Check Partial calls, once per strip mount; empty while SCP is effectively off. */
+export async function getScpCalls(): Promise<string[]> {
+  return invoke('get_scp_calls')
+}
+
+/** Import an N1MM-format call-history file for one contest (a `FieldDayStatus.event` id). A file
+ *  that does not read is refused and the one held is kept. */
+export async function importCallHistory(
+  text: string,
+  fileName: string,
+  contest: string,
+): Promise<import('./types').CallHistoryStatus> {
+  return invoke('import_call_history', { text, fileName, contest })
+}
+
+/** What call history is imported, if any. */
+export async function getCallHistoryStatus(): Promise<import('./types').CallHistoryStatus | null> {
+  return invoke('get_call_history_status')
+}
+
+/** The imported call history for the strip; null when none is imported or it is effectively off. */
+export async function getCallHistory(): Promise<import('./types').CallHistoryFile | null> {
+  return invoke('get_call_history')
+}
+
+/** Forget the imported call history. */
+export async function clearCallHistory(): Promise<void> {
+  return invoke('clear_call_history')
 }
 
 /** Clear the streaming CW decoder's accumulated transcript. */

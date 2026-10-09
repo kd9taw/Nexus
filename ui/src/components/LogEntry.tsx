@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -34,9 +34,13 @@ import {
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
+import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
+import { scpLine } from '../features/scp'
+import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
+import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
@@ -404,6 +408,13 @@ interface Props {
    * (The Field Day variant below has never had a heading, on the same reasoning.)
    */
   titled?: boolean
+  /**
+   * CONTEST STRIP ONLY — is this strip's host the view on screen? Ctrl+D (remove the newest
+   * contact) is a WINDOW key, and the RTTY, PSK and JS8 cockpits stay mounted while hidden, so
+   * each hidden strip would otherwise take every press too. Default true: a host mounted only
+   * while it shows has nothing to say here.
+   */
+  active?: boolean
 }
 
 /**
@@ -433,6 +444,7 @@ export function LogEntry({
   fdSubmode,
   fillExchange,
   titled = true,
+  active = true,
   remote,
 }: Props) {
   const remoteMode = remote != null
@@ -612,6 +624,8 @@ export function LogEntry({
     if (fdActive && fieldDay && fdLogLen > fdSeenLen.current) {
       const lastEntry = fieldDay.log?.[fdLogLen - 1]
       if (lastEntry) {
+        // Every box is rewritten, so no box is a call-history fill or the operator's any more.
+        setFill(EMPTY_FILL)
         setFdFields((prev) => {
           const next = { ...prev }
           for (const f of fdReceives) {
@@ -625,6 +639,100 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
 
+  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D (N1MM's key) or Remove last, PRESSED TWICE. The first
+  // press names the contact on the verdict line and changes nothing; a second within
+  // REMOVE_CONFIRM_MS removes it. Any other key, the window running out, or a new contact lets it
+  // lapse, so nothing is removed that the operator was not just shown — and if the newest contact
+  // changed between the presses, nothing is removed and the line says so. The engine checks the
+  // same identity again (`changed`), so a snapshot that lagged cannot remove the wrong contact.
+  //
+  // ⛔ IT NEVER MOVES THE CARET. The Space-PTT incident was a focus change in this entry code: a
+  // keyup aimed at an input was swallowed and the rig stayed keyed. The button cancels its
+  // mousedown so focus stays where it was, and nothing here calls focus(). Nor does it key or stop
+  // a transmission: Esc still stops TX, and this reaches the contest log alone.
+  //
+  // Not on the hosted Remote page or in the native client (`remoteMode`): removal is refused
+  // from afar, and Remote's operations carry no contest-log command.
+  const removable = fdActive && !remoteMode
+  const newest = newestContact(fieldDay?.log)
+  const newestKey = newest ? `${newest.call}|${newest.whenUnix}` : ''
+  const [removeArmed, setRemoveArmed] = useState<
+    { call: string; whenUnix: number; label: string; at: number } | null
+  >(null)
+  const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  const armedRef = useRef(removeArmed)
+  armedRef.current = removeArmed
+  const pressRemove = () => {
+    const armed = armedRef.current
+    const now = Date.now()
+    if (!newest) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.empty'), alert: false })
+      return
+    }
+    if (!armed || now - armed.at > REMOVE_CONFIRM_MS) {
+      setRemoveNote(null)
+      setRemoveArmed({ call: newest.call, whenUnix: newest.whenUnix, label: contactLabel(newest.rows), at: now })
+      return
+    }
+    setRemoveArmed(null)
+    if (armed.call !== newest.call || armed.whenUnix !== newest.whenUnix) {
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+      return
+    }
+    contestRemoveLast(armed.call, armed.whenUnix).then(
+      (answer) => setRemoveNote({ text: removalText(answer, armed.label), alert: answer.outcome === 'refused' }),
+      () => setRemoveNote({ text: t('logEntry.remove.failed'), alert: true }),
+    )
+  }
+  const pressRemoveRef = useRef(pressRemove)
+  pressRemoveRef.current = pressRemove
+  // The press window, from the moment of the first press.
+  useEffect(() => {
+    if (!removeArmed) return
+    const id = window.setTimeout(() => setRemoveArmed(null), Math.max(0, removeArmed.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeArmed])
+  // A new contact (or the newest gone some other way) while a press waits: it lapses, and the
+  // line says why the next press starts over. A new contact also retires the last answer.
+  const seenNewest = useRef({ key: newestKey, len: fdLogLen })
+  useEffect(() => {
+    const was = seenNewest.current
+    seenNewest.current = { key: newestKey, len: fdLogLen }
+    if (was.key === newestKey && was.len === fdLogLen) return
+    if (armedRef.current) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+    } else if (fdLogLen > was.len) {
+      setRemoveNote(null)
+    }
+  }, [newestKey, fdLogLen])
+  // Ctrl+D from anywhere in the cockpit showing this strip — only while its host is on screen,
+  // since the RTTY, PSK and JS8 strips stay mounted when hidden.
+  useEffect(() => {
+    if (!removable || !active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (isRemoveKey(e)) {
+        // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
+        // in a macOS text box) never runs.
+        e.preventDefault()
+        // Held down, it is still ONE press: auto-repeat can never be the second.
+        if (!e.repeat) pressRemoveRef.current()
+        return
+      }
+      if (isModifierKey(e)) return
+      // Any other key lets a waiting press lapse, and retires the last answer.
+      setRemoveArmed(null)
+      setRemoveNote(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [removable, active])
+  // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
+  const removeLine = removeArmed
+    ? t('logEntry.remove.armed', { contact: removeArmed.label })
+    : removeNote?.text
+
   // THE FILL API (`fillExchange`): one box, refilled on every new `ts`. Keyed on the
   // stamp alone so a snapshot re-render never refills, and a slot this session does not
   // receive is dropped rather than added — a box nobody renders would still ride the
@@ -632,9 +740,60 @@ export function LogEntry({
   useEffect(() => {
     if (!fdActive || !fillExchange) return
     if (!fdReceives.some((f) => f.key === fillExchange.key)) return
+    // The operator's own act (a double-click on what they copied), so call history never
+    // writes over it.
+    noteTyped(fillExchange.key)
     setFdField(fillExchange.key, fillExchange.value)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillExchange?.ts])
+
+  // ⭐ SUPER CHECK PARTIAL AND CALL HISTORY are on where the ENGINE says they are: its effective
+  // assistance sources (`assistanceOn`) fold Unassisted mode in, so declaring an unassisted entry
+  // takes both off this strip at the next snapshot, as it does the cluster and the AI CW decoder.
+  // Never on Remote: the hosted page gets neither.
+  const assistOn = fieldDay?.assistanceOn ?? []
+  const scpOn = fdActive && !remoteMode && assistOn.includes(SCP_SOURCE)
+  const historyOn = fdActive && !remoteMode && assistOn.includes(CALL_HISTORY_SOURCE)
+  const scpCalls = useScpList(scpOn)
+  const historyFile = useCallHistory(historyOn)
+  // What the call-history fill has done since the strip last cleared. The ref is the truth, read
+  // by the fill effect and the key handlers in the same tick; the state renders the marks.
+  const fillRef = useRef<FillState>(EMPTY_FILL)
+  const [fillMarks, setFillMarks] = useState<FillState['filled']>({})
+  const setFill = (next: FillState) => {
+    if (next === fillRef.current) return
+    fillRef.current = next
+    setFillMarks(next.filled)
+  }
+  /** The operator typed in a box (or picked from its list, or grabbed into it): it is theirs. */
+  const noteTyped = (key: string) => setFill(typedIn(fillRef.current, key))
+  /** The strip is clearing. A logged contact keeps what it logged; an abandoned one gives its
+   *  call-history values back, so one station's last exchange never stays in a box, unmarked,
+   *  for the next. */
+  const endFill = (logged: boolean) => {
+    if (fillRef.current === EMPTY_FILL) return
+    if (!logged) {
+      const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+      const { writes } = applyFill(fillRef.current, '', {}, values)
+      if (Object.keys(writes).length > 0) setFdFields((prev) => ({ ...prev, ...writes }))
+    }
+    setFill(EMPTY_FILL)
+  }
+  // ⭐ THE FILL, AS THE CALL IS TYPED (operator, 2026-10-08). Every change of the call (typed, a
+  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what the
+  // file holds for exactly that call: `features/callHistoryFill` decides what may go in, and
+  // takes a fill back out when the call stops being the one it was for.
+  const fdReceivesKey = fdReceives.map((f) => f.key).join(' ')
+  useEffect(() => {
+    if (!fdActive) return
+    const offered = historyFill(logCall, fdReceives, historyFile, fieldDay?.event)
+    const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+    const r = applyFill(fillRef.current, logCall, offered, values)
+    if (r.state === fillRef.current) return
+    setFill(r.state)
+    if (Object.keys(r.writes).length > 0) setFdFields((prev) => ({ ...prev, ...r.writes }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -1220,6 +1379,9 @@ export function LogEntry({
   }
 
   const reset = () => {
+    // Before the call goes: a contact abandoned here gives its call-history values back. A
+    // logged one has already said it keeps them (`endFill(true)` beside its `reset()`).
+    endFill(false)
     setRemoteDraftContext(null)
     setLogCall('')
     setLogRstSent(defaultRst)
@@ -1401,7 +1563,10 @@ export function LogEntry({
           }
           // The contact is in the log once any county entered it; a line that was all dupes
           // leaves the entry on screen, as a refused single contact does.
-          if (logged.length > 0) reset()
+          if (logged.length > 0) {
+            endFill(true)
+            reset()
+          }
         }
         return
       }
@@ -1429,6 +1594,7 @@ export function LogEntry({
           }),
           'success',
         )
+        endFill(true)
         reset()
       }
       return
@@ -1639,6 +1805,18 @@ export function LogEntry({
     logEntity !== null &&
     WVE_ENTITIES.has(logEntity) &&
     fdValue(qthSlot).trim() === ''
+  // The SCP line for what is in the Call box: calls already in this log first, then the list's
+  // partial matches, then its one-character-different ones. A scan per render, zero IPC.
+  const scpHits =
+    scpOn && scpCalls.length > 0
+      ? scpLine(logCall, scpCalls, (fieldDay?.log ?? []).map((q) => q.call.toUpperCase()))
+      : []
+  /** A click on the SCP line puts that call in the Call box, as typing it would, and leaves
+   *  the caret there. Nothing is ever put in the box from the line on its own. */
+  const pickScp = (call: string) => {
+    setLogCall(call)
+    requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+  }
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -1770,16 +1948,30 @@ export function LogEntry({
           {/* ONE BOX PER RECEIVED SLOT, in receive order. Space walks each to the next
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
-          {fdReceives.map((f, i) => (
+          {fdReceives.map((f, i) => {
+            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
+            // value: typing over it, or the strip clearing, takes the mark away.
+            const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            return (
             <label className="le-fd-field" key={f.key}>
-              <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              {fromHistory ? (
+                <span className="le-fd-cap le-fd-cap-marked">
+                  <span className="le-fd-cap-text">{fdFieldLabel(f.key)}</span>
+                  <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
+                </span>
+              ) : (
+                <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              )}
               <input
                 ref={(el) => {
                   fdBoxRefs.current[f.key] = el
                 }}
-                className="settings-input mono le-fd-input le-fd-input-code"
+                className={`settings-input mono le-fd-input le-fd-input-code${
+                  fromHistory ? ' le-fd-input-history' : ''
+                }`}
                 value={fdValue(f)}
                 onChange={(e) => {
+                  noteTyped(f.key)
                   setFdField(f.key, e.target.value)
                   // The list is offered from every universe this slot draws on, which for
                   // a QSO party's one QTH box is counties AND states — and, inside a county
@@ -1812,7 +2004,11 @@ export function LogEntry({
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
-                title={slotTitle(f.key)}
+                title={
+                  fromHistory
+                    ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
+                    : slotTitle(f.key)
+                }
               />
               {fdHits.key === f.key && fdHits.values.length > 0 && (
                 <ul className="le-fd-suggest">
@@ -1824,6 +2020,7 @@ export function LogEntry({
                           e.preventDefault() // pick before the input's onBlur closes the list
                           // Inside a county line the pick completes the part being typed.
                           const line = fdLineDomain(f)
+                          noteTyped(f.key)
                           setFdField(
                             f.key,
                             line && isCountyLine(fdValue(f)) ? withLastCountyPart(fdValue(f), v.code) : v.code,
@@ -1839,7 +2036,8 @@ export function LogEntry({
                 </ul>
               )}
             </label>
-          ))}
+            )
+          })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
               is false whenever `fdActive` is, so `logIt`'s grid guard — which
               sits above the FD branch — is provably inert on this path. A layout
@@ -1860,8 +2058,55 @@ export function LogEntry({
           >
             {t('logEntry.clear.label')}
           </button>
+          {removable && (
+            <button
+              type="button"
+              className="le-qrz le-fd-remove"
+              // ⛔ THE CARET STAYS WHERE IT WAS: a click never takes focus (see `pressRemove`).
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={pressRemove}
+              disabled={!newest}
+              aria-pressed={removeArmed != null}
+              title={t('logEntry.remove.title')}
+            >
+              {t('logEntry.remove.label')}
+            </button>
+          )}
 
         </div>
+
+        {/* ⭐ SUPER CHECK PARTIAL — one line under the boxes, there whenever SCP is on so the
+            strip does not grow and shrink as calls come and go (it is a `fit="content"` pane,
+            so its height is its content). A click puts the call in the Call box; nothing is put
+            there from this line on its own, and a call missing from it is not an error. A log
+            aid, not a transmit control. */}
+        {scpOn && (
+          <div className="le-scp" role="group" aria-label={t('logEntry.scp.label')} title={t('logEntry.scp.title')}>
+            {scpCalls.length === 0 ? (
+              <span className="le-scp-empty">{t('logEntry.scp.none')}</span>
+            ) : (
+              scpHits.map((h) => (
+                <button
+                  key={h.call}
+                  type="button"
+                  className={`le-scp-call le-scp-${h.kind}`}
+                  // The caret stays in the Call box: a press here is a pick, not a move.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickScp(h.call)}
+                  title={
+                    h.kind === 'worked'
+                      ? t('logEntry.scp.worked.title')
+                      : h.kind === 'near'
+                        ? t('logEntry.scp.near.title')
+                        : undefined
+                  }
+                >
+                  {h.call}
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {/* THE VERDICT SLOT — always present, empty or not.
 
@@ -1874,12 +2119,17 @@ export function LogEntry({
             strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
             zero-height in every other host, so Phone and CW are unchanged. */}
         <div className="le-fd-verdicts">
-        {logCall.trim() !== '' && fdBadField !== undefined && (
+        {removeLine != null && (
+          <div className="le-fd-hint le-fd-remove-line" role={removeArmed || removeNote?.alert ? 'alert' : 'status'}>
+            {removeLine}
+          </div>
+        )}
+        {removeLine == null && logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
             {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
           </div>
         )}
-        {fdOwnDupe && (
+        {removeLine == null && fdOwnDupe && (
           <div className="le-fd-hint" role="alert">
             {/* FOUR literal call sites rather than one with a computed key: the i18n
                 extractor reads keys statically and the placeholder guard compares each
@@ -1906,7 +2156,7 @@ export function LogEntry({
                 : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
           </div>
         )}
-        {fdClubDupe && (
+        {removeLine == null && fdClubDupe && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.fd.dupe.club', {
               call: fdTypedCall,
@@ -1915,7 +2165,7 @@ export function LogEntry({
             })}
           </div>
         )}
-        {wveMissingQth && (
+        {removeLine == null && wveMissingQth && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.contest.qthMissing', { call: fdTypedCall })}
           </div>

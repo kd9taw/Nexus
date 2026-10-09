@@ -25,6 +25,8 @@ let station: Record<string, unknown> = {}
 let writeDelay = 0
 
 vi.mock('../api', () => ({
+  // The contest screen's Removed list, read on mount: none removed.
+  contestRemoved: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...station })),
   setSettings: vi.fn(async (s: Record<string, unknown>) => {
     if (writeDelay) await new Promise((r) => setTimeout(r, writeDelay))

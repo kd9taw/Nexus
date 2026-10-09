@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+pub mod contest_removal;
+/// Removing the newest contest contact, through the engine.
+#[cfg(test)]
+mod contest_removal_tests;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -2733,6 +2737,10 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// The highest contest seq the slot loop has handed to N3FJP, the N1MM broadcast and
+    /// WSJT-X listeners — the forwarder's own cursor, told here each slot boundary
+    /// ([`Self::note_fd_forwarded`]) so a removal can say whether the contact already went.
+    fd_forwarded_seq: u64,
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
@@ -5377,6 +5385,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_forwarded_seq: 0,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
             // any path that leaves a pending message in the sequencer (a CQ-run state, a
@@ -25172,7 +25181,10 @@ contact yourself."
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
-        if station.log.qso_count() == 0 {
+        // EMPTY means no row at all. A log whose every contact was removed still holds them,
+        // and the journal on disk still has them LIVE until it is rewritten: skipping the write
+        // here brought a removed contact back on the next mode change or restart.
+        if station.log.qsos().is_empty() && station.log.removed().is_empty() {
             return None;
         }
         Some(station.log.adif())
@@ -25829,9 +25841,14 @@ contact yourself."
         self.station.set_sat_tag(id, sat_name)
     }
 
-    /// See [`StationCore::delete_qso`].
+    /// See [`StationCore::delete_qso`] — plus the contest half [`Self::contest_row_deleted`], as
+    /// [`Self::update_qso`] carries a correction into the contest log.
     pub fn delete_qso(&mut self, id: tempo_core::logbook::RecordId) -> bool {
-        self.station.delete_qso(id)
+        let Some(gone) = self.station.delete_row(id) else {
+            return false;
+        };
+        self.contest_row_deleted(&gone);
+        true
     }
 
     /// See [`StationCore::clear_logbook`] — plus the reset of the LoTW/eQSL
@@ -37147,6 +37164,31 @@ mod tests {
         assert_eq!(e.stored_log()[0].call, "W9XYZ");
     }
 
+    /// ⭐ A CONTACT LOGGED ON THE DIAL THE RADIO REPORTED CARRIES THAT DIAL'S BAND AND FREQUENCY,
+    /// on 10 GHz too. An IC-905 on its 10 GHz band reports its dial in 12 digits, which the native
+    /// CI-V daemon reads whole (A7711-9EX-2, PDF p. 17). From that reading the log gets 3 cm and
+    /// 10368.150 MHz plus the signal's offset. From the 10-digit reading it used to get, 368.150
+    /// MHz, the log got that frequency and no band at all.
+    #[test]
+    fn a_contact_logged_on_the_ic905s_10_ghz_dial_carries_3_cm() {
+        for (reported_hz, band, dial_mhz) in
+            [(10_368_150_000, "3cm", 10368.15), (368_150_000, "", 368.15)]
+        {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.observe_rig_freq(reported_hz);
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            assert!(e.log_current_qso(), "{reported_hz} Hz: logged");
+            let rec = &e.stored_log()[0];
+            let on_air = dial_mhz + f64::from(e.tx_offset_hz) / 1e6;
+            assert_eq!(
+                (rec.band.as_str(), format!("{:.6}", rec.freq_mhz)),
+                (band, format!("{on_air:.6}")),
+                "{reported_hz} Hz"
+            );
+        }
+    }
+
     /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
     /// happen for Field Day. Master OFF with a live FD session → the engine truly leaves
     /// `Mode::FieldDay` even though a QSO-bearing mode now survives a save (spec §1.3 —
@@ -44145,6 +44187,19 @@ mod tests {
         assert!(
             !fd.assistance_on.iter().any(|l| l == "DX cluster / RBN"),
             "Unassisted mode is on — cluster must no longer be listed as live"
+        );
+        // The contest strip's own switch for Super Check Partial and call history is this list:
+        // both were live before the declaration (on by default), and neither is now.
+        use crate::settings::{CALL_HISTORY_SOURCE, SCP_SOURCE};
+        assert!(
+            expected.iter().any(|l| l == SCP_SOURCE)
+                && expected.iter().any(|l| l == CALL_HISTORY_SOURCE)
+        );
+        assert!(
+            !fd.assistance_on
+                .iter()
+                .any(|l| l == SCP_SOURCE || l == CALL_HISTORY_SOURCE),
+            "Unassisted mode turns Super Check Partial and call history off in the strip"
         );
     }
 

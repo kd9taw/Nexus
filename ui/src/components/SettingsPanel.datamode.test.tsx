@@ -194,3 +194,42 @@ describe('the D1/D2/D3 picker on the Icom network connection', () => {
     expect(picker!.parentElement?.querySelector('.settings-hint')?.textContent).toMatch(/Icom network connection/)
   })
 })
+
+// OVER A CABLE THE PICKER ASKS THE NATIVE SWITCH'S OWN QUESTION (`nativeCivBlockedReason`, the engine's
+// `native_civ_model`), as the CI-V log does: the same radios and connections as SettingsPanel.civlog.test.tsx. The
+// saved D1/D2/D3 reaches the radio only through Nexus's own CI-V engine, and that engine never runs on Network or
+// through OmniRig, switch or no switch. There the picker was enabled, said the radio is put into that mode, and did
+// nothing. Each case is its own row, so each red names its own case.
+describe('the D1/D2/D3 picker follows the native CI-V switch', () => {
+  const SSTV = /Hold the data mode while SSTV/
+  const IC7610 = { rigModel: 3078, rigModelName: 'Icom IC-7610' }
+  const APPLIES = { enabled: true, hint: /^Which DATA mode this radio is put into/ }
+  const NEEDS_SWITCH = { enabled: false, hint: /^Needs the native CI-V connection above/ }
+
+  it.each([
+    // Nexus's own CI-V engine drives the radio, so the saved mode reaches it.
+    ['an IC-7610 over USB with the switch on', IC7610, APPLIES],
+    ['an IC-7610 stored under the name "Icom 7610"', { rigModel: 3078, rigModelName: 'Icom 7610' }, APPLIES],
+    ['an IC-7610 stored under the name "IC-7610M"', { rigModel: 3078, rigModelName: 'IC-7610M' }, APPLIES],
+    ['an IC-7610 stored with no name', { rigModel: 3078, rigModelName: '' }, APPLIES],
+    ['an IC-7610 on the Icom network connection', { ...IC7610, rigConn: 'icomlan', icomNativeCat: false }, APPLIES],
+    // OmniRig holds the COM port, and a Network radio has no port for Nexus to open.
+    ['an IC-7610 through OmniRig, with the switch left on', { ...IC7610, rigConn: 'omnirig' }, NEEDS_SWITCH],
+    ['an IC-7610 on Network, with the switch left on', { ...IC7610, rigConn: 'network', rigAddr: '192.168.1.50:4532' }, NEEDS_SWITCH],
+    ['an IC-7610 with the switch off', { ...IC7610, icomNativeCat: false }, NEEDS_SWITCH],
+    // One DATA mode, or no CI-V engine at all: nothing to pick.
+    ['an IC-7300', { rigModel: 3073, rigModelName: 'Icom IC-7300' }, null],
+    ['an IC-9700', { rigModel: 3081, rigModelName: 'Icom IC-9700' }, null],
+    ['an IC-705', { rigModel: 3085, rigModelName: 'Icom IC-705' }, null],
+    ['an IC-905', { rigModel: 3090, rigModelName: 'Icom IC-905' }, null],
+    ['an FTDX10 stored under the name IC-7300, with the switch left on', { rigModel: 1042, rigModelName: 'IC-7300' }, null],
+  ] as const)('on %s', async (_what, radio, expected) => {
+    renderPanel(settingsFor(radio))
+    const picker = await pickerOnScreen(SSTV)
+    const seen = picker && {
+      enabled: !picker.disabled,
+      hint: picker.parentElement?.querySelector('.settings-hint')?.textContent ?? '',
+    }
+    expect(seen).toEqual(expected && { enabled: expected.enabled, hint: expect.stringMatching(expected.hint) })
+  })
+})

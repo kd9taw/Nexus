@@ -1066,6 +1066,7 @@ export function Js8Cockpit({
             : null
         }
         fieldDay={snap.fieldDay ?? null}
+        active={active}
         fdMode="DIG"
         fdSubmode={JS8}
       />}

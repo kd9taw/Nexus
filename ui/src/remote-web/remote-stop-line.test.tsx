@@ -221,6 +221,11 @@ it.each(['noControl', 'loggingOnly'] as const)('a browser %s gets the existing r
 // accepted. The station is already stopping, so the page must not say "Could not stop transmit"
 // (2026-10-03). Phone's TX strip, with the page's real toast.
 it('a Stop the relay refuses within a second of an accepted one raises no failure, and the stop line keeps it', async () => {
+  // The client's clock (`1000 + performance.now()`, in `session`) is the test's: it moves only when the test moves it,
+  // so the third press is inside the relay's second however long the box takes between the presses. On the real clock
+  // a box that stalled for over a second there put the third press outside it, and the page then rightly said the Stop
+  // failed. Timers stay real: `settle` waits on them.
+  vi.useFakeTimers({ toFake: ['performance'] })
   const real = await vi.importActual<typeof import('../toast')>('../toast')
   const toast = vi.mocked(withErrorToast), stubbed = toast.getMockImplementation()!
   toast.mockImplementation(real.withErrorToast)

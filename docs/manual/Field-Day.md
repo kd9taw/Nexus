@@ -208,6 +208,18 @@ The contest log survives restarts: every logged contact is journaled to `fieldda
 
 One consequence to know: contacts logged during a **pre-event gear test within 4 days of the event** are restored into the real event's log and dupe sheet. To start the event clean, delete `fieldday_backup.adi` after testing (with Nexus closed, or at least outside Field Day mode — the next contact logged in FD mode re-writes the whole journal from memory).
 
+### Take Back the Last Contact
+
+Logged a contact you should not have, or stopped your TU after the contact was already in the log? Press **Ctrl+D** from anywhere in a cockpit that shows the contest log strip, or click **Remove last** beside Clear. The first press names your newest contest contact on the strip's message line, for example `Remove K9AAA · 20m CW · 17:32 · 599 COOK? Press Ctrl+D again.` A second press within 5 seconds removes it. Any other key, the 5 seconds running out, or a new contact cancels it, and if the newest contact changed between the two presses nothing is removed and the strip says so. A held-down Ctrl+D counts as one press. The caret stays where it was, and Ctrl+D never keys or stops the transmitter: Esc still stops TX. A contact on a county line goes with all its counties. On the contest screen the newest row of the log has its own **Remove**, which asks the same way: click it twice.
+
+Nothing is deleted. The contact leaves the QSO count, the score, the multipliers, the rate, the dupe check, the Cabrillo, the contest ADIF, the summary and a later merge into your logbook, and the contest screen keeps it under **Removed**. **Restore** there puts it back exactly as it was, with the same time, serial number and club-sync number, unless you have worked that station again on that band and mode since; then it stays removed and the screen says why. A removed contact's serial number and club-sync number are never handed to another contact, not even after a restart, because the journal keeps the removed contact, marked as removed.
+
+The contact may already have gone elsewhere, and Nexus cannot take it back from there. The strip says where: N3FJP, the N1MM broadcast and WSJT-X listeners, once a slot boundary had sent it on to them, and your logbook if you had merged the contest, with the services that copy was uploaded to. Delete it in those places yourself if you need to. Removing it from the contest log never touches your logbook. The other way round does work: deleting a contact in the Logbook that you merged from the contest still running also removes it from the contest log (it appears under Removed, and Restore brings it back), the way an edit of its call or band in the Logbook already corrects the contest log.
+
+**Removal is refused while club sync is on**, at a position or at the host, because the club log cannot take a contact back yet: the strip says so, and the club's Cabrillo file is the place to fix it before you send it in. Removal is not offered on the hosted Remote page or in the Remote client.
+
+Remember that most sponsors check logs against each other: if the other station logged you, a contact you remove becomes a not-in-log for them. When in doubt, keep it.
+
 ---
 
 ## Band Follows QSY
@@ -295,6 +307,9 @@ A plain-text check sheet: every section multiplier with the call and band that f
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Club sync does not run a serial-number contest or CQ World-Wide.** It runs every other contest on the picker under that contest's own rules. With Sweepstakes, CQ WPX, the California QSO Party or CQ WW selected a station neither hosts nor joins, and the contest screen and Settings say why: one entry's serial numbers must run in a single sequence, and CQ WW's log must say which transmitter made each contact. Log those on each position by itself.
+- **A removed contact stays wherever it already went.** N3FJP has no delete command, and Nexus does not send N1MM's contact-delete broadcast yet, so delete it in those programs yourself.
+- **A contact removed before it was sent on, then restored after a later contact went out, is not sent on.** Add it in N3FJP by hand if your club uses it.
+- **Going back to an older Nexus** brings removed contacts back as ordinary contacts, except one whose station you worked again on that band and mode, which the older version leaves out.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---

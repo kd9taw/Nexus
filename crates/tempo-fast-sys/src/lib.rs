@@ -710,10 +710,6 @@ extern "C" {
         max_out: c_int,
     ) -> c_int;
 
-    /// Decode every FST4 signal in a 180000-sample (15 s) frame.
-    ///
-    /// DECODE ONLY — there is deliberately no `fst4_encode` / `fst4_gen_wave`.
-    /// FST4 ships receive-only; see `Capabilities.tx` and `modes::tx_mode`.
     /// Encode a message into the 160 FST4 channel symbols (values 0..3).
     ///
     /// `iwspr`: 0 = FST4 (77-bit QSO message, LDPC(240,101)), 1 = FST4W (50-bit
@@ -732,7 +728,8 @@ extern "C" {
     /// FST4 channel symbols → real audio at `fsample`, nominal carrier `f0`.
     ///
     /// `hmod` is upstream's tone-spacing multiplier (1 | 2 | 4). Returns samples
-    /// produced (`160 * nsps`), or -1 on refusal.
+    /// produced (`160 * nsps`), or -1 on refusal. `fsample` must be 12000: `nsps`
+    /// comes from the 12 kHz table, so any other rate is refused.
     ///
     /// Unlike Q65's plain MFSK this is GFSK-shaped (BT=2.0) with raised-cosine
     /// ramps, via upstream's own `gen_fst4wave`. `f0` is where the signal is
@@ -748,6 +745,8 @@ extern "C" {
         nwave_cap: c_int,
     ) -> c_int;
 
+    /// Decode every FST4 or FST4W signal in one T/R period of `ntrperiod * 12000`
+    /// samples.
     pub fn fst4_decode_frame(
         iwave: *const i16, // [ntrperiod * 12000] — see `fst4_nmax`
         ntrperiod: c_int,  // 15|30|60|120|300|900|1800; anything else ⇒ -1

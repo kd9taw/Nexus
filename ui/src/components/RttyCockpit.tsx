@@ -1228,6 +1228,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             // The grab's exchange half: one box, refilled on every new `ts`. See the grab.
             fillExchange={fillExchange}
             fieldDay={snap.fieldDay ?? null}
+            active={active}
             fdMode="DIG"
             fdSubmode={RTTY}
           />

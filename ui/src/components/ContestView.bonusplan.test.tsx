@@ -18,6 +18,8 @@ import type { FieldDayStatus, Settings } from '../types'
 let settingsNow: Record<string, unknown> = {}
 
 vi.mock('../api', () => ({
+  // The contest screen's Removed list, read on mount: none removed.
+  contestRemoved: vi.fn(async () => []),
   getSettings: vi.fn(async () => settingsNow),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),

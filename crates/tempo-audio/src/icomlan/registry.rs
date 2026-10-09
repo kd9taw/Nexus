@@ -153,3 +153,11 @@ pub fn retry_in(key: SocketAddrV4, now: u64) -> Option<u64> {
 pub fn held(key: SocketAddrV4) -> bool {
     radios().get(&key).is_some_and(|e| e.hold.is_some())
 }
+
+/// Forgets a radio altogether: its hold, its wait and its ladder. For the tests, whose simulated
+/// radios listen on ephemeral loopback ports that the next test's radio can be given once one
+/// closes, so none may inherit what another left here.
+#[cfg(test)]
+pub(crate) fn forget(key: SocketAddrV4) {
+    radios().remove(&key);
+}
