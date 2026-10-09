@@ -30,6 +30,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type RefObject } from 'react'
 import { announce } from '../../announce'
 import { t } from '../../i18n'
+import { elZoom } from '../PaneSeam'
 import { arrangeIds, dropArranged, placedColumns, PANE_COLUMNS, type ArrangeSpec, type Arrangement, type PaneColumn, type PaneDrop } from '../../features/panelPlace'
 
 /** A place a pane can be dropped: a column, or the left side. */
@@ -542,9 +543,12 @@ export function PaneDropLayer({ drag, host }: { drag: PaneDrag; host: RefObject<
   const view = useSyncExternalStore(drag.subscribe, drag.view, drag.view)
   const el = host.current
   if (!view || !el) return null
+  // Boxes are measured on screen; the marks are placed in the host's own CSS px, which the UI scale (CSS zoom)
+  // shrinks or grows on the way to the screen — and its borders, scrollbars and scroll are in those px too.
+  const z = elZoom(el)
   const r = el.getBoundingClientRect()
-  // The host's inside, where its children are drawn: its box less its borders and scrollbars.
-  const clip: Box = { left: r.left + el.clientLeft, top: r.top + el.clientTop, width: el.clientWidth, height: el.clientHeight }
+  // The host's inside, where its children are drawn, on screen: its box less its borders and scrollbars.
+  const clip: Box = { left: r.left + el.clientLeft * z, top: r.top + el.clientTop * z, width: el.clientWidth * z, height: el.clientHeight * z }
   const at = (b: Box): CSSProperties | null => {
     const left = Math.max(b.left, clip.left)
     const top = Math.max(b.top, clip.top)
@@ -552,10 +556,10 @@ export function PaneDropLayer({ drag, host }: { drag: PaneDrag; host: RefObject<
     const h = Math.min(bottom(b), bottom(clip)) - top
     if (!(w > 0) || !(h > 0)) return null
     return {
-      left: left - r.left - el.clientLeft + el.scrollLeft,
-      top: top - r.top - el.clientTop + el.scrollTop,
-      width: w,
-      height: h,
+      left: (left - clip.left) / z + el.scrollLeft,
+      top: (top - clip.top) / z + el.scrollTop,
+      width: w / z,
+      height: h / z,
     }
   }
   const source = view.source ? at(view.source) : null

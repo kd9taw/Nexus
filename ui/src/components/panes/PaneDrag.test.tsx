@@ -240,6 +240,20 @@ describe('the press', () => {
     expect(drops).toEqual([['three', { area: 'a', before: 'two' }]])
     expect(announced).toEqual(['Three moved: Column 1, above Two'])
   })
+  it('under a UI scale the marks are placed in the host’s own CSS px: on screen they stand where measured', () => {
+    render(<Host />)
+    layout()
+    // The UI scale is CSS zoom on the app: what is 104 px down the screen is 130 of the region's own px at 0.8.
+    Object.defineProperty($('region'), 'currentCSSZoom', { configurable: true, value: 0.8 })
+    press('title-three', 400, 20)
+    move(400, 60)
+    move(100, 104)
+    const line = document.querySelector<HTMLElement>('.pane-drop-line')!
+    expect(parseFloat(line.style.top) + parseFloat(line.style.height) / 2).toBeCloseTo(104 / 0.8, 5)
+    expect(parseFloat(line.style.left)).toBeCloseTo(4 / 0.8, 5)
+    expect(parseFloat(line.style.width)).toBeCloseTo(292 / 0.8, 5)
+    release(100, 104)
+  })
   it('Escape cancels: nothing is dropped, nothing is drawn — and the key is not swallowed', () => {
     render(<Host />)
     layout()
