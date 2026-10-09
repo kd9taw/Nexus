@@ -339,6 +339,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positions send their call too and are refused the same way. ARRL Field Day is the exception,
   because its GOTA station must use a call of its own: there a position on any call joins as
   before.
+- **ARRL Field Day: the club's Cabrillo writes the GOTA station's contacts under its own call.**
+  The GOTA station must use a callsign of its own (ARRL Field Day rule 4.1.1.1), and its laptop
+  joins the club on that call, but the club's file wrote every contact under the host's call, so
+  each GOTA contact read as one the main station made. Each of them now carries the GOTA laptop's
+  Callsign on the air, and every other contact the club's call as before. The host keeps that call
+  with each contact, so the file is the same after the host restarts, even once the GOTA laptop
+  has gone. The header, the club ADIF and the score are unchanged, and so is the club file of
+  every other contest.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

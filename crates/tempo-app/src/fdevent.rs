@@ -29,7 +29,9 @@
 //! different contest is refused at JOIN, by name ([`ClubLog::join_refusal`]), so is
 //! one on another station call than the host's outside ARRL Field Day
 //! ([`ClubLog::call_refusal`]), and a contest the club log cannot run faithfully is
-//! refused before a club is built at all ([`club_refusal`]).
+//! refused before a club is built at all ([`club_refusal`]). At ARRL Field Day that other
+//! call is the GOTA station's, and the club's file writes its contacts under it
+//! ([`MergedRow::station_call`]).
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
@@ -281,6 +283,23 @@ pub struct MergedRow {
     /// contact through a linear bird.
     #[serde(default)]
     pub sat_fm: bool,
+    /// ⭐ **The station call the logging position JOINED this club on**, stamped by the host
+    /// as the row merges ([`ClubLog::merge`]) and only by a club with a GOTA station
+    /// ([`ClubLog::has_gota_station`]: ARRL Field Day), whose GOTA station *"must use a
+    /// different callsign from the primary Field Day station"* (rule 4.1.1.1). The club's
+    /// Cabrillo writes it as the call sent wherever it is not the club's
+    /// ([`ClubLog::unique_log_with`]).
+    ///
+    /// It is on the row because a host restart replays the journal before any position has
+    /// joined again, and the file exported then must still say which station made each
+    /// contact. Empty on every other club's rows, on a row from a position that sent no
+    /// call, and on every row merged before it existed. A position that changes its call
+    /// keeps the old one here until it joins again.
+    ///
+    /// ⚠️ `#[serde(default)]` on this type's standing rule, and skipped when empty, so every
+    /// other club's journal line is the bytes it was.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub station_call: String,
 }
 
 impl MergedRow {
@@ -302,6 +321,8 @@ impl MergedRow {
             operator: q.op.clone(),
             sat: q.sat.clone(),
             sat_fm: q.sat_fm,
+            // The host's to fill: a wire row names no station (`ClubLog::merge`).
+            station_call: String::new(),
         }
     }
 
@@ -663,7 +684,8 @@ impl ClubLog {
     /// ⚠️ **Except ARRL Field Day**, whose GOTA station "must use a different callsign from
     /// the primary Field Day station" (rule 4.1.1.1) and whose contacts "may be claimed for
     /// credit by its primary Field Day operation" (4.1.1.5): a position there is served on
-    /// any call. Winter Field Day has no GOTA station.
+    /// any call, and its rows keep that call into the club's file
+    /// ([`MergedRow::station_call`]). Winter Field Day has no GOTA station.
     ///
     /// Compared trimmed and case-blind, and nothing more: `W9XYZ/P` is another call on the
     /// air, and none of the rules the club runs that were read for this (ARRL Field Day and
@@ -675,7 +697,7 @@ impl ClubLog {
         if club.is_empty()
             || theirs.is_empty()
             || club.eq_ignore_ascii_case(theirs)
-            || self.event_id == FdEvent::ArrlFd.code()
+            || self.has_gota_station()
         {
             return None;
         }
@@ -684,6 +706,18 @@ impl ClubLog {
             &club.to_uppercase(),
             &theirs.to_uppercase(),
         ))
+    }
+
+    /// ⭐ **Does this club's contest have a GOTA station** — the one position that is on the
+    /// air under another call than the host's? ARRL Field Day only: its GOTA station *"must
+    /// use a different callsign from the primary Field Day station"* (rule 4.1.1.1). Winter
+    /// Field Day has none, and neither has any other contest the club log runs.
+    ///
+    /// One predicate for the JOIN that serves such a position ([`call_refusal`](Self::call_refusal))
+    /// and for the rows that keep its call ([`MergedRow::station_call`]), so the two cannot
+    /// come to disagree about which club that is.
+    pub fn has_gota_station(&self) -> bool {
+        self.event_id == FdEvent::ArrlFd.code()
     }
 
     /// Open (creating if absent) the append-only journal at `path`, replaying
@@ -749,8 +783,20 @@ impl ClubLog {
     /// unchanged) high-water ack for the row's position. Idempotent: a known
     /// `(posid, seq)` changes nothing — which is what makes every re-push
     /// after an outage free.
+    ///
+    /// A club with a GOTA station keeps on each row the call its position joined on
+    /// ([`MergedRow::station_call`]); a journal replay is not a merge, and keeps the call
+    /// each row was journaled with.
     pub fn merge(&mut self, q: &WireQso, now: u64) -> u64 {
-        self.merge_row(MergedRow::from_wire(q), now);
+        let mut row = MergedRow::from_wire(q);
+        if self.has_gota_station() {
+            row.station_call = self
+                .positions
+                .get(&q.pos)
+                .map(|p| p.call.clone())
+                .unwrap_or_default();
+        }
+        self.merge_row(row, now);
         self.positions.get(&q.pos).map(|p| p.acked).unwrap_or(0)
     }
 
@@ -1007,7 +1053,8 @@ impl ClubLog {
     }
 
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the
-    /// HOST's station identity — the one artifact both exports and the score
+    /// HOST's station identity (a GOTA station's rows keep their own call:
+    /// [`MergedRow::station_call`]) — the one artifact both exports and the score
     /// derive from, so they can never disagree with each other.
     pub fn unique_log(&self, mycall: &str, class: &str, section: &str) -> FieldDayLog {
         self.unique_log_with(
@@ -1047,10 +1094,18 @@ impl ClubLog {
         // wrote, which carried no `OPERATOR`.
         let names_operators = self.field_day_event().is_none();
         let station = mycall.trim().to_ascii_uppercase();
+        let gota = self.has_gota_station();
         let mut log = FieldDayLog::new(mycall, session, "");
         for i in self.export_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();
+            // ⭐ A GOTA station's row is sent under its own call, which its QSO line carries;
+            // every other row is the club's, written under `mycall` exactly as before.
+            log.station_call = if gota && !r.station_call.eq_ignore_ascii_case(&station) {
+                r.station_call.clone()
+            } else {
+                String::new()
+            };
             if names_operators {
                 // A position with nobody named at the key sends the station's own call
                 // (`Engine::fd_sync_outbox`, for the band board), and a row's operator is
@@ -1754,6 +1809,7 @@ mod tests {
                         operator: "KD9TAW".into(),
                         sat: String::new(),
                         sat_fm: false,
+                        station_call: String::new(),
                     },
                     last_year,
                 );
@@ -1789,6 +1845,7 @@ mod tests {
                     operator: "KD9TAW".into(),
                     sat: String::new(),
                     sat_fm: false,
+                    station_call: String::new(),
                 },
                 now,
             );
@@ -1824,6 +1881,7 @@ mod tests {
                 operator: "KD9TAW".into(),
                 sat: String::new(),
                 sat_fm: false,
+                station_call: String::new(),
             },
             now,
         );
@@ -2033,6 +2091,7 @@ mod tests {
             operator: "KD9TAW".into(),
             sat: String::new(),
             sat_fm: false,
+            station_call: String::new(),
         })
         .unwrap();
         let as_v1: V1MergedRow =
@@ -3233,5 +3292,248 @@ mod tests {
             (FdEvent::WinterFd, "WFD")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1700Z, Saturday 27 June 2026 — ARRL Field Day's first minute, as the 1.x fixture's.
+    const FD_START: u64 = 1_782_579_600;
+
+    /// The `QSO:` lines of a Cabrillo file, in order.
+    fn qso_lines(cab: &str) -> Vec<&str> {
+        cab.lines().filter(|l| l.starts_with("QSO:")).collect()
+    }
+
+    /// ⭐ **An ARRL Field Day club's file says which station made each contact: a GOTA
+    /// position's QSO lines carry the GOTA station's own call, and every other line the
+    /// club's.**
+    ///
+    /// ARRL Field Day rules (2026): the GOTA station *"must use a different callsign from
+    /// the primary Field Day station"* and *"uses the same exchange as its parent"*
+    /// (4.1.1.1), and *"QSOs made by this station may be claimed for credit by its primary
+    /// Field Day operation"* (4.1.1.5). A Cabrillo QSO line's first call is the one SENT,
+    /// and the club's file, written under the host's call, wrote every GOTA contact as one
+    /// the primary station made.
+    #[test]
+    fn a_gota_positions_lines_carry_its_own_call_and_every_other_line_the_clubs() {
+        let session = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let entrant = CabrilloEntrant::default();
+        let dir = scratch("gota");
+        // The host and a second tent on the club's call (the tent's as typed), and the GOTA
+        // tent on `gota_call`; every row sends the club's 3A WI, as the GOTA station must.
+        let club_with = |gota_call: &str, journal: &PathBuf| {
+            let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+            club.attach_journal_since(journal, 0).unwrap();
+            club.join("aaaa0001", "HQ", "W9XYZ", 1);
+            club.join("bbbb0002", "CW tent", " w9xyz ", 1);
+            club.join("cccc0003", "GOTA", gota_call, 1);
+            for (pos, seq, call, band, mode, sect, minute) in [
+                ("aaaa0001", 1, "W1AW", "20m", "PH", "CT", 0),
+                ("cccc0003", 1, "K1ABC", "40m", "CW", "EMA", 1),
+                ("bbbb0002", 1, "N0XYZ", "15m", "CW", "MN", 2),
+                ("cccc0003", 2, "W5DEF", "20m", "DIG", "STX", 3),
+            ] {
+                let when = FD_START + 60 * minute;
+                let row = with_sent(wq(pos, seq, call, band, mode, sect, when), ("3A", "WI"));
+                club.merge(&row, when);
+            }
+            club
+        };
+        let journal = dir.join("fd_event_gota.jsonl");
+        let club = club_with("K9GOT", &journal);
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session(), &entrant)
+            .unwrap();
+        assert!(
+            cab.contains("\nCALLSIGN: W9XYZ\n"),
+            "the club's entry: {cab}"
+        );
+        assert_eq!(
+            qso_lines(&cab),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 W9XYZ 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 W9XYZ 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 K9GOT 3A WI W5DEF 2A STX",
+            ],
+            "the GOTA tent's two contacts under its own call, the rest under the club's"
+        );
+        // A host restart replays the journal before any position has joined again, so the
+        // call has to come back with the rows.
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        restarted.attach_journal_since(&journal, 0).unwrap();
+        assert_eq!(
+            restarted
+                .export_cabrillo_with("W9XYZ", session(), &entrant)
+                .unwrap(),
+            cab,
+            "the replayed club writes the same file, with no position joined"
+        );
+        // The club's own lines are written under the club's call exactly as given, however
+        // the positions typed it.
+        assert_eq!(
+            qso_lines(
+                &club
+                    .export_cabrillo_with("w9xyz", session(), &entrant)
+                    .unwrap()
+            ),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 w9xyz 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 w9xyz 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 K9GOT 3A WI W5DEF 2A STX",
+            ]
+        );
+
+        // CONTROL: that tent on the club's call is no GOTA station, and every line is the
+        // club's. The call column of those two lines is the whole difference between the
+        // files, and the ADIF (which names no station on any record) and the score are the
+        // same bytes and numbers: only how the Cabrillo prints moved.
+        let control = club_with("W9XYZ", &dir.join("fd_event_control.jsonl"));
+        let control_cab = control
+            .export_cabrillo_with("W9XYZ", session(), &entrant)
+            .unwrap();
+        assert_eq!(
+            qso_lines(&control_cab),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 W9XYZ 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 W9XYZ 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 W9XYZ 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 W9XYZ 3A WI W5DEF 2A STX",
+            ]
+        );
+        assert_eq!(cab.replace(" K9GOT ", " W9XYZ "), control_cab);
+        assert_eq!(
+            club.export_adif_with("W9XYZ", session()),
+            control.export_adif_with("W9XYZ", session())
+        );
+        assert_eq!(
+            club.score_with("W9XYZ", session(), 2, &[], &[]),
+            control.score_with("W9XYZ", session(), 2, &[], &[])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **CONTROLS: only ARRL Field Day writes the call a position joined on.** Winter Field
+    /// Day, the QSO parties and the VHF contests have no GOTA station, and the engine refuses
+    /// a position on another call at JOIN ([`ClubLog::call_refusal`]). A club that holds one
+    /// anyway writes the file and the journal of the same club with that position on the
+    /// club's call, byte for byte, and its QSO line is the position's own line, under the
+    /// club's call. Run over every contest the club log runs but ARRL Field Day.
+    #[test]
+    fn no_other_contests_club_file_or_journal_carries_the_call_a_position_joined_on() {
+        // (contest, the host's session, the exchange the station worked sent)
+        let cases = vec![
+            (
+                "wfd",
+                ContestSession::field_day(FdEvent::WinterFd, "3O", "WI"),
+                vec![("CLASS", "2O"), ("SECTION", "CT")],
+            ),
+            (
+                "ilqp",
+                party_session("ilqp", "IL", "MCLN"),
+                vec![("RST", "599"), ("QTH", "COOK")],
+            ),
+            (
+                "tnqp",
+                party_session("tnqp", "TN", "ANDE"),
+                vec![("RST", "599"), ("QTH", "BEDF")],
+            ),
+            (
+                "ohqp",
+                party_session("ohqp", "OH", "ADAM"),
+                vec![("RST", "599"), ("QTH", "ALLE")],
+            ),
+            (
+                "txqp",
+                party_session("txqp", "TX", "ANDE"),
+                vec![("RST", "599"), ("QTH", "ANDR")],
+            ),
+            (
+                "nyqp",
+                party_session("nyqp", "NY", "ALB"),
+                vec![("RST", "599"), ("QTH", "BRX")],
+            ),
+            (
+                "arrlvhf_jan",
+                party_session("arrlvhf_jan", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+            (
+                "arrlvhf_jun",
+                party_session("arrlvhf_jun", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+            (
+                "arrlvhf_sep",
+                party_session("arrlvhf_sep", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+        ];
+        for (event, session, fields) in &cases {
+            let rs = party(event);
+            let dir = scratch(&format!("call-{event}"));
+            let fields: Vec<(String, String)> = fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let mut own = FieldDayLog::new("W9XYZ", session.clone(), "20m");
+            assert!(
+                own.log_fields_at("K9AAA", &fields, "CW", "", 0, ILQP_START),
+                "{event}: fixture contact refused"
+            );
+            let q = &own.qsos()[0];
+            // The outbox's own row shape (`Engine::fd_sync_outbox`).
+            let row = WireQso {
+                pos: "aaaa0001".into(),
+                seq: q.seq,
+                call: q.call.clone(),
+                class: q.class().to_string(),
+                sect: q.section().to_string(),
+                ex: to_wire_fields(&q.rx),
+                mex: to_wire_fields(&q.tx),
+                band: q.band.clone(),
+                mode: q.mode.clone(),
+                sub: q.submode.clone(),
+                when: q.when_unix,
+                op: String::new(),
+                sat: String::new(),
+                sat_fm: false,
+            };
+            let joined_on = |call: &str| {
+                let journal = dir.join(format!("{call}.jsonl"));
+                let mut club = ClubLog::for_ruleset(rs, "TEST");
+                club.attach_journal_since(&journal, 0).unwrap();
+                club.join("aaaa0001", "", call, 1);
+                club.merge(&row, 1);
+                let cab = club
+                    .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
+                    .unwrap();
+                (cab, std::fs::read_to_string(&journal).unwrap())
+            };
+            let (cab, journal) = joined_on("K9GOT");
+            let (club_cab, club_journal) = joined_on("W9XYZ");
+            assert_eq!(cab, club_cab, "{event}: the club's file");
+            assert_eq!(journal, club_journal, "{event}: the club's journal");
+            assert_eq!(
+                qso_lines(&cab),
+                qso_lines(&own.cabrillo(0).unwrap()),
+                "{event}: the position's own line"
+            );
+            assert!(
+                qso_lines(&cab)[0].contains(" W9XYZ ") && !cab.contains("K9GOT"),
+                "{event}: {cab}"
+            );
+            assert!(!journal.contains("K9GOT"), "{event}: {journal}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Every contest the club log runs is above, but ARRL Field Day: a contest added to
+        // the seed must be run here.
+        for event in seeded_events() {
+            if club_refusal(party(&event)).is_none() && event != "arrlfd" {
+                assert!(
+                    cases.iter().any(|(e, _, _)| *e == event),
+                    "{event} is run by the club log and not tested here"
+                );
+            }
+        }
     }
 }

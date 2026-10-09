@@ -226,6 +226,78 @@ fn host_three_positions_outage_and_host_restart_converge_on_the_union() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The two callsign columns of each QSO line of the host's club Cabrillo — `(call sent,
+/// call worked)` — sorted by the call worked (two pumps merge in either order).
+fn club_file_calls(eng: &Shared) -> Vec<(String, String)> {
+    let cab = engine_lock(eng)
+        .fd_club_export(true)
+        .expect("the host exports its club file");
+    let mut calls: Vec<(String, String)> = cab
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(|l| {
+            // QSO: freq mo date time SENT class section WORKED class section
+            let cols: Vec<&str> = l.split_whitespace().collect();
+            (cols[5].to_string(), cols[8].to_string())
+        })
+        .collect();
+    calls.sort_by(|a, b| a.1.cmp(&b.1));
+    calls
+}
+
+/// ⭐ **A GOTA position's contacts reach the club's Cabrillo under the GOTA station's own
+/// call** — over the real bridge and sockets, and again after a host restart that replays
+/// the journal once the GOTA position has gone. ARRL Field Day rule 4.1.1.1: the GOTA
+/// station "must use a different callsign from the primary Field Day station". CONTROL: the
+/// host's own contact keeps the club's call.
+#[test]
+fn a_gota_positions_contacts_keep_its_own_call_in_the_club_file_across_a_host_restart() {
+    let dir = std::env::temp_dir().join(format!("fd-gota-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_gota.jsonl");
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let gota = fd_engine("K9GOT", "cccc0003", "GOTA", &addr);
+    let gota_sd = start_pump(&gota, &addr);
+    log_fd(&host, "W1AW", "CT", "CW");
+    log_fd(&gota, "K1ABC", "EMA", "PH");
+    wait_until("both contacts merged at the host", 10, || {
+        club_rows(&host) == 2
+    });
+    let expected = vec![
+        ("K9GOT".to_string(), "K1ABC".to_string()),
+        ("W9XYZ".to_string(), "W1AW".to_string()),
+    ];
+    assert_eq!(
+        club_file_calls(&host),
+        expected,
+        "the GOTA tent's contact under its own call, the host's under the club's"
+    );
+
+    // The GOTA position packs up, then the host restarts: nothing joins it again.
+    for sd in [gota_sd, host_sd, host_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(600));
+    let host2 = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host2).fd_host_start(journal.clone()).unwrap();
+    assert_eq!(
+        club_rows(&host2),
+        2,
+        "the journal replay rebuilt the club log"
+    );
+    assert_eq!(
+        club_file_calls(&host2),
+        expected,
+        "the GOTA call came back with the journal"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The name a position shows on the club board, as the HOST holds it.
 fn board_label(eng: &Shared, posid: &str) -> String {
     engine_lock(eng)

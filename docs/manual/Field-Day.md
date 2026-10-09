@@ -334,6 +334,7 @@ All four exports are available at any time during or after the event from the Co
 - `CATEGORY-OPERATOR` is the **Entry category** you pick in Settings → Contesting ▸ Contest (`SINGLE-OP` by default).
 - Legacy contacts without a timestamp fall back to the `----------` placeholder rather than inventing a time.
 - **Winter Field Day's** header is the one in the sponsor's example log: `CONTEST: WFD`, `LOCATION` (your section, `MX` or `DX`), `CATEGORY-POWER` (`QRP` or `LOW`, from Power category; HIGH writes none), `CLAIMED-SCORE` (the claimed total), `CLUB`, `OPERATORS`, `NAME`, `EMAIL` and `X-EXCHANGE` (your class and category, such as `3O`). Name, club, other operators and email come from Settings → Station and Settings → Contesting ▸ Contest, each line left out when blank. A club's file is the host's **Club Cabrillo**, with an OPERATORS line naming whoever the positions logged under, then the host's other operators.
+- **ARRL Field Day's GOTA station:** in the host's **Club Cabrillo**, each contact the GOTA laptop logged carries the GOTA station's call (that laptop's Callsign on the air) as the call sent, and every other contact the club's call. The rules require the GOTA station to use a call of its own (rule 4.1.1.1) and let the club claim its contacts (rule 4.1.1.5). The header stays the club's: the GOTA call goes on ARRL's online entry form, which has a box for it.
 
 ### ADIF
 

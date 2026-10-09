@@ -302,6 +302,18 @@ pub struct LoggedQso {
     /// A club rotates operators through one position, so the person belongs to the ROW, not
     /// the log: the Cabrillo `OPERATORS` header is everyone the rows name.
     pub operator: String,
+    /// ⭐ **The call this contact was SENT under, when it is not the log's own** — `""` on
+    /// every row of a position's own log, whose contacts all went out under
+    /// [`FieldDayLog::mycall`], the call a Cabrillo QSO line writes for a row with none.
+    ///
+    /// One row has another: an ARRL Field Day GOTA station's, which *"must use a different
+    /// callsign from the primary Field Day station"* (2026 rules, 4.1.1.1) and whose QSOs
+    /// *"may be claimed for credit by its primary Field Day operation"* (4.1.1.5). Its
+    /// contacts reach the host's club log, whose file is written under the host's call, so
+    /// the club's rebuild stamps the GOTA call here ([`FieldDayLog::station_call`]). The
+    /// ADIF writer names no station on any row, so it has nothing of this to carry, and no
+    /// journal holds a row with one: a club's rebuilt log is never journaled.
+    pub station_call: String,
 }
 
 impl LoggedQso {
@@ -518,6 +530,11 @@ pub struct FieldDayLog {
     /// [`current_submode`](Self::current_submode) is — so every log path, the digital
     /// sequencer's own included, names whoever was at the key for that contact.
     pub operator: String,
+    /// The call being sent RIGHT NOW when it is not [`mycall`](Self::mycall), copied onto each
+    /// row as it is logged exactly as [`operator`](Self::operator) is
+    /// ([`LoggedQso::station_call`]). `""` on every log but a club's rebuild, which sets it
+    /// for each row of a GOTA station's (`ClubLog::unique_log_with` in tempo-app).
+    pub station_call: String,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -572,6 +589,7 @@ impl FieldDayLog {
             event,
             current_submode: String::new(),
             operator: String::new(),
+            station_call: String::new(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1187,6 +1205,7 @@ impl FieldDayLog {
             dupe,
             sat: sat.cloned(),
             operator: self.operator.clone(),
+            station_call: self.station_call.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2050,6 +2069,9 @@ impl FieldDayLog {
                 .get("OPERATOR")
                 .map(|o| o.trim().to_ascii_uppercase())
                 .unwrap_or_default(),
+            // A journaled row went out under the log's own call: only a club's rebuild sets
+            // another, and that log is never journaled.
+            station_call: String::new(),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -2393,7 +2415,13 @@ impl FieldDayLog {
             // station has no QTH — on its own side too, although a DX station sends none
             // on the air). Without one, the structural line, unchanged.
             let template = rs.cabrillo_columns;
-            cols.push(self.mycall.clone());
+            // The call SENT: the log's own, or the one this row went out under — a GOTA
+            // station's contact in an ARRL Field Day club's file (`LoggedQso::station_call`).
+            cols.push(if q.station_call.is_empty() {
+                self.mycall.clone()
+            } else {
+                q.station_call.clone()
+            });
             if template.is_empty() {
                 cols.extend(
                     crate::contest::sent_exchange(q, spec)
