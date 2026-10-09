@@ -2844,7 +2844,7 @@ export const JA: PartialCatalog = {
   "settings.fdBoard.url.label": "テレビで開く",
   "settings.fdBoard.url.copy": "コピー",
   "settings.fdBoard.url.pending": "起動中 — 設定を保存すると、この行にアドレスが表示されます。",
-  "settings.fdBoard.hostOnly": "ライブデータはこのポジションがクラブイベントをホストしているときに表示されます。それ以外ではページが観客をホストへ案内します。",
+  "settings.fdBoard.notHosting": "このステーションがポジションの場合、テレビには参加先ホストのボードが表示されます。ホスト側でも観客用スコアボードを同じポートでオンにしてください。クラブがない場合は、テレビにその旨と対処方法が表示されます。",
   "sat.health.silent.label": "サイレント",
   "sat.health.silent.title": "軌道上にありますが、カタログに稼働中のアマチュア送信機の記載がありません — パスの計算は実軌道ですが、交信できる相手はありません。",
   "sat.health.dead.label": "停波",

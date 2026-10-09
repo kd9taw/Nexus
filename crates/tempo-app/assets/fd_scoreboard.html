@@ -5,280 +5,403 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Field Day Scoreboard</title>
 <style>
-/* Field Day spectator scoreboard — one self-contained page, served by the host
-   Nexus over the LAN. Dark, high-contrast, sized for a 16:9 TV read across a
-   room: fluid clamp() typography, all four blocks visible at once (a spectator
-   who glances up must find the block where it was — nothing auto-cycles).
-   No external reference of any kind lives in this file (a Rust test pins it). */
+/* The spectator scoreboard: one self-contained page, served by Nexus over the LAN for a
+   TV or projector, for any contest club sync runs. No external reference of any kind
+   lives in this file (a Rust test pins it): it must render at a field site with no
+   route to the internet.
+
+   TV-FIRST. The whole board is one 16:9 frame sized in --u, a hundredth of the frame's
+   width, so it lays out identically at 1920x1080 and at 3840x2160 (a TV browser that
+   reports a 4K viewport at a device pixel ratio of 1 gets the same board, twice the
+   pixels), and a 4:3 projector letterboxes rather than reflowing. Nothing scrolls and
+   nothing auto-cycles: a spectator who glances up must find each block where it was.
+   Big numerals are heavy, tabular and high-contrast; the smallest text on the board
+   is about one fiftieth of its height.
+
+   THEMES. Dark is the default (a TV in a tent). ?theme=light gives the light board,
+   ?theme=auto follows the TV's own setting. Every colour is a token below, defined for
+   both. */
 :root {
-  --bg: #0b0f14;
-  --panel: #121924;
-  --panel-2: #0e141d;
-  --line: #26303d;
-  --text: #e8eef5;
-  --dim: #93a1b0;
-  --faint: #5c6a78;
+  --u: min(1vw, 1.7778vh);
+  --bg: #05090e;
+  --frame: #090f17;
+  --panel: #0e1520;
+  --panel-hi: #131c29;
+  --line: #1e2937;
+  --text: #f2f6fa;
+  --dim: #a4b3c3;
+  --faint: #6f7f90;
   --accent: #4cc2ff;
-  --lit: #2fd07a;
-  --lit-bg: #10321f;
+  --accent-ink: #03121c;
+  --lit: #34d27e;
+  --lit-ink: #04200e;
+  --need: #1c2a3b;
+  --need-ink: #8296ab;
   --warn: #ffb454;
   --hot: #ff6a5e;
+  --hot-ink: #1d0705;
   --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+  --sans: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
 }
+:root[data-theme="light"] {
+  --bg: #dfe5ec;
+  --frame: #eef2f6;
+  --panel: #ffffff;
+  --panel-hi: #f5f8fb;
+  --line: #d3dbe4;
+  --text: #0b1520;
+  --dim: #3f4e5f;
+  --faint: #677688;
+  --accent: #0868ad;
+  --accent-ink: #ffffff;
+  --lit: #13814a;
+  --lit-ink: #ffffff;
+  --need: #e6ebf1;
+  --need-ink: #66778a;
+  --warn: #9a5800;
+  --hot: #c0342a;
+  --hot-ink: #ffffff;
+  color-scheme: light;
+}
+/* On the light board a band's hue rides the chip's edge; its name stays ink-dark. */
+:root[data-theme="light"] .pos-band { color: var(--text); }
+:root[data-theme="light"] .pos-where { border-width: calc(var(--u) * 0.18); }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--sans);
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 #board {
-  height: 100vh;
+  width: calc(var(--u) * 100);
+  height: calc(var(--u) * 56.25);
+  padding: calc(var(--u) * 0.9);
+  background: var(--frame);
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: clamp(6px, 0.8vh, 12px);
-  padding: clamp(8px, 1vw, 18px);
+  grid-template-rows: calc(var(--u) * 5.6) minmax(0, 1fr) calc(var(--u) * 4.5);
+  gap: calc(var(--u) * 0.75);
 }
+.num { font-variant-numeric: tabular-nums; }
 
-/* ---- header ---- */
-#hdr {
-  display: flex;
-  align-items: baseline;
-  gap: clamp(10px, 1.5vw, 28px);
-  border-bottom: 1px solid var(--line);
-  padding-bottom: clamp(4px, 0.6vh, 10px);
-}
-#ev-name { font-size: clamp(20px, 2.6vw, 44px); font-weight: 800; letter-spacing: 0.02em; }
-#ev-station { font-size: clamp(14px, 1.5vw, 26px); color: var(--dim); font-family: var(--mono); }
-#hdr-right { margin-left: auto; text-align: right; }
-#clock { font-size: clamp(18px, 2vw, 34px); font-family: var(--mono); font-weight: 700; }
-#time-label { font-size: clamp(11px, 1vw, 18px); color: var(--dim); }
-#timebar { height: clamp(4px, 0.5vh, 8px); background: var(--panel); border-radius: 4px; margin-top: 4px; overflow: hidden; }
-#timebar-fill { height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width 1s linear; }
+/* ---- header: the event, the station, the clock and the time left ---- */
+#hdr { position: relative; display: flex; align-items: center; gap: calc(var(--u) * 1.5); padding: 0 calc(var(--u) * 0.5) calc(var(--u) * 0.45); }
+#hdr-left { flex: 1 1 auto; min-width: 0; }
+#ev-name { font-size: calc(var(--u) * 2.7 * var(--fit, 1)); font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; white-space: nowrap; overflow: hidden; }
+#ev-station { font-family: var(--mono); font-size: calc(var(--u) * 1.45); line-height: 1.25; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A live board whose host has gone quiet keeps the board and says so in its own header. */
+#ev-station.warn { font-family: var(--sans); font-weight: 800; color: var(--warn); }
+#hdr-right { flex: 0 0 auto; text-align: right; }
+#clock-row { display: flex; align-items: baseline; justify-content: flex-end; gap: calc(var(--u) * 0.45); }
+#clock { font-size: calc(var(--u) * 2.9); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+#clock-utc { font-size: calc(var(--u) * 1.25); font-weight: 800; letter-spacing: 0.1em; color: var(--dim); }
+#time-label { font-size: calc(var(--u) * 1.3); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-top: calc(var(--u) * 0.3); white-space: nowrap; }
+#time-label.soon { color: var(--warn); }
+/* The time-left bar is the header's own bottom rule, the width of the board. */
+#timebar { position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--u) * 0.3); background: var(--line); border-radius: calc(var(--u) * 0.3); overflow: hidden; }
+#timebar-fill { height: 100%; width: 0; background: var(--accent); transition: width 1s linear; }
 
-/* ---- main grid ---- */
-#main {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.15fr) minmax(0, 2.1fr) minmax(220px, 1.45fr);
-  gap: clamp(6px, 0.8vw, 14px);
-  min-height: 0;
-}
+/* ---- the three columns ---- */
+#main { display: grid; grid-template-columns: calc(var(--u) * 28) minmax(0, 1fr) calc(var(--u) * 26.5); gap: calc(var(--u) * 0.75); min-height: 0; }
+#col-left, #col-right { display: flex; flex-direction: column; gap: calc(var(--u) * 0.75); min-height: 0; min-width: 0; }
+#col-center { display: flex; min-height: 0; min-width: 0; }
 .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: clamp(8px, 1vw, 16px);
+  border: calc(var(--u) * 0.08) solid var(--line);
+  border-radius: calc(var(--u) * 0.7);
+  padding: calc(var(--u) * 0.7) calc(var(--u) * 1);
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 .panel h2 {
-  font-size: clamp(10px, 0.9vw, 16px);
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: calc(var(--u) * 1.05);
+  font-weight: 800;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--faint);
-  margin-bottom: clamp(4px, 0.6vh, 10px);
+  color: var(--dim);
+  line-height: 1.2;
+  margin-bottom: calc(var(--u) * 0.4);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-#col-left, #col-right { display: flex; flex-direction: column; gap: clamp(6px, 0.8vh, 14px); min-height: 0; }
-#col-center { display: flex; flex-direction: column; gap: clamp(6px, 0.8vh, 14px); min-height: 0; }
 
-/* score */
-#score-total { font-size: clamp(40px, 5.5vw, 110px); font-weight: 800; font-family: var(--mono); line-height: 1.05; }
-#score-caption { color: var(--dim); font-size: clamp(11px, 1vw, 18px); margin-bottom: clamp(4px, 0.8vh, 12px); }
-.score-line { display: flex; justify-content: space-between; font-size: clamp(12px, 1.1vw, 20px); padding: 2px 0; }
-.score-line .k { color: var(--dim); }
-.score-line .v { font-family: var(--mono); font-weight: 700; }
+/* ---- the score: one big number, and how it is made ---- */
+#score-panel { flex: 0 0 auto; }
+#score-total { font-size: calc(var(--u) * 6.0 * var(--fit, 1)); font-weight: 900; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+#score-caption { font-size: calc(var(--u) * 1.05); color: var(--dim); line-height: 1.3; margin: calc(var(--u) * 0.2) 0 calc(var(--u) * 0.45); }
+/* How the score is made, as label-over-value cells two to a row; the arithmetic lines span both. */
+#score-lines { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: calc(var(--u) * 0.8); }
+.score-line { display: flex; flex-direction: column; min-width: 0; padding: calc(var(--u) * 0.22) 0; border-top: calc(var(--u) * 0.06) solid var(--line); }
+.score-line.wide { grid-column: 1 / -1; }
+.score-line .k { font-size: calc(var(--u) * 0.95); font-weight: 700; color: var(--dim); line-height: 1.25; }
+.score-line .v { font-size: calc(var(--u) * 1.45 * var(--fit, 1)); font-weight: 800; line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
 .score-line.provisional .k, .score-line.provisional .v { color: var(--warn); }
-#qso-stats { display: flex; gap: clamp(8px, 1vw, 18px); align-items: baseline; }
-#qso-count { font-size: clamp(24px, 2.6vw, 48px); font-weight: 800; font-family: var(--mono); }
-.qso-sub { color: var(--dim); font-size: clamp(11px, 1vw, 18px); }
-#sparkline { width: 100%; height: clamp(30px, 5vh, 70px); margin-top: 4px; }
-#sparkline polyline { fill: none; stroke: var(--accent); stroke-width: 2; }
-#sparkline .fill { fill: rgba(76, 194, 255, 0.15); stroke: none; }
+#score-note { display: none; font-size: calc(var(--u) * 1.0); line-height: 1.3; color: var(--warn); margin-top: calc(var(--u) * 0.4); }
+#score-note.on { display: block; }
 
-/* the globe — the sections display: one pin per ARRL/RAC section, lit as it
-   is reached, readable from the far side of a tent. Everything visual about
-   it is painted on the canvas; the CSS only gives it a box to fill. */
-#sec-head { display: flex; align-items: baseline; gap: clamp(6px, 0.8vw, 14px); flex-wrap: wrap; }
-#sec-count { font-family: var(--mono); font-weight: 800; font-size: clamp(16px, 1.8vw, 32px); color: var(--accent); }
-#globe-legend { margin-left: auto; display: flex; gap: clamp(8px, 1vw, 18px); font-size: clamp(9px, 0.8vw, 14px); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
-.leg { display: flex; align-items: center; gap: 5px; }
-.leg .dot { width: clamp(7px, 0.6vw, 11px); height: clamp(7px, 0.6vw, 11px); border-radius: 50%; background: var(--faint); }
+/* ---- the rate ---- */
+#rate-panel { flex: 1 1 auto; }
+#qso-stats { flex: 0 0 auto; display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: calc(var(--u) * 0.6); }
+.stat { min-width: 0; }
+.stat-v { font-size: calc(var(--u) * 2.6 * var(--fit, 1)); font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+.stat-u { font-size: calc(var(--u) * 1.2); font-weight: 800; color: var(--dim); margin-left: 0.12em; }
+.stat-k { font-size: calc(var(--u) * 0.9); font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); margin-top: calc(var(--u) * 0.3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#spark-wrap { flex: 1 1 auto; min-height: 0; position: relative; margin-top: calc(var(--u) * 0.6); }
+#sparkline { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#sparkline rect { fill: var(--accent); opacity: 0.85; }
+#sparkline rect.now { fill: var(--lit); opacity: 1; }
+#spark-cap { position: absolute; left: 0; top: 0; font-size: calc(var(--u) * 0.85); font-weight: 700; color: var(--faint); white-space: nowrap; }
+
+/* ---- the line score: contacts by band and mode ---- */
+#bm-panel { flex: 0 0 auto; }
+#bm-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: calc(var(--u) * 1.05 * var(--fit, 1)); font-variant-numeric: tabular-nums; }
+#bm-table th, #bm-table td { padding: calc(var(--u) * 0.12) calc(var(--u) * 0.08); text-align: center; white-space: nowrap; overflow: hidden; }
+#bm-table thead th { font-size: 0.85em; font-weight: 800; color: var(--dim); border-bottom: calc(var(--u) * 0.08) solid var(--line); }
+#bm-table tbody th { text-align: left; font-size: 0.85em; font-weight: 800; color: var(--dim); }
+#bm-table thead th:first-child { width: 20%; }
+#bm-table td { font-weight: 700; }
+#bm-table td.z { color: var(--faint); font-weight: 400; }
+#bm-table tr.total td, #bm-table tr.total th { color: var(--accent); font-weight: 900; border-top: calc(var(--u) * 0.08) solid var(--line); }
+
+/* ---- the map: the sections globe, a county mosaic, or a board of what the ruleset counts ---- */
+#globe-panel { flex: 1 1 auto; }
+#sec-head { flex: 0 0 auto; display: flex; align-items: baseline; gap: calc(var(--u) * 0.8); min-width: 0; }
+#sec-head h2 { margin-bottom: 0; flex: 0 1 auto; }
+#sec-count { font-size: calc(var(--u) * 1.9); font-weight: 900; color: var(--lit); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#globe-legend { margin-left: auto; display: flex; gap: calc(var(--u) * 1.1); font-size: calc(var(--u) * 0.95); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+.leg { display: flex; align-items: center; gap: calc(var(--u) * 0.4); }
+.leg .dot { width: calc(var(--u) * 0.8); height: calc(var(--u) * 0.8); border-radius: 50%; background: var(--need-ink); }
 .leg.on { color: var(--lit); }
-.leg.on .dot { background: var(--lit); box-shadow: 0 0 8px rgba(47, 208, 122, 0.6); }
-#globe-wrap { flex: 1; min-height: 0; position: relative; margin-top: clamp(2px, 0.5vh, 8px); }
-/* ⚠️ THE GLOBE MUST NOT SHRINK AS THE EVENT FILLS UP. It used to be `flex: 3` beside a
-   content-sized band table with no flex of its own, so the table took its full height first
-   and the globe lived on the remainder: measured 592px tall at two worked bands and 246px at
-   thirteen. Every stroke width derives from the globe's radius and clamps to a floor, so at
-   hour 22 — every band worked, the fullest and most impressive the board ever gets — the pins
-   bottomed out around 1.3px and a spectator six metres away saw nothing. Exactly backwards.
-   The globe now claims a hard floor of most of the column and the band table takes what is
-   left, scrolling inside itself rather than pushing the globe down.
+.leg.on .dot { background: var(--lit); }
+.leg.home .dot { background: transparent; border: calc(var(--u) * 0.2) solid var(--accent); }
+#globe-wrap { flex: 1 1 auto; min-height: 0; position: relative; margin-top: calc(var(--u) * 0.5); }
+#globe, #mapsvg, #chipmap { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#mapsvg, #chipmap { display: none; }
+#globe-wrap.mosaic #globe, #globe-wrap.chips #globe { display: none; }
+#globe-wrap.mosaic #mapsvg { display: block; }
+#globe-wrap.chips #chipmap { display: grid; }
+#mapsvg .cell { fill: var(--need); stroke: var(--panel); }
+#mapsvg .cell.on { fill: var(--lit); }
+#mapsvg .cell.home { stroke: var(--accent); }
+#mapsvg .cell.fresh { animation: fresh 2.6s ease-out; }
+#mapsvg text { font-family: var(--mono); font-weight: 800; fill: var(--need-ink); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#mapsvg text.on { fill: var(--lit-ink); }
+@keyframes fresh { 0% { fill: var(--warn); } 100% { fill: var(--lit); } }
+#chipmap { align-content: start; gap: calc(var(--u) * 0.35); grid-template-columns: repeat(var(--cols, 8), minmax(0, 1fr)); }
+.chip { font-family: var(--mono); font-weight: 800; font-size: calc(var(--u) * 1.0 * var(--fit, 1)); text-align: center; padding: calc(var(--u) * 0.25) 0; border-radius: calc(var(--u) * 0.3); background: var(--need); color: var(--need-ink); white-space: nowrap; overflow: hidden; }
+.chip.on { background: var(--lit); color: var(--lit-ink); }
+#framing { flex: 0 0 auto; font-size: calc(var(--u) * 1.0); line-height: 1.3; color: var(--faint); margin-top: calc(var(--u) * 0.4); }
 
-   MEASURED, headless Chrome at 1920x1080, --force-device-scale-factor=1, globe RADIUS by
-   number of worked bands — before this rule, then after:
-       2 bands   R 290 -> 396
-       8 bands   R 195 -> 301
-      13 bands   R 117 -> 287     (every band worked: the fullest the board ever is)
-   At R=287 none of the stroke widths clamp to their floors any more, and the band table still
-   shows all thirteen rows by scrolling itself. The column does not overflow and the page never
-   scrolls sideways at any of the three. */
-#globe-panel { flex: 1 1 auto; min-height: min(58vh, 620px); }
-#bm-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
-#globe { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-
-/* band × mode */
-#bm-table { width: 100%; border-collapse: collapse; font-size: clamp(11px, 1.05vw, 20px); }
-#bm-table th, #bm-table td { text-align: right; padding: clamp(1px, 0.3vh, 5px) clamp(4px, 0.6vw, 12px); font-family: var(--mono); }
-#bm-table th { color: var(--faint); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: clamp(9px, 0.8vw, 14px); }
-#bm-table th:first-child, #bm-table td:first-child { text-align: left; }
-#bm-table td { border-top: 1px solid var(--line); }
-#bm-table td.z { color: var(--faint); }
-#bm-table td.total { color: var(--accent); font-weight: 800; }
-
-/* positions */
-.pos-row { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 10px; padding: clamp(3px, 0.5vh, 8px) 0; border-bottom: 1px solid var(--line); align-items: center; }
-.pos-label { font-weight: 700; font-size: clamp(12px, 1.15vw, 22px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pos-op { color: var(--dim); font-family: var(--mono); font-size: clamp(10px, 0.9vw, 16px); }
-.pos-nums { text-align: right; font-family: var(--mono); font-size: clamp(11px, 1vw, 19px); }
-.pos-nums b { color: var(--accent); }
-/* Which band this position is on — the club band board, on the screen the
-   whole tent can see. The band hue is the one used by the globe and the band
-   grid, so 20m looks like 20m everywhere. */
-.pos-where { text-align: right; font-family: var(--mono); min-width: 4.5em; }
-.pos-band { font-weight: 800; font-size: clamp(11px, 1.05vw, 20px); }
-.pos-mode { color: var(--dim); font-size: clamp(9px, 0.85vw, 15px); }
+/* ---- positions: who is on which band right now ---- */
+#pos-panel { flex: 1 1 auto; }
+#pos-list { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.pos-row { display: grid; grid-template-columns: calc(var(--u) * 5.4 * var(--fit, 1)) minmax(0, 1fr) auto; gap: calc(var(--u) * 0.8); align-items: center; padding: calc(var(--u) * 0.45 * var(--fit, 1)) 0; border-bottom: calc(var(--u) * 0.06) solid var(--line); }
+/* Which band this position is on, in the band's own hue (the globe's, the cockpit's),
+   so 20m looks like 20m everywhere. */
+.pos-where { text-align: center; border-radius: calc(var(--u) * 0.45); padding: calc(var(--u) * 0.3) 0; background: var(--panel-hi); border: calc(var(--u) * 0.1) solid var(--line); }
+.pos-where { border-color: var(--band, var(--line)); }
+.pos-band { color: var(--band, var(--text)); font-weight: 900; font-size: calc(var(--u) * 1.45 * var(--fit, 1)); line-height: 1.05; font-variant-numeric: tabular-nums; }
+.pos-mode { font-weight: 800; font-size: calc(var(--u) * 0.95 * var(--fit, 1)); color: var(--dim); letter-spacing: 0.06em; }
 /* Presence expires; QSO counts do not. Only the live claim goes dim. */
-.pos-where.stale { opacity: 0.45; }
+.pos-where.stale { opacity: 0.4; }
+.pos-who { min-width: 0; }
+.pos-label { font-weight: 800; font-size: calc(var(--u) * 1.35 * var(--fit, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pos-op { font-family: var(--mono); font-size: calc(var(--u) * 1.0 * var(--fit, 1)); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pos-nums { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pos-nums .q { font-weight: 900; font-size: calc(var(--u) * 1.35 * var(--fit, 1)); }
+.pos-nums .p { font-size: calc(var(--u) * 1.0 * var(--fit, 1)); color: var(--dim); }
+.pos-nums b { color: var(--accent); }
 
-/* bonuses / objectives */
-#bonus-list { overflow: hidden; }
-.bonus { display: flex; align-items: center; gap: 6px; font-size: clamp(10px, 0.95vw, 17px); padding: 1px 0; color: var(--faint); }
-.bonus .tick { width: clamp(10px, 0.9vw, 16px); text-align: center; font-weight: 800; }
+/* ---- multipliers, bonuses or objectives: how the score multiplies ---- */
+#mult-panel { flex: 0 0 auto; max-height: 50%; }
+#mult-list { display: none; }
+#mult-panel.mults #mult-list { display: block; }
+#mult-panel.mults #bonus-list { display: none; }
+.mult-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: calc(var(--u) * 0.6); padding: calc(var(--u) * 0.3) 0; border-top: calc(var(--u) * 0.06) solid var(--line); }
+.mult-row:first-child { border-top: 0; }
+.mult-k { font-size: calc(var(--u) * 1.2 * var(--fit, 1)); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mult-v { font-size: calc(var(--u) * 1.9 * var(--fit, 1)); font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.05; }
+.mult-v .of { font-size: 0.55em; font-weight: 800; color: var(--dim); margin-left: 0.25em; }
+.mult-bar { grid-column: 1 / -1; height: calc(var(--u) * 0.35); background: var(--need); border-radius: calc(var(--u) * 0.35); overflow: hidden; }
+.mult-bar span { display: block; height: 100%; background: var(--lit); }
+.mult-stations { font-size: calc(var(--u) * 1.1 * var(--fit, 1)); padding: calc(var(--u) * 0.35) 0 0; border-top: calc(var(--u) * 0.06) solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mult-stations .st { font-family: var(--mono); font-weight: 800; color: var(--faint); margin-right: calc(var(--u) * 0.9); }
+.mult-stations .st.on { color: var(--lit); }
+#bonus-list { display: block; }
+.bonus-more { font-size: calc(var(--u) * 1.0); color: var(--faint); margin-top: calc(var(--u) * 0.25); }
+.bonus { display: none; align-items: flex-start; gap: calc(var(--u) * 0.4); font-size: calc(var(--u) * 1.15 * var(--fit, 1)); line-height: 1.3; padding: calc(var(--u) * 0.12) 0; color: var(--faint); min-width: 0; }
+.bonus.claimed { display: flex; }
+.bonus > span:nth-child(2) { min-width: 0; }
+.bonus .tick { width: 1.1em; text-align: center; font-weight: 900; flex: 0 0 auto; }
+.bonus .om { margin-left: auto; padding-left: calc(var(--u) * 0.4); font-variant-numeric: tabular-nums; font-weight: 800; flex: 0 0 auto; }
 .bonus.claimed { color: var(--text); }
 .bonus.claimed .tick { color: var(--lit); }
 
-/* footer / ticker */
-#ftr { border-top: 1px solid var(--line); padding-top: clamp(4px, 0.6vh, 10px); }
-#hero-label { font-size: clamp(9px, 0.8vw, 14px); color: var(--faint); letter-spacing: 0.12em; text-transform: uppercase; }
-#hero { font-size: clamp(18px, 2.2vw, 40px); font-weight: 800; font-family: var(--mono); }
-#hero .call { color: var(--accent); }
-#hero .attr { color: var(--dim); font-weight: 600; font-size: 0.7em; }
-#hero.flash { animation: flash 1.2s ease-out; }
+/* ---- the latest contact: the board's lower third ---- */
+#ftr { flex-direction: row; align-items: center; gap: calc(var(--u) * 1.2); padding-top: calc(var(--u) * 0.5); padding-bottom: calc(var(--u) * 0.5); }
+#hero-label { flex: 0 0 auto; font-size: calc(var(--u) * 1.0); font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent); border-radius: calc(var(--u) * 0.35); padding: calc(var(--u) * 0.35) calc(var(--u) * 0.7); white-space: nowrap; }
+#hero { flex: 1 1 auto; min-width: 0; font-size: calc(var(--u) * 2.0 * var(--fit, 1)); font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hero .call { font-family: var(--mono); color: var(--accent); font-weight: 900; }
+#hero .attr { color: var(--dim); font-weight: 700; font-size: 0.7em; }
+#hero.flash { animation: flash 1.4s ease-out; }
 @keyframes flash { 0% { color: var(--lit); } 100% { color: var(--text); } }
-#recent { font-family: var(--mono); color: var(--dim); font-size: clamp(10px, 0.95vw, 17px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-#framing { color: var(--faint); font-size: clamp(10px, 0.95vw, 16px); margin-top: clamp(2px, 0.4vh, 6px); }
+#recent { flex: 0 1 auto; max-width: 42%; font-family: var(--mono); font-size: calc(var(--u) * 1.1); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* status overlays */
+/* ---- status: the stale badge, or a notice where there is no board ---- */
 #stale {
   display: none;
-  position: fixed; top: clamp(8px, 1vh, 16px); right: clamp(8px, 1vw, 16px);
-  background: var(--hot); color: #14090b; font-weight: 800;
-  padding: 4px 12px; border-radius: 6px; font-size: clamp(11px, 1vw, 18px);
+  position: fixed; top: calc(var(--u) * 1.2); left: 50%; transform: translateX(-50%);
+  max-width: calc(var(--u) * 80);
+  background: var(--hot); color: var(--hot-ink); font-weight: 800;
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 1.2); border-radius: calc(var(--u) * 0.5);
+  font-size: calc(var(--u) * 1.3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #stale.on { display: block; }
 #inactive {
   display: none;
-  position: fixed; inset: 0; background: rgba(11, 15, 20, 0.92);
-  align-items: center; justify-content: center; text-align: center;
-  font-size: clamp(18px, 2.4vw, 40px); color: var(--dim); padding: 10vw;
+  position: fixed; inset: 0; background: var(--bg);
+  align-items: center; justify-content: center;
 }
 #inactive.on { display: flex; }
+#notice {
+  width: calc(var(--u) * 72);
+  background: var(--panel); border: calc(var(--u) * 0.1) solid var(--line);
+  border-left: calc(var(--u) * 0.6) solid var(--accent);
+  border-radius: calc(var(--u) * 0.9);
+  padding: calc(var(--u) * 2.4) calc(var(--u) * 3);
+}
+#notice-kicker { font-size: calc(var(--u) * 1.1); font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+#notice-title { font-size: calc(var(--u) * 3.2); font-weight: 800; line-height: 1.12; margin: calc(var(--u) * 0.6) 0 calc(var(--u) * 1.1); }
+#notice-body { font-size: calc(var(--u) * 1.65); line-height: 1.4; color: var(--text); }
+#notice-do { font-size: calc(var(--u) * 1.45); line-height: 1.45; color: var(--dim); margin-top: calc(var(--u) * 1.1); }
+#notice-foot { display: flex; justify-content: space-between; align-items: baseline; margin-top: calc(var(--u) * 2); padding-top: calc(var(--u) * 1); border-top: calc(var(--u) * 0.08) solid var(--line); font-size: calc(var(--u) * 1.2); color: var(--faint); }
+#notice-clock { font-size: calc(var(--u) * 2.2); font-weight: 800; color: var(--dim); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  #hero.flash, #mapsvg .cell.fresh { animation: none; }
+  #timebar-fill { transition: none; }
+}
 </style>
 </head>
 <body>
 <div id="board">
   <div id="hdr">
-    <div id="ev-name"></div>
-    <div id="ev-station"></div>
-    <div id="hdr-right">
-      <div><span id="clock"></span> <span id="clock-utc"></span></div>
-      <div id="time-label"></div>
-      <div id="timebar"><div id="timebar-fill"></div></div>
+    <div id="hdr-left">
+      <div id="ev-name"></div>
+      <div id="ev-station"></div>
     </div>
+    <div id="hdr-right">
+      <div id="clock-row"><span id="clock"></span><span id="clock-utc"></span></div>
+      <div id="time-label"></div>
+    </div>
+    <div id="timebar"><div id="timebar-fill"></div></div>
   </div>
   <div id="main">
     <div id="col-left">
-      <div class="panel">
+      <div class="panel" id="score-panel">
         <h2 id="score-title"></h2>
         <div id="score-total">0</div>
         <div id="score-caption"></div>
         <div id="score-lines"></div>
+        <div id="score-note"></div>
       </div>
-      <div class="panel">
+      <div class="panel" id="rate-panel">
         <h2 id="qso-title"></h2>
         <div id="qso-stats">
-          <div id="qso-count">0</div>
-          <div class="qso-sub"><span id="qso-rate">0</span><span id="qso-rate-unit"></span></div>
-          <div class="qso-sub"><span id="qso-rate10">0</span> <span id="qso-rate10-unit"></span></div>
+          <div class="stat"><div class="stat-v" id="qso-count">0</div><div class="stat-k" id="qso-count-k"></div></div>
+          <div class="stat"><div class="stat-v"><span id="qso-rate">0</span><span class="stat-u" id="qso-rate-unit"></span></div><div class="stat-k" id="qso-rate-k"></div></div>
+          <div class="stat"><div class="stat-v" id="qso-rate10">0</div><div class="stat-k" id="qso-rate10-unit"></div></div>
         </div>
-        <svg id="sparkline" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
+        <div id="spark-wrap"><svg id="sparkline" viewBox="0 0 100 30" preserveAspectRatio="none"></svg><div id="spark-cap"></div></div>
+      </div>
+      <div class="panel" id="bm-panel">
+        <h2 id="bm-title"></h2>
+        <table id="bm-table">
+          <thead><tr id="bm-head"></tr></thead>
+          <tbody id="bm-body"></tbody>
+        </table>
       </div>
     </div>
     <div id="col-center">
       <div class="panel" id="globe-panel">
         <div id="sec-head"><h2 id="sec-title"></h2><span id="sec-count"></span><div id="globe-legend"></div></div>
-        <div id="globe-wrap"><canvas id="globe"></canvas></div>
-      </div>
-      <div class="panel" id="bm-panel">
-        <h2 id="bm-title"></h2>
-        <table id="bm-table">
-          <thead><tr>
-            <th id="bm-h-band"></th><th id="bm-h-ph"></th><th id="bm-h-cw"></th>
-            <th id="bm-h-dig"></th><th id="bm-h-total"></th>
-          </tr></thead>
-          <tbody id="bm-body"></tbody>
-        </table>
+        <div id="globe-wrap"><canvas id="globe"></canvas><svg id="mapsvg" preserveAspectRatio="xMidYMid meet"></svg><div id="chipmap"></div></div>
+        <div id="framing"></div>
       </div>
     </div>
     <div id="col-right">
-      <div class="panel" style="flex: 1.3;">
+      <div class="panel" id="pos-panel">
         <h2 id="pos-title"></h2>
         <div id="pos-list"></div>
       </div>
-      <div class="panel">
+      <div class="panel" id="mult-panel">
         <h2 id="bonus-title"></h2>
+        <div id="mult-list"></div>
         <div id="bonus-list"></div>
       </div>
     </div>
   </div>
-  <div id="ftr">
+  <div class="panel" id="ftr">
     <div id="hero-label"></div>
     <div id="hero"></div>
     <div id="recent"></div>
-    <div id="framing"></div>
   </div>
 </div>
 <div id="stale"></div>
-<div id="inactive"></div>
+<div id="inactive">
+  <div id="notice">
+    <div id="notice-kicker"></div>
+    <div id="notice-title"></div>
+    <div id="notice-body"></div>
+    <div id="notice-do"></div>
+    <div id="notice-foot"><span id="notice-where"></span><span id="notice-clock"></span></div>
+  </div>
+</div>
 <script>
 'use strict';
 /* All page prose lives HERE — the locale seam. A later pass can inject a
    translated dict server-side without touching the render code. Callsigns,
-   section codes, bands, modes and the event's own name are invariant. */
+   section and county codes, bands, modes and the contests' own names are
+   invariant. */
 var STRINGS = {
-  scoreTitle: 'Score',
+  scoreTitle: 'Claimed score',
   rawPoints: 'QSO points (raw) — multipliers apply at submission',
+  claimedPoints: 'QSO points × (objective multiplier + 1)',
   totalPoints: 'total points',
+  multipliedPoints: 'QSO points × multipliers + bonus',
+  pointsOnly: 'QSO points + bonus',
   qsoPointsLine: 'QSO points',
   powerLine: 'power multiplier',
   poweredLine: 'powered points',
+  multsLine: 'multipliers',
   bonusLine: 'bonus points',
   objectivesLine: 'objectives completed',
+  objectiveMultLine: 'objective multiplier',
+  formulaLine: 'QSO points × (multiplier + 1)',
   atSubmission: 'at submission',
   projectedWord: 'projected',
-  qsoTitle: 'Contacts',
-  perHour: '/hr',
-  last10: 'in last 10 min',
+  incompleteNote: 'The sponsor also awards bonus points this board cannot count from the log; they are not in this total.',
+  qsoTitle: 'Rate',
+  qsosStat: 'QSOs',
+  perHour: '/h',
+  lastHour: 'last hour',
+  last10: 'last 10 min',
+  hourlyCaption: 'QSOs each hour of the event',
   sectionsTitle: 'Sections reached',
   ofWord: 'of',
   legendWorked: 'worked',
   legendUnworked: 'not yet',
-  bandModeTitle: 'Contacts by band and mode',
+  legendHome: 'ours',
+  bandModeTitle: 'Contacts by band',
   bandCol: 'Band',
   phoneCol: 'Phone',
   cwCol: 'CW',
@@ -290,6 +413,21 @@ var STRINGS = {
   opWord: 'op',
   bonusesTitle: 'Bonuses claimed',
   objectivesTitle: 'Objectives completed',
+  multsTitle: 'Multipliers',
+  maxWord: 'max',
+  bonusStationsLine: 'Bonus stations',
+  moreOpen: '{n} more not claimed yet',
+  multCounty: 'Counties',
+  multMult: 'States & provinces',
+  multState: 'States & provinces',
+  multQth: 'States, provinces & DX',
+  multDxcc: 'DX entities',
+  multCountry: 'Countries',
+  multZone: 'Zones',
+  multGrid: 'Grid squares',
+  multSection: 'Sections',
+  multNy: 'New York',
+  multPrefix: 'Prefixes',
   latestLabel: 'Latest contact',
   waitingFirst: 'Waiting for the first contact…',
   phoneWord: 'Phone',
@@ -299,20 +437,85 @@ var STRINGS = {
   endsIn: 'ends in',
   startsIn: 'starts in',
   endedWord: 'event complete',
+  dayShort: 'd',
   hourShort: 'h',
   minShort: 'm',
   staleBadge: 'STALE — reconnecting…',
-  hostOnlyMsg: 'The scoreboard is served from the host station.',
+  hostLostBanner: 'Can’t reach the host at {host} — this is its board from {at} UTC',
+  noticeKicker: 'Spectator scoreboard',
+  noticeNoClubTitle: 'No club event on this station',
+  noticeNoClubBody: 'This computer isn’t hosting a club event or joined to one, so there is no club score to show.',
+  noticeNoClubDo: 'To fill this board, open Settings ▸ Contesting ▸ Field Day Club Sync. On the station that keeps the club log, turn on Host a club event; a station working alone can host its own. A position joins the host from the same place, and its TV then shows the host’s board.',
+  noticeRefusedTitle: 'Club sync can’t run this contest',
+  noticeRefusedBody: 'Club sync doesn’t run {contest}: {why}.',
+  noticeRefusedDo: 'Log it on each position by itself. This board shows a club as soon as club sync runs one.',
+  noticeStartingTitle: 'The club event is starting',
+  noticeStartingBody: 'This station is set to host a club event, and its board appears here as soon as the club is running.',
+  noticeStartingDo: 'If this stays, Settings ▸ Contesting ▸ Field Day Club Sync on this station says why the club has not started.',
+  noticeSessionTitle: 'The club score can’t be made right now',
+  noticeSessionBody: 'The host can’t build its contest session: {why}.',
+  noticeSessionDo: 'Fix it in Settings on the host station. This board comes back by itself.',
+  noticeRulesTitle: 'This contest’s rules aren’t loaded',
+  noticeRulesBody: 'The rules this Nexus loaded don’t include the club’s contest ({why}).',
+  noticeRulesDo: 'In Settings, check for rules updates, then restart Nexus.',
+  noticeUnreachableTitle: 'Can’t reach the host station',
+  noticeUnreachableBody: 'This position shows the host’s board, and the host’s scoreboard at {host} isn’t answering.',
+  noticeUnreachableDo: 'Check that the host computer is on and on this network, and that its Spectator scoreboard is on, on the same port as this one’s. This board comes back by itself.',
+  noticeNoBoardTitle: 'The host isn’t serving the scoreboard',
+  noticeNoBoardBody: 'The host computer at {host} answered, but its Spectator scoreboard is off or on another port.',
+  noticeNoBoardDo: 'On the host station, turn on Spectator scoreboard in Settings ▸ Contesting ▸ Field Day Club Sync, on the same port as this station’s.',
+  noticeHostIdleTitle: 'The host isn’t showing a club board',
+  noticeHostIdleBody: 'The host station at {host} isn’t hosting a club event right now, or its Nexus is older than this one.',
+  noticeHostIdleDo: 'On the host, turn on Host a club event. If it is on already, update Nexus on the host to this version.',
+  noticeBadReplyTitle: 'Something else answered for the host',
+  noticeBadReplyBody: 'What answered at {host} isn’t a Nexus scoreboard.',
+  noticeBadReplyDo: 'Check that the Spectator scoreboard port is the same on both stations, and that nothing else uses it on the host.',
+  noticeGenericTitle: 'No club board on this station',
+  noticeGenericBody: 'This station isn’t showing a club board right now.',
   framing: 'Ham radio operators here are contacting other stations across ' +
     'North America using portable equipment and emergency power — every arc ' +
     'on the globe is a contact just made, and its pin stays lit for the rest ' +
-    'of the event.'
+    'of the event.',
+  framingMap: 'Each one lit has been worked by this club; the dark ones are still to find.'
+};
+
+/* MIRROR of CONTESTS in ui/src/fdEvent.ts — each contest's own name, by its
+   rules-file id (invariant, never translated). A hand copy because this page has
+   no build step; the jsdom suite holds the two together. An id this list does not
+   know shows the sponsor's id from the payload instead. */
+var CONTEST_NAMES = {
+  arrlfd: 'ARRL Field Day',
+  wfd: 'Winter Field Day',
+  arrlss_cw: 'ARRL November Sweepstakes (CW)',
+  arrlss_ssb: 'ARRL November Sweepstakes (Phone)',
+  arrlvhf_jan: 'ARRL January VHF Contest',
+  arrlvhf_jun: 'ARRL June VHF Contest',
+  arrlvhf_sep: 'ARRL September VHF Contest',
+  cqww_cw: 'CQ World-Wide DX Contest (CW)',
+  cqww_ssb: 'CQ World-Wide DX Contest (SSB)',
+  cqww_rtty: 'CQ World-Wide RTTY DX Contest',
+  cqwpx_cw: 'CQ World-Wide WPX Contest (CW)',
+  cqwpx_ssb: 'CQ World-Wide WPX Contest (SSB)',
+  cqp: 'California QSO Party',
+  ilqp: 'Illinois QSO Party',
+  nyqp: 'New York QSO Party',
+  ohqp: 'Ohio QSO Party',
+  tnqp: 'Tennessee QSO Party',
+  txqp: 'Texas QSO Party'
+};
+
+/* Labels for the multiplier universes, by the rule id the rules data gives them. */
+var MULT_LABEL = {
+  county: 'multCounty', mult: 'multMult', state: 'multState', qth: 'multQth',
+  dxcc: 'multDxcc', country: 'multCountry', zone: 'multZone', grid: 'multGrid',
+  section: 'multSection', ny: 'multNy', prefix: 'multPrefix'
 };
 
 /* ------------------------------------------------------------------ */
 /* Pure render(data, meta) functions. Every DATA value goes through
-   textContent — calls and sections arrive over RF and are untrusted;
-   only static STRINGS skeletons are ever assigned as markup. */
+   textContent — calls, sections and counties arrive over RF and over the
+   LAN and are untrusted; only static STRINGS skeletons and generated
+   numerics are ever assigned as markup. */
 /* ------------------------------------------------------------------ */
 
 var $ = function (id) { return document.getElementById(id); };
@@ -320,6 +523,14 @@ var metaDone = false;
 var lastHeroKey = '';
 var clockOffsetMs = 0;
 var eventWindow = { start: 0, end: 0 };
+var hasBoard = false;      /* a real board has been drawn at least once */
+var stationText = '';      /* what the header's station line says while the board is live */
+var boardAtMs = 0;         /* host clock of the last good board */
+var placeNames = {};       /* code -> name, for the latest contact */
+var mapState = null;       /* the county mosaic or chip board, when meta has one */
+var globeStarted = false;
+
+function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -336,42 +547,88 @@ function modeWord(mode) {
 
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
-function fmtDuration(secs) {
-  var h = Math.floor(secs / 3600);
-  var m = Math.floor((secs % 3600) / 60);
-  return h + ' ' + STRINGS.hourShort + ' ' + pad2(m) + ' ' + STRINGS.minShort;
+/* Thousands grouped so a four-digit score reads at a glance (1,234). */
+function fmtNum(n) {
+  var s = String(Math.round(Number(n) || 0));
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-/* Static labels + the globe legend + the bonus skeleton, from meta.json (the
-   section universe and the bonus menu are the RULES DATA — never hardcoded
-   here; the page only ever counts them). */
+function fill(template, vals) {
+  return template.replace(/\{(\w+)\}/g, function (m, k) {
+    return own(vals, k) && vals[k] !== undefined && vals[k] !== null ? String(vals[k]) : '';
+  });
+}
+
+function fmtDuration(secs) {
+  var d = Math.floor(secs / 86400);
+  var h = Math.floor((secs % 86400) / 3600);
+  var m = Math.floor((secs % 3600) / 60);
+  return (d ? d + ' ' + STRINGS.dayShort + ' ' : '') +
+    h + ' ' + STRINGS.hourShort + ' ' + pad2(m) + ' ' + STRINGS.minShort;
+}
+
+function contestName(kind, fallback) {
+  return own(CONTEST_NAMES, kind) ? CONTEST_NAMES[kind] : (fallback || kind || '');
+}
+
+/* A Field Day payload (power tiers or objectives) draws the sections globe and the
+   bonus list; any other contest draws its multiplier universes. */
+function isFieldDay(meta) {
+  return meta.scoring_model === 'powered' || meta.scoring_model === 'objectives';
+}
+
+/* Shrink-to-fit for the few blocks whose content length the payload decides (a long
+   event name, a five-digit score, a dozen positions). Steps a --fit factor down until
+   nothing overflows. In a browser that does not lay out (the jsdom suite) every box
+   measures zero, so this is a no-op there. */
+function fit(node, probe, tall) {
+  if (!node) return;
+  var boxes = probe ? Array.prototype.slice.call(probe) : [node];
+  /* Width for a line of text; height too for a list (`tall`), where rows pile up. */
+  var over = function () {
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      if (b.scrollWidth > b.clientWidth + 1) return true;
+      if (tall && b.scrollHeight > b.clientHeight + 1) return true;
+    }
+    return false;
+  };
+  node.style.setProperty('--fit', '1');
+  for (var k = 1; k > 0.5 && over(); k -= 0.06) {
+    node.style.setProperty('--fit', (k - 0.06).toFixed(2));
+  }
+}
+
+/* Static labels, the map, the legend and the bonus/objective skeleton, from
+   meta.json (the section universe, the multiplier universes and the menus are
+   the RULES DATA — never hardcoded here; the page only ever counts them). */
 function renderMeta(meta) {
   $('score-title').textContent = STRINGS.scoreTitle;
   $('qso-title').textContent = STRINGS.qsoTitle;
+  $('qso-count-k').textContent = STRINGS.qsosStat;
   $('qso-rate-unit').textContent = STRINGS.perHour;
+  $('qso-rate-k').textContent = STRINGS.lastHour;
   $('qso-rate10-unit').textContent = STRINGS.last10;
+  $('spark-cap').textContent = STRINGS.hourlyCaption;
   $('bm-title').textContent = STRINGS.bandModeTitle;
-  $('bm-h-band').textContent = STRINGS.bandCol;
-  $('bm-h-ph').textContent = STRINGS.phoneCol;
-  $('bm-h-cw').textContent = STRINGS.cwCol;
-  $('bm-h-dig').textContent = STRINGS.digitalCol;
-  $('bm-h-total').textContent = STRINGS.totalCol;
   $('pos-title').textContent = STRINGS.positionsTitle;
-  $('bonus-title').textContent =
-    meta.scoring_model === 'objectives' ? STRINGS.objectivesTitle : STRINGS.bonusesTitle;
   $('hero-label').textContent = STRINGS.latestLabel;
-  $('framing').textContent = STRINGS.framing;
   $('stale').textContent = STRINGS.staleBadge;
-  $('inactive').textContent = STRINGS.hostOnlyMsg;
   $('clock-utc').textContent = STRINGS.utcWord;
-  $('sec-title').textContent = STRINGS.sectionsTitle;
+  $('notice-kicker').textContent = STRINGS.noticeKicker;
 
-  $('ev-name').textContent = meta.event.name + ' ' + meta.event.year;
+  var name = contestName(meta.event.kind, meta.event.name);
+  $('ev-name').textContent = name + ' ' + meta.event.year;
+  try { document.title = name + ' · ' + meta.event.call; } catch (e) { /* no title */ }
   eventWindow = { start: meta.event.start_unix, end: meta.event.end_unix };
 
-  /* The globe legend. The section universe itself is the RULES DATA and is
-     never hardcoded here; the globe's pin table is keyed by the same codes
-     and is checked against that universe by the jsdom suite. */
+  var fd = isFieldDay(meta);
+  placeNames = {};
+  (meta.sections || []).forEach(function (s) { if (!own(placeNames, s.code)) placeNames[s.code] = s.name; });
+  (meta.mults || []).forEach(function (m) {
+    (m.values || []).forEach(function (v) { if (!own(placeNames, v.code)) placeNames[v.code] = v.name; });
+  });
+
   var legend = $('globe-legend');
   legend.textContent = '';
   var addLeg = function (cls, text) {
@@ -382,20 +639,49 @@ function renderMeta(meta) {
   };
   addLeg('on', STRINGS.legendWorked);
   addLeg('', STRINGS.legendUnworked);
-  initGlobe();
 
-  /* Bonus / objective checklist skeleton. */
+  if (fd) {
+    $('sec-title').textContent = STRINGS.sectionsTitle;
+    $('framing').textContent = STRINGS.framing;
+    $('globe-wrap').className = '';
+    $('mult-panel').className = 'panel';
+    $('bonus-title').textContent =
+      meta.scoring_model === 'objectives' ? STRINGS.objectivesTitle : STRINGS.bonusesTitle;
+    mapState = null;
+    initGlobe();
+    if (!window.__FDBOARD_TEST__ && !globeStarted) {
+      globeStarted = true;
+      startGlobe();
+    }
+  } else {
+    var m = mapMult(meta);
+    $('sec-title').textContent = m ? multLabel(m.id) : STRINGS.multsTitle;
+    $('framing').textContent = STRINGS.framingMap;
+    $('mult-panel').className = 'panel mults';
+    $('bonus-title').textContent = STRINGS.multsTitle;
+    if (m && meta.event.section) addLeg('home', STRINGS.legendHome);
+    mapState = buildMap(m);
+    $('globe-wrap').className = mapState ? mapState.kind : 'chips';
+  }
+
+  /* Bonus / objective checklist skeleton: an objectives event's objectives with
+     their multipliers, else the bonus menu with its points. */
   var bl = $('bonus-list');
   bl.textContent = '';
-  meta.bonuses.forEach(function (b) {
+  var menu = meta.objectives && meta.objectives.length ? meta.objectives : (meta.bonuses || []);
+  menu.forEach(function (b) {
     var row = el('div', 'bonus');
     row.setAttribute('data-id', b.id);
     row.appendChild(el('span', 'tick', '☐'));
     row.appendChild(el('span', '', b.label));
+    if (typeof b.multiplier === 'number') row.appendChild(el('span', 'om', '×' + b.multiplier));
+    else if (typeof b.points === 'number') row.appendChild(el('span', 'om', '+' + b.points));
     bl.appendChild(row);
   });
+  bl.appendChild(el('div', 'bonus-more'));
 
   metaDone = true;
+  fit($('ev-name'));
 }
 
 function renderScore(score) {
@@ -407,48 +693,82 @@ function renderScore(score) {
     row.appendChild(el('span', 'v', v));
     lines.appendChild(row);
   };
-  $('score-total').textContent = String(score.total);
+  $('score-total').textContent = fmtNum(score.total);
+  var note = $('score-note');
+  note.textContent = score.incomplete ? STRINGS.incompleteNote : '';
+  note.className = score.incomplete ? 'on' : '';
   if (score.model === 'objectives') {
-    /* WFD: the headline is RAW QSO points — the payload carries no power
-       fields at all, so power math cannot be rendered here even by mistake.
-       The ×(n+1) projection is a labelled, provisional secondary. */
-    $('score-caption').textContent = STRINGS.rawPoints;
-    var n = score.objectives_claimed || 0;
-    addLine(STRINGS.objectivesLine, String(n));
-    if (score.bonus_points) addLine(STRINGS.bonusLine, String(score.bonus_points));
-    addLine(
-      STRINGS.atSubmission,
-      score.qso_points + ' × ' + (n + 1) + ' → ' +
-        score.projected_at_submission + ' ' + STRINGS.projectedWord,
-      'provisional'
-    );
+    /* WFD: the payload carries no power fields at all, so power math cannot be
+       rendered here even by mistake. With its objectives (objective_multiplier
+       in the payload) the headline is the CLAIMED total, the sponsor's QSO
+       points × (objective multiplier + 1); without them it is the raw QSO
+       points, and the ×(n+1) projection is a labelled, provisional secondary. */
+    var om = score.objective_multiplier;
+    if (typeof om === 'number') {
+      $('score-caption').textContent = STRINGS.claimedPoints;
+      addLine(STRINGS.objectivesLine, String(score.objectives_claimed || 0));
+      addLine(STRINGS.objectiveMultLine, String(om));
+      addLine(STRINGS.formulaLine,
+        fmtNum(score.qso_points) + ' × (' + om + ' + 1) = ' + fmtNum(score.total), 'wide');
+      if (score.bonus_points) addLine(STRINGS.bonusLine, fmtNum(score.bonus_points));
+    } else {
+      $('score-caption').textContent = STRINGS.rawPoints;
+      var n = score.objectives_claimed || 0;
+      addLine(STRINGS.objectivesLine, String(n));
+      if (score.bonus_points) addLine(STRINGS.bonusLine, fmtNum(score.bonus_points));
+      addLine(
+        STRINGS.atSubmission,
+        fmtNum(score.qso_points) + ' × ' + (n + 1) + ' → ' +
+          fmtNum(score.projected_at_submission) + ' ' + STRINGS.projectedWord,
+        'provisional wide'
+      );
+    }
+  } else if (score.model === 'multipliers' || score.model === 'points') {
+    /* Any other contest: QSO points, the power tier where the ruleset has one,
+       times the multiplier total, plus the ticked menu and the bonus stations. */
+    $('score-caption').textContent =
+      score.model === 'multipliers' ? STRINGS.multipliedPoints : STRINGS.pointsOnly;
+    addLine(STRINGS.qsoPointsLine, fmtNum(score.qso_points));
+    if (typeof score.power_mult === 'number') addLine(STRINGS.powerLine, '× ' + score.power_mult);
+    if (typeof score.mults === 'number') addLine(STRINGS.multsLine, '× ' + fmtNum(score.mults));
+    addLine(STRINGS.bonusLine, '+ ' + fmtNum(score.bonus_points));
   } else {
     $('score-caption').textContent = STRINGS.totalPoints;
-    addLine(STRINGS.qsoPointsLine, String(score.qso_points));
+    addLine(STRINGS.qsoPointsLine, fmtNum(score.qso_points));
     addLine(STRINGS.powerLine, '× ' + score.power_mult);
-    addLine(STRINGS.poweredLine, String(score.powered_points));
-    addLine(STRINGS.bonusLine, '+ ' + score.bonus_points);
+    addLine(STRINGS.poweredLine, fmtNum(score.powered_points));
+    addLine(STRINGS.bonusLine, '+ ' + fmtNum(score.bonus_points));
   }
+  fit($('score-total'));
+  fit(lines, lines.querySelectorAll('.v'));
 }
 
 function renderQsos(qsos) {
-  $('qso-count').textContent = String(qsos.count);
-  $('qso-rate').textContent = String(qsos.rate_hour);
-  $('qso-rate10').textContent = String(qsos.rate_10min);
+  $('qso-count').textContent = fmtNum(qsos.count);
+  $('qso-rate').textContent = fmtNum(qsos.rate_hour);
+  $('qso-rate10').textContent = fmtNum(qsos.rate_10min);
+  ['qso-count', 'qso-rate10'].forEach(function (id) { fit($(id)); });
+  /* One bar per hour of the event so far, the hour in progress in the worked
+     colour. Generated numerics only, so innerHTML on the <svg> keeps the bars in
+     the SVG namespace without naming the namespace URL. */
   var svg = $('sparkline');
-  var h = qsos.hourly;
-  if (!h || h.length < 2) { svg.innerHTML = ''; return; }
+  var h = (qsos.hourly || []).slice(-48);
+  if (!h.length) { svg.innerHTML = ''; return; }
   var max = Math.max.apply(null, h.concat([1]));
-  var pts = h.map(function (v, i) {
-    var x = (i / (h.length - 1)) * 100;
-    var y = 29 - (v / max) * 27;
-    return x.toFixed(2) + ',' + y.toFixed(2);
+  var w = 100 / h.length;
+  var gap = Math.min(w * 0.25, 1.2);
+  var bars = h.map(function (v, i) {
+    var bh = Math.max(v ? 0.8 : 0, (v / max) * 21);
+    return '<rect' + (i === h.length - 1 ? ' class="now"' : '') + ' x="' + (i * w + gap / 2).toFixed(2) +
+      '" y="' + (30 - bh).toFixed(2) + '" width="' + Math.max(0.4, w - gap).toFixed(2) +
+      '" height="' + bh.toFixed(2) + '"></rect>';
   });
-  /* innerHTML on the <svg> keeps the children in the SVG namespace without
-     naming the namespace URL; the content is generated numerics only. */
-  svg.innerHTML =
-    '<polygon class="fill" points="0,30 ' + pts.join(' ') + ' 100,30"></polygon>' +
-    '<polyline points="' + pts.join(' ') + '"></polyline>';
+  svg.innerHTML = bars.join('');
+  /* The caption sits over the empty top of the chart; on a board too short for both it
+     gives way rather than covering the bars. */
+  var wrap = $('spark-wrap');
+  var u = $('board').clientWidth / 100;
+  $('spark-cap').style.display = wrap.clientHeight < 3.2 * u ? 'none' : '';
 }
 
 /* ================================================================== */
@@ -1187,18 +1507,316 @@ function globeSnapshot() {
   return { lit: lit, home: HOME, arcs: ARCS.length, fired: arcsFired, seeded: seeded };
 }
 
+/* ================================================================== */
+/* THE COUNTY MOSAIC — the map for a contest that counts counties.
+   Each county is the part of the map nearer its own centre than any other
+   county's, cut from a disc round that centre: the counties tile with no
+   gaps and no holes, each sits where it is, and the outer edge follows the
+   state's own shape. A lit county is one the club has worked. Built once
+   from the centres below (pure geometry, exposed on window.__fdboard.map for
+   the jsdom suite), drawn as SVG, re-coloured on every payload. */
+/* ------------------------------------------------------------------ */
+
+/* Approximate centre of each Illinois county, [lat, lon], by the sponsor's own
+   county codes (the rules data's il_counties). A COUNTY IS A REGION, NOT A
+   POINT: each pair is a hand-placed centre good to about a tenth of a degree,
+   enough to put the county in its place on a TV mosaic and never a QTH. The
+   jsdom suite holds this table to the rules data's 102 codes, one for one. */
+var IL_COUNTIES = {
+  ADAM: [39.99, -91.19], ALEX: [37.19, -89.34], BOND: [38.89, -89.44], BOON: [42.32, -88.82],
+  BROW: [39.96, -90.75], BURO: [41.40, -89.53], CALH: [39.17, -90.67], CARR: [42.07, -89.93],
+  CASS: [39.97, -90.25], CHAM: [40.14, -88.20], CHRS: [39.55, -89.28], CLAY: [38.75, -88.49],
+  CLNT: [38.61, -89.42], CLRK: [39.33, -87.79], COLE: [39.52, -88.22], COOK: [41.84, -87.82],
+  CRAW: [39.00, -87.76], CUMB: [39.27, -88.24], DEKA: [41.89, -88.77], DEWT: [40.17, -88.90],
+  DOUG: [39.77, -88.22], DUPG: [41.85, -88.09], EDGR: [39.68, -87.75], EDWA: [38.42, -88.05],
+  EFFG: [39.06, -88.59], FAYE: [39.00, -89.02], FORD: [40.60, -88.22], FRNK: [37.99, -88.92],
+  FULT: [40.47, -90.21], GALL: [37.76, -88.23], GREE: [39.36, -90.39], GRUN: [41.29, -88.42],
+  HAML: [38.08, -88.54], HANC: [40.40, -91.16], HARD: [37.52, -88.27], HENR: [41.35, -90.13],
+  HNDR: [40.82, -90.93], IROQ: [40.75, -87.82], JACK: [37.79, -89.38], JASP: [39.01, -88.15],
+  JEFF: [38.30, -88.92], JERS: [39.09, -90.36], JODA: [42.37, -90.21], JOHN: [37.46, -88.88],
+  KANE: [41.94, -88.43], KANK: [41.14, -87.86], KEND: [41.59, -88.43], KNOX: [40.93, -90.21],
+  LAKE: [42.33, -87.95], LASA: [41.34, -88.89], LAWR: [38.72, -87.73], LEE: [41.75, -89.30],
+  LIVG: [40.89, -88.56], LOGN: [40.12, -89.37], MACN: [39.86, -88.96], MADN: [38.83, -89.90],
+  MARI: [38.65, -88.92], MASN: [40.24, -89.92], MCDN: [40.46, -90.68], MCHE: [42.32, -88.45],
+  MCLN: [40.49, -88.85], MCPN: [39.26, -89.92], MNRD: [40.03, -89.80], MNRO: [38.28, -90.18],
+  MNTG: [39.23, -89.48], MORG: [39.72, -90.20], MOUL: [39.64, -88.62], MRCR: [41.21, -90.74],
+  MSHL: [41.03, -89.34], MSSC: [37.22, -88.71], OGLE: [42.04, -89.32], PEOR: [40.79, -89.76],
+  PERR: [38.08, -89.37], PIAT: [40.01, -88.59], PIKE: [39.62, -90.89], POPE: [37.41, -88.56],
+  PULA: [37.22, -89.13], PUTN: [41.20, -89.29], RAND: [38.05, -89.82], RICH: [38.71, -88.09],
+  ROCK: [41.47, -90.57], SALI: [37.75, -88.54], SANG: [39.76, -89.66], SCHY: [40.16, -90.61],
+  SCLA: [38.47, -89.93], SCOT: [39.64, -90.47], SHEL: [39.39, -88.81], STAR: [41.09, -89.80],
+  STEP: [42.35, -89.66], TAZW: [40.51, -89.51], UNIO: [37.47, -89.25], VERM: [40.18, -87.73],
+  WABA: [38.45, -87.84], WARR: [40.85, -90.62], WASH: [38.35, -89.41], WAYN: [38.43, -88.43],
+  WBGO: [42.34, -89.16], WHIT: [38.09, -88.18], WILL: [41.45, -87.98], WMSN: [37.73, -88.93],
+  WOOD: [40.79, -89.21], WTSD: [41.76, -89.91]
+};
+
+/* The mosaics this page can draw. A universe is drawn as a map only when one of
+   these covers EVERY code in it and nothing else, so a rules-file change to a
+   county list shows the chip board rather than a map with a hole in it. */
+var MAP_LAYOUTS = [IL_COUNTIES];
+
+/* Cut one polygon to the half-plane of points no farther from the point a than
+   from the point b — the Sutherland-Hodgman step against their bisector. The
+   bisector passes through (mx, my) at right angles to (dx, dy) = b - a. */
+function clipHalfPlane(poly, mx, my, dx, dy) {
+  var out = [], n = poly.length;
+  for (var k = 0; k < n; k++) {
+    var a = poly[k], b = poly[(k + 1) % n];
+    var fa = (a[0] - mx) * dx + (a[1] - my) * dy;
+    var fb = (b[0] - mx) * dx + (b[1] - my) * dy;
+    if (fa <= 0) out.push(a);
+    if ((fa <= 0) !== (fb <= 0)) {
+      var t = fa / (fa - fb);
+      out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
+    }
+  }
+  return out;
+}
+
+/* The disc radius each county is cut from, in degrees of latitude: wider than
+   any county's half-width, so the inside of the state tiles completely, and
+   narrow enough that the border counties end near the state line. */
+var MOSAIC_R = 0.3;
+
+/* The mosaic of a {code: [lat, lon]} table, one convex cell per code, sorted by code.
+   Equal degrees both ways (x east, y south) rather than true scale: the state reads a
+   little wider than it is, and every county gets room for its code. */
+function buildMosaic(centres) {
+  var codes = Object.keys(centres).sort(), i, j, k;
+  var pts = codes.map(function (c) { return [centres[c][1], -centres[c][0]]; });
+  var cells = [], x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (i = 0; i < pts.length; i++) {
+    var poly = [];
+    for (k = 0; k < 40; k++) {
+      var a = (k / 40) * TAU;
+      poly.push([pts[i][0] + MOSAIC_R * Math.cos(a), pts[i][1] + MOSAIC_R * Math.sin(a)]);
+    }
+    for (j = 0; j < pts.length && poly.length; j++) {
+      if (j === i) continue;
+      var dx = pts[j][0] - pts[i][0], dy = pts[j][1] - pts[i][1];
+      if (dx * dx + dy * dy > 4 * MOSAIC_R * MOSAIC_R) continue; /* too far to cut it */
+      poly = clipHalfPlane(poly, (pts[i][0] + pts[j][0]) / 2, (pts[i][1] + pts[j][1]) / 2, dx, dy);
+    }
+    cells.push(poly);
+    for (k = 0; k < poly.length; k++) {
+      x0 = Math.min(x0, poly[k][0]); x1 = Math.max(x1, poly[k][0]);
+      y0 = Math.min(y0, poly[k][1]); y1 = Math.max(y1, poly[k][1]);
+    }
+  }
+  return { codes: codes, sites: pts, cells: cells, box: [x0, y0, x1 - x0, y1 - y0] };
+}
+
+/* Area-weighted centroid of a convex cell — where its label sits. */
+function cellCentroid(poly) {
+  var a = 0, cx = 0, cy = 0;
+  for (var k = 0; k < poly.length; k++) {
+    var p = poly[k], q = poly[(k + 1) % poly.length];
+    var w = p[0] * q[1] - q[0] * p[1];
+    a += w; cx += (p[0] + q[0]) * w; cy += (p[1] + q[1]) * w;
+  }
+  if (Math.abs(a) < 1e-12) return poly.length ? poly[0] : [0, 0];
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+/* A point inside a convex cell, either winding — the jsdom suite's check that the
+   cells tile without overlapping. */
+function inCell(poly, x, y) {
+  var sign = 0;
+  for (var k = 0; k < poly.length; k++) {
+    var p = poly[k], q = poly[(k + 1) % poly.length];
+    var c = (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
+    if (Math.abs(c) < 1e-12) continue;
+    var s = c > 0 ? 1 : -1;
+    if (sign && s !== sign) return false;
+    sign = s;
+  }
+  return true;
+}
+
+/* The widest a cell's label may be set: the cell's own chord through the label's centre,
+   so a small county gets a smaller label instead of one that spills into its neighbour. */
+function labelSize(poly, c, chars) {
+  var w = chord(poly, c, 0), h = chord(poly, c, 1);
+  return Math.max(0.035, Math.min(0.11, (0.86 * w) / (0.62 * Math.max(1, chars)), 0.6 * h));
+}
+
+/* The length of the line through c, horizontal (axis 0) or vertical (axis 1), inside a
+   convex cell. */
+function chord(poly, c, axis) {
+  var lo = Infinity, hi = -Infinity, o = 1 - axis;
+  for (var k = 0; k < poly.length; k++) {
+    var p = poly[k], q = poly[(k + 1) % poly.length];
+    if ((p[o] - c[o]) * (q[o] - c[o]) > 0 || p[o] === q[o]) continue;
+    var t = (c[o] - p[o]) / (q[o] - p[o]);
+    var v = p[axis] + t * (q[axis] - p[axis]);
+    lo = Math.min(lo, v); hi = Math.max(hi, v);
+  }
+  return hi > lo ? hi - lo : 0;
+}
+
+function pickLayout(values) {
+  for (var i = 0; i < MAP_LAYOUTS.length; i++) {
+    var L = MAP_LAYOUTS[i];
+    if (Object.keys(L).length !== values.length) continue;
+    var all = true;
+    for (var k = 0; k < values.length; k++) {
+      if (!own(L, String(values[k].code))) { all = false; break; }
+    }
+    if (all) return L;
+  }
+  return null;
+}
+
+function multLabel(id) {
+  return own(MULT_LABEL, id) ? STRINGS[MULT_LABEL[id]] : String(id).toUpperCase();
+}
+
+/* The universe the map draws: the one meta names, else the first with values. */
+function mapMult(meta) {
+  var ms = meta.mults || [], i;
+  for (i = 0; i < ms.length; i++) if (ms[i].id === meta.map) return ms[i];
+  for (i = 0; i < ms.length; i++) if (ms[i].values && ms[i].values.length) return ms[i];
+  return ms.length ? ms[0] : null;
+}
+
+/* Build the map's DOM once per meta: a mosaic when a layout covers the universe,
+   else a board of chips — one per value of a closed universe, or (for a universe
+   with no closed list, ARRL VHF's grids) one per value worked. */
+function buildMap(m) {
+  var svg = $('mapsvg'), chips = $('chipmap');
+  svg.innerHTML = '';
+  chips.textContent = '';
+  if (!m) return null;
+  var values = m.values || [];
+  var layout = values.length ? pickLayout(values) : null;
+  if (layout) {
+    var mo = buildMosaic(layout);
+    var b = mo.box, pad = 0.04;
+    svg.setAttribute('viewBox', [b[0] - pad, b[1] - pad, b[2] + 2 * pad, b[3] + 2 * pad]
+      .map(function (v) { return v.toFixed(3); }).join(' '));
+    /* Numbers only go into this markup; the codes are set as text afterwards. */
+    var parts = [], i;
+    for (i = 0; i < mo.cells.length; i++) {
+      var d = mo.cells[i].map(function (p, k) {
+        return (k ? 'L' : 'M') + p[0].toFixed(3) + ' ' + p[1].toFixed(3);
+      }).join('') + 'Z';
+      parts.push('<path class="cell" data-i="' + i + '" stroke-width="0.016" d="' + d + '"></path>');
+    }
+    for (i = 0; i < mo.cells.length; i++) {
+      var c = cellCentroid(mo.cells[i]);
+      parts.push('<text data-i="' + i + '" x="' + c[0].toFixed(3) + '" y="' + c[1].toFixed(3) +
+        '" font-size="' + labelSize(mo.cells[i], c, mo.codes[i].length).toFixed(3) + '"></text>');
+    }
+    svg.innerHTML = parts.join('');
+    var texts = svg.querySelectorAll('text');
+    for (i = 0; i < texts.length; i++) texts[i].textContent = mo.codes[i];
+    return { kind: 'mosaic', id: m.id, codes: mo.codes, size: values.length, lit: {}, seeded: false };
+  }
+  var codes = values.map(function (v) { return String(v.code); });
+  if (codes.length) buildChips(codes);
+  return { kind: 'chips', id: m.id, codes: codes, size: values.length, lit: {}, seeded: false };
+}
+
+function buildChips(codes) {
+  var chips = $('chipmap');
+  chips.textContent = '';
+  var cols = Math.max(4, Math.ceil(Math.sqrt(codes.length * 1.3)));
+  chips.style.setProperty('--cols', String(cols));
+  codes.forEach(function (c) {
+    var chip = el('div', 'chip', c);
+    chip.setAttribute('data-code', c);
+    chips.appendChild(chip);
+  });
+}
+
+/* The map's half of render(): which cells are lit, which is ours, which just lit. */
+function renderMap(data, meta) {
+  if (!mapState) {
+    $('sec-count').textContent = '';
+    return;
+  }
+  var row = null, ms = data.mults || [], i;
+  for (i = 0; i < ms.length; i++) if (ms[i].id === mapState.id) row = ms[i];
+  var worked = (row && row.worked) || [];
+  var lit = {};
+  for (i = 0; i < worked.length; i++) lit[String(worked[i]).toUpperCase()] = true;
+  if (mapState.kind === 'chips' && !mapState.size) {
+    buildChips(worked.map(String)); /* no closed universe: the board is what was worked */
+  }
+  var home = String((data.event && data.event.section) || '').toUpperCase();
+  var fresh = !mapState.seeded || motionOff ? {} : lit;
+  var count = 0;
+  if (mapState.kind === 'mosaic') {
+    var paths = $('mapsvg').querySelectorAll('path.cell');
+    var texts = $('mapsvg').querySelectorAll('text');
+    for (i = 0; i < paths.length; i++) {
+      var code = mapState.codes[i];
+      var on = own(lit, code);
+      if (on) count += 1;
+      var cls = 'cell' + (on ? ' on' : '') + (code === home ? ' home' : '');
+      if (on && own(fresh, code) && !own(mapState.lit, code)) cls += ' fresh';
+      paths[i].setAttribute('class', cls);
+      paths[i].setAttribute('stroke-width', code === home ? '0.034' : '0.016');
+      if (texts[i]) texts[i].setAttribute('class', on ? 'on' : '');
+    }
+  } else {
+    var chips = $('chipmap').querySelectorAll('.chip');
+    for (i = 0; i < chips.length; i++) {
+      var c = chips[i].getAttribute('data-code');
+      var hit = own(lit, String(c).toUpperCase());
+      if (hit) count += 1;
+      chips[i].className = 'chip' + (hit ? ' on' : '');
+    }
+    fit($('chipmap'), null, true);
+  }
+  mapState.lit = lit;
+  mapState.seeded = true;
+  $('sec-count').textContent = mapState.size
+    ? count + ' ' + STRINGS.ofWord + ' ' + mapState.size
+    : String(worked.length);
+}
+
+function mapSnapshot() {
+  if (!mapState) return null;
+  var lit = Object.keys(mapState.lit).sort();
+  return { kind: mapState.kind, id: mapState.id, size: mapState.size, lit: lit };
+}
+
+/* The line score: one column per band worked, longest wavelength first, a row per
+   mode class and a total row. */
 function renderBandMode(rows) {
+  var head = $('bm-head');
+  head.textContent = '';
+  head.appendChild(el('th', '', ''));
+  rows.forEach(function (r) { head.appendChild(el('th', '', r.band)); });
+  head.appendChild(el('th', '', STRINGS.totalCol));
   var body = $('bm-body');
   body.textContent = '';
-  rows.forEach(function (r) {
+  [['ph', STRINGS.phoneCol], ['cw', STRINGS.cwCol], ['dig', STRINGS.digitalCol]].forEach(function (m) {
     var tr = document.createElement('tr');
-    tr.appendChild(el('td', '', r.band));
-    [r.ph, r.cw, r.dig].forEach(function (v) {
-      tr.appendChild(el('td', v ? '' : 'z', String(v)));
+    tr.appendChild(el('th', '', m[1]));
+    var sum = 0;
+    rows.forEach(function (r) {
+      var v = Number(r[m[0]]) || 0;
+      sum += v;
+      tr.appendChild(el('td', v ? '' : 'z', fmtNum(v)));
     });
-    tr.appendChild(el('td', 'total', String(r.ph + r.cw + r.dig)));
+    tr.appendChild(el('td', sum ? '' : 'z', fmtNum(sum)));
     body.appendChild(tr);
   });
+  var tot = document.createElement('tr');
+  tot.className = 'total';
+  tot.appendChild(el('th', '', STRINGS.totalCol));
+  var all = 0;
+  rows.forEach(function (r) {
+    var v = (Number(r.ph) || 0) + (Number(r.cw) || 0) + (Number(r.dig) || 0);
+    all += v;
+    tot.appendChild(el('td', '', fmtNum(v)));
+  });
+  tot.appendChild(el('td', '', fmtNum(all)));
+  body.appendChild(tot);
+  fit($('bm-table'), $('bm-table').querySelectorAll('th, td'));
 }
 
 function renderPositions(positions) {
@@ -1206,10 +1824,6 @@ function renderPositions(positions) {
   list.textContent = '';
   positions.forEach(function (p) {
     var row = el('div', 'pos-row');
-    var left = el('div');
-    left.appendChild(el('div', 'pos-label', p.label));
-    if (p.operator) left.appendChild(el('div', 'pos-op', STRINGS.opWord + ' ' + p.operator));
-    row.appendChild(left);
     /* WHERE THIS POSITION IS RIGHT NOW. Presence, not log history: a club
        running several stations needs to see who is on which band without
        walking the site. The host decides when a reading has expired (it owns
@@ -1217,21 +1831,24 @@ function renderPositions(positions) {
        draws it. A position that has never reported shows a dash rather than
        an invented band. */
     var where = el('div', 'pos-where' + (p.stale ? ' stale' : ''));
-    var band = el('div', 'pos-band', p.band || '\u2014');
-    if (p.band) band.style.color = bandColor(p.band);
-    where.appendChild(band);
+    if (p.band) where.style.setProperty('--band', bandColor(p.band));
+    where.appendChild(el('div', 'pos-band', p.band || '—'));
     where.appendChild(el('div', 'pos-mode', p.mode || ''));
     row.appendChild(where);
+    var who = el('div', 'pos-who');
+    who.appendChild(el('div', 'pos-label', p.label));
+    if (p.operator) who.appendChild(el('div', 'pos-op', STRINGS.opWord + ' ' + p.operator));
+    row.appendChild(who);
     var nums = el('div', 'pos-nums');
-    nums.appendChild(el('div', '', p.qsos_raw + ' ' + STRINGS.qsosWord));
-    var pts = el('div');
-    var b = el('b', '', String(p.points));
-    pts.appendChild(b);
+    nums.appendChild(el('div', 'q', p.qsos_raw + ' ' + STRINGS.qsosWord));
+    var pts = el('div', 'p');
+    pts.appendChild(el('b', '', String(p.points)));
     pts.appendChild(document.createTextNode(' ' + STRINGS.ptsWord));
     nums.appendChild(pts);
     row.appendChild(nums);
     list.appendChild(row);
   });
+  fit(list, null, true);
 }
 
 function renderBonuses(claimed) {
@@ -1244,16 +1861,60 @@ function renderBonuses(claimed) {
     if (have[id]) { rows[i].classList.add('claimed'); tick.textContent = '☑'; }
     else { rows[i].classList.remove('claimed'); tick.textContent = '☐'; }
   }
+  /* The TV lists what has been CLAIMED; the rest of the menu is one line, so a long
+     menu (ARRL Field Day's sixteen) never crowds out the board. */
+  var open = rows.length - $('bonus-list').querySelectorAll('.bonus.claimed').length;
+  var more = $('bonus-list').querySelector('.bonus-more');
+  if (more) more.textContent = open ? fill(STRINGS.moreOpen, { n: open }) : '';
+  fit($('mult-panel'), [$('bonus-list')], true);
 }
 
-function sectionName(code, meta) {
-  for (var i = 0; i < meta.sections.length; i++) {
-    if (meta.sections[i].code === code) return meta.sections[i].name;
+/* The multiplier universes of any contest but the Field Days: each one's count (the
+   scorer's own, caps applied), how many it could be when the universe is the map's,
+   its cap, and the bonus stations worked. */
+function renderMults(data, meta) {
+  var list = $('mult-list');
+  list.textContent = '';
+  var rows = {};
+  (data.mults || []).forEach(function (m) { rows[m.id] = m; });
+  var total = data.score && typeof data.score.mults === 'number' ? data.score.mults : null;
+  $('bonus-title').textContent = STRINGS.multsTitle + (total === null ? '' : ' · ' + fmtNum(total));
+  (meta.mults || []).forEach(function (m) {
+    var d = own(rows, m.id) ? rows[m.id] : { count: 0, worked: [] };
+    var row = el('div', 'mult-row');
+    row.setAttribute('data-id', m.id);
+    row.appendChild(el('div', 'mult-k', multLabel(m.id)));
+    var v = el('div', 'mult-v', fmtNum(d.count));
+    var whole = mapState && mapState.id === m.id && mapState.size ? mapState.size : 0;
+    if (whole) v.appendChild(el('span', 'of', STRINGS.ofWord + ' ' + whole));
+    else if (typeof m.cap === 'number') v.appendChild(el('span', 'of', STRINGS.maxWord + ' ' + m.cap));
+    row.appendChild(v);
+    if (whole) {
+      var bar = el('div', 'mult-bar');
+      var fillBar = el('span');
+      fillBar.style.width = Math.min(100, (100 * (Number(d.count) || 0)) / whole).toFixed(1) + '%';
+      bar.appendChild(fillBar);
+      row.appendChild(bar);
+    }
+    list.appendChild(row);
+  });
+  var st = data.bonus_stations || [];
+  if (st.length) {
+    var line = el('div', 'mult-stations');
+    line.appendChild(el('span', 'st-k', STRINGS.bonusStationsLine + ' '));
+    st.forEach(function (s) {
+      line.appendChild(el('span', 'st' + (s.worked ? ' on' : ''), (s.worked ? '✓' : '') + s.call));
+    });
+    list.appendChild(line);
   }
-  return code;
+  fit($('mult-panel'), [list], true);
 }
 
-function renderTicker(ticker, meta) {
+function placeName(code) {
+  return own(placeNames, code) ? placeNames[code] : code;
+}
+
+function renderTicker(ticker) {
   var hero = $('hero');
   hero.textContent = '';
   if (!ticker.length) {
@@ -1265,7 +1926,7 @@ function renderTicker(ticker, meta) {
   var key = t.when_unix + '|' + t.call;
   hero.appendChild(el('span', 'call', t.call));
   hero.appendChild(document.createTextNode(
-    ' · ' + sectionName(t.section, meta) +
+    (t.section ? ' · ' + placeName(t.section) : '') +
     ' · ' + t.band + ' ' + (t.submode || modeWord(t.mode)) + ' '
   ));
   hero.appendChild(el('span', 'attr',
@@ -1276,24 +1937,43 @@ function renderTicker(ticker, meta) {
     void hero.offsetWidth; /* restart the highlight animation */
     hero.classList.add('flash');
   }
-  $('recent').textContent = ticker.slice(1, 9).map(function (q) {
-    return q.call + ' ' + q.section + ' ' + q.band + ' ' + (q.submode || q.mode);
-  }).join('   ·   ');
+  /* Before that: as many earlier contacts as fit whole, never one cut in half. */
+  var recent = $('recent');
+  var items = ticker.slice(1, 7).map(function (q) {
+    return q.call + (q.section ? ' ' + q.section : '') + ' ' + q.band;
+  });
+  recent.textContent = items.join('  ·  ');
+  while (items.length > 1 && recent.scrollWidth > recent.clientWidth + 1) {
+    items.pop();
+    recent.textContent = items.join('  ·  ');
+  }
+  fit(hero);
 }
 
 /* The composite render — everything from one data.json + one meta.json. */
 function render(data, meta) {
   if (!metaDone) renderMeta(meta);
-  $('ev-station').textContent =
-    data.event.call + ' — ' + data.event.class + ', ' + data.event.section;
+  hasBoard = true;
+  boardAtMs = (Number(data.now_unix) || 0) * 1000;
+  var fd = isFieldDay(meta);
+  stationText = fd
+    ? data.event.call + ' — ' + data.event.class + ', ' + data.event.section
+    : data.event.call + (data.event.section ? ' — ' + placeName(data.event.section) : '');
+  $('ev-station').textContent = stationText;
+  $('ev-station').className = '';
   eventWindow = { start: data.event.start_unix, end: data.event.end_unix };
   renderScore(data.score);
   renderQsos(data.qsos);
-  renderGlobe(data, meta);
-  renderBandMode(data.band_mode);
-  renderPositions(data.positions);
-  renderBonuses(data.claimed);
-  renderTicker(data.ticker, meta);
+  if (fd) {
+    renderGlobe(data, meta);
+    renderBonuses(data.claimed || []);
+  } else {
+    renderMap(data, meta);
+    renderMults(data, meta);
+  }
+  renderBandMode(data.band_mode || []);
+  renderPositions(data.positions || []);
+  renderTicker(data.ticker || []);
 }
 
 function setStale(on) {
@@ -1301,32 +1981,96 @@ function setStale(on) {
   $('stale').className = on ? 'on' : '';
 }
 
-function setInactive(on) {
-  $('inactive').textContent = STRINGS.hostOnlyMsg;
-  $('inactive').className = on ? 'on' : '';
+/* Why there is no board here, by the reason the server gives, in plain words and
+   with what to do. A problem reaching the host keeps the last board on screen with a
+   warning in its header; everything else is a notice of its own, with the clock still
+   running, so the TV is never just a dead overlay. */
+var NOTICES = {
+  'no-club': ['noticeNoClubTitle', 'noticeNoClubBody', 'noticeNoClubDo'],
+  'refused': ['noticeRefusedTitle', 'noticeRefusedBody', 'noticeRefusedDo'],
+  'club-starting': ['noticeStartingTitle', 'noticeStartingBody', 'noticeStartingDo'],
+  'club-session': ['noticeSessionTitle', 'noticeSessionBody', 'noticeSessionDo'],
+  'no-ruleset': ['noticeRulesTitle', 'noticeRulesBody', 'noticeRulesDo'],
+  'host-unreachable': ['noticeUnreachableTitle', 'noticeUnreachableBody', 'noticeUnreachableDo', 1],
+  'host-no-board': ['noticeNoBoardTitle', 'noticeNoBoardBody', 'noticeNoBoardDo', 1],
+  'host-idle': ['noticeHostIdleTitle', 'noticeHostIdleBody', 'noticeHostIdleDo', 1],
+  'host-bad-reply': ['noticeBadReplyTitle', 'noticeBadReplyBody', 'noticeBadReplyDo', 1]
+};
+
+function noticeFor(info) {
+  var n = own(NOTICES, info.reason)
+    ? NOTICES[info.reason]
+    : ['noticeGenericTitle', 'noticeGenericBody', 'noticeNoClubDo'];
+  var vals = {
+    host: info.host || '',
+    why: info.detail || '',
+    contest: contestName(info.contest, info.contest)
+  };
+  return {
+    title: fill(STRINGS[n[0]], vals),
+    body: fill(STRINGS[n[1]], vals),
+    todo: fill(STRINGS[n[2]], vals),
+    keepBoard: n[3] === 1
+  };
 }
 
-/* UTC clock + time-remaining bar, off the host's clock (now_unix from the
-   last poll corrects the TV's own drift). */
+function hhmm(ms) {
+  var d = new Date(ms);
+  return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+}
+
+function setInactive(on, info) {
+  var box = $('inactive');
+  var station = $('ev-station');
+  if (station.className === 'warn') {
+    station.className = '';
+    station.textContent = stationText;
+  }
+  if (!on) {
+    box.className = '';
+    return;
+  }
+  info = info || {};
+  var n = noticeFor(info);
+  if (n.keepBoard && hasBoard) {
+    box.className = '';
+    station.textContent = fill(STRINGS.hostLostBanner, { host: info.host || '', at: hhmm(boardAtMs) });
+    station.className = 'warn';
+    return;
+  }
+  $('notice-kicker').textContent = STRINGS.noticeKicker;
+  $('notice-title').textContent = n.title;
+  $('notice-body').textContent = n.body;
+  $('notice-do').textContent = n.todo;
+  $('notice-where').textContent = info.host || '';
+  box.className = 'on';
+}
+
+/* UTC clock + time left, off the host's clock (now_unix from the last poll
+   corrects the TV's own drift). */
 function tickClock() {
   var now = new Date(Date.now() + clockOffsetMs);
-  $('clock').textContent =
-    pad2(now.getUTCHours()) + ':' + pad2(now.getUTCMinutes()) + ':' + pad2(now.getUTCSeconds());
+  var hms = pad2(now.getUTCHours()) + ':' + pad2(now.getUTCMinutes()) + ':' + pad2(now.getUTCSeconds());
+  $('clock').textContent = hms;
+  $('notice-clock').textContent = hms + ' ' + STRINGS.utcWord;
   var s = Math.floor(now.getTime() / 1000);
   var label = '';
   var pct = 0;
+  var soon = false;
   if (eventWindow.end > eventWindow.start) {
     if (s < eventWindow.start) {
       label = STRINGS.startsIn + ' ' + fmtDuration(eventWindow.start - s);
     } else if (s < eventWindow.end) {
       label = STRINGS.endsIn + ' ' + fmtDuration(eventWindow.end - s);
       pct = ((s - eventWindow.start) / (eventWindow.end - eventWindow.start)) * 100;
+      soon = eventWindow.end - s < 3600;
     } else {
       label = STRINGS.endedWord;
       pct = 100;
     }
   }
   $('time-label').textContent = label;
+  $('time-label').className = soon ? 'soon' : '';
   $('timebar-fill').style.width = pct.toFixed(2) + '%';
 }
 
@@ -1351,7 +2095,14 @@ function poll() {
       misses = 0;
       setStale(false);
       if (data.active === false) {
-        setInactive(true);
+        setInactive(true, data);
+        return;
+      }
+      /* The club changed contest (a host restarts its club when its picker moves):
+         start again from that contest's meta, with nothing of the old board kept. */
+      if (META && META.event && data.event &&
+          (data.event.kind !== META.event.kind || data.event.start_unix !== META.event.start_unix)) {
+        window.location.reload();
         return;
       }
       setInactive(false);
@@ -1373,7 +2124,7 @@ function loadMeta() {
     .then(function (r) { return r.json(); })
     .then(function (meta) {
       if (meta.active === false) {
-        setInactive(true);
+        setInactive(true, meta);
         setTimeout(loadMeta, 3000);
         return;
       }
@@ -1384,10 +2135,32 @@ function loadMeta() {
     .catch(function () { setTimeout(loadMeta, 3000); });
 }
 
+/* ?theme=light, ?theme=auto (the TV's own setting), else dark. */
+function applyTheme() {
+  var q = '';
+  try { q = String(window.location.search || ''); } catch (e) { q = ''; }
+  var m = /[?&]theme=(light|dark|auto)(?:&|$)/.exec(q);
+  var want = m ? m[1] : 'dark';
+  var root = document.documentElement;
+  if (want === 'auto' && typeof window.matchMedia === 'function') {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    root.setAttribute('data-theme', mq.matches ? 'light' : 'dark');
+    if (mq && typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', function (e) {
+        root.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+      });
+    }
+    return;
+  }
+  root.setAttribute('data-theme', want === 'light' ? 'light' : 'dark');
+}
+applyTheme();
+
 /* Test seam: the jsdom suite sets __FDBOARD_TEST__ and drives the pure
    render functions directly — no network, no timers. */
 window.__fdboard = {
   STRINGS: STRINGS,
+  CONTEST_NAMES: CONTEST_NAMES,
   render: render,
   renderMeta: renderMeta,
   setStale: setStale,
@@ -1406,10 +2179,18 @@ window.__fdboard = {
     contactKey: contactKey,
     landRingCount: function () { return decodeLand(LAND_RAW).length; },
     snapshot: globeSnapshot
+  },
+  /* The county mosaic's pure half, the same way. */
+  map: {
+    IL_COUNTIES: IL_COUNTIES,
+    MAP_LAYOUTS: MAP_LAYOUTS,
+    pickLayout: pickLayout,
+    buildMosaic: buildMosaic,
+    inCell: inCell,
+    snapshot: mapSnapshot
   }
 };
 if (!window.__FDBOARD_TEST__) {
-  startGlobe();
   loadMeta();
   setInterval(tickClock, 1000);
   tickClock();

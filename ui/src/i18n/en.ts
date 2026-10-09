@@ -4248,7 +4248,7 @@ export const EN = {
   'settings.fdBoard.url.label': 'On the TV, open',
   'settings.fdBoard.url.copy': 'Copy',
   'settings.fdBoard.url.pending': 'Starting up — save settings, then this row shows the address.',
-  'settings.fdBoard.hostOnly': 'Live data appears when this position hosts the club event; otherwise the page points viewers to the host.',
+  'settings.fdBoard.notHosting': 'When this station is a position, its TV shows the board of the host it joined, so the host needs Spectator scoreboard on too, on the same port. With no club at all, the TV says so and what to do.',
 
   // ── Satellites ──────────────────────────────────────────────────────────────────────
   // The Satellites section, the Connect Passes pane, and the nine composers behind them.

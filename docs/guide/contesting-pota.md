@@ -163,9 +163,9 @@ gives out its own, and CQ World-Wide, whose log must say which transmitter
 made each contact. For those a station neither hosts nor joins, and the contest
 screen and the Club Sync settings say why. Every position must pick the
 **same contest** as the host: a position logging another one is refused when it
-joins, and the club chip names both contests. The spectator scoreboard scores
-Field Day only, so it shows nothing for any other contest. The manual's Field
-Day page has the steps for the Illinois QSO Party.
+joins, and the club chip names both contests. The [spectator
+scoreboard](#the-spectator-scoreboard) shows the club's own contest too. The
+manual's Field Day page has the steps for the Illinois QSO Party.
 
 Before any club event:
 
@@ -182,6 +182,32 @@ Before any club event:
   position's own clock, and when two positions log the same contact the club log
   keeps the earlier one. Set every laptop from one source, a phone for example,
   before the event starts.
+
+### The spectator scoreboard
+
+Turn on **Spectator scoreboard** (Settings ▸ Contesting ▸ Field Day Club Sync)
+and any browser on the site network can show the club's board: a TV or a
+projector with nothing installed. The Settings row shows the address to open. The
+board is made to be read from across a room, at 1080p and at 4K:
+
+- the **claimed score**, made the contest's own way (QSO points times the power
+  tier for ARRL Field Day, times the objectives for Winter Field Day, times the
+  multipliers for a QSO party, plus the bonuses), and the **rate**: the last hour,
+  the last ten minutes, and a bar for each hour;
+- a **map of what the contest counts**: the sections globe for the two Field Days,
+  and for the Illinois QSO Party the state's 102 counties, each lit when the club
+  works it, with the host's own county outlined;
+- each position's **band and mode right now**, the contacts by band and mode, the
+  multipliers with their counts and caps, the bonus stations, the latest contact,
+  the clock and the time left.
+
+**Any station can show it.** The host shows its own club. A position shows the
+host's board, fetched from the host it joined, so the TV can sit at any table with
+a spare laptop; the host's Spectator scoreboard has to be on too, on the same port.
+If the host can't be reached, the TV says so in plain words, keeps the last board
+it had and comes back by itself. A station with no club says so, with what to do.
+Add `?theme=light` to the address for the light board, or `?theme=auto` to follow
+the TV's own setting.
 
 ---
 
@@ -236,7 +262,7 @@ they're heard on the air.
   a bug.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
-  position. The spectator scoreboard shows Field Day only.
+  position.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.

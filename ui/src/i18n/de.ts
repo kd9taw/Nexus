@@ -806,7 +806,7 @@ export const DE: PartialCatalog = {
   "settings.fdBoard.url.label": "Auf dem TV öffnen",
   "settings.fdBoard.url.copy": "Kopieren",
   "settings.fdBoard.url.pending": "Startet — Einstellungen speichern, dann zeigt diese Zeile die Adresse.",
-  "settings.fdBoard.hostOnly": "Live-Daten erscheinen, wenn diese Position das Club-Event hostet; sonst verweist die Seite die Zuschauer auf den Host.",
+  "settings.fdBoard.notHosting": "Ist diese Station eine Position, zeigt ihr Fernseher das Scoreboard des Hosts, dem sie beigetreten ist; dafür muss am Host das Zuschauer-Scoreboard ebenfalls an sein, auf demselben Port. Ohne Club zeigt der Fernseher das an und sagt, was zu tun ist.",
   "settings.backup.restore.confirm.title": "Aktuelle Konfiguration durch {{file}} ersetzen?",
   "settings.backup.restore.confirm.body": "Ihre Funkgeräte, Einstellungen, Speicherkanäle, Beobachtungsliste und Jagdlisten werden ersetzt. Ihr Logbuch bleibt unberührt. Das lässt sich nicht rückgängig machen.",
   "settings.backup.restore.confirm.action": "Wiederherstellen",

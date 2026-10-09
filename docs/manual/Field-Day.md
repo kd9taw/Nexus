@@ -94,6 +94,7 @@ The FieldDay view carries a live scoreboard: QSO and section counts, per-mode ch
 - **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
 - **Club Board** — the **club band board** (position, band, mode, operator, QSOs, rate) has its own button in the left rail, directly under Field Day, and its own window. It appears whenever Field Day is on, whether or not club sync is running, and one click puts it on a second monitor: this is the board a multi-station club watches all event to see who is on what band before moving to another one. The same **Pop out board** button in the club header on the dashboard opens the same window. It is set in larger type than the docked copy because it is watched from the operating position rather than read at the keyboard, and it is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
 - **With club sync off**, the window says so and names the route that turns it on (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event) instead of showing an empty board. With sync on and nobody else logging yet, it says it is waiting.
+- **Spectator scoreboard** — a web page for a TV or projector facing the room (Settings ▸ Contesting ▸ Field Day Club Sync ▸ **Spectator scoreboard**; the row shows the address to open on the TV). It reads across a room at 1080p and at 4K: the claimed score and how it is made, the rate, each position's band and mode, the contacts by band and mode, the latest contact, the time left, and a map of what the contest counts — the sections globe for both Field Days, the 102 counties for the Illinois QSO Party. It works for **any contest club sync runs**. The host shows its own club; a **position shows the host's board**, so the TV can sit at any table, as long as the host's Spectator scoreboard is on too, on the same port. If the host can't be reached the TV says so in plain words, keeps the last board, and comes back by itself; a station with no club says so, with what to do. Add `?theme=light` to the address for the light board, or `?theme=auto` to follow the TV.
 
 ---
 
@@ -242,7 +243,6 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Club sync does not run a serial-number contest or CQ World-Wide.** It runs every other contest on the picker under that contest's own rules. With Sweepstakes, CQ WPX, the California QSO Party or CQ WW selected a station neither hosts nor joins, and the contest screen and Settings say why: one entry's serial numbers must run in a single sequence, and CQ WW's log must say which transmitter made each contact. Log those on each position by itself.
-- **The spectator scoreboard is Field Day only.** It scores by Field Day's rules, so for a club running any other contest its page shows no club.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---
@@ -291,6 +291,7 @@ Before the party, on every laptop:
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
 - [ ] One laptop: an **Event name** for the party and **Host a club event** on. The others: **Find club events**, or the host's address in **Join event at**. Allow Nexus through the Windows firewall on Private networks.
 - [ ] Every clock set from one source, to the second.
+- [ ] For a TV in the room, **Spectator scoreboard** on the host, and on the laptop the TV is plugged into if that is a position: it shows the host's board, the counties map included.
 - [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on the host, any `fd_event_*.ilqp.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's, or the rehearsal's contacts come back into the party's logs.
 
 During the party:

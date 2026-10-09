@@ -5504,7 +5504,7 @@ export const FR: PartialCatalog = {
   "settings.fdBoard.url.label": "Sur le téléviseur, ouvrez",
   "settings.fdBoard.url.copy": "Copier",
   "settings.fdBoard.url.pending": "Démarrage — enregistrez les réglages, puis cette ligne affichera l’adresse.",
-  "settings.fdBoard.hostOnly": "Les données en direct apparaissent quand cette position héberge l’événement du club ; sinon la page renvoie les spectateurs vers l’hôte.",
+  "settings.fdBoard.notHosting": "Si cette station est une position, son téléviseur affiche le tableau de l’hôte qu’elle a rejoint ; l’hôte doit aussi avoir le tableau des scores spectateurs activé, sur le même port. Sans club, le téléviseur l’indique et dit quoi faire.",
   "settings.fieldDay.power.hundred.hint": "100W ou moins, quelle que soit la source",
   "settings.fieldDay.power.hundred.label": "×2 ≤100W",
   "settings.fieldDay.power.label": "Multiplicateur de puissance",

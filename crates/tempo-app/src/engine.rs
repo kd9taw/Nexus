@@ -12104,18 +12104,23 @@ impl Engine {
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
     /// `Some` ONLY in the host role — a non-host position holds just the
-    /// compact `ClubMirror` (no per-QSO attribution), which is why the HTTP
-    /// scoreboard runs at the host.
+    /// compact `ClubMirror` (no per-QSO attribution), which is why the board is
+    /// built at the host.
     ///
-    /// ⚠️ And only for a FIELD DAY club. The spectator page scores by a Field Day event
-    /// (power tiers, the bonus menu, the sections globe), so a club running anything
-    /// else hands it nothing rather than a board that would show its contacts scored as
-    /// ARRL Field Day's.
+    /// ⭐ For ANY contest the club runs. A Field Day club hands the rows the Field Day
+    /// payload is built from, as it always has; any other club also hands its session and
+    /// merged rows (`contest`), which the board scores by that contest's own ruleset off
+    /// this lock. It used to hand a non-Field-Day club nothing, so hosting the Illinois QSO
+    /// Party put "served from the host station" on the host's own TV.
     pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
-        let club = self
-            .fd_club
-            .as_ref()
-            .filter(|c| c.field_day_event().is_some())?;
+        let club = self.fd_club.as_ref()?;
+        let contest =
+            club.field_day_event()
+                .is_none()
+                .then(|| crate::fd_scoreboard::ContestBoard {
+                    session: self.fd_club_session(club),
+                    rows: club.rows().to_vec(),
+                });
         let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
             .positions()
             .iter()
@@ -12144,6 +12149,9 @@ impl Engine {
             rows: club
                 .rows()
                 .iter()
+                // A non-Field-Day club's rows ride whole in `contest`; these are the
+                // Field Day payload's, so they are not cloned twice.
+                .filter(|_| contest.is_none())
                 .map(|r| crate::fd_scoreboard::FdBoardRow {
                     posid: r.posid.clone(),
                     seq: r.seq,
@@ -12157,7 +12165,38 @@ impl Engine {
                     operator: r.operator.clone(),
                 })
                 .collect(),
+            contest,
         })
+    }
+
+    /// ⭐ **What this station's spectator board shows**, asked on every board request: its
+    /// own club while it hosts one, the host's board while it is a position (the join
+    /// address's host, on this station's board port), and otherwise why there is none —
+    /// a contest club sync refuses, a club still starting, or no club at all. A TV plugged
+    /// into any station is never left showing a board that will not come.
+    pub fn fd_board_role(&self) -> crate::fd_scoreboard::BoardRole {
+        use crate::fd_scoreboard::BoardRole;
+        if self.fd_club.is_some() {
+            return BoardRole::Host;
+        }
+        let s = &self.settings;
+        let idle = |reason: &'static str, detail: &str| BoardRole::Idle {
+            reason,
+            detail: detail.to_string(),
+            contest: self.fd_club_contest(),
+        };
+        if s.fd_host_enable || !s.fd_join_addr.trim().is_empty() {
+            if let Some(why) = self.club_sync_refusal() {
+                return idle("refused", why.sentence());
+            }
+        }
+        if s.fd_host_enable {
+            return idle("club-starting", "");
+        }
+        match crate::fd_scoreboard::host_board_addr(&s.fd_join_addr, s.fd_scoreboard_port) {
+            Some(host) => BoardRole::Position { host },
+            None => idle("no-club", ""),
+        }
     }
 
     // --- position half (the PositionSync impl calls these) -----------------
@@ -42003,6 +42042,70 @@ mod tests {
         assert_eq!(e.fd_position_report().name, "CW tent");
     }
 
+    /// ⭐ **Every station knows what its spectator board shows** — the host its own club, a
+    /// position the host's (the join address's host, on this station's board port), and a
+    /// station with no club, or with a contest club sync refuses, the reason in words.
+    #[test]
+    fn every_station_knows_what_its_spectator_board_shows() {
+        use crate::fd_scoreboard::BoardRole;
+        let idle = |e: &Engine| match e.fd_board_role() {
+            BoardRole::Idle { reason, detail, .. } => (reason, detail),
+            other => panic!("expected no board, got {other:?}"),
+        };
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        assert_eq!(
+            idle(&e),
+            ("no-club", String::new()),
+            "no club: the TV says so"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_join_addr = " 192.168.1.10:42073 ".into();
+            s.fd_scoreboard_port = 7474;
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.fd_board_role(),
+            BoardRole::Position {
+                host: "192.168.1.10:7474".into()
+            },
+            "a position shows the host's board, from the host it joined"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlss_cw".into(); // a serial-number contest club sync refuses
+            e.apply_settings(s);
+        }
+        let (reason, detail) = idle(&e);
+        assert_eq!(reason, "refused");
+        assert!(
+            detail.contains("serial numbers"),
+            "the reason, in words: {detail}"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlfd".into();
+            s.fd_join_addr.clear();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            idle(&e).0,
+            "club-starting",
+            "the host toggle is on and the club is not up yet"
+        );
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-role-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        assert_eq!(e.fd_board_role(), BoardRole::Host, "hosting: its own club");
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn fd_board_snapshot_is_some_only_in_the_host_role() {
         // THE SCOREBOARD SEAM CONTRACT: a non-host position (even one deep in
@@ -42620,9 +42723,25 @@ mod tests {
         );
         let adif = e.fd_club_export(false).expect("the club ADIF");
         assert!(adif.contains("IL QSO Party"), "the ADIF contest id: {adif}");
-        assert!(
-            e.fd_board_snapshot().is_none(),
-            "the spectator board scores by Field Day, so a party club hands it nothing"
+        // ⭐ …and the spectator board claims the SAME score, made of the same parts: the
+        // club's own unique log under the party's rules, never a Field Day reading of it.
+        let board: serde_json::Value =
+            serde_json::from_str(&crate::fd_scoreboard::build_data_core(
+                &e.fd_board_snapshot()
+                    .expect("a party club hands the board its club"),
+                t + 600,
+            ))
+            .expect("the board's payload is JSON");
+        assert_eq!(
+            (
+                board["score"]["total"].as_u64(),
+                board["score"]["qso_points"].as_u64(),
+                board["score"]["mults"].as_u64(),
+                board["score"]["bonus_points"].as_u64(),
+                board["event"]["kind"].as_str(),
+            ),
+            (Some(115), Some(5), Some(3), Some(100), Some("ilqp")),
+            "the board claims what the club file and the positions' club line claim: {board}"
         );
         e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);
