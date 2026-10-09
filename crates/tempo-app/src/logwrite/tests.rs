@@ -2985,3 +2985,132 @@ fn qrz_s_copies_of_other_services_never_reach_a_contact_at_apply() {
     );
     assert_eq!(late.credit_granted, ["DXCC"], "LoTW's row brought it");
 }
+
+/// ★ Sync from QRZ never puts back what Check confirmations took off. 1.17.0 put the 18:00
+/// contact's LoTW and eQSL confirmations, and LoTW's DXCC, on 06:00, and the check takes them off
+/// as ticked. QRZ's book then says LoTW, eQSL and a paper card confirm 06:00, with LoTW's credit:
+/// its copies, which are not QRZ's word, so 06:00 keeps none of them (a card would give back the
+/// award credit the check took off). QRZ's own confirmation still merges beside copies that do
+/// not: 18:00 gains QRZ's confirmation and not the card the same row says it has, and K5NEW,
+/// which the log lacks, is added with QRZ's confirmation alone.
+#[test]
+fn sync_from_qrz_never_puts_back_what_check_confirmations_took_off() {
+    use tempo_core::logbook::QslRcvd;
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel};
+    let d = Dir::new("sync-qrz-copies");
+    let lotw = lotw_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let inbox = eqsl_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180100",
+        "<EQSL_QSL_RCVD:1>Y",
+    )]);
+    let mut log = contacts(&[
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+        adif_row("W1AW", "20m", "FT8", "180000", ""),
+    ]);
+    for text in [&lotw, &inbox] {
+        log = left_by_1_17(log, &tempo_core::logbook::report_rows(text));
+    }
+    let engine = holding(&d, &log);
+    let plan = || crate::engine::log_plan(&engine);
+    let lines: Vec<_> = [
+        station::check_lotw_confirmations(&plan(), &lotw, &lotw_answer(&[]), Some("K2DEF")),
+        station::check_eqsl_confirmations(&plan(), &inbox, Some("K2DEF")),
+    ]
+    .into_iter()
+    .flat_map(|checked| checked.expect("the check reads the log").check.lines)
+    .collect();
+    assert_eq!(lines.len(), 2, "06:00's LoTW and eQSL lines: {lines:#?}");
+    let (applied, durability) = apply_confirmation_check(
+        &engine,
+        &[(Channel::Lotw, lotw), (Channel::Eqsl, inbox)],
+        &lines,
+        APPLIED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    applied.expect("applied");
+    let early = contact_at(&engine, "W1AW", "060000");
+    let late = contact_at(&engine, "W1AW", "180000");
+    assert_eq!(
+        (early.qsl_rcvd, early.credit_granted.as_slice()),
+        (QslRcvd::default(), &[] as &[String]),
+        "premise: the check took LoTW's and eQSL's confirmations and the DXCC off 06:00"
+    );
+
+    // Sync from QRZ: QRZ's FETCH answer, read as the sync reads it, then merged as it merges it.
+    let copies = "<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC";
+    let book = [
+        adif_row("W1AW", "20m", "FT8", "060000", copies),
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+        adif_row(
+            "K5NEW",
+            "20m",
+            "FT8",
+            "090000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+    ]
+    .concat();
+    let answer = format!(
+        "RESULT=OK&COUNT=3&ADIF={}",
+        book.replace('<', "&lt;").replace('>', "&gt;")
+    );
+    let (merged, durability) =
+        merge_qrz_report(&engine, &tempo_core::qrz::parse_fetch(&answer).adif);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let (added, summary) = merged.expect("merged");
+    let now = |call: &str, hhmmss: &str| {
+        let r = contact_at(&engine, call, hhmmss);
+        (r.qsl_rcvd, r.award_confirmed, r.credit_granted)
+    };
+    assert_eq!(
+        [
+            now("W1AW", "060000"),
+            now("W1AW", "180000"),
+            now("K5NEW", "090000")
+        ],
+        [
+            (QslRcvd::default(), false, vec![]),
+            (
+                QslRcvd {
+                    card: false,
+                    lotw: true,
+                    eqsl: true,
+                    qrz: true
+                },
+                true,
+                vec!["DXCC".to_string()]
+            ),
+            (
+                QslRcvd {
+                    qrz: true,
+                    ..QslRcvd::default()
+                },
+                false,
+                vec![]
+            ),
+        ],
+        "06:00 keeps none of QRZ's copies; 18:00 gains QRZ's own confirmation and not its card; \
+         K5NEW is added with QRZ's alone"
+    );
+    assert_eq!((added, summary.matched), (1, 2));
+    // Nothing else about the two contacts moved.
+    assert_eq!(contact_at(&engine, "W1AW", "060000"), early);
+    let mut gained = late;
+    gained.qsl_rcvd.qrz = true;
+    assert_eq!(contact_at(&engine, "W1AW", "180000"), gained);
+}
