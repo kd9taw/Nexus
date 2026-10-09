@@ -9037,6 +9037,9 @@ export const EN = {
     "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will end the carrier. Set a transmit timeout in SmartSDR.",
   'operate.strip.tune.radioRefused':
     "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
+  'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',
+  'operate.strip.atu.radioRefused':
+    "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 
   // The rig moved under us. `{{rigMode}}` is what the radio reports and `{{mode}}` what
   // Nexus commanded — both mode names, and both data.

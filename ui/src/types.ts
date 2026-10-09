@@ -1469,6 +1469,15 @@ export interface RadioStatus {
    * (judged as CW there too) though it allows the mode's own emission: Tune keys nothing, and the
    * note beside it says why. Absent when false. */
   flexTuneRefused?: boolean
+  /** While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
+   * and the radio reports a tuner fitted: the radio's tune power and transmit timeout, as beside
+   * Tune, and the ATU line (a cycle's result, or why a press started none), shown beside the ATU
+   * (`RadioTuneNote`). Absent on every other station. */
+  flexAtu?: FlexAtu | null
+  /** The ATU is the client's here, and the licence refuses its carrier where the radio transmits
+   * (judged as CW there too) though it allows the mode's own emission: ATU keys nothing, and the
+   * note beside it says why. Absent when false. */
+  flexAtuRefused?: boolean
   /** The Flex VITA **meter** worker is running — on a Flex the only producer of a
    * FlexLib-scaled SWR. Observed from the worker, never read from `flexNativePan` (the toggle
    * stands with no radio address, or with a start that failed). Read it WITH
@@ -4735,6 +4744,19 @@ export interface FlexTune {
   powerPct?: number | null
   /** The radio's own transmit timeout in milliseconds, 0 when it is off; null until reported. */
   txTimeoutMs?: number | null
+}
+
+/** What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner (mirror of
+ *  the Rust FlexAtu, `RadioStatus.flexAtu`). Read and shown; Nexus writes none of it. */
+export interface FlexAtu {
+  /** The radio's tune power and transmit timeout, as beside Tune. */
+  tune: FlexTune
+  /** The radio's ATU status in its own word (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …): data, never
+   *  translated. Null until the radio reports one. */
+  status?: string | null
+  /** Why the last ATU press started no cycle, in the station's words (the radio's refusal with its
+   *  code, or the client's): data, shown as it is. Null once a press goes out. */
+  refused?: string | null
 }
 
 /** A slot over's key the radio did not accept (mirror of the Rust SlotKeyRefused). The words are
