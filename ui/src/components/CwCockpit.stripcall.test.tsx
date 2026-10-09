@@ -10,6 +10,10 @@
 // FIELD shown twice, as RTTY's Call box and strip are: a call typed in either is in both,
 // and it is committed to the peer before the next send.
 //
+// Until a station is worked or the operator types, the decoder's best guess fills that one
+// field, unconfirmed, and is committed like a typed call: the F-keys send it unless it is
+// corrected first.
+//
 // The cockpit renders with the REAL log strip. The engine is a stand-in that does the two
 // things these keys reach: it holds the peer `selectPeer` sets, and it expands a macro the
 // way `expand_cw` does for the Illinois QSO Party below (the real expansion, contest by
@@ -18,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
+import * as api from '../api'
 import { EN } from '../i18n'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
@@ -150,8 +155,12 @@ async function settle() {
   await flush()
 }
 
+const cockpit = (fieldDay: FieldDayStatus | null, pendingWork: { call: string; ts: number } | null = null) => (
+  <CwCockpit snap={snap()} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={fieldDay} pendingWork={pendingWork} />
+)
+
 async function renderCockpit(fieldDay: FieldDayStatus | null = ILQP) {
-  const r = render(<CwCockpit snap={snap()} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={fieldDay} />)
+  const r = render(cockpit(fieldDay))
   // The mount-time settings read and the first decode poll, which reports the engine's peer.
   await flush()
   await flush()
@@ -262,13 +271,230 @@ describe('the CW log strip and His Call are one field', () => {
     expect(stripCall().value).toBe('W2BBB')
   })
 
-  it('a decoder\'s best guess fills neither field until it is picked', async () => {
+})
+
+// ── THE DECODER'S BEST GUESS fills the one field until a station is worked or a call is typed ──
+
+/** The calls the strip has looked up in the callbook, in order. */
+const lookedUp = () => vi.mocked(api.qrzLookup).mock.calls.map(([call]) => call)
+
+/** The engine takes the next `selectPeer` only when released, as a busy engine would. */
+function holdNextSelectPeer() {
+  let release = () => {}
+  vi.mocked(api.selectPeer).mockImplementationOnce(
+    (p) =>
+      new Promise((resolve) => {
+        release = () => {
+          engine.peer = p
+          resolve(null as unknown as AppSnapshot) // no snapshot, as the stand-in above
+        }
+      }),
+  )
+  return () => release()
+}
+
+describe('the decoder\'s best guess, in the one field', () => {
+  it('fills both fields', async () => {
     decodeState.candidates = [{ call: 'W2BBB', best: true }]
     await renderCockpit()
     await settle()
-    expect(stripCall().value).toBe('')
-    expect(hisCall().value).toBe('')
+    expect(hisCall().value).toBe('W2BBB')
+    expect(stripCall().value).toBe('W2BBB')
+  })
+
+  it('…unconfirmed: the strip spends no callbook lookup on it, as it does on a call typed', async () => {
+    vi.mocked(api.qrzLookup).mockClear()
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit(null)
+    await settle()
+    expect(casualCall().value).toBe('W2BBB')
+    await settle() // past the strip's lookup, 700 ms after a call settles
+    expect(lookedUp()).toEqual([])
+    fireEvent.change(hisCall(), { target: { value: 'K9AAA' } })
+    await settle()
+    expect(casualCall().value).toBe('K9AAA')
+    await settle()
+    await settle()
+    expect(lookedUp()).toEqual(['K9AAA'])
+  })
+
+  it('F3 keys the guess', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
     await press('F3')
-    expect(engine.keyed).toEqual(['DE KD9TAW 5NN COOK COOK K'])
+    expect(engine.keyed).toEqual(['W2BBB DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('…and, once sent, it stays the call while the engine takes it, whatever the decoder guesses next', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    const release = holdNextSelectPeer()
+    await press('F3')
+    decodeState.candidates = [{ call: 'W2BBX', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['W2BBB', 'W2BBB'])
+    release()
+    await settle()
+    expect(engine.keyed).toEqual(['W2BBB DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('a call typed over it in the strip is the one F3 keys', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await press('F3', stripCall())
+    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('…and in His Call', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    fireEvent.change(hisCall(), { target: { value: 'N0CALL' } })
+    await press('F3', hisCall())
+    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('a station worked wins over a guess', async () => {
+    engine.peer = 'W1AW'
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['W1AW', 'W1AW'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['W1AW DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('…and replaces one at once', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    expect(hisCall().value).toBe('W2BBB')
+    engine.peer = 'N0CALL' // worked from elsewhere: the engine's peer changes under the guess
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N0CALL', 'N0CALL'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('a spot handoff replaces it', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    const r = await renderCockpit()
+    await settle()
+    expect(hisCall().value).toBe('W2BBB')
+    r.rerender(cockpit(ILQP, { call: 'K9SPT', ts: 1 }))
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['K9SPT', 'K9SPT'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['K9SPT DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('a chip pick replaces it', async () => {
+    decodeState.candidates = [
+      { call: 'W2BBB', best: true },
+      { call: 'N3CCC', best: false },
+    ]
+    await renderCockpit()
+    await settle()
+    expect(hisCall().value).toBe('W2BBB')
+    fireEvent.click(screen.getByRole('button', { name: 'N3CCC' }))
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['N3CCC DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('…and the pick holds while the engine takes it, whatever the decoder guesses next', async () => {
+    decodeState.candidates = [
+      { call: 'W2BBB', best: true },
+      { call: 'N3CCC', best: false },
+    ]
+    await renderCockpit()
+    await settle()
+    const release = holdNextSelectPeer()
+    fireEvent.click(screen.getByRole('button', { name: 'N3CCC' }))
+    decodeState.candidates = [{ call: 'W2BBX', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
+    release()
+    await settle()
+    await press('F3')
+    expect(engine.keyed).toEqual(['N3CCC DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('follows a better guess while untouched, and stays put once a call is typed in the strip', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    decodeState.candidates = [{ call: 'W2BBX', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['W2BBX', 'W2BBX'])
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    decodeState.candidates = [{ call: 'N3CCC', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['K9AAA', 'K9AAA'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('…or in His Call', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    decodeState.candidates = [{ call: 'W2BBX', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['W2BBX', 'W2BBX'])
+    fireEvent.change(hisCall(), { target: { value: 'N0CALL' } })
+    await flush()
+    decodeState.candidates = [{ call: 'N3CCC', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N0CALL', 'N0CALL'])
+    await press('F3')
+    expect(engine.keyed).toEqual(['N0CALL DE KD9TAW 5NN COOK COOK K'])
+  })
+
+  it('logging empties both, and the next guess fills them again; the call just logged is not offered again', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    // Logged before the next decode poll reports W2BBB, just sent, as the station worked.
+    await press('F3')
+    fireEvent.change(qthBox(), { target: { value: 'KANE' } })
+    fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['', ''])
+    // W2BBB, logged, is still the decoder's best guess: the next F3 keys no call.
+    await press('F3')
+    decodeState.candidates = [{ call: 'N3CCC', best: true }]
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['N3CCC', 'N3CCC'])
+    await press('F3')
+    expect(engine.keyed).toEqual([
+      'W2BBB DE KD9TAW 5NN COOK COOK K',
+      'DE KD9TAW 5NN COOK COOK K',
+      'N3CCC DE KD9TAW 5NN COOK COOK K',
+    ])
+  })
+
+  it('…and neither the call just logged nor the guess the decoder held then comes back', async () => {
+    decodeState.candidates = [{ call: 'W2BBB', best: true }]
+    await renderCockpit()
+    await settle()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await press('F3', stripCall())
+    fireEvent.change(qthBox(), { target: { value: 'KANE' } })
+    fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await settle() // K9AAA, sent, reaches the decode poll as the station worked
+    decodeState.candidates = []
+    await settle()
+    decodeState.candidates = [{ call: 'W2BBB', best: true }] // the same guess, back
+    await settle()
+    expect([hisCall().value, stripCall().value]).toEqual(['', ''])
+    await press('F3')
+    expect(engine.keyed).toEqual(['K9AAA DE KD9TAW 5NN COOK COOK K', 'DE KD9TAW 5NN COOK COOK K'])
   })
 })

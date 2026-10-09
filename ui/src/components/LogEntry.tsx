@@ -346,6 +346,8 @@ interface Props {
    * never filled straight back, which is what keeps a keystroke typed during the round trip.
    */
   onCallChange?: (call: string) => void
+  /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
+  onReset?: () => void
   /**
    * When provided, the component enters FD mode: contacts go to contestLogManual()
    * instead of the general logbook.  The `mode` prop determines the FD mode
@@ -425,6 +427,7 @@ export function LogEntry({
   onConsumeWork,
   cwLive,
   onCallChange,
+  onReset,
   fieldDay,
   fdMode,
   fdSubmode,
@@ -1254,6 +1257,7 @@ export function LogEntry({
     // preventScroll for the same reason as the click-to-work RST focus above:
     // this focus readies the field, it must not snap the cockpit to the log.
     requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+    onReset?.()
   }
 
   // FD exchange gate: every REQUIRED received slot must be satisfied. Never substitute '?' for a
