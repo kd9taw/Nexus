@@ -28,6 +28,11 @@ import type { SatDetail, SatPass, SatTrackStatus } from '../types'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// THE BUDGET (2026-10-09). The slowest case here, "lands on the quarter he asked for, at the supported…", takes
+// 0.30 s and 0.30 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => ({
   // Typed: the stale-chip case below hands back a real SatView, and an
   // inferred `Promise<null>` would reject it at compile time.

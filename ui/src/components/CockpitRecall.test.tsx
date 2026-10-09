@@ -26,6 +26,11 @@ import { distanceLabel, bearingLabel } from '../grid'
 import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
 
+// THE BUDGET (2026-10-09). The slowest case here, "shows photo, distance/bearing and history inside the…", takes
+// 0.25 s and 0.22 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
 
 const resolved: QrzLookup = {

@@ -43,6 +43,12 @@ import { resolve } from 'node:path'
 import { DetachedPanel } from './DetachedPanel'
 import type { AppSnapshot } from './types'
 
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "has exactly ONE scroll owner, and it is the
+// board itself", takes 0.79 s and 0.75 s on one core (two runs), nearly all of it CPU work (2.96 s at a third of a
+// CPU); a loaded full suite on this box has run cases up to 20 times slower than one core, 15.1 s for this one. 20 s
+// holds that; a test that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 // The snapshot every branch polls for. Read through a global rather than closed over,
 // because vi.mock factories are hoisted above this module's own initialisation.
 const SNAP = {

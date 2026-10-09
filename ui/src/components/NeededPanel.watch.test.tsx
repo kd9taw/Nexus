@@ -10,12 +10,17 @@
 // own, and adding rows by it would show stations the station was never asked to watch — more than
 // "exactly". A row an older station tagged `Wanted` from its retired wanted list reads the same.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { NeededPanel } from './NeededPanel'
 import { t } from '../i18n'
 import { newWatchFilter, saveWatchlist } from '../watchlist'
 import type { NeedAlert } from '../types'
+
+// THE BUDGET (2026-10-09). The slowest case here, "keeps exactly the watched rows, first", takes 0.24 s and 0.28 s on
+// one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core, past
+// vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const alert = (call: string, entity: string, over: Partial<NeedAlert> = {}): NeedAlert =>
   ({

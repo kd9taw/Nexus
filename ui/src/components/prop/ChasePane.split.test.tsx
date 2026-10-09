@@ -10,13 +10,18 @@
 // jsdom lays nothing out, so the widths the stamp reads are given here, and the layout the stamp selects
 // is the cascade winner over the real sheets (cssCascade.testkit). The geometry is the real-browser
 // census's.
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import type { NeedAlert } from '../../types'
 import type { PaneContext } from '../connect/paneContext'
 import { css, loadSheets } from '../../cssCascade.testkit'
 import { ChasePane } from './ChasePane'
 import { ChaseFeedPane } from './ChaseFeedPane'
+
+// THE BUDGET (2026-10-09). The slowest case here, "stamps its head, and the entity and its heading take…", takes
+// 0.25 s and 0.67 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 const NEED = {
   call: 'VP8ORK', entity: 'South Orkney Is.', band: '20m', zone: 13, tags: ['NewEntity'], priority: 90,

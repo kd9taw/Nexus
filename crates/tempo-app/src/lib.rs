@@ -15,6 +15,7 @@
 pub mod alltxt;
 pub mod bandplan;
 pub mod clocksync;
+pub mod clubclock;
 pub mod connect_web;
 pub mod dto;
 pub mod dualrx;

@@ -1462,6 +1462,23 @@ pub enum Freshness {
     Stale(String),
 }
 
+impl Freshness {
+    /// For a reader that may never answer without a change made before it was asked (P4) — the
+    /// command layer's folds, the confirmation diagnostics: a read that did not see every one is
+    /// REFUSED, never answered from the store as it stood, so the caller asks again once the
+    /// store holds them. The refusal is [`NOT_ANSWERED`] and the writer's words.
+    pub fn or_refuse(self) -> Result<(), String> {
+        match self {
+            Freshness::Current => Ok(()),
+            Freshness::Stale(why) => Err(format!("{NOT_ANSWERED}: {why}")),
+        }
+    }
+}
+
+/// How a read refused by [`Freshness::or_refuse`] begins: what a caller that asks again, or that
+/// answers busy, looks for.
+pub const NOT_ANSWERED: &str = "the logbook has not saved every change made before this was asked";
+
 impl StoreReads {
     /// Wait up to `wait_up_to` for the store to hold every change made before this read was
     /// asked for, then run `f` against it in one read transaction.

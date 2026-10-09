@@ -80,6 +80,11 @@ import {
   type Rule,
 } from '../cssCascade'
 
+// THE BUDGET (2026-10-09). The slowest case here, "renders Start, Download and the ⧉, and Start disabled…", takes
+// 0.30 s and 0.23 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** What the POTA/SOTA and Satellites views ask the backend for as they mount. */
 const views = vi.hoisted(() => ({
   getActivation: vi.fn(async (): Promise<unknown> => null),

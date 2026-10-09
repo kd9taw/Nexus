@@ -12,6 +12,11 @@ import type { QueryPage } from './application-query-protocol'
 import { t } from '../i18n'
 import fixture from './__fixtures__/ota.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "uses the real hunter cards and filters with no station…", takes
+// 0.28 s and 0.27 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const snap = { hunt: null } as AppSnapshot
 const page = (): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), snapshotId: crypto.randomUUID(),
   collection: 'ota', offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: structuredClone(fixture) } })

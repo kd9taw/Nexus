@@ -19,6 +19,11 @@ import { loadSheets, css, pxOf } from '../cssCascade.testkit'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "lays its rows out as Main’s chain does — it is a…", takes 0.34 s
+// and 0.36 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // The REAL host, so a rule scoped by where the strip sits (`.pane-body …`, the pane frame, the
 // cockpit) competes exactly as it would on screen — the strip rendered alone would be blind to
 // every one of them.

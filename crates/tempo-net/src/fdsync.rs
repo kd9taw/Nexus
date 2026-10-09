@@ -24,6 +24,12 @@
 //! worst case is garbage rows in the club log, which the operator sees).
 //! Pinned by `the_inbound_surface_is_data_plane_only` below.
 //!
+//! The ping doubles as a position's clock probe ([`ClockSample`]): the position times its
+//! own ping, the host stamps its pong, and the position measures how far its clock is from
+//! the host's. That is shown, on the position's club line and the host's board, and it
+//! reaches no clock: nothing on either side sets, steps or steers one, FT's slot clock
+//! included.
+//!
 //! Wire format: one JSON object per `\n`-terminated line, tagged by `"t"`.
 //! `v` (protocol version) travels only in `join`/`welcome`/`beacon`; the host
 //! refuses a higher version with an `error` line the position shows verbatim.
@@ -277,9 +283,7 @@ pub enum Msg {
     Qso(WireQso),
     /// host→pos: rows up to and including `seq` are merged (idempotent —
     /// re-pushing an acked row is a no-op, so re-sync needs no bookkeeping).
-    Ack {
-        seq: u64,
-    },
+    Ack { seq: u64 },
     /// pos→host presence: current band/mode/operator/dial (the band board).
     Pos {
         #[serde(default)]
@@ -302,24 +306,49 @@ pub enum Msg {
         /// host and never "clear the label".
         #[serde(default)]
         name: String,
+        /// This position's clock minus the host's, in ms, as it measured it over the
+        /// timed ping — the host's board shows it. `None` (absent on the wire) = not
+        /// measured: no round trip has closed, or a Nexus older than the field. An older
+        /// host ignores it; v1.14.0's and v1.17.0's own decoders were shown this line.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock_ms: Option<i64>,
     },
     /// host→pos on join: full club state (chunked by [`SNAP_DUPES_PER_LINE`]).
     Snap(ClubState),
     /// host→pos after: club-state delta + fresh board.
     Club(ClubState),
-    Ping,
-    Pong,
+    /// Either side's keepalive, and a position's clock probe. A position stamps `t0`, its
+    /// own wall clock (Unix ms) as the line leaves, and the host's [`Msg::Pong`] closes the
+    /// round trip a [`ClockSample`] is made of. `0` means an untimed ping: the host's own,
+    /// and every ping from a Nexus older than the field.
+    ///
+    /// ⭐ Adding the field needed no version bump, and that was MEASURED, not assumed: the
+    /// unit variant this used to be is decoded by serde's internally tagged visitor, which
+    /// skips every key but `t`, so v1.14.0's and v1.17.0's own decoders read
+    /// `{"t":"ping","t0":…}` as `Ping` and their hosts answer it. Zero is never written, so
+    /// an untimed ping is still exactly `{"t":"ping"}`.
+    Ping {
+        #[serde(default, skip_serializing_if = "is_zero")]
+        t0: u64,
+    },
+    /// The answer to a ping. A host answering a timed ping echoes its `t0` and adds its own
+    /// wall clock (Unix ms) when the ping came in (`t1`) and as this line leaves (`t2`).
+    /// All three are `0`, and absent on the wire, otherwise: exactly the `{"t":"pong"}` an
+    /// older peer sends, which is no sample, so its position keeps the welcome's clock.
+    Pong {
+        #[serde(default, skip_serializing_if = "is_zero")]
+        t0: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        t1: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        t2: u64,
+    },
     /// RESERVED (defined so a future ship needs no version bump; ignored on
     /// receive today — `FieldDayLog` is append-only with no edit UI).
-    Retract {
-        pos: String,
-        seq: u64,
-    },
+    Retract { pos: String, seq: u64 },
     /// host→pos refusal (version mismatch etc.) — shown to the operator
     /// verbatim.
-    Error {
-        msg: String,
-    },
+    Error { msg: String },
     /// Any `t` this build does not know. Ignored.
     #[serde(other)]
     Unknown,
@@ -427,6 +456,22 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// The wall clock in Unix milliseconds, `0` before the epoch — read, never written. The
+/// ping/pong stamps are the only use: what they measure is shown, and nothing here or
+/// behind either trait can set, step or steer a clock.
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// `skip_serializing_if` for the ping/pong stamps: an untimed line stays byte-for-byte the
+/// one every older peer sends.
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Send a `ClubState` as one or more lines, chunking the dupe lists so every
@@ -599,6 +644,7 @@ fn serve_club_connection(
                         op,
                         freq,
                         name,
+                        clock_ms,
                     } => {
                         if let Some(pos) = &joined {
                             backend.position_status(
@@ -609,15 +655,32 @@ fn serve_club_connection(
                                     op,
                                     freq,
                                     name,
+                                    clock_ms,
                                 },
                             );
                         }
                     }
-                    Msg::Ping => {
-                        if writer
-                            .write_all(encode_line(&Msg::Pong).as_bytes())
-                            .is_err()
-                        {
+                    Msg::Ping { t0 } => {
+                        // A timed ping is a position measuring its clock against ours:
+                        // answer with the echo and our wall clock as it came in and as the
+                        // pong leaves — one reading plus the monotonic time between, so a
+                        // step in our own clock cannot land between the two. An untimed
+                        // ping (every older position's) gets the plain pong it always got.
+                        let pong = if t0 == 0 {
+                            Msg::Pong {
+                                t0: 0,
+                                t1: 0,
+                                t2: 0,
+                            }
+                        } else {
+                            let (t1, read) = (now_unix_ms(), Instant::now());
+                            Msg::Pong {
+                                t0,
+                                t1,
+                                t2: t1 + read.elapsed().as_millis() as u64,
+                            }
+                        };
+                        if writer.write_all(encode_line(&pong).as_bytes()).is_err() {
                             break;
                         }
                     }
@@ -651,7 +714,7 @@ fn serve_club_connection(
             }
             if beat {
                 if writer
-                    .write_all(encode_line(&Msg::Ping).as_bytes())
+                    .write_all(encode_line(&Msg::Ping { t0: 0 }).as_bytes())
                     .is_err()
                 {
                     break;
@@ -723,6 +786,26 @@ pub struct PosReport {
     /// The position's friendly name ("CW tent"). Empty = "no news" to the
     /// host, which keeps whatever label it already knows.
     pub name: String,
+    /// This position's clock minus the host's, in ms, as it measured it. `None` = not
+    /// measured, which the host reads as no news, as it reads an empty `name`: a
+    /// reconnect's first report leaves before its first round trip has closed.
+    pub clock_ms: Option<i64>,
+}
+
+/// One answered round trip of a position's timed ping, as four wall-clock readings in Unix
+/// milliseconds: `t0` the ping left this position, `t1` it reached the host, `t2` the host's
+/// pong left, `t3` the pong arrived back here.
+///
+/// `t3` is `t0` plus the round trip as the MONOTONIC clock measured it, not a second wall
+/// reading, so a step in this PC's wall clock while the ping was out (WSL2 steps its own
+/// about every 30 s) cannot bend the round trip or make it negative. The pump builds one
+/// only from a pong that echoes the `t0` it is waiting for and carries both host stamps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClockSample {
+    pub t0: u64,
+    pub t1: u64,
+    pub t2: u64,
+    pub t3: u64,
 }
 
 /// The position pump's view of the application. Mirrors [`ClubBackend`]'s
@@ -757,6 +840,19 @@ pub trait PositionSync: Send + Sync {
     fn position_report(&self) -> Option<PosReport>;
     /// Link up/down transitions (drives the Offline/Behind/Synced chip).
     fn on_link(&self, connected: bool);
+    /// One answered round trip of this position's timed ping — what the position measures
+    /// its clock against the host's from. Data for the screen and the board, like every
+    /// other method here: the trait has no way to set, step or steer a clock.
+    fn on_clock(&self, sample: ClockSample);
+}
+
+/// Send a timed ping and return what its pong must echo, with the instant it left — the
+/// round trip is timed on the monotonic clock from here ([`ClockSample`]).
+fn send_timed_ping(w: &mut impl Write) -> std::io::Result<(u64, Instant)> {
+    let t0 = now_unix_ms();
+    let sent = Instant::now();
+    w.write_all(encode_line(&Msg::Ping { t0 }).as_bytes())?;
+    Ok((t0, sent))
 }
 
 /// One connected session: join → welcome → stream the gap → duplex pump.
@@ -800,6 +896,9 @@ fn run_position_session(
     let mut last_rx = Instant::now();
     let mut last_beat = Instant::now();
     let mut last_report: Option<PosReport> = None;
+    // The timed ping awaiting its pong: its `t0` and the instant it left. One at a time —
+    // a newer ping replaces it, and a pong that does not echo it is no sample.
+    let mut ping_out: Option<(u64, Instant)> = None;
     let result = loop {
         if shutdown.load(Ordering::Relaxed) {
             break Ok(welcomed);
@@ -828,6 +927,24 @@ fn run_position_session(
                         acked = a;
                         sent_to = a; // everything past the ack re-streams below
                         backend.on_welcome(a, &event, &host_call, now_unix);
+                        // Measure now rather than a heartbeat later: until a round trip
+                        // closes, the position has only the welcome's whole seconds.
+                        ping_out = Some(send_timed_ping(&mut writer)?);
+                    }
+                    Some(Msg::Pong { t0, t1, t2 }) => {
+                        // Only the answer to the ping still out: an older host's untimed
+                        // pong carries no stamps, and a stray echo is someone else's.
+                        if let Some((sent, at)) = ping_out {
+                            if t0 == sent && t1 != 0 && t2 != 0 {
+                                ping_out = None;
+                                backend.on_clock(ClockSample {
+                                    t0,
+                                    t1,
+                                    t2,
+                                    t3: sent + at.elapsed().as_millis() as u64,
+                                });
+                            }
+                        }
                     }
                     Some(Msg::Ack { seq }) => {
                         acked = acked.max(seq);
@@ -835,14 +952,19 @@ fn run_position_session(
                     }
                     Some(Msg::Snap(st)) => backend.on_club(true, &st),
                     Some(Msg::Club(st)) => backend.on_club(false, &st),
-                    Some(Msg::Ping) => {
-                        writer.write_all(encode_line(&Msg::Pong).as_bytes())?;
+                    Some(Msg::Ping { .. }) => {
+                        let pong = Msg::Pong {
+                            t0: 0,
+                            t1: 0,
+                            t2: 0,
+                        };
+                        writer.write_all(encode_line(&pong).as_bytes())?;
                     }
                     Some(Msg::Error { msg }) => {
                         backend.on_error(&msg);
                         break Ok(welcomed);
                     }
-                    _ => {} // Pong / Unknown / host-bound vocabulary — ignore
+                    _ => {} // Unknown / host-bound vocabulary — ignore
                 }
             }
             Err(e)
@@ -870,6 +992,7 @@ fn run_position_session(
                     op,
                     freq,
                     name,
+                    clock_ms,
                 }) = report.clone()
                 {
                     writer.write_all(
@@ -879,6 +1002,7 @@ fn run_position_session(
                             op,
                             freq,
                             name,
+                            clock_ms,
                         })
                         .as_bytes(),
                     )?;
@@ -886,7 +1010,7 @@ fn run_position_session(
                 last_report = report;
             }
             if beat {
-                writer.write_all(encode_line(&Msg::Ping).as_bytes())?;
+                ping_out = Some(send_timed_ping(&mut writer)?);
                 last_beat = Instant::now();
             }
         }
@@ -1058,6 +1182,7 @@ mod tests {
                 op: "KD9TAW".into(),
                 freq: 14_032_100,
                 name: "CW tent".into(),
+                clock_ms: Some(-3_000),
             },
             Msg::Snap(ClubState {
                 reset: true,
@@ -1079,8 +1204,20 @@ mod tests {
                 }],
             }),
             Msg::Club(ClubState::default()),
-            Msg::Ping,
-            Msg::Pong,
+            Msg::Ping { t0: 0 },
+            Msg::Ping {
+                t0: 1_791_500_000_123,
+            },
+            Msg::Pong {
+                t0: 0,
+                t1: 0,
+                t2: 0,
+            },
+            Msg::Pong {
+                t0: 1_791_500_000_123,
+                t1: 1_791_500_000_650,
+                t2: 1_791_500_000_651,
+            },
             Msg::Retract {
                 pos: "a1b2c3d4".into(),
                 seq: 7,
@@ -1100,7 +1237,7 @@ mod tests {
     fn wire_tags_match_the_documented_sketch() {
         // The `t` values are the protocol — pin them so a rename can't ship
         // silently.
-        assert!(encode_line(&Msg::Ping).contains("\"t\":\"ping\""));
+        assert!(encode_line(&Msg::Ping { t0: 0 }).contains("\"t\":\"ping\""));
         assert!(encode_line(&Msg::Ack { seq: 1 }).contains("\"t\":\"ack\""));
         let j = encode_line(&Msg::Join {
             v: 1,
@@ -1142,6 +1279,84 @@ mod tests {
         // …and non-JSON is None (garbage-counted by the loops).
         assert!(decode_line("MAIL FROM:<spam>").is_none());
         assert!(decode_line("").is_none());
+    }
+
+    /// ⭐ **The bytes an older Nexus was shown.** The clock stamps went onto the ping and
+    /// pong because v1.14.0's and v1.17.0's OWN decoders and socket loops, each release's
+    /// `fdsync.rs` built with the serde it locked, read exactly these lines: both decode the
+    /// timed ping as `Ping` and the timed pong as `Pong`, and a v1.17.0 host answers the
+    /// timed ping with its pong. That proof covers these strings and nothing else, so this
+    /// pins the encoder to them: a change here means running it again on the new bytes.
+    #[test]
+    fn the_new_lines_are_the_bytes_an_older_peer_was_shown() {
+        assert_eq!(
+            encode_line(&Msg::Ping {
+                t0: 1_791_500_000_123
+            }),
+            "{\"t\":\"ping\",\"t0\":1791500000123}\n"
+        );
+        assert_eq!(
+            encode_line(&Msg::Pong {
+                t0: 1_791_500_000_123,
+                t1: 1_791_500_000_650,
+                t2: 1_791_500_000_651,
+            }),
+            "{\"t\":\"pong\",\"t0\":1791500000123,\"t1\":1791500000650,\"t2\":1791500000651}\n"
+        );
+        // Untimed, they are today's lines exactly.
+        assert_eq!(encode_line(&Msg::Ping { t0: 0 }), "{\"t\":\"ping\"}\n");
+        assert_eq!(
+            encode_line(&Msg::Pong {
+                t0: 0,
+                t1: 0,
+                t2: 0
+            }),
+            "{\"t\":\"pong\"}\n"
+        );
+        // The presence report, with the clock and without it.
+        let pos = |clock_ms| Msg::Pos {
+            band: "20m".into(),
+            mode: "CW".into(),
+            op: "KD9TAW".into(),
+            freq: 14_032_100,
+            name: "CW tent".into(),
+            clock_ms,
+        };
+        assert_eq!(
+            encode_line(&pos(Some(-3_000))),
+            "{\"t\":\"pos\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"freq\":14032100,\"name\":\"CW tent\",\"clock_ms\":-3000}\n"
+        );
+        assert_eq!(
+            encode_line(&pos(None)),
+            "{\"t\":\"pos\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"freq\":14032100,\"name\":\"CW tent\"}\n"
+        );
+    }
+
+    /// An older peer's ping and pong decode on this build as UNTIMED, which the pump turns
+    /// into no sample at all (the position keeps the welcome's clock).
+    #[test]
+    fn an_older_peers_ping_and_pong_decode_as_untimed() {
+        assert!(matches!(
+            decode_line(r#"{"t":"ping"}"#),
+            Some(Msg::Ping { t0: 0 })
+        ));
+        assert!(matches!(
+            decode_line(r#"{"t":"pong"}"#),
+            Some(Msg::Pong {
+                t0: 0,
+                t1: 0,
+                t2: 0
+            })
+        ));
+        // Control: the stamps are read when they are there.
+        assert!(matches!(
+            decode_line(r#"{"t":"pong","t0":5,"t1":7,"t2":8}"#),
+            Some(Msg::Pong {
+                t0: 5,
+                t1: 7,
+                t2: 8
+            })
+        ));
     }
 
     #[test]
@@ -1199,6 +1414,8 @@ mod tests {
         refuse_below_v2: Mutex<Option<String>>,
         /// The contest each JOIN named, in arrival order — what reached the policy layer.
         contests: Mutex<Vec<String>>,
+        /// Each presence report's clock, in arrival order.
+        clocks: Mutex<Vec<(String, Option<i64>)>>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1247,6 +1464,10 @@ mod tests {
         }
         fn position_status(&self, pos: &str, r: &PosReport) {
             self.log(format!("pos {pos} {} name={}", r.band, r.name));
+            self.clocks
+                .lock()
+                .unwrap()
+                .push((pos.to_string(), r.clock_ms));
         }
         fn counts(&self) -> (usize, usize) {
             (self.merged.lock().unwrap().len(), 0)
@@ -1371,6 +1592,69 @@ mod tests {
             sat: String::new(),
             sat_fm: false,
         })
+    }
+
+    /// The host answers a TIMED ping with the echo and its own wall clock twice (the ping in,
+    /// the pong out), over a real socket; an untimed ping, every older position's, still
+    /// gets the plain pong it always got.
+    #[test]
+    fn the_host_answers_a_timed_ping_with_its_clock_and_an_untimed_one_as_before() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club);
+        let join = encode_line(&join_msg("ffff0001", 0));
+        let before = now_unix_ms();
+        let got = talk_raw(
+            addr,
+            &[
+                join.trim_end(),
+                r#"{"t":"ping","t0":123}"#,
+                r#"{"t":"ping"}"#,
+            ],
+            800,
+        );
+        let after = now_unix_ms();
+        sd.store(true, Ordering::Relaxed);
+        let pongs: Vec<(u64, u64, u64)> = got
+            .iter()
+            .filter_map(|m| match m {
+                Msg::Pong { t0, t1, t2 } => Some((*t0, *t1, *t2)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pongs.len(), 2, "one pong per ping: {pongs:?}");
+        let (t0, t1, t2) = pongs[0];
+        assert_eq!(t0, 123, "the echo of the ping it answers");
+        assert!(
+            before <= t1 && t1 <= t2 && t2 <= after,
+            "the host's clock as the ping came in and as the pong left: {before} ≤ {t1} ≤ {t2} ≤ {after}"
+        );
+        assert_eq!(pongs[1], (0, 0, 0), "an untimed ping gets today's pong");
+    }
+
+    /// A position's report carries its measured clock to the host's backend, and an older
+    /// position's report, which has none, arrives as `None`.
+    #[test]
+    fn a_report_carries_the_positions_clock_to_the_host_and_an_older_ones_none() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let join = encode_line(&join_msg("ffff0002", 0));
+        talk_raw(
+            addr,
+            &[
+                join.trim_end(),
+                r#"{"t":"pos","band":"20m","mode":"CW","op":"KD9TAW","freq":14032100,"name":"CW tent","clock_ms":-3000}"#,
+                r#"{"t":"pos","band":"20m","mode":"CW","op":"KD9TAW","freq":14032100,"name":"CW tent"}"#,
+            ],
+            500,
+        );
+        sd.store(true, Ordering::Relaxed);
+        assert_eq!(
+            *club.clocks.lock().unwrap(),
+            [
+                ("ffff0002".to_string(), Some(-3_000)),
+                ("ffff0002".to_string(), None)
+            ]
+        );
     }
 
     #[test]
@@ -1778,6 +2062,9 @@ mod tests {
             r#"{"t":"retract","pos":"cccc0001","seq":1}"#,
             r#"{"t":"welcome","v":1,"acked":999}"#,
             r#"{"t":"ack","seq":999}"#,
+            // The clock probe at its extremes: answered on the socket, nothing more.
+            r#"{"t":"ping","t0":18446744073709551615}"#,
+            r#"{"t":"pong","t0":1,"t1":2,"t2":3}"#,
             "not even json",
         ] {
             w.write_all(format!("{hostile}\n").as_bytes()).unwrap();
@@ -1791,6 +2078,7 @@ mod tests {
                 op: "OP".into(),
                 freq: 0,
                 name: "CW tent".into(),
+                clock_ms: Some(i64::MIN), // a clock at its extreme is data like any other
             })
             .as_bytes(),
         )
@@ -1878,6 +2166,8 @@ mod tests {
         host_contests: Mutex<Vec<String>>,
         /// What the POLICY layer answers a host's contest with — `Some` refuses it.
         refuse_host: Mutex<Option<String>>,
+        /// Every round trip the pump handed back, in arrival order.
+        samples: Mutex<Vec<ClockSample>>,
     }
     impl Default for FakePosition {
         fn default() -> Self {
@@ -1890,6 +2180,7 @@ mod tests {
                 name: Mutex::new("SSB tent".into()),
                 host_contests: Mutex::new(Vec::new()),
                 refuse_host: Mutex::new(None),
+                samples: Mutex::new(Vec::new()),
             }
         }
     }
@@ -1949,10 +2240,14 @@ mod tests {
                 op: "OP".into(),
                 freq: 14_285_000,
                 name: self.name.lock().unwrap().clone(),
+                clock_ms: None,
             })
         }
         fn on_link(&self, up: bool) {
             self.linked.lock().unwrap().push(up);
+        }
+        fn on_clock(&self, sample: ClockSample) {
+            self.samples.lock().unwrap().push(sample);
         }
     }
 
@@ -2227,6 +2522,107 @@ mod tests {
         assert!(
             calls.iter().any(|c| c == "pos eeee0001 40m name="),
             "the nameless report still landed, with an empty name: {calls:?}"
+        );
+    }
+
+    /// ⭐ **The pump times its own ping and hands back the round trip its pong closes**, by
+    /// value, over a real socket: a scripted host running 45 s ahead of this PC stamps the
+    /// pong, and the one sample carries the echo, the host's two stamps and a round trip
+    /// measured here. The first timed ping goes out as the welcome is taken, not a heartbeat
+    /// later. A pong that closes no outstanding ping (an older host's untimed one, one
+    /// echoing another `t0`, a second copy of the answer) is no sample.
+    #[test]
+    fn the_pump_times_its_ping_and_takes_only_the_answer_it_is_waiting_for() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
+        let addr = listener.local_addr().unwrap().to_string();
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr, pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+
+        let (s, _) = listener.accept().unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut w = s.try_clone().unwrap();
+        let mut r = BufReader::new(s);
+        let next_ping = |r: &mut BufReader<TcpStream>| -> Option<(u64, Instant)> {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if let Ok(Some(line)) = read_capped_line(r) {
+                    if let Some(Msg::Ping { t0 }) = decode_line(&line) {
+                        return Some((t0, Instant::now()));
+                    }
+                }
+            }
+            None
+        };
+        w.write_all(
+            encode_line(&Msg::Welcome {
+                v: PROTO_VERSION,
+                event: "TEST FD".into(),
+                host_call: "W9ABC".into(),
+                acked: 3,
+                now_unix: now_unix(),
+                contest: "ilqp".into(),
+            })
+            .as_bytes(),
+        )
+        .unwrap();
+        let welcomed = Instant::now();
+        let (t0, pinged) = next_ping(&mut r).expect("a ping");
+        assert!(t0 > 0, "the position's ping is timed");
+        assert!(
+            pinged.duration_since(welcomed) < Duration::from_secs(2),
+            "measured as the welcome is taken, not a heartbeat later"
+        );
+        // Not answers: an older host's untimed pong, and one echoing another ping.
+        w.write_all(b"{\"t\":\"pong\"}\n").unwrap();
+        w.write_all(
+            encode_line(&Msg::Pong {
+                t0: t0 + 1,
+                t1: 5,
+                t2: 6,
+            })
+            .as_bytes(),
+        )
+        .unwrap();
+        // The answer, from a host 45 s ahead that took 1 ms over it — then a second copy.
+        let t1 = now_unix_ms() + 45_000;
+        let answer = encode_line(&Msg::Pong { t0, t1, t2: t1 + 1 });
+        w.write_all(answer.as_bytes()).unwrap();
+        w.write_all(answer.as_bytes()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && posn.samples.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(300)); // room for a wrong second sample
+        pump_sd.store(true, Ordering::Relaxed);
+        drop(w);
+        drop(r);
+        pump.join().unwrap();
+
+        let samples = posn.samples.lock().unwrap().clone();
+        assert_eq!(
+            samples.len(),
+            1,
+            "exactly the answer it waited for: {samples:?}"
+        );
+        let got = samples[0];
+        assert_eq!((got.t0, got.t1, got.t2), (t0, t1, t1 + 1));
+        assert!(
+            got.t3 >= got.t0 && got.t3 - got.t0 < 2_000,
+            "the round trip, measured here: {got:?}"
+        );
+        // Host minus this PC, round-trip corrected: +45 s, give or take half the round trip, plus
+        // the stamps' own whole-millisecond rounding. The four stamps are truncated to the
+        // millisecond, so the offset can sit up to about 2 ms off even when the round trip
+        // itself measures 0 ms: a fast, idle machine measured t3 == t0 and an offset of
+        // 45 001 ms, which a bound of the round trip alone (0 ms) refused.
+        let offset = ((got.t1 as i64 - got.t0 as i64) + (got.t2 as i64 - got.t3 as i64)) / 2;
+        assert!(
+            (offset - 45_000).abs() <= (got.t3 - got.t0) as i64 + 2,
+            "the host is 45 s ahead: {offset} ms"
         );
     }
 }

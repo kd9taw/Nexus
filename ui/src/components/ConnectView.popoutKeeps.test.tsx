@@ -41,6 +41,12 @@ import { ConnectView } from './ConnectView'
 import { DEFAULT_LAYERS } from './MapView'
 import { pastTheSwitch } from './ConnectView.testkit'
 
+// THE BUDGET (2026-10-09). The slowest case here, "reopened after the main window moved to another intent…", takes
+// 0.89 s and 0.81 s on one core (two runs), nearly all of it CPU work (3.05 s at a third of a CPU); a loaded full
+// suite on this box has run cases up to 20 times slower than one core, 16.2 s for this one. 20 s holds that; a test
+// that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 class RO {
   observe() {}
   unobserve() {}

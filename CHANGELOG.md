@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state's 102 counties, each one lit when the club works it, with the host's own county outlined.
   The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
   address for the light board, or `?theme=auto` to follow the TV's own setting.
+- **Club sync: each position says how far its clock is from the host's, and the host's club board
+  shows every position's.** Every 5 seconds each position measures its clock against the host's
+  over the club link, allowing for the time the measurement spends on the network. From 2 seconds
+  off, its club line says so ("This PC's clock is 3 s behind the host's"); past 30 seconds it is
+  the warning it has always been. The host's club board has a new **Clock** column: in step, how
+  many seconds ahead or behind, and a dash for a position running an older Nexus. Nexus Remote's
+  Field Day view shows the column too, for the host. Nexus only shows the difference: it never
+  changes a clock, FT8 and FT4 timing is untouched, and contact times still come from each
+  position's own clock, so put a wrong one right in that PC's date and time settings. Older
+  versions of Nexus keep working alongside: an older position shows a dash in the Clock column,
+  and with an older host each position goes by the rougher reading it takes when it joins.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and
@@ -198,6 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
   as the current one: those feeds carry more than one, and a second spacecraft's readings are
   never mixed in. Reported by KB0UZT (#404).
+- **On a slow disk, the needs, awards, statistics, Journey and confirmation diagnostics never
+  leave out the contact you just logged.** Each waits up to two seconds for that contact to reach
+  the logbook database first. When saving took longer than that, they answered without it: the
+  station you had just worked could stay marked as needed and the counts were one short, with
+  nothing to say so. Now, while the contact is still being saved, they give no answer rather than
+  a short one, and the next look includes it.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -288,6 +305,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
   span the radio was not showing. That edge is now read as negative. It only happens with the
   scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
+- **IC-905 on 10 GHz: the panadapter is drawn where the radio is.** On its 10 GHz band the
+  IC-905 sends its scope's frequencies with two more digits than on its other bands, and Nexus's
+  own CI-V connection read them as the usual ten: a Center-mode sweep at 10368 MHz was drawn
+  around 368 MHz, and a Fixed or Scroll-F sweep was thrown away as out of range. Nexus now reads
+  the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
+  for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
+  IC-905 on 10 GHz.
+- **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
+  Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
+  and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
+  from below 0 Hz to about 288 MHz. Scroll-C sweeps are now read as two edges, as every Icom CI-V
+  reference says. Center, Fixed and Scroll-F are unchanged. NEEDS-BENCH: not yet tried on a radio
+  in Scroll-C.
+- **The CI-V bus diagnostic log is offered on every radio Nexus's own CI-V connection drives.**
+  Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the log by what the radio's model name looked
+  like, so an IC-7610 saved as "Icom 7610", as "IC-7610M" or with no name could turn on Native
+  Icom CI-V and never see the log. It now goes by the model itself, as the Native Icom CI-V
+  switch above it does: an IC-7300, IC-7610, IC-9700, IC-705 or IC-905 with that switch on, or
+  any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
+  radio that is only named like one of those, where Nexus's own CI-V never runs and the log
+  would have nothing to record.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
@@ -379,6 +417,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched since your account's last download by any program. The older confirmations never
   arrived, and the syncs after it carried on from there. Nexus now asks for everything from
   1900-01-01 in that case.
+- **The first eQSL download asks for your whole InBox.** With no earlier download on record (the
+  first sync, or after you changed the eQSL username or cleared the log), Nexus asked eQSL for your
+  InBox without saying from when, and eQSL's documentation does not say what it sends then. Nexus
+  now asks for every card received from 1900 on, as Logbook ▸ Check confirmations does. Later
+  downloads carry on from the last one, as before.
+- **Sync from QRZ takes only QRZ's own confirmation.** Your QRZ logbook also repeats what LoTW,
+  eQSL and paper cards say about a contact, and Sync from QRZ took those copies as the services'
+  own: a contact could gain a LoTW, eQSL or paper-card confirmation from QRZ's copy, with the award
+  credit a LoTW or card confirmation brings, and a confirmation Logbook ▸ Check confirmations took
+  off could come back with the next sync. Sync from QRZ and Pull confirmations automatically now
+  mark a contact confirmed only where QRZ itself confirms it, on the contacts in your log and on the
+  ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
+  eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
+  adds that confirmation. Confirmations already in your log are not changed.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the

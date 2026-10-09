@@ -41,6 +41,11 @@ import {
 import type { AppSnapshot } from '../types'
 import type { CwPanelId, PanelLayoutApi, PanelState, PhonePanelId } from '../features/panelState'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Phone, audio bandscope: listed, ticked, and it says…", takes
+// 0.30 s and 0.25 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** What the stubbed engine reports as this session's sent CW — '' at session start is the
  *  state the Sent Echo entry is dead in, and the whole point of that entry's reason. */
 let cwSentLines: string[] = []

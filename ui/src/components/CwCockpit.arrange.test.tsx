@@ -12,6 +12,11 @@ import type { AppSnapshot } from '../types'
 import { BOX_IDS, CW_PANELS, panelStorageKey, usePanelLayout, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { arrangeIds, isStockPlacement, placedColumns, type PaneMove } from '../features/panelPlace'
 
+// THE BUDGET (2026-10-09). The slowest case here, "50 random moves with tier flips between them: the…", takes 0.56 s
+// and 1.37 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
   wpm: 22,

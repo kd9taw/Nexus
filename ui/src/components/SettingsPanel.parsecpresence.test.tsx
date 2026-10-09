@@ -13,6 +13,11 @@ import type { ParsecPresence } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
 
+// THE BUDGET (2026-10-09). The slowest case here, "offers the switch, OFF, and says what it watches and…", takes
+// 0.26 s and 0.29 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const platform = vi.hoisted(() => ({ windows: true }))
 vi.mock('../platform', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()

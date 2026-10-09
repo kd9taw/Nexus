@@ -29,6 +29,11 @@ import { RadioProgView } from './RadioProgView'
 import { SITE_SPREAD_PX } from './RepeaterMap'
 import { markerScaleFor } from './MapView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "a dot and its row are linked: pointing at one lights…", takes
+// 1.12 s and 0.52 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const NOW = Math.floor(Date.now() / 1000)
 const HOME = gridToLatLon('EN52')!
 

@@ -6,7 +6,7 @@
 // ticks costs one follow-up; an answer never goes backwards (v2 R4); a failure waits for the next
 // change instead of looping; a view keeps its old answer until the fresh one lands.
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { createAskingLogSource, type LogTransport } from './askingLogSource'
 import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from './logAnswers'
@@ -14,6 +14,11 @@ import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from './logA
 // test's time limit.
 import { Logbook } from '../components/Logbook'
 import { setLogSource, useLogAnswer, type LogSource } from './logSource'
+
+// THE BUDGET (2026-10-09). The slowest case here, "shows the same rows, the same count and the same order…", takes
+// 0.40 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
 
 /** A transport whose every call waits until the test answers it. */
 function handTransport() {

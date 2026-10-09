@@ -738,6 +738,9 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
         lock(&queries.0.orders).is_empty(),
         "an order read before the writer caught up is not kept"
     );
+    // Asked once the writer has caught up: letting the hold go only lets it start, and on a loaded
+    // machine its commit can outlast the next answer's own wait.
+    engine.caught_up();
     let caught_up = ask(&queries, &engine, question, &resolve);
     assert_eq!(
         caught_up["orderRev"], answer["orderRev"],
@@ -776,6 +779,8 @@ fn a_fold_read_before_the_writer_caught_up_is_not_kept() {
         "answered from the store as it stands"
     );
     drop(hold);
+    // Asked once the writer has caught up, as above.
+    engine.caught_up();
     let caught_up = grids();
     assert!(
         caught_up.as_array().unwrap().contains(&json!("AA00")),

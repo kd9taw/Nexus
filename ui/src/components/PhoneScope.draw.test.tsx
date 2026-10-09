@@ -29,6 +29,11 @@ import { bakeLut } from '../waterfall'
 import { TRACE_STOPS } from '../spectrum/canvas2d'
 import { SpectrumRing } from '../spectrum/ring'
 
+// THE BUDGET (2026-10-09). The slowest case here, "an Auto scope repaints in the theme’s palette when the…", takes
+// 0.61 s and 0.61 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** A 512-bin row with one carrier, shaped like what the engine publishes. */
 const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
 

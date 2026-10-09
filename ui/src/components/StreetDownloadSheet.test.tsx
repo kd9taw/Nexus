@@ -56,6 +56,11 @@ import { StreetDownloadSheet } from './StreetDownloadSheet'
 import { __resetStreetMapsForTests, gb, mb } from '../features/streetMaps'
 import { t } from '../i18n'
 
+// THE BUDGET (2026-10-09). The slowest case here, "asks the exact size again for every choice, and shows…", takes
+// 1.00 s and 1.00 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const SALINA = { lat: 38.84, lon: -97.61 }
 
 async function settle(ms = 0) {

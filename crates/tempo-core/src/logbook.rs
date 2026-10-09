@@ -2046,8 +2046,10 @@ impl Logbook {
     /// rows become orphans), this ADDS the QSOs the download has that the local log
     /// lacks AND upgrades confirmations on the ones already present — in a single
     /// consume-once pass keyed at reconcile (mode-class) granularity, so a mode-spelling
-    /// difference can't double-log the same contact. Returns `(added_records, summary)`;
-    /// call [`save`](Self::save) to persist.
+    /// difference can't double-log the same contact. A row confirms with QRZ's own
+    /// confirmation alone, never with its copies of other services'
+    /// ([`crate::reconcile::merge_and_add`]). Returns `(added_records, summary)`; call
+    /// [`save`](Self::save) to persist.
     pub fn merge_downloaded(
         &mut self,
         text: &str,
@@ -2062,9 +2064,8 @@ impl Logbook {
     /// Logbook ▸ Check confirmations' gains from a downloaded QRZ book (a QRZ Logbook FETCH):
     /// QRZ's own confirmation put on each contact one of its confirming rows pairs with, and
     /// nothing else ([`crate::reconcile::check::gain_qrz_confirmations`]). Unlike
-    /// [`merge_downloaded`](Self::merge_downloaded), it adds no contact and carries none of QRZ's
-    /// copies of other services' confirmations. How many contacts gained it. Pure merge — call
-    /// [`save`](Self::save) to persist.
+    /// [`merge_downloaded`](Self::merge_downloaded), it adds no contact and takes nothing else a
+    /// row carries. How many contacts gained it. Pure merge — call [`save`](Self::save) to persist.
     pub fn gain_qrz_confirmations(&mut self, text: &str) -> usize {
         crate::reconcile::check::gain_qrz_confirmations(&mut self.records[..], &report_rows(text))
     }
@@ -4344,8 +4345,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // (any-channel for display, LoTW+paper for award counting — never eQSL/QRZ).
     // A QRZ Logbook FETCH marks a native confirmation in APP_QRZLOG_STATUS=C (some exports use
     // Y). Map that to the QRZ channel — deliberately NOT to `card`, so a QRZ-only confirmation
-    // never wrongly earns award credit. LOTW_QSL_RCVD / EQSL_QSL_RCVD that QRZ re-reports still
-    // flow to their own award-grade channels.
+    // never wrongly earns award credit. The LOTW_QSL_RCVD, EQSL_QSL_RCVD and QSL_RCVD that QRZ
+    // re-reports parse to their own channels here, as any file's do; the merge of a QRZ download
+    // takes none of them (`reconcile::merge_and_add`).
     let qrz_status = f
         .remove("APP_QRZLOG_STATUS")
         .is_some_and(|v| v.eq_ignore_ascii_case("C") || v.eq_ignore_ascii_case("Y"));

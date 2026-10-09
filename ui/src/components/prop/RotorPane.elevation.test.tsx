@@ -15,6 +15,11 @@ import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import type { RotatorState } from '../../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "a bearing still on its way goes with the elevation…", takes 0.29 s
+// and 0.29 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 /** A G-5500 on a GS-232B at 123° / 45°: what `read_rotator_state` answers for it. */
 const G5500: RotatorState = { azDeg: 123, reading: 'position', elDeg: 45, elRange: [0, 180] }
 /** A Rotor-EZ: azimuth only, declared so. */

@@ -36,6 +36,11 @@ vi.mock('../api', async (importOriginal) => ({
 import { ConnectView } from './ConnectView'
 import { pastTheSwitch } from './ConnectView.testkit'
 
+// THE BUDGET (2026-10-09). The slowest case here, "hides the header, the rail panes and the bottom strip…", takes
+// 0.45 s and 0.50 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const props = {
   myGrid: 'EN52',
   theme: 'dark' as const,

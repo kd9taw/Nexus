@@ -27,6 +27,11 @@ import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
 import { setAttDb, setPreampDb } from '../api'
 
+// THE BUDGET (2026-10-09). The slowest case here, "the receive chain and the transmit chain are each ONE…", takes
+// 0.38 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Auto-mock every api export rather than listing the ones this file uses: the REAL
 // CockpitHeader is mounted (this file asserts what is NO LONGER in it, which a stub could
 // never show), and mounting it pulls in RotorStrip and the band plan, whose api calls a
