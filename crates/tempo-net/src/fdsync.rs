@@ -186,6 +186,12 @@ pub struct WireBoardRow {
     /// Merged rows in the trailing 60 min (the contest rate meter).
     pub rate: u64,
     pub age: u64,
+    /// That position's clock minus the host's, in ms, as its last report said
+    /// ([`Msg::Pos`]'s `clock_ms`). `None` = not measured: a Nexus older than the
+    /// field, or no round trip closed yet. Absent on the wire then, so an older host's
+    /// rows and a row nobody measured read the same; an older position ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_ms: Option<i64>,
 }
 
 /// Club state pushed host→position in `snap` (full, on join) and `club`
@@ -306,6 +312,12 @@ pub enum Msg {
         /// host and never "clear the label".
         #[serde(default)]
         name: String,
+        /// This position's clock minus the host's, in ms, as it measured it over the
+        /// timed ping — the host's board shows it. `None` (absent on the wire) = not
+        /// measured: no round trip has closed, or a Nexus older than the field. An older
+        /// host ignores it; v1.14.0's and v1.17.0's own decoders were shown this line.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock_ms: Option<i64>,
     },
     /// host→pos on join: full club state (chunked by [`SNAP_DUPES_PER_LINE`]).
     Snap(ClubState),
@@ -638,6 +650,7 @@ fn serve_club_connection(
                         op,
                         freq,
                         name,
+                        clock_ms,
                     } => {
                         if let Some(pos) = &joined {
                             backend.position_status(
@@ -648,6 +661,7 @@ fn serve_club_connection(
                                     op,
                                     freq,
                                     name,
+                                    clock_ms,
                                 },
                             );
                         }
@@ -778,6 +792,10 @@ pub struct PosReport {
     /// The position's friendly name ("CW tent"). Empty = "no news" to the
     /// host, which keeps whatever label it already knows.
     pub name: String,
+    /// This position's clock minus the host's, in ms, as it measured it. `None` = not
+    /// measured, which the host reads as no news, as it reads an empty `name`: a
+    /// reconnect's first report leaves before its first round trip has closed.
+    pub clock_ms: Option<i64>,
 }
 
 /// One answered round trip of a position's timed ping, as four wall-clock readings in Unix
@@ -980,6 +998,7 @@ fn run_position_session(
                     op,
                     freq,
                     name,
+                    clock_ms,
                 }) = report.clone()
                 {
                     writer.write_all(
@@ -989,6 +1008,7 @@ fn run_position_session(
                             op,
                             freq,
                             name,
+                            clock_ms,
                         })
                         .as_bytes(),
                     )?;
@@ -1168,6 +1188,7 @@ mod tests {
                 op: "KD9TAW".into(),
                 freq: 14_032_100,
                 name: "CW tent".into(),
+                clock_ms: Some(-3_000),
             },
             Msg::Snap(ClubState {
                 reset: true,
@@ -1186,6 +1207,7 @@ mod tests {
                     uniq: 55,
                     rate: 23,
                     age: 2,
+                    clock_ms: Some(-3_000),
                 }],
             }),
             Msg::Club(ClubState::default()),
@@ -1298,6 +1320,44 @@ mod tests {
             }),
             "{\"t\":\"pong\"}\n"
         );
+        // The presence report and the board row, with the clock and without it.
+        let pos = |clock_ms| Msg::Pos {
+            band: "20m".into(),
+            mode: "CW".into(),
+            op: "KD9TAW".into(),
+            freq: 14_032_100,
+            name: "CW tent".into(),
+            clock_ms,
+        };
+        assert_eq!(
+            encode_line(&pos(Some(-3_000))),
+            "{\"t\":\"pos\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"freq\":14032100,\"name\":\"CW tent\",\"clock_ms\":-3000}\n"
+        );
+        assert_eq!(
+            encode_line(&pos(None)),
+            "{\"t\":\"pos\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"freq\":14032100,\"name\":\"CW tent\"}\n"
+        );
+        let club = Msg::Club(ClubState {
+            score: 12,
+            qsos: 3,
+            board: vec![WireBoardRow {
+                pos: "a1b2c3d4".into(),
+                name: "CW tent".into(),
+                band: "20m".into(),
+                mode: "CW".into(),
+                op: "KD9TAW".into(),
+                qsos: 3,
+                uniq: 3,
+                rate: 3,
+                age: 2,
+                clock_ms: Some(-3_000),
+            }],
+            ..ClubState::default()
+        });
+        assert_eq!(
+            encode_line(&club),
+            "{\"t\":\"club\",\"reset\":false,\"dupes\":[],\"dkeys\":[],\"sections\":[],\"score\":12,\"qsos\":3,\"board\":[{\"pos\":\"a1b2c3d4\",\"name\":\"CW tent\",\"band\":\"20m\",\"mode\":\"CW\",\"op\":\"KD9TAW\",\"qsos\":3,\"uniq\":3,\"rate\":3,\"age\":2,\"clock_ms\":-3000}]}\n"
+        );
     }
 
     /// An older peer's ping and pong decode on this build as UNTIMED, which the pump turns
@@ -1382,6 +1442,8 @@ mod tests {
         refuse_below_v2: Mutex<Option<String>>,
         /// The contest each JOIN named, in arrival order — what reached the policy layer.
         contests: Mutex<Vec<String>>,
+        /// Each presence report's clock, in arrival order.
+        clocks: Mutex<Vec<(String, Option<i64>)>>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1430,6 +1492,10 @@ mod tests {
         }
         fn position_status(&self, pos: &str, r: &PosReport) {
             self.log(format!("pos {pos} {} name={}", r.band, r.name));
+            self.clocks
+                .lock()
+                .unwrap()
+                .push((pos.to_string(), r.clock_ms));
         }
         fn counts(&self) -> (usize, usize) {
             (self.merged.lock().unwrap().len(), 0)
@@ -1591,6 +1657,32 @@ mod tests {
             "the host's clock as the ping came in and as the pong left: {before} ≤ {t1} ≤ {t2} ≤ {after}"
         );
         assert_eq!(pongs[1], (0, 0, 0), "an untimed ping gets today's pong");
+    }
+
+    /// A position's report carries its measured clock to the host's backend, and an older
+    /// position's report, which has none, arrives as `None`.
+    #[test]
+    fn a_report_carries_the_positions_clock_to_the_host_and_an_older_ones_none() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let join = encode_line(&join_msg("ffff0002", 0));
+        talk_raw(
+            addr,
+            &[
+                join.trim_end(),
+                r#"{"t":"pos","band":"20m","mode":"CW","op":"KD9TAW","freq":14032100,"name":"CW tent","clock_ms":-3000}"#,
+                r#"{"t":"pos","band":"20m","mode":"CW","op":"KD9TAW","freq":14032100,"name":"CW tent"}"#,
+            ],
+            500,
+        );
+        sd.store(true, Ordering::Relaxed);
+        assert_eq!(
+            *club.clocks.lock().unwrap(),
+            [
+                ("ffff0002".to_string(), Some(-3_000)),
+                ("ffff0002".to_string(), None)
+            ]
+        );
     }
 
     #[test]
@@ -2014,6 +2106,7 @@ mod tests {
                 op: "OP".into(),
                 freq: 0,
                 name: "CW tent".into(),
+                clock_ms: Some(i64::MIN), // a clock at its extreme is data like any other
             })
             .as_bytes(),
         )
@@ -2175,6 +2268,7 @@ mod tests {
                 op: "OP".into(),
                 freq: 14_285_000,
                 name: self.name.lock().unwrap().clone(),
+                clock_ms: None,
             })
         }
         fn on_link(&self, up: bool) {

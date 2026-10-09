@@ -3439,6 +3439,10 @@ export interface FdClubBoardRow {
   /** Seconds since the host last heard from it — stale-mark past 15 s
    *  (readings are never silently stale). */
   lastSeenSecs: number
+  /** That position's clock minus the host's, in ms, as it measured it over the club link.
+   *  `null` when it has not (an older Nexus, or no round trip yet); absent from a station
+   *  older than the field. Shown, never applied. */
+  clockMs?: number | null
 }
 
 /** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
@@ -3458,7 +3462,9 @@ export interface FdClubStatus {
   score: number
   qsos: number
   sections: number
-  /** Local minus host clock (secs) — warn past ±30 s, never adjusted. */
+  /** This PC's clock minus the host's, whole seconds — measured over the club link (the
+   *  welcome's coarse value until the first round trip, or from an older host). The club
+   *  line says it from 2 s and warns past 30 s; never adjusted. */
   skewSecs: number
   /** The last host error line, verbatim (version refusal etc.). */
   lastError?: string | null

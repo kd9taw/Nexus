@@ -183,3 +183,20 @@ it('accepts the W/VE location warning, and still bounds it',()=>{
   expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
  }
 })
+
+// Each club board row may carry that position's clock against the host's, in ms (`clockMs`,
+// null when it has not measured one). This validator refuses board keys it does not know, so a
+// station sending the column goes blank through Remote unless the page that takes it is
+// deployed first; and a station older than the field sends no key at all.
+it('accepts a board row\'s measured clock, null or absent, and refuses anything but whole ms',()=>{
+ type Row=Record<string,unknown>
+ const page=(clockMs?:unknown)=>{
+  const p=fieldDayPage()
+  const row=((p.meta as {source:{fieldDay:{club:{board:Row[]}}}}).source.fieldDay.club.board)[0]
+  if (clockMs!==undefined) row.clockMs=clockMs
+  return p
+ }
+ for (const ok of [-3000,0,45600,null,undefined]) expect(()=>parseFieldDay(page(ok)),String(ok)).not.toThrow()
+ expect(parseFieldDay(page(-3000)).fieldDay?.club?.board[0].clockMs).toBe(-3000)
+ for (const bad of [1.5,'-3000',Number.MAX_SAFE_INTEGER+2,true,{}]) expect(()=>parseFieldDay(page(bad)),String(bad)).toThrow('invalidFieldDay')
+})

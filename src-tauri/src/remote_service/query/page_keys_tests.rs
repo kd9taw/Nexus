@@ -666,7 +666,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 
 /// The Field Day view (`field-day.ts`): the capture's four keys, the operator settings' four, the
 /// ruleset's six and three it may carry, and the running status: seventeen keys and sixteen it
-/// may carry, with its contacts, club board, dupe rule and location warning. The ruleset the
+/// may carry, with its contacts, club board (each row's measured clock one it may carry), dupe
+/// rule and location warning. The ruleset the
 /// desktop's Settings previews also carries a location warning; the station's never does.
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
@@ -768,7 +769,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 &["lastError", "dkeys"],
             );
             for row in club["board"].as_array().unwrap() {
-                takes(
+                takes_optional(
                     &format!("{what}: a club board row"),
                     row,
                     &[
@@ -781,6 +782,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                         "rate",
                         "lastSeenSecs",
                     ],
+                    &["clockMs"],
                 );
             }
         }
@@ -896,6 +898,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 qsos: 1,
                 rate: 30,
                 last_seen_secs: 5,
+                clock_ms: Some(-3_000),
             }],
         }),
         upload: Default::default(),

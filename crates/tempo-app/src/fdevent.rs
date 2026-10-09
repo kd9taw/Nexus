@@ -346,6 +346,9 @@ pub struct ClubPosition {
     pub last_seen_unix: u64,
     /// High-water acked seq (what `welcome` reports back on a rejoin).
     pub acked: u64,
+    /// The position's clock minus this host's, in ms, as its last measured report said;
+    /// `None` until one does (a Nexus older than the measurement never will).
+    pub clock_ms: Option<i64>,
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -722,6 +725,11 @@ impl ClubLog {
         pos.mode = r.mode.to_uppercase();
         pos.operator = r.op.to_uppercase();
         pos.freq = r.freq;
+        // An unmeasured report is no news either: a reconnect's first report leaves
+        // before its first round trip has closed.
+        if r.clock_ms.is_some() {
+            pos.clock_ms = r.clock_ms;
+        }
         pos.last_seen_unix = now;
     }
 
@@ -993,6 +1001,7 @@ impl ClubLog {
                     uniq: uniq.get(id.as_str()).copied().unwrap_or(0),
                     rate: rate.get(id.as_str()).copied().unwrap_or(0),
                     age: now.saturating_sub(p.last_seen_unix.min(now)),
+                    clock_ms: p.clock_ms,
                 }
             })
             .collect()
@@ -1228,6 +1237,7 @@ mod tests {
             op: op.into(),
             freq: 14_032_100,
             name: name.into(),
+            clock_ms: None,
         }
     }
 
@@ -1430,6 +1440,34 @@ mod tests {
         // Rate window: an arrival >1 h old stops counting.
         let rows = club.board_rows(1000 + 3700);
         assert_eq!(rows.iter().find(|r| r.pos == "aaaa").unwrap().rate, 0);
+    }
+
+    /// Each position's row carries its clock as its last MEASURED report said. An unmeasured
+    /// report (a reconnect's first, or every one from an older Nexus) leaves it alone, a
+    /// position that never measured has none, and a new measurement replaces the old.
+    #[test]
+    fn the_board_carries_each_positions_last_measured_clock() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.join("aaaa", "CW tent", "KD9TAW", 1000);
+        club.join("bbbb", "SSB tent", "KD9TAW", 1000);
+        let clocked = |clock_ms| PosReport {
+            clock_ms,
+            ..report("", "20m", "cw", "op1")
+        };
+        club.position_status("aaaa", &clocked(Some(-3_000)), 1001);
+        club.position_status("aaaa", &clocked(None), 1002);
+        club.position_status("bbbb", &report("", "40m", "ph", "op2"), 1002);
+        let clock = |club: &ClubLog, id: &str| {
+            club.board_rows(1003)
+                .into_iter()
+                .find(|r| r.pos == id)
+                .unwrap()
+                .clock_ms
+        };
+        assert_eq!(clock(&club, "aaaa"), Some(-3_000));
+        assert_eq!(clock(&club, "bbbb"), None);
+        club.position_status("aaaa", &clocked(Some(400)), 1004);
+        assert_eq!(clock(&club, "aaaa"), Some(400));
     }
 
     #[test]

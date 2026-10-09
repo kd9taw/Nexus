@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // The club-sync block on ContestView: the honesty chip (derived state, queue
-// in the label), the band board with its 15 s stale marks, the >30 s clock-skew
-// warning, and the host-only club export buttons. The whole section is gated on
+// in the label), the band board with its 15 s stale marks and clock column, the
+// clock line from 2 s and its >30 s warning, and the host-only club export buttons. The whole section is gated on
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
@@ -127,6 +127,80 @@ describe('ContestView club sync section', () => {
       screen.getByText("This PC's clock differs from the host's by 45 s — check this PC's clock"),
     ).toBeTruthy()
     expect(screen.getByText('Host: update the host')).toBeTruthy()
+  })
+
+  // This PC's clock against the host's (whole seconds, measured over the club link): said
+  // from 2 s, in its direction, and past 30 s the warning the block always had. By value at
+  // every edge, both ways.
+  it('says the clock difference from 2 s, ahead or behind, and warns past 30 s', () => {
+    const line = (skewSecs: number) => {
+      render(<ContestView fieldDay={fd({ ...CLUB, skewSecs })} onSetMode={() => {}} />)
+      const club = within(screen.getByLabelText('Club sync'))
+      const said = {
+        note: club.queryByText(/^This PC's clock is \d+ s (ahead of|behind) the host's$/)?.textContent ?? null,
+        warning: club.queryByRole('alert')?.textContent ?? null,
+      }
+      cleanup()
+      return said
+    }
+    expect(line(0)).toEqual({ note: null, warning: null })
+    expect(line(1)).toEqual({ note: null, warning: null })
+    expect(line(-1)).toEqual({ note: null, warning: null })
+    expect(line(2)).toEqual({ note: "This PC's clock is 2 s ahead of the host's", warning: null })
+    expect(line(-3)).toEqual({ note: "This PC's clock is 3 s behind the host's", warning: null })
+    expect(line(30)).toEqual({ note: "This PC's clock is 30 s ahead of the host's", warning: null })
+    expect(line(31)).toEqual({
+      note: null,
+      warning: "This PC's clock differs from the host's by 31 s — check this PC's clock",
+    })
+    expect(line(-45)).toEqual({
+      note: null,
+      warning: "This PC's clock differs from the host's by 45 s — check this PC's clock",
+    })
+  })
+
+  // The host's board lists every position's clock, in the club line's own terms and with
+  // its rounding (half away from zero, so a row and that position's own line agree).
+  it('gives the board a Clock column: in step, ahead or behind, warned past 30 s, a dash unmeasured', () => {
+    const row = (posid: string, posName: string, clockMs?: number | null) => ({
+      ...CLUB.board[0],
+      posid,
+      posName,
+      lastSeenSecs: 2,
+      ...(clockMs === undefined ? {} : { clockMs }),
+    })
+    render(
+      <ContestView
+        fieldDay={fd({
+          ...CLUB,
+          board: [
+            row('a', 'A tent', 0),
+            row('b', 'B tent', 1_499),
+            row('c', 'C tent', -1_500),
+            row('d', 'D tent', 3_400),
+            row('e', 'E tent', -45_600),
+            row('f', 'F tent', null),
+            row('g', 'G tent'), // a station older than the field sends no key at all
+          ],
+        })}
+        onSetMode={() => {}}
+      />,
+    )
+    const board = screen.getByLabelText('Club sync').querySelector('[data-club-board]') as HTMLElement
+    expect(within(board).getByText('Clock').getAttribute('title')).toMatch(/never changes a clock/)
+    const cells = Array.from(board.children) as HTMLElement[]
+    const clockOf = (name: string) => cells[cells.findIndex(c => c.textContent === name) + 6]
+    expect(clockOf('A tent').textContent).toBe('in step')
+    expect(clockOf('B tent').textContent).toBe('in step')
+    expect(clockOf('C tent').textContent).toBe('2 s behind')
+    expect(clockOf('D tent').textContent).toBe('3 s ahead')
+    expect(clockOf('E tent').textContent).toBe('46 s behind')
+    expect(clockOf('F tent').textContent).toBe('—')
+    expect(clockOf('G tent').textContent).toBe('—')
+    expect(clockOf('E tent').style.color).toContain('--status-new-entity')
+    expect(clockOf('D tent').style.color).toBe('')
+    expect(clockOf('F tent').getAttribute('title')).toMatch(/^Not measured/)
+    expect(clockOf('A tent').getAttribute('title')).toBeNull()
   })
 
   it('counts a party club by its score and QSOs — a party has no sections to count', () => {

@@ -12369,6 +12369,9 @@ impl Engine {
             op,
             freq: (self.settings.dial_mhz * 1e6) as u64,
             name: self.fd_position_label(),
+            // What the host's board shows for this position: the measurement the club
+            // line shows, in ms.
+            clock_ms: self.fd_mirror.clock.skew_ms(),
         }
     }
 
@@ -12423,6 +12426,7 @@ impl Engine {
                 qsos: r.qsos,
                 rate: r.rate,
                 last_seen_secs: r.age,
+                clock_ms: r.clock_ms,
             })
             .collect();
         // Named positions first, alphabetically; unnamed ones after, in id order so
@@ -42211,6 +42215,7 @@ mod tests {
                 op: "w9aaa".into(),
                 freq: 14_050_000,
                 name: "CW tent".into(),
+                clock_ms: None,
             },
         );
         let board = e.fd_board_snapshot().expect("hosting");
@@ -42304,6 +42309,7 @@ mod tests {
                     uniq: 5,
                     rate: 12,
                     age: 3,
+                    clock_ms: Some(-3_000),
                 }],
             });
         }
@@ -42319,6 +42325,11 @@ mod tests {
         assert_eq!(club.board.len(), 1);
         assert_eq!(club.board[0].pos_name, "SSB tent");
         assert_eq!(club.board[0].last_seen_secs, 3);
+        assert_eq!(
+            club.board[0].clock_ms,
+            Some(-3_000),
+            "the position's measured clock reaches the board"
+        );
 
         // A second local contact while connected but unacked → BEHIND, queued 1.
         assert!(e.fd_log_manual("W5DEF", "1E", "STX", "PH").unwrap());

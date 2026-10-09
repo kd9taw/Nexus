@@ -117,8 +117,11 @@ function status(v: unknown): void {
         !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
       !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
     for (const raw of c.board) {
-      const r = object(raw,['posid','posName','band','mode','operator','qsos','rate','lastSeenSecs'])
-      if (![r.posid,r.posName,r.band,r.mode,r.operator].every(text) || ![r.qsos,r.rate,r.lastSeenSecs].every(integer)) throw new Error('invalidFieldDay')
+      // `clockMs`: that position's clock minus the host's, in whole ms, either sign; null when it
+      // has not measured one, and absent from a station older than the field.
+      const r = object(raw,['posid','posName','band','mode','operator','qsos','rate','lastSeenSecs'],['clockMs'])
+      if (![r.posid,r.posName,r.band,r.mode,r.operator].every(text) || ![r.qsos,r.rate,r.lastSeenSecs].every(integer) ||
+        (r.clockMs !== undefined && r.clockMs !== null && !Number.isSafeInteger(r.clockMs))) throw new Error('invalidFieldDay')
     }
   }
 }
