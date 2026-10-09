@@ -46,6 +46,13 @@
 // place in a column it does not have is dropped on load and ◀ ▶ never reach one. ◀ ▶ go to the
 // neighbouring column ON SCREEN, so a cockpit whose columns stand in another order on this window (FT's
 // side rail on the left) passes that order with the move.
+//
+// A DROP (2026-10-08: the operator's "drag with the mouse": a pane dragged by its title onto a column or
+// between panes) is not a second way of placing a pane: it is the arrows' own moves, run one after another
+// to the place the pane was dropped (`dropArranged`). So a drop writes exactly the record those presses
+// would, every rule above holds for it unchanged (a pinned pane never leaves its column, only a listed pane
+// reaches the left side, hidden panes are stepped past), and a stop control, which has no id, can no more be
+// dragged or dropped onto than it can be moved.
 
 /** The columns of a grid cockpit's pane region, in their stock order on screen. */
 export type PaneColumn = 'a' | 'b' | 'log'
@@ -370,4 +377,72 @@ export function canMoveArranged<P extends string>(
   order?: readonly PaneColumn[],
 ): boolean {
   return moveArranged(spec, arr, id, move, shown, sideShows, order) != null
+}
+
+// ── A DROP ───────────────────────────────────────────────────────────────────────────────────────
+
+/** Where a dragged pane is dropped: a column, or the left side, and the pane on screen it lands right
+ *  above there — null for the foot of that place. */
+export interface PaneDrop<P extends string> {
+  area: PaneColumn | 'side'
+  before: P | null
+}
+
+/**
+ * The arrangement after `id` is dropped at `drop`, or null when the drop changes nothing or no run of the
+ * arrows reaches it (see the header). The run: a pane on the left side first takes ▶ back to its column; ◀ ▶
+ * then step it to the dropped column along the columns' order on screen (`order`, as for a move), and the
+ * side is reached by ◀ from the first column; then ▲ ▼ step it until it stands right above `drop.before` —
+ * a pane on screen in that place — or at the foot. The arguments are `moveArranged`'s, and each step is that
+ * function, so the result is the record the same presses leave.
+ */
+export function dropArranged<P extends string>(
+  spec: ArrangeSpec<P>,
+  arr: Arrangement<P>,
+  id: P,
+  drop: PaneDrop<P>,
+  shown: (id: P) => boolean,
+  sideShows: boolean,
+  order?: readonly PaneColumn[],
+): Arrangement<P> | null {
+  const side = sideShows && spec.leftSide != null
+  if (!arrangeIds(spec).includes(id) || !shown(id) || drop.before === id) return null
+  if (drop.area === 'side' ? !side : !columnsOf(spec).includes(drop.area)) return null
+  let cur = arr
+  const step = (move: PaneMove): boolean => {
+    const next = moveArranged(spec, cur, id, move, shown, sideShows, order)
+    if (next) cur = next
+    return next != null
+  }
+  const onSide = (a: Arrangement<P>, x: P) => side && (a.leftSide ?? []).includes(x)
+  const areaOf = (): PaneColumn | 'side' | undefined => {
+    if (onSide(cur, id)) return 'side'
+    const cols = placedColumns(spec, cur.place)
+    return PANE_COLUMNS.find((c) => cols[c].includes(id))
+  }
+  // The panes on screen in the dropped place, top to bottom: what ▲ ▼ step past there.
+  const listed = (): P[] =>
+    drop.area === 'side'
+      ? (cur.leftSide ?? []).filter(shown)
+      : placedColumns(spec, cur.place)[drop.area].filter((x) => shown(x) && !onSide(cur, x))
+  if (areaOf() === 'side' && drop.area !== 'side' && !step('right')) return null
+  const seq = order ?? columnsOf(spec)
+  const goal = drop.area === 'side' ? PANE_COLUMNS[0] : drop.area
+  for (let at = areaOf(), n = 0; at !== 'side' && at !== goal; at = areaOf(), n++) {
+    const from = seq.indexOf(at as PaneColumn)
+    const to = seq.indexOf(goal)
+    if (from < 0 || to < 0 || n > seq.length || !step(to < from ? 'left' : 'right')) return null
+  }
+  if (drop.area === 'side' && areaOf() !== 'side' && !step('left')) return null
+  if (areaOf() !== drop.area) return null
+  for (let n = listed().length; n >= 0; n--) {
+    const list = listed()
+    const at = list.indexOf(id)
+    const others = list.filter((x) => x !== id)
+    const want = drop.before == null ? others.length : others.indexOf(drop.before)
+    if (at < 0 || want < 0) return null
+    if (at === want) return cur === arr ? null : cur
+    if (!step(at < want ? 'down' : 'up')) return null
+  }
+  return null
 }
