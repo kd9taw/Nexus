@@ -182,12 +182,14 @@ fn parse_waveform(
         if data.len() < 16 {
             return None;
         }
-        // Mode byte: 00=Center, 01=Fixed, 02=Scroll-C (center-style fields),
-        // 03=Scroll-F (fixed-style fields). Anything newer/unknown → drop the sweep
-        // rather than misread its fields.
+        // Mode byte: 00=Center sends a center and a span; 01=Fixed, 02=Scroll-C and
+        // 03=Scroll-F send the two edges ("In the Fixed, SCROLL-C, and SCROLL-F modes: Lower
+        // edge and higher edge frequencies are sent", `27 00` item 5 in every guide here; the
+        // pages are on the test). Anything newer/unknown → drop the sweep rather than misread
+        // its fields.
         let center_style = match data[4] {
-            0x00 | 0x02 => true,
-            0x01 | 0x03 => false,
+            0x00 => true,
+            0x01..=0x03 => false,
             _ => return None,
         };
         // How many bytes each frequency takes: 5, except on a 10 GHz band, where the center
@@ -397,7 +399,7 @@ mod tests {
         assert_eq!(sweep.hi_hz, 144_500_000.0);
     }
 
-    /// A NEGATIVE LOWER EDGE. In the Fixed and Scroll-F modes the radio sends the two edges, and
+    /// A NEGATIVE LOWER EDGE. In the Fixed and scroll modes the radio sends the two edges, and
     /// an `F` in the lower edge's 1 GHz digit means the edge is below 0 Hz, its other digits the
     /// absolute value. Read as a 0, the F put the sweep over a positive span the radio was not
     /// showing.
@@ -408,8 +410,8 @@ mod tests {
         let mut lower = freq_to_bcd(20_000);
         lower[4] |= 0xF0;
         assert_eq!(lower, [0x00, 0x00, 0x02, 0x00, 0xF0]);
-        for mode in [0x01u8, 0x03] {
-            // Fixed, and Scroll-F (fixed-style edges).
+        for mode in [0x01u8, 0x02, 0x03] {
+            // Fixed, Scroll-C and Scroll-F: each sends the two edges.
             let mut hdr = vec![mode];
             hdr.extend_from_slice(&lower);
             hdr.extend_from_slice(&freq_to_bcd(480_000));
@@ -507,21 +509,33 @@ mod tests {
         assert!(asm.push(&wf_frame(2, 2, &[5, 6])).is_some());
     }
 
+    /// THE SCROLL MODES SEND EDGES, both of them. Every guide here says it in the same words, "In
+    /// the Fixed, SCROLL-C, and SCROLL-F modes: Lower edge and higher edge frequencies are sent"
+    /// (`27 00` item 5): the IC-7300 Full Manual A7292-4EX-12 PDF p. 172, A7380-7EX-4 (IC-7610)
+    /// PDF p. 15, A7508-3EX-4 (IC-9700) PDF p. 26, A7560-8EX-6 (IC-705) PDF p. 29, A7711-9EX-2
+    /// (IC-905) PDF p. 29, A7788-8EX-2 (IC-7760) PDF p. 25 and the IC-7300MK2's rev 0, PDF p. 24.
+    /// Only Center sends a center and a span. Read as a center and a span, a Scroll-C sweep of
+    /// 144.0–144.5 MHz was drawn from −0.5 MHz to 288.5 MHz. An unknown mode byte must drop, not
+    /// misread.
     #[test]
-    fn scroll_modes_parse_with_their_base_styles_and_unknown_modes_drop() {
-        // Mode 02 = Scroll-C carries CENTER-style fields (center ± span); 03 = Scroll-F
-        // carries FIXED-style edges; an unknown mode byte must drop, not misread.
+    fn scroll_modes_send_edges_and_unknown_modes_drop() {
         let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
-        let mut hdr = vec![0x02]; // Scroll-C
-        hdr.extend_from_slice(&freq_to_bcd(145_000_000));
-        hdr.extend_from_slice(&freq_to_bcd(25_000));
-        hdr.push(0x00);
-        assert!(asm.push(&wf_frame(1, 2, &hdr)).is_none());
-        let sweep = asm
-            .push(&wf_frame(2, 2, &[1, 2]))
-            .expect("scroll-C assembles");
-        assert_eq!(sweep.lo_hz, 144_975_000.0, "center-style math for Scroll-C");
-        assert_eq!(sweep.hi_hz, 145_025_000.0);
+        for mode in [0x02u8, 0x03] {
+            // Scroll-C, Scroll-F
+            let mut hdr = vec![mode];
+            hdr.extend_from_slice(&freq_to_bcd(144_000_000));
+            hdr.extend_from_slice(&freq_to_bcd(144_500_000));
+            hdr.push(0x00);
+            assert!(asm.push(&wf_frame(1, 2, &hdr)).is_none());
+            let sweep = asm
+                .push(&wf_frame(2, 2, &[1, 2]))
+                .expect("a scroll sweep assembles");
+            assert_eq!(
+                (sweep.lo_hz, sweep.hi_hz),
+                (144_000_000.0, 144_500_000.0),
+                "mode {mode:02X}: the two edges"
+            );
+        }
 
         let mut bad = vec![0x07]; // unknown future mode
         bad.extend_from_slice(&freq_to_bcd(145_000_000));
@@ -725,16 +739,16 @@ mod tests {
         assert_eq!(sweep.row, [0.0, 0.5, 1.0]);
     }
 
-    /// ⭐ …AND IN THE FIXED AND SCROLL-F MODES EACH EDGE IS. A7711-9EX-2 PDF p. 29, `27 00` item
+    /// ⭐ …AND IN THE FIXED AND SCROLL MODES EACH EDGE IS. A7711-9EX-2 PDF p. 29, `27 00` item
     /// 5: "When the Higher Edge or Lower Edge frequency is in the 10 GHz band, the each Edge
     /// frequency is 12 digits (6 bytes) from 100 GHz to 1 Hz", laid out as the Scope Fixed edge
     /// frequency settings' range 06 (`27 1E`, PDF p. 30). Read as 10 digits, the out-of-range byte
     /// came from inside the upper edge, so this sweep was dropped as out of range.
     #[test]
     fn the_ic905s_10_ghz_edges_are_12_digits_each() {
-        for mode in [0x01u8, 0x03] {
+        for mode in [0x01u8, 0x02, 0x03] {
             let body = [
-                mode, // Fixed, or Scroll-F
+                mode, // Fixed, Scroll-C or Scroll-F
                 0x00, 0x00, 0x00, 0x68, 0x03, 0x01, // lower edge 10368.000000 MHz
                 0x00, 0x00, 0x50, 0x68, 0x03, 0x01, // upper edge 10368.500000 MHz
                 0x00, // in range

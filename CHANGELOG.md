@@ -312,6 +312,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
   for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
   IC-905 on 10 GHz.
+- **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
+  Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
+  and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
+  from below 0 Hz to about 288 MHz. Scroll-C sweeps are now read as two edges, as every Icom CI-V
+  reference says. Center, Fixed and Scroll-F are unchanged. NEEDS-BENCH: not yet tried on a radio
+  in Scroll-C.
 - **The CI-V bus diagnostic log is offered on every radio Nexus's own CI-V connection drives.**
   Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the log by what the radio's model name looked
   like, so an IC-7610 saved as "Icom 7610", as "IC-7610M" or with no name could turn on Native
