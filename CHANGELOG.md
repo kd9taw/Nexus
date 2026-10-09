@@ -332,6 +332,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check against your licence privileges judges 3 cm, as it does every other band. Its other bands,
   and every other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the
   dial, a QSY and a logged contact, receiving or into a dummy load).
+- **A native CI-V Icom is no longer refused a frequency that Nexus only guessed it cannot reach.**
+  On Nexus's own CI-V connection (USB or the Icom network connection), Nexus took 135.7 kHz to
+  1.3 GHz as the range the radio receives. That range is part of what the CAT broker tells WSJT-X
+  so that WSJT-X will set any frequency, and it was never the radio's own. So an IC-905 was
+  refused a satellite downlink on 2.4, 5.7 or 10 GHz with "This radio doesn't cover…" before the
+  radio was asked (a QO-100 pick on 10489.5 MHz among them), and an IC-7300 was taken to receive
+  2 m. Nexus now treats a native CI-V radio's range as unknown and refuses nothing up front: the
+  frequency goes to the radio, and if the radio cannot tune it, the CAT status and the satellite
+  rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
+  is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
+  on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
