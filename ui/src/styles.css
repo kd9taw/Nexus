@@ -17628,8 +17628,9 @@ body.pane-dragging {
   grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--gap);
-  /* The containing block of the column dividers (`.op-colseam` below) and of nothing else: every
-     absolutely positioned thing inside the panes already has a positioned ancestor of its own. */
+  /* The containing block of the column dividers (`.op-colseam` below), and of a drag's marks while a
+     pane is dragged (`.pane-drop-layer`), and of nothing else: every absolutely positioned thing
+     inside the panes already has a positioned ancestor of its own. */
   position: relative;
 }
 /* Roster mode (GridTracker-style): the Call Roster pane (first child) is dominant,
