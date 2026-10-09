@@ -5307,7 +5307,7 @@ impl RadioLoop {
         };
         tempo_core::applog::info("tx", &format!("{why} (dropped)"));
         if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
-            engine_lock(engine).set_audio_error(Some(why.clone()));
+            engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
             self.err_owner = ErrOwner::Ptt;
         }
         Some(why)
