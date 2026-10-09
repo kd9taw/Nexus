@@ -28186,6 +28186,134 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
     Ok(eng.snapshot())
 }
 
+/// A contest contact the operator removed, as the contest screen lists it: its rows as the log
+/// table shows them, when it was removed, and the id Restore takes.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemovedContestDto {
+    id: u64,
+    removed_unix: u64,
+    rows: Vec<tempo_app::dto::FieldDayQso>,
+}
+
+impl From<&tempo_app::engine::contest_removal::ContestRemoval> for RemovedContestDto {
+    fn from(r: &tempo_app::engine::contest_removal::ContestRemoval) -> Self {
+        Self {
+            id: r.entry.id(),
+            removed_unix: r.entry.removed_unix,
+            rows: r.rows.clone(),
+        }
+    }
+}
+
+/// Where a removed contact had already gone — places a removal cannot take it back from.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContestSentToDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n3fjp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n1mm: Option<String>,
+    wsjtx: bool,
+    /// The logbook holds a copy merged from the contest.
+    logbook: bool,
+    /// The services holding that copy, by its upload marks.
+    uploaded: Vec<&'static str>,
+}
+
+/// What a removal or a restore came to.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestRemovalDto {
+    #[serde(rename_all = "camelCase")]
+    Removed {
+        entry: RemovedContestDto,
+        sent_to: ContestSentToDto,
+    },
+    Restored {
+        entry: RemovedContestDto,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Remove the newest contest contact** — the strip's Ctrl+D pressed twice (or Remove last)
+/// and the contest screen's Remove on the newest row — when it is still the contact named.
+///
+/// Kept, never deleted ([`tempo_app::engine::contest_removal`]): the contest journal keeps it
+/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. Refused
+/// while club sync runs. The answer names where it had already gone, which nothing here takes
+/// it back from. Answers once the contest journal holds the change; the logbook's copies are
+/// read with the engine lock released, on the blocking pool, as [`journaled_command`] waits.
+///
+/// ⛔ Not one of Remote's operations: removal is refused from afar.
+#[tauri::command]
+async fn contest_remove_last(
+    state: State<'_, SharedEngine>,
+    call: String,
+    when_unix: u64,
+) -> Result<ContestRemovalDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::remove_last(&engine, &call, when_unix)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(removed) => {
+            let sent = &removed.removal.sent;
+            ContestRemovalDto::Removed {
+                entry: RemovedContestDto::from(&removed.removal),
+                sent_to: ContestSentToDto {
+                    n3fjp: sent.n3fjp.clone(),
+                    n1mm: sent.n1mm.clone(),
+                    wsjtx: sent.wsjtx,
+                    logbook: removed.logbook.is_some(),
+                    uploaded: removed.logbook.clone().unwrap_or_default(),
+                },
+            }
+        }
+        Err(refusal) => ContestRemovalDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
+/// Put a removed contest contact back exactly as it was, by the id the Removed list gave it —
+/// refused when the station was worked again since on that band and mode, and while club sync
+/// runs. Answers once the contest journal holds the change.
+#[tauri::command]
+async fn contest_restore(
+    state: State<'_, SharedEngine>,
+    id: u64,
+) -> Result<ContestRemovalDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::restore(&engine, id)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(restored) => ContestRemovalDto::Restored {
+            entry: RemovedContestDto::from(&restored),
+        },
+        Err(refusal) => ContestRemovalDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
+/// The contest screen's Removed list: the removed contacts, oldest removal first.
+#[tauri::command(async)]
+fn contest_removed(state: State<'_, SharedEngine>) -> Vec<RemovedContestDto> {
+    engine_lock(&state)
+        .contest_removed()
+        .iter()
+        .map(RemovedContestDto::from)
+        .collect()
+}
+
 /// What one merge into the general logbook did (§3.2).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34226,6 +34354,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_log_satellite,
             contest_working,
             contest_entry_reset,
+            contest_remove_last,
+            contest_restore,
+            contest_removed,
             fd_merge_to_general,
             fd_set_upload,
             contest_i_moved,
@@ -36105,6 +36236,53 @@ mod tests {
             list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
             "contest_log_manual_rows is not registered — a county line would fail at runtime"
         );
+    }
+
+    /// ⭐ Removing the newest contest contact reaches the app only if its three commands are
+    /// REGISTERED, and the two that change the contest log answer only once its journal holds
+    /// the change (the tempo-app functions that wait for it). And none of them is one of Remote's
+    /// operations: removal is refused from afar, so the Remote dispatcher must never name them.
+    #[test]
+    fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, waits_through) in [
+            ("contest_remove_last", Some("contest_removal::remove_last(")),
+            ("contest_restore", Some("contest_removal::restore(")),
+            ("contest_removed", None),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — the strip or the contest screen would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nfn {command}("))
+                .or_else(|| src.split_once(&format!("\nasync fn {command}(")))
+                .expect("the command exists")
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            if let Some(call) = waits_through {
+                assert!(body.contains(call), "{command} must go through {call}");
+            }
+        }
+        // The Remote dispatcher's change table. The POSITIVE CONTROL: it does carry the
+        // Logbook's delete, so a check that read nothing could not pass for one that read it.
+        let remote = include_str!("remote_service/operations/logging.rs");
+        assert!(
+            remote.contains("LogOp::Delete"),
+            "the control: Remote's own delete is there"
+        );
+        for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
+            assert!(!remote.contains(name), "Remote must not reach {name}");
+        }
     }
 
     /// The RF scope pane's poll is also its request for the radio's scope, so it must be

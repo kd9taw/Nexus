@@ -2127,6 +2127,14 @@ pub struct FieldDayQso {
     /// `"dupe":false` on every ordinary row spends ~28 KB of it saying nothing.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dupe: bool,
+    /// The row's contest seq — what the slot loop's forwarder names a row by when it pushes new
+    /// contacts to N3FJP, the N1MM broadcast and WSJT-X listeners. Named, not counted: a
+    /// removal and a new contact inside one slot leave the count where it was.
+    ///
+    /// ⛔ **NEVER ON THE WIRE** (`skip`): the hosted Remote page refuses a contest row carrying a
+    /// key it does not know, so a row that serialised this would blank its Field Day view.
+    #[serde(skip)]
+    pub seq: u64,
 }
 
 /// `skip_serializing_if` for a flag that is false on almost every row. serde needs a path
