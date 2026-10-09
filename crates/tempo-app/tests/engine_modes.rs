@@ -159,3 +159,119 @@ fn field_day_mode_logs_through_the_engine() {
     );
     assert_eq!(fr.points, 2); // one digital QSO = 2 points
 }
+
+/// ⛔ **Hard gate 2's boundary, pinned through FT itself.** What a club position measures of
+/// its clock against the host's is SHOWN, and reaches no clock, slot or timestamp FT reads.
+///
+/// The runner is a club position whose host is 30 s ahead, told so by 100 round trips through
+/// the real bridge; then it works a Field Day contact over the FT modem loopback. Its FT
+/// steering offset (`Engine::clock_offset_ms`: the one number the radio loop subtracts from the
+/// system clock for every slot, TX key and decode window) is exactly what SNTP left it, with an
+/// offset held and with none; the contact the sequencer logged, and one logged by hand after
+/// it, are stamped by this PC's own clock, 30 s from the host's.
+#[test]
+fn the_club_clock_reaches_no_clock_slot_or_stamp_ft_reads() {
+    use std::sync::{Arc, Mutex};
+    use tempo_app::fdbridge::EnginePositionSync;
+    use tempo_net::fdsync::{ClockSample, PositionSync};
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+    };
+    for held in [None, Some(1_234i64)] {
+        let runner = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut sp = Engine::new("K2DEF", "FN31", 1);
+        {
+            let mut r = runner.lock().unwrap();
+            r.set_tier(Tier::TempoFast);
+            let mut s = r.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_position_id = "aaaa0001".into();
+            s.fd_join_addr = "127.0.0.1:42073".into(); // a club position: the club block shows
+            r.apply_settings(s);
+            r.set_mode("fieldday-run").unwrap();
+            if let Some(ms) = held {
+                r.publish_clock_offset(ms, 3, None);
+            }
+        }
+        sp.set_tier(Tier::TempoFast);
+        let mut s = sp.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "2A".into();
+        s.fd_section = "IL".into();
+        sp.apply_settings(s);
+        sp.set_mode("fieldday-sp").unwrap();
+        sp.set_tx_enabled(true);
+
+        let (ft_offset, ft_chip) = {
+            let r = runner.lock().unwrap();
+            (r.clock_offset_ms(), r.snapshot().radio.clock_offset_ms)
+        };
+        assert_eq!(
+            ft_offset, held,
+            "scene: FT steers by what SNTP measured, or by nothing"
+        );
+
+        let club = EnginePositionSync(runner.clone());
+        club.on_welcome(0, "TEST FD", "W9ABC", now().as_secs());
+        let base = now().as_millis() as u64;
+        for i in 0..100u64 {
+            let t0 = base + i * 5_000;
+            club.on_clock(ClockSample {
+                t0,
+                t1: t0 + 30_001,
+                t2: t0 + 30_002,
+                t3: t0 + 3,
+            });
+        }
+
+        let mut r = runner.lock().unwrap();
+        // Control: the club line did take the measurement.
+        assert_eq!(
+            r.snapshot().field_day.unwrap().club.unwrap().skew_secs,
+            -30,
+            "the position says it is 30 s behind the host"
+        );
+        let logged = |e: &Engine| {
+            e.snapshot()
+                .field_day
+                .map(|f| f.qso_count >= 1)
+                .unwrap_or(false)
+        };
+        let lo = now().as_secs();
+        run(&mut r, &mut sp, 50, |a, b| logged(a) && logged(b));
+        assert!(
+            r.fd_log_manual("N0XYZ", "1D", "MN", "CW").unwrap(),
+            "the hand-logged contact"
+        );
+        let hi = now().as_secs();
+
+        let fd = r.snapshot().field_day.unwrap();
+        assert_eq!(
+            fd.qso_count, 2,
+            "the FT contact and the hand-logged one: {:?}",
+            fd.log
+        );
+        for q in &fd.log {
+            assert!(
+                lo <= q.when_unix && q.when_unix <= hi,
+                "{} is stamped by this PC's clock: {lo} ≤ {} ≤ {hi}",
+                q.call,
+                q.when_unix
+            );
+        }
+        assert_eq!(
+            r.clock_offset_ms(),
+            ft_offset,
+            "FT's slot clock is untouched"
+        );
+        assert_eq!(
+            r.snapshot().radio.clock_offset_ms,
+            ft_chip,
+            "and so is the clock chip"
+        );
+    }
+}

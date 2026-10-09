@@ -2604,6 +2604,18 @@ pub struct FdClubBoardRow {
     /// Seconds since the host last heard from it — the UI stale-marks
     /// rows past 15 s (readings are never silently stale).
     pub last_seen_secs: u64,
+    /// That position's clock minus the host's, in ms, as it measured it over the club
+    /// link and reported it to the host. Filled on the HOST's board only; `None` on a
+    /// position's, and for a position that has not measured one (a Nexus older than the
+    /// measurement, or no round trip yet). Shown on the board, never applied to anything.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know before a station sends
+    /// it (`ui/src/remote-web/field-day.ts` refuses any board key it does not), so the page
+    /// that takes it is deployed before the release that writes it. Absent, not `null`, when
+    /// there is no value, so a position's board, which never has one, stays exactly what an
+    /// older page takes; only a host's measured rows carry the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_ms: Option<i64>,
 }
 
 /// The club block on [`FieldDayStatus`]: sync honesty + the down-flowed club

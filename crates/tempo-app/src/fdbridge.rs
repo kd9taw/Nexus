@@ -14,7 +14,9 @@
 
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
-use tempo_net::fdsync::{ClubBackend, ClubState, JoinAccept, PosReport, PositionSync, WireQso};
+use tempo_net::fdsync::{
+    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionSync, WireQso,
+};
 
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
@@ -83,9 +85,10 @@ impl PositionSync for EnginePositionSync {
     }
 
     fn on_welcome(&self, acked: u64, event: &str, host_call: &str, host_now_unix: u64) {
-        // Skew = local − host, computed at the one moment both clocks are in
-        // hand. WARNED about above ±30 s, never adjusted (ids are clock-free
-        // and FD has no time-window dupe rule).
+        // Skew = local − host in whole seconds, computed at the one moment both
+        // clocks are in hand: the club line's number until the first timed round
+        // trip closes (`on_clock`). Shown, never adjusted (ids are clock-free and
+        // FD has no time-window dupe rule).
         let skew = now_unix() as i64 - host_now_unix as i64;
         engine_lock(&self.0)
             .fd_mirror_mut()
@@ -114,5 +117,11 @@ impl PositionSync for EnginePositionSync {
         engine_lock(&self.0)
             .fd_mirror_mut()
             .on_link(connected, now_unix());
+    }
+
+    fn on_clock(&self, sample: ClockSample) {
+        // Into the mirror and nowhere else: what the club measures is shown, never applied
+        // (FT's slot clock steers by the SNTP measurement alone).
+        engine_lock(&self.0).fd_mirror_mut().on_clock(sample);
     }
 }

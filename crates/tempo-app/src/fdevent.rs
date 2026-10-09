@@ -346,6 +346,11 @@ pub struct ClubPosition {
     pub last_seen_unix: u64,
     /// High-water acked seq (what `welcome` reports back on a rejoin).
     pub acked: u64,
+    /// The position's clock minus this host's, in ms, as its last measured report said;
+    /// `None` until one does (a Nexus older than the measurement never will). The host's
+    /// own board shows it ([`ClubLog::clock_ms`]); it rides no board line, so the lines
+    /// every position is sent are no longer for it.
+    pub clock_ms: Option<i64>,
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -727,7 +732,18 @@ impl ClubLog {
         pos.mode = r.mode.to_uppercase();
         pos.operator = r.op.to_uppercase();
         pos.freq = r.freq;
+        // An unmeasured report is no news either: a reconnect's first report leaves
+        // before its first round trip has closed.
+        if r.clock_ms.is_some() {
+            pos.clock_ms = r.clock_ms;
+        }
         pos.last_seen_unix = now;
+    }
+
+    /// A position's clock minus this host's, in ms, as its last measured report said —
+    /// the host's board column. `None` for a position that has not measured one.
+    pub fn clock_ms(&self, posid: &str) -> Option<i64> {
+        self.positions.get(posid).and_then(|p| p.clock_ms)
     }
 
     /// Stamp a position's liveness (any socket activity counts — the board's
@@ -1141,8 +1157,12 @@ pub struct ClubMirror {
     /// Link liveness + when it went down (the Offline chip's `since`).
     pub connected: bool,
     pub down_since_unix: u64,
-    /// Local minus host clock at the last welcome (warn > 30 s, NEVER adjust).
+    /// This PC's clock minus the host's, whole seconds: the welcome's until the first timed
+    /// round trip closes, measured from then on ([`Self::clock`]). The club line shows it
+    /// from 2 s and warns past 30 s; NOTHING ever adjusts a clock by it.
     pub skew_secs: i64,
+    /// The round-trip measurement behind [`Self::skew_secs`], this session's only.
+    pub clock: crate::clubclock::ClubClock,
     /// The last host `error` line, verbatim (version refusal etc.).
     pub last_error: Option<String>,
 }
@@ -1177,7 +1197,19 @@ impl ClubMirror {
         self.event = event.to_string();
         self.host_call = host_call.to_string();
         self.skew_secs = skew_secs;
+        // A new session may be with another host, so the measurement starts again; until
+        // its first round trip the welcome's whole seconds stand.
+        self.clock = Default::default();
         self.last_error = None;
+    }
+
+    /// One answered round trip of the timed ping (`fdsync::ClockSample`). Updates what the
+    /// club line says, and nothing else.
+    pub fn on_clock(&mut self, sample: tempo_net::fdsync::ClockSample) {
+        self.clock.add(sample);
+        if let Some(secs) = self.clock.skew_secs() {
+            self.skew_secs = secs;
+        }
     }
 
     pub fn on_link(&mut self, connected: bool, now: u64) {
@@ -1246,6 +1278,7 @@ mod tests {
             op: op.into(),
             freq: 14_032_100,
             name: name.into(),
+            clock_ms: None,
         }
     }
 
@@ -1448,6 +1481,32 @@ mod tests {
         // Rate window: an arrival >1 h old stops counting.
         let rows = club.board_rows(1000 + 3700);
         assert_eq!(rows.iter().find(|r| r.pos == "aaaa").unwrap().rate, 0);
+    }
+
+    /// The host keeps each position's clock as its last MEASURED report said. An unmeasured
+    /// report (a reconnect's first, or every one from an older Nexus) leaves it alone, a
+    /// position that never measured has none, and a new measurement replaces the old.
+    #[test]
+    fn the_host_keeps_each_positions_last_measured_clock() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.join("aaaa", "CW tent", "KD9TAW", 1000);
+        club.join("bbbb", "SSB tent", "KD9TAW", 1000);
+        let clocked = |clock_ms| PosReport {
+            clock_ms,
+            ..report("", "20m", "cw", "op1")
+        };
+        club.position_status("aaaa", &clocked(Some(-3_000)), 1001);
+        club.position_status("aaaa", &clocked(None), 1002);
+        club.position_status("bbbb", &report("", "40m", "ph", "op2"), 1002);
+        assert_eq!(club.clock_ms("aaaa"), Some(-3_000));
+        assert_eq!(club.clock_ms("bbbb"), None);
+        assert_eq!(
+            club.clock_ms("cccc"),
+            None,
+            "a position the host never heard of"
+        );
+        club.position_status("aaaa", &clocked(Some(400)), 1004);
+        assert_eq!(club.clock_ms("aaaa"), Some(400));
     }
 
     #[test]

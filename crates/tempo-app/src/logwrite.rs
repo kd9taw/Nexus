@@ -1004,8 +1004,8 @@ fn made_again(
 /// and record Settings' last-sync summary as those do ([`merge_lotw_report`],
 /// [`merge_eqsl_report`]). QRZ's book gives only QRZ's own confirmation
 /// ([`station::plan_qrz_gains`]): Sync from QRZ also adds the contacts the book holds that the log
-/// lacks, and carries QRZ's copies of other services' confirmations, and neither is a gain this
-/// check showed, nor its summary a sync's. How many contacts gained the service's confirmation.
+/// lacks, which is no gain this check showed, nor its summary a sync's. How many contacts gained
+/// the service's confirmation.
 fn merged_for_check(
     engine: &Mutex<Engine>,
     channel: tempo_core::reconcile::check::Channel,
