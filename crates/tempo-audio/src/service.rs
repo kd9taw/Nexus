@@ -7734,14 +7734,16 @@ impl RadioLoop {
                         if !self.tuner_probed {
                             self.tuner_probed = true;
                             let tuner = rig.read_func("TUNER");
-                            // Nexus's own Flex client says itself whether it can start the
-                            // radio's tuner (a tuner the radio reports fitted, while the client
-                            // runs the ATU): the profile's Hamlib model, 2036 for SmartSDR CAT,
-                            // describes a CAT path that is not in use, and says it cannot.
+                            // Nexus's own Flex client, once it runs the radio's ATU, says itself
+                            // whether it can start the radio's tuner (a tuner the radio reports
+                            // fitted): the profile's Hamlib model, 2036 for SmartSDR CAT,
+                            // describes a CAT path that is not in use, and says it cannot. Until
+                            // then the client answers no `u TUNER`, so no ATU button is offered,
+                            // and the model's answer stands, as before.
                             let start_tune =
                                 match self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
-                                    Some(client) => client.starts_atu(),
-                                    None => crate::rigmodels::hamlib_atu_start_tune_reaches(
+                                    Some(client) if client.runs_atu() => client.starts_atu(),
+                                    _ => crate::rigmodels::hamlib_atu_start_tune_reaches(
                                         self.applied.rig_model,
                                     ),
                                 };
