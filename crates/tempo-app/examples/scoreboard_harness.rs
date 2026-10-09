@@ -200,9 +200,11 @@ fn field_day(event: FdEvent, page: &'static str) -> Frozen {
             section: sections[g.next(sections.len() * 3 / 4)].into(),
             band: bands[g.next(bands.len())].into(),
             mode_class: modes[g.next(modes.len())].into(),
-            submode: String::new(),
             when_unix: start + 60 + i * 78 + g.next(60) as u64,
             operator: ["AA9XYZ", "W9XYZ", "KD9ABC", "N9VHF"][p].into(),
+            // The submode and anything a later build adds to a row stay at their
+            // defaults, so this harness keeps compiling as the row grows.
+            ..Default::default()
         });
     }
     let d = FdBoardData {

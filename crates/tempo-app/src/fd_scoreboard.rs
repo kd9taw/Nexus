@@ -88,7 +88,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// reconciled shape from the fd sync design. `posid` is the machine identity
 /// (persisted 8-hex per instance); `operator` was stamped at enqueue time, so
 /// an operator swap changes subsequent rows, not history.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FdBoardRow {
     pub posid: String,
     pub seq: u64,
