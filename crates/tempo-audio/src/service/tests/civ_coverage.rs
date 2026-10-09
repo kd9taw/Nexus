@@ -443,3 +443,71 @@ fn an_unanswered_dial_write_counts_toward_the_breaker_and_an_ng_toward_the_give_
         ((2, 1, 0), (2, 0, 2))
     );
 }
+
+/// ⭐ A DIAL NOTE COMES DOWN WHEN THE DIAL LANDS. A dial write the radio did not answer, and one it
+/// refused, are each followed by a write it takes: the note gives way to the confirmation, and the
+/// radio is on the dial. A line published after the note (here a Test CAT result) is newer than
+/// the dial and stays. The note stayed up over a radio that had taken the dial: "28.4000 MHz not
+/// sent — no reply from the rig" with the radio on 28.400 MHz.
+#[test]
+fn a_dial_note_comes_down_when_the_dial_lands_and_a_newer_line_stays() {
+    let confirmed = "CAT confirmed — rig accepted a command".to_string();
+    // A silence, then the retry lands.
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+    s.regs.lock().unwrap().drop_dial_writes = 1;
+    s.engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+    let silent = (s.said_until(|s| s.main_hz() == 28_400_000), s.main_hz());
+    // An NG, then the radio takes the same dial on the retry; `newer` is published in between.
+    let refused_then_taken = |newer: Option<&str>| {
+        let mut s = Scene::new(
+            IcomModel::Ic7300,
+            3073,
+            (14.074, "20m"),
+            &[(30_000, 74_800_000)],
+        );
+        s.engine.lock().unwrap().set_frequency(145.0, "2m", "USB");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !s.told().0.contains("(1/3)") && Instant::now() < deadline {
+            s.step();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let note = s.told().0;
+        if let Some(line) = newer {
+            s.engine
+                .lock()
+                .unwrap()
+                .set_cat_status(Some(true), line.to_string());
+        }
+        s.regs.lock().unwrap().covers_hz.clear();
+        let said = s.said_until(|s| s.main_hz() == 145_000_000);
+        (note, said, s.told().0, s.main_hz())
+    };
+    assert_eq!(
+        (
+            silent,
+            refused_then_taken(None),
+            refused_then_taken(Some("Connected — 14.074 MHz")),
+        ),
+        (
+            (
+                vec![
+                    "28.4000 MHz not sent — no reply from the rig".to_string(),
+                    confirmed.clone(),
+                ],
+                28_400_000,
+            ),
+            (
+                "145.0000 MHz refused by the rig (1/3)".to_string(),
+                vec![confirmed.clone()],
+                confirmed,
+                145_000_000,
+            ),
+            (
+                "145.0000 MHz refused by the rig (1/3)".to_string(),
+                vec![],
+                "Connected — 14.074 MHz".to_string(),
+                145_000_000,
+            ),
+        )
+    );
+}

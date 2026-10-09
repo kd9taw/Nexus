@@ -488,6 +488,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers for itself. What WSJT-X and other programs read through the CAT broker is unchanged, and
   so is the check against your licence privileges. NEEDS-BENCH: a FLEX radio, and a radio on
   OmniRig, asked for a frequency it cannot tune should say that the radio refused it.
+- **The CAT status no longer says a frequency was not sent once the radio has taken it.** When a
+  frequency change went unanswered, or was refused once, and the next try went through, the CAT
+  status kept its note ("… MHz not sent — no reply from the rig", or "… MHz refused by the rig
+  (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
+  rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
+  is on the line by then.
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn

@@ -3810,6 +3810,11 @@ struct RadioLoop {
     dial_giveup: Option<u64>,
     /// Consecutive refusals of the currently-commanded dial, against [`DIAL_SET_MAX_TRIES`].
     dial_fail_count: u32,
+    /// The engine's CAT-status publish count ([`Engine::cat_probe_gen`]) just after this loop put
+    /// a dial note up ("… not sent — no reply from the rig", "… refused by the rig (1/3)"). While
+    /// the count has not moved, the note is still what the operator reads, so a dial that then
+    /// lands takes it down. It used to stay up after the radio had taken the dial.
+    dial_note_gen: Option<u64>,
     /// RX frequency ranges (Hz) read from the rig's Hamlib capability table once per CAT
     /// confirmation. `None` = not probed yet or unknown (must fail OPEN — see
     /// [`crate::rig::Rig::read_rx_ranges`]).
@@ -4162,6 +4167,7 @@ impl RadioLoop {
             cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
+            dial_note_gen: None,
             rx_ranges: None,
             rx_ranges_probed: false,
             handoff_deferred: false,
@@ -7104,6 +7110,8 @@ impl RadioLoop {
             let mut retune_note: Option<String> = None;
             // A DIAL refusal, held separately so the mode note below cannot bury it.
             let mut dial_note: Option<String> = None;
+            // The rig took a dial this tick: a dial note still up is out of date.
+            let mut dial_landed = false;
             if force_retune {
                 // New native intent (including local TX arming's existing
                 // assert) owns this work; an observation never sets this flag.
@@ -7209,6 +7217,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Band-crossing pick: the rig's band-stack may have just
                                 // overridden the mode commanded above — verify and win.
                                 self.reassert_mode_after_band_cross(
@@ -7323,6 +7332,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Same band-stack window as the force path.
                                 self.reassert_mode_after_band_cross(
                                     rig, &md, prev_dial, dial, engine,
@@ -8920,6 +8930,7 @@ impl RadioLoop {
             // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
+            let showing_dial = dial_note.is_some();
             if let Some(note) = dial_note.or(retune_note) {
                 // The note rides along; the VERDICT is the breaker's. This used to promote any
                 // note starting "rig set to" to `Some(true)` — including "rig set to … (mode
@@ -8929,6 +8940,18 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, note);
+                    self.dial_note_gen = showing_dial.then(|| eng.cat_probe_gen());
+                }
+            } else if dial_landed {
+                // The dial a note said was not sent, or was refused, has now landed. Take the note
+                // down, but only if it is still the line on screen: anything published since it
+                // (Test CAT, the breaker, another note) is newer than the dial and stays.
+                let mut eng = engine_lock(engine);
+                if self.dial_note_gen.take() == Some(eng.cat_probe_gen()) {
+                    eng.set_cat_status(
+                        self.cat_ok,
+                        "CAT confirmed — rig accepted a command".to_string(),
+                    );
                 }
             }
         }
