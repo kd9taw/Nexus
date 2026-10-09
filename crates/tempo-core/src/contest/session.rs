@@ -396,6 +396,15 @@ impl ContestSession {
         }
     }
 
+    /// This session with the entry's declared `CATEGORY-POWER` (Settings ▸ Contesting) — for
+    /// a Field Day session, which [`field_day`](Self::field_day) builds with none because ARRL
+    /// Field Day's power is a scoring tier. Winter Field Day's sponsor asks for the line; a
+    /// value that is not a Cabrillo power token declares nothing.
+    pub fn with_category_power(mut self, declared: &str) -> Self {
+        self.category_power = cabrillo_token(declared, &POWER_TOKENS);
+        self
+    }
+
     /// ⭐ **A session for ANY shipped ruleset** — the constructor that makes a contest
     /// other than Field Day reachable at all.
     ///
@@ -480,10 +489,7 @@ impl ContestSession {
             transmitter_id: rs.transmitter_column.then_some(0),
             my_call_location: super::resolve_call(&station.mycall),
             upload: UploadPolicy::default(),
-            category_power: cabrillo_token(
-                &station.contest_category_power,
-                &["HIGH", "LOW", "QRP"],
-            ),
+            category_power: cabrillo_token(&station.contest_category_power, &POWER_TOKENS),
             category_assisted: cabrillo_token(
                 &station.contest_category_assisted,
                 &["ASSISTED", "NON-ASSISTED"],
@@ -1054,6 +1060,9 @@ fn location_hints(
     }
     out
 }
+
+/// Cabrillo's `CATEGORY-POWER` tokens.
+const POWER_TOKENS: [&str; 3] = ["HIGH", "LOW", "QRP"];
 
 /// A declared Cabrillo category token, trimmed and upper-cased — or `""` when it is not one of
 /// the tokens Cabrillo defines for that axis. A value this build does not recognise is not a

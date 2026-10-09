@@ -1,0 +1,874 @@
+{
+ "data": {
+  "band_mode": [
+   {
+    "band": "40m",
+    "cw": 2,
+    "dig": 0,
+    "ph": 0
+   },
+   {
+    "band": "20m",
+    "cw": 0,
+    "dig": 0,
+    "ph": 1
+   }
+  ],
+  "bonus_stations": [
+   {
+    "call": "W9AWE",
+    "points": 100,
+    "worked": true
+   },
+   {
+    "call": "W9OAB",
+    "points": 100,
+    "worked": false
+   }
+  ],
+  "claimed": [],
+  "event": {
+   "call": "W9XYZ",
+   "class": "",
+   "end_unix": 1792371600,
+   "kind": "ilqp",
+   "name": "IL QSO Party",
+   "section": "MCLN",
+   "start_unix": 1792342800,
+   "year": 2026
+  },
+  "mults": [
+   {
+    "count": 3,
+    "id": "county",
+    "worked": [
+     "COOK",
+     "MCDN",
+     "WILL"
+    ]
+   },
+   {
+    "count": 0,
+    "id": "mult",
+    "worked": []
+   },
+   {
+    "count": 0,
+    "id": "dxcc",
+    "worked": []
+   }
+  ],
+  "positions": [
+   {
+    "band": "40m",
+    "id": "aaaa0001",
+    "label": "CW tent",
+    "last_qso_unix": 1792343100,
+    "mode": "CW",
+    "operator": "AA9XYZ",
+    "points": 4,
+    "qsos_raw": 3,
+    "qsos_unique": 2,
+    "stale": false
+   },
+   {
+    "band": "20m",
+    "id": "bbbb0002",
+    "label": "SSB tent",
+    "last_qso_unix": 1792343220,
+    "mode": "PH",
+    "operator": "W9XYZ",
+    "points": 1,
+    "qsos_raw": 2,
+    "qsos_unique": 1,
+    "stale": false
+   }
+  ],
+  "qsos": {
+   "count": 3,
+   "hourly": [
+    3
+   ],
+   "rate_10min": 3,
+   "rate_hour": 3
+  },
+  "score": {
+   "bonus_points": 100,
+   "model": "multipliers",
+   "mults": 3,
+   "qso_points": 5,
+   "total": 115
+  },
+  "sections_worked": [],
+  "ticker": [
+   {
+    "band": "40m",
+    "call": "K9AAA",
+    "class": "",
+    "mode": "CW",
+    "operator": "W9XYZ",
+    "position": "SSB tent",
+    "section": "COOK",
+    "submode": "",
+    "when_unix": 1792343220
+   },
+   {
+    "band": "20m",
+    "call": "W9AWE",
+    "class": "",
+    "mode": "PH",
+    "operator": "W9XYZ",
+    "position": "SSB tent",
+    "section": "MCDN",
+    "submode": "",
+    "when_unix": 1792343160
+   },
+   {
+    "band": "40m",
+    "call": "K9AAA",
+    "class": "",
+    "mode": "CW",
+    "operator": "W9XYZ",
+    "position": "CW tent",
+    "section": "WILL",
+    "submode": "",
+    "when_unix": 1792343100
+   },
+   {
+    "band": "40m",
+    "call": "K9AAA",
+    "class": "",
+    "mode": "DIG",
+    "operator": "W9XYZ",
+    "position": "CW tent",
+    "section": "COOK",
+    "submode": "RTTY",
+    "when_unix": 1792343040
+   },
+   {
+    "band": "40m",
+    "call": "K9AAA",
+    "class": "",
+    "mode": "CW",
+    "operator": "W9XYZ",
+    "position": "CW tent",
+    "section": "COOK",
+    "submode": "",
+    "when_unix": 1792342980
+   }
+  ]
+ },
+ "meta": {
+  "bonuses": [],
+  "event": {
+   "call": "W9XYZ",
+   "class": "",
+   "end_unix": 1792371600,
+   "kind": "ilqp",
+   "name": "IL QSO Party",
+   "section": "MCLN",
+   "start_unix": 1792342800,
+   "year": 2026
+  },
+  "map": "county",
+  "mults": [
+   {
+    "id": "county",
+    "scope": "perLog",
+    "source": "field",
+    "values": [
+     {
+      "code": "ADAM",
+      "name": "Adams"
+     },
+     {
+      "code": "ALEX",
+      "name": "Alexander"
+     },
+     {
+      "code": "BOND",
+      "name": "Bond"
+     },
+     {
+      "code": "BOON",
+      "name": "Boone"
+     },
+     {
+      "code": "BROW",
+      "name": "Brown"
+     },
+     {
+      "code": "BURO",
+      "name": "Bureau"
+     },
+     {
+      "code": "CALH",
+      "name": "Calhoun"
+     },
+     {
+      "code": "CARR",
+      "name": "Carroll"
+     },
+     {
+      "code": "CASS",
+      "name": "Cass"
+     },
+     {
+      "code": "CHAM",
+      "name": "Champaign"
+     },
+     {
+      "code": "CHRS",
+      "name": "Christian"
+     },
+     {
+      "code": "CLRK",
+      "name": "Clark"
+     },
+     {
+      "code": "CLAY",
+      "name": "Clay"
+     },
+     {
+      "code": "CLNT",
+      "name": "Clinton"
+     },
+     {
+      "code": "COLE",
+      "name": "Coles"
+     },
+     {
+      "code": "COOK",
+      "name": "Cook"
+     },
+     {
+      "code": "CRAW",
+      "name": "Crawford"
+     },
+     {
+      "code": "CUMB",
+      "name": "Cumberland"
+     },
+     {
+      "code": "DEKA",
+      "name": "DeKalb"
+     },
+     {
+      "code": "DEWT",
+      "name": "DeWitt"
+     },
+     {
+      "code": "DOUG",
+      "name": "Douglas"
+     },
+     {
+      "code": "DUPG",
+      "name": "DuPage"
+     },
+     {
+      "code": "EDGR",
+      "name": "Edgar"
+     },
+     {
+      "code": "EDWA",
+      "name": "Edwards"
+     },
+     {
+      "code": "EFFG",
+      "name": "Effingham"
+     },
+     {
+      "code": "FAYE",
+      "name": "Fayette"
+     },
+     {
+      "code": "FORD",
+      "name": "Ford"
+     },
+     {
+      "code": "FRNK",
+      "name": "Franklin"
+     },
+     {
+      "code": "FULT",
+      "name": "Fulton"
+     },
+     {
+      "code": "GALL",
+      "name": "Gallatin"
+     },
+     {
+      "code": "GREE",
+      "name": "Greene"
+     },
+     {
+      "code": "GRUN",
+      "name": "Grundy"
+     },
+     {
+      "code": "HAML",
+      "name": "Hamilton"
+     },
+     {
+      "code": "HANC",
+      "name": "Hancock"
+     },
+     {
+      "code": "HARD",
+      "name": "Hardin"
+     },
+     {
+      "code": "HNDR",
+      "name": "Henderson"
+     },
+     {
+      "code": "HENR",
+      "name": "Henry"
+     },
+     {
+      "code": "IROQ",
+      "name": "Iroquois"
+     },
+     {
+      "code": "JACK",
+      "name": "Jackson"
+     },
+     {
+      "code": "JASP",
+      "name": "Jasper"
+     },
+     {
+      "code": "JEFF",
+      "name": "Jefferson"
+     },
+     {
+      "code": "JERS",
+      "name": "Jersey"
+     },
+     {
+      "code": "JODA",
+      "name": "JoDaviess"
+     },
+     {
+      "code": "JOHN",
+      "name": "Johnson"
+     },
+     {
+      "code": "KANE",
+      "name": "Kane"
+     },
+     {
+      "code": "KANK",
+      "name": "Kankakee"
+     },
+     {
+      "code": "KEND",
+      "name": "Kendall"
+     },
+     {
+      "code": "KNOX",
+      "name": "Knox"
+     },
+     {
+      "code": "LAKE",
+      "name": "Lake"
+     },
+     {
+      "code": "LASA",
+      "name": "LaSalle"
+     },
+     {
+      "code": "LAWR",
+      "name": "Lawrence"
+     },
+     {
+      "code": "LEE",
+      "name": "Lee"
+     },
+     {
+      "code": "LIVG",
+      "name": "Livingston"
+     },
+     {
+      "code": "LOGN",
+      "name": "Logan"
+     },
+     {
+      "code": "MACN",
+      "name": "Macon"
+     },
+     {
+      "code": "MCPN",
+      "name": "Macoupin"
+     },
+     {
+      "code": "MADN",
+      "name": "Madison"
+     },
+     {
+      "code": "MARI",
+      "name": "Marion"
+     },
+     {
+      "code": "MSHL",
+      "name": "Marshall"
+     },
+     {
+      "code": "MASN",
+      "name": "Mason"
+     },
+     {
+      "code": "MSSC",
+      "name": "Massac"
+     },
+     {
+      "code": "MCDN",
+      "name": "McDonough"
+     },
+     {
+      "code": "MCHE",
+      "name": "McHenry"
+     },
+     {
+      "code": "MCLN",
+      "name": "McLean"
+     },
+     {
+      "code": "MNRD",
+      "name": "Menard"
+     },
+     {
+      "code": "MRCR",
+      "name": "Mercer"
+     },
+     {
+      "code": "MNRO",
+      "name": "Monroe"
+     },
+     {
+      "code": "MNTG",
+      "name": "Montgomery"
+     },
+     {
+      "code": "MORG",
+      "name": "Morgan"
+     },
+     {
+      "code": "MOUL",
+      "name": "Moultrie"
+     },
+     {
+      "code": "OGLE",
+      "name": "Ogle"
+     },
+     {
+      "code": "PEOR",
+      "name": "Peoria"
+     },
+     {
+      "code": "PERR",
+      "name": "Perry"
+     },
+     {
+      "code": "PIAT",
+      "name": "Piatt"
+     },
+     {
+      "code": "PIKE",
+      "name": "Pike"
+     },
+     {
+      "code": "POPE",
+      "name": "Pope"
+     },
+     {
+      "code": "PULA",
+      "name": "Pulaski"
+     },
+     {
+      "code": "PUTN",
+      "name": "Putnam"
+     },
+     {
+      "code": "RAND",
+      "name": "Randolph"
+     },
+     {
+      "code": "RICH",
+      "name": "Richland"
+     },
+     {
+      "code": "ROCK",
+      "name": "Rock Island"
+     },
+     {
+      "code": "SALI",
+      "name": "Saline"
+     },
+     {
+      "code": "SANG",
+      "name": "Sangamon"
+     },
+     {
+      "code": "SCHY",
+      "name": "Schuyler"
+     },
+     {
+      "code": "SCOT",
+      "name": "Scott"
+     },
+     {
+      "code": "SHEL",
+      "name": "Shelby"
+     },
+     {
+      "code": "STAR",
+      "name": "Stark"
+     },
+     {
+      "code": "SCLA",
+      "name": "St. Clair"
+     },
+     {
+      "code": "STEP",
+      "name": "Stephenson"
+     },
+     {
+      "code": "TAZW",
+      "name": "Tazewell"
+     },
+     {
+      "code": "UNIO",
+      "name": "Union"
+     },
+     {
+      "code": "VERM",
+      "name": "Vermilion"
+     },
+     {
+      "code": "WABA",
+      "name": "Wabash"
+     },
+     {
+      "code": "WARR",
+      "name": "Warren"
+     },
+     {
+      "code": "WASH",
+      "name": "Washington"
+     },
+     {
+      "code": "WAYN",
+      "name": "Wayne"
+     },
+     {
+      "code": "WHIT",
+      "name": "White"
+     },
+     {
+      "code": "WTSD",
+      "name": "Whiteside"
+     },
+     {
+      "code": "WILL",
+      "name": "Will"
+     },
+     {
+      "code": "WMSN",
+      "name": "Williamson"
+     },
+     {
+      "code": "WBGO",
+      "name": "Winnebago"
+     },
+     {
+      "code": "WOOD",
+      "name": "Woodford"
+     }
+    ]
+   },
+   {
+    "id": "mult",
+    "scope": "perLog",
+    "source": "field",
+    "values": [
+     {
+      "code": "AL",
+      "name": "Alabama"
+     },
+     {
+      "code": "AK",
+      "name": "Alaska"
+     },
+     {
+      "code": "AZ",
+      "name": "Arizona"
+     },
+     {
+      "code": "AR",
+      "name": "Arkansas"
+     },
+     {
+      "code": "CA",
+      "name": "California"
+     },
+     {
+      "code": "CO",
+      "name": "Colorado"
+     },
+     {
+      "code": "CT",
+      "name": "Connecticut"
+     },
+     {
+      "code": "DC",
+      "name": "District of Columbia"
+     },
+     {
+      "code": "DE",
+      "name": "Delaware"
+     },
+     {
+      "code": "FL",
+      "name": "Florida"
+     },
+     {
+      "code": "GA",
+      "name": "Georgia"
+     },
+     {
+      "code": "HI",
+      "name": "Hawaii"
+     },
+     {
+      "code": "ID",
+      "name": "Idaho"
+     },
+     {
+      "code": "IN",
+      "name": "Indiana"
+     },
+     {
+      "code": "IA",
+      "name": "Iowa"
+     },
+     {
+      "code": "KS",
+      "name": "Kansas"
+     },
+     {
+      "code": "KY",
+      "name": "Kentucky"
+     },
+     {
+      "code": "LA",
+      "name": "Louisiana"
+     },
+     {
+      "code": "ME",
+      "name": "Maine"
+     },
+     {
+      "code": "MD",
+      "name": "Maryland"
+     },
+     {
+      "code": "MA",
+      "name": "Massachusetts"
+     },
+     {
+      "code": "MI",
+      "name": "Michigan"
+     },
+     {
+      "code": "MN",
+      "name": "Minnesota"
+     },
+     {
+      "code": "MS",
+      "name": "Mississippi"
+     },
+     {
+      "code": "MO",
+      "name": "Missouri"
+     },
+     {
+      "code": "MT",
+      "name": "Montana"
+     },
+     {
+      "code": "NE",
+      "name": "Nebraska"
+     },
+     {
+      "code": "NV",
+      "name": "Nevada"
+     },
+     {
+      "code": "NH",
+      "name": "New Hampshire"
+     },
+     {
+      "code": "NJ",
+      "name": "New Jersey"
+     },
+     {
+      "code": "NM",
+      "name": "New Mexico"
+     },
+     {
+      "code": "NY",
+      "name": "New York"
+     },
+     {
+      "code": "NC",
+      "name": "North Carolina"
+     },
+     {
+      "code": "ND",
+      "name": "North Dakota"
+     },
+     {
+      "code": "OH",
+      "name": "Ohio"
+     },
+     {
+      "code": "OK",
+      "name": "Oklahoma"
+     },
+     {
+      "code": "OR",
+      "name": "Oregon"
+     },
+     {
+      "code": "PA",
+      "name": "Pennsylvania"
+     },
+     {
+      "code": "RI",
+      "name": "Rhode Island"
+     },
+     {
+      "code": "SC",
+      "name": "South Carolina"
+     },
+     {
+      "code": "SD",
+      "name": "South Dakota"
+     },
+     {
+      "code": "TN",
+      "name": "Tennessee"
+     },
+     {
+      "code": "TX",
+      "name": "Texas"
+     },
+     {
+      "code": "UT",
+      "name": "Utah"
+     },
+     {
+      "code": "VT",
+      "name": "Vermont"
+     },
+     {
+      "code": "VA",
+      "name": "Virginia"
+     },
+     {
+      "code": "WA",
+      "name": "Washington"
+     },
+     {
+      "code": "WV",
+      "name": "West Virginia"
+     },
+     {
+      "code": "WI",
+      "name": "Wisconsin"
+     },
+     {
+      "code": "WY",
+      "name": "Wyoming"
+     },
+     {
+      "code": "NL",
+      "name": "Newfoundland and Labrador"
+     },
+     {
+      "code": "NF",
+      "name": "Newfoundland"
+     },
+     {
+      "code": "LAB",
+      "name": "Labrador"
+     },
+     {
+      "code": "PE",
+      "name": "Prince Edward Island"
+     },
+     {
+      "code": "PEI",
+      "name": "Prince Edward Island"
+     },
+     {
+      "code": "NS",
+      "name": "Nova Scotia"
+     },
+     {
+      "code": "NB",
+      "name": "New Brunswick"
+     },
+     {
+      "code": "QC",
+      "name": "Quebec"
+     },
+     {
+      "code": "ON",
+      "name": "Ontario"
+     },
+     {
+      "code": "MB",
+      "name": "Manitoba"
+     },
+     {
+      "code": "SK",
+      "name": "Saskatchewan"
+     },
+     {
+      "code": "AB",
+      "name": "Alberta"
+     },
+     {
+      "code": "BC",
+      "name": "British Columbia"
+     },
+     {
+      "code": "NT",
+      "name": "Northwest Territories"
+     },
+     {
+      "code": "NU",
+      "name": "Nunavut"
+     },
+     {
+      "code": "YT",
+      "name": "Yukon"
+     }
+    ]
+   },
+   {
+    "cap": 5,
+    "id": "dxcc",
+    "scope": "perLog",
+    "source": "dxcc",
+    "values": []
+   }
+  ],
+  "rules_year": 2026,
+  "scoring_model": "multipliers",
+  "sections": []
+ },
+ "now": 1792343400
+}

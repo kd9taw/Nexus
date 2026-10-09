@@ -681,6 +681,9 @@ pub(super) fn prepare_change(
                 .map_err(|refusal| match refusal {
                     crate::self_spot::Refusal::NoActivation => ChangeReason::InvalidChange,
                     crate::self_spot::Refusal::Moved => ChangeReason::ContextChanged,
+                    // No refusal of its own on the wire, so a page that predates the rule
+                    // still reads the answer; the page's contest screen says why.
+                    crate::self_spot::Refusal::RfOnly => ChangeReason::InvalidChange,
                 });
         }
         Change::Spot {
@@ -688,8 +691,12 @@ pub(super) fn prepare_change(
             freq_mhz,
             comment,
         } => {
-            // Nothing is read from the station: a spot of another station is the operator's own
-            // three fields. Uppercased here exactly as the desktop dialog uppercases them.
+            // Refused while a contest that allows spotting only over amateur RF runs (Winter
+            // Field Day), as the desktop's own door refuses it.
+            crate::internet_spot_allowed(engine).map_err(|_| ChangeReason::InvalidChange)?;
+            // Nothing else is read from the station: a spot of another station is the
+            // operator's own three fields. Uppercased here exactly as the desktop dialog
+            // uppercases them.
             return Ok(ChangeWork::ClusterSpot {
                 call: call.to_ascii_uppercase(),
                 freq_mhz: *freq_mhz,

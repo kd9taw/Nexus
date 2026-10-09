@@ -17,6 +17,11 @@
 //
 // PURE by design: every input is a prop, so tests drive it with fixture DTOs
 // and the mounting surfaces (which own the data) stay in charge of fetching.
+//   SPOTS OVER RF ONLY — the ruleset allows spotting only over amateur RF
+//   (`spotsRfOnly`, Winter Field Day 2027) and its event is running: the station
+//   is posting no spot over the internet, and this says why. Banner only, with
+//   the assistance advisory; the event window and the clock are props.
+//
 // It is a passive status line — no handlers, no controls, no panel-vocabulary
 // id — so it has no stop-line implications on any surface that hosts it.
 import type { FdRulesetDto } from '../api'
@@ -42,6 +47,8 @@ export function FdAdvisories({
   activeMode,
   assistanceOn = [],
   showAssistance = false,
+  eventWindow,
+  nowUnix,
 }: {
   /** The Field Day master switch — nothing renders while it's off. */
   fdActive: boolean
@@ -55,6 +62,10 @@ export function FdAdvisories({
   /** The ContestView banner shows the assistance advisory; the cockpit header
    *  hosts only the banned-mode chip. */
   showAssistance?: boolean
+  /** The running-or-next event window (`FieldDayStatus.eventStartUnix`/`eventEndUnix`) and
+   *  the clock to judge it by — the same window the engine's spot block judges. */
+  eventWindow?: { start: number; end: number }
+  nowUnix?: number
 }) {
   if (!fdActive || !ruleset) return null
   // ⭐ THE CONTEST THAT IS RUNNING, by its own name. This read every id that was not `wfd` as
@@ -93,6 +104,19 @@ export function FdAdvisories({
         })
       }
     }
+  }
+  // ⭐ No spot goes out over the internet while such a contest runs — PSK Reporter, the DX
+  // cluster and pota.app are all refused by the station — and a refusal nobody can see the
+  // reason for reads as a broken button. Receiving spots carries on, and the line says so.
+  if (
+    showAssistance &&
+    ruleset.spotsRfOnly &&
+    eventWindow &&
+    nowUnix !== undefined &&
+    eventWindow.start <= nowUnix &&
+    nowUnix < eventWindow.end
+  ) {
+    lines.push({ key: 'spotsRfOnly', text: t('fieldDay.advisory.spotsRfOnly', { event: eventName }) })
   }
   if (lines.length === 0) return null
   return (

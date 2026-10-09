@@ -30,18 +30,35 @@ The header reads **active** once the window opens and clears back to countdown a
 Run through this before the weekend. Most problems are discovered Saturday at 1759 UTC, not Friday evening.
 
 - [ ] **Set your class and section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Field Day mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
-- [ ] **Set power multiplier**: x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
+- [ ] **Set power multiplier** (ARRL Field Day): x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
 - [ ] **Verify CAT / PTT** on all bands you plan to use. Use **Settings → Radio ▸ Rig & CAT** and the Test Tone / key-up checks on [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 - [ ] **Test the Phone and CW cockpits** end-to-end: make a test QSO on a non-event day to confirm the FD log strip accepts a manual entry and that the dupe toast fires on a repeat.
-- [ ] **Claim bonuses** in the bonus checklist once they are achieved during the event (see [Bonus Checklist](#bonus-checklist)).
+- [ ] **Claim bonuses** (ARRL Field Day) or **tick objectives** (Winter Field Day) on the contest screen as you achieve them (see [Bonus Checklist](#bonus-checklist) and [Winter Field Day Scoring](#winter-field-day-scoring)).
+
+### Winter Field Day 2027
+
+The 2027 event is **23 and 24 January**, 1600 UTC Saturday to 21:59 UTC Sunday. Before it, on every laptop:
+
+- [ ] **Get the 2027 rules.** Settings → Contesting ▸ Field Day Setup ▸ **Check for rules updates**, then restart Nexus: a downloaded rules file takes effect at the next launch. Until then a 1.14 to 1.17 copy counts down to 30 January, a week late. **Nexus 1.13 or older cannot read the current rules file at all**: upgrade, or its Winter Field Day starts a week late.
+- [ ] Settings → Contesting ▸ Contest: **Winter Field Day**, then **Field Day mode** on.
+- [ ] **Class and category**: the number of transmitters you can run at once, then your category letter, `H` (home), `I` (indoor), `O` (outdoor) or `M` (mobile): `2O` is two transmitters outdoors. Then your ARRL/RAC section, `MX` in Mexico or `DX` anywhere else.
+- [ ] **Power category** `LOW` (100 W PEP, the limit for everyone) or `QRP` (5 W on CW and digital, 10 W on phone, for the whole event). The Cabrillo file takes one of those two; HIGH writes no CATEGORY-POWER line.
+- [ ] **Bands**: every amateur band **except 12, 17, 30 and 60 m**. Nexus does not warn on those four at Winter Field Day, so keep off them yourself.
+- [ ] **Modes**: no WSJT mode (FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W and Echo, the sponsor's list); the strip warns. JTTY is not on that list. RTTY, PSK and SSTV are digital contacts.
+- [ ] **Only direct contacts count**: one band, one mode, simplex, station to station. No cross-band, repeater, relayed, meshed or internet-linked contact counts; a satellite contact is logged and kept, and scores nothing (see [Winter Field Day Scoring](#winter-field-day-scoring)).
+- [ ] **Spot and solicit only over amateur RF.** While the event runs Nexus posts no spot over the internet (see [Winter Field Day Spotting](#winter-field-day-spotting)).
+- [ ] For a club: allow Nexus through the Windows firewall on **Private** networks (club sync uses TCP 42073 and UDP 42074, the club TV scoreboard TCP 7373; Nexus adds no firewall rule of its own), and set **every clock from one source**, to the second. Nexus warns a position more than 30 seconds off the host's clock when it joins, and never sets a clock.
+- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on a host, any `fd_event_*.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's.
+
+During the event, tick each objective on the contest screen as you complete it. After it, export the Cabrillo or ADIF file and submit it as [Exports](#exports-cabrillo-adif-summary-and-dupe-sheet) describes, by **23:59 UTC on 1 March 2027**.
 
 ---
 
 ## Exchange and Mode Codes
 
-ARRL FD exchange is **Class + ARRL Section** (e.g. `3A WI`).
+ARRL FD exchange is **Class + ARRL Section** (e.g. `3A WI`). Winter Field Day's is a class number and a category letter, then the location: the transmitters you can run at once, `H`, `I`, `O` or `M`, then the ARRL/RAC section, `MX` or `DX` (e.g. `2O WI`).
 
 Nexus logs three mode classes, matching ARRL's mode-class dupe rule:
 
@@ -57,7 +74,7 @@ The same callsign counts **once per band per mode class**. Working K1ABC on 20 m
 
 ## Scoring Formula
 
-The live scoreboard shows:
+For ARRL Field Day the live scoreboard shows:
 
 ```
 QSO points × power multiplier + claimed bonus points = total score
@@ -77,29 +94,62 @@ Score updates every snapshot cycle (approximately every 300 ms).
 
 ### Winter Field Day Scoring
 
-WFD scoring in Nexus is partial. QSO points and the bonus checklist are tracked. WFD operator-count and objective multipliers are **not** computed in-app. The UI states *"WFD objective multipliers apply at submission (not tracked here)"* — use the raw point export and apply multipliers in the WACA WFD scoring tool at submission.
+Winter Field Day scores by **objectives**: the sponsor's thirteen for 2027, each worth an objective multiplier (OM).
+
+```
+total score = QSO points × (OM + 1)
+```
+
+"The +1 is for participating", so a log with no objective completed still scores its QSO points. QSO points are counted as at ARRL Field Day (phone 1, CW and digital 2, each station once per band and mode); there is no power multiplier and no bonus list.
+
+| Objective | OM |
+|---|---|
+| Operate station equipment on alternative power | 1 |
+| Operate 100% on alternative Power | 2 |
+| Operate away from home | 3 |
+| Deploy multiple antennas | 1 |
+| Send and receive the WFD SSTV image | 2 |
+| Make at least three contacts on a cross-band repeater | 3 |
+| Send and receive at least one Winlink email | 1 |
+| Copy the Winter Field Day Special Bulletin | 1 |
+| Make at least 3 contacts on at least 6 different bands | 6 |
+| Make at least 3 contacts on at least 12 different bands | 6 |
+| Use multiple modes | 2 |
+| Operate the event QRP | 4 |
+| Operate six continuous hours during the event | 2 |
+
+The contest screen lists them where ARRL Field Day lists its bonuses, under **Objectives**. Tick each one as you complete it, or mark it **Plan**: only a ticked objective counts. Ticking 100% alternative power counts station equipment on alternative power with it, as the sponsor says it qualifies you for that one, and twelve bands counts six. For six bands, twelve bands and multiple modes the row shows what your log has (bands with three or more contacts, and modes worked); you tick them yourself. When you submit, the sponsor's form asks you to select your completed objectives again. If your Power category and the QRP objective disagree, the list says so.
+
+The claimed total is the same number on the contest screen and its pop-out, the club line, the club TV scoreboard, the score summary and the Cabrillo `CLAIMED-SCORE`.
+
+**A satellite contact counts for nothing**: the sponsor's rules say "Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not count." Nexus logs it and keeps it (it reaches your logbook and LoTW when you merge the contest log), scores it zero, leaves it out of the Winter Field Day Cabrillo and ADIF files, and does not count it as a dupe of the same station worked without the satellite.
 
 ### Winter Field Day Mode Rules
 
-The WFD rules ban the entire WSJT-X mode suite (FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W and Echo, the sponsor's own 2027 list) while explicitly keeping RTTY and SSTV legal as Digital. Nexus carries this list as advisory rules data. It does **not** block or disable any mode. Staying inside the rules is your call; what Nexus does guarantee is that a digital contact is exported and pushed under the mode actually used (an RTTY contact says RTTY, never FT8), so a legal contact can never be misreported as a banned one.
+The WFD rules ban the entire WSJT-X mode suite (FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W and Echo, the sponsor's own 2027 list) while explicitly keeping RTTY and SSTV legal as Digital. JTTY is not on that list. Nexus carries this list as advisory rules data. It does **not** block or disable any mode. Staying inside the rules is your call; what Nexus does guarantee is that a digital contact is exported and pushed under the mode actually used (an RTTY contact says RTTY, never FT8), so a legal contact can never be misreported as a banned one.
+
+### Winter Field Day Spotting
+
+The sponsor's 2027 rules: "You may spot yourself and others only via amateur RF." and "QSOs may be solicited only over amateur RF during the event." So while the event runs, a station with Winter Field Day switched on posts nothing over the internet: no PSK Reporter reports, no DX cluster spot from the Spot dialog, and no POTA self-spot, from the desktop or from Nexus Remote. The contest screen says so while it lasts, the Spot and Spot me buttons say why if you press them, and Settings says so beside PSK Reporter. Receiving cluster and skimmer spots carries on, your PSK Reporter setting is not changed, and everything posts again once the event ends. Asking for contacts anywhere but on the air is up to you to avoid.
 
 ---
 
 ## Scoreboard, Sections Board and Pop-Out
 
-The Contest screen carries a live scoreboard: QSO and section counts, per-mode chips (DIG / CW / PH), and the score math for the active event (WFD shows honest raw points, never the ARRL power×+bonus formula).
+The Contest screen carries a live scoreboard: QSO and section counts, per-mode chips (DIG / CW / PH), and the score math for the active event (Winter Field Day shows its claimed total, QSO points × (OM + 1), never the ARRL power×+bonus formula).
 
 - **Operator field** — Field Day rotates operators; type the call of whoever is at the key. It persists across restarts, and each QSO pushed to N3FJP is attributed to that operator (falling back to the station call when empty).
-- **Sections board** — all 83 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
+- **Sections board** — all 85 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
 - **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
 - **Club Board** — the **club band board** (position, band, mode, operator, QSOs, rate) has its own button in the left rail, directly under Contest, and its own window. It appears whenever Field Day is on, whether or not club sync is running, and one click puts it on a second monitor: this is the board a multi-station club watches all event to see who is on what band before moving to another one. The same **Pop out board** button in the club header on the dashboard opens the same window. It is set in larger type than the docked copy because it is watched from the operating position rather than read at the keyboard, and it is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
 - **With club sync off**, the window says so and names the route that turns it on (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event) instead of showing an empty board. With sync on and nobody else logging yet, it says it is waiting.
+- **Spectator scoreboard** — a web page for a TV or projector facing the room (Settings ▸ Contesting ▸ Field Day Club Sync ▸ **Spectator scoreboard**; the row shows the address to open on the TV). It reads across a room at 1080p and at 4K: the claimed score and how it is made, the rate, each position's band and mode, the contacts by band and mode, the latest contact, the time left, and a map of what the contest counts — the sections globe for both Field Days, the 102 counties for the Illinois QSO Party. It works for **any contest club sync runs**. The host shows its own club; a **position shows the host's board**, so the TV can sit at any table, as long as the host's Spectator scoreboard is on too, on the same port. If the host can't be reached the TV says so in plain words, keeps the last board, and comes back by itself; a station with no club says so, with what to do. Add `?theme=light` to the address for the light board, or `?theme=auto` to follow the TV.
 
 ---
 
 ## Bonus Checklist
 
-The bonus checklist contains exactly 15 ARRL FD bonuses. Toggle each one on the Contest screen as your club achieves it:
+The bonus checklist contains ARRL Field Day's 16 bonuses. Toggle each one on the Contest screen as your club achieves it:
 
 | Bonus | Points |
 |---|---|
@@ -117,11 +167,12 @@ The bonus checklist contains exactly 15 ARRL FD bonuses. Toggle each one on the 
 | Safety officer | 100 |
 | Social media | 100 |
 | Educational activity | 100 |
+| Satellite QSO | 100 |
 | Web submission | 50 |
 
-**Total possible bonus: 1 450 points.**
+**Total possible bonus: 1 550 points.**
 
-The bonus checklist models ARRL FD bonuses only. WFD has a different bonus structure that is not separately modeled.
+The bonus checklist is ARRL Field Day's. Winter Field Day has no bonus list: it scores by its objectives (see [Winter Field Day Scoring](#winter-field-day-scoring)).
 
 ---
 
@@ -214,6 +265,7 @@ All four exports are available at any time during or after the event from the Co
   is `ARRL-FIELD-DAY`).
 - `CATEGORY-OPERATOR` is the **Entry category** you pick in Settings → Contesting ▸ Contest (`SINGLE-OP` by default).
 - Legacy contacts without a timestamp fall back to the `----------` placeholder rather than inventing a time.
+- **Winter Field Day's** header is the one in the sponsor's example log: `CONTEST: WFD`, `LOCATION` (your section, `MX` or `DX`), `CATEGORY-POWER` (`QRP` or `LOW`, from Power category; HIGH writes none), `CLAIMED-SCORE` (the claimed total), `CLUB`, `OPERATORS`, `NAME`, `EMAIL` and `X-EXCHANGE` (your class and category, such as `3O`). Name, club, other operators and email come from Settings → Station and Settings → Contesting ▸ Contest, each line left out when blank. A club's file is the host's **Club Cabrillo**, with an OPERATORS line naming whoever the positions logged under, then the host's other operators.
 
 ### ADIF
 
@@ -223,26 +275,25 @@ All four exports are available at any time during or after the event from the Co
 
 ### Score Summary
 
-A one-page plain-text score summary: QSO counts by mode and by band, the sections worked, power multiplier, claimed bonuses and the score math (WFD prints raw QSO points and notes that objective multipliers apply at submission). Hand it to the club scorekeeper or check your entry against it before submitting.
+A one-page plain-text score summary: QSO counts by mode and by band, the sections worked, power multiplier, claimed bonuses and the score math (Winter Field Day lists the objectives completed with their multipliers, the OM and the claimed total). Hand it to the club scorekeeper or check your entry against it before submitting.
 
 ### Dupe / Multiplier Sheet
 
 A plain-text check sheet: every section multiplier with the call and band that first earned it, then an alphabetical callsign list showing how many times and where (band/mode) each station was worked, with dupes flagged `*`.
 
-Submit the Cabrillo file to the ARRL online submission system. ADIF can be imported into N3FJP or other loggers for cross-checking.
+**ARRL Field Day:** submit the Cabrillo file through the ARRL's online submission system. **Winter Field Day:** submit on winterfieldday.org: fill in the form, which asks for your completed objectives, and upload the Cabrillo or ADIF file, named after the callsign used in the event (`K4SCO.log`, for example), by **23:59 UTC on 1 March 2027**. ADIF can be imported into N3FJP or other loggers for cross-checking.
 
 ---
 
 ## Limits / Not Yet
 
-- **WFD scoring is partial**: QSO points and bonuses are tracked; WFD operator-count and objective multipliers are not computed in-app.
-- **Bonus checklist is ARRL FD only**: WFD has a different bonus structure that is not modeled.
+- **No warning on 12, 17, 30 or 60 m at Winter Field Day.** They are not WFD bands, but the log strip's band warning is off for both Field Days, so the checklist above is what says so.
+- **Winter Field Day's objectives are yours to tick.** The hints for six bands, twelve bands and multiple modes count what your log shows; nothing is ticked for you, and the sponsor decides what it credits.
 - **N3FJP errors are not surfaced in the UI** beyond the initial Test button; monitor N3FJP's own display to confirm pushes are landing.
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Club sync does not run a serial-number contest or CQ World-Wide.** It runs every other contest on the picker under that contest's own rules. With Sweepstakes, CQ WPX, the California QSO Party or CQ WW selected a station neither hosts nor joins, and the contest screen and Settings say why: one entry's serial numbers must run in a single sequence, and CQ WW's log must say which transmitter made each contact. Log those on each position by itself.
-- **The spectator scoreboard is Field Day only.** It scores by Field Day's rules, so for a club running any other contest its page shows no club.
 - **Desktop-only** (Tauri v2); no mobile companion.
 
 ---
@@ -291,6 +342,7 @@ Before the party, on every laptop:
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
 - [ ] One laptop: an **Event name** for the party and **Host a club event** on. The others: **Find club events**, or the host's address in **Join event at**. Allow Nexus through the Windows firewall on Private networks.
 - [ ] Every clock set from one source, to the second.
+- [ ] For a TV in the room, **Spectator scoreboard** on the host, and on the laptop the TV is plugged into if that is a position: it shows the host's board, the counties map included.
 - [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on the host, any `fd_event_*.ilqp.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's, or the rehearsal's contacts come back into the party's logs.
 
 During the party:

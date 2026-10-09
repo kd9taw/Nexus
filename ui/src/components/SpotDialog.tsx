@@ -100,7 +100,13 @@ export function SpotDialog({
       pushToast(t('spots.post.done', { call: c }), 'success', 2500)
       onClose()
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : t('spots.post.failed'), 'error', 3500)
+      // The station's refusal while a contest that allows spotting only over amateur RF runs
+      // (Winter Field Day) is a token; it says why in words.
+      pushToast(
+        e === 'spotRfOnly' ? t('spots.post.rfOnly') : typeof e === 'string' ? e : t('spots.post.failed'),
+        'error',
+        e === 'spotRfOnly' ? 6000 : 3500,
+      )
     } finally {
       setBusy(false)
     }

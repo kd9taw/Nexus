@@ -205,12 +205,12 @@ describe('it refuses to turn on, and names what is missing', () => {
     )
   })
 
-  it('Winter Field Day calls the class its category', async () => {
+  it('Winter Field Day names the box as Settings does', async () => {
     preview = rules({ event: 'wfd', bannedModes: [], problem: '' })
     await openOn({ fdEvent: 'wfd', fdClass: '', fdSection: 'IL' })
     await press()
     expect(sentence(screen.getByRole('alert'))).toBe(
-      'The station cannot enter Winter Field Day until your WFD Category is set.',
+      'The station cannot enter Winter Field Day until your WFD Class and Category is set.',
     )
   })
 

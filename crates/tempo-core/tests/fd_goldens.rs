@@ -39,6 +39,21 @@
 //! and must keep doing so — not one byte of any `.adi` file. `wfd.cbr` and
 //! `wfd-classes.cbr` did not move either: `WFD` is the same string in both
 //! registries, and is the one token of the six that its sponsor actually publishes.
+//!
+//! ⚠️ **A third deliberate movement, Winter Field Day's 2027 rules.** Line 7 of
+//! `wfd.cbr` and `wfd-classes.cbr` changed from `X-NEXUS-RULES-YEAR: 2026` to `2027`,
+//! because the bundled WFD ruleset is now the sponsor's 2027 one and that header says
+//! which rules data scored the entry. `arrlfd.cbr` did not move, and neither did any
+//! `.adi` file: ADIF carries no rules year. One pinned number moved with it: WFD's bonus in
+//! `both_events_score_exactly_what_head_scored`, from 150 to 0. The two bonuses that test
+//! claims are ARRL Field Day's, and Winter Field Day no longer carries a copy of ARRL's
+//! menu; its objectives multiply instead (2027 rules, p.7). With the objectives modelled,
+//! both WFD files also gained line 6, `CLAIMED-SCORE: 11` and `CLAIMED-SCORE: 6`: the sponsor
+//! asks for *"your calculated total score including multipliers"* (p.10), and with no
+//! objective ticked that is the QSO points × 1. And both gained `X-EXCHANGE:` before
+//! `X-NEXUS-RULES-YEAR`, the class the entry sends (p.10's `X-EXCHANGE: 3O`): `3A` in
+//! `wfd.cbr`, whose frozen fixture sends an ARRL class, and `2O` in `wfd-classes.cbr`.
+//! Neither declares a power, so neither carries CATEGORY-POWER.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
@@ -172,10 +187,12 @@ fn both_events_score_exactly_what_head_scored() {
     // is not a golden. Hand-checked against the fixture: 2 CW rows x 2 pts + 3 phone
     // rows x 1 pt + 2 digital rows x 2 pts = 11 QSO points. ARRL FD multiplies by the
     // legal 5x power tier (55); WFD's Objectives model applies no on-air power
-    // multiplier, so powered == qso. Bonus = w1aw-bulletin + web-submission.
+    // multiplier, so powered == qso. Bonus = w1aw-bulletin + web-submission, which are
+    // ARRL Field Day's bonuses: Winter Field Day has carried no copy of that menu since
+    // its 2027 rules, so they are worth nothing there (the one deliberate movement here).
     for (event, want_qso, want_powered, want_bonus) in [
         (FdEvent::ArrlFd, 11u32, 55u32, 150u32),
-        (FdEvent::WinterFd, 11u32, 11u32, 150u32),
+        (FdEvent::WinterFd, 11u32, 11u32, 0u32),
     ] {
         let log = capture::golden_log(event);
         let rs = ruleset(event, CURRENT_RULES_YEAR);
