@@ -240,6 +240,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not apply there. Tune is also refused where the radio's carrier would fall outside your
   CW privileges. Until it is switched on, Tune on the Flex native client works as before.
   NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: the radio's own ATU through the Flex native client, built and off until a tester
+  has checked it on a radio.** Once it is switched on, the Flex native client offers the ATU
+  button when the radio reports a tuner fitted, and each press runs one cycle of the radio's own
+  tuner. Beside the ATU, Nexus shows the radio's tune power and its transmit timeout, as beside
+  Tune, and says so when the radio has no transmit timeout; then the cycle's result in the
+  radio's own word (TUNE_SUCCESSFUL, TUNE_FAIL and so on), or why a press started no cycle. A
+  press the radio refuses ends there, with its reason and no alarm. FlexRadio documents no command
+  that stops a cycle part way, so Stop TX during a cycle sends the radio both its unkey and its
+  tune-off. If the radio has not reported the cycle finished and the transmitter idle 5 seconds
+  after Stop TX, or a cycle runs for more than 20 seconds, Nexus sends both again, says in red
+  that the radio may still be transmitting, and drops the connection. The ATU is also refused
+  where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
+  Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
 
 ### Changed
 
