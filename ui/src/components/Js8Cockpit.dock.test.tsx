@@ -307,12 +307,16 @@ describe('with AUTO off the reply lands in the compose box, for you to send', ()
     composer.offer = { id: 7, text: 'W1AW SNR -03' }
     await renderCockpit()
     type('.js8-to', 'K1ABC')
+    const from = js8Composer.mock.calls.length
     type('.js8-compose', '')
     await waitFor(() => expect(q<HTMLInputElement>('.js8-compose').value).toBe('W1AW SNR -03'))
     expect(q<HTMLInputElement>('.js8-to').value, 'the reply names its station itself').toBe('')
     expect(q<HTMLSelectElement>('.js8-cmd-select').value, 'sent as typed, no command').toBe('')
     composer.offer = null
-    await waitFor(() => expect(js8Composer).toHaveBeenLastCalledWith(true, 7))
+    // The sync after the fill tells the station the box holds reply 7, (true, 7); the next 500 ms poll then says
+    // (true, null). So the LAST call is (true, 7) only until that poll, and load can bring the poll before this check:
+    // the call is looked for among those made since the box was emptied.
+    await waitFor(() => expect(js8Composer.mock.calls.slice(from)).toContainEqual([true, 7]))
     await act(async () => {
       fireEvent.click(q('.js8-send'))
     })
