@@ -24,6 +24,7 @@ on:
       - crates/tempo-core/src/fd_rules.seed.json
       - crates/tempo-core/src/fd_rules.rs
       - crates/tempo-core/src/bin/fd-rules-check.rs
+      - scripts/fd-rules-released-loader.sh
       - .github/workflows/fd-rules.yml
   workflow_dispatch: {}
 
@@ -93,6 +94,18 @@ jobs:
       # reason printed is parse_spec's own — nothing else publishes.
       - name: Validate the seed with the real loader (refuses a bad file, exit 1)
         run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
+
+      # THE OLDEST RELEASE STILL SUPPORTED. The step above is the landing's own loader, which knows
+      # every new value; an install validates the downloaded file with ITS loader and refuses the
+      # whole file over one value it cannot read, so it would keep its old rules with nothing here
+      # going red. Build fd-rules-check as the oldest supported release shipped it and require it to
+      # accept the seed too: exit 1 (refused) or 2 (could not fetch or build it) stops the publish.
+      # Raise OLDEST when a release stops being supported. Its build lands under `target`, which the
+      # cache above keeps.
+      - name: Validate the seed with the oldest supported release's loader
+        env:
+          OLDEST: v1.14.0
+        run: scripts/fd-rules-released-loader.sh "$OLDEST" crates/tempo-core/src/fd_rules.seed.json
 
       - name: Stage the artifact
         run: |

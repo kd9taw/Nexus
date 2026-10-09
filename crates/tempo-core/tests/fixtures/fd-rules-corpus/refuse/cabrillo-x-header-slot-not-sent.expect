@@ -1,0 +1,1 @@
+ruleset wfd/2026: cabrillo x-header "X-EXCHANGE" writes slot "RST", which role "" does not send

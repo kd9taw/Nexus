@@ -480,11 +480,13 @@ impl Authority {
             },
         )
     }
-    /// A public spot of ANOTHER station, through the station's own `post_spot` verb — the same
-    /// door the desktop Spot dialog uses, with its callsign rule and its no-node-connected refusal.
+    /// A public spot of ANOTHER station, through the station's own cluster door — the same one
+    /// the desktop Spot dialog reaches, with its callsign rule and its no-node-connected refusal.
+    /// The contest rule that allows spotting only over RF was asked when the change was
+    /// prepared, under the Engine lock.
     #[cfg(not(test))]
     fn cluster_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-        crate::post_spot(freq_mhz, call.into(), comment.into())
+        crate::queue_spot(freq_mhz, call.into(), comment.into())
     }
     /// The test build reaches no cluster at all: the poster a test installed answers, and with none
     /// installed the spot is refused. This is the self-spot's own hook, so a test can never put a

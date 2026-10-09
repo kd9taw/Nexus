@@ -112,11 +112,23 @@ function makeMeta(scoringModel: 'powered' | 'objectives') {
     rules_year: 2026,
     rules_generated: '2026-08-29T00:00:00Z',
     sections,
-    bonuses: [
-      { id: 'emergency-power', label: 'Emergency power', points: 100 },
-      { id: 'safety-officer', label: 'Safety officer', points: 100 },
-      { id: 'web-submission', label: 'Web submission', points: 50 },
-    ],
+    bonuses:
+      scoringModel === 'objectives'
+        ? []
+        : [
+            { id: 'emergency-power', label: 'Emergency power', points: 100 },
+            { id: 'safety-officer', label: 'Safety officer', points: 100 },
+            { id: 'web-submission', label: 'Web submission', points: 50 },
+          ],
+    // Winter Field Day's objectives, as meta.json lists them (two of the thirteen).
+    ...(scoringModel === 'objectives'
+      ? {
+          objectives: [
+            { id: 'wfd-alt-power-100', label: 'Operate 100% on alternative Power', multiplier: 2 },
+            { id: 'wfd-qrp', label: 'Operate the event QRP', multiplier: 4 },
+          ],
+        }
+      : {}),
   }
 }
 
@@ -135,10 +147,10 @@ function makeData(model: 'powered' | 'objectives') {
       : {
           model: 'objectives',
           qso_points: 6,
-          bonus_points: 150,
-          total: 6,
-          projected_at_submission: 18,
-          objectives_claimed: 2,
+          bonus_points: 0,
+          total: 48,
+          objective_multiplier: 7,
+          objectives_claimed: 3,
         }
   return {
     rev: 7,
@@ -602,17 +614,21 @@ describe('fd scoreboard page', () => {
     expect(block).toContain('× 2')
   })
 
-  it('WFD: raw headline + labelled projection, and NO power-multiplier text anywhere', () => {
+  it('WFD: the claimed total as the headline, the objective arithmetic beside it, and NO power-multiplier text anywhere', () => {
     const b = boot()
     b.render(makeData('objectives'), makeMeta('objectives'))
-    // Headline is the RAW qso points, captioned as provisional.
-    expect(document.getElementById('score-total')!.textContent).toBe('6')
+    // The headline is the CLAIMED total, QSO points × (OM + 1), and says so.
+    expect(document.getElementById('score-total')!.textContent).toBe('48')
     expect(document.getElementById('score-caption')!.textContent).toBe(
-      b.STRINGS.rawPoints,
+      b.STRINGS.claimedPoints,
     )
     const block = document.getElementById('score-lines')!.textContent!
-    expect(block).toContain('6 × 3 → 18') // the ×(n+1) projection, labelled
-    expect(block).toContain(b.STRINGS.atSubmission)
+    expect(block).toContain(`${b.STRINGS.objectivesLine}3`)
+    expect(block).toContain(`${b.STRINGS.objectiveMultLine}7`)
+    expect(block).toContain('6 × (7 + 1) = 48')
+    // The checklist lists the objectives with their multipliers.
+    const rows = [...document.querySelectorAll('#bonus-list .bonus')].map((e) => e.textContent)
+    expect(rows).toEqual(['☐Operate 100% on alternative Power×2', '☐Operate the event QRP×4'])
     // The no-power pin (the SFD test above is the positive control that this
     // text DOES appear when the model has a power multiplier).
     const leftPanel = document.getElementById('col-left')!.textContent!

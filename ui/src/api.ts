@@ -463,6 +463,9 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
  * in the catalogs, computed UI-side. `enforcement` ships `'warn'`: nothing is
  * ever removed or disabled by rule (operator ruling). */
 export interface FdRulesetDto {
+  /** The contest allows spotting only over amateur RF while it runs (Winter Field Day 2027), so
+   *  Nexus posts no spot over the internet then. Absent when false. */
+  spotsRfOnly?: boolean
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |

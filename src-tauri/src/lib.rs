@@ -8504,6 +8504,11 @@ struct FdRulesetDto {
     /// the contest starts. Absent when it does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     location_warning: Option<tempo_app::dto::LocationWarningDto>,
+    /// ⭐ The contest allows spotting only over amateur RF while it runs (Winter Field Day),
+    /// so Nexus posts no spot over the internet then. Absent when false: the Remote field-day
+    /// capture sends this DTO, and a page older than the key would refuse it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    spots_rf_only: bool,
     /// The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order, for Settings
     /// to offer: the Illinois QSO Party's eight. Filled by the PREVIEW only and absent when
     /// empty: the Remote field-day capture sends this DTO too, and the hosted page refuses a
@@ -8529,6 +8534,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         banned_modes: rs.banned_modes.iter().map(|m| m.to_string()).collect(),
         spotting_allowed: rs.assistance.spotting_allowed,
         cluster_allowed: rs.assistance.cluster_allowed,
+        spots_rf_only: rs.assistance.spots_rf_only,
         enforcement: rs.enforcement.to_string(),
         // Filled by `get_fd_ruleset`, which has the settings this needs. The bare
         // ruleset facts stay reachable without them.
@@ -9013,12 +9019,41 @@ struct SatPassDto {
     aos_clamped: bool,
 }
 
-/// Post the operator's own DX spot to the human DX cluster. Formats a canonical
+/// The refusal every internet spot door answers with while a contest that allows spotting
+/// only over amateur RF runs (`Engine::internet_spot_block`) — a token the UI turns into the
+/// sentence that says why.
+const SPOT_RF_ONLY: &str = "spotRfOnly";
+
+/// ⭐ **The question every internet spot door asks first**: `Err(SPOT_RF_ONLY)` while a
+/// contest that allows spotting only over amateur RF runs (`Engine::internet_spot_block`,
+/// Winter Field Day's *"You may spot yourself and others only via amateur RF."*), `Ok`
+/// otherwise. The desktop's cluster spot and the Remote page's both come through here.
+fn internet_spot_allowed(engine: &tempo_app::engine::Engine) -> Result<(), String> {
+    match engine.internet_spot_block() {
+        Some(_) => Err(SPOT_RF_ONLY.into()),
+        None => Ok(()),
+    }
+}
+
+/// Post the operator's own DX spot to the human DX cluster — refused while a contest that
+/// allows spotting only over amateur RF runs ([`internet_spot_allowed`]), and otherwise
+/// [`queue_spot`]. `(async)` per the UI-thread hang guard: it reads the engine.
+#[tauri::command(async)]
+fn post_spot(
+    state: State<'_, SharedEngine>,
+    freq_mhz: f64,
+    call: String,
+    comment: String,
+) -> Result<(), String> {
+    internet_spot_allowed(&engine_lock(&state))?;
+    queue_spot(freq_mhz, call, comment)
+}
+
+/// The cluster half of a spot, after the station's own checks: formats a canonical
 /// `DX <freq_khz> <call> <comment>` line and queues it for the connected human
 /// node(s) to send. Gated on a node being connected NOW — a spot must not buffer
 /// and post stale hours later — and on a real callsign + a sane frequency.
-#[tauri::command]
-fn post_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String> {
+fn queue_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String> {
     if !freq_mhz.is_finite() || freq_mhz <= 0.0 {
         return Err("invalid frequency".into());
     }
@@ -9060,6 +9095,7 @@ async fn self_spot_activation(
         .map_err(|refusal| match refusal {
             self_spot::Refusal::NoActivation => "noActivation".to_string(),
             self_spot::Refusal::Moved => "contextChanged".to_string(),
+            self_spot::Refusal::RfOnly => SPOT_RF_ONLY.to_string(),
         })?;
         Ok(self_spot::send(&ctx))
     })
@@ -38925,6 +38961,48 @@ mod tests {
         // behaved the same way, the lookup would be broken rather than the config wrong.
         assert!(v["productName"].is_string());
         assert!(v["nexus_no_such_key"].is_null());
+    }
+
+    /// ⭐ **The desktop's DX cluster spot is refused while Winter Field Day runs** — 2027 rules
+    /// p.8: *"You may spot yourself and others only via amateur RF."* — and goes on to the
+    /// cluster outside it, and during ARRL Field Day, whose rules say nothing of the kind.
+    #[test]
+    fn the_desktop_cluster_spot_door_refuses_an_internet_spot_while_wfd_runs() {
+        let engine = |event: &str, now: u64| {
+            let mut e = tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings {
+                fd_active: true,
+                fd_event: event.into(),
+                ..Default::default()
+            });
+            e.set_spot_clock(Some(now));
+            e
+        };
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+            .event_window(2027);
+        let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+            .event_window(2026);
+        assert_eq!(
+            [
+                super::internet_spot_allowed(&engine("wfd", wfd.start_unix + 7200)),
+                super::internet_spot_allowed(&engine("wfd", wfd.start_unix - 3600)),
+                super::internet_spot_allowed(&engine("arrlfd", arrl.start_unix + 7200)),
+            ],
+            [Err(super::SPOT_RF_ONLY.to_string()), Ok(()), Ok(())],
+            "(during Winter Field Day, before it, during ARRL Field Day)"
+        );
+        // …and the command asks the door before it queues anything. (A Tauri command takes
+        // its engine as managed state, which no unit test can hand it, so the order is read
+        // off the source.)
+        let src = include_str!("lib.rs");
+        let body = &src[src.find("fn post_spot(").expect("post_spot")..];
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        let (asks, queues) = (
+            body.find("internet_spot_allowed(")
+                .expect("post_spot asks the door"),
+            body.find("queue_spot(").expect("post_spot queues"),
+        );
+        assert!(asks < queues, "post_spot queues before it asks:\n{body}");
     }
 
     #[test]

@@ -446,7 +446,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     try {
       announceSelfSpot(await selfSpot(reference, dialHz))
     } catch (e) {
-      pushToast(e === 'contextChanged' ? t('ota.selfSpot.moved') : t('ota.selfSpot.failed'), 'error', 6000)
+      pushToast(
+        e === 'contextChanged'
+          ? t('ota.selfSpot.moved')
+          : e === 'spotRfOnly'
+            ? t('ota.selfSpot.rfOnly')
+            : t('ota.selfSpot.failed'),
+        'error',
+        6000,
+      )
     }
   }
 

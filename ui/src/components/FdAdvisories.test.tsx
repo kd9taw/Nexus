@@ -129,3 +129,32 @@ describe('the assistance advisory', () => {
     expect(advisories()).toHaveLength(0)
   })
 })
+
+describe('the spots-over-RF-only line (Winter Field Day 2027: "You may spot yourself and others only via amateur RF.")', () => {
+  const rfOnly: FdRulesetDto = { ...WFD, rulesYear: 2027, spotsRfOnly: true }
+  const window = { start: 1_800_720_000, end: 1_800_828_000 }
+  const line = () => advisories().filter((a) => a.classList.contains('spotsRfOnly'))
+
+  it('says, while the event runs, that no spot goes out over the internet and receiving carries on', () => {
+    render(<FdAdvisories fdActive ruleset={rfOnly} showAssistance eventWindow={window} nowUnix={window.start + 7200} />)
+    expect(line().map((a) => a.textContent)).toEqual([
+      '⚠ Winter Field Day allows spots only over amateur RF while it runs: Nexus is sending no PSK Reporter reports, DX cluster spots or POTA self-spots until it ends. Receiving spots carries on.',
+    ])
+  })
+
+  it('is quiet before the event starts and once it has ended', () => {
+    for (const now of [window.start - 1, window.end]) {
+      render(<FdAdvisories fdActive ruleset={rfOnly} showAssistance eventWindow={window} nowUnix={now} />)
+      expect(line(), `at ${now}`).toEqual([])
+      cleanup()
+    }
+  })
+
+  it('CONTROL — a contest without the rule, and the master switch off, say nothing', () => {
+    render(<FdAdvisories fdActive ruleset={SFD} showAssistance eventWindow={window} nowUnix={window.start + 7200} />)
+    expect(line()).toEqual([])
+    cleanup()
+    render(<FdAdvisories fdActive={false} ruleset={rfOnly} showAssistance eventWindow={window} nowUnix={window.start + 7200} />)
+    expect(line()).toEqual([])
+  })
+})

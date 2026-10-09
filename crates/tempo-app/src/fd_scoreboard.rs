@@ -46,10 +46,11 @@
 //! [`tempo_core::fd_rules`] ruleset — the same dedupe and the same math every
 //! other surface uses, never re-derived. For WFD (no `PostMultiplier::PowerTier`)
 //! the payload carries **no power fields at all**, so the page *cannot* render
-//! ARRL power math for an event that has none: the headline is raw QSO points
-//! and the ×(n+1) projection is a labelled secondary (multipliers apply at
-//! submission). WFD bonus points ride along informationally but are not folded
-//! into the provisional headline. Golden-payload tests pin both shapes.
+//! ARRL power math for an event that has none: the headline is the CLAIMED total,
+//! the sponsor's QSO points × (objective multiplier + 1) over the host's ticked
+//! objectives (`FdRuleset::claimed_total`, the formula every surface asks), with
+//! the multiplier and the objectives completed beside it. Golden-payload tests pin
+//! both shapes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
@@ -102,6 +103,9 @@ pub struct FdBoardRow {
     pub submode: String,
     pub when_unix: u64,
     pub operator: String,
+    /// The bird a satellite contact was worked through, `""` for a terrestrial one — so an
+    /// event that gives satellites no credit (Winter Field Day) leaves the row out.
+    pub sat: String,
 }
 
 /// A known position (identity + label + current operator). Rows referencing a
@@ -136,8 +140,10 @@ pub struct FdBoardData {
     /// Stored power multiplier setting — consulted for SFD only; WFD's payload
     /// carries no power fields regardless of what is stored here.
     pub power_mult: u32,
-    /// Claimed bonus/objective ids (settings), filtered against the menu.
+    /// Claimed bonus ids (settings), filtered against the menu.
     pub claimed: Vec<String>,
+    /// Ticked objective ids (settings), for an event that scores by objectives.
+    pub objectives: Vec<String>,
     pub positions: Vec<FdBoardPosition>,
     pub rows: Vec<FdBoardRow>,
     /// The club's contest when it is NOT one of the two Field Days — `None` for a Field
@@ -566,9 +572,12 @@ struct ScoreBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     powered_points: Option<u32>,
     total: u32,
-    /// WFD only: qso_points × (objectives_claimed + 1), labelled provisional.
+    /// WFD only: the objective multiplier (OM) the ticked objectives earn — `total` is
+    /// `qso_points × (OM + 1)`. Absent for an event with no objective menu.
     #[serde(skip_serializing_if = "Option::is_none")]
-    projected_at_submission: Option<u32>,
+    objective_multiplier: Option<u32>,
+    /// WFD only: how many objectives are completed, each one a ticked objective brings
+    /// counted with it.
     #[serde(skip_serializing_if = "Option::is_none")]
     objectives_claimed: Option<u32>,
 }
@@ -658,16 +667,25 @@ struct MetaBonus {
 }
 
 #[derive(Serialize)]
+struct MetaObjective {
+    id: &'static str,
+    label: &'static str,
+    multiplier: u32,
+}
+
+#[derive(Serialize)]
 struct MetaDoc {
     event: EventIdent,
     scoring_model: &'static str,
     rules_year: u16,
     rules_generated: &'static str,
     sections: Vec<MetaSection>,
-    /// The bonus/objective menu the `claimed` ids index into. WFD reuses the
-    /// bonus menu until fd_rules grows a real objectives table — when it does,
-    /// the board follows automatically with zero page changes.
+    /// The bonus menu the `claimed` ids index into (ARRL Field Day's).
     bonuses: Vec<MetaBonus>,
+    /// The objectives, with their multipliers, for an event that scores by them (Winter
+    /// Field Day) — what `claimed` indexes into there. Absent for every other event.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    objectives: Vec<MetaObjective>,
 }
 
 /// The events' own names — invariant, never translated (mirrors the UI's
@@ -785,6 +803,10 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
     let mut unique = vec![false; d.rows.len()];
     for &i in &order {
         let r = &d.rows[i];
+        // A satellite contact the event gives no credit counts for nothing here.
+        if !rs.satellite_credit && !r.sat.is_empty() {
+            continue;
+        }
         log.band = r.band.trim().to_string();
         unique[i] = log.log_submode_at(
             &r.call,
@@ -810,6 +832,14 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
         .cloned()
         .collect();
     let bonus_points = rs.bonus_points(&claimed);
+    // An objectives event ticks its COMPLETED objectives on the board — each ticked one
+    // and what it brings with it — in place of a bonus list it does not have.
+    let earned = rs.objectives_earned(&d.objectives);
+    let claimed: Vec<String> = if rs.objective_menu.is_empty() {
+        claimed
+    } else {
+        earned.iter().map(|o| o.id.to_string()).collect()
+    };
     let score = if rs.scoring.power_tiers().is_some() {
         ScoreBlock {
             model: model_tag(&rs.scoring),
@@ -824,20 +854,20 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             }),
             powered_points: Some(powered),
             total: powered + bonus_points,
-            projected_at_submission: None,
+            objective_multiplier: None,
             objectives_claimed: None,
         }
     } else {
-        let n = claimed.len() as u32;
+        let menu = !rs.objective_menu.is_empty();
         ScoreBlock {
             model: model_tag(&rs.scoring),
             qso_points,
             bonus_points,
             power_mult: None,
             powered_points: None,
-            total: qso_points,
-            projected_at_submission: Some(qso_points * (n + 1)),
-            objectives_claimed: Some(n),
+            total: rs.claimed_total(qso_points, qso_points, bonus_points, &d.objectives),
+            objective_multiplier: menu.then(|| rs.objective_multiplier(&d.objectives)),
+            objectives_claimed: menu.then_some(earned.len() as u32),
         }
     };
 
@@ -1026,6 +1056,15 @@ pub fn build_meta(d: &FdBoardData, now_unix: u64) -> String {
                 id: b.id,
                 label: b.label,
                 points: b.points,
+            })
+            .collect(),
+        objectives: rs
+            .objective_menu
+            .iter()
+            .map(|o| MetaObjective {
+                id: o.id,
+                label: o.label,
+                multiplier: o.multiplier,
             })
             .collect(),
     };
@@ -1792,6 +1831,7 @@ mod tests {
             submode: submode.into(),
             when_unix: when,
             operator: op.into(),
+            sat: String::new(),
         }
     }
 
@@ -1813,6 +1853,9 @@ mod tests {
                 "web-submission".into(),  // 50
                 "not-a-real-bonus".into(),
             ],
+            // 100% alternative power (×2, bringing station equipment on alternative power,
+            // ×1) and QRP (×4): OM 7. ARRL Field Day has no objectives and ignores them.
+            objectives: vec!["wfd-alt-power-100".into(), "wfd-qrp".into()],
             positions: vec![
                 FdBoardPosition {
                     id: "aaaa1111".into(),
@@ -1946,12 +1989,25 @@ mod tests {
         let v = parse(&json);
         assert_eq!(v["score"]["model"], "objectives");
         assert_eq!(v["score"]["qso_points"], 6);
-        // Headline is RAW qso points; the ×(n+1) projection is a labelled
-        // secondary (n = 2 valid claimed objectives → ×3).
-        assert_eq!(v["score"]["total"], 6);
-        assert_eq!(v["score"]["objectives_claimed"], 2);
-        assert_eq!(v["score"]["projected_at_submission"], 18);
-        assert_eq!(v["score"]["bonus_points"], 150);
+        // The headline is the CLAIMED total, the sponsor's QSO points × (OM + 1): 6 × (7 + 1).
+        // Three objectives completed (the two ticked and the one 100% alternative power
+        // brings); the ARRL bonus ids the fixture also claims are worth nothing here.
+        assert_eq!(
+            (
+                v["score"]["total"].as_u64(),
+                v["score"]["objective_multiplier"].as_u64(),
+                v["score"]["objectives_claimed"].as_u64(),
+                v["score"]["bonus_points"].as_u64(),
+                v["score"].get("projected_at_submission").is_some(),
+            ),
+            (Some(48), Some(7), Some(3), Some(0), false),
+            "(total, OM, objectives completed, bonus points, the old projection): {json}"
+        );
+        assert_eq!(
+            v["claimed"],
+            serde_json::json!(["wfd-alt-power-equipment", "wfd-alt-power-100", "wfd-qrp"]),
+            "the completed objectives the board ticks, the implied one with them"
+        );
         assert_eq!(v["event"]["kind"], "wfd");
         assert_eq!(v["event"]["name"], "Winter Field Day");
 
@@ -2122,12 +2178,38 @@ mod tests {
         assert_eq!(menu.len(), rs.bonuses.len());
         assert_eq!(v["scoring_model"], "powered");
         assert_eq!(v["rules_year"], rs.rules_year);
-        // WFD tags its model; its menu is the bonus menu until fd_rules grows
-        // a real objectives table (then this follows automatically).
+        // WFD tags its model and lists its objectives with their multipliers; it carries no
+        // copy of ARRL's bonus menu since the sponsor's 2027 rules.
         let (w, wnow) = fixture(FdEvent::WinterFd);
         let mv = parse(&build_meta(&w, wnow));
         assert_eq!(mv["scoring_model"], "objectives");
-        assert!(!mv["bonuses"].as_array().unwrap().is_empty());
+        assert_eq!(mv["bonuses"].as_array().unwrap().len(), 0);
+        let objectives: Vec<(String, u64)> = mv["objectives"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|o| {
+                        (
+                            o["id"].as_str().unwrap().to_string(),
+                            o["multiplier"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            (
+                objectives.len(),
+                objectives.iter().map(|(_, m)| m).sum::<u64>(),
+                objectives.first().cloned()
+            ),
+            (13, 34, Some(("wfd-alt-power-equipment".to_string(), 1))),
+            "the sponsor's thirteen objectives, 34 together"
+        );
+        // …and ARRL Field Day's meta lists no objectives.
+        assert!(v
+            .get("objectives")
+            .is_none_or(|o| o.as_array().unwrap().is_empty()));
     }
 
     // -- the cached source -------------------------------------------------

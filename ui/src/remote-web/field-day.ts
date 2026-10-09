@@ -58,7 +58,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -73,6 +73,10 @@ function status(v: unknown): void {
     (f.locationWarning !== undefined && !locationWarning(f.locationWarning)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
+    // Winter Field Day's objective multiplier, beside the claimed total it multiplies.
+    (f.objectiveMultiplier !== undefined && !integer(f.objectiveMultiplier)) ||
+    // Whether a satellite contact counts, sent (as false) only by a contest where it does not.
+    (f.satelliteCredit !== undefined && typeof f.satelliteCredit !== 'boolean') ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
     // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
     // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.
@@ -128,18 +132,24 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
     !meta || !integer(meta.capturedAgeMs) || Number(meta.capturedAgeMs) >= FIELD_DAY_TTL_MS) throw new Error('invalidFieldDay')
   const value = object(meta.source,['active','fieldDay','settings','ruleset'])
   if (new TextEncoder().encode(JSON.stringify(value)).length > 224*1024 || typeof value.active !== 'boolean' || (!value.active && value.fieldDay !== null)) throw new Error('invalidFieldDay')
-  const s = object(value.settings,['fdOperator','fdPowerMult','fdBonuses','fdBonusesPlanned'])
-  if (!text(s.fdOperator) || ![1,2,5].includes(Number(s.fdPowerMult)) || typeof s.fdPowerMult !== 'number' || !texts(s.fdBonuses,64) || !texts(s.fdBonusesPlanned,64)) throw new Error('invalidFieldDay')
+  // The two objective lists ride a capture only for a contest that scores by objectives (Winter
+  // Field Day). OPTIONAL, so an older station without them still validates; and this page must be
+  // deployed before a station that sends them, which it would otherwise refuse whole.
+  const s = object(value.settings,['fdOperator','fdPowerMult','fdBonuses','fdBonusesPlanned'],['fdObjectives','fdObjectivesPlanned'])
+  if (!text(s.fdOperator) || ![1,2,5].includes(Number(s.fdPowerMult)) || typeof s.fdPowerMult !== 'number' || !texts(s.fdBonuses,64) || !texts(s.fdBonusesPlanned,64) ||
+    (s.fdObjectives !== undefined && !texts(s.fdObjectives,64)) || (s.fdObjectivesPlanned !== undefined && !texts(s.fdObjectivesPlanned,64))) throw new Error('invalidFieldDay')
   // Same drift as the status struct above, and this is the one that actually fired: the contest
   // programme gave the ruleset an `exchange` (the ExchangeSpec that replaced the hardcoded
   // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
   const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
-    ['exchange','problem','role'])
+    ['exchange','problem','role','spotsRfOnly'])
   // The ruleset of whichever contest is running — the same id, so the same shape rule as the
   // status's `event` above (a hardcoded arrlfd/wfd pair here blanked every other contest).
   if (!eventId(r.event) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
     typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
     (r.role !== undefined && !text(r.role)) ||
+    // A contest that allows spotting only over amateur RF while it runs (Winter Field Day).
+    (r.spotsRfOnly !== undefined && typeof r.spotsRfOnly !== 'boolean') ||
     (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
     // The exchange is a spec object, bounded here rather than re-modelled - the real Nexus app
     // is what renders it, and this gate caps shape and size, it does not duplicate the DTO.

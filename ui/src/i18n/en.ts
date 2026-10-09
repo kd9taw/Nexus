@@ -3271,6 +3271,7 @@ export const EN = {
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
+  'spots.post.rfOnly': 'Not posted: the contest you are running allows spots only over amateur RF while it runs.',
   'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
   'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
   'spots.post.confirm.post': 'Post spot',
@@ -3665,6 +3666,7 @@ export const EN = {
   'ota.selfSpot.cluster.invalid': 'Not sent to the DX cluster: check your callsign, and that the dial is in a ham band',
   'ota.selfSpot.moved': 'Your park or frequency changed after you pressed Spot me, so nothing was posted',
   'ota.selfSpot.failed': 'Couldn’t spot you. Nothing was posted.',
+  'ota.selfSpot.rfOnly': 'Not spotted: the contest you are running allows spots only over amateur RF while it runs.',
 
   // The offline park directory. `{{formatted}}` is a park COUNT the call site has already
   // grouped for display — it never passes through a formatter here (see `logbook.markLotw`).
@@ -3842,6 +3844,7 @@ export const EN = {
   // instead of the ARRL power×+bonus arithmetic — a different statement, not a shortened one.
   'fieldDay.score.wfd':
     'QSO pts {{points}} · WFD objective multipliers apply at submission (not tracked here)',
+  'fieldDay.score.wfdObjectives': 'QSO pts <b>{{qsoPts}}</b> × (OM <b>{{om}}</b> + 1) = <total>{{totalScore}}</total>',
   // The whole sum as ONE message: an equation assembled from eight fragments cannot be
   // reordered, and every language puts "power" and "bonuses" somewhere of its own.
   'fieldDay.score.math':
@@ -3940,6 +3943,22 @@ export const EN = {
   'fieldDay.bonus.plan.on': 'Planned',
   'fieldDay.bonus.plan.aria': 'Plan {{label}} \u2014 planned bonuses do not score',
   'fieldDay.bonus.plan.title': 'Planned = you mean to earn it. It scores only once you tick the box.',
+  'fieldDay.objectives.head': 'Objectives',
+  'fieldDay.objectives.count': '{{done}}/{{total}} completed · OM {{om}}',
+  'fieldDay.objectives.planned.count': '{{count}} planned · +OM {{om}}',
+  'fieldDay.objectives.chase.aria': 'Objective multiplier earned and planned',
+  'fieldDay.objectives.chase.earned': 'Earned OM {{om}}',
+  'fieldDay.objectives.chase.planned': 'Planned +OM {{om}}',
+  'fieldDay.objectives.chase.potential': 'If all land OM {{om}}',
+  'fieldDay.objectives.aria': 'Completed Winter Field Day objectives',
+  'fieldDay.objective.aria': '{{label}} — objective multiplier {{om}}',
+  'fieldDay.objective.om': '×{{om}}',
+  'fieldDay.objective.implied': 'comes with an objective you ticked',
+  'fieldDay.objective.hint.bands': 'log: {{count}} of {{need}} bands with 3+ contacts',
+  'fieldDay.objective.hint.modes': 'log: {{count}} modes',
+  'fieldDay.objective.plan.aria': 'Plan {{label}} — planned objectives do not count',
+  'fieldDay.objectives.qrp.undeclared': '“{{objective}}” is ticked, but your Power category (Settings ▸ Contesting ▸ Contest) is not QRP, so the Cabrillo file does not claim QRP.',
+  'fieldDay.objectives.qrp.unticked': 'Your Power category is QRP, but “{{objective}}” (×{{om}}) is not ticked.',
 
   // The log. Column headings name a CONCEPT; every value under them is a token. ARRL calls
   // the exchange field Class and WFD calls it Category — two words for two events, not one
@@ -3979,6 +3998,7 @@ export const EN = {
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
     'Spotting assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
+  'fieldDay.advisory.spotsRfOnly': '{{event}} allows spots only over amateur RF while it runs: Nexus is sending no PSK Reporter reports, DX cluster spots or POTA self-spots until it ends. Receiving spots carries on.',
   'fieldDay.club.aria': 'Club sync',
   'fieldDay.club.head': 'Club',
   'fieldDay.club.state.synced': 'Synced',
@@ -4064,6 +4084,7 @@ export const EN = {
   'settings.contestPick.entryAxes.unset': 'Not set',
   'settings.contestPick.entryAxes.hint':
     'The rest of what your Cabrillo log declares about the entry. Sweepstakes also sends these on the air, as the precedence letter, so it will not start until you have picked one of each: ARRL counts 5 watts or less as QRP, 100 watts or less as low power, and anything above that as high power, and an entry using spots, a skimmer or a cluster is Single Operator Unlimited.',
+  'settings.contestPick.power.wfd': 'Winter Field Day takes QRP or LOW (its limit is 100 W PEP), and HIGH writes no CATEGORY-POWER line.',
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
     'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
@@ -4117,9 +4138,8 @@ export const EN = {
   'settings.fieldDay.class.label': 'FD Class',
   'settings.fieldDay.class.hint':
     'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.',
-  'settings.fieldDay.category.label': 'WFD Category',
-  'settings.fieldDay.category.hint':
-    'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).',
+  'settings.fieldDay.category.label': 'WFD Class and Category',
+  'settings.fieldDay.category.hint': 'The number of transmitters (your class), then your category letter: H=Home, I=Indoor, O=Outdoor, M=Mobile (e.g. 2O = 2 transmitters, outdoor).',
   'settings.fieldDay.section.label': 'ARRL Section',
   // `{{section}}` is what the operator typed and `{{count}}` the size of the section list.
   'settings.fieldDay.section.invalid':
@@ -4190,6 +4210,7 @@ export const EN = {
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
+  'settings.fdClub.firewall.hint': 'Allow Nexus through your computer\'s firewall (on Windows, on Private networks): a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373. Nexus adds no firewall rule of its own.',
   'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
@@ -7417,6 +7438,7 @@ export const EN = {
     'WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.',
   'settings.integrations.spotSources.title': 'Spot Sources',
   'settings.integrations.pskreporter.hint': 'upload spots to the global map',
+  'settings.integrations.pskreporter.rfOnly': 'While {{event}} runs, its rules allow spots only over amateur RF, so no reports are sent; they resume when it ends.',
   'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
   'settings.integrations.clusterSpots.hint':
     'Surface "new ones" from the Reverse Beacon Network on the Needed board + Conditions. Takes effect on restart.',
