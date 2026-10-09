@@ -50,7 +50,7 @@ The 2027 event is **23 and 24 January**, 1600 UTC Saturday to 21:59 UTC Sunday. 
 - [ ] **Only direct contacts count**: one band, one mode, simplex, station to station. No cross-band, repeater, relayed, meshed or internet-linked contact counts; a satellite contact is logged and kept, and scores nothing (see [Winter Field Day Scoring](#winter-field-day-scoring)).
 - [ ] **Spot and solicit only over amateur RF.** While the event runs Nexus posts no spot over the internet (see [Winter Field Day Spotting](#winter-field-day-spotting)).
 - [ ] For a club: allow Nexus through the Windows firewall on **Private** networks (club sync uses TCP 42073 and UDP 42074, the club TV scoreboard TCP 7373; Nexus adds no firewall rule of its own), and set **every clock from one source**, to the second. Nexus warns a position more than 30 seconds off the host's clock when it joins, and never sets a clock.
-- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on a host, any `fd_event_*.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's.
+- [ ] Rehearse on an earlier day than the day before the event: entering the event loads only the contacts logged from 24 hours before it starts, keeps a rehearsal's out of its log by itself and deletes nothing (see [Contest Log Persistence](#contest-log-persistence)). On a host, use a different Event name from the rehearsal's, so the club journal starts fresh.
 
 During the event, tick each objective on the contest screen as you complete it. After it, export the Cabrillo or ADIF file and submit it as [Exports](#exports-cabrillo-adif-summary-and-dupe-sheet) describes, by **23:59 UTC on 1 March 2027**.
 
@@ -142,6 +142,8 @@ The Contest screen carries a live scoreboard: QSO and section counts, per-mode c
 - **Sections board** — all 85 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
 - **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
 - **Club Board** — the **club band board** (position, band, mode, operator, QSOs, rate, clock) has its own button in the left rail, directly under Contest, and its own window. It appears whenever Field Day is on, whether or not club sync is running, and one click puts it on a second monitor: this is the board a multi-station club watches all event to see who is on what band before moving to another one. The same **Pop out board** button in the club header on the dashboard opens the same window. It is set in larger type than the docked copy because it is watched from the operating position rather than read at the keyboard, and it is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
+- **A full board** (on the host) — every club line each position is sent carries the whole board, and one line carries about 59 positions. From the moment one more might not fit, the host's club block says how many positions the club has; past that, each position's board leaves out the positions heard from least recently, and says how many it shows. Contacts, dupe warnings and the score still sync.
+- **Turned away** (on the host) — a position the host refuses when it joins (another contest, a Nexus too old for it, or at a QSO party a laptop set up on the other side of the state line) is named on the host's club block with the sentence that position was sent, which its own club block shows too.
 - **Clock** (on the host's board) — each position's clock against the host's, which the position measures every 5 s over the club link and reports to the host: *in step* under 2 s, how many seconds ahead or behind from there, in the warning colour past 30 s, and a dash for a position running an older Nexus. Each position's own club line says the same from 2 s ("This PC's clock is 3 s behind the host's") and warns past 30 s. Nexus only shows the difference and never changes a clock, so FT8/FT4 timing is untouched; put a wrong clock right in that PC's date and time settings.
 - **With club sync off**, the window says so and names the route that turns it on (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event) instead of showing an empty board. With sync on and nobody else logging yet, it says it is waiting.
 - **Spectator scoreboard** — a web page for a TV or projector facing the room (Settings ▸ Contesting ▸ Field Day Club Sync ▸ **Spectator scoreboard**; the row shows the address to open on the TV). It reads across a room at 1080p and at 4K: the claimed score and how it is made, the rate, each position's band and mode, the contacts by band and mode, the latest contact, the time left, and a map of what the contest counts — the sections globe for both Field Days, the 102 counties for the Illinois QSO Party. It works for **any contest club sync runs**. The host shows its own club; a **position shows the host's board**, so the TV can sit at any table, as long as the host's Spectator scoreboard is on too, on the same port. If the host can't be reached the TV says so in plain words, keeps the last board, and comes back by itself; a station with no club says so, with what to do. Add `?theme=light` to the address for the light board, or `?theme=auto` to follow the TV.
@@ -206,7 +208,7 @@ All three mode classes write into the **same unified FD log**, so the live score
 
 The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever you re-enter Field Day mode — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Entries from a previous event (older than 4 days) are not restored, so the journal self-expires between events.
 
-One consequence to know: contacts logged during a **pre-event gear test within 4 days of the event** are restored into the real event's log and dupe sheet. To start the event clean, delete `fieldday_backup.adi` after testing (with Nexus closed, or at least outside Field Day mode — the next contact logged in FD mode re-writes the whole journal from memory).
+Only the session's own contacts are restored: the contest you are entering, logged from 24 hours before this running of it starts. A rehearsal on an earlier day, or another contest worked in the last four days, stays in the journal untouched and out of this log, and the Contest screen says how many contacts it kept out and why. A gear test within 24 hours of the start is part of the event's log; to start clean after one, delete `fieldday_backup.adi` (with Nexus closed, or at least outside Field Day mode — the next contact logged in FD mode re-writes the whole journal from memory).
 
 ---
 
@@ -338,13 +340,13 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 Before the party, on every laptop:
 
 - [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
-- [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's.
+- [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's. A laptop set up out of state is refused when it joins, and both its club block and the host's say why.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
 - [ ] One laptop: an **Event name** for the party and **Host a club event** on. The others: **Find club events**, or the host's address in **Join event at**. Allow Nexus through the Windows firewall on Private networks.
 - [ ] Every clock set from one source, to the second; once the positions have joined, the host's club board says each one is in step.
 - [ ] For a TV in the room, **Spectator scoreboard** on the host, and on the laptop the TV is plugged into if that is a position: it shows the host's board, the counties map included.
-- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` (and, on the host, any `fd_event_*.ilqp.jsonl`) left from a rehearsal in the last four days, and use a different Event name from the rehearsal's, or the rehearsal's contacts come back into the party's logs.
+- [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: the party's laptops then load none of the rehearsal's contacts, and their Contest screens say how many they kept out. On the host, use a different Event name from the rehearsal's, or its club journal brings the rehearsal's contacts back into the club's log.
 
 During the party:
 
@@ -363,7 +365,7 @@ Before the party, on every laptop:
 - [ ] Your station data: State **IL** and your **County** code.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs. Your operator name is on the Station tab.
 - [ ] Field Day Setup: **Field Day mode** on. Leave **Host a club event** off and **Join event at** empty.
-- [ ] With Nexus closed, delete any `fieldday_backup_*.adi` file left from a rehearsal in the last four days, or its contacts come back into the party's log.
+- [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: its contacts then stay out of the party's log, and the Contest screen says how many it kept out.
 - [ ] Rehearse on each position: log a phone contact and a CW contact, log one of them again and see it refused as a dupe, then export a Cabrillo file and read its header.
 
 During the party:
