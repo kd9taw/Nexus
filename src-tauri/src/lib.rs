@@ -15171,11 +15171,45 @@ enum AimedAt {
     Country(&'static str),
 }
 
-/// A point-at-call's short-path bearing (degrees true) and what it was taken to.
+/// A point-at-call's short-path bearing (degrees true), how far away that is, and what it was
+/// taken to.
 #[derive(Debug, Clone, PartialEq)]
 struct Aim {
     bearing: f64,
+    /// Great-circle kilometres to the point the bearing is taken to.
+    km: f64,
     to: AimedAt,
+}
+
+/// Why [`aim_at_call`] has no bearing to give.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NoAim {
+    /// The operator's own grid is not set, so there is nowhere to take a bearing from.
+    MyGrid,
+    /// Nothing places the station: no fix, and its call is in no DXCC entity.
+    Station,
+}
+
+impl NoAim {
+    /// What a point-at-call says when it cannot aim (its toast's `{{error}}`), word for word what
+    /// it has always said.
+    fn sentence(self, call: &str) -> String {
+        match self {
+            NoAim::MyGrid => {
+                "Set your grid square in Settings so a bearing can be computed.".to_string()
+            }
+            NoAim::Station => format!("Couldn't locate {call} (unknown callsign)."),
+        }
+    }
+
+    /// What [`rotator_bearing_to_call`] answers instead: a code, and the UI owns the words (the
+    /// `PENDING_LOG_MOVED_ON` shape).
+    fn code(self) -> &'static str {
+        match self {
+            NoAim::MyGrid => "noGrid",
+            NoAim::Station => "unknownStation",
+        }
+    }
 }
 
 /// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
@@ -15212,10 +15246,9 @@ fn aim_at_call(
     mygrid: &str,
     call: &str,
     fixes: Vec<propagation::geo::StationFix>,
-) -> Result<Aim, String> {
-    use propagation::geo::{bearing_deg, best_fix, maidenhead_to_latlon, StationFix};
-    let me = maidenhead_to_latlon(mygrid.trim())
-        .ok_or("Set your grid square in Settings so a bearing can be computed.")?;
+) -> Result<Aim, NoAim> {
+    use propagation::geo::{bearing_deg, best_fix, haversine_km, maidenhead_to_latlon, StationFix};
+    let me = maidenhead_to_latlon(mygrid.trim()).ok_or(NoAim::MyGrid)?;
     if let Some(fix) = best_fix(fixes) {
         if let Some(at) = fix.latlon() {
             let to = match fix {
@@ -15224,14 +15257,16 @@ fn aim_at_call(
             };
             return Ok(Aim {
                 bearing: bearing_deg(me, at),
+                km: haversine_km(me, at),
                 to,
             });
         }
     }
-    let info = propagation::dxcc::resolve(call)
-        .ok_or_else(|| format!("Couldn't locate {call} (unknown callsign)."))?;
+    let info = propagation::dxcc::resolve(call).ok_or(NoAim::Station)?;
+    let at = (info.lat, info.lon);
     Ok(Aim {
-        bearing: bearing_deg(me, (info.lat, info.lon)),
+        bearing: bearing_deg(me, at),
+        km: haversine_km(me, at),
         to: AimedAt::Country(info.entity),
     })
 }
@@ -15266,6 +15301,46 @@ impl PointedAtDto {
     }
 }
 
+/// What [`rotator_bearing_to_call`] answers: what a short-path point at the call answers
+/// ([`PointedAtDto`]), and how far away that is.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CallBearingDto {
+    pointed: PointedAtDto,
+    /// Great-circle kilometres to the point the bearing is taken to.
+    km: f64,
+}
+
+/// The bearing a short-path [`point_rotator_at_call`] turns the antenna to for `call`, and how far
+/// away that is, from what `eng` knows now: the point's own inputs (the operator's grid and
+/// [`station_fixes`]) through the point's own resolver ([`aim_at_call`]).
+fn call_bearing(eng: &tempo_app::engine::Engine, call: &str) -> Result<CallBearingDto, NoAim> {
+    let aim = aim_at_call(&eng.settings().mygrid, call, station_fixes(eng, call))?;
+    Ok(CallBearingDto {
+        km: aim.km,
+        pointed: PointedAtDto::new(aim.bearing, aim.to),
+    })
+}
+
+/// The rotor box's line 2 beside a cockpit: the bearing [`point_rotator_at_call`] would turn the
+/// antenna to for the call in that cockpit's log entry, and how far away that is, WITHOUT turning
+/// it. A read-only twin of the point: the same resolver on the same engine state
+/// ([`call_bearing`]), so the bearing the box shows is the one its Point turns to; and it never
+/// talks to rotctld, so nothing it does can move the mast. Polled every 2 s while a call stands in
+/// the entry, because what the station knows of the call moves under it (the log form's grid lands
+/// from the callbook a moment after the call is typed), so it waits for the engine on the blocking
+/// pool, as every polled command does. No bearing is a code (`noGrid`, `unknownStation`), never a
+/// sentence.
+#[tauri::command]
+async fn rotator_bearing_to_call(
+    state: State<'_, SharedEngine>,
+    call: String,
+) -> Result<CallBearingDto, String> {
+    with_engine(&state, move |eng| call_bearing(&eng, &call))
+        .await?
+        .map_err(|why| why.code().to_string())
+}
+
 /// Point the rotator at a callsign's station — the great-circle bearing from your grid to the
 /// best location Nexus has for it ([`aim_at_call`]). Returns the bearing and what it was taken
 /// to, for the toast.
@@ -15275,10 +15350,20 @@ async fn point_rotator_at_call(
     call: String,
     long_path: Option<bool>,
 ) -> Result<PointedAtDto, String> {
+    point_at_call(&state, call, long_path).await
+}
+
+/// [`point_rotator_at_call`]'s whole body, on any handle to the engine, so a test can drive the
+/// point through a rotctld on loopback: no unit test can hand a command its managed state.
+async fn point_at_call(
+    engine: &SharedEngine,
+    call: String,
+    long_path: Option<bool>,
+) -> Result<PointedAtDto, String> {
     #[cfg(feature = "radio")]
     {
         let (host, external, mygrid, fixes) = {
-            let eng = engine_lock(&state);
+            let eng = engine_lock(engine);
             (
                 effective_rotator_addr(eng.settings()),
                 eng.settings().rotator_host.clone(),
@@ -15292,7 +15377,7 @@ async fn point_rotator_at_call(
                     .to_string(),
             );
         };
-        let aim = aim_at_call(&mygrid, &call, fixes)?;
+        let aim = aim_at_call(&mygrid, &call, fixes).map_err(|why| why.sentence(&call))?;
         let short = aim.bearing;
         // ⭐ LONG PATH IS THE SAME GREAT CIRCLE THE OTHER WAY, so it is the reciprocal exactly
         // — no second computation and nothing to drift apart. `rem_euclid` rather than `%`
@@ -15318,7 +15403,7 @@ async fn point_rotator_at_call(
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = (state, call, long_path);
+        let _ = (engine, call, long_path);
         Err("radio support is not built into this binary".to_string())
     }
 }
@@ -15480,6 +15565,126 @@ mod point_at_call_tests {
             ("grid", Some("FN42KH"), None)
         );
     }
+
+    /// A rotctld on loopback that answers `RPRT 0` to the two lines a point at a call sends and
+    /// hands back each line it was sent. A `\dump_state` answered that way declares nothing, so
+    /// the point goes out as the plain `P <az> 0` line an azimuth move has always sent.
+    #[cfg(feature = "radio")]
+    fn rotctld() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in l.incoming().take(2) {
+                let Ok(mut sock) = conn else { break };
+                let mut line = String::new();
+                let Ok(read) = sock.try_clone() else { break };
+                if BufReader::new(read).read_line(&mut line).is_err() {
+                    break;
+                }
+                let _ = tx.send(line.trim().to_string());
+                let _ = sock.write_all(b"RPRT 0\n");
+            }
+        });
+        (addr, rx)
+    }
+
+    /// ⭐ THE BEARING THE ROTOR BOX SHOWS IS THE BEARING ITS POINT TURNS TO, by value, for the
+    /// tester's EC1DD: its callbook grid IN52TK is at 227°, the centre of Spain at 207°. The box
+    /// asks `rotator_bearing_to_call` ([`call_bearing`]); Point runs the whole point-at-call
+    /// against a rotctld on loopback, and the azimuth on the wire is the one the box showed.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_bearing_the_box_shows_is_the_one_point_turns_the_antenna_to() {
+        use propagation::geo::{haversine_km, maidenhead_to_latlon};
+        let (addr, sent) = rotctld();
+        let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: ME.into(),
+            rotator_host: addr,
+            ..Default::default()
+        });
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: None,
+            },
+        );
+        let shown = call_bearing(&eng, "EC1DD").expect("a bearing");
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let pointed = tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), None))
+            .expect("the point went out");
+
+        // The grid's bearing, not the country's: the two disagree by 20°.
+        let country = aim_at_call(ME, "EC1DD", Vec::new()).expect("Spain");
+        assert_eq!(country.to, AimedAt::Country("Spain"));
+        assert!(
+            apart(shown.pointed.bearing, country.bearing) > 15.0,
+            "{:.1}° is the centre of Spain's {:.1}°",
+            shown.pointed.bearing,
+            country.bearing
+        );
+        assert!(apart(shown.pointed.bearing, bearing_to("IN52TK")) < 1e-9);
+        assert_eq!(
+            (shown.pointed.to, shown.pointed.grid.as_deref()),
+            ("grid", Some("IN52TK"))
+        );
+        // …and the distance is to the same point: IN52TK's, a few km off the centre of Spain's.
+        let (me, there) = (
+            maidenhead_to_latlon(ME).unwrap(),
+            maidenhead_to_latlon("IN52TK").unwrap(),
+        );
+        assert!(
+            (shown.km - haversine_km(me, there)).abs() < 1e-9,
+            "{:.1} km, IN52TK is {:.1} km and the centre of Spain {:.1} km",
+            shown.km,
+            haversine_km(me, there),
+            country.km
+        );
+
+        // What Point answered is the same number, and so is what reached the mast.
+        assert_eq!(
+            pointed.bearing.to_bits(),
+            shown.pointed.bearing.to_bits(),
+            "Point answered {}°, the box showed {}°",
+            pointed.bearing,
+            shown.pointed.bearing
+        );
+        let lines: Vec<String> = sent.try_iter().collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "\\dump_state");
+        let wire: f64 = lines[1]
+            .strip_prefix("P ")
+            .and_then(|l| l.strip_suffix(" 0"))
+            .and_then(|az| az.parse().ok())
+            .unwrap_or_else(|| panic!("not an azimuth move: {:?}", lines[1]));
+        assert!(
+            (wire - shown.pointed.bearing).abs() <= 0.05,
+            "the box showed {:.2}°, the mast was sent {wire}°",
+            shown.pointed.bearing
+        );
+    }
+
+    /// No bearing is a code the box puts into words, and the point's own sentence is unchanged.
+    #[test]
+    fn no_bearing_is_a_code_for_the_box_and_the_old_sentence_for_the_point() {
+        let unset = Engine::new("KD9TAW", "", 0);
+        let why = call_bearing(&unset, "EC1DD").map(|_| ()).unwrap_err();
+        assert_eq!(why.code(), "noGrid");
+        assert_eq!(
+            why.sentence("EC1DD"),
+            "Set your grid square in Settings so a bearing can be computed."
+        );
+        let eng = Engine::new("KD9TAW", ME, 0);
+        let why = call_bearing(&eng, "QQ1QQ").map(|_| ()).unwrap_err();
+        assert_eq!(why.code(), "unknownStation");
+        assert_eq!(
+            why.sentence("QQ1QQ"),
+            "Couldn't locate QQ1QQ (unknown callsign)."
+        );
+    }
 }
 
 #[cfg(test)]
@@ -15505,11 +15710,13 @@ mod manual_pointing_tests {
     #[test]
     fn a_manual_move_keeps_the_axis_it_was_not_given() {
         let src = include_str!("lib.rs");
-        for name in [
-            "point_rotator",
-            "point_rotator_at_call",
-            "point_rotator_elevation",
-        ] {
+        // The point-at-call command is its helper, which a test can drive on loopback: the helper
+        // is what is read below.
+        assert!(
+            body(src, "point_rotator_at_call").contains("point_at_call(&state, call, long_path)"),
+            "point_rotator_at_call must run point_at_call, which this scan reads"
+        );
+        for name in ["point_rotator", "point_at_call", "point_rotator_elevation"] {
             let body = body(src, name);
             assert!(
                 body.contains("tempo_audio::rotator::point_keeping("),
@@ -15519,6 +15726,34 @@ mod manual_pointing_tests {
                 !body.contains("tempo_audio::rotator::point("),
                 "{name} sends `P <az> 0`, the elevation of zero, on every move"
             );
+        }
+    }
+
+    /// The rotor box's bearing is a READ. Its command answers through the point's resolver
+    /// (`call_bearing`), and neither reaches rotctld, so asking can never turn the mast.
+    #[test]
+    fn the_bearing_the_rotor_box_asks_for_never_moves_the_rotator() {
+        let src = include_str!("lib.rs");
+        let twin = body(src, "rotator_bearing_to_call");
+        assert!(twin.contains("call_bearing("), "{twin}");
+        let resolver = src
+            .split_once("\nfn call_bearing(")
+            .expect("call_bearing")
+            .1
+            .split_once("\n}\n")
+            .expect("its end")
+            .0;
+        for read in [twin.as_str(), resolver] {
+            for reach in [
+                "tempo_audio::rotator::",
+                "effective_rotator_addr(",
+                "spawn_blocking(",
+            ] {
+                assert!(
+                    !read.contains(reach),
+                    "the bearing read reaches the rotator ({reach}):\n{read}"
+                );
+            }
         }
     }
 }
@@ -34049,6 +34284,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             stop_sat_track,
             sat_track_status,
             point_rotator_at_call,
+            rotator_bearing_to_call,
             read_rotator,
             read_rotator_state,
             cw_decode,
@@ -39137,7 +39373,7 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 18] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 19] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
@@ -39148,6 +39384,7 @@ mod tests {
         "get_sat_transponder",
         "read_rotator",
         "read_rotator_state",
+        "rotator_bearing_to_call",
         "get_aprs_heard",
         "get_aprs_health",
         "get_aprs_tx_notice",
