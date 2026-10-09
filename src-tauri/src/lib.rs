@@ -33079,10 +33079,11 @@ fn start_on_the_logbook(
     // read-only board server (`tempo_app::fd_scoreboard` — GET/HEAD only,
     // fed snapshot JSON through a `BoardSource`, structurally unable to
     // reach a setter) binds 0.0.0.0:fd_scoreboard_port; the toggle IS the
-    // LAN opt-in and the module header carries the threat model. Real data
-    // only in the host role — elsewhere the page says "served from the host
-    // station". Deliberately NOT under cfg(feature = "radio"): a scoreboard
-    // needs no soundcard.
+    // LAN opt-in and the module header carries the threat model. The host
+    // serves its own club; a position serves the host's board, fetched from
+    // the host it joined; a station with no club says so on the TV.
+    // Deliberately NOT under cfg(feature = "radio"): a scoreboard needs no
+    // soundcard.
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
@@ -33120,11 +33121,15 @@ fn start_on_the_logbook(
                                 let shutdown = Arc::new(AtomicBool::new(false));
                                 // The board's whole data path: one bounded
                                 // clone under the engine lock, everything else
-                                // built off-lock behind the 1 s cache.
+                                // built off-lock behind the 1 s cache — and a
+                                // look at Settings for which board this station
+                                // shows (its own, the host's, or why none).
                                 let eng = mgr_engine.clone();
+                                let eng_role = mgr_engine.clone();
                                 let source: Arc<dyn tempo_app::fd_scoreboard::BoardSource> =
-                                    Arc::new(tempo_app::fd_scoreboard::CachedBoard::new(
+                                    Arc::new(tempo_app::fd_scoreboard::StationBoard::new(
                                         move || engine_lock(&eng).fd_board_snapshot(),
+                                        move || engine_lock(&eng_role).fd_board_role(),
                                     ));
                                 let sd = shutdown.clone();
                                 std::thread::spawn(move || {

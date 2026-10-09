@@ -33,6 +33,14 @@
 //! number the club file claims. Its payload says how the score is made and what each
 //! universe has worked; the page draws the universe the ruleset counts.
 //!
+//! **Every station.** The board is BUILT at the host (a position holds only the compact
+//! club mirror), and any station's server SHOWS it: [`StationBoard`] serves the host's
+//! own board on the host, the host's board on a position, and on a station with no club
+//! the reason, which the page says in plain words. So a position's server makes one kind
+//! of outbound request: `GET` of the two board routes from the host it joined — an
+//! address from its own settings, never from a viewer — bounded by timeouts and a size
+//! cap ([`fetch_host`]).
+//!
 //! **Scoring honesty**: the score block is computed by replaying the merged
 //! rows through [`tempo_core::fieldday::FieldDayLog`] and asking the active
 //! [`tempo_core::fd_rules`] ruleset — the same dedupe and the same math every
@@ -61,9 +69,9 @@ use crate::fdevent::{ClubLog, MergedRow};
 /// no framework, no external reference; a test proves the zero-internet claim).
 pub const SCOREBOARD_PAGE: &str = include_str!("../assets/fd_scoreboard.html");
 
-/// What `data.json` answers when this instance has no board to serve — the
-/// scoreboard shows real data only on the HOST position (non-host positions
-/// hold only a compact club mirror, no per-QSO attribution).
+/// What [`CachedBoard`] answers when its provider has no board — the board is built only
+/// at the HOST (non-host positions hold only a compact club mirror, no per-QSO
+/// attribution; [`StationBoard`] shows them the host's).
 pub const INACTIVE_BODY: &str = r#"{"active":false,"reason":"host-only"}"#;
 
 // Robustness caps (Decision 4): bound what a hostile LAN peer can cost us.
@@ -270,6 +278,264 @@ impl<F: Fn() -> Option<FdBoardData> + Send + Sync> BoardSource for CachedBoard<F
     }
     fn meta(&self) -> String {
         self.refresh().meta_body.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every station: a position shows the host's board
+// ---------------------------------------------------------------------------
+
+/// What this station's board server shows, decided per request from the station's own
+/// club settings (`Engine::fd_board_role`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoardRole {
+    /// This station hosts the club: its own board.
+    Host,
+    /// This station is a position: the HOST's board, fetched from `host` (the `ip:port`
+    /// of the host's scoreboard), so a TV plugged into any position shows the club.
+    Position { host: String },
+    /// No board here, and why: `reason` keys the page's words (`"no-club"`, `"refused"`,
+    /// `"club-starting"`), `detail` and `contest` fill them.
+    Idle {
+        reason: &'static str,
+        detail: String,
+        contest: String,
+    },
+}
+
+/// The host's scoreboard for the club this position joined: the join address's host, on
+/// this station's own board port. A club's stations share the default port, and when the
+/// host does not answer, the TV names the address it tried. `None` for a blank address.
+pub fn host_board_addr(join: &str, port: u16) -> Option<String> {
+    let join = join.trim();
+    let host = match join.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() && !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => {
+            h
+        }
+        _ => join,
+    };
+    (!host.is_empty()).then(|| format!("{host}:{port}"))
+}
+
+/// A board that is not this station's to show, and why, for the page to say in plain words.
+fn idle_body(reason: &str, detail: &str, host: &str, contest: &str) -> String {
+    serde_json::json!({
+        "active": false,
+        "reason": reason,
+        "detail": detail,
+        "host": host,
+        "contest": contest,
+    })
+    .to_string()
+}
+
+/// The query another station's server adds when it asks for THIS station's board.
+const HOP: &str = "hop=1";
+
+/// ⭐ **The board server's source on every station**: the host's own board on the host,
+/// the HOST's board on a position, and a plain reason on a station with no club.
+///
+/// A position cannot build the board itself: it holds only the compact club mirror, with
+/// no per-contact attribution. So it asks the host's scoreboard, over the LAN it already
+/// reaches the host on, for the same two routes a TV asks for, and serves the host's
+/// answer. The TV keeps polling the position, so when the host comes back the board does,
+/// with nobody touching the TV. When the host cannot be had, the answer says which
+/// address was tried and why ([`fetch_host`]).
+///
+/// Proxy, not a redirect to the host's page, for that reason: a TV sent to the host's
+/// address is left on a browser error page the moment the host drops (or on a host
+/// whose board is off), with nothing of ours on screen to say why, and it stays there
+/// until somebody walks over to it.
+pub struct StationBoard<F, R>
+where
+    F: Fn() -> Option<FdBoardData> + Send + Sync,
+    R: Fn() -> BoardRole + Send + Sync,
+{
+    local: CachedBoard<F>,
+    role: R,
+    ttl: Duration,
+    /// Route → (fetched at, host asked, the answer): one host fetch per route per TTL,
+    /// however many TVs watch.
+    proxy: Mutex<HashMap<&'static str, (Instant, String, String)>>,
+}
+
+impl<F, R> StationBoard<F, R>
+where
+    F: Fn() -> Option<FdBoardData> + Send + Sync,
+    R: Fn() -> BoardRole + Send + Sync,
+{
+    pub fn new(local: F, role: R) -> Self {
+        Self::with_ttl(local, role, Duration::from_secs(1))
+    }
+
+    /// Test seam: a zero TTL asks again on every request.
+    pub fn with_ttl(local: F, role: R, ttl: Duration) -> Self {
+        Self {
+            local: CachedBoard::with_ttl(local, ttl),
+            role,
+            ttl,
+            proxy: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn local_route(&self, route: &'static str) -> String {
+        if route == "meta.json" {
+            self.local.meta()
+        } else {
+            self.local.data()
+        }
+    }
+
+    fn show(&self, route: &'static str) -> String {
+        match (self.role)() {
+            BoardRole::Host => self.local_route(route),
+            BoardRole::Position { host } => self.proxied(route, &host),
+            BoardRole::Idle {
+                reason,
+                detail,
+                contest,
+            } => idle_body(reason, &detail, "", &contest),
+        }
+    }
+
+    fn proxied(&self, route: &'static str, host: &str) -> String {
+        let mut cache = self.proxy.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, asked, body)) = cache.get(route) {
+            if asked == host && at.elapsed() < self.ttl {
+                return body.clone();
+            }
+        }
+        let body = match fetch_host(host, &format!("/scoreboard/{route}?{HOP}")) {
+            // The host answered with no board of its own (it is not hosting, or it is a
+            // Nexus whose board shows Field Day only): say so, naming it.
+            Ok(v) if v["active"] == false => idle_body(
+                "host-idle",
+                v["reason"].as_str().unwrap_or_default(),
+                host,
+                "",
+            ),
+            Ok(v) => v.to_string(),
+            Err(FetchError::Refused) => idle_body("host-no-board", "", host, ""),
+            Err(FetchError::Unreachable) => idle_body("host-unreachable", "", host, ""),
+            Err(FetchError::BadReply) => idle_body("host-bad-reply", "", host, ""),
+        };
+        cache.insert(route, (Instant::now(), host.to_string(), body.clone()));
+        body
+    }
+}
+
+/// Why a position could not show the host's board.
+#[derive(Debug, PartialEq, Eq)]
+enum FetchError {
+    /// The host's machine answered and refused the connection: nothing serves its board.
+    Refused,
+    /// No answer at all: off, not on this network, a firewall, or a name that does not
+    /// resolve.
+    Unreachable,
+    /// It answered with something that is not a board: not a 200, not a JSON object, or
+    /// past the size cap.
+    BadReply,
+}
+
+/// Bounds on the one request a position's server makes: connect and per-read timeouts,
+/// a whole-exchange deadline, and a body cap. A slow or hostile host costs the TV a few
+/// seconds and an honest "can't reach the host", never a stuck server thread.
+const FETCH_CONNECT: Duration = Duration::from_millis(1500);
+const FETCH_DEADLINE: Duration = Duration::from_secs(3);
+const FETCH_MAX_BYTES: usize = 4 << 20;
+
+/// ⭐ **The one outbound request this module makes**: `GET` of a board route from the host
+/// this station joined — the address is the station's own setting, the path is fixed, and
+/// nothing a viewer sends reaches it. One request, `Connection: close`, bounded on every
+/// side, and only a JSON object comes back out (the host's numbers, re-serialized, never
+/// its bytes).
+fn fetch_host(host: &str, path: &str) -> Result<serde_json::Value, FetchError> {
+    use std::io::Read;
+    use std::net::ToSocketAddrs;
+    let addr = host
+        .to_socket_addrs()
+        .map_err(|_| FetchError::Unreachable)?
+        .next()
+        .ok_or(FetchError::Unreachable)?;
+    let mut s = TcpStream::connect_timeout(&addr, FETCH_CONNECT).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::ConnectionRefused {
+            FetchError::Refused
+        } else {
+            FetchError::Unreachable
+        }
+    })?;
+    let deadline = Instant::now() + FETCH_DEADLINE;
+    let _ = s.set_read_timeout(Some(FETCH_CONNECT));
+    let _ = s.set_write_timeout(Some(FETCH_CONNECT));
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .map_err(|_| FetchError::Unreachable)?;
+    let mut reply = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        if Instant::now() > deadline {
+            return Err(FetchError::Unreachable);
+        }
+        match s.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                reply.extend_from_slice(&chunk[..n]);
+                if reply.len() > FETCH_MAX_BYTES {
+                    return Err(FetchError::BadReply);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(FetchError::Unreachable),
+        }
+    }
+    let reply = String::from_utf8(reply).map_err(|_| FetchError::BadReply)?;
+    let (head, body) = reply.split_once("\r\n\r\n").ok_or(FetchError::BadReply)?;
+    if head.split_whitespace().nth(1) != Some("200") {
+        return Err(FetchError::BadReply);
+    }
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) if v.is_object() => Ok(v),
+        _ => Err(FetchError::BadReply),
+    }
+}
+
+impl<F, R> BoardSource for StationBoard<F, R>
+where
+    F: Fn() -> Option<FdBoardData> + Send + Sync,
+    R: Fn() -> BoardRole + Send + Sync,
+{
+    fn data(&self) -> String {
+        self.show("data.json")
+    }
+    fn meta(&self) -> String {
+        self.show("meta.json")
+    }
+    /// A board route asked with `?hop=1` is ANOTHER station's server asking for this one's
+    /// own board. It is answered from this station alone, never proxied on, so positions
+    /// pointed at one another cannot chain requests round a loop.
+    fn extra(&self, raw_path: &str) -> Option<Response> {
+        let (path, query) = raw_path.split_once('?')?;
+        if query != HOP {
+            return None;
+        }
+        let route = match path.trim_end_matches('/') {
+            "/scoreboard/data.json" => "data.json",
+            "/scoreboard/meta.json" => "meta.json",
+            _ => return None,
+        };
+        let body = match (self.role)() {
+            BoardRole::Host => self.local_route(route),
+            _ => idle_body("not-host", "", "", ""),
+        };
+        Some(Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json".into(),
+            body: body.into_bytes(),
+            allow: None,
+        })
     }
 }
 
@@ -2464,6 +2730,234 @@ mod tests {
         .map(|k| format!("{k}={}", v[*k]))
         .collect();
         assert_eq!(kept.join("\n"), WFD_CORE_GOLDEN);
+    }
+
+    // -- every station -----------------------------------------------------
+
+    /// A real board server on loopback, for the every-station tests.
+    fn serve(source: Arc<dyn BoardSource>) -> (std::net::SocketAddr, Arc<AtomicBool>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let sd = Arc::clone(&shutdown);
+        std::thread::spawn(move || serve_until(listener, source, sd));
+        (addr, shutdown)
+    }
+
+    fn body_of(reply: &str) -> serde_json::Value {
+        let (_, body) = reply.split_once("\r\n\r\n").expect("an HTTP reply");
+        serde_json::from_str(body).expect("a JSON body")
+    }
+
+    /// ⭐ **A TV on a POSITION shows the HOST's board** — the host's own numbers, through
+    /// two real servers on real sockets, where it used to show a grey "served from the
+    /// host station" overlay.
+    #[test]
+    fn a_position_shows_the_hosts_board_not_an_overlay() {
+        let (d, _) = ilqp_board();
+        let (host, host_sd) = serve(Arc::new(CachedBoard::with_ttl(
+            move || Some(d.clone()),
+            Duration::ZERO,
+        )));
+        let at = host.to_string();
+        let (pos, pos_sd) = serve(Arc::new(StationBoard::with_ttl(
+            || None,
+            move || BoardRole::Position { host: at.clone() },
+            Duration::ZERO,
+        )));
+        let data = body_of(&talk(pos, "GET /scoreboard/data.json HTTP/1.1\r\n\r\n"));
+        assert_eq!(
+            (
+                data["score"]["total"].as_u64(),
+                data["event"]["kind"].as_str()
+            ),
+            (Some(115), Some("ilqp")),
+            "the position serves the host's board: {data}"
+        );
+        let meta = body_of(&talk(pos, "GET /scoreboard/meta.json HTTP/1.1\r\n\r\n"));
+        assert_eq!(meta["map"], "county", "…and the host's meta: {meta}");
+        // POSITIVE CONTROL: the host's own answer carries the same numbers.
+        let direct = body_of(&talk(host, "GET /scoreboard/data.json HTTP/1.1\r\n\r\n"));
+        assert_eq!(direct["score"], data["score"]);
+        host_sd.store(true, Ordering::Relaxed);
+        pos_sd.store(true, Ordering::Relaxed);
+    }
+
+    /// ⭐ **When the host cannot be had, the position says which address it tried and
+    /// why** — a host whose board is off (the connection is refused) and a host that is
+    /// not there at all — on both routes, so the page can say so in plain words.
+    #[test]
+    fn a_position_names_the_host_it_cannot_reach() {
+        let closed = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .to_string(); // the listener drops here: nothing serves this port
+        let at = closed.clone();
+        let board = StationBoard::with_ttl(
+            || None,
+            move || BoardRole::Position { host: at.clone() },
+            Duration::ZERO,
+        );
+        let v = parse(&board.data());
+        assert_eq!(
+            (
+                v["active"].as_bool(),
+                v["reason"].as_str(),
+                v["host"].as_str()
+            ),
+            (Some(false), Some("host-no-board"), Some(closed.as_str())),
+            "the host is there and its board is not: {v}"
+        );
+        // A name that can never resolve (RFC 6761 reserves `.invalid`).
+        let board = StationBoard::with_ttl(
+            || None,
+            || BoardRole::Position {
+                host: "nexus-host.invalid:7373".into(),
+            },
+            Duration::ZERO,
+        );
+        for body in [board.data(), board.meta()] {
+            let v = parse(&body);
+            assert_eq!(
+                (
+                    v["active"].as_bool(),
+                    v["reason"].as_str(),
+                    v["host"].as_str()
+                ),
+                (
+                    Some(false),
+                    Some("host-unreachable"),
+                    Some("nexus-host.invalid:7373")
+                ),
+                "{v}"
+            );
+        }
+    }
+
+    /// Something that is not a board on the host's board port (another web server, an
+    /// HTML page) is never shown as one.
+    #[test]
+    fn a_reply_that_is_not_a_board_is_named_not_shown() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for mut s in listener.incoming().flatten().take(2) {
+                let mut req = [0u8; 1024];
+                let _ = s.read(&mut req);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n<html>hi</html>");
+            }
+        });
+        let board = StationBoard::with_ttl(
+            || None,
+            move || BoardRole::Position { host: at.clone() },
+            Duration::ZERO,
+        );
+        assert_eq!(parse(&board.data())["reason"], "host-bad-reply");
+        assert_eq!(parse(&board.meta())["reason"], "host-bad-reply");
+    }
+
+    /// A host that answers with no board of its own (not hosting, or a Nexus whose board
+    /// is Field Day only) is reported as such, with its own reason, never shown as data.
+    #[test]
+    fn a_position_says_so_when_the_host_has_no_board() {
+        let (host, sd) = serve(Arc::new(CachedBoard::new(|| None)));
+        let at = host.to_string();
+        let board = StationBoard::with_ttl(
+            || None,
+            move || BoardRole::Position { host: at.clone() },
+            Duration::ZERO,
+        );
+        let v = parse(&board.data());
+        assert_eq!(
+            (
+                v["reason"].as_str(),
+                v["detail"].as_str(),
+                v["host"].as_str()
+            ),
+            (
+                Some("host-idle"),
+                Some("host-only"),
+                Some(host.to_string().as_str())
+            )
+        );
+        sd.store(true, Ordering::Relaxed);
+    }
+
+    /// Two positions pointed at each other must not chain requests round a loop: a request
+    /// from another station's server is answered from this station alone. Here a position
+    /// is pointed at ITSELF, the tightest loop there is.
+    #[test]
+    fn a_request_from_another_station_is_never_passed_on() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let me = listener.local_addr().unwrap();
+        let at = me.to_string();
+        let source: Arc<dyn BoardSource> = Arc::new(StationBoard::with_ttl(
+            || None,
+            move || BoardRole::Position { host: at.clone() },
+            Duration::ZERO,
+        ));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let sd = Arc::clone(&shutdown);
+        std::thread::spawn(move || serve_until(listener, source, sd));
+        let hop = body_of(&talk(
+            me,
+            "GET /scoreboard/data.json?hop=1 HTTP/1.1\r\n\r\n",
+        ));
+        assert_eq!(hop["reason"], "not-host", "a hop is answered here: {hop}");
+        let v = body_of(&talk(me, "GET /scoreboard/data.json HTTP/1.1\r\n\r\n"));
+        assert_eq!(
+            (v["reason"].as_str(), v["detail"].as_str()),
+            (Some("host-idle"), Some("not-host")),
+            "one hop, then the answer: {v}"
+        );
+        shutdown.store(true, Ordering::Relaxed);
+    }
+
+    /// A station with no club, or a contest club sync refuses, says so with its reason;
+    /// the host role serves its own board.
+    #[test]
+    fn a_station_with_no_board_of_its_own_says_why() {
+        let board = StationBoard::new(
+            || None,
+            || BoardRole::Idle {
+                reason: "refused",
+                detail: "its serial numbers must run in one sequence".into(),
+                contest: "arrlss_cw".into(),
+            },
+        );
+        let v = parse(&board.data());
+        assert_eq!(
+            (
+                v["active"].as_bool(),
+                v["reason"].as_str(),
+                v["detail"].as_str(),
+                v["contest"].as_str()
+            ),
+            (
+                Some(false),
+                Some("refused"),
+                Some("its serial numbers must run in one sequence"),
+                Some("arrlss_cw")
+            )
+        );
+        assert_eq!(parse(&board.meta())["reason"], "refused");
+        let (d, _) = fixture(FdEvent::ArrlFd);
+        let host = StationBoard::new(move || Some(d.clone()), || BoardRole::Host);
+        assert_eq!(parse(&host.data())["score"]["total"], 162, "the host's own");
+    }
+
+    #[test]
+    fn the_hosts_board_is_the_join_addresss_host_on_the_board_port() {
+        for (join, port, want) in [
+            ("192.168.1.10:42073", 7373, Some("192.168.1.10:7373")),
+            (" clubhost.local:42073 ", 7474, Some("clubhost.local:7474")),
+            ("192.168.1.10", 7373, Some("192.168.1.10:7373")),
+            ("[fe80::1]:42073", 7373, Some("[fe80::1]:7373")),
+            ("  ", 7373, None),
+        ] {
+            assert_eq!(host_board_addr(join, port).as_deref(), want, "{join:?}");
+        }
     }
 
     const ARRL_FD_CORE_GOLDEN: &str = r##"{"event":{"kind":"arrlfd","name":"ARRL Field Day","year":2026,"start_unix":1782583200,"end_unix":1782680400,"call":"W9ABC","class":"3A","section":"WI"},"score":{"model":"powered","qso_points":6,"bonus_points":150,"power_mult":2,"powered_points":12,"total":162},"qsos":{"count":4,"rate_hour":1,"rate_10min":1,"hourly":[2,2,0]},"ticker":[{"when_unix":1782590200,"call":"VE3AAA","class":"2A","section":"ONE","band":"20m","mode":"DIG","submode":"FT8","position":"CW tent","operator":"W9AAA"},{"when_unix":1782587200,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782586900,"call":"W5XYZ","class":"2A","section":"STX","band":"40m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583400,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583300,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"CW tent","operator":"W9AAA"}],"band_mode":[{"band":"40m","ph":1,"cw":0,"dig":0},{"band":"20m","ph":1,"cw":1,"dig":1}],"sections_worked":["EMA","ONE","STX"],"positions":[{"id":"aaaa1111","label":"CW tent","operator":"W9AAA","band":"20m","mode":"CW","stale":false,"qsos_raw":2,"qsos_unique":2,"points":4,"last_qso_unix":1782590200},{"id":"bbbb2222","label":"Phone tent","operator":"W9BBB","band":"40m","mode":"PH","stale":true,"qsos_raw":3,"qsos_unique":2,"points":2,"last_qso_unix":1782587200}],"claimed":["emergency-power","web-submission"]}"##;

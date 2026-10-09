@@ -12158,6 +12158,36 @@ impl Engine {
         })
     }
 
+    /// ⭐ **What this station's spectator board shows**, asked on every board request: its
+    /// own club while it hosts one, the host's board while it is a position (the join
+    /// address's host, on this station's board port), and otherwise why there is none —
+    /// a contest club sync refuses, a club still starting, or no club at all. A TV plugged
+    /// into any station is never left showing a board that will not come.
+    pub fn fd_board_role(&self) -> crate::fd_scoreboard::BoardRole {
+        use crate::fd_scoreboard::BoardRole;
+        if self.fd_club.is_some() {
+            return BoardRole::Host;
+        }
+        let s = &self.settings;
+        let idle = |reason: &'static str, detail: &str| BoardRole::Idle {
+            reason,
+            detail: detail.to_string(),
+            contest: self.fd_club_contest(),
+        };
+        if s.fd_host_enable || !s.fd_join_addr.trim().is_empty() {
+            if let Some(why) = self.club_sync_refusal() {
+                return idle("refused", why.sentence());
+            }
+        }
+        if s.fd_host_enable {
+            return idle("club-starting", "");
+        }
+        match crate::fd_scoreboard::host_board_addr(&s.fd_join_addr, s.fd_scoreboard_port) {
+            Some(host) => BoardRole::Position { host },
+            None => idle("no-club", ""),
+        }
+    }
+
     // --- position half (the PositionSync impl calls these) -----------------
 
     /// What this position calls itself on the club band board: the operator's
@@ -41857,6 +41887,70 @@ mod tests {
         assert_eq!(e.fd_position_label(), "CW tent");
         assert_eq!(e.fd_sync_identity().1, "CW tent");
         assert_eq!(e.fd_position_report().name, "CW tent");
+    }
+
+    /// ⭐ **Every station knows what its spectator board shows** — the host its own club, a
+    /// position the host's (the join address's host, on this station's board port), and a
+    /// station with no club, or with a contest club sync refuses, the reason in words.
+    #[test]
+    fn every_station_knows_what_its_spectator_board_shows() {
+        use crate::fd_scoreboard::BoardRole;
+        let idle = |e: &Engine| match e.fd_board_role() {
+            BoardRole::Idle { reason, detail, .. } => (reason, detail),
+            other => panic!("expected no board, got {other:?}"),
+        };
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        assert_eq!(
+            idle(&e),
+            ("no-club", String::new()),
+            "no club: the TV says so"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_join_addr = " 192.168.1.10:42073 ".into();
+            s.fd_scoreboard_port = 7474;
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.fd_board_role(),
+            BoardRole::Position {
+                host: "192.168.1.10:7474".into()
+            },
+            "a position shows the host's board, from the host it joined"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlss_cw".into(); // a serial-number contest club sync refuses
+            e.apply_settings(s);
+        }
+        let (reason, detail) = idle(&e);
+        assert_eq!(reason, "refused");
+        assert!(
+            detail.contains("serial numbers"),
+            "the reason, in words: {detail}"
+        );
+        {
+            let mut s = e.settings().clone();
+            s.fd_event = "arrlfd".into();
+            s.fd_join_addr.clear();
+            s.fd_host_enable = true;
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            idle(&e).0,
+            "club-starting",
+            "the host toggle is on and the club is not up yet"
+        );
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-role-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        assert_eq!(e.fd_board_role(), BoardRole::Host, "hosting: its own club");
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
