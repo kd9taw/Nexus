@@ -305,6 +305,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
   span the radio was not showing. That edge is now read as negative. It only happens with the
   scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
+- **IC-905 on 10 GHz: the panadapter is drawn where the radio is.** On its 10 GHz band the
+  IC-905 sends its scope's frequencies with two more digits than on its other bands, and Nexus's
+  own CI-V connection read them as the usual ten: a Center-mode sweep at 10368 MHz was drawn
+  around 368 MHz, and a Fixed or Scroll-F sweep was thrown away as out of range. Nexus now reads
+  the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
+  for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
+  IC-905 on 10 GHz.
 - **The CI-V bus diagnostic log is offered on every radio Nexus's own CI-V connection drives.**
   Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the log by what the radio's model name looked
   like, so an IC-7610 saved as "Icom 7610", as "IC-7610M" or with no name could turn on Native

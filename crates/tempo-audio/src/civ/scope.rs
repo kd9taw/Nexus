@@ -25,6 +25,8 @@
 //! lower rates — the "scope never streams" trap). The IC-7610 (A7380-7EX-4, PDF p. 15) has
 //! the same frame layout with two different numbers: 15 frames over USB (the header, 13 of
 //! 50 points, then 39) and data range 0–200, length 689 — which is why the scale is per model.
+//! The IC-905 (A7711-9EX-2, PDF p. 29) has the 7300's layout, except on its 10 GHz band, where
+//! the frequency, or each edge, is 12 digits (6 bytes) instead of 10 — see `ten_ghz_points`.
 
 use super::commands::IcomModel;
 use super::frame::{bcd_to_freq, Frame};
@@ -57,6 +59,29 @@ fn point_max(model: Option<IcomModel>) -> u8 {
             | IcomModel::Ic7300Mk2,
         )
         | None => 160,
+    }
+}
+
+/// How many points a sweep carries on a radio with a 10 GHz band, or `None` for a radio without
+/// one. Only the IC-905 has one, and there its scope frequencies are 12 digits (6 bytes) instead
+/// of 10 (5 bytes): "When the 10 GHz band is selected, the Center frequency is 12 digits (6 bytes)
+/// from 100 GHz to 1 Hz", and in the Fixed and scroll modes "the each Edge frequency is 12 digits
+/// (6 bytes)" (CI-V Reference Guide A7711-9EX-2, PDF p. 29, `27 00` item 5). Its sweep is "Data
+/// length: 475" (item 7), which is what tells a network sweep's 12-digit header from a 10-digit
+/// one ([`parse_waveform`]). Every other radio here stops below 10 GHz, where its guide gives 10
+/// digits. No wildcard arm, as in [`point_max`].
+fn ten_ghz_points(model: Option<IcomModel>) -> Option<usize> {
+    match model {
+        Some(IcomModel::Ic905) => Some(475),
+        Some(
+            IcomModel::Ic7300
+            | IcomModel::Ic7610
+            | IcomModel::Ic9700
+            | IcomModel::Ic705
+            | IcomModel::Ic7760
+            | IcomModel::Ic7300Mk2,
+        )
+        | None => None,
     }
 }
 /// Cap accumulated points per sweep — a corrupt total can't grow the buffer unbounded.
@@ -134,8 +159,13 @@ struct SweepHeader {
 /// Layout (after the `00` sub-command):
 /// `[main/sub] [seq BCD] [seq-total BCD]` then, in the first frame of a burst:
 /// `[mode 00=center|01=fixed] [freq 5B BCD] [span-or-upper 5B BCD] [oor]`;
-/// in every later frame: waveform points, one byte each.
-fn parse_waveform(data: &[u8]) -> Option<(u32, u32, Option<SweepHeader>, &[u8])> {
+/// in every later frame: waveform points, one byte each. On a radio's 10 GHz band the
+/// frequency, or each edge, is 6 bytes ([`ten_ghz_points`], that radio's sweep length, or
+/// `None` for a radio without the band).
+fn parse_waveform(
+    data: &[u8],
+    ten_ghz_points: Option<usize>,
+) -> Option<(u32, u32, Option<SweepHeader>, &[u8])> {
     // data[0] = 0x00 sub-command, [1] = main(00)/sub(01) receiver, [2] = seq, [3] = total.
     // MAIN receiver only: on a dual-watch IC-9700 the sub receiver's sweeps interleave on
     // the same command — mixing the two bursts would corrupt both.
@@ -160,26 +190,47 @@ fn parse_waveform(data: &[u8]) -> Option<(u32, u32, Option<SweepHeader>, &[u8])>
             0x01 | 0x03 => false,
             _ => return None,
         };
-        let a = bcd_to_freq(&data[5..10]) as f64;
-        let b = bcd_to_freq(&data[10..15]) as f64;
+        // How many bytes each frequency takes: 5, except on a 10 GHz band, where the center
+        // frequency is 6 and the span keeps its 5, or each edge is 6 (A7711-9EX-2 PDF p. 29,
+        // `27 00` item 5). Nothing in the header names the band, so its length says which:
+        // over USB the first division carries the header alone, and over the network the one
+        // division carries the header and the whole sweep, or the header alone when the sweep
+        // is out of range (items 2, 3, 6 and 7).
+        let (wa, wb) = match ten_ghz_points {
+            Some(points) => {
+                let wide = if center_style { (6, 5) } else { (6, 6) };
+                let header = 1 + wide.0 + wide.1 + 1; // the mode, the two, out of range
+                let after = data.len() - 4;
+                if after == header || after == header + points {
+                    wide
+                } else {
+                    (5, 5)
+                }
+            }
+            None => (5, 5),
+        };
+        let a = bcd_to_freq(&data[5..5 + wa]) as f64;
+        let b = bcd_to_freq(&data[5 + wa..5 + wa + wb]) as f64;
+        let oor = 5 + wa + wb;
         let (lo, hi) = if center_style {
             // Center: center frequency ± span (the span value is the ± half-width).
             (a - b, a + b)
         } else {
-            // Fixed: lower edge, upper edge. An `F` in the lower edge's 1 GHz digit, the high
-            // nibble of its fifth byte, means the edge is NEGATIVE and the other digits are its
-            // absolute value: A7380-7EX-4 (IC-7610) PDF p. 15, the IC-7300 Full Manual
-            // A7292-4EX-12 PDF p. 172, A7560-8EX-6 (IC-705) PDF p. 29. `bcd_to_freq` reads the F
-            // as 0, so `a` is already that absolute value; only the sign was being lost.
-            let lo = if data[9] >> 4 == 0x0F { -a } else { a };
+            // Fixed: lower edge, upper edge. An `F` in the lower edge's top digit, the high
+            // nibble of its last byte, means the edge is NEGATIVE and the other digits are its
+            // absolute value. That is the 1 GHz digit in 10 digits: A7380-7EX-4 (IC-7610) PDF
+            // p. 15, the IC-7300 Full Manual A7292-4EX-12 PDF p. 172, A7560-8EX-6 (IC-705) PDF
+            // p. 29; and the 100 GHz digit in 12: A7711-9EX-2 (IC-905) PDF p. 29. `bcd_to_freq`
+            // reads the F as 0, so `a` is already that absolute value; only the sign was lost.
+            let lo = if data[4 + wa] >> 4 == 0x0F { -a } else { a };
             (lo, b)
         };
         let header = SweepHeader {
             lo_hz: lo,
             hi_hz: hi,
-            out_of_range: data[15] != 0x00,
+            out_of_range: data[oor] != 0x00,
         };
-        Some((seq, total, Some(header), &data[16..]))
+        Some((seq, total, Some(header), &data[oor + 1..]))
     } else {
         Some((seq, total, None, &data[4..]))
     }
@@ -197,6 +248,8 @@ pub struct ScopeAssembler {
     total: u32,
     /// The top of this radio's scale (`point_max`): a point is divided by it.
     point_max: f32,
+    /// This radio's sweep length if it has a 10 GHz band (`ten_ghz_points`).
+    ten_ghz_points: Option<usize>,
 }
 
 impl ScopeAssembler {
@@ -208,6 +261,7 @@ impl ScopeAssembler {
             next_seq: 0,
             total: 0,
             point_max: f32::from(point_max(model)),
+            ten_ghz_points: ten_ghz_points(model),
         }
     }
 
@@ -215,7 +269,7 @@ impl ScopeAssembler {
         if f.cmd != 0x27 {
             return None;
         }
-        let (seq, total, header, points) = parse_waveform(&f.data)?;
+        let (seq, total, header, points) = parse_waveform(&f.data, self.ten_ghz_points)?;
         if seq == 1 {
             // A new burst always resets the assembler (implicitly drops a partial one).
             self.header = header;
@@ -422,7 +476,8 @@ mod tests {
                 0x00, 0x00,
             ],
         };
-        let (seq, total, header, points) = parse_waveform(&f.data).expect("parses");
+        let (seq, total, header, points) =
+            parse_waveform(&f.data, ten_ghz_points(Some(IcomModel::Ic7300))).expect("parses");
         assert_eq!(seq, 1);
         assert_eq!(total, 11, "BCD 0x11 = 11 divisions over USB");
         let h = header.expect("first frame carries the header");
@@ -614,6 +669,78 @@ mod tests {
                 "{model:?}: half way up is 0.5, got {half}"
             );
             assert_eq!((sweep.lo_hz, sweep.hi_hz), (144_975_000.0, 145_025_000.0));
+        }
+    }
+
+    /// Assemble one IC-905 sweep from a header `body` both ways the radio sends one, and check its
+    /// span: over USB the header alone opens the burst and the points follow, and over the network
+    /// one division carries the header and all 475 points ("Data length: 475"; A7711-9EX-2 PDF
+    /// p. 29, `27 00` items 2, 3 and 7).
+    fn assert_ic905_sweeps(body: &[u8], span: (f64, f64), what: &str) {
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic905));
+        assert!(asm.push(&wf_frame(1, 2, body)).is_none(), "{what}");
+        let usb = asm
+            .push(&wf_frame(2, 2, &[0, 80, 160]))
+            .unwrap_or_else(|| panic!("{what} over USB: no sweep"));
+        assert_eq!((usb.lo_hz, usb.hi_hz), span, "{what} over USB");
+        assert_eq!(
+            usb.row,
+            [0.0, 0.5, 1.0],
+            "{what} over USB: a header byte read as a point"
+        );
+        let mut one = body.to_vec();
+        one.extend((0..475).map(|i| (i % 161) as u8));
+        let net = ScopeAssembler::new(Some(IcomModel::Ic905))
+            .push(&wf_frame(1, 1, &one))
+            .unwrap_or_else(|| panic!("{what} over the network: no sweep"));
+        assert_eq!((net.lo_hz, net.hi_hz), span, "{what} over the network");
+        assert_eq!(
+            net.row.len(),
+            475,
+            "{what} over the network: the guide's data length"
+        );
+    }
+
+    /// ⭐ ON THE IC-905'S 10 GHz BAND THE CENTER FREQUENCY IS 12 DIGITS. A7711-9EX-2 PDF p. 29,
+    /// `27 00` item 5: "When the 10 GHz band is selected, the Center frequency is 12 digits (6
+    /// bytes) from 100 GHz to 1 Hz"; the span stays the Scope span settings' 10 (`27 15` items
+    /// 2–6, the same page). These are those bytes, 1 Hz first and the 100 GHz and 10 GHz digits
+    /// last, the order of the Scope Fixed edge frequency settings (`27 1E`, PDF p. 30). Read as 10
+    /// digits, the 10 GHz digit fell into the span: a 10368 MHz sweep drew at 368 MHz, and the
+    /// out-of-range byte became a point.
+    #[test]
+    fn the_ic905s_10_ghz_center_frequency_is_12_digits() {
+        let body = [
+            0x00, // Center mode
+            0x00, 0x00, 0x20, 0x68, 0x03, 0x01, // center 10368.200000 MHz
+            0x00, 0x00, 0x05, 0x00, 0x00, // span ± 50 kHz
+            0x00, // in range
+        ];
+        assert_ic905_sweeps(&body, (10_368_150_000.0, 10_368_250_000.0), "center");
+        // Control: below 10 GHz the IC-905 sends 10 digits, and its 2 m header reads as before.
+        let mut asm = ScopeAssembler::new(Some(IcomModel::Ic905));
+        assert!(asm.push(&wf_frame(1, 2, &center_header())).is_none());
+        let sweep = asm.push(&wf_frame(2, 2, &[0, 80, 160])).expect("2 m");
+        assert_eq!((sweep.lo_hz, sweep.hi_hz), (144_975_000.0, 145_025_000.0));
+        assert_eq!(sweep.row, [0.0, 0.5, 1.0]);
+    }
+
+    /// ⭐ …AND IN THE FIXED AND SCROLL-F MODES EACH EDGE IS. A7711-9EX-2 PDF p. 29, `27 00` item
+    /// 5: "When the Higher Edge or Lower Edge frequency is in the 10 GHz band, the each Edge
+    /// frequency is 12 digits (6 bytes) from 100 GHz to 1 Hz", laid out as the Scope Fixed edge
+    /// frequency settings' range 06 (`27 1E`, PDF p. 30). Read as 10 digits, the out-of-range byte
+    /// came from inside the upper edge, so this sweep was dropped as out of range.
+    #[test]
+    fn the_ic905s_10_ghz_edges_are_12_digits_each() {
+        for mode in [0x01u8, 0x03] {
+            let body = [
+                mode, // Fixed, or Scroll-F
+                0x00, 0x00, 0x00, 0x68, 0x03, 0x01, // lower edge 10368.000000 MHz
+                0x00, 0x00, 0x50, 0x68, 0x03, 0x01, // upper edge 10368.500000 MHz
+                0x00, // in range
+            ];
+            let what = format!("mode {mode:02X}");
+            assert_ic905_sweeps(&body, (10_368_000_000.0, 10_368_500_000.0), &what);
         }
     }
 
