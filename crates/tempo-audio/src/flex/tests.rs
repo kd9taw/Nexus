@@ -644,6 +644,152 @@ fn the_radios_tune_carrier_is_off_as_it_ships_and_typed_behind_the_door() {
     assert_eq!(d.alarm(), None);
 }
 
+// ── The radio's own ATU: switched on in tests only ──────────────────────────────────────────
+
+/// The ATU's commands on the wire, and both stops a cycle can take.
+fn atu_wire(sim: &Simulator) -> Vec<String> {
+    wire(sim)
+        .into_iter()
+        .filter(|c| c.starts_with("atu ") || c == "xmit 0" || c.starts_with("transmit tune"))
+        .collect()
+}
+
+/// The bundled radio answering `sub atu all` with `lines` in place of its own `atu` status.
+fn atu_reported(lines: &[&str]) -> SimSession {
+    with(
+        SimSession::v4_gui_client(),
+        vec![rule("sub atu all", "0", lines)],
+    )
+}
+
+/// ⭐ THE ATU BUTTON SHOWS ONLY FOR A FITTED TUNER, FROM THE RADIO'S OWN STATUS. Behind the door,
+/// `u TUNER` answers from the radio's `atu` status: `0` while a tuner is fitted and no cycle has
+/// matched yet (the bundled radio's `NONE`), `1` once one has, and nothing at all (`RPRT -11`, so
+/// no button) for a radio that reports no tuner, by `atu_enabled=0` or by no `atu` status. The
+/// client's start-tune capability follows (`starts_atu`). A press on a radio with no tuner is
+/// refused by the client, nothing reaches the wire, and the reason is kept for the ATU line. As it
+/// ships, `u TUNER` is not answered, as before, whatever the radio reports.
+#[test]
+fn the_atu_button_shows_only_for_a_fitted_tuner() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(
+        (c.ask("u TUNER", 1), d.runs_atu(), d.starts_atu()),
+        ("0\n".to_string(), true, true)
+    );
+    assert_eq!(c.ask("U TUNER 2", 1), "RPRT 0\n");
+    wait_session(&d, "the cycle proven", |s| {
+        !s.keyed && s.model.atu.status.as_deref() == Some("TUNE_SUCCESSFUL")
+    });
+    assert_eq!(c.ask("u TUNER", 1), "1\n");
+    assert_eq!(atu_wire(&sim), ["atu start"]);
+    assert_eq!(d.alarm(), None);
+
+    for lines in [
+        vec![],
+        vec!["S0|atu status=NONE atu_enabled=0 memories_enabled=0 using_mem=0"],
+    ] {
+        let sim = simulator(atu_reported(&lines), vec![]);
+        let d = cw_daemon(&sim);
+        let mut c = Client::connect(&d);
+        wait_session(&d, "the readback idle", |s| s.transmit_ready);
+        assert_eq!(
+            (c.ask("u TUNER", 1), d.starts_atu(), d.radio_atu()),
+            ("RPRT -11\n".to_string(), false, None),
+            "{lines:?}"
+        );
+        assert_eq!(c.ask("U TUNER 2", 1), "RPRT -1\n");
+        assert_eq!(atu_wire(&sim), Vec::<String>::new());
+        assert_eq!(
+            *d.state.atu_refused.lock().unwrap(),
+            Some("ATU not started: the radio reports no antenna tuner.".to_string())
+        );
+    }
+
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(
+        (
+            c.ask("u TUNER", 1),
+            d.runs_atu(),
+            d.starts_atu(),
+            d.radio_atu()
+        ),
+        ("RPRT -11\n".to_string(), false, false, None)
+    );
+}
+
+/// ⭐ AN ATU START THE RADIO REFUSES ENDS QUIETLY, AND THE ATU LINE SAYS WHY. The radio answers the
+/// first `atu start` with an error and keys nothing: no stop, no alarm, the session up, nothing of
+/// ours believed on the air, and the ATU line carries the radio's code. The next press clears it
+/// and runs a cycle, beside which the radio's tune power, transmit timeout and result are read.
+/// (Which code a radio refuses with is not established: the simulator's error code stands in.)
+#[test]
+fn a_refused_atu_start_ends_quietly_and_the_atu_line_says_why() {
+    let bundled = SimSession::v4_gui_client();
+    let cycle = bundled.rules[bundled.lookup("atu start").expect("a rule")].1[0].clone();
+    let refused = Rule {
+        code: tempo_flexsim::fault::REFUSED.to_string(),
+        message: String::new(),
+        items: Vec::new(),
+    };
+    let session = with(
+        bundled,
+        vec![(Pattern::Exact("atu start".into()), vec![refused, cycle])],
+    );
+    let sim = simulator(session, vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(
+        c.ask("U TUNER 2", 1),
+        "RPRT 0\n",
+        "written: the radio answers after"
+    );
+    wait_session(&d, "the start ended", |s| {
+        !s.keyed || s.phase == Phase::Closed
+    });
+    // The watcher keeps the radio's words once it has read them.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut why = d.radio_atu().and_then(|a| a.refused);
+    while why.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        why = d.radio_atu().and_then(|a| a.refused);
+    }
+    assert_eq!(
+        (why, d.keyed(), d.is_alive(), d.alarm(), atu_wire(&sim)),
+        (
+            Some("ATU not started: the radio refused it (0x5000002C).".to_string()),
+            false,
+            true,
+            None,
+            vec!["atu start".to_string()]
+        )
+    );
+
+    assert_eq!(c.ask("U TUNER 2", 1), "RPRT 0\n");
+    wait_session(&d, "the cycle proven", |s| {
+        !s.keyed && s.model.atu.status.as_deref() == Some("TUNE_SUCCESSFUL")
+    });
+    assert_eq!(
+        d.radio_atu(),
+        Some(FlexAtu {
+            tune: FlexTune {
+                power_pct: Some(10),
+                tx_timeout_ms: Some(0)
+            },
+            status: Some("TUNE_SUCCESSFUL".to_string()),
+            refused: None
+        })
+    );
+    assert_eq!(atu_wire(&sim), ["atu start", "atu start"]);
+    assert_eq!(d.alarm(), None);
+}
+
 /// ⭐ An amplifier in line (the simulator's PGXL profile: the radio's PTT_REQUESTED carries
 /// `reason=AMP:PG-XL`): an over through the client ends on its readback, with no alarm, as it
 /// ships. Any other reason on the same report still ends in the alarm.
