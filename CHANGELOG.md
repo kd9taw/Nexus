@@ -132,8 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
   pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
   field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
-  in a contest and out of one, and logging a contact empties both. A decoded call goes into both
-  when you click its chip; the decoder's best guess no longer fills the log strip by itself.
+  in a contest and out of one, and logging a contact empties both. Until you work a station or
+  type a call, the decoder's best guess still fills the strip, and now His Call too: it is shown
+  unconfirmed, as before, and the F-keys send it unless you correct it first. Clicking a decoded
+  call's chip puts that call in both.
 - **CW contest keys send your report.** In a contest whose exchange includes a signal report
   (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
   cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois
