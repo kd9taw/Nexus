@@ -298,14 +298,17 @@ pub fn set_unselected_freq(radio: u8, hz: u64, model: Option<IcomModel>) -> Fram
 ///
 /// The `01` selects the unselected VFO exactly as it does for the frequency in
 /// [`set_unselected_freq`] (`25 01`); then the mode byte, then Icom's DATA-mode
-/// flag. That flag is always `00` here: the modes this carries are the
-/// satellite uplink's (FM/USB/LSB/CW), never a soundcard DATA submode.
+/// byte: `00`, DATA off, with `data` `None` (the satellite uplink's FM/USB/LSB/CW),
+/// and with `Some(n)` DATA mode `n`, clamped to D1–D3 as [`set_data_mode_n`]
+/// clamps it: FT8's USB-D in a split. `01`–`03` are D1–D3 on the IC-7610
+/// (A7380-7EX-4 p. 13); the one-DATA radios' guides define `01` as ON.
 ///
 /// The manual allows a trailing FILTER byte. It is deliberately omitted so the
 /// write says only what it means and the rig keeps the filter the operator
 /// chose — the same restraint `06` shows with `filter: None`.
-pub fn set_unselected_mode(radio: u8, mode: Mode) -> Frame {
-    Frame::command(radio, 0x26, &[0x01, mode.to_byte(), 0x00])
+pub fn set_unselected_mode(radio: u8, mode: Mode, data: Option<u8>) -> Frame {
+    let data = data.map_or(0x00, |n| n.clamp(1, 3));
+    Frame::command(radio, 0x26, &[0x01, mode.to_byte(), data])
 }
 /// RIT/ΔTX offset (cmd `21 00`): ±9.999 kHz as 2-byte little-endian BCD magnitude + sign
 /// byte (`00` = +, `01` = −). The offset register is shared by RIT and ΔTX.

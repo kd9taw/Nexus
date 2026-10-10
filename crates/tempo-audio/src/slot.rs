@@ -96,6 +96,9 @@ pub struct SlotAction {
     /// Fake-It split moved the VFO for this over — restore it to this dial
     /// (Hz) once the over finishes playing (the loop owns the PTT deadline).
     pub fake_it_restore: Option<u64>,
+    /// …and the TX dial it moved the VFO to (Hz), which a dial read must never take for the
+    /// operator's QSY until the radio is read back off it.
+    pub fake_it_tx_dial: Option<u64>,
     /// Rig-mode split engaged VFO B for this over — the loop tears the rig
     /// split down once the over ends (it would otherwise stay latched and a
     /// later in-window over would TX on a stale VFO B frequency).
@@ -105,6 +108,7 @@ pub struct SlotAction {
 /// What the Split-Operation pre-key step did, for the loop's teardown.
 pub(crate) struct SplitApply {
     pub fake_it_restore: Option<u64>,
+    pub fake_it_tx_dial: Option<u64>,
     pub rig_split_engaged: bool,
 }
 
@@ -116,6 +120,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
     use tempo_app::settings::SplitMode;
     let none = SplitApply {
         fake_it_restore: None,
+        fake_it_tx_dial: None,
         rig_split_engaged: false,
     };
     let shift = eng.take_tx_dial_shift();
@@ -143,6 +148,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let _ = rig.set_split_mode(&md, -1);
             SplitApply {
                 fake_it_restore: None,
+                fake_it_tx_dial: None,
                 rig_split_engaged: true,
             }
         }
@@ -150,6 +156,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let _ = rig.set_freq(tx_dial);
             SplitApply {
                 fake_it_restore: Some(dial),
+                fake_it_tx_dial: Some(tx_dial),
                 rig_split_engaged: false,
             }
         }
@@ -375,6 +382,7 @@ pub fn slot_tx_phase(
                 rx_frame,
                 tx_this_slot: false,
                 fake_it_restore: split.fake_it_restore,
+                fake_it_tx_dial: split.fake_it_tx_dial,
                 rig_split_engaged: split.rig_split_engaged,
             };
         }
@@ -421,6 +429,7 @@ pub fn slot_tx_phase(
             rx_frame,
             tx_this_slot: true,
             fake_it_restore: split.fake_it_restore,
+            fake_it_tx_dial: split.fake_it_tx_dial,
             rig_split_engaged: split.rig_split_engaged,
         }
     } else {
@@ -432,6 +441,7 @@ pub fn slot_tx_phase(
             rx_frame,
             tx_this_slot: false,
             fake_it_restore: None,
+            fake_it_tx_dial: None,
             rig_split_engaged: false,
         }
     }
@@ -1091,7 +1101,8 @@ mod tests {
     fn fake_it_split_reports_the_restore_dial() {
         // FakeIt: an out-of-window TX offset shifts the dial for the over and
         // the action carries the dial to RESTORE once the over finishes — the
-        // loop applies it at PTT drop. Rig/None report nothing to restore.
+        // loop applies it after PTT drop — and the TX dial it moved to. Rig/None
+        // report nothing to restore.
         // TX-only boundary (empty ring → no decode): the TX phase is called directly.
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft8);
@@ -1123,6 +1134,11 @@ mod tests {
             act.fake_it_restore,
             Some(eng.settings().dial_hz()),
             "restore dial = the RX dial the over shifted away from"
+        );
+        assert_eq!(
+            act.fake_it_tx_dial,
+            Some(eng.settings().dial_hz() - 1000),
+            "the TX dial = the RX dial with the over's -1000 Hz shift"
         );
     }
 

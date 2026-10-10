@@ -1172,6 +1172,10 @@ const CAT_RETRY_MAX_MS: f64 = 30_000.0;
 /// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
 /// retry costs a full CAT round-trip on a link that is already unhappy.
 const DIAL_SET_MAX_TRIES: u32 = 3;
+/// How long after a Fake-It over ends its dial write-back goes out (ms): WSJT-X's wait after PTT
+/// off, because "some rigs cannot process CAT commands while switching from Tx to Rx"
+/// (`Transceiver/TransceiverBase.cpp:142`).
+const FAKE_IT_WRITE_BACK_MS: f64 = 100.0;
 
 /// Failed breaker re-probes before the DAEMON is suspected and rebuilt (the overnight-radio
 /// review, 2026-09-02): 2 s + 4 s + 8 s of a rigctld that answers its socket and never the
@@ -3763,6 +3767,17 @@ struct RadioLoop {
     /// Fake-It split moved the VFO for the playing over — restore THIS dial
     /// (Hz) when the over ends (PTT drop / hard stop).
     fake_it_restore: Option<u64>,
+    /// …and the TX dial that over moved it to (Hz), held from the key until a dial read finds the
+    /// radio off it. A read of it until then is the shifted VFO, never the operator's QSY: WSJT-X
+    /// reports a read-back equal to the TX dial as the RX dial (`EmulateSplitTransceiver.cpp:56-64`,
+    /// "Keep that transient from being adopted as the RX dial"). It outlives the write-back, so a
+    /// radio that refused every try, or took one and then answered a read late, walks nowhere.
+    fake_it_tx_dial: Option<u64>,
+    /// When the write-back may go out (the loop's clock, ms): [`FAKE_IT_WRITE_BACK_MS`] after the
+    /// teardown first finds the over ended, then the next tick after a try the radio did not take.
+    fake_it_restore_at: Option<f64>,
+    /// Write-backs the radio has not taken, against [`DIAL_SET_MAX_TRIES`].
+    fake_it_restore_tries: u32,
     /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
     /// down once no over is pending (unless the cluster split owns VFO B).
     audio_rig_split: bool,
@@ -4226,6 +4241,9 @@ impl RadioLoop {
             cur_md: String::new(),
             cur_section_cw: false,
             fake_it_restore: None,
+            fake_it_tx_dial: None,
+            fake_it_restore_at: None,
+            fake_it_restore_tries: 0,
             audio_rig_split: false,
             rig_split_restore: None,
             split_detect: None,
@@ -5875,6 +5893,69 @@ impl RadioLoop {
         }
     }
 
+    /// A Fake-It over just moved the VFO: hold its write-back and its TX dial for the teardown.
+    fn hold_fake_it_restore(&mut self, restore: Option<u64>, tx_dial: Option<u64>) {
+        if restore.is_some() {
+            self.fake_it_restore = restore;
+            self.fake_it_tx_dial = tx_dial;
+            self.fake_it_restore_at = None;
+            self.fake_it_restore_tries = 0;
+        }
+    }
+
+    /// The Fake-It write-back is done with: taken, given up, or moot.
+    fn end_fake_it_restore(&mut self) {
+        self.fake_it_restore = None;
+        self.fake_it_restore_at = None;
+        self.fake_it_restore_tries = 0;
+    }
+
+    /// Is this dial read the Fake-It over's TX dial, before the radio has been read off it? Then
+    /// it is the shifted VFO, never an operator QSY ([`Self::fake_it_tx_dial`]). Any other read
+    /// ends the hold, and any write-back still to go with it: the radio is back on the RX dial, or
+    /// the operator has turned the knob, which a write-back would undo.
+    fn fake_it_transient(&mut self, hz: u64) -> bool {
+        match self.fake_it_tx_dial {
+            Some(tx) if hz == tx => true,
+            Some(_) => {
+                self.fake_it_tx_dial = None;
+                self.end_fake_it_restore();
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Something is about to key: a Fake-It write-back still waiting out its
+    /// [`FAKE_IT_WRITE_BACK_MS`] goes now, ahead of the key and of anything that moves the dial for
+    /// it. When the write-back went out on the unkey's own tick nothing could key ahead of it, and
+    /// WSJT-X runs its wait and its write-back before its next key; without this a tune, or an
+    /// over the engine did not shift, keyed inside the wait would go out on the last over's TX
+    /// dial. Only a write-back not yet tried, and only with no carrier up, on the teardown's own
+    /// test: a tune that supersedes an over in flight (`tx_until_ms` is still set when it keys)
+    /// keys over that over's TX dial as it always did, and the write-back waits for the tune to
+    /// end. A try the radio does not take is the teardown's to repeat.
+    fn fake_it_write_back_before_key(&mut self, rig: &mut Rig, now: f64) {
+        let Some(hz) = self.fake_it_restore else {
+            return;
+        };
+        let carrier =
+            self.tx_until_ms.is_some() || self.manual_ptt_applied || self.tuning_keyed || rig.keyed;
+        if carrier || self.fake_it_restore_tries > 0 {
+            return;
+        }
+        let sent = rig.set_freq(hz);
+        self.last_dial = hz;
+        self.last_rig_poll = now;
+        self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+        if sent.is_ok() {
+            self.end_fake_it_restore();
+        } else {
+            self.fake_it_restore_tries = 1;
+            self.fake_it_restore_at = Some(now);
+        }
+    }
+
     /// Claim radio `id`'s port for this loop ([`Self::port_claims`]). Idempotent. A radio someone
     /// else has claimed stays theirs; the callers that must have it hold the pool lock and have
     /// checked that no one does.
@@ -6025,7 +6106,8 @@ impl RadioLoop {
         self.af_gain_giveup = None;
         self.rf_gain_giveup = None;
         self.squelch_giveup = None;
-        self.fake_it_restore = None;
+        self.end_fake_it_restore();
+        self.fake_it_tx_dial = None;
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
@@ -7873,7 +7955,7 @@ impl RadioLoop {
                                 );
                             }
                         }
-                        if hz != self.last_dial {
+                        if !self.fake_it_transient(hz) && hz != self.last_dial {
                             self.last_dial = hz;
                             {
                                 let mut eng = engine_lock(engine);
@@ -8937,7 +9019,7 @@ impl RadioLoop {
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
                         eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                     }
-                    if hz != self.last_dial {
+                    if !self.fake_it_transient(hz) && hz != self.last_dial {
                         self.last_dial = hz;
                         {
                             let mut eng = engine_lock(engine);
@@ -11483,16 +11565,77 @@ impl RadioLoop {
         // `tuning_keyed` with `tx_until_ms` — this was the one that did not.
         //
         // Nothing is lost by waiting: `fake_it_restore` is HELD, not dropped, so the dial goes
-        // back on the first tick after the carrier stops.
+        // back once the carrier stops.
         if self.tx_until_ms.is_none() && !self.manual_ptt_applied && !self.tuning_keyed {
-            if let Some(hz) = self.fake_it_restore.take() {
-                let _ = rig.set_freq(hz);
-                // Settle the poll guards so the knob-QSY detector can't adopt
-                // a not-yet-restored read-back as an operator QSY (fast mirror deferred a full
-                // heavy interval, matching the retune path).
-                self.last_dial = hz;
-                self.last_rig_poll = now;
-                self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+            // ⭐ THE FAKE-IT WRITE-BACK, AS WSJT-X DOES IT. It went out on the unkey's own tick,
+            // once, its answer ignored, so a radio that missed it was left on the TX dial and the
+            // next dial read took that for the operator's QSY: the dial walked 500 Hz off the
+            // channel (at a 1441 Hz TX offset), and on a radio that missed every one, 500 Hz
+            // further every over. Now it waits FAKE_IT_WRITE_BACK_MS after the over ends, as
+            // WSJT-X waits after PTT off, and the dial reads wait with it; a try the radio does not
+            // take goes again on the next tick, DIAL_SET_MAX_TRIES in all, and then the CAT status
+            // says so; and the over's TX dial is never taken for a QSY ([`Self::fake_it_transient`]).
+            // A key that comes inside the wait sends it first
+            // ([`Self::fake_it_write_back_before_key`]). These receive-time writes are all that
+            // changed: the key, the TX dial and the over's timing are as they were.
+            if let Some(hz) = self.fake_it_restore {
+                if eng.settings().dial_hz() != hz {
+                    // The dial moved on during the over (an operator retune): the write-back
+                    // would undo that, and the over's TX dial is not the new dial's.
+                    self.end_fake_it_restore();
+                    self.fake_it_tx_dial = None;
+                } else if self.fake_it_restore_at.is_none() {
+                    self.fake_it_restore_at = Some(now + FAKE_IT_WRITE_BACK_MS);
+                    self.last_rig_poll = now;
+                    self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+                } else if self.fake_it_restore_at.is_some_and(|at| now >= at) {
+                    let sent = rig.set_freq(hz);
+                    // Settle the poll guards so the knob-QSY detector can't adopt
+                    // a not-yet-restored read-back as an operator QSY (fast mirror deferred a full
+                    // heavy interval, matching the retune path).
+                    self.last_dial = hz;
+                    self.last_rig_poll = now;
+                    self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+                    match sent {
+                        Ok(()) => {
+                            self.end_fake_it_restore();
+                            // A note that said the radio did not go back is out of date now.
+                            if self.dial_note_gen.take() == Some(eng.cat_probe_gen()) {
+                                eng.set_cat_status(
+                                    self.cat_ok,
+                                    "CAT confirmed — rig accepted a command".to_string(),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            self.fake_it_restore_tries += 1;
+                            if self.fake_it_restore_tries < DIAL_SET_MAX_TRIES {
+                                self.fake_it_restore_at = Some(now); // again on the next tick
+                            } else {
+                                let tx = self
+                                    .fake_it_tx_dial
+                                    .map(|tx| {
+                                        format!(
+                                            "; it may still be on its TX frequency, {:.4} MHz",
+                                            tx as f64 / 1e6
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                eng.set_cat_status(
+                                    self.cat_ok,
+                                    format!(
+                                        "Fake It split: the radio did not go back to {:.4} MHz \
+                                         after the over ({}, {DIAL_SET_MAX_TRIES} tries){tx}",
+                                        hz as f64 / 1e6,
+                                        dial_failure_brief(&e)
+                                    ),
+                                );
+                                self.dial_note_gen = Some(eng.cat_probe_gen());
+                                self.end_fake_it_restore();
+                            }
+                        }
+                    }
+                }
             }
             if self.audio_rig_split {
                 self.audio_rig_split = false;
@@ -11523,6 +11666,10 @@ impl RadioLoop {
                     }
                 }
             }
+        } else if self.fake_it_restore.is_some() {
+            // A carrier is up: a held write-back's wait starts again when it ends, so it always
+            // goes FAKE_IT_WRITE_BACK_MS after the last unkey.
+            self.fake_it_restore_at = None;
         }
 
         // Operator hit Erase → mirror it to cooperating apps (UDP Clear).
@@ -11733,6 +11880,7 @@ impl RadioLoop {
                 })
                 .flatten();
             if keying {
+                self.fake_it_write_back_before_key(rig, now);
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
                 // signal"). Flip DATA mode on for the tune (this exact sequence — set DATA,
@@ -12143,13 +12291,12 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        self.fake_it_write_back_before_key(rig, now);
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
                         // boundary path).
                         let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
-                        if split.fake_it_restore.is_some() {
-                            self.fake_it_restore = split.fake_it_restore;
-                        }
+                        self.hold_fake_it_restore(split.fake_it_restore, split.fake_it_tx_dial);
                         if split.rig_split_engaged {
                             self.audio_rig_split = true;
                         }
@@ -12762,6 +12909,12 @@ impl RadioLoop {
         // A key the radio refuses plays nothing and halts TX, as WSJT-X halts on a rig failure;
         // a failed key while this loop already holds the transmitter is not one
         // (`slot::slot_key_failure`).
+        // Only a boundary in this station's TX period can key. Any other one keeps a write-back's
+        // wait: a snappy over started late is trimmed to end on the next boundary, which is the
+        // other station's.
+        if slot.is_multiple_of(2) == eng.tx_even() {
+            self.fake_it_write_back_before_key(rig, now);
+        }
         let held = self.holds_tx();
         let asked = Instant::now();
         let action = crate::slot::slot_tx_phase(
@@ -12786,9 +12939,7 @@ impl RadioLoop {
             // disconnect fail-safe can't race the fresh key-up.
             self.publish_tx_intent_now();
         }
-        if action.fake_it_restore.is_some() {
-            self.fake_it_restore = action.fake_it_restore;
-        }
+        self.hold_fake_it_restore(action.fake_it_restore, action.fake_it_tx_dial);
         if action.rig_split_engaged {
             self.audio_rig_split = true;
         }
@@ -15557,6 +15708,7 @@ mod tests {
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod split_overs;
     mod wfview;
     use super::should_command_rf_power;
 
@@ -30327,11 +30479,14 @@ mod tests {
                 .count()
         };
 
-        // ⚠️ POSITIVE CONTROL: with no carrier up, an outstanding restore DOES get written —
-        // otherwise the assertion below would pass against a scene where nothing was pending.
+        // ⚠️ POSITIVE CONTROL: with no carrier up, an outstanding restore DOES get written (100 ms
+        // after the teardown first finds no over up, as WSJT-X waits after PTT off) — otherwise
+        // the assertion below would pass against a scene where nothing was pending.
         state.fake_it_restore = Some(14_074_000);
         let mark = log.lock().unwrap().len();
-        run(&mut state, &mut rig, 0.0);
+        for i in 0..=5 {
+            run(&mut state, &mut rig, f64::from(i) * 20.0);
+        }
         assert!(
             freqs(&log, mark) > 0,
             "control: a pending restore is written when nothing is transmitting — {:?}",
@@ -30362,6 +30517,110 @@ mod tests {
         assert!(
             state.fake_it_restore.is_some(),
             "the restore must be HELD, not dropped — it still has to happen after the tune"
+        );
+    }
+
+    /// ⭐ A TUNE INSIDE THE FAKE-IT WRITE-BACK'S WAIT KEYS FROM THE RX DIAL. The write-back waits
+    /// 100 ms after an over, as WSJT-X waits after PTT off. A tune pressed inside that wait used to
+    /// find the dial already back, because the write-back went out on the unkey's own tick, and it
+    /// still must: the write-back goes before the tune keys. The other side: a tune that
+    /// supersedes an over still on the air writes nothing to the VFO while that carrier is up.
+    #[test]
+    fn a_tune_inside_the_fake_it_write_back_wait_keys_from_the_rx_dial() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let dial_writes = |log: &Arc<Mutex<Vec<String>>>, from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with('F') || l.starts_with("T 1"))
+                .cloned()
+                .collect()
+        };
+
+        // A rig already commanded (no read-only-launch assert before a key), and the loop's own
+        // first dial push done, so the one dial write that can come before the tune's key is the
+        // write-back.
+        state.rig_asserted = true;
+        for i in 0..10 {
+            run(&mut state, &mut rig, f64::from(i) * 20.0);
+        }
+        // A Fake-It over on the air until t = 1000, its radio on the TX dial 14.0735; the loop
+        // unkeys it on that tick, as it ends every over.
+        assert!(rig.ptt(true).is_ok(), "premise: the over is keyed");
+        state.tx_until_ms = Some(1_000.0);
+        state.fake_it_restore = Some(14_074_000);
+        state.fake_it_tx_dial = Some(14_073_500);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 1_000.0);
+        assert_eq!(state.tx_until_ms, None, "premise: the over ended");
+        run(&mut state, &mut rig, 1_020.0);
+        assert_eq!(
+            dial_writes(&log, mark),
+            Vec::<String>::new(),
+            "premise: the write-back is waiting"
+        );
+        engine.lock().unwrap().set_tune(true);
+        run(&mut state, &mut rig, 1_040.0);
+        assert!(state.tuning_keyed, "premise: the tune keyed");
+        assert_eq!(
+            dial_writes(&log, mark),
+            ["F 14074000", "T 1"],
+            "the write-back, then the tune's key: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(state.fake_it_restore, None, "…and the write-back was taken");
+        engine.lock().unwrap().set_tune(false);
+        for i in 1..5 {
+            run(&mut state, &mut rig, 1_040.0 + f64::from(i) * 20.0);
+        }
+        assert!(!state.tuning_keyed, "premise: the tune ended");
+
+        // ⚠️ THE OTHER SIDE: a Fake-It over still on the air, and a tune that supersedes it. The
+        // teardown never saw that over end, so nothing writes the VFO under its carrier, and the
+        // write-back is held for after the tune.
+        assert!(rig.ptt(true).is_ok(), "premise: the over is keyed");
+        state.tx_until_ms = Some(60_000.0);
+        state.fake_it_restore = Some(14_074_000);
+        state.fake_it_tx_dial = Some(14_073_500);
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().set_tune(true);
+        for i in 0..5 {
+            run(&mut state, &mut rig, 2_000.0 + f64::from(i) * 20.0);
+        }
+        assert!(state.tuning_keyed, "premise: the tune keyed");
+        let wrote: Vec<String> = dial_writes(&log, mark)
+            .into_iter()
+            .filter(|l| l.starts_with('F'))
+            .collect();
+        assert_eq!(
+            wrote,
+            Vec::<String>::new(),
+            "the VFO was written under a live carrier: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            state.fake_it_restore,
+            Some(14_074_000),
+            "the write-back is held for after the tune"
         );
     }
 
