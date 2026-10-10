@@ -87,6 +87,7 @@ import { SstvViewer } from './components/SstvViewer'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
+import { ContestLogger } from './components/ContestLogger'
 import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from './fdEvent'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
@@ -237,11 +238,12 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')
   const [settings, setSettings] = useState<Settings | null>(null)
-  // The club board's window only: the station's preview of the picked contest, which says
-  // whether the rules it loaded carry it (`rulesCarry`) — so a refused club says why here too.
+  // The club board's window and the contest logger's: the station's preview of the picked contest,
+  // which says whether the rules it loaded carry it (`rulesCarry`) — so a refused club says why
+  // here too — and which rules the contest screen's lines and advisories read.
   const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
   useEffect(() => {
-    if (panel !== 'fdclub') return
+    if (panel !== 'fdclub' && panel !== 'contestlog') return
     let live = true
     getFdRuleset()
       .then((r) => live && setFdRuleset(r))
@@ -805,6 +807,23 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             is the answer to "where can I move?". Only while a club event is running; a
             single-station Field Day has no bands to compete for. */}
         {fd?.club ? <FdBandOccupancy club={fd.club} big /> : null}
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'contestlog') {
+    // THE CONTEST LOGGER WINDOW: the whole contest screen and a log line that shares the contact
+    // in progress with the operator's own, for a second person logging at a second monitor and
+    // keyboard. Nothing in it transmits — see ContestLogger.tsx.
+    return (
+      <DetachedShell className="contest-logger">
+        {snap ? (
+          <ContestLogger snap={snap} fdActive={settings?.fdActive ?? false} fdRuleset={fdRuleset} />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        )}
       </DetachedShell>
     )
   }

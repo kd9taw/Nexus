@@ -174,6 +174,13 @@ interface Props {
   /** App re-reads the settings and the snapshot after this screen saves the mode switch, so
    *  the rail, Settings and every cockpit see the change at once. */
   onSettingsSaved?: () => void
+  /** The contest logger window's copy of this screen (`ContestLogger`), where nothing may start,
+   *  stop or hold back the operator's transmission. So three things are read-only there and a
+   *  line says they are on the main screen: the contest switch and Running / S&P (Running calls
+   *  CQ in the digital cockpits), and the scoring panel, whose saves go through the whole-settings
+   *  path that keeps an over already planned from keying. Everything else works as it does here:
+   *  the operator box, the exports, the merge, the club, Remove and Restore. */
+  logger?: boolean
 }
 
 /**
@@ -1721,6 +1728,19 @@ export function FieldDayScoreboard({
             {t('fieldDay.popOut.label')}
           </button>
         )}
+        {/* ⭐ THE CONTEST LOGGER WINDOW, from the torn-off scoreboard — the window with the
+            operator box, the sections and who is on what band, which is where a club opens it
+            from. The docked screen's header has its own. */}
+        {detached && !readOnly && (
+          <button
+            type="button"
+            style={POPOUT_BTN}
+            onClick={() => void openPanelWindow('contestlog')}
+            title={t('fieldDay.logger.title')}
+          >
+            {t('fieldDay.logger.label')}
+          </button>
+        )}
       </div>
 
       {/* ⭐ WHAT THIS SCORE LEAVES OUT, when the ruleset says it leaves something out.
@@ -1845,6 +1865,7 @@ export function ContestView({
   observation,
   onOpenSettings,
   onSettingsSaved,
+  logger = false,
 }: Props) {
   const observed = observation !== undefined
   // The clock the spot advisory judges the event window by.
@@ -2027,7 +2048,7 @@ export function ContestView({
   // after a seat swap in the pop-out scoreboard, the old dial after the rig was retuned. The
   // copy only mirrors the edit, so the display does not wait on a round trip.
   const saveScoringPatch = async (edit: (s: Settings) => Partial<Settings>) => {
-    if (observed || !nativeSettings) return
+    if (observed || logger || !nativeSettings) return
     setSettingsState({ ...nativeSettings, ...edit(nativeSettings) })
     try {
       await patchSettings(edit)
@@ -2079,7 +2100,7 @@ export function ContestView({
   // A refused turn-on: what was missing at the moment the operator asked, read fresh then.
   const [refusal, setRefusal] = useState<StartBlocker | null>(null)
   const toggleMode = async () => {
-    if (observed || modeBusy) return
+    if (observed || logger || modeBusy) return
     const next = !modeOn
     setModeBusy(true)
     try {
@@ -2290,6 +2311,8 @@ export function ContestView({
     !!nativeSettings &&
     (nativeSettings.fdHostEnable === true || (nativeSettings.fdJoinAddr ?? '').trim() !== '')
   if (clubOn) modeLines.push({ key: 'club', text: t('fieldDay.mode.club') })
+  // In the logger window: where the controls that are read-only here are.
+  if (logger) modeLines.push({ key: 'logger', text: t('fieldDay.logger.note') })
   // Running / S&P with nothing to switch between and the master off: see the buttons.
   const roleLocked = !fieldDay && !modeOn
 
@@ -2307,7 +2330,7 @@ export function ContestView({
             role="switch"
             aria-checked={modeOn}
             className={`toggle${modeOn ? ' on' : ''}`}
-            disabled={observed || modeBusy}
+            disabled={observed || logger || modeBusy}
             onClick={() => void toggleMode()}
             aria-label={
               modeOn ? t('settings.fieldDay.mode.aria.disable') : t('settings.fieldDay.mode.aria.enable')
@@ -2399,8 +2422,8 @@ export function ContestView({
             type="button"
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
-            disabled={observed || roleLocked}
-            onClick={() => { if (!observed && !roleLocked) onSetMode?.('fieldday-run') }}
+            disabled={observed || logger || roleLocked}
+            onClick={() => { if (!observed && !logger && !roleLocked) onSetMode?.('fieldday-run') }}
           >
             {t('fieldDay.role.running')}
           </button>
@@ -2408,8 +2431,8 @@ export function ContestView({
             type="button"
             className={`fd-role-btn${!running ? ' active' : ''}`}
             aria-pressed={!running}
-            disabled={observed || roleLocked}
-            onClick={() => { if (!observed && !roleLocked) onSetMode?.('fieldday-sp') }}
+            disabled={observed || logger || roleLocked}
+            onClick={() => { if (!observed && !logger && !roleLocked) onSetMode?.('fieldday-sp') }}
           >
             {t('fieldDay.role.sp')}
           </button>
@@ -2418,6 +2441,19 @@ export function ContestView({
         {!observed && <div className="fd-export">
           {exportError && (
             <span className="log-export-error" role="alert">{exportError}</span>
+          )}
+          {/* ⭐ THE CONTEST LOGGER WINDOW: this screen and the log line in a window of their own,
+              for a second person logging at a second monitor and keyboard. Not in that window
+              itself, which is already it. */}
+          {!logger && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => void openPanelWindow('contestlog')}
+              title={t('fieldDay.logger.title')}
+            >
+              {t('fieldDay.logger.label')}
+            </button>
           )}
           <button
             type="button"
@@ -2595,7 +2631,7 @@ export function ContestView({
           log={log}
           om={wfdOm}
           power={observed ? undefined : (nativeSettings?.contestCategoryPower ?? '')}
-          readOnly={observed}
+          readOnly={observed || logger}
           open={bonusOpen}
           onToggleOpen={() => setBonusOpen((v) => !v)}
           onToggleEarned={(id) => void toggleObjective(id)}
@@ -2650,7 +2686,7 @@ export function ContestView({
                     className={`fd-power-chip${fdPowerMult === p.value ? ' active' : ''}`}
                     aria-pressed={fdPowerMult === p.value}
                     title={t(p.hintKey)}
-                    disabled={observed || !settings}
+                    disabled={observed || logger || !settings}
                     onClick={() => void setPowerMult(p.value)}
                   >
                     {t(p.labelKey)}
@@ -2698,7 +2734,7 @@ export function ContestView({
                       id={`fd-bonus-${b.id}`}
                       type="checkbox"
                       checked={earned}
-                      disabled={observed}
+                      disabled={observed || logger}
                       onChange={() => void toggleEarned(b.id)}
                       aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
                     />
@@ -2707,7 +2743,7 @@ export function ContestView({
                       type="button"
                       className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
                       aria-pressed={onPlan}
-                      disabled={observed}
+                      disabled={observed || logger}
                       title={t('fieldDay.bonus.plan.title')}
                       aria-label={t('fieldDay.bonus.plan.aria', { label: b.label })}
                       onClick={() => void togglePlanned(b.id)}

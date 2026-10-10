@@ -4752,6 +4752,24 @@ export interface AppSnapshot {
   /** The transmitter alarms the operator has not dismissed, oldest first (dismiss_tx_alarm).
    *  Absent while there are none, and from a station older than the alarm. */
   txAlarms?: TxAlarm[]
+  /** The contest strip's contact in progress, the same in the main window and the contest
+   *  logger window while that window is open. Absent while it is closed, from the Remote (which
+   *  never receives it), and from a station older than the logger window. */
+  contestEntry?: ContestEntryShared
+}
+
+/** The contest strip's contact in progress, shared by the main window and the contest logger
+ *  window (the engine's `contest_entry.rs`; the strip's half is `features/contestEntryShare.ts`). */
+export interface ContestEntryShared {
+  /** Bumped by every change: a window shows the entry as of this rev. */
+  rev: number
+  /** The Call box, as typed. */
+  call: string
+  /** The received boxes by slot id, as typed. A box nobody has touched is absent. */
+  fields: Record<string, string>
+  /** The strip's marks (the call-history fill, the take-back line): kept by the engine, read only
+   *  by `features/contestEntryShare.ts`. */
+  marks: unknown
 }
 
 /** What a FlexRadio reports about its own tune carrier (mirror of the Rust FlexTune,

@@ -710,13 +710,38 @@ export async function contestLogManual(
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
     fields,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
+}
+
+/** ⭐ **What a strip logging the shared contest entry saw** (`features/contestEntryShare.ts`):
+ *  the entry's rev when the strip last agreed with it, and the call and boxes it shows. Passed to
+ *  the three contest log commands while the contest logger window is open, so the engine logs
+ *  the contact once when Enter is pressed in both windows at the same moment — the second is
+ *  refused `contestEntryLogged` or `contestEntryChanged`, and logs nothing. Omitted otherwise, and
+ *  then the command's arguments are exactly what they always were. */
+export interface EntryClaim {
+  rev: number
+  call: string
+  fields: Record<string, string>
+}
+
+/** The contest strip changed in one window while the contest logger window is open: what it now
+ *  shows becomes the entry both windows show. Answers the entry's new rev. Rejects with the logger
+ *  window closed. Text in memory only — nothing is logged, written or sent. */
+export async function contestEntryPut(
+  call: string,
+  fields: Record<string, string>,
+  marks: unknown,
+): Promise<number> {
+  return invoke<number>('contest_entry_put', { call, fields, marks })
 }
 
 /** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
@@ -731,12 +756,14 @@ export async function contestLogManualRows(
   rows: [string, string][][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<boolean[]> {
   return invoke<boolean[]>('contest_log_manual_rows', {
     call,
     rows,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
 }
 
@@ -810,12 +837,14 @@ export async function contestLogSatellite(
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_satellite', {
     call,
     fields,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
 }
 
