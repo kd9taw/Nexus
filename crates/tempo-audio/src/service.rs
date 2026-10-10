@@ -35856,6 +35856,68 @@ mod tests {
         );
     }
 
+    /// Asking again waits for a tune carrier, and for the operator's mic PTT, as it does for an
+    /// over: the radio's VOX fallback keys on those too. Each value is (opens while held, the
+    /// loop keyed), then opens after the release.
+    #[test]
+    fn asking_again_waits_for_a_tune_or_a_mic_ptt_too() {
+        let held = |press: fn(&mut Engine), release: fn(&mut Engine)| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut state = loop_state();
+            state.cat_ok = Some(false); // as a failed open leaves it
+                                        // Due from the second tick on, once the first tick has keyed.
+            state.cat_reopen_at = 1_000.0;
+            let mut rig = Rig::vox();
+            let mut backend = MockBackend::new();
+            let mut opens = 0;
+            let mut tick = 0.0f64;
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, opens: &mut usize, ticks| {
+                for _ in 0..ticks {
+                    tick += 500.0;
+                    let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+                        *opens += 1;
+                        (
+                            Rig::vox(),
+                            None,
+                            CatProbe::status(Some(false), "driver not ready"),
+                        )
+                    };
+                    state
+                        .step(
+                            &engine,
+                            &mut backend,
+                            rig,
+                            &no_sinks(),
+                            tick,
+                            &mut mock_reopen_audio(),
+                            &mut reopen,
+                            &mut StationSinks::new(),
+                        )
+                        .unwrap();
+                }
+            };
+            press(&mut engine.lock().unwrap());
+            run(&mut state, &mut rig, &mut opens, 4);
+            let while_held = (opens, state.tuning_keyed || state.manual_ptt_applied);
+            release(&mut engine.lock().unwrap());
+            run(&mut state, &mut rig, &mut opens, 4);
+            (while_held, opens)
+        };
+        assert_eq!(
+            [
+                held(|e| e.set_tune(true), |e| e.set_tune(false)),
+                held(
+                    |e| {
+                        e.set_tx_enabled(true);
+                        e.set_ptt(true);
+                    },
+                    |e| e.set_ptt(false)
+                ),
+            ],
+            [((0, true), 1), ((0, true), 1)]
+        );
+    }
+
     /// The serial-port watch, pure: an absent → present edge is the immediate rebuild trigger,
     /// a known-absent port suppresses the silence rebuild (nothing to open yet), and an EMPTY
     /// enumeration says nothing at all — it must never read as "absent".
