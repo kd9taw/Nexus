@@ -365,6 +365,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
   confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
   call QRZ holds no contact with, says QRZ has no matching record.
+- **Repair clock no longer comes back every few minutes on a clock that is right.** Since 1.17.0
+  the button under the clock chip could reappear at every clock check, about every ten minutes, on
+  Windows PCs whose clock was fine: on any Windows not set to English, whose time service report
+  Nexus could not read; whenever the Windows Time service's latest check had not taken although it
+  had synchronised; and after the clock stepped, including the step a repair itself makes. For
+  those it now shows only while the clock is more than a second off UTC, which is when the clock
+  chip turns amber. A stopped Windows Time service, or one that has never synchronised, still gets
+  the button whatever the clock reads.
+- **A clock repair that Windows refuses part-way says so.** Repair clock said "Clock repaired"
+  whenever the administrator prompt was accepted, even when Windows then refused a step of the
+  repair, so the button went away and came back at the next clock check. It now says the clock
+  was not repaired and stays, so you can press it again.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16

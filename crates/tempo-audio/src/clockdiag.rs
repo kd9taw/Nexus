@@ -15,7 +15,10 @@
 //! service stopped, not synchronised, or the clock just jumped), and it runs
 //! only when the operator presses **Repair clock** (the operator's rulings,
 //! 2026-10-06). It used to run on its own, and operators met an administrator
-//! prompt nobody had asked for.
+//! prompt nobody had asked for. A report that does not confirm a sync, and a
+//! clock step, are faults only while the clock measures out
+//! ([`REPAIR_WORTH_MS`]): each is also what a working machine shows, and the
+//! button came back every pass on clocks that were right.
 //!
 //! **Nexus never calls a clock API.** On Windows the repair goes through
 //! `sc` and `w32tm` — the OS's own tools — so W32Time stays the sole
@@ -66,6 +69,17 @@ const THIRD_PARTY_CLIENTS: [(&str, &str); 5] = [
 
 /// Guard 3's ceiling, mirrored here so a diagnosis can say "too far out".
 pub use tempo_app::clocksync::MAX_STEER_MS;
+
+/// How far off UTC Nexus's own probe must measure the clock before a time
+/// service whose report does not confirm a sync, or a clock that just stepped,
+/// is offered **Repair clock**: one second, where the clock chip turns amber
+/// (`CLOCK_LOG_CONCERN_MS` in `ui/src/components/TopBar.tsx`) because logged QSO
+/// times are then a second out. Under it the radio loop's own correction already
+/// lands transmit and decode on the UTC grid, so a repair would ask for
+/// administrator rights to change nothing the operator can see. A stopped
+/// service, and one that has never synchronised, are offered whatever the clock
+/// reads.
+pub const REPAIR_WORTH_MS: i64 = 1_000;
 
 /// Timeout for one detection command, and it is load-bearing rather than
 /// decorative.
@@ -169,6 +183,14 @@ pub struct Findings {
     pub service_present: bool,
     pub service_running: bool,
     pub synced: bool,
+    /// The service's report neither confirms a sync nor says it never had one: a
+    /// good sync is on record but the latest attempt did not take (a sync error,
+    /// the state machine in Hold or Spike), or no report could be read (the query
+    /// failed or timed out, an error line came back, or Windows printed the report
+    /// in another language: only the English labels are read). A working service
+    /// shows this between two of its polls as often as a broken one does, so the
+    /// measured clock decides ([`REPAIR_WORTH_MS`]). Only Windows sets it.
+    pub sync_unconfirmed: bool,
     /// Did Nexus's own SNTP probe reach a server this round?
     pub probe_reached_network: bool,
     /// The offset the probe measured, when it has one.
@@ -245,8 +267,10 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
     // W32Time reports a perfectly good last sync — from before the machine went
     // to sleep — so every other row in this table says "healthy, do nothing"
     // about a clock that is hours wrong. `/resync` without `/rediscover`: the
-    // source was fine, it is the sample that is old.
-    if f.just_stepped && f.repairs_available && f.service_running {
+    // source was fine, it is the sample that is old. Only while the clock
+    // measures out: a step that left it right is the clock being put right (the
+    // time service stepping it, or Repair clock's own resync), not a fault.
+    if f.just_stepped && f.repairs_available && f.service_running && clock_is_off(f) {
         return ClockDiagnosis {
             owner: ClockOwner::OsService(os_service_name().into()),
             state: if f.synced {
@@ -275,6 +299,23 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
             },
             detail: format!(
                 "{} is not running — nothing is keeping this clock right",
+                os_service_name()
+            ),
+        };
+    }
+
+    // 2' — running, its report does not confirm a sync (`sync_unconfirmed`), and
+    // the clock measures right: nothing to repair. A working service between two
+    // polls reads this way, and so does every non-English Windows. Once the clock
+    // is out, row 2 offers the repair.
+    if f.service_running && f.sync_unconfirmed && !clock_is_off(f) {
+        return ClockDiagnosis {
+            owner: ClockOwner::OsService(os_service_name().into()),
+            state: ServiceState::Unknown,
+            unvouched: false,
+            repair: Repair::None,
+            detail: format!(
+                "this clock is within a second of UTC; {} has not confirmed its latest check",
                 os_service_name()
             ),
         };
@@ -313,6 +354,12 @@ pub fn decide(f: &Findings) -> ClockDiagnosis {
     }
 }
 
+/// Does Nexus's own probe measure this clock more than [`REPAIR_WORTH_MS`] off UTC?
+fn clock_is_off(f: &Findings) -> bool {
+    f.measured_offset_ms
+        .is_some_and(|ms| ms.abs() > REPAIR_WORTH_MS)
+}
+
 /// The OS time service's name on this platform, for operator-facing text.
 fn os_service_name() -> &'static str {
     if cfg!(windows) {
@@ -337,6 +384,25 @@ fn os_service_name() -> &'static str {
 /// function answers only "is the service working", from `State Machine`,
 /// `Last Sync Error` and whether a good sync was ever recorded.
 pub fn parse_synced(status: &str) -> bool {
+    parse_sync_report(status) == SyncReport::Synced
+}
+
+/// The three things W32Time's report can say about synchronisation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncReport {
+    /// A good sync on record, the latest attempt took, and the state machine is
+    /// in Sync.
+    Synced,
+    /// Neither confirmed nor denied ([`Findings::sync_unconfirmed`]): a good sync
+    /// on record but a latest attempt that did not take, or no report this can
+    /// read.
+    Unconfirmed,
+    /// The service has never synchronised.
+    Never,
+}
+
+/// [`parse_synced`]'s reading, in its three parts. Guard 12 holds here too.
+fn parse_sync_report(status: &str) -> SyncReport {
     let field = |name: &str| -> Option<String> {
         status
             .lines()
@@ -357,10 +423,23 @@ pub fn parse_synced(status: &str) -> bool {
         None => true,
     };
     // The load-bearing one: a machine that has never synchronised prints
-    // "unspecified" here.
-    let ever_synced = field("Last Successful Sync Time")
-        .is_some_and(|v| !v.is_empty() && !v.to_ascii_lowercase().contains("unspecified"));
-    state_ok && error_ok && ever_synced
+    // "unspecified" here. No such line at all is no report: a query that failed
+    // or timed out, an error line, or the labels in another language.
+    match field("Last Successful Sync Time") {
+        None => SyncReport::Unconfirmed,
+        Some(v) if v.is_empty() || v.to_ascii_lowercase().contains("unspecified") => {
+            SyncReport::Never
+        }
+        Some(_) if state_ok && error_ok => SyncReport::Synced,
+        Some(_) => SyncReport::Unconfirmed,
+    }
+}
+
+/// The sync findings from W32Time's status report ("" when the query could not run).
+fn read_w32tm_status(f: &mut Findings, status: &str) {
+    let report = parse_sync_report(status);
+    f.synced = report == SyncReport::Synced;
+    f.sync_unconfirmed = report == SyncReport::Unconfirmed;
 }
 
 /// `STATE : 4 RUNNING` from `sc query w32time`.
@@ -492,7 +571,7 @@ pub fn detect(
         f.service_present = parse_service_present(&sc);
         f.service_running = parse_service_running(&sc);
         let status = capture("w32tm.exe", &["/query", "/status", "/verbose"]).unwrap_or_default();
-        f.synced = parse_synced(&status);
+        read_w32tm_status(&mut f, &status);
         f.repairs_available = true;
     } else if cfg!(target_os = "macos") {
         // ⚠️ REPORT ONLY, AND LESS THAN ON THE OTHER TWO. `timed` owns the clock
@@ -607,9 +686,7 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
         .map(|c| c.join(" "))
         .collect::<Vec<_>>()
         .join(" && ");
-    let script = format!(
-        "Start-Process -FilePath cmd.exe -ArgumentList '/c',\"{joined}\" -Verb RunAs -Wait -WindowStyle Hidden"
-    );
+    let script = elevated_script(&joined);
     // Absolute path: a GUI-launched process gets a minimal `PATH`, the trap this
     // tree documents in `rigctld_proc.rs`.
     tempo_core::process::command(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
@@ -617,6 +694,18 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
         .status()
         .map(|st| st.success())
         .unwrap_or(false)
+}
+
+/// The PowerShell that runs `joined` under one elevation and exits with its
+/// status. `-Wait` alone exits 0 whatever the command returned, so a repair
+/// Windows refused part-way read as one that took
+/// (`the_elevated_script_exits_with_the_repairs_own_status`). `Stop` keeps a
+/// `Start-Process` that fails (a declined prompt) from running on to the `exit`,
+/// which would exit 0 with no process to ask.
+fn elevated_script(joined: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath cmd.exe -ArgumentList '/c',\"{joined}\" -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+    )
 }
 
 /// The operator-facing line after a repair attempt.
@@ -674,6 +763,38 @@ Image Name                     PID Session Name        Session#    Mem Usage
 ========================= ======== ================ =========== ============
 NetTimeService.exe            6240 Services                   0      3,960 K
 ";
+
+    /// VERBATIM, a live Windows 11 machine, read-only, 2026-10-10, as an ordinary user (the
+    /// rights Nexus has). The service synchronised at 7:31:50 and is in Sync; its LATEST attempt
+    /// found only stale data. The same report came back on every read for over an hour.
+    const W32TM_STATUS_STALE_ATTEMPT: &str = "\
+Leap Indicator: 0(no warning)
+Stratum: 5 (secondary reference - syncd by (S)NTP)
+Precision: -23 (119.209ns per tick)
+Root Delay: 0.0567875s
+Root Dispersion: 2.1708095s
+ReferenceId: 0xA83DD74A (source IP:  168.61.215.74)
+Last Successful Sync Time: 10/10/2026 7:31:50 AM
+Source: time.windows.com,0x9
+Poll Interval: 10 (1024s)
+
+Phase Offset: 0.0047341s
+ClockRate: 0.0156249s
+State Machine: 2 (Sync)
+Time Source Flags: 0 (None)
+Server Role: 0 (None)
+Last Sync Error: 2 (The computer did not resync because only stale time data was available.)
+Time since Last Good Sync Time: 8426.0524863s
+";
+
+    /// VERBATIM, the same machine and day: what `w32tm` prints in place of a report it will not
+    /// give an ordinary user (here `/query /configuration`).
+    const W32TM_ACCESS_DENIED: &str =
+        "The following error occurred: Access is denied. (0x80070005)\n";
+
+    /// Clock offsets as Nexus's own probe measures them: right, and more than a second out.
+    const CLOCK_RIGHT_MS: i64 = 30;
+    const CLOCK_OFF_MS: i64 = 3_200;
 
     // ── Parsers, against that real output ─────────────────────────────────────
 
@@ -866,6 +987,8 @@ TimeSync.exe                  9112 Console                    1     12,480 K
     #[test]
     fn a_clock_step_forces_a_resync_a_healthy_looking_machine_would_not_get() {
         let mut f = healthy_windows();
+        // The resume left the clock out by its RTC's own error, which the probe measures.
+        f.measured_offset_ms = Some(CLOCK_OFF_MS);
         // The control first: this exact machine, without the step, is left alone.
         assert_eq!(decide(&f).repair, Repair::None, "healthy without the step");
 
@@ -927,6 +1050,107 @@ TimeSync.exe                  9112 Console                    1     12,480 K
         let d = decide(&f);
         assert_eq!(d.state, ServiceState::NotSynced);
         assert_eq!(d.repair, Repair::Resync { rediscover: true });
+    }
+
+    /// The machine's findings after detection read `status` as W32Time's report, with Nexus's
+    /// probe measuring the clock `offset_ms` off UTC.
+    fn windows_reading(status: &str, offset_ms: i64) -> Findings {
+        let mut f = healthy_windows();
+        f.measured_offset_ms = Some(offset_ms);
+        read_w32tm_status(&mut f, status);
+        f
+    }
+
+    /// ⛔ A WORKING SERVICE BETWEEN TWO POLLS IS NOT A FAULT. W32Time's `Last Sync Error` is its
+    /// LATEST attempt, and this one synchronised and is in Sync. This report was read as "has not
+    /// synchronised — its server may be blocked", so Repair clock was offered with the clock right
+    /// and came back on the next pass after every press. The clock is what tells a lapse that
+    /// matters from one that does not: more than a second out and the repair is offered again.
+    #[test]
+    fn a_service_whose_latest_poll_did_not_take_is_offered_nothing_while_the_clock_is_right() {
+        let d = decide(&windows_reading(W32TM_STATUS_STALE_ATTEMPT, CLOCK_RIGHT_MS));
+        assert_eq!(d.repair, Repair::None, "{}", d.detail);
+        assert!(
+            !d.detail.contains("blocked"),
+            "nothing says it is blocked: {}",
+            d.detail
+        );
+
+        let d = decide(&windows_reading(W32TM_STATUS_STALE_ATTEMPT, CLOCK_OFF_MS));
+        assert_eq!(
+            d.repair,
+            Repair::Resync { rediscover: true },
+            "a clock that is out is told"
+        );
+        let d = decide(&windows_reading(W32TM_STATUS_STALE_ATTEMPT, -CLOCK_OFF_MS));
+        assert_eq!(
+            d.repair,
+            Repair::Resync { rediscover: true },
+            "behind as well as ahead"
+        );
+    }
+
+    /// ⛔ A REPORT THAT CANNOT BE READ SAYS NOTHING. A query that failed or ran past
+    /// [`CMD_TIMEOUT`] reaches the parser as "" (one of 132 reads on the machine above came back
+    /// with no report), and `w32tm` may print an error line in place of the report. Every
+    /// non-English Windows is in the same place: it prints the report with its labels translated
+    /// (German's "Letzte erfolgr. Synchronisierungszeit"), and only the English labels are read.
+    /// Each was taken for a service that has never synchronised, so Repair clock was offered on
+    /// every pass. The measured clock decides here too.
+    #[test]
+    fn a_report_that_cannot_be_read_is_not_a_fault_while_the_clock_is_right() {
+        for unread in ["", W32TM_ACCESS_DENIED] {
+            let d = decide(&windows_reading(unread, CLOCK_RIGHT_MS));
+            assert_eq!(d.repair, Repair::None, "{unread:?}: {}", d.detail);
+            let d = decide(&windows_reading(unread, CLOCK_OFF_MS));
+            assert_eq!(
+                d.repair,
+                Repair::Resync { rediscover: true },
+                "{unread:?}, the clock out"
+            );
+        }
+    }
+
+    /// The real faults are still told with the clock right: a service that has never
+    /// synchronised, and one that is stopped. And the clean report is healthy either way.
+    #[test]
+    fn a_never_synchronised_or_stopped_service_is_offered_whatever_the_clock_reads() {
+        let never = W32TM_STATUS_VERBOSE
+            .replace(
+                "Last Successful Sync Time: 9/9/2026 2:56:39 AM",
+                "Last Successful Sync Time: unspecified",
+            )
+            .replace("State Machine: 2 (Sync)", "State Machine: 0 (Unset)");
+        let d = decide(&windows_reading(&never, CLOCK_RIGHT_MS));
+        assert_eq!(
+            d.repair,
+            Repair::Resync { rediscover: true },
+            "{}",
+            d.detail
+        );
+
+        let mut stopped = windows_reading(W32TM_ACCESS_DENIED, CLOCK_RIGHT_MS);
+        stopped.service_running = false;
+        assert_eq!(decide(&stopped).repair, Repair::StartService);
+
+        for offset in [CLOCK_RIGHT_MS, CLOCK_OFF_MS] {
+            let d = decide(&windows_reading(W32TM_STATUS_VERBOSE, offset));
+            assert_eq!(d.repair, Repair::None, "the clean report at {offset} ms");
+        }
+    }
+
+    /// ⛔ A STEP THAT LEAVES THE CLOCK RIGHT IS THE CLOCK BEING PUT RIGHT. Windows Time stepping
+    /// a clock it found out, or the step Repair clock's own `w32tm /resync` makes, wakes the probe
+    /// as a resume does, and the clock it measures is right. That step put Repair clock straight
+    /// back after "Clock repaired". After a step the clock is out, the resync is offered as before.
+    #[test]
+    fn a_step_that_leaves_the_clock_right_is_not_a_fault() {
+        let mut f = healthy_windows();
+        f.just_stepped = true;
+        f.measured_offset_ms = Some(CLOCK_RIGHT_MS);
+        assert_eq!(decide(&f).repair, Repair::None);
+        f.measured_offset_ms = Some(CLOCK_OFF_MS);
+        assert_eq!(decide(&f).repair, Repair::Resync { rediscover: false });
     }
 
     /// ⛔ A DEFAULT WINDOWS PC IS HEALTHY, AND ITS NOTE SAYS ONLY THAT (the
@@ -1094,6 +1318,26 @@ TimeSync.exe                  9112 Console                    1     12,480 K
             repair_outcome_note(&d, true),
             "started the Windows Time service"
         );
+    }
+
+    /// ⚠️ A REPAIR WINDOWS REFUSED PART-WAY MUST READ AS ONE. PowerShell's own exit status is all
+    /// [`run_repair_elevated`] sees, and `Start-Process -Wait` exits 0 whatever the command it
+    /// waited for returned. Measured with Windows PowerShell on a Windows 11 machine (2026-10-10,
+    /// unelevated, `cmd /c exit 5` in place of the repair): that shape exited 0, and this one
+    /// (`-PassThru`, then `exit` with the command's own code) exited 5, and 0 for `exit 0`. A
+    /// repair that failed said "Clock repaired", came off offer, and was offered again by the
+    /// next pass. With `Start-Process` itself failing (a program that is not there, standing in
+    /// for a declined prompt), `-PassThru` alone exited 0 and with `Stop` first exited 1.
+    #[test]
+    fn the_elevated_script_exits_with_the_repairs_own_status() {
+        let s = elevated_script("w32tm.exe /resync");
+        assert!(s.contains("-Verb RunAs"), "still one elevation: {s}");
+        assert!(
+            s.starts_with("$ErrorActionPreference = 'Stop'; $p = Start-Process "),
+            "{s}"
+        );
+        assert!(s.contains(" -Wait -PassThru "), "{s}");
+        assert!(s.ends_with("; exit $p.ExitCode"), "{s}");
     }
 
     /// The elevated helper never runs anything off Windows, and never runs
