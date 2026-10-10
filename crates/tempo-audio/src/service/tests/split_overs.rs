@@ -397,13 +397,15 @@ fn civ_bench(addr: u8, model: IcomModel, hamlib: u32, split: SplitMode, tx_hz: f
     Bench::new(engine, state, rig, Icom { log, keyed, regs })
 }
 
-/// An IC-7610 on Nexus's CI-V daemon, Split Operation = Rig: before every key `0F 01` (split on)
-/// and `25 01` (the SUB band's dial, by name, on this radio) at the TX dial; after every unkey
-/// `0F 00` (split off). The same TX dial every over, MAIN never written, nothing written while it
-/// receives, the engine's dial unmoved. At 1441 Hz the step is -500 Hz; at 941 Hz, -1000 Hz.
+/// An IC-7610 on Nexus's CI-V daemon, Split Operation = Rig: before every key `0F 01` (split on),
+/// `25 01` (the SUB band's dial, by name, on this radio) at the TX dial and `26 01 01 01` (that
+/// band's mode: USB, DATA mode D1, the bench's Data mode); after every unkey `0F 00` (split off).
+/// The same TX dial every over, MAIN never written, nothing written while it receives, the
+/// engine's dial unmoved. At 1441 Hz the step is -500 Hz; at 941 Hz, -1000 Hz.
 ///
-/// No mode reaches the TX VFO: the loop's `X PKTUSB -1` is refused by the daemon, whose mode names
-/// (`commands::Mode::from_name`) have no DATA submode, so nothing goes on the wire for it.
+/// The `26 01` is the loop's `X PKTUSB -1`, which the daemon used to refuse: its mode names
+/// (`commands::Mode::from_name`) have no DATA submode, so nothing went on the wire, and the TX VFO
+/// transmitted FT8 in whatever mode it was left in.
 #[test]
 fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_each() {
     for (tx_hz, tx_dial) in [(1441.0, 14_073_500u64), (941.0, 14_073_000)] {
@@ -415,6 +417,7 @@ fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_e
         let key = vec![
             "0F 01".to_string(),
             format!("25 01 {tx_dial}"),
+            "26 01 01 01".to_string(),
             "1C 00 01".to_string(),
         ];
         let unkey = vec!["1C 00 00".to_string(), "0F 00".to_string()];

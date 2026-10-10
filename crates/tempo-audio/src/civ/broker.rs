@@ -1518,8 +1518,21 @@ impl RigBackend for CivBackend {
     /// ([`Self::try_set_split`]).
     fn try_set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
-        let Some(m) = Mode::from_name(mode) else {
-            return Some(Err(SetFault::Refused));
+        // ⭐ FT8 IN AN A/B SPLIT: `PKTUSB` is USB with the radio's DATA mode, `26 01 01 <D>`, D
+        // capped as every DATA write is ([`Self::data_mode_on_wire`]): D1–D3 on the IC-7610 as
+        // its Data mode setting says, `01` on the one-DATA radios. It was refused here (no DATA
+        // submode among `Mode::from_name`'s names), so a Rig split on this daemon transmitted FT8
+        // from a TX VFO in whatever mode it was left in, where the same split through Hamlib set
+        // it, as WSJT-X does (`rig_set_split_mode`, PASSBAND_NOCHANGE). ⚠️ NEEDS-BENCH (IC-7610
+        // in Rig split). Satellite mode keeps its plain modes only.
+        let (m, data) = match mode.to_ascii_uppercase().as_str() {
+            "PKTUSB" | "DATA-U" | "PKT-U" if !g.engaged => {
+                (Mode::Usb, Some(self.data_mode_on_wire()))
+            }
+            up => match Mode::from_name(up) {
+                Some(m) => (m, None),
+                None => return Some(Err(SetFault::Refused)),
+            },
         };
         if !g.engaged {
             // ⚠️ NEEDS-BENCH (IC-9700 — field report 2026-08-16, V/U FM pass
@@ -1532,7 +1545,7 @@ impl RigBackend for CivBackend {
             // restore. Unacked ⇒ `Some(false)`, and the caller says so out loud
             // ("put VFO B in FM by hand") rather than leaving the operator to
             // discover it on the air.
-            return Some(self.answer(commands::set_unselected_mode(self.addr, m)));
+            return Some(self.answer(commands::set_unselected_mode(self.addr, m, data)));
         }
         if !self.ensure_main(&mut g) {
             return Some(Err(SetFault::Refused)); // same stray-selection refusal as the freq
@@ -3524,6 +3537,64 @@ mod tests {
             ],
             "the IC-7610's split bytes moved"
         );
+    }
+
+    /// ⭐ FT8 IN A SPLIT: `X PKTUSB` PUTS THE TX VFO IN USB WITH THE RADIO'S DATA MODE, as
+    /// `26 01 01 <D>`. Icom's `26` is the VFO (or on the IC-7610 the band), the mode (`01` USB),
+    /// the DATA mode and the filter: the DATA byte selects D1–D3 on the IC-7610 (A7380-7EX-4
+    /// p. 13) and is `01`, ON, on the one-DATA radios (IC-7300 Full Manual A7292-4EX-12, PDF
+    /// p. 171; IC-9700 A7508-3EX-4, PDF p. 25), capped as every DATA write is
+    /// (`data_mode_on_wire`). The filter byte is left off, as for every other mode this verb
+    /// sends. `PKTUSB` used to be refused here, so a Rig split on this daemon transmitted FT8 from
+    /// a TX VFO in whatever mode it was left in, where the same split through Hamlib set it.
+    /// NEEDS-BENCH: which filter a radio keeps when only the filter byte is skipped.
+    #[test]
+    fn a_split_puts_its_tx_vfo_in_usb_with_the_radios_data_mode() {
+        for (addr, model, choice, want) in [
+            (
+                0x98u8,
+                Some(IcomModel::Ic7610),
+                1u8,
+                "FE FE 98 E0 26 01 01 01 FD",
+            ),
+            (
+                0x98,
+                Some(IcomModel::Ic7610),
+                2,
+                "FE FE 98 E0 26 01 01 02 FD",
+            ),
+            (
+                0x98,
+                Some(IcomModel::Ic7610),
+                3,
+                "FE FE 98 E0 26 01 01 03 FD",
+            ),
+            (
+                0x94,
+                Some(IcomModel::Ic7300),
+                2,
+                "FE FE 94 E0 26 01 01 01 FD",
+            ),
+            (
+                0xA2,
+                Some(IcomModel::Ic9700),
+                3,
+                "FE FE A2 E0 26 01 01 01 FD",
+            ),
+        ] {
+            let (_e, b, regs) = backend_with_data_mode(addr, model, choice);
+            let n = regs.lock().unwrap().wire.len();
+            assert_eq!(
+                b.set_split_mode("PKTUSB", -1),
+                Some(true),
+                "{model:?}, Data mode D{choice}"
+            );
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [want],
+                "{model:?}, Data mode D{choice}: the TX VFO's mode on the wire"
+            );
+        }
     }
 
     /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —

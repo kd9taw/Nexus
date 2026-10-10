@@ -366,6 +366,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and never takes that over's TX frequency for a QSY. If the radio still has not gone back, the CAT
   status says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300
   MK2 in Fake It.
+- **Rig split on Nexus's own Icom CI-V puts the TX VFO in USB with DATA for FT8.** With Split
+  Operation set to Rig on an Icom that uses Nexus's own CI-V, the transmit VFO was never put in a
+  data mode, so FT8 went out in whatever mode that VFO was left in. Nexus now sets it to USB with
+  the radio's DATA mode before each over (D1, D2 or D3 on an IC-7610, as Settings' Data mode says),
+  as it already did through Hamlib. NEEDS-BENCH: an IC-7610 in Rig split.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
