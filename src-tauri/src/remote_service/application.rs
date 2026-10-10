@@ -326,6 +326,10 @@ impl Publisher {
                         // Paths on this computer, and the remedy is at this computer.
                         if let Some(fields) = value.as_object_mut() {
                             fields.remove("keptFiles");
+                            // The contest strip's contact in progress is shared between this
+                            // computer's own windows only (the contest logger beside the main
+                            // window); a Remote viewer sees the main window's strip in the stream.
+                            fields.remove("contestEntry");
                         }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
@@ -719,6 +723,36 @@ mod tests {
             "no path of this computer's reaches the Remote"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+    /// The contest strip's contact in progress, shared with the contest logger window on this
+    /// computer, never reaches the Remote: it is not one of the page's keys, and a Remote viewer
+    /// sees the main window's strip in the stream, not the logger window.
+    #[test]
+    fn the_shared_contest_entry_never_reaches_the_remote() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
+        engine.contest_entry_share(true);
+        engine
+            .contest_entry_put("K1ABC", Default::default(), serde_json::Value::Null)
+            .unwrap();
+        assert!(
+            engine.snapshot().contest_entry.is_some(),
+            "control: the station's own snapshot carries it"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestEntry").is_none(),
+            "the Remote's snapshot carries no shared contest entry"
+        );
+        assert!(!data.contains("K1ABC"), "nor the call typed into it");
     }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {
