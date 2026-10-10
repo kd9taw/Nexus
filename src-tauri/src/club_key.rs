@@ -13,25 +13,19 @@
 //! - **Never logged, printed, shown or sent anywhere but a club JOIN.** Nothing here writes it
 //!   to stderr or the diagnostic log, and `PositionKey` has no `Display` and a `Debug` that
 //!   prints none of it.
-//! - **Hashed at a host before anything keeps it** ([`sha256_hex`], the host bridge's hash):
-//!   the engine and the club journal hold the hash of each position's key, never the key.
+//! - **Hashed in tempo-app before anything keeps it** (`tempo_app::fdevent::sha256_hex`, the
+//!   hash a host pins by): the engine and the club journal hold the hash of each position's
+//!   key, never the key.
 //! - **Lost means a new position.** A file that cannot be read back is replaced by a new key,
 //!   which a host that pinned the old one turns away by name; the refusal says how to give that
 //!   laptop a position of its own.
 use std::path::Path;
 
-use ring::digest::{digest, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 use tempo_net::fdsync::PositionKey;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The hash a club host pins and compares a position's key by: SHA-256 of the key, as 64
-/// lower-case hex digits. `tempo_app::fdbridge::EngineClubBackend` is built with it.
-pub(crate) fn sha256_hex(secret: &str) -> String {
-    hex(digest(&SHA256, secret.as_bytes()).as_ref())
 }
 
 /// A new key: 32 bytes from the operating system's random source. Empty if that source fails,
@@ -108,19 +102,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// The host's hash is SHA-256: FIPS 180-2's "abc" example, and the empty string.
-    #[test]
-    fn the_hosts_hash_is_sha256() {
-        assert_eq!(
-            sha256_hex("abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        assert_eq!(
-            sha256_hex(""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
     }
 
     /// ⭐ **A key is made once and kept**: the first start makes one a host takes (64 hex

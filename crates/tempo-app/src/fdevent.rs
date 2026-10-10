@@ -52,6 +52,7 @@
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
+use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
@@ -315,6 +316,19 @@ pub fn club_call(raw: &str) -> Option<String> {
         && call.bytes().any(|b| b.is_ascii_digit())
         && call.bytes().any(|b| b.is_ascii_uppercase());
     ok.then_some(call)
+}
+
+/// ⭐ **The hash a club host pins and compares a position's club key by**: SHA-256 of the key, as
+/// 64 lower-case hex digits. The host bridge hashes every JOIN's key with it before anything
+/// keeps it (`fdbridge::EngineClubBackend`), and the engine its own laptop's
+/// (`Engine::set_fd_position_key`), so the club log and its journal hold hashes, never a key;
+/// a laptop's club code is made from it ([`club_code`]).
+pub fn sha256_hex(secret: &str) -> String {
+    digest(&SHA256, secret.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The characters a club code is written in: Crockford's base 32, the digits and the capitals
@@ -5074,6 +5088,21 @@ mod tests {
     }
 
     // ---- what tells laptops and positions apart on the host's screen -------------------
+
+    /// The host's hash is SHA-256: FIPS 180-2's "abc" example, and the empty string; and the
+    /// club code of "abc"'s hash is the one the club code's own test pins.
+    #[test]
+    fn the_hosts_hash_is_sha256() {
+        assert_eq!(
+            sha256_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(club_code(&sha256_hex("abc")), "Q9W1-DFWF");
+    }
 
     /// ⭐ **A club code is eight characters no two of which read alike, made from the key's hash
     /// alone**: the first 40 bits of it, in two groups of four, the same every time. SHA-256 of

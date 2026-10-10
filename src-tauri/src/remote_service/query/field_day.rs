@@ -223,11 +223,9 @@ pub(in crate::remote_service) mod tests {
         };
         let mut e = tempo_app::engine::Engine::with_settings(s);
         e.restore_field_day_if_enabled();
-        let own = "c".repeat(64);
-        e.set_fd_position_key(
-            tempo_net::fdsync::PositionKey::new("d".repeat(64)),
-            own.clone(),
-        );
+        let own_key = tempo_net::fdsync::PositionKey::new("d".repeat(64));
+        let own = tempo_app::fdevent::sha256_hex(own_key.secret());
+        e.set_fd_position_key(own_key);
         e.fd_host_start(dir.join("fd_event_codes.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
         let join = |e: &mut tempo_app::engine::Engine, hash: &str| {
