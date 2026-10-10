@@ -403,9 +403,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TX frequency it read for your own QSY, so the dial walked 500 Hz off the FT8 channel (the band
   readout said "custom") and every later over walked with it. Nexus now moves the radio back 100 ms
   after the unkey, as WSJT-X does, sends it again up to three times if the radio does not take it,
-  and never takes that over's TX frequency for a QSY. If the radio still has not gone back, the CAT
-  status says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300
-  MK2 in Fake It.
+  and no longer takes that over's TX frequency for a QSY, except in one case: if you change
+  frequency during an over, Nexus can still take it for a moment from a radio slow to answer, and
+  keeps it if the radio refuses the change. If the radio still has not gone back, the CAT status
+  says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300 MK2
+  in Fake It.
 - **Rig split on Nexus's own Icom CI-V puts the TX VFO in USB with DATA for FT8.** With Split
   Operation set to Rig on an Icom that uses Nexus's own CI-V, the transmit VFO was never put in a
   data mode, so FT8 went out in whatever mode that VFO was left in. Nexus now sets it to USB with
