@@ -161,10 +161,10 @@ pub enum StateSource {
     Grid,
 }
 
-/// The park or summit a need row is an ACTIVATION of. Carried so a Work from the board can set
-/// the hunt the way HUNT and a map double-click already do — the contact it leads to is then
-/// logged with the reference, which is the only contact POTA credits as a hunt (and the only one
-/// [`HuntedActivations`] can see).
+/// The park or summit a need row is an ACTIVATION of. Carried so the contact a Work from the board
+/// leads to is logged with the reference — the Phone or CW log line the Work opens fills it with
+/// the call, and a row that opens none sets the hunt the way HUNT and a map double-click do — which
+/// is the only contact POTA credits as a hunt (and the only one [`HuntedActivations`] can see).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkRef {

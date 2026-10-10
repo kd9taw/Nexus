@@ -402,11 +402,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [snap])
   // Click-to-work handoff: a Needed-board click on a voice/CW spot seeds this, the
   // matching cockpit consumes it to prefill the log. `ts` makes a re-click of the same
-  // call refire the cockpit's prefill effect. Cleared once consumed.
+  // call refire the cockpit's prefill effect. Cleared once consumed. `park`: the park or
+  // summit a Needed row is an activation of, filled into the log with the call (LogEntry).
   const [pendingWork, setPendingWork] = useState<{
     call: string
     view: 'cw' | 'phone'
     ts: number
+    park?: { program: string; reference: string } | null
   } | null>(null)
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
@@ -1132,10 +1134,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
     // auto-sequences on a decode double-click, so it takes no prefill; RTTY's cockpit takes
-    // no prefill either (only the CW/Phone log forms consume pendingWork).
+    // no prefill either (only the CW/Phone log forms consume pendingWork). A Needed row's park
+    // comes with its call (`workPark`): the log line fills both, and no hunt is set.
     const wc = snap?.workCall
     if (wc && (target === 'cw' || target === 'phone')) {
-      setPendingWork({ call: wc, view: target, ts: Date.now() })
+      setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
   }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
@@ -2153,12 +2156,22 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         handleQsy(alert.band)
         return
       }
-      // A POTA/SOTA row names the activation it IS (`park`), so working it tags the hunt before
-      // the QSY — the same order as the map's own setHuntTarget-then-QSY split — and the contact
-      // this leads to is logged with the park. Without it a contact worked from the Needed board
-      // was an ordinary QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's
-      // Hide worked to see. Native only: a browser's hunt is a station change under the logging
-      // grant (RemoteOta's own path), not this command.
+      // A POTA/SOTA row names the activation it IS (`park`), and the contact this leads to is
+      // logged with the park. Without it a contact worked from the Needed board was an ordinary
+      // QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's Hide worked to see.
+      //
+      // ⚠️ WHERE A LOG LINE TAKES THE PARK, IT IS NOT A HUNT (operator, 2026-10-10: "It should
+      // instead simply populate the call data (and the park number) without setting it as
+      // 'Hunted'. Hunted should only be used if you chase a park from the POTA tab."). A row that
+      // opens the Phone or CW cockpit hands its park to that cockpit's log line with the call
+      // (`pendingWork.park`), so nothing waits at the top of the POTA/SOTA view and the line's
+      // Clear really clears it. A hunt set here outlived a station the operator never heard by four
+      // hours (HUNT_TTL_SECS), and only that view could end it. A row with no log line to fill
+      // (FT8/FT4 logs from the engine, RTTY's cockpit takes no handoff, a switched-off cockpit is
+      // never opened) still tags the hunt before the QSY, the map's setHuntTarget-then-QSY order:
+      // that is the only way its park reaches the contact. Native only: a browser's hunt is a
+      // station change under the logging grant (RemoteOta's own path), not this command, and a
+      // browser's Work never carried a park.
       //
       // AFTER that bail-out, never before it. `workTarget` is null only when the row has no
       // frequency of its own, no mode default AND no band-plan channel — and `handleQsy` reads
@@ -2171,8 +2184,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // operator watching the QSY land, working the park, and logging it with no reference at
       // all. The work still proceeds on a failed tag — the station is real and the operator can
       // add the reference by hand; refusing the QSY would be the bigger surprise.
-      if (!remote && alert.park) {
-        const park = alert.park
+      const park = remote ? null : (alert.park ?? null)
+      const fillsLogLine = (target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled)
+      if (park && !fillsLogLine) {
         await withErrorToast(
           () => setHuntTarget(alert.call, park.program, park.reference),
           t('ota.hunt.setFailed', { call: alert.call }),
@@ -2211,8 +2225,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // A browser always names the tier: its Work intent carries no implicit current tier.
           if ((m === 'FT4' || m === 'FT8') && (remote || tierRef.current !== m)) tier = m
         }
+        // The park rides the work too, so the work hint below says the same as this click, as it
+        // does for a pop-out board's: the snapshot's echo of a park row must not hand the log line
+        // the call alone.
         const s = await withErrorToast(
-          () => workSpot(opMode, target.freqMhz, target.band, target.call, tier),
+          () =>
+            park && fillsLogLine
+              ? workSpot(opMode, target.freqMhz, target.band, target.call, tier, park)
+              : workSpot(opMode, target.freqMhz, target.band, target.call, tier),
           t('shell.work.failed.cat', { call: target.call }),
         )
         // On failure DON'T navigate or poison the guard ref — the backend made no change
@@ -2226,7 +2246,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
         // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
         if (target.view === 'cw' || target.view === 'phone') {
-          setPendingWork({ call: target.call, view: target.view, ts: Date.now() })
+          setPendingWork({ call: target.call, view: target.view, ts: Date.now(), park })
         }
         setView(target.view)
         pushToast(

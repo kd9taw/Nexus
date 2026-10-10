@@ -3,7 +3,9 @@
 // WORK FROM THE NEEDED BOARD TAGS THE PARK — in the docked board, in the real App.
 //
 // The torn-off board has its own handler and its own test (DetachedPanel.neededHunt.test.tsx);
-// this is the one an operator uses. Mounts the REAL App (the App.js8workspace.test.tsx pattern),
+// this is the one an operator uses. Since 2026-10-10 only a row that opens no log line sets the
+// hunt, as these Digital rows do; a Phone or CW row fills the log line instead
+// (App.neededPark.test.tsx). Mounts the REAL App (the App.js8workspace.test.tsx pattern),
 // because what is under test is a click on a row reaching App's work handler — a source grep
 // cannot see that the board is even wired to it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'

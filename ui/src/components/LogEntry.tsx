@@ -331,8 +331,10 @@ interface Props {
    *  which is what a build with the Logbook section switched off gets. */
   onOpenLogbook?: (call: string) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
-   * `ts` changes per click so re-working the same call refires the prefill. */
-  pendingWork?: { call: string; ts: number } | null
+   * `ts` changes per click so re-working the same call refires the prefill. `park` is the park
+   * or summit a Needed row is an activation of: it fills the park box for that call, and no
+   * hunt is set (see `workPark`). */
+  pendingWork?: { call: string; ts: number; park?: { program: string; reference: string } | null } | null
   /** Called once the prefill has been applied, so the parent can clear it. */
   onConsumeWork?: () => void
   /** CW copilot LIVE fill: the best-guess worked call (confirmed chip if any, else the top
@@ -545,6 +547,14 @@ export function LogEntry({
   // (#383). Written wherever a park goes INTO the box and read only while one is there, so a clear
   // leaves it alone. See the prefill below for why the value alone cannot say.
   const parkForRef = useRef({ call: '', hunt: false })
+  // THE PARK A NEEDED CLICK HANDED OVER (`pendingWork.park`). The Needed board fills the strip with
+  // the station's call and the park it is activating, and sets no hunt: nothing waits in the
+  // engine, so nothing shows at the top of the POTA/SOTA view and the strip's Clear really clears
+  // it. For its own station it stands in for the hunt in the
+  // prefill below, so it fills, and leaves with its station, exactly as a hunted park does, and a
+  // hunt pending for the same station at another park does not replace it. It is spent the way a
+  // hunt is, by the contact it is logged with (`reset`).
+  const [workPark, setWorkPark] = useState<{ call: string; program: string; reference: string } | null>(null)
   // The park box as it stands, for the park prefill: the LAST value written to it. Every write
   // goes through `setPark`, so this always has it, even before React renders it. The call-change
   // effect runs just before the prefill and can empty the box in the same commit, while the
@@ -1031,9 +1041,11 @@ export function LogEntry({
   // contact spends the hunt in the engine, but the snapshot here names it until the next poll, so
   // the reset strip was filled again; when the hunt's end arrived nothing took the park out, and
   // an empty strip showed the last contact's park.
+  //
+  // A park a Needed click handed over (`workPark`) is the hunt here, for its own station only.
   useEffect(() => {
-    const h = snap.hunt
     const call = logCall.trim()
+    const h = workPark && sameCall(workPark.call, call) ? workPark : snap.hunt
     const shown = parkBoxRef.current.trim().toUpperCase()
     const huntRef = h?.reference?.trim().toUpperCase() ?? ''
     const bound = parkForRef.current
@@ -1054,7 +1066,7 @@ export function LogEntry({
       setPark('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snap.hunt?.reference, snap.hunt?.program, logCall])
+  }, [snap.hunt?.reference, snap.hunt?.program, logCall, workPark])
 
   // Search the local park directory as the operator types a POTA reference (debounced).
   // `asksForPark` for the same reason as the lookup below: an exchange with no park row
@@ -1183,6 +1195,10 @@ export function LogEntry({
     }
     if (remoteMode) { setRemoteDraftContext(currentDraftContext()); setRemoteWorkOffer(null) }
     setLogCall(pendingWork.call.toUpperCase())
+    // The row's park comes with its call, a new object per click so the prefill above runs again
+    // for a re-click of the same station. A handoff with no park ends the last one's.
+    const handed = pendingWork.park
+    setWorkPark(handed ? { call: pendingWork.call, program: handed.program, reference: handed.reference } : null)
     humanCallEditRef.current = false // a clicked spot is not a human keystroke…
     settledCallRef.current = true // …but it IS a final call, so it still gets enriched
     // ⭐ THE CONTEST SERIAL'S OTHER DOOR. This fill is programmatic, so no blur fires and
@@ -1511,6 +1527,7 @@ export function LogEntry({
     setLogCountry('')
     setLogImage(null)
     setPark('')
+    setWorkPark(null)
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
@@ -1779,10 +1796,17 @@ export function LogEntry({
       // Only send an EXPLICIT park. A hunt-PREFILLED ref (still equal to the pending hunt) is left
       // to the engine's callsign-matched auto-tag — which also clears the pend — so a prefill can
       // never ride onto a non-matching call, and the hunt tags exactly the right QSO once.
+      //
+      // …the pending hunt's park FOR ITS OWN STATION. The same park in the box for another call (a
+      // second activator at that park, clicked in Needed or typed) is that call's park, and the
+      // auto-tag, which matches by call, would never put it on this record.
       ota:
         asksForPark &&
         logParkRef.trim() &&
-        logParkRef.trim().toUpperCase() !== (snap.hunt?.reference ?? '').trim().toUpperCase()
+        !(
+          logParkRef.trim().toUpperCase() === (snap.hunt?.reference ?? '').trim().toUpperCase() &&
+          sameCall(snap.hunt?.call ?? '', call)
+        )
           ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
           : undefined,
     }

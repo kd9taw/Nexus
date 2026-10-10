@@ -111,7 +111,9 @@ it's telling you the truth about a marginal path.
 
 1. Click any row. Nexus **QSYs band + mode + exact frequency atomically**, opens
    the matching cockpit, and — for CW/Phone rows — prefills the callsign in the
-   log strip.
+   log strip. A POTA or SOTA row prefills the park too, without setting a hunt,
+   so **Clear** on the log strip leaves nothing behind (see
+   [Hunt an activator](contesting-pota.md#hunt-an-activator)).
 2. If the DX is running split, Nexus reads it: it **parses pileup split offsets
    from cluster comments** (`UP 2`, `DN 1.5`, `QSX 7.205`) and pre-sets rig split
    so your transmit lands where the DX is listening.

@@ -8,7 +8,9 @@
 // Before, a POTA contact worked from the board was logged as an ordinary QSO.
 //
 // This is the torn-off board, with the REAL NeededPanel: the click under test is the one on the
-// operator's row, not a stub's callback.
+// operator's row, not a stub's callback. Since 2026-10-10 only a row that opens no log line sets
+// the hunt, as these Digital rows do; a Phone or CW row hands its park to the main window's log
+// line instead (DetachedPanel.neededPark.test.tsx).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import type { NeedAlert } from './types'

@@ -989,6 +989,7 @@ impl AppState {
             work_tick: 0,
             work_view: None,
             work_call: None,
+            work_park: None,
             field_day: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
