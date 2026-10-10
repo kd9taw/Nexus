@@ -333,20 +333,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
   the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
   export sections now describe the objectives and the sponsor's submission.
-- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says.** With
-  Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or localhost) where a
-  rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as it already did when
-  rigctld TCP Port was set to the same port. With any other port it started a rigctld of its own
-  between them, and in front of wfview that one refused every command, PTT included, whenever
-  wfview reported the radio switched off. Follow the wfview steps in the Icom guide and leave
-  rigctld TCP Port as it is. Start wfview first: when nothing answers at the address as Nexus
-  connects, Nexus still starts its own rigctld in front of it, as it does for a rigctld on another
-  computer. When the rigctld Nexus shares this way goes away, Test CAT names its address rather
-  than rigctld TCP Port. NEEDS-BENCH: wfview's rigctld on a real radio, with rigctld TCP Port left
-  at 4534, should connect, follow the dial and key PTT, Rear/Data keying the DATA input.
+- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says, and
+  waits for it.** With Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or
+  localhost) where a rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as
+  it already did when rigctld TCP Port was set to the same port. With any other port it started a
+  rigctld of its own between them, and in front of wfview that one refused every command, PTT
+  included, whenever wfview reported the radio switched off. When nothing answers at the address
+  yet, Nexus starts nothing in between either: the CAT status says "Nothing is answering at
+  127.0.0.1:4533 — start wfview (or your rigctld)", with your address, and Nexus asks again on its
+  own (after 10 seconds, then less often, at most 5 minutes apart) and connects once it answers.
+  Test CAT asks again at once. So wfview and Nexus can start in either order. Follow the wfview
+  steps in the Icom guide and leave rigctld TCP Port as it is. When the rigctld Nexus shares this
+  way goes away, Test CAT names its address rather than rigctld TCP Port. NEEDS-BENCH: wfview's
+  rigctld on a real radio, with rigctld TCP Port left at 4534, should connect, follow the dial and
+  key PTT, Rear/Data keying the DATA input, with wfview started before Nexus and after it.
+- **A second radio on NET rigctl, and a Remote selection of it, use a rigctld on this computer
+  directly too.** The radio you are not operating, kept connected in the radio switcher, now talks
+  to wfview's rigctld (or yours) itself, as the operated radio does, and so does a Remote selection
+  of it. Neither starts a rigctld of its own in front of it any more; in front of wfview that one
+  refused every command, PTT included, whenever wfview reported the radio switched off. While
+  nothing answers at the address, Nexus starts nothing there and asks again on its own. A Network
+  Address on Nexus's own Share this radio port is never taken for a radio. NEEDS-BENCH: two radios,
+  one on wfview's rigctld, switched between and selected from the Remote, with wfview started
+  before Nexus and after it.
 
 ### Fixed
 
+- **Another radio's rigctld can no longer land on wfview's port.** With a radio on NET rigctl at a
+  rigctld on this computer (wfview's, or one you run), Nexus could give a second radio's rigctld
+  that same port, when it moved two radios off a port they shared or picked the port for a radio
+  you added. The two radios then read, and could command, each other's radio. Nexus now keeps
+  every rigctld of its own, and the Share this radio port, off a NET rigctl radio's Network Address
+  on this computer. Save refuses a change that would put one there and says which port to change.
+  A setup an earlier version saved that way is kept as it is, and the status bar names it until you
+  change it. A rotator's port there is moved for you, since Settings has no control for it.
+- **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
+  opened no connection at all (your own rigctld not started yet, a port something else holds,
+  Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
+  tries again after 10 seconds, then less often, at most 5 minutes apart, and each time says what
+  that attempt found. A retry never cuts an over on the air: it waits for the over to end. Nor does
+  it turn transmit off in the digital modes any more, which a retry after a failed reconnect used to
+  do. NEEDS-BENCH: a radio keyed by VOX, its CAT not answering, transmitting FT8 across a retry.
 - **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
   sound card that failed, a headphone monitor that was held off and every other notice on that line
   all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
@@ -626,6 +653,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
   rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
   is on the line by then.
+- **A radio that does not answer a mode or frequency change is no longer reported as refusing it,
+  on native CI-V, OmniRig and Nexus's own FlexRadio client.** On a native CI-V Icom, a mode change
+  the radio did not answer (switched off, or a reply lost on the CI-V bus) read "rig rejected
+  PKTUSB"; after its 30 tries Nexus sent the plain mode to the silent radio as a fallback and said
+  "rig refused PKTUSB … select USB-D/DATA on the rig by hand". It now reads "no reply from the rig
+  over CAT — couldn't set PKTUSB (1/30)", gets the same 30 tries, then says "couldn't set PKTUSB:
+  no reply over CAT … gave up" and sends no fallback. A mode the radio answers NG to is still
+  reported as refused, and still gets its fallback. On OmniRig, while OmniRig says the radio is not
+  responding, a frequency change read "the radio refused … — it does not cover that frequency" and
+  a mode change "rig rejected"; both now say there was no reply from the rig, and the frequency
+  gets its three tries as before. Nothing is written to the radio either way, and OmniRig's other
+  states (not configured, switched off in OmniRig, port held by another program) still refuse. On
+  Nexus's own FlexRadio client, a frequency change the radio did not answer within half a second,
+  or sent after the connection to the radio ended, read "the radio refused …"; it now reads "… MHz
+  not sent — no reply from the rig", with the same three tries. In all three, the number of tries
+  and how long each one holds up the radio loop, and with it a transmission due to start, are
+  unchanged. NEEDS-BENCH: an Icom on native CI-V switched off during a mode change, a radio
+  switched off while OmniRig drives it, and a FLEX radio switched off or unplugged from the network
+  during a QSY should each say no reply from the rig, never that it refused.
+- **A filter width the radio does not answer is sent three times, then given up, as a frequency
+  is, on every connection.** When the radio answered everything but a filter-width change (the
+  scope's filter edge, or the bandwidth control), Nexus on Hamlib's rigctld and on native CI-V sent
+  it again on every pass of the radio loop for as long as the radio stayed quiet, each try holding
+  up the loop, and with it a transmission due to start, for as long as the reply could take. Nexus's
+  own FlexRadio client sent it once and dropped it without a word. Now each sends it three times,
+  then stops, shows the width the radio really has, and says so: "2400 Hz filter width not sent —
+  no reply from the rig after 3 tries; still 3000 Hz". Ask for the width again to retry. A width the
+  radio refuses is still dropped after one try. NEEDS-BENCH: a radio that does not answer a
+  filter-width change, on Hamlib, native CI-V and the FlexRadio client.
+- **When a mode change gets no answer, the advice fits the connection.** After its 30 unanswered
+  tries, the CAT status told every radio to raise the rig's CI-V baud and turn CI-V Transceive off,
+  on OmniRig and Nexus's own FlexRadio client too. That advice is now given only for CI-V (an Icom
+  on Nexus's own CI-V connection, or on Hamlib's rigctld), and it says to set the faster baud on
+  both the rig and Settings ▸ Radio ▸ Rig & CAT, since Nexus opens the port at that setting. Any
+  other radio on Hamlib is pointed at the port, baud and rig model; a network address at the radio
+  or the program serving its CAT there; OmniRig at the radio and OmniRig's own setup; the FlexRadio
+  client at the radio and its network; the Icom network connection at the network.
+- **An Icom that is switched off is no longer sent mode changes while CAT is down.** On Nexus's own
+  CI-V connection, a radio that stopped answering tripped CAT's circuit breaker as if it had
+  refused a reading, not as a dead link, so Nexus kept sending it the mode change it was waiting
+  on, on every pass of the radio loop, each holding up the loop for the CI-V deadline. Now, on any
+  connection, neither the mode nor the frequency goes out while the breaker is tripped on a radio
+  that is not answering, and both go out as soon as it answers again. NEEDS-BENCH: an Icom on
+  native CI-V switched off during a mode change should get no more mode commands while it is off,
+  and take the mode once it is back on.
+- **A FlexRadio that does not answer a mode, filter, power, AF, CW speed or noise switch, and a
+  radio that does not answer a split, are no longer reported as refusing it.** On Nexus's own
+  FlexRadio client each of these read as a refusal when the radio did not answer within half a
+  second: RF power said "couldn't set RF power — the rig didn't take it", and a mode change said
+  "rig refused". They now say there was no reply from the rig, and a mode change the radio never
+  answers gets no plain-mode fallback at its give-up. A split that goes unanswered (on native CI-V,
+  OmniRig, or a rigctld reporting the rig did not answer) now reads "no reply from the rig — split
+  not set; work the pile-up manually", not "rig rejected split". Each is tried as many times as
+  before, and an OmniRig server that does not answer Nexus at all is still read as a refusal.
+  NEEDS-BENCH: a FLEX radio unplugged from the network during a power or mode change, and a radio
+  switched off during a split, should each say no reply from the rig.
 - **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
   (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
   wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus

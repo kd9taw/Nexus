@@ -11,7 +11,9 @@
 //! answered wfview. That wfview itself behaves so is the model, not a measurement.
 //!
 //! Nexus is pointed at it with Rig Model NET rigctl and wfview's address. On this computer Nexus
-//! shares wfview's rigctld, whatever rigctld TCP Port says. On another computer Nexus talks to it
+//! shares wfview's rigctld, whatever rigctld TCP Port says, for the operated radio, a monitored one
+//! and a Remote selection alike, and while nothing answers there it starts nothing and waits for
+//! it; and no radio's rigctld may be given wfview's port. On another computer Nexus talks to it
 //! through a Hamlib rigctld of its own (`-m 2`, on rigctld TCP Port), which needs a Hamlib `rigctld`
 //! here, and this machine's own address on its network to stand in for the other computer.
 use super::*;
@@ -47,7 +49,16 @@ impl FakeWfview {
 
     /// [`Self::start`], listening on `ip` rather than loopback.
     fn start_on(ip: &str, powered: bool) -> Self {
-        let listener = std::net::TcpListener::bind((ip, 0)).unwrap();
+        Self::serving(std::net::TcpListener::bind((ip, 0)).unwrap(), powered)
+    }
+
+    /// [`Self::start`], listening at `addr`: a wfview started after Nexus, at the address Nexus was
+    /// already pointed at.
+    fn at(addr: &str, powered: bool) -> Self {
+        Self::serving(std::net::TcpListener::bind(addr).unwrap(), powered)
+    }
+
+    fn serving(listener: std::net::TcpListener, powered: bool) -> Self {
         let addr = listener.local_addr().unwrap().to_string();
         let radio = Arc::new(Mutex::new(Radio {
             hz: 14_074_000,
@@ -882,18 +893,18 @@ fn through_nexuss_own_rigctld_wfview_keys_only_while_it_says_the_radio_is_on() {
 
 /// ⭐ WHERE THE NETWORK ADDRESS HOLDS NO RIGCTLD NEXUS MAY SHARE, NEXUS STARTS ITS OWN, AS BEFORE.
 /// NET rigctl on this computer, rigctld TCP Port at a number of its own, and at the Network
-/// Address: nothing; a listener that says nothing; Thetis's CAT server, which is not a rigctld;
-/// wfview, opened by a dual-radio switch that reuses its own rigctld's port, which shares nothing
-/// it finds; wfview on the port this station's CAT broker is set to, where Nexus could be talking
-/// to itself; and wfview behind a Rig Model that is not NET rigctl (Hamlib's Dummy, which opens
-/// at once). Each starts Nexus's own rigctld, and none shares what is at the address.
+/// Address: Thetis's CAT server, which answers, but not as a rigctld; wfview, opened by a
+/// dual-radio switch that reuses its own rigctld's port, which shares nothing it finds; wfview on
+/// the port this station's CAT broker is set to, where Nexus could be talking to itself; and
+/// wfview behind a Rig Model that is not NET rigctl (Hamlib's Dummy, which opens at once). Each
+/// starts Nexus's own rigctld, and none shares what is at the address. Where nothing answers
+/// there, Nexus starts nothing at all (below).
 #[test]
 fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() {
     if !hamlib_rigctld_here() {
         return;
     }
     let wf = FakeWfview::start(true);
-    let quiet = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let net = |addr: &str| station(addr, free_port()).1;
     let mut broker = net(&wf.addr);
     broker.cat_broker = true;
@@ -901,16 +912,6 @@ fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() 
     let mut dummy = net(&wf.addr);
     dummy.rig_model = 1;
     let rows = [
-        (
-            "nothing listening",
-            net(&format!("127.0.0.1:{}", free_port())),
-            true,
-        ),
-        (
-            "a listener that says nothing",
-            net(&quiet.local_addr().unwrap().to_string()),
-            true,
-        ),
         (
             "Thetis's CAT server",
             net(&format!("127.0.0.1:{}", fake_thetis_cat_server())),
@@ -942,4 +943,611 @@ fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() 
         opened,
         rows.map(|(what, _, _)| (what, true, false)).to_vec()
     );
+}
+
+/// What the CAT status says while Nexus waits for the rigctld at `addr`.
+fn nothing_answering_at(addr: &str) -> String {
+    format!("Nothing is answering at {addr} — start wfview (or your rigctld)")
+}
+
+/// ⭐ WITH NOTHING ANSWERING AT THE NETWORK ADDRESS, NEXUS STARTS NOTHING AND SAYS SO. NET rigctl
+/// on this computer, rigctld TCP Port at a number of its own, and at the Network Address nothing
+/// listening, or a listener that says nothing: no rigctld of Nexus's own, and the CAT status names
+/// the address and what to start there. Nexus used to start Hamlib's rigctld in front of the
+/// address, so the start order decided the path.
+#[test]
+fn with_nothing_answering_at_the_network_address_nexus_starts_nothing_and_says_so() {
+    let quiet = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let rows = [
+        ("nothing listening", format!("127.0.0.1:{}", free_port())),
+        (
+            "a listener that says nothing",
+            quiet.local_addr().unwrap().to_string(),
+        ),
+    ];
+    let opened: Vec<_> = std::thread::scope(|scope| {
+        let opens: Vec<_> = rows
+            .iter()
+            .map(|(what, addr)| {
+                scope.spawn(move || {
+                    let (_rig, daemon, probe) = open_cat(
+                        &Transport::from_settings(&station(addr, free_port()).1),
+                        PttMode::Cat,
+                        true,
+                        None,
+                    );
+                    eprintln!("{what}: {}", probe.detail);
+                    (*what, daemon.is_some(), probe.ok, probe.detail)
+                })
+            })
+            .collect();
+        opens.into_iter().map(|o| o.join().unwrap()).collect()
+    });
+    assert_eq!(
+        opened,
+        rows.map(|(what, addr)| (what, false, Some(false), nothing_answering_at(&addr)))
+            .to_vec()
+    );
+}
+
+/// ⭐ STARTED BEFORE WFVIEW, NEXUS WAITS FOR IT AND THEN SHARES IT. The launch as `run_radio`
+/// makes it, NET rigctl on this computer with nothing at the Network Address yet: the open starts
+/// no rigctld in between and says what is missing; the loop asks the address again on the reopen
+/// backoff and says the same; once wfview is up, the next ask shares its rigctld directly, and
+/// `T 1` reaches it. Every line Nexus sends there is one wfview answers.
+#[test]
+fn started_before_wfview_nexus_waits_for_it_and_then_shares_it() {
+    let addr = format!("127.0.0.1:{}", free_port());
+    let (engine, settings) = station(&addr, free_port());
+    let applied = Transport::from_settings(&settings);
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    let launched = (daemon.is_some(), probe.ok, probe.detail.clone());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    // Ticks half a second apart by the loop's clock, each reopen the real one, until `done` or
+    // `ticks` run out.
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    run(&mut state, &mut rig, 4, &|_| false);
+    let waiting = (state.rigctld_proc.is_some(), state.cat_ok, said());
+    let wf = FakeWfview::at(&addr, true);
+    // The backoff is 10 s after the first ask again.
+    run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
+    let shared = (
+        state.rigctld_proc.is_some(),
+        state.cat_ok,
+        rig.control_addr().map(str::to_string),
+        said(),
+    );
+    let keyed = || wf.radio.lock().unwrap().ptt;
+    let ptt = [
+        rig.ptt(true).is_ok(),
+        keyed(),
+        rig.ptt(false).is_ok(),
+        keyed(),
+    ];
+    let keyed_with = wf.keyed_with();
+    let r = wf.radio.lock().unwrap();
+    assert_eq!(
+        (
+            launched,
+            waiting,
+            shared,
+            ptt,
+            keyed_with,
+            r.unanswered.clone(),
+            r.unmodelled.clone()
+        ),
+        (
+            (false, Some(false), nothing_answering_at(&addr)),
+            (false, Some(false), nothing_answering_at(&addr)),
+            (
+                false,
+                Some(true),
+                Some(addr.clone()),
+                format!("Sharing the rigctld at {addr} — Connected — 14.074 MHz"),
+            ),
+            [true, true, true, false],
+            ["T 0", "T 1", "T 0"].map(String::from).to_vec(),
+            vec![],
+            vec![],
+        )
+    );
+}
+
+/// Which launch opens the loop asks again on the reopen backoff: every one that failed and opened
+/// no link, whatever its station. A link that opened (its own reads trip the breaker when the radio
+/// stays silent), a verdict that is not a failure, and no verdict start as they did: no verdict
+/// until CAT reads down.
+#[test]
+fn the_loop_asks_again_after_every_launch_that_opened_no_link() {
+    let net = |addr: &str, rigctld_port: u16| station(addr, rigctld_port).1;
+    let mut broker = net("127.0.0.1:4532", 4534);
+    broker.cat_broker = true;
+    broker.cat_broker_port = 4532;
+    let mut dummy = net("127.0.0.1:4533", 4534);
+    dummy.rig_model = 1;
+    let here = net("127.0.0.1:4533", 4534);
+    let linked = || Rig::with_control(Some("127.0.0.1:4533".into()), PttMode::Cat);
+    let rows = [
+        (
+            "nothing at the address",
+            &here,
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
+        (
+            "shared, its first read failed",
+            &here,
+            linked(),
+            Some(false),
+            None,
+        ),
+        ("not a failure", &here, Rig::vox(), Some(true), None),
+        ("no verdict", &here, Rig::vox(), None, None),
+        (
+            "rigctld TCP Port's own number",
+            &net("127.0.0.1:4534", 4534),
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
+        (
+            "another computer",
+            &net("192.168.1.50:4533", 4534),
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
+        (
+            "the CAT broker's port",
+            &broker,
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
+        (
+            "Rig Model Dummy",
+            &dummy,
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
+    ];
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|(what, settings, rig, ok, _)| {
+            let mut state = RadioLoop::new(
+                Transport::from_settings(settings),
+                None,
+                &RadioConfig::default(),
+            );
+            state.after_the_launch_open(rig, *ok);
+            (*what, state.cat_ok)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        rows.iter()
+            .map(|(what, .., want)| (*what, *want))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Test CAT asks a waiting Network Address again at once, ahead of the backoff: pressed while the
+/// loop waits for the rigctld on this computer, it re-runs the open, which says what the address
+/// answered, rather than probe a link that never opened ("the control channel didn't open — check
+/// the rig model, serial port…", which is not this station's fault). The matching-port station,
+/// which waits under its own message, keeps Test CAT's probe as it was.
+#[test]
+fn test_cat_asks_a_waiting_network_address_again_at_once() {
+    let press = |addr: String, rigctld_port: u16| {
+        let (engine, settings) = station(&addr, rigctld_port);
+        let applied = Transport::from_settings(&settings);
+        let (mut rig, daemon, probe) = open_rig(&applied, true);
+        engine
+            .lock()
+            .unwrap()
+            .set_cat_status(probe.ok, probe.detail);
+        let cfg = RadioConfig {
+            rig_model: settings.rig_model,
+            ..RadioConfig::default()
+        };
+        let mut state = RadioLoop::new(applied, daemon, &cfg);
+        state.after_the_launch_open(&rig, probe.ok);
+        state.cat_reopen_at = 60_000.0; // the backoff is not due
+        engine.lock().unwrap().request_cat_reprobe();
+        let mut opens = 0;
+        let mut reopen_rig = |t: &Transport, coexist: bool| {
+            opens += 1;
+            open_rig(t, coexist)
+        };
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                &mut rig,
+                &no_sinks(),
+                1_000.0,
+                &mut mock_reopen_audio(),
+                &mut reopen_rig,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        (opens, said)
+    };
+    let waiting = format!("127.0.0.1:{}", free_port());
+    let matching = free_port();
+    assert_eq!(
+        [
+            press(waiting.clone(), free_port()),
+            press(format!("127.0.0.1:{matching}"), matching),
+        ],
+        [
+            (1, nothing_answering_at(&waiting)),
+            (
+                0,
+                "CAT rig configured, but the control channel didn't open — check the rig model, \
+                 serial port, and that the CAT daemon (rigctld) could start (or a port conflict)."
+                    .to_string()
+            ),
+        ]
+    );
+}
+
+/// A NET rigctl radio as Settings ▸ Radio keeps it: Network Address `addr`, rigctld TCP Port
+/// `rigctld_port`, PTT over CAT.
+fn net_rigctl_profile(id: u32, addr: &str, rigctld_port: u16) -> RadioProfile {
+    RadioProfile {
+        id,
+        name: format!("Radio {}", id + 1),
+        rig_model: 2,
+        rig_conn: "network".into(),
+        rig_addr: addr.into(),
+        rigctld_port,
+        ptt_method: "cat".into(),
+        ..RadioProfile::default()
+    }
+}
+
+/// A read-only open: the monitor's or the Remote selection's.
+type ReadOnlyOpen = fn(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>);
+
+/// ⭐ A MONITOR AND A REMOTE SELECTION SHARE WFVIEW'S RIGCTLD DIRECTLY, AS THE ACTIVE OPEN DOES.
+/// NET rigctl at the fake wfview on this computer, rigctld TCP Port a number of its own, and wfview
+/// saying the radio is off (its power cache 0, on which a Hamlib rigctld in between refuses). Each
+/// open starts no rigctld, dials wfview's address and reads the radio's dial. They used to start
+/// Hamlib's rigctld in front of it. Each value is (no daemon, the verdict, the address the rig
+/// dials, a dial read), then what wfview heard.
+#[test]
+fn a_monitor_and_a_remote_selection_share_wfviews_rigctld_directly() {
+    let opened = |open: ReadOnlyOpen| {
+        let wf = FakeWfview::start(false);
+        let t = Transport::from_profile(&net_rigctl_profile(1, &wf.addr, free_port()));
+        let (mut rig, daemon, ok) = open(&t);
+        let seen = (
+            daemon.is_none(),
+            ok,
+            rig.control_addr().map(str::to_string),
+            rig.read_freq().ok(),
+        );
+        drop(daemon);
+        let heard = wf.radio.lock().unwrap().heard.clone();
+        (seen, heard, wf.addr.clone())
+    };
+    let seen = [opened(open_monitor), opened(open_selection)];
+    let shared = seen.clone().map(|(_, _, addr)| {
+        (
+            (true, Some(true), Some(addr.clone()), Some(14_074_000)),
+            ["\\chk_vfo", "f", "m", "f"].map(String::from).to_vec(),
+            addr,
+        )
+    });
+    assert_eq!(seen, shared);
+}
+
+/// ⭐ WHERE NOTHING ANSWERS AT THE NETWORK ADDRESS, A MONITOR AND A REMOTE SELECTION START NOTHING.
+/// They used to start Hamlib's rigctld in front of the empty address. Now each open hands back no
+/// link and no daemon; the monitor pool asks again on its own backoff. Each value is (no daemon,
+/// the verdict, a link).
+#[test]
+fn a_monitor_and_a_remote_selection_start_nothing_where_nothing_answers() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let opened = |open: ReadOnlyOpen| {
+        let empty = format!("127.0.0.1:{}", free_port());
+        let (rig, daemon, ok) = open(&Transport::from_profile(&net_rigctl_profile(
+            1,
+            &empty,
+            free_port(),
+        )));
+        (daemon.is_none(), ok, rig.has_control())
+    };
+    assert_eq!(
+        [opened(open_monitor), opened(open_selection)],
+        [(true, Some(false), false); 2]
+    );
+}
+
+/// ⭐ A MONITOR NEVER TAKES NEXUS'S OWN CAT BROKER FOR A RADIO. A radio whose Network Address is the
+/// broker's port (a clash an older build could store; the status lane says it) is monitored with
+/// the broker's port in its transport, as the active radio's carries it, so the direct share
+/// leaves it alone; and the monitor starts nothing there. What answers on that port is Nexus,
+/// serving the active radio: here a rigctld on 7.200 MHz stands in for it, and the monitor used to
+/// read its dial as this radio's, through a Hamlib rigctld of its own. Each value is (the broker's
+/// port in the transport, the address the direct share would take), then (no daemon, the verdict,
+/// a dial read).
+#[test]
+fn a_monitor_never_takes_nexuss_own_cat_broker_for_a_radio() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let broker = FakeWfview::start(true);
+    broker.radio.lock().unwrap().hz = 7_200_000;
+    let mut s = Settings {
+        cat_broker: true,
+        cat_broker_port: broker.port(),
+        ..Settings::default()
+    };
+    s.ensure_radio_profiles();
+    s.radios
+        .push(net_rigctl_profile(1, &broker.addr, free_port()));
+    let (_, want) = monitor_want(&s);
+    let t = &want.iter().find(|(id, _)| *id == 1).unwrap().1;
+    let (mut rig, daemon, ok) = open_monitor(t);
+    let seen = (
+        (
+            t.broker_self_port,
+            net_rigctld_on_this_machine(t).map(str::to_string),
+        ),
+        (daemon.is_none(), ok, rig.read_freq().ok()),
+    );
+    drop(daemon);
+    assert_eq!(
+        seen,
+        ((Some(broker.port()), None), (true, Some(false), None))
+    );
+}
+
+/// ⭐ TWO MONITORED RADIOS NEVER CROSS THROUGH A NET RIGCTL ADDRESS. Radio 1 is Hamlib's Dummy (on
+/// 145.000 MHz), monitored through its own Nexus rigctld on port X; radio 2 is NET rigctl at
+/// wfview's address (14.074 MHz). Radio 2's Network Address typed as `127.0.0.1:X` used to be
+/// saved, and radio 2's monitor then read radio 1's dial. The edit is now refused, by name, and
+/// each monitor reads its own radio. Each value is (the edit, radio 1's dial, radio 2's dial).
+#[test]
+fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let wf = FakeWfview::start(true);
+    let x = free_port();
+    let engine = Engine::new("W9XYZ", "EN37", 0);
+    let engine = Arc::new(Mutex::new(engine));
+    {
+        let mut e = engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.cat_broker = false;
+        s.radios = vec![
+            RadioProfile {
+                id: 0,
+                name: "Radio 1".into(),
+                rig_model: 1,
+                rigctld_port: x,
+                ptt_method: "cat".into(),
+                ..RadioProfile::default()
+            },
+            net_rigctl_profile(1, &wf.addr, free_port()),
+        ];
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+        e.apply_restored_settings(s);
+    }
+    let edit = {
+        let mut e = engine.lock().unwrap();
+        let mut p = e.settings().radios[1].clone();
+        p.rig_addr = format!("127.0.0.1:{x}");
+        e.update_radio_profile(
+            1,
+            serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap(),
+        )
+    };
+    let monitor = |id: u32| {
+        let (_, want) = monitor_want(engine.lock().unwrap().settings());
+        let t = match want.iter().find(|(i, _)| *i == id) {
+            Some((_, t)) => t.clone(),
+            // The operated radio is not in the monitor's set; open it as the monitor would.
+            None => Transport::from_profile(&engine.lock().unwrap().settings().radios[id as usize]),
+        };
+        open_monitor(&t)
+    };
+    let (mut one, one_daemon, _) = monitor(0);
+    let (mut two, two_daemon, _) = monitor(1);
+    let seen = (edit, one.read_freq().ok(), two.read_freq().ok());
+    drop((one_daemon, two_daemon));
+    assert_eq!(
+        seen,
+        (
+            Err(format!(
+                "TCP port {x} is Radio 2's Network Address (127.0.0.1:{x}), and Radio 1's rigctld \
+                 TCP Port is {x} too: Radio 2 and Radio 1 could each read and command the other's \
+                 radio. Give Radio 1 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )),
+            Some(145_000_000),
+            Some(14_074_000),
+        )
+    );
+}
+
+/// ⭐ THE MANUAL'S NET RIGCTL STATION, STARTED BEFORE ITS RIGCTLD, SHARES IT ONCE IT IS UP. Network
+/// Address and rigctld TCP Port are the same number and nothing is there yet: the launch open says
+/// so ("…it just isn't running yet — start it…") and starts nothing. The loop used to wait there
+/// for a Test CAT press or a Save. It now asks again on the reopen backoff, with the same words,
+/// and once the rigctld is up it shares it. Each value is (daemon, the loop's verdict, the CAT
+/// status), and once shared the address the rig dials too.
+#[test]
+fn the_manual_net_rigctl_station_started_before_its_rigctld_shares_it_once_it_is_up() {
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let (engine, settings) = station(&addr, port);
+    let applied = Transport::from_settings(&settings);
+    let not_yet = cat_port_conflict(&applied).unwrap();
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    let launched = (daemon.is_some(), probe.ok, probe.detail.clone());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    run(&mut state, &mut rig, 4, &|_| false);
+    let waiting = (state.rigctld_proc.is_some(), state.cat_ok, said());
+    let _wf = FakeWfview::at(&addr, true);
+    run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
+    let shared = (
+        state.rigctld_proc.is_some(),
+        state.cat_ok,
+        rig.control_addr().map(str::to_string),
+        said(),
+    );
+    assert_eq!(
+        (launched, waiting, shared),
+        (
+            (false, Some(false), not_yet.clone()),
+            (false, Some(false), not_yet),
+            (
+                false,
+                Some(true),
+                Some(addr),
+                format!("Sharing the rigctld already on :{port} — Connected — 14.074 MHz"),
+            ),
+        )
+    );
+}
+
+/// ⭐ A MONITOR OF THE MANUAL'S NET RIGCTL STATION SHARES ITS RIGCTLD. Network Address and rigctld
+/// TCP Port are the same number, with the operator's own rigctld there (the fake wfview stands in
+/// for it). The operated radio has always shared it, through the coexist probe. A monitor of it
+/// started a rigctld of its own on that same port, which cannot bind while the operator's holds it,
+/// so the radio read as down. Each value is (no daemon, the verdict, the address the rig dials, a
+/// dial read).
+#[test]
+fn a_monitor_of_the_manual_net_rigctl_station_shares_its_rigctld() {
+    let wf = FakeWfview::start(true);
+    let t = Transport::from_profile(&net_rigctl_profile(1, &wf.addr, wf.port()));
+    let (mut rig, daemon, ok) = open_monitor(&t);
+    let seen = (
+        daemon.is_none(),
+        ok,
+        rig.control_addr().map(str::to_string),
+        rig.read_freq().ok(),
+    );
+    drop(daemon);
+    assert_eq!(
+        seen,
+        (true, Some(true), Some(wf.addr.clone()), Some(14_074_000))
+    );
+}
+
+/// Something that answers at a monitor's Network Address, but not as a rigctld (an SDR console's
+/// own CAT server here), takes the monitor's old path: a rigctld of its own in front of it, as the
+/// active open's fall-through does. Only a rigctld's answer is shared. The value is the
+/// connections that server took: the probe's, and that rigctld's.
+#[test]
+fn a_monitor_starts_its_own_rigctld_where_the_network_address_is_not_a_rigctld() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let taken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = taken.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let _ = s.write_all(THETIS_BANNER.as_bytes());
+                let _ = s.flush();
+                std::thread::sleep(Duration::from_millis(3000));
+            });
+        }
+    });
+    let (_rig, daemon, _) = open_monitor(&Transport::from_profile(&net_rigctl_profile(
+        1,
+        &addr,
+        free_port(),
+    )));
+    let taken_by = |n: usize| {
+        let until = Instant::now() + Duration::from_secs(3);
+        while taken.load(std::sync::atomic::Ordering::SeqCst) < n && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        taken.load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let seen = taken_by(2);
+    drop(daemon);
+    assert!(seen >= 2, "connections the server took: {seen}");
 }

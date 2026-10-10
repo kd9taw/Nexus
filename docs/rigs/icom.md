@@ -92,10 +92,15 @@ Nexus in different ways.
    computer directly, with no rigctld of its own in between.
 4. The audio travels through the bridge too: pick the bridge's audio devices in Nexus's audio settings.
 
-Start the bridge, with its rigctld server on, before Nexus connects to the radio. If nothing answers at the Network
-Address when Nexus connects, Nexus starts a rigctld of its own in front of it, as it does for a bridge on another
-computer, and with wfview that one refuses PTT whenever wfview reports the radio switched off. If **Share this radio
-with other programs** is on, its port must be a different number from the bridge's.
+The bridge and Nexus can start in either order. With the bridge on this computer and nothing answering at the Network
+Address yet, Nexus starts nothing in between: the CAT status reads "Nothing is answering at 127.0.0.1:4533 — start
+wfview (or your rigctld)", with your address, and Nexus asks again on its own (after 10 seconds, then less often, at
+most 5 minutes apart) and connects once the bridge answers. **Test CAT** asks again at once. For a bridge on another
+computer, Nexus talks to it through a rigctld of its own, and with wfview that one refuses PTT whenever wfview reports
+the radio switched off. If **Share this radio with other programs** is on, its port must be a different number from
+the bridge's. So must every other radio's **rigctld TCP Port**: two programs on one port would read and command each
+other's radio, so Save refuses it and names the radio to change. With the radio kept connected in the radio switcher
+while you operate another, or picked from the Remote, Nexus shares the bridge's rigctld directly too.
 
 **With RS-BA1:** it runs no rigctld server, so NET rigctl finds nothing to talk to. RS-BA1 gives the computer a virtual
 COM port instead, and Nexus uses that port the way it uses a USB cable:
