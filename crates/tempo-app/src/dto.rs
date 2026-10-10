@@ -4092,6 +4092,12 @@ pub struct AppSnapshot {
     /// always was.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tx_alarms: Vec<TxAlarm>,
+    /// The contest strip's contact in progress, the same in the main window and the contest
+    /// logger window while that window is open ([`crate::engine::contest_entry`]). `None`, and
+    /// then not sent at all, while it is closed, so every other snapshot is the one it always
+    /// was. For the screens on this computer: the Remote never receives this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contest_entry: Option<crate::engine::contest_entry::ContestEntryDto>,
 }
 
 /// A transmitter alarm, on screen until the operator dismisses it — see

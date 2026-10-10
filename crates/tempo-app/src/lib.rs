@@ -1021,6 +1021,8 @@ impl AppState {
             parsec_presence: None,
             // Filled by the engine while a transmitter alarm waits for the operator; none here.
             tx_alarms: Vec::new(),
+            // Filled by the engine while the contest logger window is open; none here.
+            contest_entry: None,
         }
     }
 
