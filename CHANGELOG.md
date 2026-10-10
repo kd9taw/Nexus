@@ -357,6 +357,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fake It split puts the dial back after an over, and the dial no longer walks off FT8.** With
+  Split Operation set to Fake It, Nexus moves the radio to its TX frequency for an over and back
+  after it. When the radio did not take the move back, Nexus never sent it again, and then took the
+  TX frequency it read for your own QSY, so the dial walked 500 Hz off the FT8 channel (the band
+  readout said "custom") and every later over walked with it. Nexus now moves the radio back 100 ms
+  after the unkey, as WSJT-X does, sends it again up to three times if the radio does not take it,
+  and never takes that over's TX frequency for a QSY. If the radio still has not gone back, the CAT
+  status says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300
+  MK2 in Fake It.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16

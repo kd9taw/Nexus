@@ -14,9 +14,12 @@
 //! reaches the radio on the tick that keys each over, on the tick that unkeys it, and while it
 //! receives, and where its VFOs are when the next over is due. The radios are an IC-7610 and an
 //! IC-7300 behind Nexus's own CI-V daemon (the register file of `FakeRadio`, which also keys here),
-//! and a rigctld that holds two VFOs and a split flag. They pin what the loop does today: on a radio
-//! that takes every command, and on one that does not take the dial write that puts the dial back
-//! after an over, which is the case WSJT-X's read-back rule exists for.
+//! and a rigctld that holds two VFOs and a split flag. They pin what the loop sends: on a radio
+//! that takes every command, and on radios that do not take the dial write that puts the dial back
+//! after a Fake It over (the write-back), which is the case WSJT-X's read-back rule exists for. The
+//! write-back goes out 100 ms after the unkey, as WSJT-X waits after PTT off
+//! (`TransceiverBase.cpp:142`), and again on the next ticks while the radio has not taken it, up to
+//! the dial's three tries.
 //!
 //! The loop's clock runs on the real clock's timebase, a little ahead of it, because an over's hold
 //! is measured on the real clock (`slot::slot_tx_phase`), as in `failed_unkey`.
@@ -40,12 +43,20 @@ const FT8_DIAL: u64 = 14_074_000;
 struct Over {
     /// The dial the engine held on the tick that keyed it (Hz).
     dial: u64,
+    /// When it keyed, in ms into its 15 s period.
+    key_ms: f64,
+    /// When it unkeyed, in ms into its 15 s period.
+    unkey_ms: f64,
     /// The writes on the tick that keyed it, up to and including the key.
     key: Vec<String>,
     /// The writes on the tick that unkeyed it, from the unkey on.
     unkey: Vec<String>,
     /// Every write while it received afterwards, up to the next over's tick.
     rx: Vec<String>,
+    /// When each of `rx` went out, in ms after the tick that unkeyed it.
+    rx_ms: Vec<f64>,
+    /// The dials the engine held while it received, each once, in order (Hz).
+    rx_dials: Vec<u64>,
 }
 
 /// The radio's side of the link, whichever it is.
@@ -119,7 +130,17 @@ impl<R: Radio> Bench<R> {
     }
 
     /// [`Self::overs`], calling `on_key` with each over's index on the tick that keyed it.
-    fn overs_with(&mut self, n: usize, mut on_key: impl FnMut(usize)) -> Vec<Over> {
+    fn overs_with(&mut self, n: usize, on_key: impl FnMut(usize)) -> Vec<Over> {
+        self.overs_hooked(n, on_key, |_, _| {})
+    }
+
+    /// [`Self::overs_with`], calling `before` with the loop's clock and state before every tick.
+    fn overs_hooked(
+        &mut self,
+        n: usize,
+        mut on_key: impl FnMut(usize),
+        mut before: impl FnMut(f64, &mut RadioLoop),
+    ) -> Vec<Over> {
         let sinks = Sinks {
             wsjtx: None,
             psk: None,
@@ -136,7 +157,9 @@ impl<R: Radio> Bench<R> {
         let mut overs: Vec<Over> = Vec::new();
         // Up to the tick before the over after the last one; bounded in case one never keys.
         let mut end = self.slot + 30_000.0 * (n as f64 + 1.0);
+        let mut unkeyed_at = 0.0;
         while self.t < end {
+            before(self.t, &mut self.state);
             let (before, was_keyed) = (self.radio.sent().len(), self.radio.keyed());
             let dial = self.engine.lock().unwrap().settings().dial_hz();
             self.state
@@ -169,6 +192,7 @@ impl<R: Radio> Bench<R> {
                     .map_or(writes.len(), |i| i + 1);
                 overs.push(Over {
                     dial,
+                    key_ms: self.t.rem_euclid(15_000.0),
                     key: writes[..at].to_vec(),
                     ..Over::default()
                 });
@@ -180,8 +204,16 @@ impl<R: Radio> Bench<R> {
                 if was_keyed && !keyed {
                     let at = writes.iter().position(|l| is_unkey(l)).unwrap_or(0);
                     over.unkey = writes[at..].to_vec();
+                    over.unkey_ms = self.t.rem_euclid(15_000.0);
+                    unkeyed_at = self.t;
                 } else if !keyed {
+                    over.rx_ms
+                        .extend(writes.iter().map(|_| self.t - unkeyed_at));
                     over.rx.extend(writes);
+                    let dial = self.dial();
+                    if over.rx_dials.last() != Some(&dial) {
+                        over.rx_dials.push(dial);
+                    }
                 }
             }
             self.t += 20.0;
@@ -412,8 +444,8 @@ fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_e
 }
 
 /// An IC-7300 on Nexus's CI-V daemon, Split Operation = Fake It: before every key `05` to the TX
-/// dial, after every unkey `05` back to the RX dial, on the same tick. The dial is put back exactly
-/// and nothing else is written.
+/// dial, and 100 ms after every unkey `05` back to the RX dial. The dial is put back exactly, the
+/// engine's dial never moves, and nothing else is written.
 #[test]
 fn an_ic7300_in_fake_it_moves_the_dial_for_each_over_and_puts_it_back_exactly() {
     let mut b = civ_bench(0x94, IcomModel::Ic7300, 3073, SplitMode::FakeIt, 1441.0);
@@ -422,34 +454,39 @@ fn an_ic7300_in_fake_it_moves_the_dial_for_each_over_and_puts_it_back_exactly() 
         eprintln!("IC-7300 Fake It over {}: {o:?}", i + 1);
         assert_eq!(o.dial, FT8_DIAL, "over {}", i + 1);
         assert_eq!(o.key, ["05 14073500", "1C 00 01"], "over {}", i + 1);
-        assert_eq!(o.unkey, ["1C 00 00", "05 14074000"], "over {}", i + 1);
-        assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
+        assert_eq!(o.unkey, ["1C 00 00"], "over {}", i + 1);
+        assert_eq!(o.rx, ["05 14074000"], "over {}", i + 1);
+        assert_eq!(o.rx_ms, [100.0], "over {}: after the unkey", i + 1);
+        assert_eq!(o.rx_dials, [FT8_DIAL], "over {}", i + 1);
     }
     assert_eq!(b.radio.regs.lock().unwrap().main_hz, FT8_DIAL);
     assert_eq!(b.dial(), FT8_DIAL);
 }
 
-/// TODAY'S BEHAVIOUR, PINNED: a Fake It restore the radio does not take is read back as the
-/// operator's own QSY, and every later over walks from it. The IC-7300 drops the one dial write
-/// that should put the dial back after the first over (`drop_dial_writes`). The loop never sends
-/// it again (`let _ = rig.set_freq(hz)` in the teardown); 750 ms later its dial read finds the radio
-/// on the TX dial and `Engine::observe_rig_freq` adopts it. The second over is then planned from
-/// 14.0735 and goes out 500 Hz lower in RF, the radio is left on 14.0735 (off the 20 m FT8 channel,
-/// which the band control shows as "custom"), and nothing ever brings it back. WSJT-X's Fake It
-/// reports a read-back equal to the TX dial as the RX dial (`EmulateSplitTransceiver.cpp:56-64`),
-/// so the same lost write leaves its dial, and the next over, where they were.
+/// A Fake It write-back the radio does not take is sent again on the next tick, and the dial stays
+/// on the channel. The IC-7300 says nothing to the one dial write that should put the dial back
+/// after the first over (`drop_dial_writes`). That write used to go out once and never again; 750
+/// ms later the dial read found the radio on the TX dial and `Engine::observe_rig_freq` took it for
+/// the operator's QSY, so the second over was planned from 14.0735 and went out 500 Hz lower in RF,
+/// and the radio was left off the 20 m FT8 channel for good (the band control read "custom").
+/// WSJT-X's Fake It reports a read-back equal to the TX dial as the RX dial
+/// (`EmulateSplitTransceiver.cpp:56-64`), so the same lost write leaves its dial, and the next
+/// over, where they were.
 #[test]
-fn a_fake_it_restore_the_radio_does_not_take_is_adopted_as_the_dial_and_the_next_over_walks() {
+fn a_fake_it_write_back_the_radio_does_not_take_is_sent_again_and_the_dial_stays() {
     let mut b = civ_bench(0x94, IcomModel::Ic7300, 3073, SplitMode::FakeIt, 1441.0);
     let regs = b.radio.regs.clone();
-    // Armed on the first over's key tick, after its `05`: the next dial write is its restore.
+    // Armed on the first over's key tick, after its `05`: the next dial write is its write-back.
     let overs = b.overs_with(3, |i| {
         if i == 0 {
             regs.lock().unwrap().drop_dial_writes = 1;
         }
     });
     for (i, o) in overs.iter().enumerate() {
-        eprintln!("IC-7300 Fake It, first restore lost, over {}: {o:?}", i + 1);
+        eprintln!(
+            "IC-7300 Fake It, first write-back lost, over {}: {o:?}",
+            i + 1
+        );
     }
     assert_eq!(
         regs.lock().unwrap().drop_dial_writes,
@@ -463,34 +500,39 @@ fn a_fake_it_restore_the_radio_does_not_take_is_adopted_as_the_dial_and_the_next
     );
     assert_eq!(
         overs[0].unkey,
-        ["1C 00 00", "05 14074000"],
-        "the restore went out, once"
+        ["1C 00 00"],
+        "nothing else on the unkey's tick"
     );
     assert_eq!(
         overs[0].rx,
-        Vec::<String>::new(),
-        "…and was never sent again"
+        ["05 14074000", "05 14074000"],
+        "the write-back the radio did not answer, and again"
     );
     assert_eq!(
-        overs[1].dial, 14_073_500,
-        "the TX dial the radio was left on became the dial"
+        overs[0].rx_ms,
+        [100.0, 120.0],
+        "…100 ms after the unkey, then on the next tick"
     );
-    assert_eq!(
-        overs[1].key,
-        ["05 14073000", "1C 00 01"],
-        "…and the next over walks from it"
-    );
-    assert_eq!(
-        overs[1].unkey,
-        ["1C 00 00", "05 14073500"],
-        "…and comes back to it"
-    );
-    assert_eq!(
-        overs[2].dial, 14_073_500,
-        "nothing brings the dial back to the channel"
-    );
-    assert_eq!(regs.lock().unwrap().main_hz, 14_073_500);
-    assert_eq!(b.dial(), 14_073_500);
+    for (i, o) in overs.iter().enumerate().skip(1) {
+        assert_eq!(o.dial, FT8_DIAL, "over {}: the dial", i + 1);
+        assert_eq!(
+            o.key,
+            ["05 14073500", "1C 00 01"],
+            "over {}: the same TX dial",
+            i + 1
+        );
+        assert_eq!(o.rx, ["05 14074000"], "over {}", i + 1);
+    }
+    for (i, o) in overs.iter().enumerate() {
+        assert_eq!(
+            o.rx_dials,
+            [FT8_DIAL],
+            "over {}: the engine's dial while receiving",
+            i + 1
+        );
+    }
+    assert_eq!(regs.lock().unwrap().main_hz, FT8_DIAL);
+    assert_eq!(b.dial(), FT8_DIAL);
 }
 
 // ── Hamlib rigctld ───────────────────────────────────────────────────────────────────────────
@@ -502,10 +544,21 @@ struct Vfos {
     b: u64,
     /// While above zero, a dial write (`F`) is answered `RPRT -9` and not taken.
     refuse_f: u32,
-    /// A radio that cannot take a dial write in the moment after an unkey: the first `F` after
-    /// every `T 0` is answered `RPRT -9` and not taken.
-    refuse_f_after_unkey: bool,
-    unkeyed: bool,
+    /// A radio that cannot take a dial write in the moment after an unkey: the first this many
+    /// `F` after every `T 0` are answered `RPRT -9` and not taken.
+    refuse_f_after_unkey: u32,
+    /// A read-back that lags a QSY: after the first `F` it takes after a `T 0`, the next dial
+    /// read (`f`) answers the dial it left. This many times.
+    lag_after_unkey: u32,
+    /// The operator's knob: the first `F` taken after a `T 0` is answered `RPRT 0`, and VFO A is
+    /// then turned to this dial.
+    knob_after_unkey: Option<u64>,
+    /// `F` since the last `T 0`, taken or not; `None` before the first.
+    since_unkey: Option<u32>,
+    /// What the next `f` answers in place of VFO A.
+    stale: Option<u64>,
+    /// Dial reads answered with anything but the 20 m FT8 dial.
+    reads_off_the_channel: u32,
 }
 
 struct Hamlib {
@@ -560,11 +613,18 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
             "T 0" => {
                 radio.keyed = false;
                 k.store(false, Ordering::SeqCst);
-                v.unkeyed = true;
+                v.since_unkey = Some(0);
                 ok()
             }
             "s" => Some(format!("{}\nVFOB\n", u8::from(v.split))),
             "i" => Some(format!("{}\n", v.b)),
+            "f" => {
+                let hz = v.stale.take().unwrap_or(radio.dial);
+                if hz != FT8_DIAL {
+                    v.reads_off_the_channel += 1;
+                }
+                Some(format!("{hz}\n"))
+            }
             _ if line.starts_with("S ") => {
                 v.split = line.split_whitespace().nth(1) == Some("1");
                 ok()
@@ -578,13 +638,22 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
                 v.refuse_f -= 1;
                 Some("RPRT -9\n".to_string())
             }
-            _ if line.starts_with("F ") && v.refuse_f_after_unkey && v.unkeyed => {
-                v.unkeyed = false;
-                Some("RPRT -9\n".to_string())
-            }
             _ if line.starts_with("F ") => {
-                v.unkeyed = false;
-                None
+                v.since_unkey = v.since_unkey.map(|n| n + 1);
+                match v.since_unkey {
+                    Some(n) if n <= v.refuse_f_after_unkey => Some("RPRT -9\n".to_string()),
+                    // The first dial write the radio takes after the unkey.
+                    Some(n) if n == v.refuse_f_after_unkey + 1 => {
+                        if v.lag_after_unkey > 0 {
+                            v.lag_after_unkey -= 1;
+                            v.stale = Some(radio.dial);
+                        }
+                        let knob = v.knob_after_unkey.take()?;
+                        radio.dial = knob;
+                        ok()
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         }
@@ -641,8 +710,8 @@ fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_after_every_o
     assert_eq!((v.split, v.b), (true, FT8_DIAL));
 }
 
-/// Through Hamlib, Split Operation = Fake It: `F` to the TX dial before every key and `F` back
-/// after every unkey; the dial is put back exactly.
+/// Through Hamlib, Split Operation = Fake It: `F` to the TX dial before every key, and `F` back
+/// 100 ms after every unkey; the dial is put back exactly.
 #[test]
 fn through_hamlib_fake_it_moves_the_dial_for_each_over_and_puts_it_back_exactly() {
     let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
@@ -651,71 +720,352 @@ fn through_hamlib_fake_it_moves_the_dial_for_each_over_and_puts_it_back_exactly(
         eprintln!("Hamlib Fake It over {}: {o:?}", i + 1);
         assert_eq!(o.dial, FT8_DIAL, "over {}", i + 1);
         assert_eq!(o.key, ["F 14073500", "T 1"], "over {}", i + 1);
-        assert_eq!(o.unkey, ["T 0", "F 14074000"], "over {}", i + 1);
-        assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
+        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
+        assert_eq!(o.rx, ["F 14074000"], "over {}", i + 1);
+        assert_eq!(o.rx_ms, [100.0], "over {}: after the unkey", i + 1);
+        assert_eq!(o.rx_dials, [FT8_DIAL], "over {}", i + 1);
     }
     assert_eq!(b.dial(), FT8_DIAL);
 }
 
-/// TODAY'S BEHAVIOUR, PINNED, through Hamlib: the Fake It restore refused once (`RPRT -9`, an
-/// Icom's NG) is never sent again, the dial read adopts the TX dial, and the next over walks.
+/// Through Hamlib: a Fake It write-back refused once (`RPRT -9`, an Icom's NG) is sent again on
+/// the next tick and taken, and the next over keys from the channel. It used to go out once; the
+/// dial read then took the TX dial for the dial, and every later over walked from it.
 #[test]
-fn through_hamlib_a_refused_fake_it_restore_is_adopted_and_the_next_over_walks() {
+fn through_hamlib_a_refused_fake_it_write_back_is_sent_again_and_the_dial_stays() {
     let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
     let vfos = b.radio.vfos.clone();
     let overs = b.overs_with(3, |i| {
         if i == 0 {
-            vfos.lock().unwrap().refuse_f = 1; // the restore, and only it
+            vfos.lock().unwrap().refuse_f = 1; // the write-back, and only it
         }
     });
     for (i, o) in overs.iter().enumerate() {
         eprintln!(
-            "Hamlib Fake It, first restore refused, over {}: {o:?}",
+            "Hamlib Fake It, first write-back refused, over {}: {o:?}",
             i + 1
         );
     }
     assert_eq!(
         vfos.lock().unwrap().refuse_f,
         0,
-        "premise: the restore was refused"
+        "premise: the write-back was refused"
     );
-    assert_eq!(
-        overs[0].unkey,
-        ["T 0", "F 14074000"],
-        "the restore went out, once"
-    );
+    assert_eq!(overs[0].unkey, ["T 0"]);
     assert_eq!(
         overs[0].rx,
-        Vec::<String>::new(),
-        "…and was never sent again"
+        ["F 14074000", "F 14074000"],
+        "refused, and sent again"
     );
-    assert_eq!(overs[1].dial, 14_073_500, "the TX dial became the dial");
-    assert_eq!(
-        overs[1].key,
-        ["F 14073000", "T 1"],
-        "…and the next over walks from it"
-    );
-    assert_eq!(overs[2].dial, 14_073_500, "nothing brings it back");
-    assert_eq!(b.dial(), 14_073_500);
+    assert_eq!(overs[0].rx_ms, [100.0, 120.0]);
+    for (i, o) in overs.iter().enumerate() {
+        assert_eq!(o.dial, FT8_DIAL, "over {}: the dial", i + 1);
+        assert_eq!(o.key, ["F 14073500", "T 1"], "over {}: the TX dial", i + 1);
+        assert_eq!(o.rx_dials, [FT8_DIAL], "over {}", i + 1);
+    }
+    assert_eq!(b.dial(), FT8_DIAL);
 }
 
-/// TODAY'S BEHAVIOUR, PINNED, through Hamlib: on a radio that refuses the Fake It restore every
-/// time (a dial write in the moment after the unkey), the station walks one step EVERY over: the
-/// TX dial and the dial move 500 Hz lower each cycle at 1441 Hz.
+/// Through Hamlib, on a radio that refuses every Fake It write-back (a dial write in the moment
+/// after the unkey, all three of the dial's tries): each over's write-back goes out three times,
+/// 100, 120 and 140 ms after the unkey, then the CAT status says the radio did not go back, and
+/// the TX dial is still never taken for the dial, though every dial read finds the radio on it.
+/// So every over keys the same TX dial from the channel. This station used to walk one step every
+/// over: the TX dial and the dial went 500 Hz lower each cycle at 1441 Hz.
 #[test]
-fn through_hamlib_a_radio_that_refuses_every_restore_walks_one_step_every_over() {
+fn through_hamlib_a_radio_that_refuses_every_write_back_gets_three_tries_and_never_walks() {
     let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
-    b.radio.vfos.lock().unwrap().refuse_f_after_unkey = true;
+    b.radio.vfos.lock().unwrap().refuse_f_after_unkey = 3;
     let overs = b.overs(3);
     for (i, o) in overs.iter().enumerate() {
         eprintln!(
-            "Hamlib Fake It, every restore refused, over {}: {o:?}",
+            "Hamlib Fake It, every write-back refused, over {}: {o:?}",
             i + 1
         );
     }
-    let dials: Vec<u64> = overs.iter().map(|o| o.dial).collect();
-    let keys: Vec<&str> = overs.iter().map(|o| o.key[0].as_str()).collect();
-    assert_eq!(dials, [14_074_000, 14_073_500, 14_073_000]);
-    assert_eq!(keys, ["F 14073500", "F 14073000", "F 14072500"]);
-    assert_eq!(b.dial(), 14_072_500);
+    for (i, o) in overs.iter().enumerate() {
+        let what = format!("over {}", i + 1);
+        assert_eq!(o.dial, FT8_DIAL, "{what}: the dial");
+        assert_eq!(o.key, ["F 14073500", "T 1"], "{what}: the TX dial");
+        assert_eq!(o.unkey, ["T 0"], "{what}");
+        assert_eq!(
+            o.rx, ["F 14074000"; 3],
+            "{what}: the write-back's three tries"
+        );
+        assert_eq!(o.rx_ms, [100.0, 120.0, 140.0], "{what}");
+        assert_eq!(o.rx_dials, [FT8_DIAL], "{what}: never taken for a QSY");
+    }
+    assert!(
+        b.radio.vfos.lock().unwrap().reads_off_the_channel > 0,
+        "premise: the dial reads found the radio on the TX dial"
+    );
+    assert_eq!(b.dial(), FT8_DIAL);
+    assert_eq!(
+        b.engine.lock().unwrap().snapshot().radio.cat_detail,
+        "Fake It split: the radio did not go back to 14.0740 MHz after the over (refused by the \
+         rig, 3 tries); it may still be on its TX frequency, 14.0735 MHz"
+    );
+}
+
+/// Through Hamlib, a radio that takes the write-back and then answers one dial read with the TX
+/// dial it left (a read-back that lags the QSY): that read is not the operator's QSY. It used to be
+/// taken for the dial until the next read 180 ms later put it back.
+#[test]
+fn through_hamlib_a_read_of_the_tx_dial_after_the_write_back_is_not_taken_for_a_qsy() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    b.radio.vfos.lock().unwrap().lag_after_unkey = 1;
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("Hamlib Fake It, one read lags, over {}: {o:?}", i + 1);
+    }
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!(
+        (v.lag_after_unkey, v.reads_off_the_channel),
+        (0, 1),
+        "premise: one read answered the TX dial"
+    );
+    drop(v);
+    for (i, o) in overs.iter().enumerate() {
+        assert_eq!(o.dial, FT8_DIAL, "over {}: the dial", i + 1);
+        assert_eq!(o.key, ["F 14073500", "T 1"], "over {}: the TX dial", i + 1);
+        assert_eq!(o.rx, ["F 14074000"], "over {}", i + 1);
+        assert_eq!(
+            o.rx_dials,
+            [FT8_DIAL],
+            "over {}: never taken for a QSY",
+            i + 1
+        );
+    }
+    assert_eq!(b.dial(), FT8_DIAL);
+}
+
+/// ⚠️ POSITIVE CONTROL: the operator's knob is still followed. The radio takes the first over's
+/// write-back, then the operator turns VFO A to 14.076 while it receives. That read is not the TX
+/// dial, so it is the operator's QSY, and the next overs key from 14.076.
+#[test]
+fn through_hamlib_a_knob_move_while_receiving_is_still_followed() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    b.radio.vfos.lock().unwrap().knob_after_unkey = Some(14_076_000);
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("Hamlib Fake It, knob to 14.076, over {}: {o:?}", i + 1);
+    }
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().knob_after_unkey,
+        None,
+        "premise: the knob moved"
+    );
+    assert_eq!(overs[0].rx, ["F 14074000"]);
+    assert_eq!(
+        overs[0].rx_dials,
+        [FT8_DIAL, 14_076_000],
+        "the knob's dial is the dial"
+    );
+    for (i, o) in overs.iter().enumerate().skip(1) {
+        assert_eq!(o.dial, 14_076_000, "over {}: the dial", i + 1);
+        assert_eq!(o.key, ["F 14075500", "T 1"], "over {}: the TX dial", i + 1);
+        assert_eq!(o.rx, ["F 14076000"], "over {}", i + 1);
+        assert_eq!(o.rx_dials, [14_076_000], "over {}", i + 1);
+    }
+    assert_eq!(b.dial(), 14_076_000);
+}
+
+/// Stop TX during a Fake It over, then Call CQ again at once with the TX offset moved inside
+/// 1500–2000 Hz, so the engine plans no shift and the new over keys in the same period (the snappy
+/// first over): the radio goes back on the RX dial before that over keys, so it goes out from the
+/// dial and not from the stopped over's TX dial. The write-back used to go out on the unkey's own
+/// tick, ahead of any key; it now waits 100 ms after the unkey, and a key inside that wait sends it
+/// first.
+#[test]
+fn through_hamlib_an_over_keyed_inside_the_write_back_wait_keys_from_the_rx_dial() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    let engine = b.engine.clone();
+    // On the first over's key tick: Stop TX, the offset into the window, Call CQ.
+    let overs = b.overs_with(1, |_| {
+        let mut e = engine.lock().unwrap();
+        e.halt_tx();
+        e.set_tx_offset(1700.0);
+        e.start_cq(None).expect("Call CQ again");
+    });
+    eprintln!("Hamlib Fake It, stopped and keyed again: {overs:?}");
+    let writes: Vec<String> = b
+        .radio
+        .sent()
+        .into_iter()
+        .filter(|l| !l.ends_with('?'))
+        .collect();
+    let from = writes
+        .iter()
+        .position(|l| l == "F 14073500")
+        .expect("the first over's TX dial");
+    assert_eq!(
+        writes[from..(from + 5).min(writes.len())],
+        ["F 14073500", "T 1", "T 0", "F 14074000", "T 1"],
+        "the stopped over, the write-back, then the new over from the RX dial: {writes:?}"
+    );
+    assert_eq!(b.dial(), FT8_DIAL);
+}
+
+/// A snappy first over started 3 s into its period (Stop TX before the period, Call CQ 3 s into
+/// it) moves the dial like any other, and its write-back goes out 100 ms after its unkey. The loop
+/// trims its head and its trailing silence, so it ends well before the period's boundary.
+#[test]
+fn through_hamlib_a_late_snappy_over_is_written_back_100_ms_after_its_unkey() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    let (engine, slot) = (b.engine.clone(), b.slot);
+    // Stop TX before the even period, so its boundary keys nothing; Call CQ 3 s into it.
+    let overs = b.overs_hooked(
+        2,
+        |_| {},
+        |t, _| {
+            if t == slot - 100.0 {
+                engine.lock().unwrap().halt_tx();
+            } else if t == slot + 3_000.0 {
+                engine.lock().unwrap().start_cq(None).expect("Call CQ");
+            }
+        },
+    );
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("Hamlib Fake It, late first over, over {}: {o:?}", i + 1);
+    }
+    assert_eq!(
+        overs[0].key_ms, 3_000.0,
+        "premise: the first over keyed 3 s into its period"
+    );
+    assert_eq!(
+        overs[0].key,
+        ["M PKTUSB -1", "F 14073500", "T 1"],
+        "premise: the late over, after the mode Call CQ asked for"
+    );
+    eprintln!("late over unkeyed {} ms into its period", overs[0].unkey_ms);
+    assert_eq!(overs[0].unkey, ["T 0"]);
+    assert_eq!(overs[0].rx, ["F 14074000"]);
+    assert_eq!(
+        overs[0].rx_ms,
+        [100.0],
+        "the write-back, 100 ms after the unkey"
+    );
+    assert_eq!(overs[1].key, ["F 14073500", "T 1"]);
+    assert_eq!(b.dial(), FT8_DIAL);
+}
+
+/// The operator retunes during a Fake It over (a band-plan pick of 14.076): the write-back after
+/// it would put the old RX dial back over that, so it is dropped, and the new dial alone goes out
+/// once the over ends.
+#[test]
+fn through_hamlib_a_retune_during_the_over_is_not_undone_by_the_write_back() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    let engine = b.engine.clone();
+    let overs = b.overs_with(1, |_| {
+        engine.lock().unwrap().set_frequency(14.076, "20m", "USB");
+    });
+    eprintln!("Hamlib Fake It, retuned during the over: {overs:?}");
+    let dial_writes: Vec<&str> = overs[0]
+        .rx
+        .iter()
+        .filter(|l| l.starts_with("F "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(overs[0].unkey, ["T 0"]);
+    assert_eq!(
+        dial_writes,
+        ["F 14076000"],
+        "the new dial, and not the old one written back"
+    );
+    assert_eq!(b.dial(), 14_076_000);
+}
+
+/// The same Stop TX and Call CQ, on a radio that refuses the first dial write after every unkey:
+/// the write-back sent ahead of the new over is refused, the new over keys anyway, and the next try
+/// waits for that over's unkey and then 100 ms, like the first. Three tries in all.
+#[test]
+fn through_hamlib_a_write_back_refused_ahead_of_a_key_waits_for_the_next_unkey() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+    b.radio.vfos.lock().unwrap().refuse_f_after_unkey = 1;
+    let engine = b.engine.clone();
+    let overs = b.overs_with(1, |_| {
+        let mut e = engine.lock().unwrap();
+        e.halt_tx();
+        e.set_tx_offset(1700.0);
+        e.start_cq(None).expect("Call CQ again");
+    });
+    eprintln!("Hamlib Fake It, refused ahead of the new over: {overs:?}");
+    let writes: Vec<String> = b
+        .radio
+        .sent()
+        .into_iter()
+        .filter(|l| !l.ends_with('?'))
+        .collect();
+    let from = writes
+        .iter()
+        .position(|l| l == "F 14073500")
+        .expect("the first over's TX dial");
+    let tries = writes[from..]
+        .iter()
+        .filter(|l| l.as_str() == "F 14074000")
+        .count();
+    assert_eq!(tries, 3, "the write-back's three tries: {writes:?}");
+    assert_eq!(
+        overs[0].unkey,
+        ["T 0"],
+        "the new over's unkey, alone on its tick"
+    );
+    // The mode Call CQ asked for, held while the over was on the air; then the write-back,
+    // refused and taken.
+    assert_eq!(overs[0].rx, ["M PKTUSB -1", "F 14074000", "F 14074000"]);
+    assert_eq!(overs[0].rx_ms, [20.0, 100.0, 120.0]);
+    assert_eq!(b.dial(), FT8_DIAL);
+}
+
+/// A write-back still waiting when this station's period begins goes out ahead of that period's
+/// key, so an over the engine does not shift (here the TX offset is 1700 Hz) goes out from the RX
+/// dial. The wait is set up as a carrier let go 40 ms before the period leaves it: the write-back
+/// due 100 ms later, the loop's own teardown starting the clock.
+#[test]
+fn through_hamlib_a_write_back_waiting_at_our_period_goes_ahead_of_its_key() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1700.0, None);
+    let slot = b.slot;
+    let overs = b.overs_hooked(
+        1,
+        |_| {},
+        |t, st| {
+            if t == slot - 40.0 {
+                st.fake_it_restore = Some(FT8_DIAL);
+            }
+        },
+    );
+    eprintln!("Hamlib Fake It, write-back waiting at our period: {overs:?}");
+    assert_eq!(overs[0].key_ms, 0.0, "premise: the over our period keys");
+    assert_eq!(
+        overs[0].key,
+        ["F 14074000", "T 1"],
+        "the write-back, then the unshifted over's key"
+    );
+    assert_eq!(b.dial(), FT8_DIAL);
+}
+
+/// The same wait set up 40 ms before the other station's period: no over keys at that boundary,
+/// so the write-back keeps its 100 ms and goes out 15.06 s into this station's period.
+#[test]
+fn through_hamlib_a_write_back_waiting_at_their_period_keeps_its_100_ms() {
+    let mut b = hamlib_bench(SplitMode::FakeIt, 1700.0, None);
+    let slot = b.slot;
+    let overs = b.overs_hooked(
+        1,
+        |_| {},
+        |t, st| {
+            if t == slot + 14_960.0 {
+                st.fake_it_restore = Some(FT8_DIAL);
+            }
+        },
+    );
+    eprintln!("Hamlib Fake It, write-back waiting at their period: {overs:?}");
+    assert_eq!(overs[0].key, ["T 1"], "premise: an unshifted over");
+    assert_eq!(overs[0].rx, ["F 14074000"]);
+    assert_eq!(
+        overs[0].unkey_ms + overs[0].rx_ms[0],
+        15_060.0,
+        "the write-back, 100 ms after the wait began"
+    );
+    assert_eq!(b.dial(), FT8_DIAL);
 }
