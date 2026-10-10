@@ -237,8 +237,9 @@ pub const POSITION_HELD: &str = "this Nexus joined as a club position that anoth
      position, on the host's Contest screen, beside the line in its club block that says it \
      turned this laptop away. If this laptop's settings came from another laptop, quit Nexus \
      here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus again: it makes a \
-     position of its own and rejoins by itself. Contacts you log stay in your own log and go up \
-     when this laptop rejoins.";
+     position of its own and rejoins by itself, with a contest log of its own that starts empty, \
+     so log nothing here until then. Contacts you log meanwhile stay in your own log, and go up \
+     if the host gives this laptop its position.";
 
 /// ⭐ **The sentence for a JOIN under a position a laptop with the same club key is connected as
 /// now** ([`ClubLog::connected`]): two laptops with one position id and one key are one laptop's
