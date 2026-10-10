@@ -24,6 +24,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, cleanup, fireEvent } from '@testing-library/react'
 import { ContestView } from './ContestView'
+import { fdSetUpload } from '../api'
+import { StreamInputDispatcher } from '../remote-native/stream-input'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, FdMergeReport } from '../types'
 
@@ -166,5 +168,71 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
     // By name: the Field Day mode switch shares the screen with it.
     expect(screen.getByRole('switch', { name: "Upload this session's merged contacts" })).toBeTruthy()
     expect(screen.getByRole('note').textContent).toContain('catch-up sweep')
+  })
+})
+
+// jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
+// under it.
+describe('a press through the Remote stream merges nothing', () => {
+  let under: Element | null = null
+  let stream: StreamInputDispatcher | null = null
+  beforeEach(() => {
+    under = null
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => under })
+    stream = new StreamInputDispatcher(window)
+  })
+  afterEach(() => {
+    stream?.dispose()
+    stream = null
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+  // Two ways through the stream: a click on the button, or Enter and then Space on it focused
+  // (each presses a button, as a browser does).
+  const through = {
+    pressed: async (el: HTMLElement) => {
+      under = el
+      for (const action of ['down', 'up']) {
+        await act(async () => {
+          stream!.handle({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+            modifiers: 0, pointerType: 'mouse', clicks: 1 })
+        })
+      }
+      await settle()
+    },
+    keyed: async (el: HTMLElement) => {
+      el.focus()
+      for (const [key, code] of [['Enter', 'Enter'], [' ', 'Space']]) {
+        await act(async () => {
+          stream!.handle({ type: 'key', action: 'down', key, code, modifiers: 0, repeat: false })
+          stream!.handle({ type: 'key', action: 'up', key, code, modifiers: 0, repeat: false })
+        })
+      }
+      await settle()
+    },
+  }
+
+  it.each(['pressed', 'keyed'] as const)('refuses Merge %s through the stream, and says why; CONTROL: at the station it merges', async (way) => {
+    fdMergeToGeneral.mockResolvedValue({ added: 3, already: 0, refused: 0, queued: false })
+    await show()
+    const merge = () => screen.getByRole('button', { name: /Merge 3 contacts/ })
+    await through[way](merge())
+    expect(fdMergeToGeneral).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Only at the station: a press through Remote merges no contact into the logbook.',
+    )
+    expect(screen.queryByRole('status'), 'no report: nothing was merged').toBeNull()
+    fireEvent.click(merge())
+    await settle()
+    expect(fdMergeToGeneral).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status').textContent).toContain('Added 3')
+    expect(screen.queryByRole('alert'), 'the report replaces the refusal').toBeNull()
+  })
+
+  it('CONTROL: the upload switch beside it still answers a press through the stream', async () => {
+    vi.mocked(fdSetUpload).mockClear()
+    await show()
+    await through.pressed(screen.getByRole('switch', { name: "Upload this session's merged contacts" }))
+    expect(vi.mocked(fdSetUpload)).toHaveBeenCalledWith(true, [])
+    expect(fdMergeToGeneral).not.toHaveBeenCalled()
   })
 })

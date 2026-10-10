@@ -154,7 +154,7 @@ describe('never from afar', () => {
 
 // jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
 // under it.
-describe('a press through the Remote stream removes nothing', () => {
+describe('a press through the Remote stream removes nothing, and restores nothing', () => {
   let under: Element | null = null
   let stream: StreamInputDispatcher | null = null
   beforeEach(() => {
@@ -170,6 +170,23 @@ describe('a press through the Remote stream removes nothing', () => {
   const pointer = (action: 'down' | 'up') =>
     ({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
       modifiers: 0, pointerType: 'mouse', clicks: 1 })
+  // Two ways through the stream: a click on the button, or Enter and then Space on it focused
+  // (each presses a button, as a browser does).
+  const through = {
+    pressed: async (el: Element) => {
+      under = el
+      await act(async () => { stream!.handle(pointer('down')); stream!.handle(pointer('up')) })
+    },
+    keyed: async (el: HTMLElement) => {
+      el.focus()
+      for (const [key, code] of [['Enter', 'Enter'], [' ', 'Space']]) {
+        await act(async () => {
+          stream!.handle({ type: 'key', action: 'down', key, code, modifiers: 0, repeat: false })
+          stream!.handle({ type: 'key', action: 'up', key, code, modifiers: 0, repeat: false })
+        })
+      }
+    },
+  }
 
   it('refuses Remove clicked twice through the stream, and says why; CONTROL: at the station it removes', async () => {
     api.contestRemoveLast.mockResolvedValue({
@@ -189,5 +206,21 @@ describe('a press through the Remote stream removes nothing', () => {
     await act(async () => { fireEvent.click(removeButtons()[0]) })
     await settle()
     expect(api.contestRemoveLast).toHaveBeenCalledWith('W9BBB', T0 + 60)
+  })
+
+  it.each(['pressed', 'keyed'] as const)('refuses Restore %s through the stream, and says why; CONTROL: at the station it restores', async (way) => {
+    api.contestRemoved.mockResolvedValue([KEPT])
+    api.contestRestore.mockResolvedValue({ outcome: 'restored', entry: KEPT })
+    await show(LOG)
+    await through[way](screen.getByText('Restore'))
+    await settle()
+    expect(api.contestRestore).not.toHaveBeenCalled()
+    expect(note()).toBe('Only at the station: a press through Remote restores no contact.')
+    expect(document.querySelector('.fd-removed-row')?.textContent, 'still listed').toContain('K9OLD')
+    await act(async () => { fireEvent.click(screen.getByText('Restore')) })
+    await settle()
+    expect(api.contestRestore).toHaveBeenCalledWith(7)
+    expect(note()).toBe('Restored K9OLD to the contest log.')
+    api.contestRemoved.mockResolvedValue([])
   })
 })

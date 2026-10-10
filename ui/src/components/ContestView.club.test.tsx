@@ -4,10 +4,11 @@
 // in the label), the band board with its 15 s stale marks and clock column, the
 // clock line from 2 s and its >30 s warning, and the host-only club export buttons. The whole section is gated on
 // `fieldDay.club` — a solo Field Day renders none of it (the control).
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, act, within } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, cleanup, act, within, fireEvent } from '@testing-library/react'
 import { ContestView, FdClubSection } from './ContestView'
-import { getSettings } from '../api'
+import { exportLog, fdClubExport, getSettings, saveTextToDownloads } from '../api'
+import { StreamInputDispatcher } from '../remote-native/stream-input'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FdClubStatus, FieldDayStatus } from '../types'
 
@@ -258,6 +259,88 @@ describe('ContestView club sync section', () => {
     render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
     expect(screen.getByText('Club Cabrillo')).toBeTruthy()
     expect(screen.getByText('Club ADIF')).toBeTruthy()
+  })
+})
+
+// The host's club files are written to the station's disk, so a press that comes through the
+// Remote stream writes neither. jsdom never lays out: `elementFromPoint` does not exist, so each
+// streamed press says what is under it.
+describe('a press through the Remote stream exports no club file', () => {
+  let under: Element | null = null
+  let stream: StreamInputDispatcher | null = null
+  beforeEach(() => {
+    under = null
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => under })
+    stream = new StreamInputDispatcher(window)
+    for (const f of [exportLog, fdClubExport, saveTextToDownloads]) vi.mocked(f).mockClear()
+  })
+  afterEach(() => {
+    stream?.dispose()
+    stream = null
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+  const settle = async () => {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+  }
+  // Two ways through the stream: a click on the button, or Enter and then Space on it focused
+  // (each presses a button, as a browser does).
+  const through = {
+    pressed: async (el: HTMLElement) => {
+      under = el
+      for (const action of ['down', 'up']) {
+        await act(async () => {
+          stream!.handle({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+            modifiers: 0, pointerType: 'mouse', clicks: 1 })
+        })
+      }
+      await settle()
+    },
+    keyed: async (el: HTMLElement) => {
+      el.focus()
+      for (const [key, code] of [['Enter', 'Enter'], [' ', 'Space']]) {
+        await act(async () => {
+          stream!.handle({ type: 'key', action: 'down', key, code, modifiers: 0, repeat: false })
+          stream!.handle({ type: 'key', action: 'up', key, code, modifiers: 0, repeat: false })
+        })
+      }
+      await settle()
+    },
+  }
+  const exportAlert = () => document.querySelector('.fd-export [role="alert"]')?.textContent ?? null
+  const host = async () => {
+    render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} onSetMode={() => {}} />)
+    await settle()
+  }
+
+  it.each([
+    ['Club Cabrillo', 'pressed', 'cabrillo', 'cbr'],
+    ['Club Cabrillo', 'keyed', 'cabrillo', 'cbr'],
+    ['Club ADIF', 'pressed', 'adif', 'adi'],
+    ['Club ADIF', 'keyed', 'adif', 'adi'],
+  ] as const)('refuses %s %s through the stream, and says why; CONTROL: at the station it exports', async (label, way, format, ext) => {
+    await host()
+    const button = () => screen.getByRole('button', { name: label })
+    await through[way](button())
+    expect(fdClubExport).not.toHaveBeenCalled()
+    expect(exportAlert()).toBe('Only at the station: a press through Remote exports no club log.')
+    expect(saveTextToDownloads, 'no file written').not.toHaveBeenCalled()
+    expect((button() as HTMLButtonElement).disabled, 'nothing started').toBe(false)
+    await act(async () => { fireEvent.click(button()) })
+    await settle()
+    expect(fdClubExport).toHaveBeenCalledWith(format)
+    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^fd-club-log-.*\\.${ext}$`)), '')
+    expect(exportAlert(), 'the export clears the refusal').toBeNull()
+  })
+
+  it('CONTROL: the station log’s own Export Cabrillo, pressed through the stream, still exports', async () => {
+    await host()
+    await through.pressed(screen.getByRole('button', { name: 'Export Cabrillo' }))
+    expect(exportLog).toHaveBeenCalledWith('cabrillo')
+    expect(saveTextToDownloads).toHaveBeenCalledTimes(1)
+    expect(fdClubExport).not.toHaveBeenCalled()
+    expect(exportAlert()).toBeNull()
   })
 })
 

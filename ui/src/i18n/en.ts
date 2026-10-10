@@ -3929,6 +3929,7 @@ export const EN = {
   'fieldDay.merge.already': '{{count}} already in your logbook',
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
+  'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
   'fieldDay.upload.label': 'Send merged contacts to my logbook',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4018,6 +4019,7 @@ export const EN = {
   'fieldDay.removed.clubSync': 'Club sync is on, so nothing was restored.',
   'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
+  'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
   'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',
@@ -4081,6 +4083,7 @@ export const EN = {
   'fieldDay.club.export.adif.label': 'Club ADIF',
   'fieldDay.club.export.adif.title': 'Export the merged club log as ADIF (deduped — the earliest contact wins)',
   'fieldDay.club.export.adif.titleKept': 'Export the merged club log as ADIF (every contact stays in: this contest wants repeats reported, and a repeat scores zero)',
+  'fieldDay.club.export.remote': 'Only at the station: a press through Remote exports no club log.',
   'fieldDay.club.popOut.label': '⧉ Pop out board',
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
