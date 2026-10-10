@@ -357,6 +357,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
+  new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
+  contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
+  the FETCH — check your Logbook API key" every five minutes, and the last pull time stopped
+  moving. A pull that finds nothing new is now a pull that worked. The same answer is read the same
+  way everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
+  confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
+  call QRZ holds no contact with, says QRZ has no matching record.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
