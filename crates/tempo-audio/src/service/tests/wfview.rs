@@ -1086,12 +1086,12 @@ fn started_before_wfview_nexus_waits_for_it_and_then_shares_it() {
     );
 }
 
-/// Which launch opens the loop asks again on the reopen backoff: the one that found nothing at a
-/// NET rigctl Network Address on this computer, and only that one. A link that opened, a verdict
-/// that is not a failure, and each station the direct share leaves alone start as they did: no
-/// verdict until CAT reads down.
+/// Which launch opens the loop asks again on the reopen backoff: every one that failed and opened
+/// no link, whatever its station. A link that opened (its own reads trip the breaker when the radio
+/// stays silent), a verdict that is not a failure, and no verdict start as they did: no verdict
+/// until CAT reads down.
 #[test]
-fn the_loop_asks_again_after_a_launch_that_found_nothing_at_the_network_address() {
+fn the_loop_asks_again_after_every_launch_that_opened_no_link() {
     let net = |addr: &str, rigctld_port: u16| station(addr, rigctld_port).1;
     let mut broker = net("127.0.0.1:4532", 4534);
     broker.cat_broker = true;
@@ -1122,23 +1122,29 @@ fn the_loop_asks_again_after_a_launch_that_found_nothing_at_the_network_address(
             &net("127.0.0.1:4534", 4534),
             Rig::vox(),
             Some(false),
-            None,
+            Some(false),
         ),
         (
             "another computer",
             &net("192.168.1.50:4533", 4534),
             Rig::vox(),
             Some(false),
-            None,
+            Some(false),
         ),
         (
             "the CAT broker's port",
             &broker,
             Rig::vox(),
             Some(false),
-            None,
+            Some(false),
         ),
-        ("Rig Model Dummy", &dummy, Rig::vox(), Some(false), None),
+        (
+            "Rig Model Dummy",
+            &dummy,
+            Rig::vox(),
+            Some(false),
+            Some(false),
+        ),
     ];
     let seen: Vec<_> = rows
         .iter()
@@ -1402,6 +1408,81 @@ fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
             )),
             Some(145_000_000),
             Some(14_074_000),
+        )
+    );
+}
+
+/// ⭐ THE MANUAL'S NET RIGCTL STATION, STARTED BEFORE ITS RIGCTLD, SHARES IT ONCE IT IS UP. Network
+/// Address and rigctld TCP Port are the same number and nothing is there yet: the launch open says
+/// so ("…it just isn't running yet — start it…") and starts nothing. The loop used to wait there
+/// for a Test CAT press or a Save. It now asks again on the reopen backoff, with the same words,
+/// and once the rigctld is up it shares it. Each value is (daemon, the loop's verdict, the CAT
+/// status), and once shared the address the rig dials too.
+#[test]
+fn the_manual_net_rigctl_station_started_before_its_rigctld_shares_it_once_it_is_up() {
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let (engine, settings) = station(&addr, port);
+    let applied = Transport::from_settings(&settings);
+    let not_yet = cat_port_conflict(&applied).unwrap();
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    let launched = (daemon.is_some(), probe.ok, probe.detail.clone());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    run(&mut state, &mut rig, 4, &|_| false);
+    let waiting = (state.rigctld_proc.is_some(), state.cat_ok, said());
+    let _wf = FakeWfview::at(&addr, true);
+    run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
+    let shared = (
+        state.rigctld_proc.is_some(),
+        state.cat_ok,
+        rig.control_addr().map(str::to_string),
+        said(),
+    );
+    assert_eq!(
+        (launched, waiting, shared),
+        (
+            (false, Some(false), not_yet.clone()),
+            (false, Some(false), not_yet),
+            (
+                false,
+                Some(true),
+                Some(addr),
+                format!("Sharing the rigctld already on :{port} — Connected — 14.074 MHz"),
+            ),
         )
     );
 }

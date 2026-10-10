@@ -346,6 +346,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on this computer. Save refuses a change that would put one there and says which port to change.
   A setup an earlier version saved that way is kept as it is, and the status bar names it until you
   change it. A rotator's port there is moved for you, since Settings has no control for it.
+- **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
+  opened no connection at all (your own rigctld not started yet, a port something else holds,
+  Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
+  tries again after 10 seconds, then less often, at most 5 minutes apart, and each time says what
+  that attempt found. A retry never cuts an over on the air: it waits for the over to end. Nor does
+  it turn transmit off in the digital modes any more, which a retry after a failed reconnect used to
+  do. NEEDS-BENCH: a radio keyed by VOX, its CAT not answering, transmitting FT8 across a retry.
 - **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
   sound card that failed, a headphone monitor that was held off and every other notice on that line
   all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
