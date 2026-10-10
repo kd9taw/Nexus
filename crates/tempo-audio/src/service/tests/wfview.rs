@@ -11,8 +11,9 @@
 //! answered wfview. That wfview itself behaves so is the model, not a measurement.
 //!
 //! Nexus is pointed at it with Rig Model NET rigctl and wfview's address. On this computer Nexus
-//! shares wfview's rigctld, whatever rigctld TCP Port says, and while nothing answers there it
-//! starts nothing and waits for it. On another computer Nexus talks to it
+//! shares wfview's rigctld, whatever rigctld TCP Port says, for the operated radio, a monitored one
+//! and a Remote selection alike, and while nothing answers there it starts nothing and waits for
+//! it; and no radio's rigctld may be given wfview's port. On another computer Nexus talks to it
 //! through a Hamlib rigctld of its own (`-m 2`, on rigctld TCP Port), which needs a Hamlib `rigctld`
 //! here, and this machine's own address on its network to stand in for the other computer.
 use super::*;
@@ -1219,4 +1220,253 @@ fn test_cat_asks_a_waiting_network_address_again_at_once() {
             ),
         ]
     );
+}
+
+/// A NET rigctl radio as Settings ▸ Radio keeps it: Network Address `addr`, rigctld TCP Port
+/// `rigctld_port`, PTT over CAT.
+fn net_rigctl_profile(id: u32, addr: &str, rigctld_port: u16) -> RadioProfile {
+    RadioProfile {
+        id,
+        name: format!("Radio {}", id + 1),
+        rig_model: 2,
+        rig_conn: "network".into(),
+        rig_addr: addr.into(),
+        rigctld_port,
+        ptt_method: "cat".into(),
+        ..RadioProfile::default()
+    }
+}
+
+/// A read-only open: the monitor's or the Remote selection's.
+type ReadOnlyOpen = fn(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>);
+
+/// ⭐ A MONITOR AND A REMOTE SELECTION SHARE WFVIEW'S RIGCTLD DIRECTLY, AS THE ACTIVE OPEN DOES.
+/// NET rigctl at the fake wfview on this computer, rigctld TCP Port a number of its own, and wfview
+/// saying the radio is off (its power cache 0, on which a Hamlib rigctld in between refuses). Each
+/// open starts no rigctld, dials wfview's address and reads the radio's dial. They used to start
+/// Hamlib's rigctld in front of it. Each value is (no daemon, the verdict, the address the rig
+/// dials, a dial read), then what wfview heard.
+#[test]
+fn a_monitor_and_a_remote_selection_share_wfviews_rigctld_directly() {
+    let opened = |open: ReadOnlyOpen| {
+        let wf = FakeWfview::start(false);
+        let t = Transport::from_profile(&net_rigctl_profile(1, &wf.addr, free_port()));
+        let (mut rig, daemon, ok) = open(&t);
+        let seen = (
+            daemon.is_none(),
+            ok,
+            rig.control_addr().map(str::to_string),
+            rig.read_freq().ok(),
+        );
+        drop(daemon);
+        let heard = wf.radio.lock().unwrap().heard.clone();
+        (seen, heard, wf.addr.clone())
+    };
+    let seen = [opened(open_monitor), opened(open_selection)];
+    let shared = seen.clone().map(|(_, _, addr)| {
+        (
+            (true, Some(true), Some(addr.clone()), Some(14_074_000)),
+            ["\\chk_vfo", "f", "m", "f"].map(String::from).to_vec(),
+            addr,
+        )
+    });
+    assert_eq!(seen, shared);
+}
+
+/// ⭐ WHERE NOTHING ANSWERS AT THE NETWORK ADDRESS, A MONITOR AND A REMOTE SELECTION START NOTHING.
+/// They used to start Hamlib's rigctld in front of the empty address. Now each open hands back no
+/// link and no daemon; the monitor pool asks again on its own backoff. Each value is (no daemon,
+/// the verdict, a link).
+#[test]
+fn a_monitor_and_a_remote_selection_start_nothing_where_nothing_answers() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let opened = |open: ReadOnlyOpen| {
+        let empty = format!("127.0.0.1:{}", free_port());
+        let (rig, daemon, ok) = open(&Transport::from_profile(&net_rigctl_profile(
+            1,
+            &empty,
+            free_port(),
+        )));
+        (daemon.is_none(), ok, rig.has_control())
+    };
+    assert_eq!(
+        [opened(open_monitor), opened(open_selection)],
+        [(true, Some(false), false); 2]
+    );
+}
+
+/// ⭐ A MONITOR NEVER TAKES NEXUS'S OWN CAT BROKER FOR A RADIO. A radio whose Network Address is the
+/// broker's port (a clash an older build could store; the status lane says it) is monitored with
+/// the broker's port in its transport, as the active radio's carries it, so the direct share
+/// leaves it alone; and the monitor starts nothing there. What answers on that port is Nexus,
+/// serving the active radio: here a rigctld on 7.200 MHz stands in for it, and the monitor used to
+/// read its dial as this radio's, through a Hamlib rigctld of its own. Each value is (the broker's
+/// port in the transport, the address the direct share would take), then (no daemon, the verdict,
+/// a dial read).
+#[test]
+fn a_monitor_never_takes_nexuss_own_cat_broker_for_a_radio() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let broker = FakeWfview::start(true);
+    broker.radio.lock().unwrap().hz = 7_200_000;
+    let mut s = Settings {
+        cat_broker: true,
+        cat_broker_port: broker.port(),
+        ..Settings::default()
+    };
+    s.ensure_radio_profiles();
+    s.radios
+        .push(net_rigctl_profile(1, &broker.addr, free_port()));
+    let (_, want) = monitor_want(&s);
+    let t = &want.iter().find(|(id, _)| *id == 1).unwrap().1;
+    let (mut rig, daemon, ok) = open_monitor(t);
+    let seen = (
+        (
+            t.broker_self_port,
+            net_rigctld_on_this_machine(t).map(str::to_string),
+        ),
+        (daemon.is_none(), ok, rig.read_freq().ok()),
+    );
+    drop(daemon);
+    assert_eq!(
+        seen,
+        ((Some(broker.port()), None), (true, Some(false), None))
+    );
+}
+
+/// ⭐ TWO MONITORED RADIOS NEVER CROSS THROUGH A NET RIGCTL ADDRESS. Radio 1 is Hamlib's Dummy (on
+/// 145.000 MHz), monitored through its own Nexus rigctld on port X; radio 2 is NET rigctl at
+/// wfview's address (14.074 MHz). Radio 2's Network Address typed as `127.0.0.1:X` used to be
+/// saved, and radio 2's monitor then read radio 1's dial. The edit is now refused, by name, and
+/// each monitor reads its own radio. Each value is (the edit, radio 1's dial, radio 2's dial).
+#[test]
+fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let wf = FakeWfview::start(true);
+    let x = free_port();
+    let engine = Engine::new("W9XYZ", "EN37", 0);
+    let engine = Arc::new(Mutex::new(engine));
+    {
+        let mut e = engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.cat_broker = false;
+        s.radios = vec![
+            RadioProfile {
+                id: 0,
+                name: "Radio 1".into(),
+                rig_model: 1,
+                rigctld_port: x,
+                ptt_method: "cat".into(),
+                ..RadioProfile::default()
+            },
+            net_rigctl_profile(1, &wf.addr, free_port()),
+        ];
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+        e.apply_restored_settings(s);
+    }
+    let edit = {
+        let mut e = engine.lock().unwrap();
+        let mut p = e.settings().radios[1].clone();
+        p.rig_addr = format!("127.0.0.1:{x}");
+        e.update_radio_profile(
+            1,
+            serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap(),
+        )
+    };
+    let monitor = |id: u32| {
+        let (_, want) = monitor_want(engine.lock().unwrap().settings());
+        let t = match want.iter().find(|(i, _)| *i == id) {
+            Some((_, t)) => t.clone(),
+            // The operated radio is not in the monitor's set; open it as the monitor would.
+            None => Transport::from_profile(&engine.lock().unwrap().settings().radios[id as usize]),
+        };
+        open_monitor(&t)
+    };
+    let (mut one, one_daemon, _) = monitor(0);
+    let (mut two, two_daemon, _) = monitor(1);
+    let seen = (edit, one.read_freq().ok(), two.read_freq().ok());
+    drop((one_daemon, two_daemon));
+    assert_eq!(
+        seen,
+        (
+            Err(format!(
+                "TCP port {x} is Radio 2's Network Address (127.0.0.1:{x}), and Radio 1's rigctld \
+                 TCP Port is {x} too: Radio 2 and Radio 1 could each read and command the other's \
+                 radio. Give Radio 1 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )),
+            Some(145_000_000),
+            Some(14_074_000),
+        )
+    );
+}
+
+/// ⭐ A MONITOR OF THE MANUAL'S NET RIGCTL STATION SHARES ITS RIGCTLD. Network Address and rigctld
+/// TCP Port are the same number, with the operator's own rigctld there (the fake wfview stands in
+/// for it). The operated radio has always shared it, through the coexist probe. A monitor of it
+/// started a rigctld of its own on that same port, which cannot bind while the operator's holds it,
+/// so the radio read as down. Each value is (no daemon, the verdict, the address the rig dials, a
+/// dial read).
+#[test]
+fn a_monitor_of_the_manual_net_rigctl_station_shares_its_rigctld() {
+    let wf = FakeWfview::start(true);
+    let t = Transport::from_profile(&net_rigctl_profile(1, &wf.addr, wf.port()));
+    let (mut rig, daemon, ok) = open_monitor(&t);
+    let seen = (
+        daemon.is_none(),
+        ok,
+        rig.control_addr().map(str::to_string),
+        rig.read_freq().ok(),
+    );
+    drop(daemon);
+    assert_eq!(
+        seen,
+        (true, Some(true), Some(wf.addr.clone()), Some(14_074_000))
+    );
+}
+
+/// Something that answers at a monitor's Network Address, but not as a rigctld (an SDR console's
+/// own CAT server here), takes the monitor's old path: a rigctld of its own in front of it, as the
+/// active open's fall-through does. Only a rigctld's answer is shared. The value is the
+/// connections that server took: the probe's, and that rigctld's.
+#[test]
+fn a_monitor_starts_its_own_rigctld_where_the_network_address_is_not_a_rigctld() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let taken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = taken.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let _ = s.write_all(THETIS_BANNER.as_bytes());
+                let _ = s.flush();
+                std::thread::sleep(Duration::from_millis(3000));
+            });
+        }
+    });
+    let (_rig, daemon, _) = open_monitor(&Transport::from_profile(&net_rigctl_profile(
+        1,
+        &addr,
+        free_port(),
+    )));
+    let taken_by = |n: usize| {
+        let until = Instant::now() + Duration::from_secs(3);
+        while taken.load(std::sync::atomic::Ordering::SeqCst) < n && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        taken.load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let seen = taken_by(2);
+    drop(daemon);
+    assert!(seen >= 2, "connections the server took: {seen}");
 }

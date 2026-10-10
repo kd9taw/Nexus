@@ -546,24 +546,6 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
     )
 }
 
-/// The port a `host:port` rig address names, plus its host. `None` when the address names no
-/// port. The last colon wins, so the bracketed IPv6 form (`[::1]:5002`) splits correctly.
-fn split_host_port(addr: &str) -> Option<(&str, u16)> {
-    let (host, port) = addr.trim().rsplit_once(':')?;
-    Some((host.trim(), port.trim().parse().ok()?))
-}
-
-/// Is this rig address on THIS machine — i.e. does its port live in the same space rigctld
-/// binds into? A remote rig reusing our rigctld's port number is no clash at all.
-fn host_is_this_machine(host: &str) -> bool {
-    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
-    h.is_empty()
-        || h.eq_ignore_ascii_case("localhost")
-        || h == "::1"
-        || h == "0.0.0.0"
-        || h.starts_with("127.")
-}
-
 /// The Network Address to share DIRECTLY: a NET rigctl radio's, when that address is on this
 /// machine (wfview's rigctld, or one the operator runs). `None` everywhere else.
 ///
@@ -584,14 +566,9 @@ fn host_is_this_machine(host: &str) -> bool {
 ///
 /// Pure config: the caller probes the address and shares only a rigctld's answer.
 fn net_rigctld_on_this_machine(t: &Transport) -> Option<&str> {
-    // 2 is Hamlib's NET rigctl.
-    if t.rig_model != 2 || !t.is_network() {
-        return None;
-    }
-    let (host, port) = split_host_port(&t.rig_addr)?;
-    let here =
-        host_is_this_machine(host) && port != t.rigctld_port && t.broker_self_port != Some(port);
-    here.then(|| t.rig_addr.trim())
+    let (addr, port) =
+        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)?;
+    (port != t.rigctld_port && t.broker_self_port != Some(port)).then_some(addr)
 }
 
 /// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
@@ -797,7 +774,7 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
 }
 
 use tempo_app::dto::{AudioErrorKind, FieldDayQso, SourceKind, Tier};
-use tempo_app::settings::{RadioProfile, Settings};
+use tempo_app::settings::{host_is_this_machine, split_host_port, RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
 // protocols that consume it (N1MM `<band>`, N3FJP `fldBand`), because the
@@ -2292,7 +2269,8 @@ fn drop_pooled(
 impl Transport {
     /// Build a transport from a SPECIFIC radio profile (not the flat active mirror) — to open a
     /// monitor connection to a non-active radio. Audio/monitor fields are zeroed (monitors are
-    /// CAT-only) and the broker port dropped (only the active radio talks to the broker).
+    /// CAT-only). The broker port is the station's, not the profile's: the caller sets it, as
+    /// [`monitor_want`] does.
     fn from_profile(p: &RadioProfile) -> Self {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
@@ -2339,9 +2317,10 @@ impl Transport {
     }
 }
 
-/// Open a READ-ONLY CAT connection for a monitor radio: launch its rigctld (or share an EXTERNAL one
-/// already on the port) and probe by reading the dial — but NEVER set freq/mode/PTT (a monitor must
-/// not disturb the radio the operator isn't focused on). Returns the Rig + daemon handle + cat_ok.
+/// Open a READ-ONLY CAT connection for a monitor radio: launch its rigctld (or share the rigctld a
+/// NET rigctl radio names on this computer) and probe by reading the dial — but NEVER set
+/// freq/mode/PTT (a monitor must not disturb the radio the operator isn't focused on). Returns the
+/// Rig + daemon handle + cat_ok.
 fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
     // `None`: a monitor is READ-ONLY and must never be able to key. Even for a shared-port
     // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
@@ -2367,7 +2346,33 @@ fn open_read_only(
     if !t.cat_available() {
         return (Rig::vox(), None, None);
     }
-    // A monitor ALWAYS spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
+    // NET rigctl to a rigctld on THIS computer: the one the operator runs there (wfview's, or their
+    // own) is this radio, as Nexus's port bookkeeping keeps every daemon of its own off that address
+    // (`tempo_app::settings::net_rigctl_port_here`). So it is shared directly, as the active open
+    // shares it, whatever rigctld TCP Port says, and never fronted by a rigctld of ours: where
+    // nothing answers yet, nothing is started, and the pool asks again on its backoff. Something
+    // that answers, but not as a rigctld, takes the spawn below, as the active open's does. Our own
+    // CAT broker's port is never this radio: what answers there is Nexus, serving the active radio.
+    if let Some((direct, port)) =
+        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)
+    {
+        // A network radio keys no line on a CAT port (`keys_on_the_cat_port`).
+        debug_assert!(ptt_line.is_none());
+        if t.broker_self_port == Some(port) {
+            return (Rig::vox(), None, Some(false));
+        }
+        match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+            crate::rigctld_server::PortReply::Rigctld => {
+                let mut rig = Rig::with_control(Some(direct.to_string()), PttMode::Vox);
+                rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                let ok = probe_cat(&mut rig, t).ok;
+                return (rig, None, ok);
+            }
+            crate::rigctld_server::PortReply::Silent => return (Rig::vox(), None, Some(false)),
+            crate::rigctld_server::PortReply::NotRigctld(_) => {}
+        }
+    }
+    // Every other monitor spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
     // port, because `probe_rigctld` can only tell that a RIGCTLD is listening (it reads the reply
     // now — see `classify_probe_reply`), never WHICH radio that daemon serves; coexisting onto
     // another radio's daemon is the dual-radio crossed-CAT bug (a monitor
@@ -2419,39 +2424,7 @@ fn monitor_loop(
             return;
         }
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
-        let (active, want): (u32, Vec<(u32, Transport)>) = {
-            let e = engine_lock(&engine);
-            let s = e.settings();
-            let active = s.active_radio;
-            // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
-            // real port on a real radio — so it has to honour them too. Without this, an
-            // operator who set a line HIGH to power a line-fed CI-V converter would keep that
-            // converter alive on the active radio and kill it on every monitored one.
-            let lines = crate::rigctld_proc::ControlLines {
-                rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
-                dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
-                // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
-                // inference and the silence every release up to now shipped.
-                handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
-                keying_line: crate::rigctld_proc::LineState::from_keying_setting(
-                    &s.cat_ptt_line_state,
-                ),
-                // Not an operator wish and never read from settings: `resolve_lines` sets it,
-                // and only where dropping the handshake is what makes `rts` above achievable.
-                handshake_none: false,
-            };
-            let want = s
-                .radios
-                .iter()
-                .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
-                .map(|p| {
-                    let mut t = Transport::from_profile(p);
-                    t.control_lines = lines;
-                    (p.id, t)
-                })
-                .collect();
-            (active, want)
-        };
+        let (active, want) = monitor_want(engine_lock(&engine).settings());
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
         if pending.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2462,6 +2435,41 @@ fn monitor_loop(
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+/// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
+/// radio with a rig model.
+fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
+    let active = s.active_radio;
+    // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
+    // real port on a real radio — so it has to honour them too. Without this, an
+    // operator who set a line HIGH to power a line-fed CI-V converter would keep that
+    // converter alive on the active radio and kill it on every monitored one.
+    let lines = crate::rigctld_proc::ControlLines {
+        rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
+        dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+        // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
+        // inference and the silence every release up to now shipped.
+        handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
+        keying_line: crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state),
+        // Not an operator wish and never read from settings: `resolve_lines` sets it,
+        // and only where dropping the handshake is what makes `rts` above achievable.
+        handshake_none: false,
+    };
+    let want = s
+        .radios
+        .iter()
+        .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
+        .map(|p| {
+            let mut t = Transport::from_profile(p);
+            t.control_lines = lines;
+            // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
+            // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
+            t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            (p.id, t)
+        })
+        .collect();
+    (active, want)
 }
 
 /// Bring the monitor pool in line with the desired `(id, transport)` set: open newly-wanted radios,
@@ -2820,15 +2828,19 @@ fn handoff_if_switched(
         return;
     }
     state.handoff_deferred = false;
-    // The monitor's `from_profile` conn transport zeroes the broker port; compare CAT fields against a
-    // broker-stripped `want` so the broker being on doesn't spuriously fail the match (FIX #3: adopt
-    // ONLY a conn whose CAT config matches what we now want — a stale conn is dropped + reopened).
-    let mut want_cat = want_active.clone();
-    want_cat.broker_self_port = None;
-    // …and the keying port: a monitor's transport never carries one (`Transport::from_profile`)
-    // and its rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
-    // `install_handoff_connection` carries the port into `applied`.
-    want_cat.ptt_serial_port = String::new();
+    // FIX #3: adopt ONLY a conn whose CAT config matches what we now want — a stale conn is dropped
+    // + reopened. Compared without our own CAT broker's port, which is the station's and not the
+    // radio's (a monitor's transport carries it to judge its own open, `monitor_want`), and without
+    // the keying port: a monitor's transport never carries one (`Transport::from_profile`) and its
+    // rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
+    // `install_handoff_connection` carries both into `applied`.
+    let cat_of = |t: &Transport| {
+        let mut t = t.clone();
+        t.broker_self_port = None;
+        t.ptt_serial_port = String::new();
+        t
+    };
+    let want_cat = cat_of(&want_active);
     // Adopt ONLY a LIVE conn: a monitor whose rigctld failed to bind / whose CAT probe never connected
     // is parked in the pool as a `Rig::vox()` (no control channel — see `open_monitor`). Adopting that
     // dead conn would install a control-less rig as the active radio, and because `state.applied` is
@@ -2848,7 +2860,7 @@ fn handoff_if_switched(
             // adopting it installs dead CAT as the active radio with `applied` matching, so
             // rig_differs would never rebuild it. Refuse → the fallback drops it + reopens fresh.
             && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-            && !c.transport.rig_differs(&want_cat)
+            && !cat_of(&c.transport).rig_differs(&want_cat)
     }) {
         let mut conn = p.remove(idx);
         // Preserve native unkey-on-adopt before installing the already-open
@@ -5875,11 +5887,10 @@ impl RadioLoop {
             daemon.set_scope_enabled(false);
         }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
-        // Monitor comparison strips the broker port. The active side retains
-        // it so ordinary reconciliation does not tear down either connection.
-        // The keying port likewise: a monitor never carries one, and the active
-        // side keys with the one the operator configured.
-        old_transport.broker_self_port = None;
+        // The demoted transport keeps the broker's port, which the monitor's own want carries
+        // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
+        // port: a monitor never carries one, and the active side keys with the one the operator
+        // configured.
         old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
         self.applied.broker_self_port = want_active.broker_self_port;
@@ -20206,8 +20217,8 @@ mod tests {
         let mut want = cat_transport(4533, None);
         want.ptt_method = "cat".into();
         want.broker_self_port = Some(4534);
-        let mut monitored = want.clone();
-        monitored.broker_self_port = None;
+        // A monitor's transport carries the broker's port, as `monitor_want` builds it.
+        let monitored = want.clone();
         let connection = MonitorConn {
             id: 1,
             transport: monitored,
@@ -20226,7 +20237,11 @@ mod tests {
         assert!(matches!(rig.ptt_mode(), PttMode::Cat));
         assert!(matches!(demoted.rig.ptt_mode(), PttMode::Vox));
         assert_eq!(demoted.id, 0);
-        assert_eq!(demoted.transport.broker_self_port, None);
+        assert_eq!(
+            demoted.transport.broker_self_port,
+            Some(4534),
+            "the demoted transport keeps the broker's port, as the monitor's want has it"
+        );
         assert_eq!(state.applied.broker_self_port, Some(4534));
         assert_eq!(state.remote_radio_id, Some(1));
         assert_eq!(state.meter_feed.smeter_db(), None);
@@ -22247,7 +22262,8 @@ mod tests {
 
     /// Two radios, each configured through the flat settings form (which edits whatever is
     /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
-    /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.
+    /// transports (`Transport::from_profile` and the broker's port, as `monitor_want` builds
+    /// them), and radio 0's transport as the loop applies it.
     fn two_radio_engine(
         radio0: impl FnOnce(&mut tempo_app::settings::Settings),
         radio1: impl FnOnce(&mut tempo_app::settings::Settings),
@@ -22266,7 +22282,11 @@ mod tests {
             e.apply_settings(s);
             e.set_active_radio(0);
             let monitor = |id: u32| {
-                Transport::from_profile(e.settings().radios.iter().find(|p| p.id == id).unwrap())
+                let s = e.settings();
+                let mut t = Transport::from_profile(s.radios.iter().find(|p| p.id == id).unwrap());
+                // As the monitor thread builds it, with the station's broker port (`monitor_want`).
+                t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+                t
             };
             (
                 r1,

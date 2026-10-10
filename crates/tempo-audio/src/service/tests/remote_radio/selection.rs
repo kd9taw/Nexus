@@ -41,8 +41,8 @@ fn configured_station(peer: &Peer, configure: impl FnOnce(&mut Settings)) -> Sta
 fn connection(s: &Station, peer: &Peer) -> MonitorConn {
     let e = engine_lock(&s.engine);
     let projection = e.preview_radio_selection(1).unwrap();
-    let mut transport = Transport::from_settings(projection.settings());
-    transport.broker_self_port = None;
+    // The monitor's view of the radio, the broker's port included (`monitor_want`).
+    let transport = Transport::from_settings(projection.settings());
     MonitorConn {
         id: 1,
         transport,
@@ -629,8 +629,7 @@ fn selection_worker_switches_back_using_the_original_connection_and_retires_old_
     {
         let e = engine_lock(&s.engine);
         let projection = e.preview_radio_selection(0).unwrap();
-        let mut want = Transport::from_settings(projection.settings());
-        want.broker_self_port = None;
+        let want = Transport::from_settings(projection.settings());
         let connections = pool.lock().unwrap();
         assert!(!connections[0].transport.rig_differs(&want));
         assert!(connections[0].rig.has_control());
@@ -2096,4 +2095,49 @@ fn a_selection_stops_the_outgoing_radios_voice_memory_after_its_unkey() {
             .any(|line| line == "\\stop_voice_mem"),
         "…and only that radio"
     );
+}
+
+/// ⭐ A REMOTE SELECTION KNOWS NEXUS'S OWN CAT BROKER, AS THE ACTIVE RADIO DOES. The incoming radio
+/// is NET rigctl at the broker's own port (a clash an older build could store; the status lane
+/// says it). The transport the selection hands its opener names that port as the broker's, so the
+/// direct share leaves it alone. It used to drop the broker's port, and the direct share took
+/// Nexus itself for the radio. The value is (the broker's port in the transport, the address the
+/// direct share would take).
+#[test]
+fn a_remote_selection_knows_nexuss_own_cat_broker() {
+    let _station = selection_test_lock();
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = configured_station(&outgoing, |settings| {
+        let broker = settings.cat_broker_port;
+        let radio = &mut settings.radios[1];
+        radio.rig_model = 2;
+        radio.rig_conn = "network".into();
+        radio.rig_addr = format!("127.0.0.1:{broker}");
+    });
+    let pool = Arc::new(MonitorConnections::new(vec![]));
+    let mut held = 0;
+    handoff_if_switched(
+        &s.engine,
+        &pool,
+        &mut s.rig,
+        &mut s.state,
+        &mut held,
+        &AtomicBool::new(false),
+    );
+    let handed = std::cell::RefCell::new(None);
+    apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |t| {
+            handed.replace(Some((
+                t.broker_self_port,
+                net_rigctld_on_this_machine(t).map(str::to_string),
+            )));
+            (Rig::rigctld(&incoming.address), None, Some(true))
+        },
+    );
+    let broker = engine_lock(&s.engine).settings().cat_broker_port;
+    assert_eq!(handed.into_inner(), Some((Some(broker), None)));
 }

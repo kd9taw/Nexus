@@ -192,7 +192,7 @@ fn native_amp_follow_off_during_poll_cancels_the_captured_follow_step() {
         .unwrap();
         patch.amp_follow_band = false;
         let radio = native.settings().active_radio;
-        native.update_radio_profile(radio, patch);
+        native.update_radio_profile(radio, patch).unwrap();
         assert!(!native.settings().active_profile().unwrap().amp_follow_band);
     }
     assert!(
@@ -222,7 +222,7 @@ fn native_amp_port_change_during_poll_cannot_operate_the_old_link() {
         .unwrap();
         patch.amp_port = "different-native-amp".into();
         let radio = native.settings().active_radio;
-        native.update_radio_profile(radio, patch);
+        native.update_radio_profile(radio, patch).unwrap();
         assert_eq!(
             native.settings().active_profile().unwrap().amp_port,
             "different-native-amp"
@@ -357,9 +357,9 @@ fn native_amp_retired_reads_stay_retired_after_the_same_port_is_restored() {
         .unwrap();
         let radio = native.settings().active_radio;
         patch.amp_port = "temporarily-different".into();
-        native.update_radio_profile(radio, patch.clone());
+        native.update_radio_profile(radio, patch.clone()).unwrap();
         patch.amp_port = "native-amp-test".into();
-        native.update_radio_profile(radio, patch);
+        native.update_radio_profile(radio, patch).unwrap();
         native.remote_observe_amp(Some(&read), dto.clone());
     }
     assert!(dispatch(&e, &dto, &read).is_empty());
