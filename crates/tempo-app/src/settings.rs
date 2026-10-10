@@ -4222,6 +4222,54 @@ pub fn net_rigctl_address_conflicts(
         .map(|c| c.message(radios))
 }
 
+/// The words that refuse radio `id`'s opener its NET rigctl Network Address on this computer, while
+/// one of Nexus's own listeners holds that port: another radio's CAT daemon, on its rigctld TCP
+/// Port, or the CAT broker (`broker`, while it is on). What answers there is that other radio, or
+/// Nexus itself, so a read would show the wrong dial and a key would key the wrong transmitter.
+/// `None` for every other address, and for every radio that is not NET rigctl on this computer.
+///
+/// [`port_clash_introduced`] keeps a save from making one. This is for a clash an older build
+/// stored, which nothing renumbers: the status lane says it ([`net_rigctl_address_conflicts`]),
+/// in these same words, and every opener refuses the address until the operator changes the port.
+///
+/// The radio is described as its opener dials it (`rig_model`, `rig_conn`, `rig_addr`): the
+/// operated radio's flat mirror, a monitored one's profile.
+///
+/// A holder is a radio Nexus runs a CAT daemon for: enabled, with a rig model or on OmniRig (which
+/// needs none). Not one: a radio with no CAT, whose rigctld TCP Port nothing binds, and a radio
+/// sharing its own rigctld at its own Network Address (the manual's NET rigctl station), for which
+/// Nexus starts nothing.
+pub fn net_rigctl_address_refusal(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+    id: u32,
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &str,
+) -> Option<String> {
+    let (_, port) = net_rigctl_addr_here(rig_model, rig_conn, rig_addr)?;
+    let holder = radios.iter().find(|p| {
+        p.enabled
+            && p.id != id
+            && (p.rig_model != 0 || rig_conn_is_omnirig(&p.rig_conn))
+            && p.rigctld_port == port
+            && net_rigctl_port_here(p) != Some(p.rigctld_port)
+    });
+    let holder = match holder {
+        Some(p) => PortHolder::Cat(p.id),
+        None if broker == Some(port) => PortHolder::Broker,
+        None => return None,
+    };
+    Some(
+        AddressClash {
+            port,
+            address_of: id,
+            holder,
+        }
+        .message(radios),
+    )
+}
+
 /// The first [`AddressClash`] a save makes, in words: one in `after` that `before` did not have.
 /// The save is refused with it. One already stored is not that save's to refuse: the operator may
 /// be saving something else entirely, and the status lane says it meanwhile.
@@ -12255,6 +12303,155 @@ mod tests {
                 "TCP port 4533 is claimed by both A's CAT and C's CAT — give them different ports"
                     .into()
             )
+        );
+    }
+
+    /// ⭐ AN OPENER IS REFUSED A NET RIGCTL ADDRESS ONE OF NEXUS'S OWN LISTENERS HOLDS, BY NAME. Each
+    /// row is a roster and the broker; the answer is what refuses the opener of the first radio, a
+    /// NET rigctl radio, its Network Address. Only the first four are refused: another radio's CAT
+    /// daemon on its port (in either spelling of this computer), one kept by OmniRig, which needs
+    /// no model, and the broker. A radio with no CAT or disabled starts no daemon there; the
+    /// manual's NET rigctl station shares its own; and an address on another computer, or with the
+    /// broker off, or on a port nothing of Nexus's takes, is the operator's.
+    #[test]
+    fn an_opener_is_refused_a_net_rigctl_address_nexus_holds_by_name() {
+        let b = |addr: &str, port: u16| net_rigctl(0, "IC-9700", addr, port);
+        let a = |port: u16| serial_rig(1, "FTDX10", port);
+        let mut a_off = a(4533);
+        a_off.enabled = false;
+        let mut a_vox = a(4533);
+        a_vox.rig_model = 0;
+        let a_omnirig = RadioProfile {
+            rig_model: 0,
+            rig_conn: "omnirig".into(),
+            serial_port: String::new(),
+            ..a(4533)
+        };
+        let mut dummy = b("127.0.0.1:4533", 4534);
+        dummy.rig_model = 1;
+        let rows: Vec<(&str, Vec<RadioProfile>, Option<u16>)> = vec![
+            (
+                "another radio's CAT on the address",
+                vec![b("127.0.0.1:4533", 4534), a(4533)],
+                Some(4532),
+            ),
+            (
+                "the address spelled localhost",
+                vec![b("localhost:4533", 4534), a(4533)],
+                None,
+            ),
+            (
+                "an OmniRig radio's port",
+                vec![b("127.0.0.1:4533", 4534), a_omnirig],
+                None,
+            ),
+            (
+                "the broker on the address",
+                vec![b("127.0.0.1:4532", 4534)],
+                Some(4532),
+            ),
+            (
+                "the broker off",
+                vec![b("127.0.0.1:4532", 4534), a(4535)],
+                None,
+            ),
+            (
+                "the other radio on another port",
+                vec![b("127.0.0.1:4533", 4534), a(4535)],
+                Some(4532),
+            ),
+            (
+                "an address on another computer",
+                vec![b("192.168.1.50:4533", 4534), a(4533)],
+                None,
+            ),
+            (
+                "the other radio disabled",
+                vec![b("127.0.0.1:4533", 4534), a_off],
+                None,
+            ),
+            (
+                "the other radio with no CAT",
+                vec![b("127.0.0.1:4533", 4534), a_vox],
+                None,
+            ),
+            (
+                "the radio's own rigctld TCP Port on its own address",
+                vec![b("127.0.0.1:4533", 4533)],
+                Some(4532),
+            ),
+            (
+                "another radio sharing its own rigctld there",
+                vec![
+                    b("127.0.0.1:4533", 4535),
+                    net_rigctl(1, "IC-705", "127.0.0.1:4533", 4533),
+                ],
+                None,
+            ),
+            ("not NET rigctl", vec![dummy, a(4533)], None),
+        ];
+        let said: Vec<(&str, Option<String>)> = rows
+            .iter()
+            .map(|(what, radios, broker)| {
+                let q = &radios[0];
+                (
+                    *what,
+                    net_rigctl_address_refusal(
+                        radios,
+                        *broker,
+                        q.id,
+                        q.rig_model,
+                        &q.rig_conn,
+                        &q.rig_addr,
+                    ),
+                )
+            })
+            .collect();
+        let cat = |addr: &str| {
+            format!(
+                "TCP port 4533 is IC-9700's Network Address ({addr}), and FTDX10's rigctld TCP \
+                 Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+                 radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )
+        };
+        let broker = "TCP port 4532 is IC-9700's Network Address (127.0.0.1:4532), and Share this \
+                      radio with other programs is on 4532 too: IC-9700 would read and command \
+                      Nexus itself instead of its own radio. Change the Share this radio port \
+                      (Settings ▸ Radio ▸ Transmit limits & sharing)."
+            .to_string();
+        assert_eq!(
+            said,
+            vec![
+                (
+                    "another radio's CAT on the address",
+                    Some(cat("127.0.0.1:4533"))
+                ),
+                ("the address spelled localhost", Some(cat("localhost:4533"))),
+                ("an OmniRig radio's port", Some(cat("127.0.0.1:4533"))),
+                ("the broker on the address", Some(broker)),
+                ("the broker off", None),
+                ("the other radio on another port", None),
+                ("an address on another computer", None),
+                ("the other radio disabled", None),
+                ("the other radio with no CAT", None),
+                ("the radio's own rigctld TCP Port on its own address", None),
+                ("another radio sharing its own rigctld there", None),
+                ("not NET rigctl", None),
+            ]
+        );
+        // The radio as its opener dials it: an operated radio whose flat form already names its
+        // own rigctld TCP Port as its address, before its profile does, is the manual's station on
+        // that port, never a radio holding its own address.
+        assert_eq!(
+            net_rigctl_address_refusal(
+                &[b("127.0.0.1:4540", 4533)],
+                None,
+                0,
+                2,
+                "network",
+                "127.0.0.1:4533"
+            ),
+            None
         );
     }
 

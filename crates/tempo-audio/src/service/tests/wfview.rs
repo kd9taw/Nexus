@@ -15,7 +15,10 @@
 //! and a Remote selection alike, and while nothing answers there it starts nothing and waits for
 //! it; and no radio's rigctld may be given wfview's port. On another computer Nexus talks to it
 //! through a Hamlib rigctld of its own (`-m 2`, on rigctld TCP Port), which needs a Hamlib `rigctld`
-//! here, and this machine's own address on its network to stand in for the other computer.
+//! here, and this machine's own address on its network to stand in for the other computer. An
+//! address on this computer whose port another radio's rigctld, or Nexus's own CAT broker, holds
+//! (a clash an older build could store) is refused by every opener, by name, until the port is
+//! changed.
 use super::*;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -34,6 +37,9 @@ struct Radio {
     /// Lines this fake does not model (wfview's extended replies, a read with an argument):
     /// none should arrive, and a scene asserts that.
     unmodelled: Vec<String>,
+    /// Connections accepted, and bytes read on them, whatever they said.
+    connections: usize,
+    bytes: usize,
 }
 
 struct FakeWfview {
@@ -68,11 +74,14 @@ impl FakeWfview {
             heard: Vec::new(),
             unanswered: Vec::new(),
             unmodelled: Vec::new(),
+            connections: 0,
+            bytes: 0,
         }));
         let shared = radio.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
+                shared.lock().unwrap().connections += 1;
                 let radio = shared.clone();
                 std::thread::spawn(move || serve(stream, &radio));
             }
@@ -104,6 +113,7 @@ fn serve(mut stream: TcpStream, radio: &Mutex<Radio>) {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
+        radio.lock().unwrap().bytes += n;
         pending.extend_from_slice(&buf[..n]);
         let Some(end) = pending.iter().rposition(|b| *b == b'\n') else {
             continue;
@@ -894,11 +904,12 @@ fn through_nexuss_own_rigctld_wfview_keys_only_while_it_says_the_radio_is_on() {
 /// ⭐ WHERE THE NETWORK ADDRESS HOLDS NO RIGCTLD NEXUS MAY SHARE, NEXUS STARTS ITS OWN, AS BEFORE.
 /// NET rigctl on this computer, rigctld TCP Port at a number of its own, and at the Network
 /// Address: Thetis's CAT server, which answers, but not as a rigctld; wfview, opened by a
-/// dual-radio switch that reuses its own rigctld's port, which shares nothing it finds; wfview on
-/// the port this station's CAT broker is set to, where Nexus could be talking to itself; and
-/// wfview behind a Rig Model that is not NET rigctl (Hamlib's Dummy, which opens at once). Each
-/// starts Nexus's own rigctld, and none shares what is at the address. Where nothing answers
-/// there, Nexus starts nothing at all (below).
+/// dual-radio switch that reuses its own rigctld's port, which shares nothing it finds; and wfview
+/// behind a Rig Model that is not NET rigctl (Hamlib's Dummy, which opens at once). Each starts
+/// Nexus's own rigctld, and none shares what is at the address. Where nothing answers there, Nexus
+/// starts nothing at all (below). On the port this station's CAT broker is set to, where Nexus
+/// would be talking to itself, the open is refused instead
+/// (`the_launch_never_relays_to_nexuss_own_cat_broker`).
 #[test]
 fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() {
     if !hamlib_rigctld_here() {
@@ -906,9 +917,6 @@ fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() 
     }
     let wf = FakeWfview::start(true);
     let net = |addr: &str| station(addr, free_port()).1;
-    let mut broker = net(&wf.addr);
-    broker.cat_broker = true;
-    broker.cat_broker_port = wf.port();
     let mut dummy = net(&wf.addr);
     dummy.rig_model = 1;
     let rows = [
@@ -918,7 +926,6 @@ fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() 
             true,
         ),
         ("a switch reusing its own port", net(&wf.addr), false),
-        ("the CAT broker's port", broker, true),
         ("Rig Model Dummy", dummy, true),
     ];
     let opened: Vec<_> = std::thread::scope(|scope| {
@@ -1550,4 +1557,588 @@ fn a_monitor_starts_its_own_rigctld_where_the_network_address_is_not_a_rigctld()
     let seen = taken_by(2);
     drop(daemon);
     assert!(seen >= 2, "connections the server took: {seen}");
+}
+
+/// The settings.json a v1.17.0 station has on disk, written by v1.17.0's own code and nothing else:
+/// its `Settings::save` after its own port repair (`ensure_distinct_radio_ports`), then its
+/// `Settings::load` and save once more, as its next launch does; a third pass moves no byte. The
+/// station before the repair: an IC-9700 through wfview's rigctld (NET rigctl at wfview's
+/// 127.0.0.1:4533, rigctld TCP Port 4534); an FTDX10 on a serial port, its rigctld TCP Port 4534
+/// too; and an FT-991A, the one operated, on the manual's external rigctld (127.0.0.1:4532,
+/// rigctld TCP Port 4532), with Share this radio on at its default 4532. The repair moved the
+/// FTDX10's rigctld onto 4533, the IC-9700's wfview address, and the FT-991A's onto 4535, leaving
+/// its address on the broker's port.
+const STORED_BY_1_17_0: &str =
+    include_str!("../../../tests/fixtures/settings-1.17.0-net-rigctl-clash.json");
+
+/// The station v1.17.0 stored, on this run's free ports, in a file where [`Settings::load`] read
+/// it. Each of the file's ports is swapped as a whole `"key": value` run, counted, so the file can
+/// never drift from what the scenes assume. `ftdx10` is the FTDX10's rigctld TCP Port, and so the
+/// IC-9700's address; `broker` is Share this radio's port, and so the FT-991A's address.
+struct Stored {
+    path: std::path::PathBuf,
+    bytes: String,
+    settings: Settings,
+}
+
+impl Stored {
+    fn on(ftdx10: u16, broker: u16) -> Self {
+        let mut bytes = STORED_BY_1_17_0.to_string();
+        let swaps = [
+            (
+                "\"rigAddr\": \"127.0.0.1:4533\"",
+                format!("\"rigAddr\": \"127.0.0.1:{ftdx10}\""),
+                1,
+            ),
+            (
+                "\"rigctldPort\": 4533,",
+                format!("\"rigctldPort\": {ftdx10},"),
+                1,
+            ),
+            (
+                "\"rigAddr\": \"127.0.0.1:4532\"",
+                format!("\"rigAddr\": \"127.0.0.1:{broker}\""),
+                2,
+            ),
+            (
+                "\"catBrokerPort\": 4532,",
+                format!("\"catBrokerPort\": {broker},"),
+                1,
+            ),
+            (
+                "\"rigctldPort\": 4534,",
+                format!("\"rigctldPort\": {},", free_port()),
+                1,
+            ),
+            (
+                "\"rigctldPort\": 4535,",
+                format!("\"rigctldPort\": {},", free_port()),
+                2,
+            ),
+        ];
+        for (from, to, n) in &swaps {
+            assert_eq!(bytes.matches(from).count(), *n, "{from} in the stored file");
+            bytes = bytes.replace(from, to);
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-stored-clash-{}-{ftdx10}-{broker}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let settings = Settings::load(&path);
+        Stored {
+            path,
+            bytes,
+            settings,
+        }
+    }
+
+    /// Is the file still, byte for byte, what was stored?
+    fn untouched(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|now| now == self.bytes)
+    }
+}
+
+impl Drop for Stored {
+    fn drop(&mut self) {
+        if let Some(dir) = self.path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// Save an edit of radio `id` through the per-radio save (`update_radio_profile`), as Settings ▸
+/// Radio's Save does for it.
+fn edit_radio(
+    engine: &Arc<Mutex<Engine>>,
+    id: u32,
+    change: impl FnOnce(&mut RadioProfile),
+) -> Result<(), String> {
+    let mut e = engine.lock().unwrap();
+    let mut p = e
+        .settings()
+        .radios
+        .iter()
+        .find(|p| p.id == id)
+        .unwrap()
+        .clone();
+    change(&mut p);
+    e.update_radio_profile(
+        id,
+        serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap(),
+    )
+}
+
+/// What a port heard: (connections, bytes).
+fn heard_at(fake: &FakeWfview) -> (usize, usize) {
+    let r = fake.radio.lock().unwrap();
+    (r.connections, r.bytes)
+}
+
+/// The status lane's words for a NET rigctl radio's address another radio's rigctld holds.
+fn held_by_a_radio(port: u16, radio: &str, holder: &str) -> String {
+    format!(
+        "TCP port {port} is {radio}'s Network Address (127.0.0.1:{port}), and {holder}'s rigctld \
+         TCP Port is {port} too: {radio} and {holder} could each read and command the other's \
+         radio. Give {holder} a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+    )
+}
+
+/// The status lane's words for a NET rigctl radio's address the CAT broker holds.
+fn held_by_the_broker(port: u16, radio: &str) -> String {
+    format!(
+        "TCP port {port} is {radio}'s Network Address (127.0.0.1:{port}), and Share this radio \
+         with other programs is on {port} too: {radio} would read and command Nexus itself instead \
+         of its own radio. Change the Share this radio port (Settings ▸ Radio ▸ Transmit limits & \
+         sharing)."
+    )
+}
+
+/// ⭐ A CLASH AN OLDER BUILD STORED IS NEVER READ BY A MONITOR OR A REMOTE SELECTION. The station
+/// v1.17.0 left, loaded as a launch loads it: the FTDX10's rigctld TCP Port is the IC-9700's wfview
+/// address, and a rigctld standing in for the FTDX10's holds that port, its radio on 7.074 MHz.
+/// The monitor's pill for the IC-9700 showed that dial, and a Remote selection of the IC-9700 read
+/// it: the FTDX10's radio, which either could also command. Both are refused now, nothing reaches
+/// that port (the pill keeps the dial the file stored, never read, and shows CAT down), the status
+/// lane names the clash, and the file is as stored. Each value is the pill (dial, CAT), the
+/// selection's open (verdict, a dial read), what the port heard (connections, bytes), the lane, and
+/// whether the file is untouched.
+#[test]
+fn a_clash_an_older_build_stored_is_never_read_by_a_monitor_or_a_remote_selection() {
+    let ftdx10 = FakeWfview::start(true);
+    ftdx10.radio.lock().unwrap().hz = 7_074_000;
+    let stored = Stored::on(ftdx10.port(), free_port());
+    let engine = Arc::new(Mutex::new(Engine::with_settings(stored.settings.clone())));
+    // The pill: the monitor pool opens the IC-9700 as it always does, then polls it.
+    let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+    let (active, mut want) = monitor_want(engine.lock().unwrap().settings());
+    want.retain(|(id, _)| *id == 0);
+    reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
+    poll_monitors(
+        &pool,
+        active,
+        &engine,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    let pill = engine
+        .lock()
+        .unwrap()
+        .snapshot()
+        .radios
+        .iter()
+        .find(|r| r.id == 0)
+        .map(|r| (r.dial_mhz, r.cat_ok));
+    // The Remote selection of the IC-9700: the transport it hands its opener.
+    let mut chosen = engine.lock().unwrap().settings().clone();
+    chosen.active_radio = 0;
+    chosen.sync_flat_from_active();
+    let (mut rig, daemon, ok) = open_selection(&Transport::from_settings(&chosen));
+    let selection = (ok, rig.read_freq().ok());
+    drop((rig, daemon, pool));
+    let port = ftdx10.port();
+    assert_eq!(
+        (
+            pill,
+            selection,
+            heard_at(&ftdx10),
+            engine.lock().unwrap().snapshot().radio.radio_config_warning,
+            stored.untouched(),
+        ),
+        (
+            Some((0.0, Some(false))),
+            (Some(false), None),
+            (0, 0),
+            Some(held_by_a_radio(port, "IC-9700", "FTDX10")),
+            true,
+        )
+    );
+}
+
+/// ⭐ THE OPERATED RADIO NEVER READS OR KEYS AN ADDRESS ANOTHER RADIO'S RIGCTLD HOLDS. The station
+/// v1.17.0 stored, the operator switched to the IC-9700. Its open shared the rigctld at its address,
+/// the FTDX10's ("Connected — 7.074 MHz"); its key keyed the FTDX10, and its unkey unkeyed the
+/// FTDX10 even while that radio was transmitting on its own. Now the open is refused by name, and
+/// nothing reaches that port: not its key and unkey, not the loop's own keying (a mic PTT, then a
+/// tune, each of which the loop did key). Once the operator gives the FTDX10 another rigctld TCP
+/// Port, the loop opens the address at once and shares what answers there now: wfview, the
+/// IC-9700 on 144.174 MHz. Each value is the open (no daemon, verdict, status, dial read), the
+/// FTDX10 keyed after the IC-9700's key, its unkey, and its unkey while the FTDX10 transmits, the
+/// loop keyed (mic PTT, tune), what the port heard, then the share (verdict, the address the rig
+/// dials, status).
+#[test]
+fn the_operated_radio_never_reads_or_keys_an_address_another_radios_rigctld_holds() {
+    let ftdx10 = FakeWfview::start(true);
+    ftdx10.radio.lock().unwrap().hz = 7_074_000;
+    let stored = Stored::on(ftdx10.port(), free_port());
+    let engine = Arc::new(Mutex::new(Engine::with_settings(stored.settings.clone())));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_active_radio(0);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(144.174, "2m", "USB");
+    }
+    let applied = Transport::from_settings(engine.lock().unwrap().settings());
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    let opened = (
+        daemon.is_none(),
+        probe.ok,
+        probe.detail.clone(),
+        probe.freq_hz,
+    );
+    let keyed = || ftdx10.radio.lock().unwrap().ptt;
+    let _ = rig.ptt(true);
+    let after_key = keyed();
+    let _ = rig.ptt(false);
+    let after_unkey = keyed();
+    // The FTDX10 transmitting, keyed by its own loop; then the IC-9700's unkey.
+    ftdx10.radio.lock().unwrap().ptt = true;
+    let _ = rig.ptt(false);
+    let its_own_over = keyed();
+    ftdx10.radio.lock().unwrap().ptt = false;
+    // The loop, launched as `run_radio` launches it.
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: applied.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+    }
+    run(&mut state, &mut rig, 4, &|_| false);
+    let mic = state.manual_ptt_applied;
+    engine.lock().unwrap().set_ptt(false);
+    run(&mut state, &mut rig, 4, &|_| false);
+    engine.lock().unwrap().set_tune(true);
+    run(&mut state, &mut rig, 4, &|_| false);
+    let tune = state.tuning_keyed;
+    engine.lock().unwrap().set_tune(false);
+    run(&mut state, &mut rig, 4, &|_| false);
+    let heard = heard_at(&ftdx10);
+    let untouched = stored.untouched();
+    // wfview now has the port, serving the IC-9700, and the FTDX10 gets a port of its own.
+    ftdx10.radio.lock().unwrap().hz = 144_174_000;
+    let moved = edit_radio(&engine, 1, |p| p.rigctld_port = free_port());
+    run(&mut state, &mut rig, 10, &|s| s.cat_ok == Some(true));
+    let shared = (state.cat_ok, rig.control_addr().map(str::to_string), said());
+    let port = ftdx10.port();
+    let addr = format!("127.0.0.1:{port}");
+    assert_eq!(
+        (
+            opened,
+            [after_key, after_unkey, its_own_over],
+            (mic, tune),
+            heard,
+            untouched,
+            moved,
+            shared,
+        ),
+        (
+            (
+                true,
+                Some(false),
+                held_by_a_radio(port, "IC-9700", "FTDX10"),
+                None,
+            ),
+            [false, false, true],
+            (true, true),
+            (0, 0),
+            true,
+            Ok(()),
+            (
+                Some(true),
+                Some(addr.clone()),
+                format!("Sharing the rigctld at {addr} — Connected — 144.174 MHz"),
+            ),
+        )
+    );
+}
+
+/// The FT-991A's launch, as `run_radio` makes it from the station's settings: the configuration
+/// it is handed (as the app builds it) and the transport it opens. Each value is (a daemon
+/// started, the verdict, the status, a dial read, a key and unkey taken).
+fn launched(s: &Settings) -> (bool, Option<bool>, String, Option<u64>, [bool; 2]) {
+    let cfg = RadioConfig {
+        ptt_method: s.ptt_method.clone(),
+        rig_model: s.rig_model,
+        rig_conn: s.rig_conn.clone(),
+        rig_addr: s.rig_addr.clone(),
+        rigctld_port: s.rigctld_port,
+        radio_id: s.active_radio,
+        broker_self_port: s.cat_broker.then_some(s.cat_broker_port),
+        ..RadioConfig::default()
+    };
+    let (mut rig, daemon, probe) = open_rig(&launch_transport(&cfg, s), true);
+    let keys = [rig.ptt(true).is_ok(), rig.ptt(false).is_ok()];
+    let seen = (
+        daemon.is_some(),
+        probe.ok,
+        probe.detail,
+        rig.read_freq().ok(),
+        keys,
+    );
+    drop(daemon);
+    seen
+}
+
+/// ⭐ THE LAUNCH NEVER RELAYS TO NEXUS'S OWN CAT BROKER. The station v1.17.0 stored, launched: the
+/// FT-991A operated, its Network Address the broker's port. A rigctld on 7.200 MHz stands in for
+/// the broker, which serves whichever radio is operated. The launch started Hamlib's rigctld in
+/// front of that address and read the broker's dial as the FT-991A's ("Connected — 7.200 MHz (via
+/// Hamlib rigctld)"): Nexus talking to itself, its key relayed there too. Now the launch is refused
+/// by name before anything is started, and nothing reaches the broker's port. With the Share this
+/// radio port changed, or the broker off, the same launch shares the rigctld at the address (the
+/// operator's own, on 14.074 MHz here). Each value is a launch (a daemon started, the verdict, the
+/// status, a dial read, a key and unkey taken), then what the broker's port heard and whether the
+/// file is untouched.
+#[test]
+fn the_launch_never_relays_to_nexuss_own_cat_broker() {
+    if !hamlib_rigctld_here() {
+        return;
+    }
+    let broker = FakeWfview::start(true);
+    broker.radio.lock().unwrap().hz = 7_200_000;
+    let stored = Stored::on(free_port(), broker.port());
+    let refused = launched(&stored.settings);
+    let heard = heard_at(&broker);
+    let untouched = stored.untouched();
+    // The operator's own rigctld at the address, once the broker is not.
+    broker.radio.lock().unwrap().hz = 14_074_000;
+    let mut moved = stored.settings.clone();
+    moved.cat_broker_port = free_port();
+    let mut off = stored.settings.clone();
+    off.cat_broker = false;
+    let shared = [launched(&moved), launched(&off)];
+    let port = broker.port();
+    let share = (
+        false,
+        Some(true),
+        format!("Sharing the rigctld at 127.0.0.1:{port} — Connected — 14.074 MHz"),
+        Some(14_074_000),
+        [true, true],
+    );
+    assert_eq!(
+        (refused, heard, untouched, shared),
+        (
+            (
+                false,
+                Some(false),
+                held_by_the_broker(port, "FT-991A"),
+                None,
+                [true, true],
+            ),
+            (0, 0),
+            true,
+            [share.clone(), share],
+        )
+    );
+}
+
+/// Test CAT on a radio whose address is refused says why again, as its open did: it re-runs the
+/// open, which starts and reads nothing, rather than probe a link that never opened ("the control
+/// channel didn't open — check the rig model, serial port…", not this station's fault). The
+/// address is the CAT broker's port, with a rigctld standing in for the broker. The value is
+/// (opens, the CAT status, what the broker's port heard).
+#[test]
+fn test_cat_on_a_refused_address_says_why_again() {
+    let broker = FakeWfview::start(true);
+    let (engine, _) = station(&broker.addr, free_port());
+    let settings = {
+        let mut e = engine.lock().unwrap();
+        e.rename_radio(0, "IC-9700");
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = broker.port();
+        e.apply_settings(s);
+        e.settings().clone()
+    };
+    let applied = Transport::from_settings(&settings);
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    state.cat_reopen_at = 60_000.0; // the backoff is not due
+    engine.lock().unwrap().request_cat_reprobe();
+    let mut opens = 0;
+    let mut reopen_rig = |t: &Transport, coexist: bool| {
+        opens += 1;
+        open_rig(t, coexist)
+    };
+    state
+        .step(
+            &engine,
+            &mut MockBackend::new(),
+            &mut rig,
+            &no_sinks(),
+            1_000.0,
+            &mut mock_reopen_audio(),
+            &mut reopen_rig,
+            &mut StationSinks::new(),
+        )
+        .unwrap();
+    let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    assert_eq!(
+        (opens, said, heard_at(&broker)),
+        (1, held_by_the_broker(broker.port(), "IC-9700"), (0, 0))
+    );
+}
+
+/// ⭐ A REFUSAL NEVER LEAVES THE RADIO KEYED. The operated radio shares wfview's rigctld, and the
+/// operator holds the mic PTT. A second radio has no CAT yet, and an older build left its rigctld
+/// TCP Port on wfview's port: nothing binds it there, so nothing is refused. The operator picks
+/// that radio's model, so Nexus would start a daemon on wfview's port, and the operated radio's
+/// address is refused from then on. The loop lets go of wfview as every rebuild does, unkeying it
+/// first, and the refused open sends nothing after. Each value is (wfview keyed, a link, the CAT
+/// status) while held before the save and after it, then the save and the lines wfview heard after
+/// the refusal.
+#[test]
+fn a_refusal_never_leaves_the_radio_keyed() {
+    let wf = FakeWfview::start(true);
+    let (engine, _) = station(&wf.addr, free_port());
+    {
+        let mut e = engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.radios[0].name = "IC-9700".into();
+        s.radios.push(RadioProfile {
+            id: 1,
+            name: "FTDX10".into(),
+            serial_port: "COM3".into(),
+            rigctld_port: wf.port(),
+            ..RadioProfile::default()
+        });
+        e.apply_restored_settings(s);
+    }
+    let applied = Transport::from_settings(engine.lock().unwrap().settings());
+    let (mut rig, daemon, probe) = open_rig(&applied, true);
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: applied.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(applied, daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run = |state: &mut RadioLoop, rig: &mut Rig, ticks: usize| {
+        for _ in 0..ticks {
+            now += 500.0;
+            let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &no_sinks(),
+                    now,
+                    &mut mock_reopen_audio(),
+                    &mut reopen_rig,
+                    &mut StationSinks::new(),
+                )
+                .unwrap();
+        }
+    };
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+    }
+    run(&mut state, &mut rig, 4);
+    let keyed = || wf.radio.lock().unwrap().ptt;
+    let held = (keyed(), rig.has_control(), said());
+    let saved = edit_radio(&engine, 1, |p| p.rig_model = 1042);
+    run(&mut state, &mut rig, 4);
+    let after = (keyed(), rig.has_control(), said());
+    let heard_then = wf.radio.lock().unwrap().heard.len();
+    run(&mut state, &mut rig, 8);
+    let heard_since = wf.radio.lock().unwrap().heard.len() - heard_then;
+    let port = wf.port();
+    assert_eq!(
+        (held, saved, after, heard_since),
+        (
+            (
+                true,
+                true,
+                "CAT confirmed — rig accepted a command".to_string()
+            ),
+            Ok(()),
+            (false, false, held_by_a_radio(port, "IC-9700", "FTDX10")),
+            0,
+        )
+    );
+}
+
+/// A refused radio is opened again when the port is changed, never for a rename. The refusal's
+/// words name radios, so it is compared as refused or not, as a radio's own name is never compared.
+/// The values are (the words changed, the transport changed) with the FTDX10 renamed while the
+/// IC-9700's address is refused, then (no refusal, the transport changed) with its port changed.
+#[test]
+fn a_refused_radio_is_reopened_for_a_port_change_never_for_a_rename() {
+    let stored = Stored::on(free_port(), free_port());
+    let mut s = stored.settings.clone();
+    s.active_radio = 0;
+    s.sync_flat_from_active();
+    let refused = Transport::from_settings(&s);
+    let mut renamed = s.clone();
+    renamed.radios[1].name = "FTDX10 shack".into();
+    let renamed = Transport::from_settings(&renamed);
+    let mut moved = s.clone();
+    moved.radios[1].rigctld_port = free_port();
+    let moved = Transport::from_settings(&moved);
+    assert_eq!(
+        (
+            (
+                refused.address_refusal.0 != renamed.address_refusal.0,
+                refused.rig_differs(&renamed),
+            ),
+            (
+                moved.address_refusal.0.is_none(),
+                refused.rig_differs(&moved)
+            ),
+        ),
+        ((true, false), (true, true))
+    );
 }
