@@ -2475,6 +2475,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         onCallChange={setWorkedCall}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
+        onSnap={onSnap}
         fieldDay={fieldDay}
         active={active}
         fdMode="PH"

@@ -950,6 +950,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ? { call: settledHisCall, rst: null, name: null, confirmed: true }
                 : null
             }
+            onSnap={onSnap}
             // FIELD DAY IS ALL-MODE, AND PSK IS ITS DIGITAL CLASS. Non-null `snap.fieldDay`
             // (the master switch, gated engine-side on `fd_active`) flips this strip to the
             // class/section exchange and routes the contact to the CONTEST log — the only

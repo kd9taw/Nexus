@@ -6,6 +6,7 @@
 // `i18n/index.ts`.
 
 import { useContext, useEffect, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 import {
   isOnAir,
   type AppSnapshot,
@@ -15,7 +16,7 @@ import {
   type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -55,6 +56,7 @@ import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
+import { useStationControl } from '../stationAccess'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -371,6 +373,9 @@ interface Props {
   onEntryCall?: (call: string) => void
   /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
   onReset?: () => void
+  /** Called with the snapshot `clearHuntTarget` answered, after the hunt tag's ✕ ended the hunt, so
+   *  the host applies it at once: the POTA / SOTA view's `onSnap`, for its banner ✕. */
+  onSnap?: (s: AppSnapshot) => void
   /**
    * When provided, the component enters FD mode: contacts go to contestLogManual()
    * instead of the general logbook.  The `mode` prop determines the FD mode
@@ -475,6 +480,7 @@ export function LogEntry({
   onCallChange,
   onEntryCall,
   onReset,
+  onSnap,
   fieldDay,
   fdMode,
   fdSubmode,
@@ -486,6 +492,11 @@ export function LogEntry({
   sharedEntry,
 }: Props) {
   const remoteMode = remote != null
+  // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
+  // which mounts this strip under `StationControlContext` false, with its adapter in the cockpits
+  // and without it in Satellites: it cannot make that call, and a browser ends a hunt on the POTA /
+  // SOTA view, by its own change under the logging grant (RemoteOta).
+  const stationOwn = useStationControl()
   // A station that offers its park directory answers the two offline park reads below.
   // Nothing else here reaches the station, and the live POTA lookup never does.
   const remoteParks = useContext(RemoteCollectionsContext)?.client.supports(PARKS_COMMAND) ?? false
@@ -2522,6 +2533,21 @@ export function LogEntry({
   // dedicated park field). Matches when the logged call equals the hunted activator.
   const hunt = snap.hunt
   const huntMatches = hunt != null && logCall.trim() !== '' && sameCall(hunt.call, logCall)
+  // THE TAG'S ✕ ENDS THE HUNT with the POTA/SOTA view's banner ✕'s own call, and hands up the
+  // snapshot it answered as that view does, so the tag and the banner go at once. Clear could not
+  // end it: the hunt's prefill fills the emptied strip again. The park that prefill put in the box
+  // goes with the hunt; a park the operator typed, or one a Needed click handed over (`workPark`,
+  // the prefill's source for its own station), is theirs and stays.
+  const endHunt = async (huntRef: string) => {
+    const s = await withErrorToast(() => clearHuntTarget(), t('ota.hunt.clearFailed'))
+    if (!s) return
+    const handed = workPark != null && sameCall(workPark.call, logCall.trim())
+    if (parkForRef.current.hunt && !handed && parkBoxRef.current.trim().toUpperCase() === huntRef.trim().toUpperCase()) {
+      setPark('')
+    }
+    onSnap?.(s)
+    pushToast(t('ota.hunt.cleared'), 'info', 2000)
+  }
 
   return (
     <div className="log-entry" onChangeCapture={remoteMode ? rememberRemoteContext : undefined}>
@@ -2548,6 +2574,17 @@ export function LogEntry({
           <span className="le-hunt-for"> · {hunt.call}</span>
           {!huntMatches && logCall.trim() !== '' && (
             <span className="le-hunt-warn"> {t('logEntry.hunt.mismatch')}</span>
+          )}
+          {stationOwn && (
+            <button
+              type="button"
+              className="le-hunt-clear"
+              onClick={() => void endHunt(hunt.reference)}
+              title={t('ota.hunt.clear')}
+              aria-label={t('ota.hunt.clear')}
+            >
+              <X aria-hidden="true" />
+            </button>
           )}
         </div>
       )}

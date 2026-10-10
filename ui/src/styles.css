@@ -9994,6 +9994,28 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 400;
   color: var(--alert-warning);
 }
+/* The tag's ✕ ends the hunt, as the POTA/SOTA banner's ✕ does. It sits in the tag's own line and
+   must not make the log line taller: no padding or border, and an icon one em of the tag's own text
+   (`font: inherit`, since a button's font is the control font, not its parent's), which that text's
+   line already holds. */
+.le-hunt-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+}
+.le-hunt-clear:hover {
+  color: var(--text);
+}
+.le-hunt-clear svg {
+  width: 1em;
+  height: 1em;
+}
 .le-row {
   display: flex;
   /* WRAP, never overflow. Inside the pane grid the log column can be as narrow as 24em;

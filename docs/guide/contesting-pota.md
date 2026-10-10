@@ -295,7 +295,9 @@ activation: nothing was hunted, logged or uploaded to POTA.*
 
 The pending hunt tags **only the first matching QSO** and **expires after 4
 hours**, so a stale park reference can't contaminate an unrelated contact next
-week. Activators also appear as chips on the [Needed board](needed-dx.md) when
+week. To end it sooner, click **✕** on the hunt banner at the top of POTA / SOTA,
+or on the 🌲 hunt tag above the log line, which also takes the park the hunt
+filled in out of the log line. Activators also appear as chips on the [Needed board](needed-dx.md) when
 they're heard on the air. Clicking a Phone or CW activator there sets no hunt: it
 puts the call and the park in that cockpit's log line, which tags the contact
 when you log it, and **Clear** on the log line clears both. An FT8, FT4 or RTTY

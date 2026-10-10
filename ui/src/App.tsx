@@ -3438,6 +3438,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             focusSat={satFocus}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
+            onSnap={setSnap}
           />
         </main>
       )
