@@ -766,7 +766,7 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
     )
 }
 
-use tempo_app::dto::{FieldDayQso, SourceKind, Tier};
+use tempo_app::dto::{AudioErrorKind, FieldDayQso, SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
@@ -1811,7 +1811,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // see only a silent, blank waterfall).
             {
                 let mut eng = engine_lock(&engine);
-                eng.set_audio_error(Some(format!("Sound card failed to open: {e}")));
+                eng.set_audio_error(Some((
+                    AudioErrorKind::SoundCard,
+                    format!("Sound card failed to open: {e}"),
+                )));
             }
             // ⚠️ Do NOT die here when a device was NAMED. `CpalBackend::open` became strict
             // about a configured-but-unresolvable device (device.rs `resolve_configured`),
@@ -1842,10 +1845,13 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                         attempt += 1;
                         {
                             let mut eng = engine_lock(&engine);
-                            eng.set_audio_error(Some(format!(
-                                "Sound card failed to open: {e} The system default failed too \
-                                 ({fallback}). Retrying every {}s — attempt {attempt}.",
-                                (AUDIO_RETRY_MS / 1000.0) as u64
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!(
+                                    "Sound card failed to open: {e} The system default failed \
+                                     too ({fallback}). Retrying every {}s — attempt {attempt}.",
+                                    (AUDIO_RETRY_MS / 1000.0) as u64
+                                ),
                             )));
                         }
                         std::thread::sleep(Duration::from_millis(AUDIO_RETRY_MS as u64));
@@ -5005,12 +5011,13 @@ impl RadioLoop {
         if flex_enabled && ip.is_empty() {
             {
                 let mut eng = engine_lock(engine);
-                eng.set_audio_error(Some(
+                eng.set_audio_error(Some((
+                    AudioErrorKind::FlexAddress,
                     "Flex native panadapter is switched on but no Flex radio IP is set — \
                      nothing will start. Put the radio's LAN address in Settings ▸ Radio ▸ \
                      \"Flex radio IP\" (Find Radios fills it in), then Save."
                         .to_string(),
-                ));
+                )));
             }
             self.err_owner = ErrOwner::Dax;
         }
@@ -5207,10 +5214,11 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::Ptt,
                         "The rig didn't accept PTT — check your PTT method and CAT/port."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Ptt;
             }
@@ -5307,7 +5315,7 @@ impl RadioLoop {
         };
         tempo_core::applog::info("tx", &format!("{why} (dropped)"));
         if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
-            engine_lock(engine).set_audio_error(Some(why.clone()));
+            engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
             self.err_owner = ErrOwner::Ptt;
         }
         Some(why)
@@ -6080,12 +6088,13 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::FlexAudio,
                         "Native Flex audio is selected but no audio is arriving — switched back \
                          to the sound card. Check the Flex API address, that DAX is enabled on \
                          the radio, and that a firewall isn't blocking its UDP audio."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Dax;
             }
@@ -6626,8 +6635,9 @@ impl RadioLoop {
                     self.audio_suspect = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.set_audio_error(Some(format!(
-                            "Sound card stopped — {err}. Reopening…"
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::SoundCard,
+                            format!("Sound card stopped — {err}. Reopening…"),
                         )));
                     }
                     // A REAL device error owns the line, same as the open-failure arm below.
@@ -6680,10 +6690,13 @@ impl RadioLoop {
                         };
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!(
-                                "Audio input is open but delivering pure silence — every \
-                                 sample is zero. Check the rig's USB audio cable and the \
-                                 input's level.{mac_hint}"
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
+                                format!(
+                                    "Audio input is open but delivering pure silence — every \
+                                     sample is zero. Check the rig's USB audio cable and the \
+                                     input's level.{mac_hint}"
+                                ),
                             )));
                         }
                         // The receive side finally says something. This condition was detected
@@ -6854,9 +6867,10 @@ impl RadioLoop {
                         // erase the wait.
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
                                 "Audio device reopened, waiting for samples…".to_string(),
-                            ));
+                            )));
                         }
                         self.err_owner = ErrOwner::Device;
                         self.audio_awaiting_samples = true;
@@ -6876,7 +6890,10 @@ impl RadioLoop {
                         );
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!("Audio device failed to open: {e}"),
+                            )));
                         }
                         // A REAL device error owns the line — monitor/voice-mic
                         // notices may neither overwrite nor clear it.
@@ -6952,20 +6969,22 @@ impl RadioLoop {
                             // Device error outranks us; a VoiceMic notice is the
                             // operator's more recent concern.
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(format!(
-                                    "Headphone monitor could not open: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
+                                    format!("Headphone monitor could not open: {e}"),
                                 )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
                         Ok(()) if want.monitor_enabled && guarded => {
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
                                     "Headphone monitor is off: the chosen output is the rig's TX \
                                      device — monitoring it would transmit the received band. Pick a \
                                      separate headphone or speaker device."
                                         .to_string(),
-                                ));
+                                )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
@@ -10227,9 +10246,12 @@ impl RadioLoop {
                         if matches!(self.err_owner, ErrOwner::None | ErrOwner::VoiceMic) {
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_audio_error(Some(format!(
-                                    "Voice mic could not open: {e} — recording from the shared \
-                                     input instead"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::VoiceMic,
+                                    format!(
+                                        "Voice mic could not open: {e} — recording from the \
+                                         shared input instead"
+                                    ),
                                 )));
                             }
                             self.err_owner = ErrOwner::VoiceMic;
@@ -10330,8 +10352,9 @@ impl RadioLoop {
                             Err(e) => {
                                 let mut eng = engine_lock(engine);
                                 eng.stop_qso_recording();
-                                eng.set_audio_error(Some(format!(
-                                    "Could not start QSO recording: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Recording,
+                                    format!("Could not start QSO recording: {e}"),
                                 )));
                             }
                         }
@@ -12593,7 +12616,10 @@ impl RadioLoop {
                     let name = format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{sec:02}_{band}.wav");
                     let path = std::path::Path::new(&dir).join(name);
                     if let Err(e) = crate::voice::write_wav_12k(&path, frame) {
-                        eng.set_audio_error(Some(format!("period WAV save failed: {e}")));
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::Recording,
+                            format!("period WAV save failed: {e}"),
+                        )));
                     }
                 }
             }
@@ -19772,6 +19798,11 @@ mod tests {
         assert!(
             said.contains("Flex radio IP"),
             "the message names the field to fill in: {said}"
+        );
+        assert_eq!(
+            line_kind(&engine),
+            "flexAddress",
+            "named as the missing address, not as a stopped radio"
         );
 
         // …then types the address. THIS is the transition the key must see.
@@ -30534,9 +30565,10 @@ mod tests {
 
         // The state the no-address warning leaves behind: a Dax-owned banner with the native
         // pan's key, which carries no address, still recorded.
-        engine.lock().unwrap().set_audio_error(Some(
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::FlexAddress,
             "Flex native panadapter is switched on but no Flex radio IP is set (…)".to_string(),
-        ));
+        )));
         state.err_owner = ErrOwner::Dax;
         state.spectrum_src_key = Some((2036, true, String::new()));
 
@@ -30551,10 +30583,10 @@ mod tests {
         assert_eq!(state.err_owner, ErrOwner::None, "the line is handed back");
 
         // …and the same transition must not clear a line another writer owns.
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Audio device failed to open".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Audio device failed to open".to_string(),
+        )));
         state.err_owner = ErrOwner::Device;
         state.spectrum_src_key = Some((2036, true, String::new()));
         state.reconcile_spectrum_source(&engine, 0, false);
@@ -30576,32 +30608,40 @@ mod tests {
         state.report_ptt(&engine, true);
         assert!(banner(&engine).is_some(), "PTT NAK shows the banner");
         assert_eq!(state.err_owner, ErrOwner::Ptt);
+        assert_eq!(
+            line_kind(&engine),
+            "ptt",
+            "named as a PTT problem, so the lane does not say the radio stopped"
+        );
         state.report_ptt(&engine, false);
         assert!(
             banner(&engine).is_none(),
             "a good key clears the PTT status"
         );
         assert_eq!(state.err_owner, ErrOwner::None);
+        assert_eq!(line_kind(&engine), serde_json::Value::Null, "and its kind");
 
         // A PTT status must NOT clobber a higher-priority device error, and clearing PTT
         // must not wipe the device error either.
         state.err_owner = ErrOwner::Device;
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Sound card failed".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Sound card failed".to_string(),
+        )));
         state.report_ptt(&engine, true);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "device error wins"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "and so does its kind");
         state.report_ptt(&engine, false);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "clearing PTT leaves a device error intact"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "kind and all");
     }
 
     #[test]
@@ -31440,6 +31480,13 @@ mod tests {
             .unwrap();
     }
 
+    /// The kind the snapshot gives the audio-error line, as the UI reads it off the wire
+    /// (`Null` = no line).
+    fn line_kind(engine: &Arc<Mutex<Engine>>) -> serde_json::Value {
+        let snapshot = engine.lock().unwrap().snapshot();
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"].clone()
+    }
+
     /// One `step` at `now`, with a rebuild closure that must never be called.
     fn quiet_step(
         engine: &Arc<Mutex<Engine>>,
@@ -31527,6 +31574,11 @@ mod tests {
                 .is_some_and(|m| m.contains("waiting for samples")),
             "control: the banner must be up before the card delivers"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "noReceiveAudio",
+            "an open card that has delivered nothing is named for what the operator lacks"
+        );
 
         // The rebuilt stream comes to life.
         backend.queue_capture(vec![0.01_f32; 512]);
@@ -31535,6 +31587,11 @@ mod tests {
             engine.lock().unwrap().snapshot().radio.audio_error,
             None,
             "the first delivered frame IS the recovery — the banner must come down on it"
+        );
+        assert_eq!(
+            line_kind(&engine),
+            serde_json::Value::Null,
+            "and its kind with it"
         );
         assert!(
             !state.audio_awaiting_samples,
@@ -31545,6 +31602,74 @@ mod tests {
             ErrOwner::None,
             "the audio-error line is released too, so a monitor/voice-mic notice can use it again"
         );
+    }
+
+    /// A card that dies, and then will not reopen, is named a SOUND CARD failure on the line at
+    /// both steps: while the confirmed death waits for its rebuild, and when the rebuild's open
+    /// fails. Not a stopped radio: CAT carries on throughout.
+    #[test]
+    fn a_card_that_dies_and_will_not_reopen_is_named_a_sound_card_failure() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        // Every reopen fails: the device is gone for good.
+        let mut ra =
+            |_t: &Transport| -> Result<MockBackend, String> { Err("no such device".to_string()) };
+        let mut step = |state: &mut RadioLoop, backend: &mut MockBackend, now: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let line = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error;
+
+        // Settle, so nothing but the death below can explain a rebuild.
+        step(&mut state, &mut backend, 0.0);
+        engine.lock().unwrap().set_audio_error(None);
+        backend.stream_error = Some("capture stream: device no longer available".to_string());
+        step(&mut state, &mut backend, 20.0);
+        // The death is confirmed, and its rebuild held back (as it is while keyed, or inside the
+        // debounce after a recent one).
+        state.audio_rebuild_floor = f64::MAX;
+        step(
+            &mut state,
+            &mut backend,
+            20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Sound card stopped")),
+            "premise: the death is on the line, its rebuild still to come: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
+
+        // The rebuild runs, and the card will not open.
+        state.audio_rebuild_floor = 0.0;
+        step(
+            &mut state,
+            &mut backend,
+            40.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Audio device failed to open")),
+            "premise: the reopen failed: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
     }
 
     #[test]
@@ -32810,6 +32935,65 @@ mod tests {
                 .contains("Voice mic could not open"),
             "the failure is surfaced on the audio-status line, got {err:?}"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "voiceMic",
+            "named as the voice mic's notice: the radio works through it"
+        );
+    }
+
+    /// A headphone monitor held off because its output is the rig's TX device is named a MONITOR
+    /// notice on the line: the radio receives and transmits through it.
+    #[test]
+    fn a_monitor_held_off_by_the_tx_device_guard_is_named_a_monitor_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.monitor_enabled = true;
+            s.monitor_device = "Rig USB CODEC".to_string();
+            s.audio_out = "Rig USB CODEC".to_string();
+            eng.apply_settings(s);
+        }
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        // The new output device rebuilds the card, which holds the line until it delivers.
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        backend.queue_capture(vec![0.01_f32; 512]);
+        quiet_step(&engine, &mut state, &mut backend, 20.0);
+        // The monitor applies itself again (as after a voice-mic notice comes down).
+        state.monitor_reapply = true;
+        quiet_step(&engine, &mut state, &mut backend, 40.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Headphone monitor is off")),
+            "premise: the guard held the monitor off: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "monitor");
+    }
+
+    /// A QSO recording that cannot start is named a RECORDING notice on the line: the radio works
+    /// through it.
+    #[test]
+    fn a_qso_recording_that_cannot_start_is_named_a_recording_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        // No file can be created at an empty path.
+        engine.lock().unwrap().start_qso_recording("");
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Could not start QSO recording")),
+            "premise: the recording could not start: {said:?}"
+        );
+        assert!(
+            !engine.lock().unwrap().is_qso_recording(),
+            "premise: the REC flag came down"
+        );
+        assert_eq!(line_kind(&engine), "recording");
     }
 
     #[test]

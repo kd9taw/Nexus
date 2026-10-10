@@ -31,6 +31,7 @@ vi.mock('./components/MapView', () => ({ MapView: () => <div data-testid="map" /
 
 import * as api from './api'
 import App from './App'
+import { StationControlContext } from './stationAccess'
 import { APP_SNAPSHOT, COCKPIT_MAIN } from './appCockpits.testkit'
 import settingsFixture from './components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot, CallBearing, Settings } from './types'
@@ -48,6 +49,12 @@ const RAIL_SLOTS = { rail1: 'rotor', rail2: 'clock', rail3: 'spacewx', rail4: 'g
 const BEARINGS: Record<string, CallBearing> = {
   EC1DD: { pointed: { bearing: 227.4, to: 'grid', grid: 'IN52TK', country: null }, km: 1530.6 },
   AA1AA: { pointed: { bearing: 290.6, to: 'grid', grid: 'FN42KH', country: null }, km: 5379.2 },
+}
+
+/** FT's recall card follows the roster's selection and asks the station for that call's bearing too
+ *  (features/callBearing), so a case that counts the box's questions puts the card away first. */
+function withoutFtRecallCard(): void {
+  localStorage.setItem('nexus.panels.operate.main', JSON.stringify({ v: 2, state: { recall: 'removed' }, share: {} }))
 }
 
 async function mountOn(view: string): Promise<void> {
@@ -120,6 +127,7 @@ describe('FT: the box follows the QSO its Log QSO would log, not the roster sele
   it('line 2 is EC1DD at its bearing, Point turns to EC1DD, and the strip still offers AA1AA', async () => {
     serve(ftSnapshot)
     localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
+    withoutFtRecallCard()
     await mountOn('operate')
     const ft = document.querySelector<HTMLElement>(COCKPIT_MAIN.operate)
     expect(ft, 'the FT cockpit did not render').not.toBeNull()
@@ -156,6 +164,7 @@ describe('FT: the box follows the QSO its Log QSO would log, not the roster sele
   it('no QSO, no line 2', async () => {
     serve({ ...ftSnapshot, qso: null })
     localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
+    withoutFtRecallCard()
     await mountOn('operate')
     await waitFor(() => expect(rail()?.querySelector('.rotor-pane')).toBeTruthy())
     await waitFor(() => expect(rail()!.querySelector('.rotor-az')?.textContent).toContain('100°T'))
@@ -205,16 +214,19 @@ describe('from afar', () => {
       JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'rotor' } }),
     )
     window.location.hash = '#operate'
+    // Without station control, as the hosted page mounts App (remote-web/BrowserApplication).
     render(
-      <App
-        remote={{
-          snapshot: { ...APP_SNAPSHOT, qso: { state: 'AwaitReport', dxcall: 'EC1DD', rxReport: null, running: false, cqRunning: false } } as unknown as AppSnapshot,
-          settings: settingsFixture as unknown as Settings,
-          bandPlan: [],
-          status: <div>Observer</div>,
-          cwPhone: true,
-        }}
-      />,
+      <StationControlContext.Provider value={false}>
+        <App
+          remote={{
+            snapshot: { ...APP_SNAPSHOT, qso: { state: 'AwaitReport', dxcall: 'EC1DD', rxReport: null, running: false, cqRunning: false } } as unknown as AppSnapshot,
+            settings: settingsFixture as unknown as Settings,
+            bandPlan: [],
+            status: <div>Observer</div>,
+            cwPhone: true,
+          }}
+        />
+      </StationControlContext.Provider>,
     )
     await screen.findByText('Observer')
     await act(async () => {})

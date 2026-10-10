@@ -4306,8 +4306,6 @@ export const EN = {
   'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
   'contest.esm.phone.speak': 'Say his call and your exchange.',
   'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',
-  'contest.esm.refused.history':
-    '{{field}} came from call history: type it to accept it, then press Enter. Alt+Enter logs it as it is.',
   'contest.esm.stopped.logged': '{{step}} stopped. {{call}} is logged. Ctrl+D twice removes it.',
   'contest.esm.stopped.loggedClubSync':
     '{{step}} stopped. {{call}} is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
@@ -5650,9 +5648,11 @@ export const EN = {
   // Two whole statements, and the conjunction between the two squares is inside a message of
   // its own — a language that pairs them differently can only do it if it can translate the
   // joining word.
-  'recall.geo.title': 'Great-circle distance · true bearing from your QTH',
+  // `{{to}}` is what the bearing was taken to, as the point's toast says it (`rotor.pointed.to.*`): the
+  // station's grid, its callbook position, or the centre of its country.
+  'recall.geo.title': 'Great-circle distance · true bearing from your QTH ({{to}})',
   'recall.geo.title.approx':
-    'Great-circle distance · true bearing from your QTH — approximate: computed from the center of {{squares}}',
+    'Great-circle distance · true bearing from your QTH ({{to}}) — approximate: computed from the center of {{squares}}',
   'recall.geo.approx.mine':
     'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
   'recall.geo.approx.theirs': 'their {{grid}} square',
@@ -10541,7 +10541,20 @@ export const EN = {
   // A lane item PERSISTS while its condition holds, so its wording is what the operator
   // stares at. `detail` is the backend's own message where one exists and is interpolated as
   // data, never translated.
-  'shell.lane.audio.message': 'RADIO STOPPED',
+  // The station's audio-error line, headed by the kind of problem the station names beside its
+  // sentence (features/audioError.ts); the sentence is the tooltip, as data. `.other` heads a line
+  // from a station too old to name the kind.
+  'shell.lane.audio.engineStopped': 'RADIO ENGINE STOPPED',
+  'shell.lane.audio.soundCard': 'SOUND CARD FAILED',
+  'shell.lane.audio.noReceiveAudio': 'NO RECEIVE AUDIO',
+  'shell.lane.audio.ptt': 'PTT NOT ACCEPTED',
+  'shell.lane.audio.flexAudio': 'NO FLEX AUDIO',
+  'shell.lane.audio.flexAddress': 'NO FLEX RADIO IP',
+  'shell.lane.audio.monitor': 'HEADPHONE MONITOR OFF',
+  'shell.lane.audio.voiceMic': 'VOICE MIC FAILED',
+  'shell.lane.audio.recording': 'RECORDING FAILED',
+  'shell.lane.audio.decodeCrash': 'DECODE CRASHED',
+  'shell.lane.audio.other': 'RADIO ALERT',
   'shell.lane.scopeSpan.message': 'SCOPE SPAN REFUSED',
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',

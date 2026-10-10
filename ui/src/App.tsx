@@ -185,6 +185,7 @@ import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { pttRefusedLane } from './features/pttRefused'
 import { clockRepairHoldLane } from './features/clockRepairHold'
+import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
@@ -633,16 +634,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       if (s) setSnap(s)
     })
   }, [])
-  // Surface a dead radio engine (audio_error) in the persistent status lane —
-  // it was only visible deep in Settings ▸ CAT, i.e. effectively invisible.
+  // Surface the station's audio-error line in the persistent status lane — it was only visible
+  // deep in Settings ▸ CAT, i.e. effectively invisible. The headline names the kind of problem the
+  // station gives it (a PTT the rig did not accept, a sound card that failed, a monitor held off),
+  // tiered by what it costs, and the station's sentence is the tooltip (features/audioError.ts).
   useEffect(() => {
-    const err = snap?.radio.audioError
-    if (err) {
-      setStatus('audio', { tier: 'critical', message: t('shell.lane.audio.message'), detail: err })
-    } else {
-      setStatus('audio', null)
-    }
-  }, [snap?.radio.audioError])
+    setStatus('audio', audioErrorLane(snap?.radio.audioError, snap?.radio.audioErrorKind))
+  }, [snap?.radio.audioError, snap?.radio.audioErrorKind])
 
   // Surface an RF-scope source that is not delivering. WARNING, not critical, and the wording says
   // what to DO: on an FT-710 the spectrum only exists once SCU-LAN10 and the external display are

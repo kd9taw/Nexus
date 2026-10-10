@@ -12,23 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
   ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
   and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
-  then TU, which logs it. Searching and pouncing: your call, then your exchange, which logs it. It
-  is off until you turn it on, for each cockpit separately, with the ESM switch in its TX dock or
-  in Settings ▸ Contesting ▸ Enter Sends Message, where you can also choose which of your own keys
-  sends each step. The dock shows **Run** or **S&P** (click it to switch; your CQ key switches to
-  Run, and clicking a spot to S&P), lights the key or keys the next Enter sends, and says why when
-  it sends nothing. Enter never turns TX on: after Stop TX, Esc or the watchdog it sends nothing
-  until you turn TX back on yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone.
-  It sends what that F-key sends, by the same path and with the same checks, and an Enter that is
-  refused logs nothing. One press is one message: holding Enter sends once, and Alt+Enter logs
-  without sending anything. A message you stop counts as not sent, so the next Enter sends it
-  again; if you stop the TU or the exchange whose Enter logged the contact, the contact stays
-  logged and the strip says so, and Ctrl+D twice takes it back. In Phone, Enter plays the voice
-  keyer's recordings (F1 CQ, F2 your exchange, F3 TU, F4 your call, F5 AGN), and when you are
-  running you say his call and your exchange yourself. A box filled from call history counts once
-  you type it, so Enter never logs last year's exchange on its own. ESM steps aside, and Enter logs
-  as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the voice keyer
-  is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
+  then TU, which logs it. Searching and pouncing: your call, then your exchange, which logs it,
+  even when call history fills his exchange as you type his call. It is off until you turn it on,
+  for each cockpit separately, with the ESM switch in its TX dock or in Settings ▸ Contesting ▸
+  Enter Sends Message, where you can also choose which of your own keys sends each step. The dock
+  shows **Run** or **S&P** (click it to switch; your CQ key switches to Run, and clicking a spot
+  to S&P), lights the key or keys the next Enter sends, and says why when it sends nothing. Enter
+  never turns TX on: after Stop TX, Esc or the watchdog it sends nothing until you turn TX back on
+  yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone. It sends what that F-key
+  sends, by the same path and with the same checks, and an Enter that is refused logs nothing. One
+  press is one message: holding Enter sends once, and Alt+Enter logs without sending anything. A
+  message you stop counts as not sent, so the next Enter sends it again; if you stop the TU or the
+  exchange whose Enter logged the contact, the contact stays logged and the strip says so, and
+  Ctrl+D twice takes it back. In Phone, Enter plays the voice keyer's recordings (F1 CQ, F2 your
+  exchange, F3 TU, F4 your call, F5 AGN), and when you are running you say his call and your
+  exchange yourself. A box filled from call history counts as copied: Enter sends and logs it as
+  it stands, so type over it when the station sends something different. ESM steps aside, and
+  Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
+  voice keyer is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
 - **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
   last** beside Clear on the log strip) names your newest contest contact on the strip's message
   line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
@@ -314,6 +315,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
+  sound card that failed, a headphone monitor that was held off and every other notice on that line
+  all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
+  and CAT worked. Each now says what it is: PTT NOT ACCEPTED, SOUND CARD FAILED, NO RECEIVE AUDIO,
+  NO FLEX AUDIO, HEADPHONE MONITOR OFF, VOICE MIC FAILED, RECORDING FAILED and so on, and RADIO
+  ENGINE STOPPED only when Nexus's radio engine itself has stopped and needs a restart. Only what
+  stops receiving or transmitting flashes. A notice the radio keeps working through (the headphone
+  monitor, the voice mic, Flex native audio falling back to the sound card, a recording that could
+  not start) shows as a warning. Hovering the chip still shows the full message.
+- **The bearings shown beside a call are the ones the antenna turns to.** The Chase box's heading
+  next to its ↗ was always worked out to the centre of the station's country, while ↗ turns the
+  antenna to the station's own grid or callbook position whenever Nexus knows one: about 20° apart
+  from the Netherlands to Galicia. The distance and bearing on the recall card under a log entry
+  could differ from it too. Both now show where ↗ and Point turn the antenna: the station's grid or
+  callbook position when Nexus knows one, otherwise the centre of its country (the Chase box marks
+  that with ~, and the card's tooltip says which). A call Nexus cannot place says "location unknown"
+  instead of a number, and without your own grid in Settings they say so. In a browser on Nexus
+  Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
+  the station's country); the browser's Chase box and recall card show no bearing, because only the
+  station can work it out.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a

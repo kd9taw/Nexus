@@ -3,12 +3,19 @@
 // stations are workable this minute vs which have a later window. Dual-audience: Basic shows
 // the plain "call now" / "best 1400Z" action per row; Expert adds the entity + who heard it.
 // Clicking a row selects it on the map; ▶ Work QSYs the rig and opens the cockpit.
+//
+// A row's heading is the station's answer for where its ↗ turns the antenna (features/callBearing),
+// never the centre of the entity worked out here: the station's grid or callbook position when Nexus
+// knows one, `~` and the centre of its country when it does not. When the station cannot give one the
+// row says so in words, on a line of its own under the call (in the heading's place they took the
+// whole line from the entity in a 200 px box, measured in Chrome).
 import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { useChaseSplit } from './chaseSplit'
 import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
-import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
+import { useCallBearings, type CallAim } from '../../features/callBearing'
+import { azimuthLabel, azimuthTitle } from '../../grid'
 import { t } from '../../i18n'
 import { fmtKmTokens } from '../../units'
 
@@ -42,9 +49,34 @@ function openPhrase(target: ChaseTarget): { text: string; cls: string } {
   return { text: target.band, cls: 'unknown' }
 }
 
+/** A row's heading, drawn as every board draws one (`azimuthLabel`/`azimuthTitle`: `~` and a
+ *  rough-heading tooltip when it is only the centre of the country). No answer: nothing. */
+function Heading({ aim }: { aim: CallAim | undefined }) {
+  if (!aim || !('bearing' in aim)) return null
+  const { pointed } = aim.bearing
+  const az = { deg: Math.round(pointed.bearing) % 360, approx: pointed.to === 'country' }
+  return (
+    <span className="chase-az" title={azimuthTitle(az, pointed.country)}>
+      {azimuthLabel(az)}
+    </span>
+  )
+}
+
+/** Why a row has no heading, in words and never a 0°: the station cannot place the call, or the
+ *  operator's own grid is not set. Nothing while there is no answer yet, or for a failure the station
+ *  did not name. */
+function NoHeading({ aim }: { aim: CallAim | undefined }) {
+  if (!aim || !('why' in aim)) return null
+  if (aim.why === 'unknownStation') return <div className="chase-why">{t('rotor.pane.aim.unknown')}</div>
+  if (aim.why === 'noGrid') return <div className="chase-why">{t('rotor.pane.aim.noGrid')}</div>
+  return null
+}
+
 export function ChasePane({ ctx }: { ctx: PaneContext }) {
   // Freshness is re-derived on each snapshot-driven re-render; no per-second ticking needed.
   const targets = buildChaseTargets(ctx.needAlerts, ctx.bandOutlook, Date.now())
+  const rows = targets.slice(0, 12)
+  const aims = useCallBearings(rows.map((target) => target.call))
   // A row whose first line has no room for the entity gives it the line under it (chaseSplit).
   const list = useRef<HTMLUListElement>(null)
   useChaseSplit(list, targets.length > 0)
@@ -55,7 +87,7 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
   return (
     <section className="chase-pane panel">
       <ul className="chase-list" ref={list}>
-        {targets.slice(0, 12).map((target) => {
+        {rows.map((target) => {
           const chip = target.tags[0] ? NEED_CHIP[target.tags[0]] : null
           const op = openPhrase(target)
           return (
@@ -86,17 +118,11 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                     {/* The heading beside the entity — this is the pane with a
                         point-the-antenna button on the same row, so the number the
                         button is about should be readable without pressing it. */}
-                    {(() => {
-                      const az = azimuthTo(ctx.myGrid, null, target.entity, ctx.entityCentroids)
-                      return az ? (
-                        <span className="chase-az" title={azimuthTitle(az, target.entity)}>
-                          {azimuthLabel(az)}
-                        </span>
-                      ) : null
-                    })()}
+                    <Heading aim={aims.get(target.call)} />
                   </span>
                   {target.ageSecs != null && <span className="chase-age">{ageLabel(target.ageSecs)}</span>}
                 </div>
+                <NoHeading aim={aims.get(target.call)} />
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>
                 {/* "heard by K9LC (EN52, 26 km)": its distances in the operator's units. */}
                 {target.evidence && (
