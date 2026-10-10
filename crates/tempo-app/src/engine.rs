@@ -12161,8 +12161,9 @@ impl Engine {
 
     // --- host half (the ClubBackend impl calls these) ----------------------
 
-    /// A position joined. Err when not hosting (a race with the toggle), Err with
-    /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
+    /// A position joined. Err when not hosting (a race with the toggle), Err when its position
+    /// id is not one Nexus makes (`fdevent::club_position_id`: the id rides every board line),
+    /// Err with §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
     /// rules-file id — Err when it is set up in another exchange ROLE than the club's
     /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
@@ -12196,8 +12197,9 @@ impl Engine {
             return Err("this station is not hosting a club event".into());
         };
         let theirs = role.trim();
-        let refusal = club
-            .join_refusal(v, contest)
+        let refusal = (!crate::fdevent::club_position_id(pos))
+            .then(|| crate::fdevent::NOT_A_POSITION_ID.to_string())
+            .or_else(|| club.join_refusal(v, contest))
             .or_else(|| {
                 (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
                     .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
@@ -43312,6 +43314,56 @@ mod tests {
         assert_eq!(accept.host_call, "W9XYZ");
         assert_eq!(refused(&fd), Vec::new());
         fd.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A JOIN under a position id no Nexus makes is turned away by name**, before any gate
+    /// that would let it in: the id rides every board line to every position, the TV and
+    /// Remote, and one that only looks like another position's (`aaaa0001` and a zero-width
+    /// space), or carries a line of its own, or runs past what Remote takes, would ride there
+    /// too. Nothing of it reaches the board; the host's list names it. CONTROL: an id Nexus
+    /// makes joins, one a fresh Engine just made among them.
+    #[test]
+    fn a_join_under_a_position_id_no_nexus_makes_is_refused_by_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-position-id-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = party_host(&dir);
+        let odd = [
+            "aaaa0001\u{200B}".to_string(),
+            "AAAA0001".into(),
+            "aaaa001".into(),
+            "aaaa0001\nbbbb0002".into(),
+            "a".repeat(2048),
+            String::new(),
+        ];
+        let mut served = Vec::new();
+        for pos in &odd {
+            let got = e.fd_club_join(v, pos, "SSB tent", "W9XYZ", "ilqp", "in_state");
+            if got.as_ref().err().map(String::as_str) != Some(crate::fdevent::NOT_A_POSITION_ID) {
+                let shown: String = pos.chars().take(16).collect();
+                served.push(format!("{shown:?}: {:?}", got.map(|a| a.acked)));
+            }
+        }
+        assert!(served.is_empty(), "{}", served.join("\n"));
+        assert!(e.fd_board_snapshot().unwrap().positions.is_empty());
+        let listed = e.fd_club_log().unwrap().refused(now_unix_secs());
+        assert!(listed
+            .iter()
+            .all(|r| r.reason == crate::fdevent::NOT_A_POSITION_ID));
+        assert!(listed
+            .iter()
+            .any(|r| r.label == "SSB tent" && r.call == "W9XYZ"));
+        let (made, generated) = Engine::new("W9XYZ", "EN61", 0).fd_ensure_position_id();
+        assert!(generated, "a fresh Engine makes its id");
+        for pos in ["aaaa0001", "0000005a", made.as_str()] {
+            e.fd_club_join(v, pos, "SSB tent", "W9XYZ", "ilqp", "in_state")
+                .unwrap_or_else(|why| panic!("{pos}: {why}"));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

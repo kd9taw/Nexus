@@ -341,13 +341,14 @@ impl Sink {
         })
     }
 
-    /// Write one line. Timestamped, redacted, and rotated if it took the file over the cap.
+    /// Write one line. Timestamped, redacted, one record ([`one_record`]), and rotated if it
+    /// took the file over the cap.
     fn write(&mut self, level: Level, text: &str) {
         let (y, mo, d, h, mi, s) = crate::logbook::datetime_utc(now_unix());
         let line = format!(
             "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}Z  {}  {}\n",
             level.tag(),
-            redact(&trim_build_paths(text))
+            one_record(&redact(&trim_build_paths(text)))
         );
         let Some(f) = self.file.as_mut() else {
             return;
@@ -501,6 +502,38 @@ fn trim_build_paths(text: &str) -> String {
                 .map(|(p, c)| p + c.len_utf8())
                 .unwrap_or(0);
             out.replace_range(start..=i, "");
+        }
+    }
+    out
+}
+
+/// The indent a record's own continuation lines start with: never a timestamp's first digit.
+const CONTINUATION: &str = "\n    ";
+
+/// ⭐ **One record's text as the file may hold it**: every line break inside it (a line feed, a
+/// carriage return, CR LF, a next-line, a line or paragraph separator) opens an INDENTED
+/// continuation line, and any other control character but a tab is written as its escape.
+///
+/// A record's first line, and only that, starts with its timestamp, so nothing a detail holds
+/// can start a line that reads as a record of its own. Details carry text from off the station
+/// (a name a LAN peer chose, a message off the air), and this is the one function every line
+/// passes through, so no call site has to remember. A detail's own second line (a panic's
+/// message, say) stays readable, one indent in.
+fn one_record(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str(CONTINUATION);
+            }
+            '\n' | '\u{85}' | '\u{2028}' | '\u{2029}' => out.push_str(CONTINUATION),
+            '\t' => out.push(c),
+            c if c.is_control() => out.extend(c.escape_unicode()),
+            c => out.push(c),
         }
     }
     out
@@ -969,5 +1002,39 @@ mod tests {
         assert!(body.contains('Z'), "lines carry a UTC timestamp: {body}");
         assert_eq!(super::path(), Some(path.as_path()));
         // NOT removed: the writer thread owns this file for the rest of the process.
+    }
+
+    /// ⭐ **No detail can start a record of its own.** A detail can carry text from off the
+    /// station (a name a LAN peer chose, a message off the air), and every line break in it
+    /// used to start a line of the file, one that can read exactly like a record this writer
+    /// wrote. A line break now opens an indented continuation line (so a two-line panic stays
+    /// readable), and any other control character is written as its escape.
+    #[test]
+    fn a_detail_can_never_start_a_record_of_its_own() {
+        let dir = scratch();
+        let path = dir.join("nexus-diag.log");
+        let mut sink = Sink::open(&path, SIZE_CAP).unwrap();
+        let forged = "2026-10-09 00:00:00Z  ERROR  cat: forged";
+        let breaks = ["\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}"];
+        for b in breaks {
+            sink.write(Level::Info, &format!("club: joined TENT{b}{forged}"));
+        }
+        sink.write(
+            Level::Error,
+            "panic: at x.rs:1: panicked at x.rs:1:5:\nthe message",
+        );
+        sink.write(Level::Info, "club: joined TENT\u{1b}[2J");
+        sink.flush();
+        let body = read(&path);
+        let records = body.lines().filter(|l| l.starts_with("20")).count();
+        assert_eq!(records, breaks.len() + 2, "{body}");
+        let stray = |c: char| matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}' | '\u{1b}');
+        assert!(!body.contains(stray), "{body:?}");
+        assert!(
+            body.contains("panicked at x.rs:1:5:\n    the message\n"),
+            "a detail's own second line is kept, indented: {body}"
+        );
+        assert!(body.contains("TENT\\u{1b}[2J"), "{body}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
