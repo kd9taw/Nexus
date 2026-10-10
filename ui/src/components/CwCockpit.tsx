@@ -1714,6 +1714,7 @@ export function CwCockpit({
         }
         onCallChange={onStripCall}
         onReset={onStripReset}
+        onSnap={onSnap}
         fieldDay={fieldDay}
         active={active}
         fdMode="CW"

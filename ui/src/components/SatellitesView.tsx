@@ -113,6 +113,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** Apply a snapshot the log strip's hunt-tag ✕ answered (LogEntry's `onSnap`). */
+  onSnap?: (s: AppSnapshot) => void
 }
 
 const SCHEDULE_HOURS = 48
@@ -2218,7 +2220,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
  *  and the pass column's. */
 const SATS_COLUMN_VARS = ['--sats-col-a', '--sats-col-b'] as const
 
-export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Props) {
+export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap }: Props) {
   // Every gesture in this section — arm, stop, pick, Doppler, mapping, peg, elements — asks this
   // one question, on the desktop and from a browser alike. `allowed` draws the control; `send`
   // carries the gesture to the station, and only a browser ever uses it (`local` short-circuits
@@ -4422,6 +4424,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
               exchange="satellite"
               fieldDay={snap.fieldDay}
               {...fdClassForLogMode(logMode)}
+              onSnap={onSnap}
             />
             <p
               className="sats-log-note"

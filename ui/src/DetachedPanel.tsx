@@ -782,7 +782,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   if (panel === 'sats') {
     return (
       <DetachedShell>
-        <SatellitesView snap={snap} />
+        <SatellitesView snap={snap} onSnap={setSnap} />
       </DetachedShell>
     )
   }

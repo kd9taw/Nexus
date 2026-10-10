@@ -273,6 +273,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turned away by name, its contacts out of the club's log until it rejoins. Its line then has the
   same button, so a wrong press is undone the same way. The host keeps the change through a
   restart. Only on the host's own screen: never from Remote.
+- **The hunt tag above the log line has an ✕ that ends the hunt.** A hunt set with HUNT on the
+  POTA / SOTA list, on the map, or by an FT8, FT4 or RTTY row on the Needed board could be cleared
+  only at the top of the POTA / SOTA list, and the log line's Clear could not get rid of its park:
+  the hunt filled it straight back in. The ✕ on the 🌲 tag ends the hunt as that one does, so the
+  tag and the line at the top of the list go together, and the park the hunt filled in goes with
+  them. A park you typed, or one a Needed click filled in, stays. The ✕ is not offered on the
+  Remote page.
 
 ### Changed
 

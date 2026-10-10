@@ -1077,6 +1077,7 @@ export function Js8Cockpit({
             ? { call: selected.call, rst: fmtSnr(selected.snrDb), name: null, confirmed: true }
             : null
         }
+        onSnap={onSnap}
         fieldDay={snap.fieldDay ?? null}
         active={active}
         fdMode="DIG"
