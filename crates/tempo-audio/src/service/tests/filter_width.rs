@@ -1,7 +1,8 @@
 //! THE FILTER WIDTH THROUGH THE RADIO LOOP — what reaches the radio when the scope's filter edge
 //! (or the BW stepper) asks for a width. By value on both backends: the Hamlib path's `M <mode>
 //! <hz>` and the native CI-V daemon's `1A 03 <code>`; one width per mode read, the last one
-//! asked; nothing at all while the radio is keyed; and the read that carries it owed at once.
+//! asked; nothing at all while the radio is keyed; the read that carries it owed at once; and a
+//! width the radio does not answer sent three times, then given up, as a dial is.
 
 use super::*;
 
@@ -295,9 +296,10 @@ fn a_width_reaches_a_hamlib_rig_once_as_set_mode() {
     assert!(!engine.lock().unwrap().passband_request_pending());
 }
 
-/// A rigctld that REFUSES any width over 3.6 kHz (`RPRT -9`, as an Icom on Hamlib does past its
-/// table) and accepts everything else, logging every line — `mock_polled_rigctld` otherwise.
-fn width_refusing_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
+/// A rigctld that answers any width over 3.6 kHz with `past_3600` and accepts everything else,
+/// logging every line — `mock_polled_rigctld` otherwise. `RPRT -9` is the REFUSAL an Icom on Hamlib
+/// gives past its table; `RPRT -5` is Hamlib's own "the rig did not answer".
+fn width_rigctld(past_3600: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -325,7 +327,7 @@ fn width_refusing_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
                 let reply = match l.as_str() {
                     "f" => "14250000\n",
                     "m" => "USB\n2400\n",
-                    _ if too_wide => "RPRT -9\n",
+                    _ if too_wide => past_3600,
                     _ => "RPRT 0\n",
                 };
                 if stream.write_all(reply.as_bytes()).is_err() {
@@ -342,7 +344,7 @@ fn width_refusing_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
 /// every poll. The radio's own width stays on screen; a hiccup (no answer) still re-queues.
 #[test]
 fn a_width_a_hamlib_rig_refuses_is_sent_once() {
-    let (addr, log) = width_refusing_rigctld();
+    let (addr, log) = width_rigctld("RPRT -9\n");
     let mut rig = Rig::rigctld(&addr);
     let engine = phone_engine(0);
     let mut state = loop_state();
@@ -466,4 +468,135 @@ fn a_waiting_width_is_applied_on_the_next_poll() {
         "the mode read was owed: {sent:?}"
     );
     assert_eq!(width_lines(&log, from), vec!["M USB 2700".to_string()]);
+}
+
+/// The CAT status line the operator reads.
+fn cat_line(engine: &Arc<Mutex<Engine>>) -> String {
+    engine.lock().unwrap().snapshot().radio.cat_detail
+}
+
+/// ⭐ A WIDTH THE RADIO DOES NOT ANSWER IS SENT THREE TIMES, THEN GIVEN UP, AS A DIAL IS. The
+/// IC-9700 on the native daemon answers everything but the `1A 03` write. The width goes out three
+/// times, the request is dropped, the radio's own width is back on screen, and the operator is
+/// told the radio did not answer. It went out on every poll for as long as the radio stayed quiet,
+/// the request never drained, the screen kept the width asked for, and nothing was said.
+#[test]
+fn a_width_the_native_radio_does_not_answer_is_sent_three_times_then_given_up() {
+    let (d, mut rig, regs) = civ_daemon_rig(false);
+    let engine = phone_engine(3081);
+    let mut state = loop_state_for(&engine);
+    state.rigctld_proc = Some(CatDaemon::Native(d));
+    let mut t = 0.0;
+    steps(&engine, &mut state, &mut rig, 2, &mut t);
+    assert!(
+        steps_until(&engine, &mut state, &mut rig, 16, &mut t, |e| {
+            e.snapshot().radio.filter_width_hz == Some(2400)
+        }),
+        "premise: the radio's own width, code 28, read back"
+    );
+    regs.lock().unwrap().drop_filter_width_writes = u32::MAX;
+    let from = regs.lock().unwrap().log.len();
+    engine.lock().unwrap().request_filter_width(1800);
+    steps_until(&engine, &mut state, &mut rig, 16, &mut t, |e| {
+        !e.passband_request_pending()
+    });
+    steps(&engine, &mut state, &mut rig, 4, &mut t); // nothing more goes out after the give-up
+    let pending = engine.lock().unwrap().passband_request_pending();
+    assert_eq!(
+        (
+            width_writes(&regs, from),
+            pending,
+            width_shown(&engine),
+            cat_line(&engine),
+        ),
+        (
+            vec![0x22; 3],
+            false,
+            Some(2400),
+            "1800 Hz filter width not sent — no reply from the rig after 3 tries; still 2400 Hz"
+                .to_string(),
+        )
+    );
+}
+
+/// The control for the test above: a width the radio answers after one silence is set, and the
+/// operator is told nothing. A silence is a try, not a give-up, and a width that lands starts the
+/// count again: asked once more, two silences later it lands again.
+#[test]
+fn a_width_the_native_radio_answers_after_one_silence_is_set() {
+    let (d, mut rig, regs) = civ_daemon_rig(false);
+    let engine = phone_engine(3081);
+    let mut state = loop_state_for(&engine);
+    state.rigctld_proc = Some(CatDaemon::Native(d));
+    let mut t = 0.0;
+    steps(&engine, &mut state, &mut rig, 2, &mut t);
+    assert!(
+        steps_until(&engine, &mut state, &mut rig, 16, &mut t, |e| {
+            e.snapshot().radio.filter_width_hz == Some(2400)
+        }),
+        "premise: the radio's own width, code 28, read back"
+    );
+    regs.lock().unwrap().drop_filter_width_writes = 1;
+    let from = regs.lock().unwrap().log.len();
+    engine.lock().unwrap().request_filter_width(1800);
+    steps_until(&engine, &mut state, &mut rig, 16, &mut t, |e| {
+        !e.passband_request_pending()
+    });
+    let first = (
+        width_writes(&regs, from),
+        regs.lock().unwrap().filter_raw,
+        width_shown(&engine),
+        cat_line(&engine).contains("1800"),
+    );
+    regs.lock().unwrap().drop_filter_width_writes = 2;
+    let from = regs.lock().unwrap().log.len();
+    engine.lock().unwrap().request_filter_width(1800);
+    steps_until(&engine, &mut state, &mut rig, 16, &mut t, |e| {
+        !e.passband_request_pending()
+    });
+    let again = (
+        width_writes(&regs, from),
+        width_shown(&engine),
+        cat_line(&engine).contains("1800"),
+    );
+    assert_eq!(
+        (first, again),
+        (
+            (vec![0x22; 2], 0x22, Some(1800), false),
+            (vec![0x22; 3], Some(1800), false)
+        )
+    );
+}
+
+/// ⭐ …AND THE SAME ON THE HAMLIB PATH. A rigctld that answers every width over 3.6 kHz `RPRT -5`,
+/// Hamlib's own "the rig did not answer", and everything else as asked. The width goes out three
+/// times and is dropped, the radio's own width from its `m` is on screen, and the operator is told.
+/// It went out on every poll for good.
+#[test]
+fn a_width_a_hamlib_rig_does_not_answer_is_sent_three_times_then_given_up() {
+    let (addr, log) = width_rigctld("RPRT -5\n");
+    let mut rig = Rig::rigctld(&addr);
+    let engine = phone_engine(0);
+    let mut state = loop_state();
+    let mut t = 0.0;
+    steps(&engine, &mut state, &mut rig, 2, &mut t);
+    let from = log.lock().unwrap().len();
+    engine.lock().unwrap().request_filter_width(4000);
+    steps(&engine, &mut state, &mut rig, 8, &mut t);
+    let pending = engine.lock().unwrap().passband_request_pending();
+    assert_eq!(
+        (
+            width_lines(&log, from),
+            pending,
+            width_shown(&engine),
+            cat_line(&engine),
+        ),
+        (
+            vec!["M USB 4000".to_string(); 3],
+            false,
+            Some(2400),
+            "4000 Hz filter width not sent — no reply from the rig after 3 tries; still 2400 Hz"
+                .to_string(),
+        )
+    );
 }

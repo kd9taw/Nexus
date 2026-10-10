@@ -37,7 +37,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::fault::{interlock_line, statuses, withholds, Fault, REFUSED};
+use crate::fault::{interlock_line, statuses, unanswered, withholds, Fault, REFUSED};
 use crate::line::{self, LineBuf};
 use crate::session::{Item, Session};
 use crate::vita::{self, Start, Stream};
@@ -113,6 +113,11 @@ pub enum Event {
     },
     /// [`Fault::DropPings`] treated this ping as lost.
     PingDropped {
+        conn: usize,
+        seq: u32,
+    },
+    /// [`Fault::Unanswered`] left this command unanswered: no reply, and nothing done.
+    Unanswered {
         conn: usize,
         seq: u32,
     },
@@ -572,6 +577,7 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream, peer: SocketAddr) {
         last_ping: Instant::now(),
         held_reply: None,
         dax_rx_creates: 0,
+        silent: false,
     };
     let mut tcp = tcp;
     let mut lines = LineBuf::default();
@@ -618,6 +624,8 @@ struct Reader<'a> {
     held_reply: Option<String>,
     /// `stream create type=dax_rx` commands so far on this connection.
     dax_rx_creates: usize,
+    /// [`Fault::Unanswered`] switched the radio off on this connection: nothing is answered.
+    silent: bool,
 }
 
 impl Reader<'_> {
@@ -639,6 +647,22 @@ impl Reader<'_> {
         conn.out_cv.notify_all();
         let text = cmd.text.as_str();
         let now = Instant::now();
+
+        let no_reply = match unanswered(&shared.config.faults, text) {
+            _ if self.silent => true,
+            Some(then_silent) => {
+                self.silent = then_silent;
+                true
+            }
+            None => false,
+        };
+        if no_reply {
+            shared.record(Event::Unanswered {
+                conn: conn.id,
+                seq: cmd.seq,
+            });
+            return;
+        }
 
         if text == "ping" {
             self.pings += 1;

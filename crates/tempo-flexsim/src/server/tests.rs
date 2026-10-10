@@ -396,6 +396,68 @@ fn dropped_pings_get_no_reply() {
     assert_eq!(dropped, [2, 3]);
 }
 
+/// A command the radio does not answer gets no reply, and the commands around it are answered as
+/// ever; with the radio gone silent on it, nothing after it is answered, pings included. The
+/// control is the same exchange without the fault.
+#[test]
+fn an_unanswered_command_gets_no_reply_and_a_radio_gone_silent_answers_nothing_after_it() {
+    let exchange = |then_silent: Option<bool>| {
+        let faults = then_silent.map_or_else(Vec::new, |then_silent| {
+            vec![Fault::Unanswered {
+                starting: "slice tune".into(),
+                then_silent,
+            }]
+        });
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        for command in ["ping", "slice tune 0 7.074000", "ping", "slice list"] {
+            c.send(command);
+        }
+        let lines = if then_silent == Some(true) {
+            // Every command reached the radio, then nothing arrives for half a second.
+            assert!(sim.wait_for(WAIT, |log| {
+                log.iter()
+                    .filter(|l| matches!(l.event, Event::Command { .. }))
+                    .count()
+                    == 4
+            }));
+            c.reader
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got: Vec<String> = c.queue.drain(..).collect();
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = read_some(&mut c.reader, &mut buf) {
+                got.extend(c.lines.push(&buf[..n]).unwrap());
+            }
+            got
+        } else {
+            c.through_reply(4)
+        };
+        let answered: Vec<u32> = lines
+            .iter()
+            .filter_map(|l| parse_reply(l))
+            .map(|r| r.seq)
+            .collect();
+        let unanswered: Vec<u32> = sim
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Unanswered { seq, .. } => Some(*seq),
+                _ => None,
+            })
+            .collect();
+        (answered, unanswered)
+    };
+    assert_eq!(
+        [exchange(None), exchange(Some(false)), exchange(Some(true))],
+        [
+            (vec![1, 2, 3, 4], vec![]),
+            (vec![1, 3, 4], vec![2]),
+            (vec![1], vec![2, 3, 4]),
+        ]
+    );
+}
+
 #[test]
 fn the_radio_keepalive_closes_a_session_whose_pings_stop_arriving() {
     // A ping goes out every 40 ms or so, twenty times inside the timeout, so a stalled test
