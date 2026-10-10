@@ -46,9 +46,10 @@
 //!   address that carries an IPv4 one is read as that IPv4 address. Kept: the private networks,
 //!   unique-local fc00::/7 and carrier-grade NAT's 100.64/10, so a viewer on the shack's own
 //!   network, or on a Tailscale network, still connects directly. A host name (a browser's mDNS
-//!   `.local` one) is never looked up, and a session tries at most [`CANDIDATES`] of the page's
-//!   candidates. A refused candidate is dropped and counted ([`Session::refused`]), and the
-//!   session goes on.
+//!   `.local` one) is never looked up. A session tries at most [`CANDIDATES`] of the page's
+//!   candidates, and takes at most [`CANDIDATES_IN_ALL`] in all, counting the ones it could never
+//!   try, which str0m keeps as well. A refused candidate is dropped and counted
+//!   ([`Session::refused`]), and the session goes on.
 //! - **The page's certificate must match its offer.** str0m verifies the peer's DTLS certificate
 //!   against the offer's fingerprint by default; [`Session::accept`] asserts that default rather than
 //!   assuming it. The device-key binding (security test A5) signs that same fingerprint, read with
@@ -163,8 +164,15 @@ pub fn receive_ends_session(error: &std::io::Error) -> bool {
 /// relay's routes, and its host address, which it names by an mDNS name (never tried) unless the
 /// page holds its microphone's permission; its relayed ones come last. One this session's socket
 /// could never try (a TCP candidate, or one of the other IP family) draws no check and does not
-/// count, so a browser that names many of those still has the rest tried.
+/// count here, only toward [`CANDIDATES_IN_ALL`], so a browser that names many of those still has
+/// the rest tried.
 pub const CANDIDATES: usize = 16;
+
+/// The most of the page's candidates one session takes in all, of every kind: the ones it tries
+/// ([`CANDIDATES`]) and the ones its socket never could. str0m keeps a candidate it can never pair
+/// just as it keeps one it can, so without this a page that named candidates without end would
+/// grow what the station holds without end. A browser names a few for each network it is on.
+pub const CANDIDATES_IN_ALL: usize = 64;
 
 /// May the station try `peer`, an address the page named, or answer a datagram from it? Only if a
 /// viewer could really be at it: a unicast address of the internet, of a private network or of a
@@ -305,6 +313,8 @@ pub struct Session {
     wanted: Option<u32>,
     /// The page's candidates taken that the session could try: at most [`CANDIDATES`].
     tried: usize,
+    /// The page's candidates taken, of every kind: at most [`CANDIDATES_IN_ALL`].
+    taken: usize,
     /// The page's candidates refused ([`Session::refused`]).
     refused: usize,
     started: Instant,
@@ -411,6 +421,7 @@ impl Session {
             estimate: estimated.then_some(START_KBPS),
             wanted: None,
             tried: 0,
+            taken: 0,
             refused: 0,
             started: now,
             connected: false,
@@ -453,9 +464,10 @@ impl Session {
     }
 
     /// A candidate the page named, trickled or in its offer. Returns whether the session took it.
-    /// One it may not try ([`may_try`], or one past [`CANDIDATES`]) is refused and counted; one it
-    /// cannot read (a host name, which is never looked up, or a malformed line) is ignored. Either
-    /// way ICE works with whatever candidates remain.
+    /// One it may not try ([`may_try`], or one past [`CANDIDATES`]), or any past
+    /// [`CANDIDATES_IN_ALL`], is refused and counted; one it cannot read (a host name, which is
+    /// never looked up, or a malformed line) is ignored. Either way ICE works with whatever
+    /// candidates remain.
     pub fn add_remote_candidate(&mut self, line: &str, now: Instant) -> bool {
         if self.closed {
             return false;
@@ -466,21 +478,27 @@ impl Session {
             return false;
         };
         // str0m pairs a candidate only with a local one of its protocol and IP family, and the
-        // station's are UDP on its socket's: only such a candidate draws checks.
+        // station's are UDP on its socket's: only such a candidate draws checks. It keeps the
+        // others too, so every one taken counts toward the total.
         let tried =
             candidate.proto() == Protocol::Udp && candidate.addr().is_ipv4() == self.base.is_ipv4();
-        if !may_try(candidate.addr()) || (tried && self.tried >= CANDIDATES) {
+        if !may_try(candidate.addr())
+            || self.taken >= CANDIDATES_IN_ALL
+            || (tried && self.tried >= CANDIDATES)
+        {
             self.refused += 1;
             return false;
         }
+        self.taken += 1;
         self.tried += usize::from(tried);
         self.rtc.add_remote_candidate(candidate);
         self.pump(now);
         true
     }
 
-    /// How many of the page's candidates the session has refused (see [`may_try`] and
-    /// [`CANDIDATES`]). The station notes the first, in its own words, never the address.
+    /// How many of the page's candidates the session has refused (see [`may_try`], [`CANDIDATES`]
+    /// and [`CANDIDATES_IN_ALL`]). The station notes the first, in its own words, never the
+    /// address.
     pub fn refused(&self) -> usize {
         self.refused
     }
@@ -2118,6 +2136,154 @@ mod tests {
                 (past, station.refused(), at_own, checks(own.at)),
                 (false, 1, 0, 0),
                 "the seventeenth: (taken, refused, checks counted, sent)"
+            );
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+        }
+
+        /// A TCP candidate at a port of its own, in as few bytes as str0m reads one (so that an
+        /// offer can carry many within the stream's limit): one this session's socket could never
+        /// try. It draws no check, but str0m keeps it.
+        fn tcp(n: usize) -> String {
+            format!("candidate:{n} 1 tcp 1 203.0.113.5 {} typ host", 9_000 + n)
+        }
+
+        /// ★ A session takes at most sixty-four of the page's candidates in all (2026-10-10). A
+        /// TCP one draws no check from this socket, but str0m keeps every candidate it is given,
+        /// so before, a page that named them without end had every one taken. Past the total, one
+        /// the session could try is refused too, though it has tried none, and the session goes
+        /// on. CONTROL: that candidate, as a session's first, draws checks.
+        #[test]
+        fn a_session_takes_at_most_sixty_four_of_the_pages_candidates_in_all() {
+            const ALL: usize = 64;
+            let own = Counter::on(own_address());
+            let mut now = Instant::now();
+            let (_page, mut station, _, _) = answered(now);
+            let took: Vec<bool> = (1..=ALL + 1)
+                .map(|n| station.add_remote_candidate(&tcp(n), now))
+                .collect();
+            let past = station.add_remote_candidate(&named(ALL + 2, own.at, "host"), now);
+            let sent = drive(&mut station, &mut now, Duration::from_secs(2), &[&own]);
+            let at_own = own.stun();
+            // CONTROL: a session whose first candidate names that address tries it.
+            let (_page, mut first, _, _) = answered(now);
+            assert!(first.add_remote_candidate(&named(0, own.at, "host"), now));
+            drive(&mut first, &mut now, Duration::from_secs(1), &[&own]);
+            assert!(
+                own.stun() > 0,
+                "control: a session's first candidate drew no check"
+            );
+            assert_eq!(
+                (
+                    took.iter().filter(|&&taken| taken).count(),
+                    took[ALL],
+                    past,
+                    station.refused(),
+                    at_own,
+                    sent.contains(&own.at)
+                ),
+                (ALL, false, false, 2, 0, false),
+                "(TCP candidates taken of the 65, the 65th, the next, which could be tried, \
+                 refused, checks counted for that one, anything sent there)"
+            );
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+        }
+
+        /// ★ The total counts what a session tries and what it never could, its offer's and its
+        /// trickle's together (2026-10-10): sixteen to try and forty-eight never tried (TCP and
+        /// IPv6 ones) are all taken, and one more is refused. A candidate refused on the way, by
+        /// the rule or as a seventeenth to try, takes no place in it. CONTROL: the sixteen draw
+        /// checks.
+        #[test]
+        fn sixteen_to_try_and_forty_eight_never_tried_are_taken_and_one_more_is_refused() {
+            let mut now = Instant::now();
+            let (_page, offer, _pending) = page(now);
+            let viewer = |n: usize| SocketAddr::from(([198, 51, 100, n as u8], 50_000));
+            let never = |n: usize| match n % 2 {
+                0 => tcp(100 + n),
+                _ => named(
+                    100 + n,
+                    format!("[2001:db8::{n:x}]:50000").parse().unwrap(),
+                    "srflx",
+                ),
+            };
+            // The offer carries half of each kind, and the trickle names the rest.
+            let carried: Vec<String> = (1..=8)
+                .map(|n| named(n, viewer(n), "srflx"))
+                .chain((1..=24).map(never))
+                .collect();
+            let (mut station, _) = Session::accept(
+                &offer_carrying(&offer, &carried),
+                BASE.parse().unwrap(),
+                now,
+            )
+            .unwrap();
+            // Before the sixteen are reached, so that the rule alone refuses it.
+            let loopback = station
+                .add_remote_candidate(&named(18, "127.0.0.1:50000".parse().unwrap(), "host"), now);
+            let to_try: Vec<bool> = (9..=16)
+                .map(|n| station.add_remote_candidate(&named(n, viewer(n), "srflx"), now))
+                .collect();
+            let seventeenth = station.add_remote_candidate(&named(17, viewer(17), "srflx"), now);
+            let never_tried: Vec<bool> = (25..=48)
+                .map(|n| station.add_remote_candidate(&never(n), now))
+                .collect();
+            let one_more = station.add_remote_candidate(&never(49), now);
+            let sent = drive(&mut station, &mut now, Duration::from_secs(3), &[]);
+            let checks = |at: SocketAddr| sent.iter().filter(|&&to| to == at).count();
+            let untried: Vec<usize> = (1..=16).filter(|&n| checks(viewer(n)) == 0).collect();
+            // CONTROL: the sixteen were taken and drew checks, beside the forty-eight.
+            assert_eq!(
+                (to_try, never_tried, untried),
+                (vec![true; 8], vec![true; 24], vec![]),
+                "(the trickle's eight to try, its twenty-four never tried, the sixteen without a \
+                 check)"
+            );
+            assert_eq!(
+                (seventeenth, loopback, one_more, station.refused()),
+                (false, false, false, 3),
+                "(taken: the seventeenth to try, loopback, the sixty-fifth; refused)"
+            );
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+        }
+
+        /// ★ The candidates an offer carries count toward the same total, and one past it is
+        /// refused at that door too (2026-10-10). The stream's limit on an offer's size leaves room
+        /// for more than sixty-four short lines. The offer is answered, the session goes on, and
+        /// the sixty-fifth, one the session could try, draws no check. CONTROL: the same line, as
+        /// an offer's only candidate, draws checks.
+        #[test]
+        fn an_offer_carrying_more_than_sixty_four_candidates_has_the_rest_refused() {
+            const ALL: usize = 64;
+            let own = Counter::on(own_address());
+            let mut now = Instant::now();
+            let past = named(ALL + 1, own.at, "host");
+            let (_page, offer, _pending) = page(now);
+            let mut carried: Vec<String> = (1..=ALL).map(tcp).collect();
+            carried.push(past.clone());
+            let sdp = offer_carrying(&offer, &carried);
+            assert!(
+                sdp.len() <= crate::protocol::SDP_BYTES,
+                "premise: the offer fits the stream's limit ({} bytes)",
+                sdp.len()
+            );
+            let (mut station, _) =
+                Session::accept(&sdp, BASE.parse().unwrap(), now).expect("the offer is answered");
+            let sent = drive(&mut station, &mut now, Duration::from_secs(2), &[&own]);
+            let at_own = own.stun();
+            // CONTROL: an offer whose only candidate is that line has it tried.
+            let (_page, offer, _pending) = page(now);
+            let (mut only, _) =
+                Session::accept(&offer_carrying(&offer, &[past]), BASE.parse().unwrap(), now)
+                    .unwrap();
+            drive(&mut only, &mut now, Duration::from_secs(1), &[&own]);
+            assert!(
+                own.stun() > 0,
+                "control: an offer's only candidate drew no check"
+            );
+            assert_eq!(
+                (station.refused(), at_own, sent.contains(&own.at)),
+                (1, 0, false),
+                "(refused, checks counted for the sixty-fifth, anything sent there)"
             );
             assert!(!station.is_closed(), "{:?}", station.take_events());
         }
