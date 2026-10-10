@@ -38,7 +38,9 @@
 //! backend answers each JOIN with a hold ([`JoinAccept::hold`], never on the wire), and the loop
 //! hands it back with every row and at every tick. Once the host's operator has given the
 //! position to the laptop it belongs to, the backend refuses the old hold, and the loop sends
-//! the refusal and closes, so nothing that connection sends afterwards is merged or acked.
+//! the refusal and closes, so nothing that connection sends afterwards is merged or acked. Each
+//! served JOIN has a link as well ([`JoinAccept::link`]), handed back once its connection ends
+//! ([`ClubBackend::disconnect`]), so the backend knows which positions a laptop is connected as.
 //!
 //! The ping doubles as a position's clock probe ([`ClockSample`]): the position times its
 //! own ping, the host stamps its pong, and the position measures how far its clock is from
@@ -514,6 +516,11 @@ pub struct JoinAccept {
     /// ([`ClubBackend::held`]). A host can give a position to another laptop, and a connection
     /// whose hold is older than that sends nothing more as it.
     pub hold: u64,
+    /// ⭐ **This JOIN's link**, the backend's own number for the open connection it came in on:
+    /// never on the wire, and handed back once, when that connection closes or JOINs again
+    /// ([`ClubBackend::disconnect`]), so the backend always knows which positions a laptop is
+    /// connected as.
+    pub link: u64,
 }
 
 /// Everything the socket loop can do to the application — and, deliberately,
@@ -577,8 +584,10 @@ pub trait ClubBackend: Send + Sync {
     /// with the current board. `mark_seen` names the asking position so the
     /// host can stamp its last-seen (stale board rows are marked, not hidden).
     fn club_state(&self, dupes_from: usize, sections_from: usize, mark_seen: &str) -> ClubState;
-    /// The position's connection dropped.
-    fn disconnect(&self, pos: &str);
+    /// The connection the JOIN served with `link` ([`JoinAccept::link`]) came in on has closed,
+    /// or JOINed again. Called once per served JOIN, on every way out of the socket loop, so a
+    /// backend that counts the laptops connected as a position never counts one that has gone.
+    fn disconnect(&self, pos: &str, link: u64);
 }
 
 fn now_unix() -> u64 {
@@ -770,6 +779,22 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
     }
 }
 
+/// The position a host-side connection JOINED as, that JOIN's hold on it and its link. Dropping
+/// it tells the backend the link is gone ([`ClubBackend::disconnect`]), so every way out of the
+/// socket loop does, a second JOIN on the same connection included.
+struct Joined {
+    backend: Arc<dyn ClubBackend>,
+    pos: String,
+    hold: u64,
+    link: u64,
+}
+
+impl Drop for Joined {
+    fn drop(&mut self) {
+        self.backend.disconnect(&self.pos, self.link);
+    }
+}
+
 /// One host-side connection: JOIN handshake, then the duplex pump — rows and
 /// presence up, acks and club state down, pings both ways. Read timeout
 /// doubles as the duty tick (club deltas, the 5 s heartbeat, the dead-man).
@@ -785,8 +810,8 @@ fn serve_club_connection(
         Err(_) => return,
     };
     let mut reader = BufReader::new(stream);
-    // The position this connection JOINED as, and that JOIN's hold on it.
-    let mut joined: Option<(String, u64)> = None;
+    // The position this connection JOINED as, that JOIN's hold on it, and its link.
+    let mut joined: Option<Joined> = None;
     let mut sent_dupes = 0usize;
     let mut sent_sections = 0usize;
     let mut garbage_run = 0u32;
@@ -836,6 +861,9 @@ fn serve_club_connection(
                             );
                             break;
                         }
+                        // A JOIN again on this connection: the one before lets go of its link
+                        // first, whatever this one is answered.
+                        drop(joined.take());
                         let accept = match backend
                             .join(v, &pos, &name, &call, max_seq, &contest, &role, &key)
                         {
@@ -846,6 +874,14 @@ fn serve_club_connection(
                                 break;
                             }
                         };
+                        // Held from the moment the backend served it, so a welcome that cannot
+                        // be written still lets go of the link.
+                        joined = Some(Joined {
+                            backend: Arc::clone(&backend),
+                            pos: pos.clone(),
+                            hold: accept.hold,
+                            link: accept.link,
+                        });
                         let welcome = Msg::Welcome {
                             v: PROTO_VERSION,
                             event: accept.event,
@@ -867,14 +903,13 @@ fn serve_club_connection(
                         }
                         sent_dupes = d;
                         sent_sections = s;
-                        joined = Some((pos, accept.hold));
                     }
                     // ⭐ Merged only as the position this connection JOINED as: every gate
                     // above decided on that JOIN, so a row naming another position is refused,
                     // never merged into a log no gate let it reach. And only while that JOIN
                     // still holds it: a position the host gave to another laptop takes no more.
                     Msg::Qso(row) => match &joined {
-                        Some((pos, hold)) if *pos == row.pos => match backend.merge(*hold, &row) {
+                        Some(j) if j.pos == row.pos => match backend.merge(j.hold, &row) {
                             Ok(acked) => {
                                 if writer
                                     .write_all(encode_line(&Msg::Ack { seq: acked }).as_bytes())
@@ -908,9 +943,9 @@ fn serve_club_connection(
                         name,
                         clock_ms,
                     } => {
-                        if let Some((pos, _)) = &joined {
+                        if let Some(j) = &joined {
                             backend.position_status(
-                                pos,
+                                &j.pos,
                                 &PosReport {
                                     band,
                                     mode,
@@ -964,15 +999,15 @@ fn serve_club_connection(
         // Duty tick: club delta the moment there is one; ping + board-bearing
         // heartbeat every PING_SECS. First, whether this JOIN still holds its position: one the
         // host gave to another laptop is told why and closed within a tick, rows or none.
-        if let Some((pos, hold)) = &joined {
-            if let Err(msg) = backend.held(pos, *hold) {
+        if let Some(j) = &joined {
+            if let Err(msg) = backend.held(&j.pos, j.hold) {
                 let _ = writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
                 break;
             }
             let (d, s) = backend.counts();
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
             if d > sent_dupes || s > sent_sections || beat {
-                let st = backend.club_state(sent_dupes, sent_sections, pos);
+                let st = backend.club_state(sent_dupes, sent_sections, &j.pos);
                 if write_club_state(&mut writer, st, false).is_err() {
                     break;
                 }
@@ -990,9 +1025,7 @@ fn serve_club_connection(
             }
         }
     }
-    if let Some((pos, _)) = joined {
-        backend.disconnect(&pos);
-    }
+    // `joined` drops here: the backend hears its link is gone.
 }
 
 /// Run the host accept loop, a thread per position, until `shutdown` is set —
@@ -1722,6 +1755,8 @@ mod tests {
         /// The hold the next JOIN is served with, and the only one `held` accepts: moving it
         /// is the host giving the position away.
         hold: Mutex<u64>,
+        /// The last link a served JOIN was given; each is one more.
+        links: Mutex<u64>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1753,12 +1788,18 @@ mod tests {
                     return Err(msg);
                 }
             }
+            let link = {
+                let mut last = self.links.lock().unwrap();
+                *last += 1;
+                *last
+            };
             Ok(JoinAccept {
                 event: "TEST FD".into(),
                 host_call: "W9ABC".into(),
                 acked: *self.acked.lock().unwrap().get(pos).unwrap_or(&0),
                 contest: "arrlfd".into(),
                 hold: *self.hold.lock().unwrap(),
+                link,
             })
         }
         fn merge(&self, hold: u64, row: &WireQso) -> Result<u64, String> {
@@ -1812,8 +1853,8 @@ mod tests {
                 board: Vec::new(),
             }
         }
-        fn disconnect(&self, pos: &str) {
-            self.log(format!("disconnect {pos}"));
+        fn disconnect(&self, pos: &str, link: u64) {
+            self.log(format!("disconnect {pos} {link}"));
         }
     }
 
@@ -2184,6 +2225,72 @@ mod tests {
         assert!(
             control.iter().any(|m| matches!(m, Msg::Ack { seq: 4 })),
             "CONTROL: a JOIN after the give is served and its contact merges: {control:?}"
+        );
+    }
+
+    /// ⭐ **Every JOIN served on a connection hands its link back once, whichever way the
+    /// connection ends**: when the peer closes, when it JOINs again (the first link goes before
+    /// the second JOIN is asked), and when the host gives its position away. A refused JOIN was
+    /// given no link and hands none back. CONTROL: a connection still open has handed back
+    /// nothing.
+    #[test]
+    fn every_served_join_hands_its_link_back_once_whichever_way_its_connection_ends() {
+        let club = Arc::new(FakeClub::default());
+        *club.refuse_older.lock().unwrap() = Some("too old".into());
+        let (addr, sd) = start_host(club.clone());
+        let links = || -> Vec<String> {
+            club.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.starts_with("join ") || c.starts_with("disconnect "))
+                .cloned()
+                .collect()
+        };
+        talk(
+            addr,
+            &[join_msg("aaaa0001", 0), join_msg("aaaa0001", 0)],
+            600,
+        );
+        let older = Msg::Join {
+            v: PROTO_VERSION - 1,
+            pos: "cccc0003".into(),
+            name: "tent".into(),
+            call: "W9ABC".into(),
+            max_seq: 0,
+            contest: String::new(),
+            role: String::new(),
+            key: PositionKey::default(),
+        };
+        talk(addr, &[older], 400);
+        let s = TcpStream::connect(addr).unwrap();
+        let mut w = s.try_clone().unwrap();
+        w.write_all(encode_line(&join_msg("bbbb0002", 0)).as_bytes())
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        let open = links();
+        *club.hold.lock().unwrap() = 1;
+        std::thread::sleep(Duration::from_millis(800));
+        let given = links();
+        sd.store(true, Ordering::Relaxed);
+        drop((w, s));
+        let (v, older_v) = (PROTO_VERSION, PROTO_VERSION - 1);
+        assert_eq!(
+            open,
+            [
+                format!("join v{v} aaaa0001"),
+                "disconnect aaaa0001 1".to_string(),
+                format!("join v{v} aaaa0001"),
+                "disconnect aaaa0001 2".to_string(),
+                format!("join v{older_v} cccc0003"),
+                format!("join v{v} bbbb0002"),
+            ],
+            "each link back once; the refused JOIN had none; CONTROL: the open one has not"
+        );
+        assert_eq!(
+            given[open.len()..],
+            ["disconnect bbbb0002 3"],
+            "the connection the give closed"
         );
     }
 

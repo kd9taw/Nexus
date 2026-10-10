@@ -2820,6 +2820,15 @@ pub struct FdClubDto {
     /// is. Absent when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdClubKeptOutDto>,
+    /// ⭐ **This laptop's own club code** (`fdevent::club_code`), on its club line: what the host
+    /// compares with the code on its turned-away list before it gives this laptop a position.
+    /// Empty, and absent, when this Nexus has no club key.
+    ///
+    /// ⛔ This laptop's screen and the host's only: the Remote capture and Remote's snapshot leave
+    /// it out (`remote_service::query::field_day::leave_out_the_hosts_own`), the TV's board never
+    /// had it, and nothing logs it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub club_code: String,
 }
 
 /// [`FdClubDto::kept_out`]: how many contacts the host keeps listed, and the newest of them
@@ -2852,6 +2861,14 @@ pub struct FdClubRefusedDto {
     /// a key it does not know, never meets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<u64>,
+    /// ⭐ **The turned-away laptop's club code** (`fdevent::club_code`), from the key its JOIN
+    /// carried: the code that laptop's own screen shows, and the one thing on the entry it cannot
+    /// choose. Absent for a JOIN with no key, and on every kept-out entry.
+    ///
+    /// ⛔ The host's own screen only, as `handle` is: the Remote capture and Remote's snapshot
+    /// leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub club_code: Option<String>,
 }
 
 /// [`FdClubDto::board_full`]: how many positions the host's club has, and how many of them

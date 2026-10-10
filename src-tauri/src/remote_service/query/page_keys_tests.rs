@@ -1000,8 +1000,10 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 pos_name: "SSB tent".into(),
                 call: "W1AW".into(),
                 reason: "this club sends the in-state exchange".into(),
-                // The host's Give button's: the capture leaves it out (below).
+                // The host's Give button's, and the laptop's club code: the capture leaves both
+                // out (below).
                 handle: Some(7),
+                club_code: Some("7KQ2-M9XD".into()),
             }],
             kept_out: Some(FdClubKeptOutDto {
                 total: 2,
@@ -1010,8 +1012,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     call: "W1AW".into(),
                     reason: "its contact with K1ABC is not in the club's log".into(),
                     handle: None,
+                    club_code: None,
                 }],
             }),
+            // This laptop's own club code: left out too.
+            club_code: "3HV8-ZQ1P".into(),
         }),
         upload: Default::default(),
         receives: Vec::new(),
@@ -1040,9 +1045,12 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             other_running: 3,
         }),
     };
+    let native = serde_json::to_value(&written).unwrap();
     assert!(
-        serde_json::to_value(&written).unwrap()["club"]["refused"][0]["handle"] == 7,
-        "CONTROL: the station's own snapshot carries the Give button's handle"
+        native["club"]["refused"][0]["handle"] == 7
+            && native["club"]["refused"][0]["clubCode"] == "7KQ2-M9XD"
+            && native["club"]["clubCode"] == "3HV8-ZQ1P",
+        "CONTROL: the station's own snapshot carries the Give button's handle and the club codes"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

@@ -53,7 +53,9 @@ fn fd_engine(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter FD");
-    e.set_fd_position_key(club_key(posid));
+    let key = club_key(posid);
+    let hash = test_hash(key.secret());
+    e.set_fd_position_key(key, hash);
     Arc::new(Mutex::new(e))
 }
 
@@ -1013,7 +1015,7 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
     };
     let copy = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
     let copy_key = club_key("a laptop with the CW tent's settings");
-    engine_lock(&copy).set_fd_position_key(copy_key.clone());
+    set_key(&copy, copy_key.clone());
     let copy_sd = start_pump(&copy, &addr);
     log_fd(&copy, "K1ABC", "EMA", "CW");
     log_fd(&copy, "N0XYZ", "MN", "CW");
@@ -1214,6 +1216,827 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
         "the journal holds a club key"
     );
     for sd in [host_sd, host_pump_sd, tent_sd, copy_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// This laptop's club key, handed to the engine as the shell hands it at startup: with its hash
+/// as this run's host bridge makes one.
+fn set_key(eng: &Shared, key: fdsync::PositionKey) {
+    let hash = test_hash(key.secret());
+    engine_lock(eng).set_fd_position_key(key, hash);
+}
+
+/// A station's club block as its own screen reads it: the snapshot's, as JSON.
+fn club_json(eng: &Shared) -> serde_json::Value {
+    serde_json::to_value(engine_lock(eng).snapshot().field_day.and_then(|f| f.club)).unwrap()
+}
+
+/// The host's turned-away entries as its screen shows them: all an entry carries but the handle
+/// its button sends back.
+fn shown_refused(eng: &Shared) -> Vec<serde_json::Value> {
+    let club = club_json(eng);
+    club["refused"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut v| {
+            v.as_object_mut().unwrap().remove("handle");
+            v
+        })
+        .collect()
+}
+
+/// The handle of the host's entry whose club code is `code`.
+fn handle_with_code(eng: &Shared, code: &str) -> Option<u64> {
+    club_json(eng)["refused"]
+        .as_array()?
+        .iter()
+        .find(|v| v["clubCode"].as_str() == Some(code))
+        .and_then(|v| v["handle"].as_u64())
+}
+
+/// The position names a board's rows carry, sorted.
+fn board_names(board: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut names: Vec<String> = board
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r[key].as_str().unwrap_or("").to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+/// ⭐ **Two laptops that name one position alike are told apart on the host's screen, and a give
+/// the host was tricked into is undone by value** — over the real bridge, sockets, pumps and
+/// engines, at an ARRL Field Day club.
+///
+/// The CW tent sends two contacts, then loses its key file and is turned away by the host that
+/// pinned the old key. A LAN peer names the same position with the tent's name and call and a key
+/// of its own, and is turned away too. The host's list then has two entries that read the same in
+/// everything the laptops chose, each with a Give button. Each laptop's own club line shows its
+/// club code, and the host's entry for it shows the same code, so the host can tell which entry
+/// is the tent. A press on the peer's entry (the host tricked) takes the tent's contacts out of
+/// the club's file; a press on the tent's gives it back, and the club's file holds the tent's
+/// contacts again. No club code is on the TV, in the journal or in Settings. CONTROL: the host's
+/// snapshot carries both codes, so the search can find one.
+#[test]
+fn two_laptops_naming_one_position_alike_are_told_apart_and_a_wrong_give_is_undone() {
+    let dir = std::env::temp_dir().join(format!("fd-codes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_codes.jsonl");
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let first_sd = start_pump(&tent, &addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    log_fd(&tent, "N0XYZ", "MN", "CW");
+    wait_until("the tent's two contacts merged", 10, || {
+        worked(&host) == ["K1ABC", "N0XYZ"]
+    });
+
+    // The tent loses its key file, and starts again with a key of its own.
+    first_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    set_key(&tent, club_key("the CW tent, after it lost its key file"));
+    let tent_sd = start_pump(&tent, &addr);
+    // A LAN peer names the tent's position, with its name and call, and a key of its own.
+    let peer = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    set_key(&peer, club_key("a laptop that read bbbb0002 off the board"));
+    log_fd(&peer, "W1FAK", "CT", "CW");
+    let peer_sd = start_pump(&peer, &addr);
+    let held = Some(tempo_app::fdevent::POSITION_HELD.to_string());
+    let show = || {
+        format!(
+            "club file {:?}; tent told {:?}; peer told {:?}; host's entries {:?}",
+            worked(&host),
+            last_error(&tent).map(|e| e.chars().take(40).collect::<String>()),
+            last_error(&peer).map(|e| e.chars().take(40).collect::<String>()),
+            shown_refused(&host),
+        )
+    };
+    wait_showing(
+        "both laptops turned away, each with a button on the host's list",
+        20,
+        || last_error(&tent) == held && last_error(&peer) == held && give_handles(&host).len() == 2,
+        show,
+    );
+    let entries = shown_refused(&host);
+    assert_ne!(
+        entries[0], entries[1],
+        "the host's screen tells the two laptops apart"
+    );
+    // What the host's own screen read while both were on its list.
+    let host_snapshot = serde_json::to_string(&engine_lock(&host).snapshot()).unwrap();
+    let code = |eng: &Shared| {
+        club_json(eng)["clubCode"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let (tent_code, peer_code) = (code(&tent), code(&peer));
+    assert!(
+        !tent_code.is_empty() && tent_code != peer_code,
+        "each laptop's own club line shows its own code: {tent_code:?}, {peer_code:?}"
+    );
+    let mut codes: Vec<String> = entries
+        .iter()
+        .map(|e| e["clubCode"].as_str().unwrap_or("").to_string())
+        .collect();
+    codes.sort();
+    let mut want = vec![tent_code.clone(), peer_code.clone()];
+    want.sort();
+    assert_eq!(
+        codes, want,
+        "the host's entries show the codes the laptops show"
+    );
+
+    // The host is tricked: it presses the peer's entry.
+    let peers = handle_with_code(&host, &peer_code).unwrap();
+    engine_lock(&host).fd_club_give_position(peers).unwrap();
+    wait_showing(
+        "the tent's contacts are out of the club's file, the peer's in",
+        30,
+        || worked(&host) == ["W1FAK"] && last_error(&peer).is_none(),
+        show,
+    );
+    // …and undoes it on the tent's entry, the one with the tent's own code.
+    wait_showing(
+        "the tent's entry still has its button",
+        20,
+        || handle_with_code(&host, &tent_code).is_some(),
+        show,
+    );
+    let tents = handle_with_code(&host, &tent_code).unwrap();
+    engine_lock(&host).fd_club_give_position(tents).unwrap();
+    wait_showing(
+        "the club's file holds the tent's contacts again, and only those",
+        30,
+        || worked(&host) == ["K1ABC", "N0XYZ"] && last_error(&tent).is_none(),
+        show,
+    );
+    wait_showing(
+        "the peer is turned away again",
+        15,
+        || last_error(&peer) == held,
+        show,
+    );
+
+    // Where the codes are, and where they are not.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let board = engine_lock(&host).fd_board_snapshot().unwrap();
+    let elsewhere = [
+        (
+            "the TV's board",
+            tempo_app::fd_scoreboard::build_data_core(&board, now)
+                + &tempo_app::fd_scoreboard::build_meta(&board, now),
+        ),
+        (
+            "the host's journal",
+            std::fs::read_to_string(&journal).unwrap(),
+        ),
+        (
+            "the host's Settings",
+            serde_json::to_string(engine_lock(&host).settings()).unwrap(),
+        ),
+        (
+            "the tent's Settings",
+            serde_json::to_string(engine_lock(&tent).settings()).unwrap(),
+        ),
+    ];
+    for code in [&tent_code, &peer_code] {
+        assert!(
+            host_snapshot.contains(code.as_str()),
+            "CONTROL: the host's own screen shows {code}"
+        );
+        for (what, text) in &elsewhere {
+            assert!(!text.contains(code.as_str()), "{what} holds a club code");
+        }
+    }
+    for sd in [host_sd, host_pump_sd, tent_sd, peer_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **A peer cannot pass as another position by name on any screen the host's board reaches**
+/// — over the real bridge, sockets and pumps, at an ARRL Field Day club. The CW tent joins first.
+/// A LAN peer joins as a position of its own named "CW tent" too, and sends one contact the club
+/// takes and one it keeps out; a second peer names itself what the first one's line reads. The
+/// host's board, the tent's board (the lines every position is sent), the TV's board, Remote's
+/// source and the host's kept-out list each tell every one of them apart, and the tent, which the
+/// host heard first, keeps its own name.
+#[test]
+fn a_peer_cannot_pass_as_another_position_by_name_on_any_board() {
+    let dir = std::env::temp_dir().join(format!("fd-names-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_names.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let tent_sd = start_pump(&tent, &addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    wait_until("the tent's contact merged", 10, || {
+        worked(&host) == ["K1ABC"]
+    });
+    let join_as = |pos: &str, name: &str| {
+        fdsync::encode_line(&fdsync::Msg::Join {
+            v: fdsync::PROTO_VERSION,
+            pos: pos.into(),
+            name: name.into(),
+            call: "W9XYZ".into(),
+            max_seq: 0,
+            contest: "arrlfd".into(),
+            role: String::new(),
+            key: club_key(pos),
+        })
+    };
+    let got = raw_peer(
+        &addr,
+        &[
+            join_as("cccc0003", "CW tent"),
+            row_line("cccc0003", 1, "W1FAK"),
+            row_line("cccc0003", 2, "K1A\u{200B}BC"),
+        ],
+        800,
+    );
+    assert!(
+        got.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })),
+        "CONTROL: the peer is a position of its own, and its contact merged: {got:?}"
+    );
+    raw_peer(&addr, &[join_as("dddd0004", "CW tent (2)")], 500);
+    let want = ["CW tent", "CW tent (2)", "CW tent (2) (2)", "HQ"];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let boards = || {
+        let tv: serde_json::Value = {
+            let board = engine_lock(&host).fd_board_snapshot().unwrap();
+            serde_json::from_str(&tempo_app::fd_scoreboard::build_data_core(&board, now)).unwrap()
+        };
+        let remote =
+            serde_json::to_value(engine_lock(&host).bounded_field_day_status().unwrap()).unwrap();
+        vec![
+            (
+                "the host's board",
+                board_names(&club_json(&host)["board"], "posName"),
+            ),
+            (
+                "the tent's board",
+                board_names(&club_json(&tent)["board"], "posName"),
+            ),
+            ("the TV's board", board_names(&tv["positions"], "label")),
+            (
+                "Remote's source",
+                board_names(&remote["club"]["board"], "posName"),
+            ),
+        ]
+    };
+    wait_showing(
+        "every board names the four positions apart",
+        15,
+        || boards().iter().all(|(_, names)| names == &want),
+        || format!("{:?}", boards()),
+    );
+    let kept: Vec<String> = club_json(&host)["keptOut"]["latest"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|k| k["posName"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(
+        kept,
+        ["CW tent (2)"],
+        "the host's kept-out list names the peer as its board does"
+    );
+    for sd in [host_sd, host_pump_sd, tent_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **A LAN peer cannot take the host's own club position before the host's laptop joins its
+/// own club** — over the real bridge and sockets, at an ARRL Field Day club. The host's position id
+/// rides every board line of every event it has hosted, and its own position joins its club over
+/// loopback only once hosting has started: a peer that JOINs as it first, with a key of its own, is
+/// turned away by name and nothing it sends is acked. The host's own laptop then joins, and its
+/// contact is the club's, before and after a host restart. CONTROL: the peer's own position joins.
+#[test]
+fn a_lan_peer_cannot_take_the_hosts_own_position_before_the_host_joins_its_club() {
+    let dir = std::env::temp_dir().join(format!("fd-own-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_own.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let peer_join = fdsync::encode_line(&fdsync::Msg::Join {
+        v: fdsync::PROTO_VERSION,
+        pos: "aaaa0001".into(),
+        name: "HQ".into(),
+        call: "W9XYZ".into(),
+        max_seq: 0,
+        contest: "arrlfd".into(),
+        role: String::new(),
+        key: club_key("a peer that read the host's position id off a board"),
+    });
+    let got = raw_peer(
+        &addr,
+        &[peer_join.clone(), row_line("aaaa0001", 1, "W1FAK")],
+        800,
+    );
+    let mut wrong = Vec::new();
+    if !told(&got, tempo_app::fdevent::POSITION_HELD) {
+        wrong.push(format!("the peer was not turned away by name: {got:?}"));
+    }
+    if got.iter().any(|m| matches!(m, fdsync::Msg::Ack { .. })) {
+        wrong.push(format!("the peer's contact was acked: {got:?}"));
+    }
+    let host_pump_sd = start_pump(&host, &addr);
+    log_fd(&host, "K1ABC", "EMA", "CW");
+    let mut joined = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if worked(&host) == ["K1ABC"] {
+            joined = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !joined {
+        wrong.push(format!(
+            "the host's own contact is not the club's: club file {:?}, host told {:?}",
+            worked(&host),
+            last_error(&host).map(|e| e.chars().take(60).collect::<String>())
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let own = raw_peer(
+        &addr,
+        &[
+            join_line("eeee0005", "W9XYZ"),
+            row_line("eeee0005", 1, "N0XYZ"),
+        ],
+        800,
+    );
+    assert!(
+        own.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })),
+        "CONTROL: the peer's own position joins: {own:?}"
+    );
+
+    // The host restarts on the same event's journal: the peer is turned away still.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    engine_lock(&host).fd_host_stop();
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, reusable_listener(port));
+    let got = raw_peer(&addr, std::slice::from_ref(&peer_join), 800);
+    assert!(
+        told(&got, tempo_app::fdevent::POSITION_HELD),
+        "after a restart: {got:?}"
+    );
+    let host_pump_sd = start_pump(&host, &addr);
+    log_fd(&host, "W5DEF", "STX", "CW");
+    wait_until("the host's own contacts are the club's", 30, || {
+        worked(&host) == ["K1ABC", "N0XYZ", "W5DEF"]
+    });
+    for sd in [host_sd, host_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **A laptop whose whole settings folder was copied from a connected one is turned away by
+/// name, and neither laptop's contacts are lost** — over the real bridge, sockets, pumps and
+/// engines, at an ARRL Field Day club. The copy carries the laptop's position id and its club key,
+/// so the host cannot tell the two apart by either: they would be one position, each counting its
+/// own contacts from 1, so one laptop's would never be sent (the host's count for the position is
+/// past them) and the other's would be dropped as repeats, with both chips reading Synced. The host
+/// turns the copy away while the laptop it came from is connected, by name, and its entry on the
+/// host's list shows the club code both laptops show. CONTROL: a laptop with a position and a key
+/// of its own joins and its contact is the club's.
+#[test]
+fn a_copied_settings_folder_is_turned_away_by_name_while_its_laptop_is_connected() {
+    let dir = std::env::temp_dir().join(format!("fd-copied-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_copied.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let tent_sd = start_pump(&tent, &addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    log_fd(&tent, "N0XYZ", "MN", "CW");
+    wait_until("the tent's two contacts merged", 10, || {
+        worked(&host) == ["K1ABC", "N0XYZ"]
+    });
+    // The copy: the tent's whole settings folder, so its position id and its club key.
+    let copy = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    log_fd(&copy, "W5DEF", "STX", "CW");
+    log_fd(&copy, "K7GHI", "OR", "CW");
+    let copy_sd = start_pump(&copy, &addr);
+    std::thread::sleep(Duration::from_millis(2_500));
+    log_fd(&copy, "W0JKL", "CO", "CW");
+    std::thread::sleep(Duration::from_millis(1_500));
+    log_fd(&tent, "W1FAK", "CT", "CW");
+    let show = || {
+        let state = |e: &Shared| {
+            let c = club_json(e);
+            format!(
+                "{} acked {}",
+                c["syncState"].as_str().unwrap_or("-"),
+                engine_lock(e).fd_mirror_mut().acked
+            )
+        };
+        format!(
+            "club file {:?}; tent {}; copy {}; copy told {:?}",
+            worked(&host),
+            state(&tent),
+            state(&copy),
+            last_error(&copy).map(|e| e.chars().take(60).collect::<String>())
+        )
+    };
+    wait_showing(
+        "three contacts in the club's file",
+        15,
+        || worked(&host).len() == 3,
+        show,
+    );
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert_eq!(
+        worked(&host),
+        ["K1ABC", "N0XYZ", "W1FAK"],
+        "every contact of the tent's is the club's: {}",
+        show()
+    );
+    assert_eq!(
+        last_error(&copy).as_deref(),
+        Some(tempo_app::fdevent::POSITION_IN_USE),
+        "the copy is turned away by name"
+    );
+    let code = |eng: &Shared| {
+        club_json(eng)["clubCode"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let entries = shown_refused(&host);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["reason"], tempo_app::fdevent::POSITION_IN_USE);
+    assert!(
+        !code(&tent).is_empty()
+            && code(&tent) == code(&copy)
+            && entries[0]["clubCode"].as_str() == Some(code(&tent).as_str()),
+        "the copy's entry shows the club code both laptops show: {entries:?}"
+    );
+    assert!(
+        club_json(&host)["refused"][0]["handle"].is_null(),
+        "and no Give button: the position is already that key's"
+    );
+    let own = fd_engine("W9XYZ", "cccc0003", "SSB tent", &addr);
+    let own_sd = start_pump(&own, &addr);
+    log_fd(&own, "W9AAA", "IL", "CW");
+    wait_until("CONTROL: a laptop of its own joins", 10, || {
+        worked(&host).contains(&"W9AAA".to_string())
+    });
+    for sd in [host_sd, host_pump_sd, tent_sd, copy_sd, own_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **No JOIN gets past the key check, whatever its key field holds** — over the real bridge and
+/// sockets, at an ARRL Field Day club whose CW tent is pinned and connected. A JOIN with no key
+/// field, an empty key, a key one digit short or long, the tent's key in capitals or with a space
+/// after it, and the pinned HASH sent as the key are each turned away by name, and nothing any of
+/// them sends is acked; a key that is not a string is no JOIN at all. The same after a host
+/// restart. CONTROL: the tent's own key is let in once its laptop has gone.
+#[test]
+fn no_join_gets_past_the_key_check_whatever_its_key_holds() {
+    let dir = std::env::temp_dir().join(format!("fd-keys-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_keys.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let tent_sd = start_pump(&tent, &addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    wait_until("the tent's contact merged", 10, || {
+        worked(&host) == ["K1ABC"]
+    });
+    let real = club_key("bbbb0002").secret().to_string();
+    let join_with = |key: &str| {
+        format!(
+            "{{\"t\":\"join\",\"v\":{},\"pos\":\"bbbb0002\",\"name\":\"CW tent\",\"call\":\"W9XYZ\",\
+             \"max_seq\":0,\"contest\":\"arrlfd\"{key}}}\n",
+            fdsync::PROTO_VERSION
+        )
+    };
+    let no_key = tempo_app::fdevent::NO_POSITION_KEY;
+    let held = tempo_app::fdevent::POSITION_HELD;
+    let cases: Vec<(&str, String, Option<&str>)> = vec![
+        ("no key field", join_with(""), Some(no_key)),
+        ("an empty key", join_with(",\"key\":\"\""), Some(no_key)),
+        (
+            "63 digits",
+            join_with(&format!(",\"key\":\"{}\"", &real[..63])),
+            Some(no_key),
+        ),
+        (
+            "65 digits",
+            join_with(&format!(",\"key\":\"{real}0\"")),
+            Some(no_key),
+        ),
+        (
+            "the key in capitals",
+            join_with(&format!(",\"key\":\"{}\"", real.to_ascii_uppercase())),
+            Some(no_key),
+        ),
+        (
+            "a space after it",
+            join_with(&format!(",\"key\":\"{real} \"")),
+            Some(no_key),
+        ),
+        (
+            "the pinned hash as the key",
+            join_with(&format!(",\"key\":\"{}\"", test_hash(&real))),
+            Some(held),
+        ),
+        ("a number", join_with(",\"key\":7"), None),
+        ("null", join_with(",\"key\":null"), None),
+    ];
+    let mut wrong = Vec::new();
+    let mut check = |when: &str| {
+        for (what, join, want) in &cases {
+            let got = raw_peer(
+                &addr,
+                &[join.clone(), row_line("bbbb0002", 9, "W1FAK")],
+                600,
+            );
+            let ok = match want {
+                Some(sentence) => told(&got, sentence),
+                None => got.is_empty(),
+            };
+            if !ok || got.iter().any(|m| matches!(m, fdsync::Msg::Ack { .. })) {
+                wrong.push(format!("{when}, {what}: {got:?}"));
+            }
+        }
+    };
+    check("live");
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    engine_lock(&host).fd_host_stop();
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, reusable_listener(port));
+    check("after a restart");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    tent_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    let got = raw_peer(
+        &addr,
+        &[
+            join_with(&format!(",\"key\":\"{real}\"")),
+            row_line("bbbb0002", 2, "N0XYZ"),
+        ],
+        800,
+    );
+    assert!(
+        got.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 2 })),
+        "CONTROL: the tent's own key: {got:?}"
+    );
+    host_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A link a test can drop as a Wi-Fi link drops: a relay between a laptop and the host that
+/// forwards both ways until [`Relay::cut`]. A cut connection forwards nothing more and its
+/// laptop's side is closed at once (the laptop's network went down under it), while its host's
+/// side stays open, silent, until the host closes it, which the relay notes. Every connection
+/// the laptop opens after the cut is relayed afresh.
+struct Relay {
+    addr: String,
+    live: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
+    host_closed: Arc<Mutex<Option<Instant>>>,
+}
+
+impl Relay {
+    fn start(host: &str) -> Relay {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let live: Arc<Mutex<Vec<Arc<AtomicBool>>>> = Arc::default();
+        let host_closed: Arc<Mutex<Option<Instant>>> = Arc::default();
+        let (host, live2, closed2) = (host.to_string(), live.clone(), host_closed.clone());
+        std::thread::spawn(move || {
+            for laptop in listener.incoming().flatten() {
+                let Ok(to_host) = std::net::TcpStream::connect(&host) else {
+                    continue;
+                };
+                let dark = Arc::new(AtomicBool::new(false));
+                live2.lock().unwrap().push(dark.clone());
+                for s in [&laptop, &to_host] {
+                    s.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+                }
+                let pump =
+                    |mut from: std::net::TcpStream,
+                     mut to: std::net::TcpStream,
+                     dark: Arc<AtomicBool>,
+                     closed: Option<Arc<Mutex<Option<Instant>>>>| {
+                        use std::io::{Read, Write};
+                        let mut buf = [0u8; 8192];
+                        loop {
+                            match from.read(&mut buf) {
+                                Ok(0) => {
+                                    if dark.load(Ordering::SeqCst) {
+                                        if let Some(c) = &closed {
+                                            *c.lock().unwrap() = Some(Instant::now());
+                                        }
+                                    }
+                                    let _ = to.shutdown(std::net::Shutdown::Both);
+                                    return;
+                                }
+                                Ok(n) if !dark.load(Ordering::SeqCst) => {
+                                    if to.write_all(&buf[..n]).is_err() {
+                                        return;
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                                Err(_) => return,
+                            }
+                            // Cut: the laptop's side goes down at once; the host's stays open.
+                            if dark.load(Ordering::SeqCst) && closed.is_none() {
+                                let _ = from.shutdown(std::net::Shutdown::Both);
+                                return;
+                            }
+                        }
+                    };
+                let (l2, h2) = (laptop.try_clone().unwrap(), to_host.try_clone().unwrap());
+                let (d1, d2, c) = (dark.clone(), dark.clone(), closed2.clone());
+                std::thread::spawn(move || pump(laptop, h2, d1, None));
+                std::thread::spawn(move || pump(to_host, l2, d2, Some(c)));
+            }
+        });
+        Relay {
+            addr,
+            live,
+            host_closed,
+        }
+    }
+
+    /// Drop every connection relayed so far, as a dropped link drops it.
+    fn cut(&self) -> Instant {
+        for dark in self.live.lock().unwrap().drain(..) {
+            dark.store(true, Ordering::SeqCst);
+        }
+        Instant::now()
+    }
+
+    /// When the host closed its side of a connection that was cut: when it noticed the link
+    /// was gone.
+    fn host_noticed(&self) -> Option<Instant> {
+        *self.host_closed.lock().unwrap()
+    }
+}
+
+/// ⭐ **A laptop back from a dropped link is turned away only until the host notices its old
+/// link is gone, and then let in by itself** — over the real bridge, sockets and pumps, through a
+/// relay that drops the CW tent's link the way a Wi-Fi link drops: the laptop's side goes down at
+/// once, so it is back within a second, while the host's side of the old connection stays open
+/// and silent until the host's dead-man closes it. Until then the laptop's JOIN meets a laptop
+/// with its key connected as its position, and is turned away by name; after it, the next JOIN
+/// is served, and the contact it logged meanwhile reaches the club's file. The measured times are
+/// printed. CONTROL: the race happened — the laptop was turned away at least once.
+#[test]
+fn a_laptop_back_from_a_dropped_link_is_turned_away_only_until_the_host_notices() {
+    let dir = std::env::temp_dir().join(format!("fd-dropped-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_dropped.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let relay = Relay::start(&addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &relay.addr);
+    let tent_sd = start_pump(&tent, &relay.addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    wait_until("the tent's contact merged through the relay", 10, || {
+        worked(&host) == ["K1ABC"]
+    });
+    let wall = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    };
+    let (cut, cut_wall) = (relay.cut(), wall());
+    log_fd(&tent, "K9EEE", "IL", "CW");
+    let in_use = tempo_app::fdevent::POSITION_IN_USE;
+    // The host's list keeps the clock of each laptop's latest refused JOIN, in whole seconds.
+    let refused_at = || {
+        let now = wall() as u64;
+        engine_lock(&host).fd_club_log().and_then(|c| {
+            c.refused(now)
+                .iter()
+                .filter(|r| r.reason == in_use)
+                .map(|r| r.at_unix)
+                .max()
+        })
+    };
+    let (mut first_refused, mut last_refused, mut served) = (None, None::<u64>, None);
+    let deadline = cut + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if let Some(at) = refused_at() {
+            first_refused.get_or_insert(Instant::now());
+            last_refused = Some(last_refused.map_or(at, |l| l.max(at)));
+        } else if first_refused.is_some() && last_error(&tent).is_none() && worked(&host).len() == 2
+        {
+            served = Some(Instant::now());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let noticed = relay.host_noticed();
+    let after = |t: Option<Instant>| t.map(|t| t.duration_since(cut).as_secs_f64());
+    let last_after = last_refused.map(|at| at as f64 - cut_wall);
+    eprintln!(
+        "dropped link, seconds after the cut: first refused {:?}, last refused JOIN {:?} (whole \
+         seconds), host noticed {:?}, served {:?}",
+        after(first_refused),
+        last_after,
+        after(noticed),
+        after(served)
+    );
+    let (Some(last_after), Some(noticed), Some(served)) =
+        (last_after, after(noticed), after(served))
+    else {
+        panic!(
+            "CONTROL or outcome missing: refused {:?}, noticed {:?}, served {:?}; club file {:?}",
+            after(first_refused),
+            after(noticed),
+            after(served),
+            worked(&host)
+        );
+    };
+    let dead = fdsync::DEAD_SECS as f64;
+    assert!(
+        noticed <= dead + 1.5,
+        "the host noticed the dead link within its dead-man: {noticed} s"
+    );
+    assert!(
+        last_after <= noticed + 1.0,
+        "turned away no longer than the host took to notice: {last_after} s, noticed {noticed} s"
+    );
+    assert!(
+        served - noticed <= 17.0,
+        "served on its next try after that: {served} s, noticed {noticed} s"
+    );
+    assert_eq!(
+        worked(&host),
+        ["K1ABC", "K9EEE"],
+        "the contact logged meanwhile"
+    );
+    for sd in [host_sd, tent_sd] {
         sd.store(true, Ordering::Relaxed);
     }
     std::thread::sleep(Duration::from_millis(300));

@@ -64,7 +64,7 @@ fn party_engine_on(call: &str, posid: &str, name: &str, join_addr: &str) -> Shar
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter the party");
-    e.set_fd_position_key(club_key(posid));
+    e.set_fd_position_key(club_key(posid), test_hash(club_key(posid).secret()));
     Arc::new(Mutex::new(e))
 }
 
@@ -79,7 +79,7 @@ fn field_day_engine(posid: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter Field Day");
-    e.set_fd_position_key(club_key(posid));
+    e.set_fd_position_key(club_key(posid), test_hash(club_key(posid).secret()));
     Arc::new(Mutex::new(e))
 }
 
@@ -355,7 +355,7 @@ fn indiana_party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter the party");
-    e.set_fd_position_key(club_key(posid));
+    e.set_fd_position_key(club_key(posid), test_hash(club_key(posid).secret()));
     Arc::new(Mutex::new(e))
 }
 

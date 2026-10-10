@@ -33018,7 +33018,10 @@ fn start_on_the_logbook(
                 "tempo: couldn't keep the club key, so a host will not know it next run: {e}"
             );
         }
-        eng.set_fd_position_key(club_key);
+        // …with its hash as this laptop's own host bridge makes one: what its club code is
+        // made from, and what its own position is pinned to when it hosts.
+        let key_hash = club_key::sha256_hex(club_key.secret());
+        eng.set_fd_position_key(club_key, key_hash);
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
         // restart loses nothing. Per-POSITION file (suffixed by posid), with a

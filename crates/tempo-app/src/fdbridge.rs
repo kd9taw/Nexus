@@ -76,8 +76,8 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_state(dupes_from, sections_from, mark_seen)
     }
 
-    fn disconnect(&self, pos: &str) {
-        engine_lock(&self.0).fd_club_disconnect(pos);
+    fn disconnect(&self, pos: &str, link: u64) {
+        engine_lock(&self.0).fd_club_disconnect(pos, link);
     }
 }
 
