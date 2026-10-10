@@ -1,7 +1,8 @@
-//! The rotator over Remote: point at an azimuth, point at a callsign's entity, stop.
+//! The rotator over Remote: point at an azimuth, point at a callsign's station, stop.
 //!
-//! The rotctld address and the bearing are resolved from the station's own Settings while the
-//! caller holds the Engine lock, exactly as the desktop commands resolve them. The rotctld
+//! The rotctld address and the bearing are resolved from the station's own Settings and Engine
+//! while the caller holds the Engine lock, exactly as the desktop commands resolve them: a
+//! point-at-call turns where the desktop's does, by the desktop's own resolver. The rotctld
 //! exchange itself runs on its own thread, so the Engine lock is never held across network I/O,
 //! and the receipt stays pending until rotctld answers. A command whose reply failed is UNKNOWN,
 //! never applied: the line may still have reached the mast.
@@ -9,6 +10,7 @@
 //! An operator gesture only. Nothing here is called on a timer or from a spot, and nothing here
 //! can arm, key or touch the transmit latch.
 use std::time::Instant;
+use tempo_app::engine::Engine;
 use tempo_app::remote_control::{Completion, Evidence, Outcome, Permit, Reason};
 use tempo_app::settings::Settings;
 
@@ -33,13 +35,23 @@ pub fn valid_call(call: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
 }
 
-/// The desktop `point_rotator_at_call` bearing: great circle from the station grid to the
-/// callsign's DXCC entity. No grid or no entity is not a bearing.
-pub fn bearing_to_call(settings: &Settings, call: &str) -> Result<f64, Reason> {
-    let me = propagation::geo::maidenhead_to_latlon(settings.mygrid.trim())
-        .ok_or(Reason::InvalidAction)?;
-    let info = propagation::dxcc::resolve(call).ok_or(Reason::InvalidAction)?;
-    Ok(propagation::geo::bearing_deg(me, (info.lat, info.lon)))
+/// The bearing the desktop's `point_rotator_at_call` turns to, short path: its own resolver
+/// (`crate::aim_at_call`) over its own inputs, the station grid and what the engine knows of the
+/// call (`crate::station_fixes`: the log form's grid, the grids heard, the callbook's answer, the
+/// grid logged before), and only when it knows none the centre of the call's DXCC entity. No grid,
+/// or nothing that places the call, is not a bearing.
+///
+/// ⚠️ This was the entity's centre alone, while the desktop has aimed at the station since
+/// 2026-09-29: from FN31, a browser's point at a Boston W1 went to the middle of the United
+/// States, 200° away from where the desktop's went.
+pub fn bearing_to_call(engine: &Engine, call: &str) -> Result<f64, Reason> {
+    crate::aim_at_call(
+        &engine.settings().mygrid,
+        call,
+        crate::station_fixes(engine, call),
+    )
+    .map(|aim| aim.bearing)
+    .map_err(|_| Reason::InvalidAction)
 }
 
 /// Admit one rotator command and hand it to its own worker thread. `satellite_track` is whether

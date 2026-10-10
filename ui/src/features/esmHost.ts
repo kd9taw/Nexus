@@ -80,8 +80,8 @@ const sameStrip = (a: EsmStrip | null, b: EsmStrip | null) =>
     b !== null &&
     a.call === b.call &&
     a.exchangeComplete === b.exchangeComplete &&
-    a.dupe === b.dupe &&
-    (a.fromHistory ?? null) === (b.fromHistory ?? null))
+    a.fromHistory === b.fromHistory &&
+    a.dupe === b.dupe)
 
 /** A cockpit's Enter Sends Message: the host for its strip, what the next Enter would do (for the
  *  dock's plate and highlight), and the cockpit's three events: a stop, the key its CQ is on, and

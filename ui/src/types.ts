@@ -1597,8 +1597,13 @@ export interface RadioStatus {
   /** Rig split TX dial (MHz) when a pile-up spot configured split; null/absent =
    * simplex. Drives the SPLIT badge. */
   splitTxMhz?: number | null
-  /** Set when the sound card failed to open (explains a blank waterfall). */
+  /** The station's audio-error line: a sound card that failed, a PTT the rig did not accept, a
+   *  headphone monitor held off … The sentence is shown whole, as data. */
   audioError?: string | null
+  /** Which kind of problem `audioError` is (mirror of the Rust AudioErrorKind). Absent while there
+   *  is none, and from a station older than the field. The words are the UI's, in
+   *  features/audioError.ts. */
+  audioErrorKind?: AudioErrorKind | null
   /** Why this station is NOT sharing its radio: the CAT broker asked for its port and was
    *  refused (#165). Absent/null = it is serving, or sharing is switched off. The share block
    *  renders this INSTEAD of the address, because with the bind refused that address is one
@@ -4736,6 +4741,21 @@ export interface FlexTune {
   /** The radio's own transmit timeout in milliseconds, 0 when it is off; null until reported. */
   txTimeoutMs?: number | null
 }
+
+/** Which kind of problem the station's audio-error line reports (mirror of the Rust
+ *  AudioErrorKind, by its wire names). The words and the tier are the UI's, in
+ *  features/audioError.ts. */
+export type AudioErrorKind =
+  | 'engineStopped'
+  | 'soundCard'
+  | 'noReceiveAudio'
+  | 'ptt'
+  | 'flexAudio'
+  | 'flexAddress'
+  | 'monitor'
+  | 'voiceMic'
+  | 'recording'
+  | 'decodeCrash'
 
 /** A slot over's key the radio did not accept (mirror of the Rust SlotKeyRefused). The words are
  *  the UI's, in features/slotKeyRefused.ts. */

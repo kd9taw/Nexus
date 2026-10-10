@@ -170,6 +170,12 @@ impl Scene {
     fn banner(&self) -> Option<String> {
         self.engine.lock().unwrap().snapshot().radio.audio_error
     }
+
+    /// The kind the snapshot gives that line, as the UI reads it off the wire (`Null` = none).
+    fn kind(&self) -> serde_json::Value {
+        let snapshot = self.engine.lock().unwrap().snapshot();
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"].clone()
+    }
 }
 
 /// The voice keyer's words for a refused key.
@@ -195,6 +201,8 @@ fn a_refused_tune_plays_no_carrier_and_ends() {
     assert!(s.backend.played.is_empty(), "a carrier went into the rig");
     assert!(!s.engine.lock().unwrap().tuning(), "the tune is still on");
     assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    // Named as a PTT problem, so the status lane says so instead of "the radio stopped".
+    assert_eq!(s.kind(), "ptt");
     let log = s.log.lock().unwrap().clone();
     let key = log.iter().position(|l| l == "T 1").unwrap();
     assert!(
@@ -211,6 +219,11 @@ fn a_refused_tune_plays_no_carrier_and_ends() {
     assert!(!s.backend.played.is_empty(), "control: no carrier");
     assert!(s.engine.lock().unwrap().tuning(), "control: the tune ended");
     assert_eq!(s.banner(), None);
+    assert_eq!(
+        s.kind(),
+        serde_json::Value::Null,
+        "control: no line, no kind"
+    );
 }
 
 /// ⭐ AN APRS FRAME THE RADIO REFUSES IS NOT PLAYED. It was played into the receiving radio and

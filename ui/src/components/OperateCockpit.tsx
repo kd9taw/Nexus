@@ -2383,8 +2383,6 @@ function OperateRecall({
       // one state while the award maths counts another. #237.
       state={station?.state}
       grid={book?.grid || station?.grid}
-      lat={book?.lat ?? null}
-      lon={book?.lon ?? null}
       country={book?.country}
       image={book?.image}
       myGrid={snap.mygrid}

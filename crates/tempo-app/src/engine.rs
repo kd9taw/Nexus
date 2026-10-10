@@ -3670,9 +3670,10 @@ pub struct Engine {
     cat_port_hold_until: Option<std::time::Instant>,
     /// Loop → prober ack: the daemon/control channel is dropped and the port is free.
     cat_port_released: bool,
-    /// Set by the radio loop when the sound card failed to open, so the UI can
-    /// explain a blank waterfall instead of failing silently.
-    audio_error: Option<String>,
+    /// The station's audio-error line: the kind of problem and the sentence that says it, set and
+    /// cleared together so a kind can never outlive its sentence. Written by the radio loop (and a
+    /// contained decode crash); see [`Self::set_audio_error`].
+    audio_error: Option<(crate::dto::AudioErrorKind, String)>,
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
@@ -20948,7 +20949,10 @@ contact yourself."
         self.scope_span_refused = note;
     }
 
-    pub fn set_audio_error(&mut self, err: Option<String>) {
+    /// Say (or stop saying) what is wrong on the station's audio-error line. Every writer names the
+    /// kind of problem beside its sentence, so the status lane can head it with true words: one
+    /// headline for all of them told an operator whose rig refused PTT that the radio had stopped.
+    pub fn set_audio_error(&mut self, err: Option<(crate::dto::AudioErrorKind, String)>) {
         self.audio_error = err;
     }
 
@@ -22226,7 +22230,8 @@ contact yourself."
             crate::settings::CwKeyerBackend::Serial => "serial",
         }
         .to_string();
-        s.radio.audio_error = self.audio_error.clone();
+        s.radio.audio_error = self.audio_error.as_ref().map(|(_, line)| line.clone());
+        s.radio.audio_error_kind = self.audio_error.as_ref().map(|(kind, _)| *kind);
         s.radio.cat_share_error = self.cat_share_error.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
@@ -23893,10 +23898,13 @@ contact yourself."
             // case is that it stays up until the operator sees it). Never STOMP a
             // live audio/CAT error though — that lane's owner outranks a notice.
             if self.audio_error.is_none() {
-                self.audio_error = Some(format!(
-                    "A {:?} decode crashed and was contained — receive continues. This \
-                     is a bug; please report it.",
-                    result.pass
+                self.audio_error = Some((
+                    crate::dto::AudioErrorKind::DecodeCrash,
+                    format!(
+                        "A {:?} decode crashed and was contained — receive continues. This \
+                         is a bug; please report it.",
+                        result.pass
+                    ),
                 ));
             }
             return DecodeApplied::Stale;
@@ -59503,6 +59511,11 @@ mod tests {
         assert!(
             e.snapshot().radio.audio_error.is_some(),
             "a contained panic must reach the operator-visible error lane"
+        );
+        assert_eq!(
+            serde_json::to_value(e.snapshot()).unwrap()["radio"]["audioErrorKind"],
+            "decodeCrash",
+            "named as a crashed decode, not as a stopped radio: receive continues"
         );
 
         // The panic unwound while HOLDING the source guard, so the lock is now
