@@ -6955,17 +6955,79 @@ impl Engine {
     /// live rig swap, no dropped carrier. If `id` happens to BE the active radio, the flat mirror is
     /// re-synced from it so the running loop picks the edits up; if it isn't, the active radio (and
     /// its flat mirror) are left completely untouched. `active_radio` is never changed here.
-    pub fn update_radio_profile(&mut self, id: u32, patch: crate::settings::RadioProfilePatch) {
+    ///
+    /// An edit that would put a daemon of Nexus's on a NET rigctl radio's Network Address on this
+    /// computer (a rigctld TCP Port typed onto another radio's address, or an address typed onto
+    /// another radio's port) is refused, by name, and changes nothing: that radio's CAT would read
+    /// and command whatever answers there ([`crate::settings::port_clash_introduced`]).
+    pub fn update_radio_profile(
+        &mut self,
+        id: u32,
+        patch: crate::settings::RadioProfilePatch,
+    ) -> Result<(), String> {
+        let mut edited = self.settings.clone();
+        if let Some(p) = edited.radios.iter_mut().find(|p| p.id == id) {
+            patch.apply_to(p);
+        }
+        // Keep each radio's daemon ports distinct (a bumped port must not collide).
+        edited.ensure_distinct_radio_ports();
+        let broker = edited.cat_broker.then_some(edited.cat_broker_port);
+        if let Some(refusal) = crate::settings::port_clash_introduced(
+            &self.settings.radios,
+            broker,
+            &edited.radios,
+            broker,
+        ) {
+            return Err(refusal);
+        }
         // Port collision repair can also change the active profile when editing another.
         self.remote_actuation.revoke();
         self.remote_readings.invalidate();
-        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
-            patch.apply_to(p);
-        }
-        // Keep each radio's daemon ports distinct (a bumped port must not collide) and mirror the
-        // ACTIVE profile back into the flat fields — a no-op for the flat mirror when id != active.
-        self.settings.ensure_distinct_radio_ports();
+        self.settings = edited;
+        // Mirror the ACTIVE profile back into the flat fields — a no-op for the flat mirror when
+        // id != active.
         self.settings.sync_flat_from_active();
+        Ok(())
+    }
+
+    /// The clash a form save of `s` would make, in words: a daemon of Nexus's, or its CAT broker,
+    /// on a NET rigctl radio's Network Address on this computer
+    /// ([`crate::settings::port_clash_introduced`]). The save is refused with it, before anything
+    /// is applied. `None` for every other save, including one made while a clash is already stored
+    /// (the status lane says that one).
+    pub fn port_clash_a_save_introduces(&self, s: &Settings) -> Option<String> {
+        let after = self.roster_after_form_save(s);
+        crate::settings::port_clash_introduced(
+            &self.settings.radios,
+            self.settings
+                .cat_broker
+                .then_some(self.settings.cat_broker_port),
+            &after.radios,
+            after.cat_broker.then_some(after.cat_broker_port),
+        )
+    }
+
+    /// The radios and the broker a form save of `s` would leave, folded as `apply_settings_inner`
+    /// folds them: the live roster, with the form's flat rig fields in the radio the form
+    /// describes, then the port repair. Only those are read from it.
+    fn roster_after_form_save(&self, s: &Settings) -> Settings {
+        let live_active = self.settings.active_radio;
+        let form_active = if s.radios.is_empty() {
+            live_active
+        } else {
+            s.active_radio
+        };
+        let mut after = s.clone();
+        after.radios = self.settings.radios.clone();
+        after.ensure_radio_profiles();
+        if after.radios.iter().any(|p| p.id == form_active) {
+            after.active_radio = form_active;
+            after.sync_active_from_flat();
+        }
+        after.active_radio = live_active;
+        after.ensure_radio_profiles();
+        after.ensure_distinct_radio_ports();
+        after
     }
 
     /// THE operator QSY: every band picker, typed MHz, spot click, needed click, mode home
@@ -22326,7 +22388,16 @@ contact yourself."
         s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
-            crate::settings::serial_port_conflicts(&self.settings.radios)
+            // A daemon of Nexus's, or its broker, on a NET rigctl radio's Network Address: two
+            // radios' CAT crossed, or one talking to Nexus itself. FIRST, as the one that can
+            // command the wrong radio.
+            crate::settings::net_rigctl_address_conflicts(
+                &self.settings.radios,
+                self.settings
+                    .cat_broker
+                    .then_some(self.settings.cat_broker_port),
+            )
+            .or_else(|| crate::settings::serial_port_conflicts(&self.settings.radios))
                 .or_else(|| {
                     crate::settings::cw_key_port_conflict(
                         self.settings.cw_keyer,
@@ -51065,7 +51136,8 @@ mod tests {
             .find(|p| p.id == r0)
             .unwrap()
             .clone();
-        e.update_radio_profile(r0, patch_with_port(&r0_profile, "COM_R0_EDITED"));
+        e.update_radio_profile(r0, patch_with_port(&r0_profile, "COM_R0_EDITED"))
+            .unwrap();
 
         // r0's profile changed…
         let r0_now = e.settings.radios.iter().find(|p| p.id == r0).unwrap();
@@ -51080,6 +51152,228 @@ mod tests {
         assert_eq!(
             e.settings.serial_port, "COM_R1",
             "flat mirror still mirrors the active radio"
+        );
+    }
+
+    /// The IC-9700 on wfview's rigctld at `127.0.0.1:4533` (Nexus's rigctld TCP Port 4534) and an
+    /// FTDX10 on a serial port with its rigctld on 4535, the broker on 4532. `active` is operated.
+    fn wfview_and_ftdx10(active: u32) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let ic9700 = crate::settings::RadioProfile {
+            id: 0,
+            name: "IC-9700".into(),
+            rig_model: 2,
+            rig_conn: "network".into(),
+            rig_addr: "127.0.0.1:4533".into(),
+            rigctld_port: 4534,
+            ..Default::default()
+        };
+        let ftdx10 = crate::settings::RadioProfile {
+            id: 1,
+            name: "FTDX10".into(),
+            rig_model: 1042,
+            serial_port: "COM3".into(),
+            rigctld_port: 4535,
+            ..Default::default()
+        };
+        e.settings.radios = vec![ic9700, ftdx10];
+        e.settings.cat_broker = true;
+        e.settings.cat_broker_port = 4532;
+        e.settings.active_radio = active;
+        e.settings.sync_flat_from_active();
+        e
+    }
+
+    /// The patch Settings ▸ Radio saves for `p`: every per-radio field, as the panel sends it.
+    fn patch_for(p: &crate::settings::RadioProfile) -> crate::settings::RadioProfilePatch {
+        serde_json::from_value(serde_json::to_value(p).unwrap()).unwrap()
+    }
+
+    /// (name, rigctld TCP Port, Network Address) of every radio.
+    fn cat_ends(e: &Engine) -> Vec<(String, u16, String)> {
+        e.settings
+            .radios
+            .iter()
+            .map(|p| (p.name.clone(), p.rigctld_port, p.rig_addr.clone()))
+            .collect()
+    }
+
+    /// ⭐ AN EDIT THAT PUTS A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS REFUSED, BY NAME,
+    /// AND CHANGES NOTHING. Two ways to make the clash (a daemon's port typed onto the address, an
+    /// address typed onto a daemon's port), and the control: an unrelated edit while one is already
+    /// stored goes through, since it is not that edit's.
+    #[test]
+    fn an_edit_that_puts_a_daemon_on_a_net_rigctl_address_is_refused_by_name() {
+        let edit = |id: u32, change: &dyn Fn(&mut crate::settings::RadioProfile)| {
+            let mut e = wfview_and_ftdx10(0);
+            let mut p = e
+                .settings
+                .radios
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .clone();
+            change(&mut p);
+            let said = e.update_radio_profile(id, patch_for(&p));
+            (said, cat_ends(&e))
+        };
+        let stored = |e: &mut Engine| e.settings.radios[1].rigctld_port = 4533;
+        let unrelated = {
+            let mut e = wfview_and_ftdx10(0);
+            stored(&mut e);
+            let mut p = e.settings.radios[1].clone();
+            p.baud = 4800;
+            let said = e.update_radio_profile(1, patch_for(&p));
+            (said, cat_ends(&e), e.settings.radios[1].baud)
+        };
+        let ends = |ftdx10: u16, ic9700: &str| {
+            vec![
+                ("IC-9700".to_string(), 4534, ic9700.to_string()),
+                ("FTDX10".to_string(), ftdx10, String::new()),
+            ]
+        };
+        assert_eq!(
+            (
+                edit(1, &|p| p.rigctld_port = 4533),
+                edit(0, &|p| p.rig_addr = "127.0.0.1:4535".into()),
+                unrelated,
+            ),
+            (
+                (
+                    Err(
+                        "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and \
+                         FTDX10's rigctld TCP Port is 4533 too: IC-9700 and FTDX10 could each \
+                         read and command the other's radio. Give FTDX10 a different rigctld \
+                         TCP Port (Settings ▸ Radio ▸ Advanced)."
+                            .to_string()
+                    ),
+                    ends(4535, "127.0.0.1:4533"),
+                ),
+                (
+                    Err(
+                        "TCP port 4535 is IC-9700's Network Address (127.0.0.1:4535), and \
+                         FTDX10's rigctld TCP Port is 4535 too: IC-9700 and FTDX10 could each \
+                         read and command the other's radio. Give FTDX10 a different rigctld \
+                         TCP Port (Settings ▸ Radio ▸ Advanced)."
+                            .to_string()
+                    ),
+                    ends(4535, "127.0.0.1:4533"),
+                ),
+                (Ok(()), ends(4533, "127.0.0.1:4533"), 4800),
+            )
+        );
+    }
+
+    /// ⭐ A FORM SAVE THAT WOULD PUT A DAEMON OR THE BROKER ON A NET RIGCTL ADDRESS IS REFUSED. The
+    /// form describes the operated radio (the FTDX10); the IC-9700 is NET rigctl at 4533.
+    #[test]
+    fn a_form_save_that_would_put_a_daemon_on_a_net_rigctl_address_is_refused() {
+        let refused = |change: &dyn Fn(&mut Settings), stored: bool| {
+            let mut e = wfview_and_ftdx10(1);
+            if stored {
+                e.settings.radios[1].rigctld_port = 4533;
+                e.settings.sync_flat_from_active();
+            }
+            let mut form = e.settings.clone();
+            change(&mut form);
+            e.port_clash_a_save_introduces(&form)
+        };
+        let rows = [
+            refused(&|s| s.rigctld_port = 4533, false).is_some(),
+            refused(&|s| s.cat_broker_port = 4533, false).is_some(),
+            refused(&|s| s.mycall = "W9SAVE".into(), true).is_some(),
+            refused(&|s| s.mycall = "W9SAVE".into(), false).is_some(),
+        ];
+        assert_eq!(rows, [true, true, false, false]);
+    }
+
+    /// The save's preview folds the roster as the save itself does, so the refusal judges exactly
+    /// the ports the save would leave. Each payload's (radio, model, connection, address, enabled,
+    /// rigctld port, rotctld port) and broker after a real `apply_settings`, against the preview's:
+    /// an unchanged form, the operated radio's port typed, a port the repair must move, the broker
+    /// off, a form still describing the other radio, and a legacy payload with no roster.
+    #[test]
+    fn the_save_preview_folds_the_roster_as_the_save_does() {
+        type Ports = Vec<(u32, u32, String, String, bool, u16, u16)>;
+        let ports = |s: &Settings| -> (Ports, bool, u16) {
+            (
+                s.radios
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.id,
+                            p.rig_model,
+                            p.rig_conn.clone(),
+                            p.rig_addr.clone(),
+                            p.enabled,
+                            p.rigctld_port,
+                            p.rotctld_port,
+                        )
+                    })
+                    .collect(),
+                s.cat_broker,
+                s.cat_broker_port,
+            )
+        };
+        let payloads: [&dyn Fn(&mut Settings); 6] = [
+            &|_| {},
+            &|s| s.rigctld_port = 4533,
+            &|s| s.rigctld_port = 4534,
+            &|s| s.cat_broker = false,
+            &|s| {
+                s.active_radio = 0;
+                s.rigctld_port = 4600;
+            },
+            &|s| s.radios.clear(),
+        ];
+        for change in payloads {
+            let mut e = wfview_and_ftdx10(1);
+            let mut form = e.settings.clone();
+            change(&mut form);
+            let previewed = ports(&e.roster_after_form_save(&form));
+            e.apply_settings(form);
+            assert_eq!(previewed, ports(&e.settings));
+        }
+    }
+
+    /// ⭐ A DAEMON ALREADY STORED ON A NET RIGCTL ADDRESS IS SAID ON LOAD, AND NOTHING IS
+    /// RENUMBERED. The file is what the port repair of an older build left: the FTDX10's rigctld
+    /// moved onto 4533, the port wfview answers on for the IC-9700. Load keeps every port as the
+    /// file has it; the status lane names the clash and its cure.
+    #[test]
+    fn a_stored_daemon_on_a_net_rigctl_address_is_said_on_load_and_never_renumbered() {
+        let mut stored = wfview_and_ftdx10(0);
+        stored.settings.radios[1].rigctld_port = 4533;
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-net-rigctl-clash-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, serde_json::to_string(&stored.settings).unwrap()).unwrap();
+        let loaded = Settings::load(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.settings = loaded;
+        assert_eq!(
+            (cat_ends(&e), e.snapshot().radio.radio_config_warning),
+            (
+                vec![
+                    ("IC-9700".to_string(), 4534, "127.0.0.1:4533".to_string()),
+                    ("FTDX10".to_string(), 4533, String::new()),
+                ],
+                Some(
+                    "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's \
+                     rigctld TCP Port is 4533 too: IC-9700 and FTDX10 could each read and \
+                     command the other's radio. Give FTDX10 a different rigctld TCP Port \
+                     (Settings ▸ Radio ▸ Advanced)."
+                        .to_string()
+                )
+            )
         );
     }
 

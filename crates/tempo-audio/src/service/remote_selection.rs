@@ -129,8 +129,9 @@ impl RadioLoop {
             let (hz, mode) = request.expected();
             let outgoing = Position::new(hz, mode)?;
             self.selection_outgoing_read(engine, rig, &request, &outgoing)?;
-            let mut monitor_transport = want.clone();
-            monitor_transport.broker_self_port = None;
+            // With the broker's port, as the pool's own connections carry it (`monitor_want`), so
+            // the opener never takes Nexus itself for the incoming radio.
+            let monitor_transport = want.clone();
             let mut incoming = selection_connection::SelectionConnection::acquire(
                 pool,
                 engine,

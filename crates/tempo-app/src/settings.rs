@@ -4027,10 +4027,70 @@ impl Default for RadioProfile {
     }
 }
 
-/// Validate that every enabled profile's rigctld port + rotctld port (and the CAT broker port, if
-/// on) are pairwise distinct — two daemons can't bind the same TCP port. Pure; used by the Settings
-/// save path + the UI. Rotctld ports only count for profiles that actually have a rotator.
+/// The port a `host:port` rig address names, plus its host. `None` when the address names no
+/// port. The last colon wins, so the bracketed IPv6 form (`[::1]:5002`) splits correctly.
+pub fn split_host_port(addr: &str) -> Option<(&str, u16)> {
+    let (host, port) = addr.trim().rsplit_once(':')?;
+    Some((host.trim(), port.trim().parse().ok()?))
+}
+
+/// Is this rig address on THIS machine — i.e. does its port live in the same space rigctld
+/// binds into? A remote rig reusing our rigctld's port number is no clash at all.
+pub fn host_is_this_machine(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.is_empty()
+        || h.eq_ignore_ascii_case("localhost")
+        || h == "::1"
+        || h == "0.0.0.0"
+        || h.starts_with("127.")
+}
+
+/// A NET rigctl radio's Network Address, trimmed, and its port, when the address is on this
+/// computer: the rigctld the operator runs here (wfview's, or their own), which Nexus shares rather
+/// than starts. `None` for any other radio. The one rule the port bookkeeping below and the openers
+/// that share the address (in `tempo-audio`'s service) both read.
+pub fn net_rigctl_addr_here<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &'a str,
+) -> Option<(&'a str, u16)> {
+    // 2 is Hamlib's NET rigctl.
+    if rig_model != 2 || !rig_conn_is_network(rig_conn, rig_addr) {
+        return None;
+    }
+    let (host, port) = split_host_port(rig_addr)?;
+    host_is_this_machine(host).then(|| (rig_addr.trim(), port))
+}
+
+/// The port of `p`'s Network Address on this computer, when `p` is NET rigctl
+/// ([`net_rigctl_addr_here`]). Whatever answers there is what `p` reads and commands, so no daemon
+/// of Nexus's, and not its CAT broker, may sit on it.
+pub fn net_rigctl_port_here(p: &RadioProfile) -> Option<u16> {
+    net_rigctl_addr_here(p.rig_model, &p.rig_conn, &p.rig_addr).map(|(_, port)| port)
+}
+
+/// Validate the TCP ports Nexus's own listeners take: every enabled profile's rigctld port and
+/// rotctld port, and the CAT broker's when it is on. They must be pairwise distinct — two daemons
+/// can't bind the same TCP port — and none may sit on a NET rigctl radio's Network Address on this
+/// computer ([`net_rigctl_address_clashes`]). Pure. Rotctld ports only count for profiles that
+/// actually have a rotator.
+///
+/// Two daemons on one port are repaired on load and on every save
+/// ([`Settings::ensure_distinct_radio_ports`]). A daemon on an address is not, since a rigctld TCP
+/// Port is the operator's to choose: a save that would make one is refused with these words
+/// ([`port_clash_introduced`]), and one already stored is said in the status lane
+/// ([`net_rigctl_address_conflicts`]).
 pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Result<(), String> {
+    if let Some(clash) = daemon_port_clash(radios, broker) {
+        return Err(clash);
+    }
+    net_rigctl_address_conflicts(radios, broker).map_or(Ok(()), Err)
+}
+
+/// Two of Nexus's daemons (or one and the broker) on one TCP port, the first such pair in words:
+/// [`validate_radio_ports`]'s first half, and what [`Settings::ensure_distinct_radio_ports`]
+/// repairs.
+fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<String> {
     let mut used: Vec<(u16, String)> = Vec::new();
     for p in radios.iter().filter(|p| p.enabled) {
         used.push((p.rigctld_port, format!("{}'s CAT", p.name)));
@@ -4044,14 +4104,138 @@ pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Res
     for i in 0..used.len() {
         for j in (i + 1)..used.len() {
             if used[i].0 == used[j].0 {
-                return Err(format!(
+                return Some(format!(
                     "TCP port {} is claimed by both {} and {} — give them different ports",
                     used[i].0, used[i].1, used[j].1
                 ));
             }
         }
     }
-    Ok(())
+    None
+}
+
+/// What of Nexus's own sits on the port a NET rigctl radio's Network Address names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortHolder {
+    /// Radio `id`'s CAT daemon, on its rigctld TCP Port.
+    Cat(u32),
+    /// The CAT broker (Share this radio with other programs).
+    Broker,
+}
+
+/// One of Nexus's own listeners on the port radio `address_of`'s Network Address names on this
+/// computer. Whatever answers at that address is what that radio reads and commands: two radios'
+/// CAT crossed, or a radio talking to Nexus itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddressClash {
+    pub port: u16,
+    pub address_of: u32,
+    pub holder: PortHolder,
+}
+
+impl AddressClash {
+    /// In operator words, with the cure: what the status lane says about a stored one, and the
+    /// refusal of a save that would make one.
+    pub fn message(&self, radios: &[RadioProfile]) -> String {
+        let name = |id: u32| {
+            radios
+                .iter()
+                .find(|p| p.id == id && !p.name.trim().is_empty())
+                .map_or_else(
+                    || format!("Radio {}", id + 1),
+                    |p| p.name.trim().to_string(),
+                )
+        };
+        let q = name(self.address_of);
+        let addr = radios
+            .iter()
+            .find(|p| p.id == self.address_of)
+            .map_or("", |p| p.rig_addr.trim());
+        let port = self.port;
+        match self.holder {
+            PortHolder::Cat(id) => {
+                let a = name(id);
+                format!(
+                    "TCP port {port} is {q}'s Network Address ({addr}), and {a}'s rigctld TCP Port \
+                     is {port} too: {q} and {a} could each read and command the other's radio. \
+                     Give {a} a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+                )
+            }
+            PortHolder::Broker => format!(
+                "TCP port {port} is {q}'s Network Address ({addr}), and Share this radio with other \
+                 programs is on {port} too: {q} would read and command Nexus itself instead of its \
+                 own radio. Change the Share this radio port (Settings ▸ Radio ▸ Transmit limits & \
+                 sharing)."
+            ),
+        }
+    }
+}
+
+/// Every [`AddressClash`] among the enabled radios, with the broker on `broker` when it is on.
+///
+/// Not a clash:
+/// * a radio's own rigctld TCP Port on its own Network Address: the manual's NET rigctl station,
+///   whose rigctld is the operator's, shared and never started;
+/// * another radio doing the same at that address: two names for one rigctld, which
+///   [`network_cat_address_conflicts`] warns of;
+/// * a rotator: Settings has no control for its port, so the repair moves it
+///   ([`Settings::ensure_distinct_radio_ports`]).
+pub fn net_rigctl_address_clashes(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+) -> Vec<AddressClash> {
+    let enabled = || radios.iter().filter(|p| p.enabled);
+    let mut clashes = Vec::new();
+    for q in enabled() {
+        let Some(port) = net_rigctl_port_here(q) else {
+            continue;
+        };
+        let mut clash = |holder| {
+            clashes.push(AddressClash {
+                port,
+                address_of: q.id,
+                holder,
+            })
+        };
+        for p in enabled() {
+            let shares_it = net_rigctl_port_here(p) == Some(p.rigctld_port);
+            if p.rigctld_port == port && !shares_it {
+                clash(PortHolder::Cat(p.id));
+            }
+        }
+        if broker == Some(port) {
+            clash(PortHolder::Broker);
+        }
+    }
+    clashes
+}
+
+/// The first [`AddressClash`], in words: what the status lane says (`radio_config_warning`) while
+/// one is stored, as an older build's port repair could leave it. Nothing renumbers it: the
+/// rigctld TCP Port to change is the operator's to choose.
+pub fn net_rigctl_address_conflicts(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+) -> Option<String> {
+    net_rigctl_address_clashes(radios, broker)
+        .first()
+        .map(|c| c.message(radios))
+}
+
+/// The first [`AddressClash`] a save makes, in words: one in `after` that `before` did not have.
+/// The save is refused with it. One already stored is not that save's to refuse: the operator may
+/// be saving something else entirely, and the status lane says it meanwhile.
+pub fn port_clash_introduced(
+    before: &[RadioProfile],
+    before_broker: Option<u16>,
+    after: &[RadioProfile],
+    after_broker: Option<u16>,
+) -> Option<String> {
+    let stored = net_rigctl_address_clashes(before, before_broker);
+    net_rigctl_address_clashes(after, after_broker)
+        .into_iter()
+        .find(|c| !stored.contains(c))
+        .map(|c| c.message(after))
 }
 
 /// Two enabled radios cannot share a serial CAT port: the OS opens a COM port
@@ -5125,7 +5309,8 @@ impl Settings {
     }
 
     /// Append a new radio profile with a fresh (never-reused) id, a placeholder name, and CAT/rotator
-    /// TCP ports guaranteed distinct from every existing radio's (two daemons can't bind one port).
+    /// TCP ports guaranteed distinct from every existing radio's (two daemons can't bind one port),
+    /// and off every NET rigctl radio's Network Address on this computer.
     /// Returns the new profile's id. The operator then configures its CAT by switching to it (the
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
@@ -5139,6 +5324,9 @@ impl Settings {
         if self.cat_broker {
             used.push(self.cat_broker_port);
         }
+        // …nor where a NET rigctl radio's Network Address points on this computer: the operator's
+        // rigctld is there (`net_rigctl_port_here`).
+        used.extend(self.radios.iter().filter_map(net_rigctl_port_here));
         let mut free_from = |start: u16| -> u16 {
             let mut port = start;
             while used.contains(&port) {
@@ -5175,24 +5363,43 @@ impl Settings {
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
-    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins. Idempotent;
-    /// called on load. `add_radio_profile` already assigns distinct ports, so this only fixes older
-    /// configs or hand-edited collisions.
+    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins, never
+    /// onto a NET rigctl radio's Network Address on this computer; and moves a rotator's port off
+    /// one. Idempotent; called on load. `add_radio_profile` already assigns distinct ports, so this
+    /// only fixes older configs or hand-edited collisions.
     pub fn ensure_distinct_radio_ports(&mut self) {
         let broker = self.cat_broker.then_some(self.cat_broker_port);
+        // Where NET rigctl radios' Network Addresses point on this computer. The operator's rigctld
+        // is there (wfview's, or their own), so no daemon is ever MOVED onto one. A CAT daemon
+        // already on one is not moved off it either: its rigctld TCP Port is the operator's to
+        // choose, and the status lane says which to change (`net_rigctl_address_conflicts`). A
+        // rotator's port is, as Settings has no control for it.
+        let addresses: Vec<u16> = self
+            .radios
+            .iter()
+            .filter_map(net_rigctl_port_here)
+            .collect();
+        let has_rotator = |p: &RadioProfile| p.rotator_model > 0 || !p.rotator_host.is_empty();
+        let rotator_on_an_address = self
+            .radios
+            .iter()
+            .any(|p| has_rotator(p) && addresses.contains(&p.rotctld_port));
         // Repair when ports COLLIDE, or when any profile has an INVALID (0) rigctld port. A lone 0
         // is technically "distinct" so `validate_radio_ports` alone wouldn't flag it, but connecting
         // to 127.0.0.1:0 fails on Windows with WSAEADDRNOTAVAIL ("the requested address is not valid
         // in its context", os error 10049) — so an older/imported config with a 0 port breaks CAT
         // for that one radio while its siblings work. Treat 0 like a collision and reassign it.
         let has_invalid_port = self.radios.iter().any(|p| p.rigctld_port == 0);
-        if !has_invalid_port && validate_radio_ports(&self.radios, broker).is_ok() {
+        if !has_invalid_port
+            && !rotator_on_an_address
+            && daemon_port_clash(&self.radios, broker).is_none()
+        {
             return;
         }
         let mut used: Vec<u16> = broker.into_iter().collect();
         let free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
             let mut port = start.max(1024);
-            while used.contains(&port) {
+            while used.contains(&port) || addresses.contains(&port) {
                 port = port.saturating_add(1);
             }
             used.push(port);
@@ -5211,6 +5418,13 @@ impl Settings {
                 } else {
                     used.push(p.rotctld_port);
                 }
+            }
+        }
+        // A rotator on a NET rigctl address moves off it last, once every port above is known, so
+        // it lands on none of them.
+        for p in self.radios.iter_mut() {
+            if has_rotator(p) && addresses.contains(&p.rotctld_port) {
+                p.rotctld_port = free_from(4533, &mut used);
             }
         }
     }
@@ -11757,6 +11971,356 @@ mod tests {
         assert!(
             validate_radio_ports(&s.radios, None).is_ok(),
             "still pairwise-distinct after repair"
+        );
+    }
+
+    /// A NET rigctl radio: Connection Network, Rig Model NET rigctl, Network Address `addr`, Nexus's
+    /// own rigctld TCP Port `port`.
+    fn net_rigctl(id: u32, name: &str, addr: &str, port: u16) -> RadioProfile {
+        RadioProfile {
+            id,
+            name: name.into(),
+            rig_model: 2,
+            rig_conn: "network".into(),
+            rig_addr: addr.into(),
+            rigctld_port: port,
+            ..Default::default()
+        }
+    }
+
+    /// A radio on a serial port, its rigctld on TCP port `port`.
+    fn serial_rig(id: u32, name: &str, port: u16) -> RadioProfile {
+        RadioProfile {
+            id,
+            name: name.into(),
+            rig_model: 1036,
+            serial_port: format!("COM{}", id + 3),
+            rigctld_port: port,
+            ..Default::default()
+        }
+    }
+
+    /// (name, rigctld TCP Port, rotctld port) of every radio.
+    fn daemon_ports(s: &Settings) -> Vec<(String, u16, u16)> {
+        s.radios
+            .iter()
+            .map(|p| (p.name.clone(), p.rigctld_port, p.rotctld_port))
+            .collect()
+    }
+
+    /// ⭐ NO REPAIR MOVES A DAEMON ONTO A NET RIGCTL RADIO'S NETWORK ADDRESS. B is NET rigctl at
+    /// wfview's `127.0.0.1:4533`, its own rigctld TCP Port 4534; A, a serial radio, collides with B
+    /// on 4534; the broker is on 4532. The repair used to move A onto 4533, the port wfview answers
+    /// on, where A's CAT and B's reach each other's radio, and the validator passed it.
+    #[test]
+    fn a_port_repair_never_moves_a_daemon_onto_a_net_rigctl_address() {
+        let mut s = Settings {
+            cat_broker: true,
+            cat_broker_port: 4532,
+            ..Settings::default()
+        };
+        s.radios = vec![
+            net_rigctl(0, "B", "127.0.0.1:4533", 4534),
+            serial_rig(1, "A", 4534),
+        ];
+        s.ensure_distinct_radio_ports();
+        let rigctld: Vec<(String, u16)> = daemon_ports(&s)
+            .into_iter()
+            .map(|(n, p, _)| (n, p))
+            .collect();
+        assert_eq!(
+            (rigctld, validate_radio_ports(&s.radios, Some(4532))),
+            (vec![("B".into(), 4534), ("A".into(), 4535)], Ok(()))
+        );
+    }
+
+    /// ⭐ A NEW RADIO NEVER GETS A NET RIGCTL RADIO'S NETWORK ADDRESS AS ITS PORT. With the broker
+    /// off, the first free port used to be 4532: the manual's own external rigctld, at B's address.
+    #[test]
+    fn a_new_radio_never_gets_a_net_rigctl_address_as_its_port() {
+        let mut s = Settings {
+            cat_broker: false,
+            ..Settings::default()
+        };
+        s.radios = vec![net_rigctl(0, "B", "127.0.0.1:4532", 4534)];
+        s.active_radio = 0;
+        let id = s.add_radio_profile();
+        let added = s.radios.iter().find(|p| p.id == id).unwrap();
+        assert_eq!((added.rigctld_port, added.rotctld_port), (4535, 4536));
+    }
+
+    /// A rotator's daemon port is Nexus's own allocation (Settings has no control for it), so one on
+    /// a NET rigctl radio's Network Address is moved off it on load, as a clash between two daemons
+    /// is; and the move lands on no port another radio holds.
+    #[test]
+    fn a_rotator_on_a_net_rigctl_address_is_moved_off_it() {
+        let mut s = Settings {
+            cat_broker: false,
+            ..Settings::default()
+        };
+        let mut b = net_rigctl(0, "B", "127.0.0.1:4533", 4534);
+        b.rotator_model = 1;
+        b.rotctld_port = 4533;
+        let mut a = serial_rig(1, "A", 4535);
+        a.rotator_model = 1;
+        a.rotctld_port = 4536;
+        s.radios = vec![b, a];
+        s.ensure_distinct_radio_ports();
+        assert_eq!(
+            daemon_ports(&s),
+            vec![("B".into(), 4534, 4537), ("A".into(), 4535, 4536)]
+        );
+    }
+
+    /// Every station without a daemon on a NET rigctl address keeps its ports byte for byte: the
+    /// matching-port station (the manual's own NET rigctl setup), a NET rigctl radio on another
+    /// computer, a disabled radio, other models, an ordinary two-radio station, and a repair whose
+    /// first free port is not an address.
+    #[test]
+    fn stations_without_a_daemon_on_a_net_rigctl_address_keep_their_ports() {
+        let mut flex = net_rigctl(1, "Flex", "127.0.0.1:4533", 4535);
+        flex.rig_model = 2036;
+        let mut disabled = net_rigctl(1, "Off", "127.0.0.1:4533", 4535);
+        disabled.enabled = false;
+        let mut serial_with_an_old_address = net_rigctl(1, "Old", "127.0.0.1:4533", 4535);
+        serial_with_an_old_address.rig_conn = "serial".into();
+        let rosters: Vec<(&str, Option<u16>, Vec<RadioProfile>)> = vec![
+            (
+                "the manual's NET rigctl station",
+                None,
+                vec![net_rigctl(0, "B", "127.0.0.1:4532", 4532)],
+            ),
+            (
+                "NET rigctl on another computer, A on its port number",
+                Some(4532),
+                vec![
+                    net_rigctl(0, "B", "192.168.1.50:4533", 4534),
+                    serial_rig(1, "A", 4533),
+                ],
+            ),
+            (
+                "an ordinary two-radio station",
+                Some(4532),
+                vec![serial_rig(0, "A", 4533), serial_rig(1, "C", 4534)],
+            ),
+            (
+                "SmartSDR CAT, not NET rigctl, on this computer",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), flex],
+            ),
+            (
+                "Connection Serial, an old address left in the field",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), serial_with_an_old_address],
+            ),
+            (
+                "a disabled NET rigctl radio",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), disabled],
+            ),
+        ];
+        for (what, broker, radios) in rosters {
+            let mut s = Settings {
+                cat_broker: broker.is_some(),
+                cat_broker_port: broker.unwrap_or(4532),
+                ..Settings::default()
+            };
+            s.radios = radios.clone();
+            s.ensure_distinct_radio_ports();
+            assert_eq!(s.radios, radios, "{what}: byte for byte");
+        }
+        // A repair that has to move a daemon, where the first free port is no address: the same
+        // number it always got.
+        let mut s = Settings {
+            cat_broker: true,
+            cat_broker_port: 4532,
+            ..Settings::default()
+        };
+        s.radios = vec![
+            net_rigctl(0, "B", "127.0.0.1:4540", 4534),
+            serial_rig(1, "A", 4534),
+        ];
+        s.ensure_distinct_radio_ports();
+        assert_eq!(
+            daemon_ports(&s)
+                .into_iter()
+                .map(|(_, p, _)| p)
+                .collect::<Vec<_>>(),
+            vec![4534, 4533]
+        );
+    }
+
+    /// ⭐ A DAEMON OR THE BROKER ON A NET RIGCTL ADDRESS IS REFUSED, BY NAME. The rows are what
+    /// `validate_radio_ports` says; only the first three are clashes.
+    #[test]
+    fn validate_radio_ports_refuses_a_daemon_or_the_broker_on_a_net_rigctl_address() {
+        let b = net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4534);
+        let mut b_off = b.clone();
+        b_off.enabled = false;
+        let mut a_off = serial_rig(1, "FTDX10", 4533);
+        a_off.enabled = false;
+        let rows: Vec<(&str, Vec<RadioProfile>, Option<u16>)> = vec![
+            (
+                "another radio's CAT on the address",
+                vec![b.clone(), serial_rig(1, "FTDX10", 4533)],
+                None,
+            ),
+            (
+                "the broker on the address",
+                vec![net_rigctl(0, "IC-9700", "127.0.0.1:4532", 4534)],
+                Some(4532),
+            ),
+            (
+                "the address spelled localhost",
+                vec![
+                    net_rigctl(0, "IC-9700", "localhost:4533", 4534),
+                    serial_rig(1, "FTDX10", 4533),
+                ],
+                None,
+            ),
+            (
+                "the radio's own rigctld TCP Port on its own address",
+                vec![net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4533)],
+                Some(4532),
+            ),
+            (
+                "two radios naming one rigctld, each on its own address",
+                vec![
+                    net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4533),
+                    net_rigctl(1, "IC-705", "127.0.0.1:4533", 4535),
+                ],
+                None,
+            ),
+            (
+                "an address on another computer",
+                vec![
+                    net_rigctl(0, "IC-9700", "192.168.1.50:4533", 4534),
+                    serial_rig(1, "FTDX10", 4533),
+                ],
+                None,
+            ),
+            (
+                "the NET rigctl radio disabled",
+                vec![b_off, serial_rig(1, "FTDX10", 4533)],
+                None,
+            ),
+            ("the other radio disabled", vec![b.clone(), a_off], None),
+        ];
+        let said: Vec<(&str, Result<(), String>)> = rows
+            .iter()
+            .map(|(what, radios, broker)| (*what, validate_radio_ports(radios, *broker)))
+            .collect();
+        let cat = |addr: &str| {
+            format!(
+                "TCP port 4533 is IC-9700's Network Address ({addr}), and FTDX10's rigctld TCP \
+                 Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+                 radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )
+        };
+        assert_eq!(
+            said,
+            vec![
+                (
+                    "another radio's CAT on the address",
+                    Err(cat("127.0.0.1:4533"))
+                ),
+                (
+                    "the broker on the address",
+                    Err(
+                        "TCP port 4532 is IC-9700's Network Address (127.0.0.1:4532), and \
+                         Share this radio with other programs is on 4532 too: IC-9700 would \
+                         read and command Nexus itself instead of its own radio. Change the \
+                         Share this radio port (Settings ▸ Radio ▸ Transmit limits & sharing)."
+                            .into()
+                    )
+                ),
+                ("the address spelled localhost", Err(cat("localhost:4533"))),
+                (
+                    "the radio's own rigctld TCP Port on its own address",
+                    Ok(())
+                ),
+                (
+                    "two radios naming one rigctld, each on its own address",
+                    Ok(())
+                ),
+                ("an address on another computer", Ok(())),
+                ("the NET rigctl radio disabled", Ok(())),
+                ("the other radio disabled", Ok(())),
+            ]
+        );
+        // A clash between two daemons keeps the words it always had.
+        assert_eq!(
+            validate_radio_ports(&[serial_rig(0, "A", 4533), serial_rig(1, "C", 4533)], None),
+            Err(
+                "TCP port 4533 is claimed by both A's CAT and C's CAT — give them different ports"
+                    .into()
+            )
+        );
+    }
+
+    /// ⭐ A SAVE MAY NOT MAKE A CLASH; ONE ALREADY STORED IS NOT ITS TO REFUSE. Each row is the
+    /// roster (and broker) before and after a save; the answer is the refusal, if any.
+    #[test]
+    fn only_a_clash_the_save_makes_is_refused() {
+        let b = net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4534);
+        let ok = vec![b.clone(), serial_rig(1, "FTDX10", 4535)];
+        let clash = vec![b.clone(), serial_rig(1, "FTDX10", 4533)];
+        let mut clash_new_baud = clash.clone();
+        clash_new_baud[1].baud = 4800;
+        /// The roster and the broker's port.
+        type Station = (Vec<RadioProfile>, Option<u16>);
+        let rows: Vec<(&str, Station, Station)> = vec![
+            (
+                "a save that makes one",
+                (ok.clone(), None),
+                (clash.clone(), None),
+            ),
+            (
+                "a save that turns the broker on at the address",
+                (ok.clone(), None),
+                (ok.clone(), Some(4533)),
+            ),
+            (
+                "an unrelated save with one already stored",
+                (clash.clone(), None),
+                (clash_new_baud, None),
+            ),
+            (
+                "a save that fixes it",
+                (clash.clone(), None),
+                (ok.clone(), None),
+            ),
+            (
+                "a stored one, and the save adds another",
+                (clash.clone(), None),
+                (clash.clone(), Some(4533)),
+            ),
+            ("no clash before or after", (ok.clone(), None), (ok, None)),
+        ];
+        let refused: Vec<(&str, bool)> = rows
+            .iter()
+            .map(|(what, (before, bb), (after, ab))| {
+                (
+                    *what,
+                    port_clash_introduced(before, *bb, after, *ab).is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            refused,
+            vec![
+                ("a save that makes one", true),
+                ("a save that turns the broker on at the address", true),
+                ("an unrelated save with one already stored", false),
+                ("a save that fixes it", false),
+                ("a stored one, and the save adds another", true),
+                ("no clash before or after", false),
+            ]
+        );
+        assert_eq!(
+            port_clash_introduced(&rows[0].1 .0, None, &rows[0].2 .0, None),
+            validate_radio_ports(&rows[0].2 .0, None).err(),
+            "the refusal is the validator's words"
         );
     }
 

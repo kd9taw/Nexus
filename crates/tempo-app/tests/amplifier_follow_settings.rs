@@ -113,11 +113,11 @@ fn per_radio_edit_updates_the_active_mirror_without_reverting_another_profile() 
     let mut e = Engine::with_settings(settings());
     let mut edit = patch(&e, 0);
     edit.amp_follow_band = true;
-    e.update_radio_profile(0, edit);
+    e.update_radio_profile(0, edit).unwrap();
     assert!(e.settings().amp_follow_band);
     let mut edit = patch(&e, 1);
     edit.amp_follow_band = false;
-    e.update_radio_profile(1, edit);
+    e.update_radio_profile(1, edit).unwrap();
     assert_eq!(e.settings().active_radio, 0);
     assert!(e.settings().amp_follow_band);
     e.settings().save(&store.file()).unwrap();

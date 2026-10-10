@@ -13238,7 +13238,9 @@ fn apply_and_persist(
 /// session is opened with its dupe sweep in the same hold of the lock as the save (SPEC-2 v3 C19).
 /// Every other save reads nothing. When the logbook is too busy to read them, the save is refused
 /// whole ([`tempo_app::engine::SESSION_BUSY`]): nothing applied, persisted or published, and the
-/// form keeps what the operator typed.
+/// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
+/// its CAT broker, on a NET rigctl radio's Network Address
+/// ([`tempo_app::engine::Engine::port_clash_a_save_introduces`]), with words naming the port.
 fn save_and_publish(
     engine: &SharedEngine,
     mut settings: Settings,
@@ -13250,6 +13252,14 @@ fn save_and_publish(
         engine,
         |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
         |eng, rows| {
+            // A form save that would put a daemon of Nexus's, or its CAT broker, on a NET rigctl
+            // radio's Network Address is refused whole, before anything below touches the engine
+            // or the process: that radio would read and command whatever answers there.
+            if !authoritative_roster {
+                if let Some(refusal) = eng.port_clash_a_save_introduces(&settings) {
+                    return Err(refusal);
+                }
+            }
             // The LoTW sync cursor is bound to the exact query (notably the username);
             // if the username changed, reset it to a full pull so a config edit can't
             // silently skip confirmations.
@@ -13310,9 +13320,9 @@ fn save_and_publish(
             if active_profile().is_some() {
                 persist_simultaneous_to_base(eng.settings().simultaneous_radios);
             }
-            eng.snapshot()
+            Ok(eng.snapshot())
         },
-    )?;
+    )??;
     // Live, so an operator can start a diagnostic session mid-flight without restarting — the
     // thing being chased is usually happening right now.
     tempo_core::applog::set_debug(published.diag_debug_log);
@@ -13421,6 +13431,77 @@ mod contest_session_tests {
         );
         drop(eng);
         drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SETTINGS SAVE THAT WOULD PUT A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS
+    /// REFUSED, BY NAME, AND CHANGES NOTHING. The station operates an FTDX10 (its rigctld on 4535)
+    /// beside an IC-9700 on wfview's rigctld at `127.0.0.1:4533`, and the form types the FTDX10's
+    /// rigctld TCP Port as 4533. Nothing the save would apply, persist or publish moves.
+    #[test]
+    fn a_settings_save_that_puts_a_daemon_on_a_net_rigctl_address_is_refused() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("port-clash", 0);
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                name: "IC-9700".into(),
+                rig_model: 2,
+                rig_conn: "network".into(),
+                rig_addr: "127.0.0.1:4533".into(),
+                rigctld_port: 4534,
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                name: "FTDX10".into(),
+                rig_model: 1042,
+                serial_port: "COM3".into(),
+                rigctld_port: 4535,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 1;
+        station.cat_broker = true;
+        station.cat_broker_port = 4532;
+        station.sync_flat_from_active();
+        engine_lock(&engine).apply_restored_settings(station);
+        let held = engine_lock(&engine).settings().clone();
+        let mut form = held.clone();
+        form.rigctld_port = 4533;
+        form.mycall = "W9CLASH".into();
+        assert_eq!(
+            save_and_publish(&engine, form, false).map(|_| ()),
+            Err(
+                "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's \
+                 rigctld TCP Port is 4533 too: IC-9700 and FTDX10 could each read and command \
+                 the other's radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio \
+                 ▸ Advanced)."
+                    .to_string()
+            )
+        );
+        let eng = engine_lock(&engine);
+        let ftdx10 = eng
+            .settings()
+            .radios
+            .iter()
+            .find(|p| p.id == 1)
+            .map(|p| p.rigctld_port);
+        assert_eq!(
+            (
+                eng.settings().mycall.clone(),
+                ftdx10,
+                eng.settings().rigctld_port
+            ),
+            (held.mycall.clone(), Some(4535), 4535),
+            "nothing applied"
+        );
+        drop(eng);
+        assert_ne!(
+            OPERATOR_QTH.lock().unwrap_or_else(|e| e.into_inner()).0,
+            "W9CLASH",
+            "nothing published"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -17456,7 +17537,8 @@ struct RoutePreview {
 
 /// Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
 /// — the per-radio Settings page uses this to configure a radio you're NOT currently operating on
-/// (no live rig swap, no dropped carrier). Persists + returns the snapshot.
+/// (no live rig swap, no dropped carrier). Persists + returns the snapshot, or refuses an edit
+/// that would put a daemon on a NET rigctl radio's Network Address, in words naming the port.
 #[tauri::command(async)]
 fn update_radio_profile(
     state: State<'_, SharedEngine>,
@@ -17464,7 +17546,7 @@ fn update_radio_profile(
     patch: tempo_app::settings::RadioProfilePatch,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.update_radio_profile(id, patch);
+    eng.update_radio_profile(id, patch)?;
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
     });
