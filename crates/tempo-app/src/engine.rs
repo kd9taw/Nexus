@@ -2859,6 +2859,9 @@ pub struct Engine {
     /// window (band map / board) can prefill the MAIN window's log Call field. Cleared on a
     /// call-less work so a stale call never prefills.
     work_call: Option<String>,
+    /// The park or summit of the last worked spot, when a Needed row named one: the MAIN window's
+    /// log line fills it with `work_call`. Cleared with `work_call`; never a hunt, never a tag.
+    work_park: Option<crate::dto::WorkPark>,
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
@@ -5453,6 +5456,7 @@ impl Engine {
             work_tick: 0,
             work_view: None,
             work_call: None,
+            work_park: None,
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
@@ -8585,6 +8589,7 @@ impl Engine {
         self.work_tick += 1;
         self.work_view = Some(mode.to_string());
         self.work_call = None; // the command that has the call sets it via note_work_call
+        self.work_park = None; // …and the park, via note_work_park
     }
 
     /// Tune to an SSTV calling channel: claim the PHONE section (SSTV rides Phone — idle is
@@ -8643,6 +8648,16 @@ impl Engine {
     /// window's log directly, so the call rides the snapshot and the main window prefills from it.
     pub fn note_work_call(&mut self, call: Option<String>) {
         self.work_call = call.filter(|c| !c.trim().is_empty());
+    }
+
+    /// Record the park or summit of the just-worked Needed row, after [`Self::note_work_call`]
+    /// (same lock). The main window's log line fills it with the call: a pop-out board's click
+    /// reaches that line only through the snapshot, and setting a hunt to carry it there left a
+    /// "Hunted" park waiting for four hours after a station the operator never heard. A park with
+    /// no call to belong to, or a blank reference, is dropped.
+    pub fn note_work_park(&mut self, park: Option<crate::dto::WorkPark>) {
+        self.work_park =
+            park.filter(|p| self.work_call.is_some() && !p.reference.trim().is_empty());
     }
 
     /// Request a RIT (receive incremental tuning) offset in Hz (0 = off); the radio loop applies it.
@@ -22990,6 +23005,7 @@ contact yourself."
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
+        s.work_park = self.work_park.clone();
         s.hunt = self
             .station
             .hunt_target() // TTL-filtered: an expired pend never shows a chip
@@ -37653,6 +37669,58 @@ mod tests {
         let s = e.snapshot();
         assert_eq!(s.work_tick, t0 + 1);
         assert_eq!(s.work_view.as_deref(), Some("cw"));
+    }
+
+    #[test]
+    fn a_worked_needed_rows_park_rides_the_hint_and_is_never_a_hunt() {
+        // A pop-out Needed board reaches the MAIN window's log line only through the snapshot, so
+        // the row's park rides the hint with its call, and nothing is hunted.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let park = crate::dto::WorkPark {
+            program: "POTA".into(),
+            reference: "US-1000".into(),
+        };
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(Some("K9ABC".into()));
+        e.note_work_park(Some(park.clone()));
+        let s = e.snapshot();
+        assert_eq!(s.work_call.as_deref(), Some("K9ABC"));
+        assert_eq!(s.work_park, Some(park.clone()));
+        assert_eq!(
+            serde_json::to_value(&s).unwrap()["workPark"],
+            serde_json::json!({ "program": "POTA", "reference": "US-1000" })
+        );
+        assert!(s.hunt.is_none(), "a worked park set a hunt");
+        // Nothing at log time reads it: a contact with that call logged without a park of its own
+        // has none, which is what tells it apart from a hunt (`hunt_target_tags_only_the_matching_qso`).
+        let mut rec = e.qso_record("K9ABC".into(), None, Some(-7));
+        rec.when_unix = 1;
+        e.log_qso(rec);
+        let hit = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "K9ABC")
+            .unwrap();
+        assert_eq!(hit.ota.their_ref, None, "the hint tagged a contact");
+        // The next work ends it, park or not: a stale park must never fill another call.
+        e.work_spot_split("cw", 14.030, "20m", None);
+        e.note_work_call(Some("W1AW".into()));
+        assert_eq!(e.snapshot().work_park, None);
+        // A blank reference is no park.
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(Some("K9ABC".into()));
+        e.note_work_park(Some(crate::dto::WorkPark {
+            program: "POTA".into(),
+            reference: " ".into(),
+        }));
+        assert_eq!(e.snapshot().work_park, None);
+        // A park with no call to belong to is dropped, and the wire then leaves the key out.
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(None);
+        e.note_work_park(Some(park));
+        let s = e.snapshot();
+        assert_eq!(s.work_park, None);
+        assert!(serde_json::to_value(&s).unwrap().get("workPark").is_none());
     }
 
     #[test]

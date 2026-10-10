@@ -2626,10 +2626,11 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
-  /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
-   *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
-   *  logged with the reference. Absent/null on every other need: a row that names no activation
-   *  must never tag one. */
+  /** The park or summit this row is an ACTIVATION of, when it is one, so the contact working the
+   *  row leads to is logged with the reference: the Phone or CW log line the Work opens fills it
+   *  with the call, and a row that opens none sets the hunt target with it, the way HUNT and a map
+   *  double-click do. Absent/null on every other need: a row that names no activation must never
+   *  tag one. */
   park?: { program: string; reference: string } | null
   /** Where the US state this row was scored in came from, when it had one: the park or summit the
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
@@ -4695,6 +4696,9 @@ export interface AppSnapshot {
   workView?: string | null
   /** The last worked spot's callsign — a pop-out window's click prefills the log Call from this. */
   workCall?: string | null
+  /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
+   *  with `workCall`. Never a hunt. Absent when there is none. */
+  workPark?: { program: string; reference: string } | null
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */

@@ -124,6 +124,17 @@ pub struct HuntDto {
     pub states: Vec<String>,
 }
 
+/// The park or summit a worked Needed row is an activation of ([`AppSnapshot::work_park`]). Not a
+/// hunt: the log line the work opens fills it with the call, and nothing else ever reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkPark {
+    /// "POTA" | "SOTA".
+    pub program: String,
+    /// "US-0001", "W7A/MN-001".
+    pub reference: String,
+}
+
 /// One UDP-driven callsign highlight (JTAlert paints wanted/B4 calls).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4009,6 +4020,11 @@ pub struct AppSnapshot {
     /// window's log Call from this (cleared on a call-less work).
     #[serde(default)]
     pub work_call: Option<String>,
+    /// The park or summit the last worked spot is activating, when a Needed row named one — the
+    /// MAIN window's log line fills it with `work_call`, so a pop-out board's click needs no hunt.
+    /// Cleared on every work; absent from the wire when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_park: Option<WorkPark>,
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,

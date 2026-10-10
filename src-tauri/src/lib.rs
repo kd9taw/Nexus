@@ -18177,6 +18177,7 @@ fn set_operating_mode(
 /// the new mode at the old dial, and the UI never sees a half-applied state. Persists,
 /// returns the snapshot.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // one per wire argument, after the two managed states
 fn work_spot(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
@@ -18185,6 +18186,7 @@ fn work_spot(
     band: String,
     call: Option<String>,
     tier: Option<String>,
+    park: Option<tempo_app::dto::WorkPark>,
 ) -> Result<AppSnapshot, String> {
     // A digital spot names its protocol (FT8/FT4). The tier switch must happen under the
     // SAME engine lock as the QSY: as two commands, the radio loop could tick in the gap
@@ -18211,6 +18213,7 @@ fn work_spot(
     let mut eng = engine_lock(&state);
     eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
+    eng.note_work_park(park); // …and a Needed row's park, which that log line fills with the call
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist worked spot: {e}")
     });

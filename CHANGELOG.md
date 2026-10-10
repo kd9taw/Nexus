@@ -263,6 +263,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A park clicked on the Needed board fills the log line instead of setting a hunt.** Clicking a
+  POTA or SOTA activator that works in Phone or CW, on the board in its own window or wherever it
+  shows, puts the station's call and the park in that cockpit's log line, and the contact you log
+  from it carries the park as before. Nothing waits at the top of the POTA / SOTA list, and the log
+  line's Clear clears it, so a station you never heard leaves nothing behind. HUNT on the POTA /
+  SOTA list sets a hunt as before. An FT8, FT4 or RTTY activator clicked on the board still sets
+  one, because the hunt is how its park reaches the contact.
 - **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
   every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
   call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO

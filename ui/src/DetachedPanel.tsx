@@ -434,12 +434,17 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
     }
-    // A park/summit row names its activation: tag the hunt first, exactly as the docked
-    // board and `onWorkSpot` above do, so the contact this leads to carries the park.
+    // A park/summit row names its activation, and the contact this leads to carries the park,
+    // as from the docked board (handleWorkNeeded spells out the rule). A row that opens the
+    // main window's Phone or CW log line hands its park there with the call, through the work
+    // hint (`workSpot`'s park → the snapshot's `workPark`), and sets NO hunt. Any other row
+    // still tags the hunt first: it is the only way that row's park reaches the contact.
     // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
     // the bail-out is the harder no-op of the two: `workTarget` is null only when the
     // band has no plan channel, and `qsyBand` then silently moves nothing at all.
-    if (a.park) {
+    const modes = readEnabledModes()
+    const fillsLogLine = (target.view === 'cw' && modes.cw) || (target.view === 'phone' && modes.phone)
+    if (a.park && !fillsLogLine) {
       const park = a.park
       await withErrorToast(
         () => setHuntTarget(a.call, park.program, park.reference),
@@ -450,7 +455,6 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // If the target cockpit is disabled, the MAIN window's nav-hint effect refuses
     // to follow (same gate as handleWorkNeeded) — so a workSpot would silently
     // switch the rig into a hidden mode with no UI. Just QSY to the spot instead.
-    const modes = readEnabledModes()
     if ((target.view === 'cw' && !modes.cw) || (target.view === 'phone' && !modes.phone)) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
@@ -462,7 +466,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // recreate the main window's default-dial-first double retune.
     const m = a.mode?.toUpperCase()
     const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
-    apply(workSpot(opMode, target.freqMhz, target.band, target.call, spotTier))
+    apply(
+      a.park && fillsLogLine
+        ? workSpot(opMode, target.freqMhz, target.band, target.call, spotTier, a.park)
+        : workSpot(opMode, target.freqMhz, target.band, target.call, spotTier),
+    )
   }
   // The POTA/SOTA board has already called setHuntTarget itself (and handed us the fresh
   // snapshot via onSnap); this half is the QSY + rig-mode switch — the same atomic workSpot

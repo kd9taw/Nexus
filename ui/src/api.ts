@@ -2058,19 +2058,24 @@ export async function workSpot(
   band: string,
   call?: string,
   tier?: 'FT8' | 'FT4',
+  park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
   // configure rig split automatically — the N1MM behavior. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
-  // default first, then switching" — operator report, 2026-08-09).
+  // default first, then switching" — operator report, 2026-08-09). `park` is a
+  // Needed row's park, which rides the work hint (`workPark`) to the log line.
   return invoke<AppSnapshot>('work_spot', {
     mode,
     freqMhz,
     band,
     call: call ?? null,
     tier: tier ?? null,
+    // Only when there is one: the hosted page's control transport refuses a work_spot carrying
+    // any other key, and a browser's Work never carries a park.
+    ...(park ? { park } : {}),
   })
 }
 
