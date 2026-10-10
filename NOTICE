@@ -1048,9 +1048,10 @@ PATENTS are in the same file.
 
 ### Existing application dependencies
 
-Nexus's Rust workspace — 21 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
+Nexus's Rust workspace — 22 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
 `jt65`, `modes`, `msk144`, `propagation`, `q65`, `street-map`, `tempo-app`, `tempo-audio`,
-`tempo-core`, `tempo-fast`, `tempo-fast-sys`, `tempo-net`, `tempo-sstv`, `tempo-stream`, `wspr` —
+`tempo-core`, `tempo-fast`, `tempo-fast-sys`, `tempo-flexsim`, `tempo-net`, `tempo-sstv`, `tempo-stream`,
+`wspr` —
 and the standalone Tauri shell (`src-tauri/`, which is NOT a workspace member) depend on the
 crates below.
 `Cargo.lock` plus `deny.toml` are the authoritative, machine-checked license set: CI runs
