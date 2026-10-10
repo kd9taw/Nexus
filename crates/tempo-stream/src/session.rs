@@ -35,6 +35,20 @@
 //!   one, and ICE's own messages carry no local address. Every SDP and candidate line is read by
 //!   [`crate::lan::leaks`] before it is handed out, and a leak (any other LAN address, or this one
 //!   anywhere but its own candidate) is never handed out.
+//! - **Only an address a viewer could really be at is tried (2026-10-10).** str0m runs full ICE: it
+//!   sends checks to every candidate it holds, answers a check where it came from, and then checks
+//!   that source too. So every candidate the page names, in its offer and its trickle alike, goes in
+//!   through [`Session::add_remote_candidate`] and is held to [`may_try`] there, and a datagram
+//!   from an address [`may_try`] refuses never reaches str0m ([`Session::receive`]). Refused:
+//!   loopback, "this network" (0/8, `::`), multicast, the reserved 240/4 and broadcast, link-local
+//!   (169.254/16, where a cloud's metadata service answers, and fe80::/10), IPv6's old site-local
+//!   fec0::/10 and anything else outside its global and unique-local space, and port 0. An IPv6
+//!   address that carries an IPv4 one is read as that IPv4 address. Kept: the private networks,
+//!   unique-local fc00::/7 and carrier-grade NAT's 100.64/10, so a viewer on the shack's own
+//!   network, or on a Tailscale network, still connects directly. A host name (a browser's mDNS
+//!   `.local` one) is never looked up, and a session tries at most [`CANDIDATES`] of the page's
+//!   candidates. A refused candidate is dropped and counted ([`Session::refused`]), and the
+//!   session goes on.
 //! - **The page's certificate must match its offer.** str0m verifies the peer's DTLS certificate
 //!   against the offer's fingerprint by default; [`Session::accept`] asserts that default rather than
 //!   assuming it. The device-key binding (security test A5) signs that same fingerprint, read with
@@ -59,7 +73,7 @@
 //!   (`transport_feedback`); every current browser's does, and one that does not keeps the
 //!   fixed budget. With it on, str0m paces the picture's packets at about the estimate, and the
 //!   data channels (receive audio, `control`) go out ahead of them unpaced.
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use str0m::bwe::Bitrate;
@@ -141,6 +155,62 @@ pub fn receive_ends_session(error: &std::io::Error) -> bool {
     let one_datagram = error.kind() == ConnectionReset
         || (cfg!(windows) && matches!(error.raw_os_error(), Some(WSAEMSGSIZE | WSAENETRESET)));
     !matches!(error.kind(), WouldBlock | TimedOut) && !one_datagram
+}
+
+/// The most of the page's candidates one session tries, from its offer and its trickle together.
+/// Each is an address the station sends checks to, so this bounds where one page can make it send.
+/// For each network it is on, a browser names a reflexive address, a relayed one for each of the
+/// relay's routes, and its host address, which it names by an mDNS name (never tried) unless the
+/// page holds its microphone's permission; its relayed ones come last. One this session's socket
+/// could never try (a TCP candidate, or one of the other IP family) draws no check and does not
+/// count, so a browser that names many of those still has the rest tried.
+pub const CANDIDATES: usize = 16;
+
+/// May the station try `peer`, an address the page named, or answer a datagram from it? Only if a
+/// viewer could really be at it: a unicast address of the internet, of a private network or of a
+/// carrier-grade NAT, or IPv6's unique-local one, and never port 0. It is an allowlist: an address
+/// in none of those is refused, whatever it is (the module header names what that refuses).
+pub fn may_try(peer: SocketAddr) -> bool {
+    peer.port() != 0
+        && match peer.ip() {
+            IpAddr::V4(v4) => viewer_v4(v4),
+            IpAddr::V6(v6) => viewer_v6(v6),
+        }
+}
+
+/// IPv4's unicast space, 1.0.0.0 to 223.255.255.255, less loopback (127/8: the station's own
+/// services) and link-local (169.254/16: the link's own devices, and a cloud's metadata service at
+/// 169.254.169.254). Below it is "this network" (0/8, the unspecified address among it), above it
+/// multicast (224/4), the reserved 240/4 and broadcast. The private networks (RFC 1918) and the
+/// carrier-grade NAT's 100.64/10, where Tailscale numbers its machines, are in it.
+fn viewer_v4(ip: Ipv4Addr) -> bool {
+    matches!(ip.octets()[0], 1..=223) && !ip.is_loopback() && !ip.is_link_local()
+}
+
+/// IPv6's global unicast space (2000::/3) and unique-local fc00::/7, and nothing else: not loopback
+/// or the unspecified address, multicast, link-local fe80::/10 or the old site-local fec0::/10. An
+/// address that carries an IPv4 one is that IPv4 address, held to IPv4's rule.
+fn viewer_v6(ip: Ipv6Addr) -> bool {
+    let o = ip.octets();
+    let v4 =
+        |a: usize, b: usize, c: usize, d: usize| viewer_v4(Ipv4Addr::new(o[a], o[b], o[c], o[d]));
+    match ip.segments() {
+        // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96, which holds `::` and `::1`).
+        [0, 0, 0, 0, 0, 0 | 0xffff, ..] => v4(12, 13, 14, 15),
+        // NAT64's well-known prefix, 64:ff9b::/96.
+        [0x64, 0xff9b, 0, 0, 0, 0, ..] => v4(12, 13, 14, 15),
+        // NAT64's local-use prefix, 64:ff9b:1::/48 (RFC 8215). A network carves its own from it at
+        // /48, /56, /64 or /96, and each puts the IPv4 address somewhere else (RFC 6052), so every
+        // one of those readings must pass.
+        [0x64, 0xff9b, 1, ..] => {
+            v4(6, 7, 9, 10) && v4(7, 9, 10, 11) && v4(9, 10, 11, 12) && v4(12, 13, 14, 15)
+        }
+        // 6to4, 2002::/16.
+        [0x2002, ..] => v4(2, 3, 4, 5),
+        // Teredo, 2001::/32: its client's own address, which it carries inverted.
+        [0x2001, 0, ..] => viewer_v4(!Ipv4Addr::new(o[12], o[13], o[14], o[15])),
+        [first, ..] => first & 0xe000 == 0x2000 || first & 0xfe00 == 0xfc00,
+    }
 }
 
 /// Why an offer was not answered.
@@ -233,6 +303,10 @@ pub struct Session {
     estimate: Option<u32>,
     /// The link last asked of the estimation ([`Session::want`]).
     wanted: Option<u32>,
+    /// The page's candidates taken that the session could try: at most [`CANDIDATES`].
+    tried: usize,
+    /// The page's candidates refused ([`Session::refused`]).
+    refused: usize,
     started: Instant,
     connected: bool,
     closed: bool,
@@ -269,7 +343,18 @@ impl Session {
         host: Option<SocketAddr>,
         now: Instant,
     ) -> Result<(Session, String), Refusal> {
-        let parsed = SdpOffer::from_sdp_string(sdp)
+        // str0m would take the offer's own candidates as they are: they go in as the trickle's
+        // do, through `add_remote_candidate`, once the session exists.
+        let candidates: Vec<&str> = sdp
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("a=candidate:"))
+            .collect();
+        let bare: String = sdp
+            .split_inclusive('\n')
+            .filter(|line| !line.trim().starts_with("a=candidate:"))
+            .collect();
+        let parsed = SdpOffer::from_sdp_string(&bare)
             .map_err(|_| Refusal::Offer(OfferRefusal::Unparseable))?;
         let estimated = transport_feedback(sdp);
         let config = Rtc::builder()
@@ -325,6 +410,8 @@ impl Session {
             path: None,
             estimate: estimated.then_some(START_KBPS),
             wanted: None,
+            tried: 0,
+            refused: 0,
             started: now,
             connected: false,
             closed: false,
@@ -332,6 +419,9 @@ impl Session {
             transmits: Vec::new(),
             events: Vec::new(),
         };
+        for line in candidates {
+            session.add_remote_candidate(line, now);
+        }
         session.pump(now);
         Ok((session, answer))
     }
@@ -362,8 +452,10 @@ impl Session {
         &self.mid
     }
 
-    /// A candidate the page trickled. One the station cannot use (an mDNS host name it cannot
-    /// resolve, a malformed line) is ignored: ICE works with whatever candidates remain.
+    /// A candidate the page named, trickled or in its offer. Returns whether the session took it.
+    /// One it may not try ([`may_try`], or one past [`CANDIDATES`]) is refused and counted; one it
+    /// cannot read (a host name, which is never looked up, or a malformed line) is ignored. Either
+    /// way ICE works with whatever candidates remain.
     pub fn add_remote_candidate(&mut self, line: &str, now: Instant) -> bool {
         if self.closed {
             return false;
@@ -373,15 +465,32 @@ impl Session {
         let Ok(candidate) = Candidate::from_sdp_string(line) else {
             return false;
         };
+        // str0m pairs a candidate only with a local one of its protocol and IP family, and the
+        // station's are UDP on its socket's: only such a candidate draws checks.
+        let tried =
+            candidate.proto() == Protocol::Udp && candidate.addr().is_ipv4() == self.base.is_ipv4();
+        if !may_try(candidate.addr()) || (tried && self.tried >= CANDIDATES) {
+            self.refused += 1;
+            return false;
+        }
+        self.tried += usize::from(tried);
         self.rtc.add_remote_candidate(candidate);
         self.pump(now);
         true
     }
 
+    /// How many of the page's candidates the session has refused (see [`may_try`] and
+    /// [`CANDIDATES`]). The station notes the first, in its own words, never the address.
+    pub fn refused(&self) -> usize {
+        self.refused
+    }
+
     /// A datagram that arrived on the session's socket. Returns false when it was not the
-    /// session's (a STUN answer to the station's own binding request, say).
+    /// session's (a STUN answer to the station's own binding request, say). One from an address
+    /// the station may not try ([`may_try`]) is never read: str0m would answer a check there, and
+    /// then try that address itself.
     pub fn receive(&mut self, now: Instant, source: SocketAddr, data: &[u8]) -> bool {
-        if self.closed {
+        if self.closed || !may_try(source) {
             return false;
         }
         let Ok(receive) = Receive::new(Protocol::Udp, source, self.base, data) else {
@@ -776,12 +885,124 @@ mod tests {
         assert_eq!(refusal.unwrap().reason(), StreamReason::InvalidOffer);
     }
 
+    /// ★ The rule, by value (2026-10-10): every class it refuses and every one it keeps, at each
+    /// edge, and every IPv6 form that carries an IPv4 address, carrying one refused and one kept.
+    /// The sessions' tests (Windows) show it at work, where the page's candidates go in.
+    #[test]
+    fn the_station_tries_only_an_address_a_viewer_could_be_at() {
+        let refused = [
+            // Loopback, "this network" with the unspecified address, and link-local, where a
+            // cloud's metadata service answers.
+            "127.0.0.1:50000",
+            "127.255.255.255:50000",
+            "0.0.0.0:50000",
+            "0.1.2.3:50000",
+            "0.255.255.255:50000",
+            "169.254.0.0:50000",
+            "169.254.169.254:80",
+            "169.254.255.255:50000",
+            // Multicast, the reserved 240/4 and broadcast.
+            "224.0.0.0:50000",
+            "224.0.0.251:5353",
+            "239.255.255.250:1900",
+            "240.0.0.1:50000",
+            "255.255.255.254:50000",
+            "255.255.255.255:50000",
+            // Port 0, on addresses otherwise kept.
+            "203.0.113.7:0",
+            "192.168.1.5:0",
+            "[2001:db8::1]:0",
+            // IPv6: loopback, unspecified, multicast, link-local, site-local, and the rest of what
+            // is outside its global and unique-local space.
+            "[::1]:50000",
+            "[::]:50000",
+            "[ff02::1]:50000",
+            "[ff0e::1]:50000",
+            "[fe80::1]:50000",
+            "[febf:ffff::1]:50000",
+            "[fec0::1]:50000",
+            "[feff::1]:50000",
+            "[fe00::1]:50000",
+            "[100::1]:50000",
+            "[1fff::1]:50000",
+            "[4000::1]:50000",
+            // IPv4-mapped and IPv4-compatible, carrying a refused IPv4 address.
+            "[::ffff:127.0.0.1]:50000",
+            "[::ffff:169.254.169.254]:80",
+            "[::ffff:0.0.0.0]:50000",
+            "[::ffff:224.0.0.1]:50000",
+            "[::ffff:255.255.255.255]:50000",
+            "[::127.0.0.1]:50000",
+            "[::169.254.169.254]:80",
+            // NAT64's well-known prefix.
+            "[64:ff9b::7f00:1]:50000",
+            "[64:ff9b::a9fe:a9fe]:80",
+            // NAT64's local-use prefix, refused by its /48, /56, /64 and /96 readings in turn.
+            "[64:ff9b:1:7f01:71:708:90a:b0c]:50000",
+            "[64:ff9b:1:cb7f:71:708:90a:b0c]:50000",
+            "[64:ff9b:1:cb01:a9:fe08:90a:b0c]:50000",
+            "[64:ff9b:1:cb01:71:708:e00a:b0c]:50000",
+            // 6to4.
+            "[2002:7f00:1::1]:50000",
+            "[2002:a9fe:a9fe::1]:80",
+            // Teredo, whose client is 127.0.0.1 or 169.254.169.254, inverted.
+            "[2001:0:4136:e378:8000:63bf:80ff:fffe]:50000",
+            "[2001:0:4136:e378:8000:63bf:5601:5601]:80",
+        ];
+        let kept = [
+            // The internet, at each edge of every block refused, and a reflexive and a relayed
+            // address.
+            "1.0.0.0:50000",
+            "126.255.255.255:50000",
+            "128.0.0.0:50000",
+            "169.253.255.255:50000",
+            "169.255.0.0:50000",
+            "223.255.255.255:50000",
+            "203.0.113.7:61000",
+            "198.51.100.77:3478",
+            // The private networks, and carrier-grade NAT's 100.64/10 (Tailscale's).
+            "10.0.0.9:50000",
+            "172.16.0.1:50000",
+            "172.31.255.255:50000",
+            "192.168.1.5:50000",
+            "100.64.0.0:50000",
+            "100.127.255.255:50000",
+            "100.85.152.128:41641",
+            // IPv6's global unicast space and unique-local fc00::/7, at their edges.
+            "[2000::1]:50000",
+            "[2001:db8::7]:61234",
+            "[3fff:ffff::1]:50000",
+            "[fc00::1]:50000",
+            "[fdff:ffff::1]:50000",
+            // Each form that carries an IPv4 address, carrying one kept.
+            "[::ffff:203.0.113.7]:50000",
+            "[::ffff:192.168.1.5]:50000",
+            "[::203.0.113.7]:50000",
+            "[64:ff9b::cb00:7107]:50000",
+            "[64:ff9b:1:cb01:71:708:90a:b0c]:50000",
+            "[2002:cb00:7107::1]:50000",
+            "[2001:0:4136:e378:8000:63bf:34ff:8ef8]:50000",
+        ];
+        let wrong = |list: &[&str], keep: bool| -> Vec<String> {
+            list.iter()
+                .filter(|peer| may_try(peer.parse().unwrap()) != keep)
+                .map(|peer| peer.to_string())
+                .collect()
+        };
+        assert_eq!(
+            (wrong(&refused, false), wrong(&kept, true)),
+            (Vec::<String>::new(), Vec::<String>::new()),
+            "(tried though refused, refused though kept)"
+        );
+    }
+
     /// The acceptance tests that need a real WebRTC session: Windows only, because that is where
     /// the approved crypto backend exists. A browser-shaped str0m peer plays the page, the network
     /// is an in-memory NAT, and time is driven by the test.
     #[cfg(windows)]
     mod windows {
         use super::*;
+        use std::net::{IpAddr, Ipv4Addr, UdpSocket};
         use str0m::change::{SdpAnswer, SdpPendingOffer};
         use str0m::channel::ChannelConfig;
         use str0m::media::Direction;
@@ -1564,6 +1785,436 @@ mod tests {
                 .events
                 .iter()
                 .any(|e| matches!(e, Event::ChannelData(d) if d.id == control)));
+        }
+
+        /// A UDP socket that counts the STUN messages reaching it: where a check the station sends,
+        /// or its answer to one, would land.
+        struct Counter {
+            socket: UdpSocket,
+            at: SocketAddr,
+        }
+
+        impl Counter {
+            fn on(ip: IpAddr) -> Self {
+                let socket = UdpSocket::bind(SocketAddr::new(ip, 0)).unwrap();
+                socket.set_nonblocking(true).unwrap();
+                let at = socket.local_addr().unwrap();
+                Counter { socket, at }
+            }
+
+            /// The STUN messages that have reached it since it was last asked.
+            fn stun(&self) -> usize {
+                std::thread::sleep(Duration::from_millis(100));
+                let mut buf = [0u8; 2048];
+                let mut count = 0;
+                while let Ok((n, _)) = self.socket.recv_from(&mut buf) {
+                    count += usize::from(stun(&buf[..n]));
+                }
+                count
+            }
+        }
+
+        /// Is this datagram a STUN message: RFC 8489's magic cookie, in its place?
+        fn stun(datagram: &[u8]) -> bool {
+            datagram.len() >= 20 && datagram[4..8] == [0x21, 0x12, 0xa4, 0x42]
+        }
+
+        /// This computer's own address on its network, where the route off it leaves, found the
+        /// way the station finds its own (`stream.rs`, `open_socket`). A viewer on this computer's
+        /// network names an address like it.
+        fn own_address() -> IpAddr {
+            let probe = UdpSocket::bind("0.0.0.0:0").unwrap();
+            probe
+                .connect("192.0.2.1:9")
+                .expect("a route off this computer");
+            let ip = probe.local_addr().unwrap().ip();
+            assert!(!ip.is_loopback() && !ip.is_unspecified(), "{ip}");
+            ip
+        }
+
+        /// A candidate line as a page trickles it: `at`, of the kind `typ`.
+        fn named(foundation: usize, at: SocketAddr, typ: &str) -> String {
+            let any = if at.is_ipv4() { "0.0.0.0" } else { "::" };
+            let (priority, related) = match typ {
+                "host" => (2_122_260_223u32, String::new()),
+                "srflx" => (1_686_052_607, format!(" raddr {any} rport 0")),
+                _ => (41_885_439, format!(" raddr {any} rport 0")),
+            };
+            format!(
+                "candidate:{foundation} 1 udp {priority} {} {} typ {typ}{related}",
+                at.ip(),
+                at.port()
+            )
+        }
+
+        /// A page's offer with its own candidate lines taken out (a browser's carries none: it
+        /// trickles every one afterwards) and `carried` put in their place.
+        fn offer_carrying(offer: &str, carried: &[String]) -> String {
+            let mut offer: String = offer
+                .split_inclusive("\r\n")
+                .filter(|line| !line.starts_with("a=candidate:"))
+                .collect();
+            for line in carried {
+                offer.push_str(&format!("a={line}\r\n"));
+            }
+            offer
+        }
+
+        /// The station's session for a page whose offer carries no candidate, with the page.
+        fn answered(now: Instant) -> (Page, Session, SdpPendingOffer, String) {
+            let (page, offer, pending) = page(now);
+            let (station, answer) =
+                Session::accept(&offer_carrying(&offer, &[]), BASE.parse().unwrap(), now).unwrap();
+            (page, station, pending, answer)
+        }
+
+        /// Run the station alone for `span`, and hand each datagram it sends to one of `counters`
+        /// to that counter through a real socket (nothing goes anywhere else). Returns where each
+        /// datagram it sent was for.
+        fn drive(
+            station: &mut Session,
+            now: &mut Instant,
+            span: Duration,
+            counters: &[&Counter],
+        ) -> Vec<SocketAddr> {
+            let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+            let mut sent = Vec::new();
+            let end = *now + span;
+            loop {
+                for t in station.take_transmits() {
+                    if counters.iter().any(|c| c.at == t.destination) {
+                        socket.send_to(&t.contents, t.destination).unwrap();
+                    }
+                    sent.push(t.destination);
+                }
+                if *now >= end {
+                    return sent;
+                }
+                *now += Duration::from_millis(10);
+                station.timeout(*now);
+            }
+        }
+
+        /// ★ The station tries no address a page names that no viewer could be at (2026-10-10).
+        /// Before, it sent checks to whatever a page trickled: its own loopback services, the
+        /// link's devices, the metadata service a cloud answers at 169.254.169.254. Counted at two
+        /// real sockets: one on loopback, which the page names, and one on this computer's own
+        /// address, which a viewer on its network names. The session goes on. CONTROL: that
+        /// viewer's address draws checks there, and so do a reflexive, a relayed and a carrier-NAT
+        /// address.
+        #[test]
+        fn a_page_naming_loopback_or_link_local_draws_no_check_there() {
+            let mut now = Instant::now();
+            let (_page, mut station, _, _) = answered(now);
+            let (loopback, own) = (
+                Counter::on(Ipv4Addr::LOCALHOST.into()),
+                Counter::on(own_address()),
+            );
+            let metadata: SocketAddr = "169.254.169.254:80".parse().unwrap();
+            let viewer: [(SocketAddr, &str); 4] = [
+                (own.at, "host"),
+                ("203.0.113.9:50001".parse().unwrap(), "srflx"),
+                ("198.51.100.77:3478".parse().unwrap(), "relay"),
+                ("100.64.1.2:50002".parse().unwrap(), "host"),
+            ];
+            let took: Vec<bool> = [(loopback.at, "host"), (metadata, "host")]
+                .iter()
+                .chain(&viewer)
+                .enumerate()
+                .map(|(n, &(at, typ))| station.add_remote_candidate(&named(n, at, typ), now))
+                .collect();
+            let sent = drive(
+                &mut station,
+                &mut now,
+                Duration::from_secs(2),
+                &[&loopback, &own],
+            );
+            let checks = |at: SocketAddr| sent.iter().filter(|&&to| to == at).count();
+            let (at_loopback, at_own) = (loopback.stun(), own.stun());
+            // CONTROL: every address a viewer could be at was taken, and drew checks.
+            assert_eq!(took[2..], [true; 4]);
+            assert!(
+                at_own > 0,
+                "no check reached this computer's address: {sent:?}"
+            );
+            for (at, typ) in viewer {
+                assert!(
+                    checks(at) > 0,
+                    "no check to the {typ} candidate {at}: {sent:?}"
+                );
+            }
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+            assert_eq!(
+                (
+                    &took[..2],
+                    station.refused(),
+                    at_loopback,
+                    checks(loopback.at),
+                    checks(metadata)
+                ),
+                (&[false, false][..], 2, 0, 0, 0),
+                "(taken, refused, checks counted at loopback, sent to loopback, sent to the \
+                 metadata service)"
+            );
+        }
+
+        /// ★ The candidates an offer carries go through the same rule as the trickle's
+        /// (2026-10-10): str0m takes an offer's own candidates as they are, and a page's offer can
+        /// carry them, though a browser's carries none. CONTROL: this computer's own address, in the
+        /// same offer, draws checks there.
+        #[test]
+        fn the_candidates_an_offer_carries_are_held_to_the_same_rule() {
+            let mut now = Instant::now();
+            let (_page, offer, _pending) = page(now);
+            let (loopback, own) = (
+                Counter::on(Ipv4Addr::LOCALHOST.into()),
+                Counter::on(own_address()),
+            );
+            let metadata: SocketAddr = "169.254.169.254:80".parse().unwrap();
+            let carried: Vec<String> = [loopback.at, metadata, own.at]
+                .iter()
+                .enumerate()
+                .map(|(n, &at)| named(n, at, "host"))
+                .collect();
+            let (mut station, _) = Session::accept(
+                &offer_carrying(&offer, &carried),
+                BASE.parse().unwrap(),
+                now,
+            )
+            .expect("the offer is answered");
+            let sent = drive(
+                &mut station,
+                &mut now,
+                Duration::from_secs(2),
+                &[&loopback, &own],
+            );
+            let checks = |at: SocketAddr| sent.iter().filter(|&&to| to == at).count();
+            let (at_loopback, at_own) = (loopback.stun(), own.stun());
+            assert!(
+                at_own > 0,
+                "control: no check reached this computer's address: {sent:?}"
+            );
+            assert_eq!(
+                (
+                    station.refused(),
+                    at_loopback,
+                    checks(loopback.at),
+                    checks(metadata)
+                ),
+                (2, 0, 0, 0),
+                "(refused, checks counted at loopback, sent to loopback, sent to the metadata \
+                 service)"
+            );
+        }
+
+        /// ★ A check's source is held to the same rule (2026-10-10): str0m answers a check where it
+        /// came from, and takes that address as a peer-reflexive candidate that it then checks. The
+        /// page's own check, as if from loopback, is never read, and nothing goes back there.
+        /// CONTROL: the same check from this computer's own address is answered there.
+        #[test]
+        fn a_check_from_an_address_no_viewer_could_be_at_is_never_answered() {
+            let mut now = Instant::now();
+            let (mut page, mut station, pending, answer) = answered(now);
+            page.rtc
+                .sdp_api()
+                .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
+                .unwrap();
+            page.drain();
+            let host = station.host_candidate().expect("premise: a LAN address");
+            page.rtc
+                .add_remote_candidate(Candidate::from_sdp_string(host).unwrap());
+            page.drain();
+            let base: SocketAddr = BASE.parse().unwrap();
+            let mut check = None;
+            for _ in 0..200 {
+                check = page
+                    .outbox
+                    .iter()
+                    .find(|(to, packet)| *to == base && stun(packet))
+                    .map(|(_, packet)| packet.clone());
+                if check.is_some() {
+                    break;
+                }
+                now += Duration::from_millis(10);
+                page.input(Input::Timeout(now));
+            }
+            let check = check.expect("premise: the page checks the station's address");
+            let (loopback, own) = (
+                Counter::on(Ipv4Addr::LOCALHOST.into()),
+                Counter::on(own_address()),
+            );
+            let read_from_loopback = station.receive(now, loopback.at, &check);
+            let read_from_own = station.receive(now, own.at, &check);
+            let sent = drive(
+                &mut station,
+                &mut now,
+                Duration::from_secs(1),
+                &[&loopback, &own],
+            );
+            let (at_loopback, at_own) = (loopback.stun(), own.stun());
+            assert!(
+                read_from_own && at_own > 0,
+                "control: the check from this computer's address was not answered: {sent:?}"
+            );
+            assert_eq!(
+                (read_from_loopback, at_loopback, sent.contains(&loopback.at)),
+                (false, 0, false),
+                "(read, counted at loopback, anything sent there)"
+            );
+        }
+
+        /// ★ A session tries at most sixteen of the page's candidates, its offer's and its
+        /// trickle's together, and refuses any more (2026-10-10). One this IPv4 socket could never
+        /// try (a TCP one, an IPv6 one) does not count, so a browser that names many of those still
+        /// has the rest taken. CONTROL: the address the seventeenth names, as a session's first,
+        /// draws checks.
+        #[test]
+        fn a_session_tries_at_most_sixteen_of_the_pages_candidates() {
+            const CAP: usize = CANDIDATES;
+            assert_eq!(CAP, 16);
+            let own = Counter::on(own_address());
+            let mut now = Instant::now();
+            let (_page, offer, _pending) = page(now);
+            let viewer = |n: usize| SocketAddr::from(([198, 51, 100, n as u8], 50_000));
+            let carried: Vec<String> = (1..=CAP / 2)
+                .map(|n| named(n, viewer(n), "srflx"))
+                .collect();
+            let (mut station, _) = Session::accept(
+                &offer_carrying(&offer, &carried),
+                BASE.parse().unwrap(),
+                now,
+            )
+            .unwrap();
+            let never = [
+                "candidate:90 1 tcp 1518280447 203.0.113.5 9 typ host tcptype active".to_string(),
+                named(91, "[2001:db8::5]:50000".parse().unwrap(), "srflx"),
+            ];
+            let unpairable: Vec<bool> = never
+                .iter()
+                .map(|line| station.add_remote_candidate(line, now))
+                .collect();
+            let trickled: Vec<bool> = (CAP / 2 + 1..=CAP)
+                .map(|n| station.add_remote_candidate(&named(n, viewer(n), "srflx"), now))
+                .collect();
+            let past = station.add_remote_candidate(&named(CAP + 1, own.at, "host"), now);
+            let sent = drive(&mut station, &mut now, Duration::from_secs(3), &[&own]);
+            let checks = |at: SocketAddr| sent.iter().filter(|&&to| to == at).count();
+            let untried: Vec<usize> = (1..=CAP).filter(|&n| checks(viewer(n)) == 0).collect();
+            let at_own = own.stun();
+            // CONTROL: a session whose first candidate names that address tries it.
+            let (_page, mut first, _, _) = answered(now);
+            assert!(first.add_remote_candidate(&named(0, own.at, "host"), now));
+            drive(&mut first, &mut now, Duration::from_secs(1), &[&own]);
+            assert!(
+                own.stun() > 0,
+                "control: a session's first candidate drew no check"
+            );
+            assert_eq!(
+                (unpairable, trickled, untried),
+                (vec![true, true], vec![true; CAP / 2], vec![]),
+                "(never tried, the trickled half, the sixteen without a check)"
+            );
+            assert_eq!(
+                (past, station.refused(), at_own, checks(own.at)),
+                (false, 1, 0, 0),
+                "the seventeenth: (taken, refused, checks counted, sent)"
+            );
+            assert!(!station.is_closed(), "{:?}", station.take_events());
+        }
+
+        /// A candidate named by a host name (a browser's mDNS `.local` one, or any other name) is
+        /// never looked up, trickled or in an offer: it is not taken, it is not a refusal, and
+        /// nothing is sent for it. An offer carrying one is answered, as it was before this rule
+        /// (measured). `localhost` names the loopback counter's port: before the rule, when the
+        /// station took loopback, a check would have reached it had the name been resolved.
+        /// CONTROL: the counter counts a STUN message sent to it straight.
+        #[test]
+        fn a_candidate_named_by_a_host_name_is_never_resolved_or_tried() {
+            let mut now = Instant::now();
+            let (_page, mut station, _, _) = answered(now);
+            let loopback = Counter::on(Ipv4Addr::LOCALHOST.into());
+            let names = [
+                format!(
+                    "candidate:1 1 udp 2122260223 localhost {} typ host",
+                    loopback.at.port()
+                ),
+                "candidate:2 1 udp 2122260223 4d2a8f1e-8c1b-4f3a-9e2d-2c3b4a5d6e7f.local 54321 \
+                 typ host"
+                    .to_string(),
+            ];
+            let took: Vec<bool> = names
+                .iter()
+                .map(|line| station.add_remote_candidate(line, now))
+                .collect();
+            let sent = drive(&mut station, &mut now, Duration::from_secs(1), &[&loopback]);
+            let (_page, offer, _pending) = page(now);
+            let (mut offered, _) =
+                Session::accept(&offer_carrying(&offer, &names), BASE.parse().unwrap(), now)
+                    .expect("an offer carrying a host name is answered");
+            let sent_for_offer =
+                drive(&mut offered, &mut now, Duration::from_secs(1), &[&loopback]);
+            assert_eq!(
+                (
+                    took,
+                    sent,
+                    sent_for_offer,
+                    station.refused() + offered.refused(),
+                    loopback.stun()
+                ),
+                (vec![false, false], vec![], vec![], 0, 0),
+                "(taken, sent for the trickled, sent for the offer's, refused, counted at loopback)"
+            );
+            // CONTROL: a binding request's header, sent there straight.
+            let mut header = [0u8; 20];
+            header[1] = 1;
+            header[4..8].copy_from_slice(&[0x21, 0x12, 0xa4, 0x42]);
+            let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+            socket.send_to(&header, loopback.at).unwrap();
+            assert_eq!(loopback.stun(), 1, "control: the counter missed a datagram");
+        }
+
+        /// A viewer only a TURN relay can reach, which trickles its relayed candidate, connects
+        /// there.
+        #[test]
+        fn a_viewer_behind_a_relay_connects_over_its_relayed_candidate() {
+            const RELAY: &str = "198.51.100.77:3478";
+            let mut now = Instant::now();
+            let (mut page, offer, pending, _) = page_on(now, false, RELAY);
+            let (mut station, answer) =
+                Session::accept(&offer_carrying(&offer, &[]), BASE.parse().unwrap(), now).unwrap();
+            page.rtc
+                .sdp_api()
+                .accept_answer(pending, SdpAnswer::from_sdp_string(&answer).unwrap())
+                .unwrap();
+            page.drain();
+            if let Some(host) = station.host_candidate() {
+                page.rtc
+                    .add_remote_candidate(Candidate::from_sdp_string(host).unwrap());
+            }
+            let line = station.add_reflexive(PUBLIC.parse().unwrap(), now).unwrap();
+            page.rtc
+                .add_remote_candidate(Candidate::from_sdp_string(&line).unwrap());
+            page.drain();
+            assert!(station.add_remote_candidate(&named(1, RELAY.parse().unwrap(), "relay"), now));
+            for _ in 0..40 {
+                travel(
+                    &mut page,
+                    &mut station,
+                    &mut now,
+                    Duration::from_millis(250),
+                    PUBLIC,
+                    RELAY,
+                );
+                if station.is_connected() {
+                    break;
+                }
+            }
+            assert!(
+                station.is_connected(),
+                "a viewer behind a relay found no path: {:?}",
+                station.take_events()
+            );
+            assert!(page.rtc.is_connected());
         }
     }
 }

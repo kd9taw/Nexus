@@ -310,7 +310,8 @@ fn one_stream_for_the_whole_station_whichever_road() {
 
 /// ★ What the LAN road's session socket hears and tries: only the shack's own subnet, a page's
 /// host candidate there included, and nothing else (a reflexive candidate, loopback, another
-/// network). CONTROL: the relay's road is not narrowed, so the hosted stream is as it was.
+/// network). CONTROL: the relay's road is not narrowed to a subnet (what the session tries, on
+/// either road, is held to `tempo_stream::session::may_try` as well).
 #[test]
 fn the_lan_roads_socket_hears_and_tries_only_the_shacks_subnet() {
     let lan = Road::Lan {
