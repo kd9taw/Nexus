@@ -4826,9 +4826,11 @@ mod tests {
             POSITION_HELD,
             1_001,
         );
+        // With a key of its own, as every JOIN this build sends has: only being held out of its
+        // position can be what lets an entry give one.
         club.note_refused(
             "bbbb0002",
-            "",
+            &throwaway_hash("a laptop logging another contest"),
             "SSB tent",
             "W9XYZ",
             "another contest",
