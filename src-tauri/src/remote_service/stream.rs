@@ -3,8 +3,8 @@
 //!
 //! A streamed session shows the remote operator the station's own Nexus window over WebRTC and
 //! carries their input back into it. The WebRTC session itself (the offer check, the one address of
-//! its own it offers, the page's certificate) is `tempo_stream::session`; this file is where it meets the
-//! station.
+//! its own it offers, the addresses of the page's it will try, the page's certificate) is
+//! `tempo_stream::session`; this file is where it meets the station.
 //!
 //! ## Where each rule is kept
 //!
@@ -245,7 +245,9 @@ struct Live {
     thread: std::thread::JoinHandle<()>,
 }
 
-/// The road a session came by (the operator's ruling of 2026-10-04, "both at once").
+/// The road a session came by (the operator's ruling of 2026-10-04, "both at once"). On either road
+/// the session itself then tries, and hears, only an address a viewer could be at
+/// (`tempo_stream::session::may_try`).
 #[derive(Clone, Copy)]
 enum Road {
     /// The relay's: a socket on the address the route to the STUN server leaves by, and the
@@ -1013,6 +1015,7 @@ fn run(
     let mut video: Option<tempo_stream::video::Video> = None;
     let mut ended = StreamReason::StreamClosed;
     let mut buf = vec![0u8; 2048];
+    let mut noted = false;
     loop {
         let now = Instant::now();
         if let Some(reflexive) = reflexive.as_mut() {
@@ -1081,6 +1084,16 @@ fn run(
                 }
                 Err(TryRecvError::Empty) => break,
             }
+        }
+        // A candidate the session refused is dropped and the stream goes on. The shack's log says
+        // so once, in these words, and never names the address.
+        if !noted && session.refused() > 0 {
+            noted = true;
+            tempo_core::applog::info(
+                "remote",
+                "stream: refused an address the page named, one no viewer could be at or one past \
+                 the stream's limit",
+            );
         }
         if now >= session.next_timeout() {
             session.timeout(now);

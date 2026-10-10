@@ -357,6 +357,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
+  sends connection checks to an address a browser names on the shack itself, on the local link
+  (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
+  of one browser's addresses. A browser on your own network or on Tailscale still connects
+  directly.
 - **Another radio's rigctld can no longer land on wfview's port.** With a radio on NET rigctl at a
   rigctld on this computer (wfview's, or one you run), Nexus could give a second radio's rigctld
   that same port, when it moved two radios off a port they shared or picked the port for a radio
