@@ -13,11 +13,13 @@
 //   - the caret never moves, and the only thing reached is the contest log;
 //   - not from afar (the hosted Remote page and the native client), and not from a strip whose
 //     cockpit is hidden.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 import type { ContestRemovalAnswer } from '../api'
+import { StreamInputDispatcher } from '../remote-native/stream-input'
+import { MOD_CTRL } from '../remote-web/stream-protocol'
 
 vi.mock('../api', () => ({
   contestLogManual: vi.fn(() => Promise.resolve({})),
@@ -282,5 +284,54 @@ describe('only where the strip shows, and never from afar', () => {
     expect(ctrlD()).toBe(false)
     expect(line()).toBeNull()
     expect(api.contestRemoveLast).not.toHaveBeenCalled()
+  })
+})
+
+// jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
+// under it. A streamed key goes to whatever has focus, as the stream's bridge sends it.
+describe('a press through the Remote stream removes nothing', () => {
+  let under: Element | null = null
+  let stream: StreamInputDispatcher | null = null
+  beforeEach(() => {
+    under = null
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => under })
+    stream = new StreamInputDispatcher(window)
+  })
+  afterEach(() => {
+    stream?.dispose()
+    stream = null
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+  const pointer = (action: 'down' | 'up') =>
+    ({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+      modifiers: 0, pointerType: 'mouse', clicks: 1 })
+  const key = (action: 'down' | 'up') =>
+    ({ type: 'key', action, key: 'd', code: 'KeyD', modifiers: MOD_CTRL, repeat: false })
+
+  it('refuses the button pressed twice through the stream, and says why; CONTROL: at the station it removes', async () => {
+    api.contestRemoveLast.mockResolvedValue(removed())
+    render(strip(party(LOG)))
+    under = screen.getByText('Remove last')
+    for (let i = 0; i < 2; i++) {
+      await act(async () => { stream!.handle(pointer('down')); stream!.handle(pointer('up')) })
+    }
+    expect(api.contestRemoveLast).not.toHaveBeenCalled()
+    expect(line()).toMatch(/Only at the station/)
+    fireEvent.click(screen.getByText('Remove last'))
+    await act(async () => { fireEvent.click(screen.getByText('Remove last')) })
+    expect(api.contestRemoveLast).toHaveBeenCalledWith('W9BBB', T0 + 60)
+  })
+
+  it('refuses Ctrl+D pressed twice through the stream; CONTROL: at the station it removes', async () => {
+    api.contestRemoveLast.mockResolvedValue(removed())
+    render(strip(party(LOG)))
+    for (let i = 0; i < 2; i++) {
+      await act(async () => { stream!.handle(key('down')); stream!.handle(key('up')) })
+    }
+    expect(api.contestRemoveLast).not.toHaveBeenCalled()
+    expect(line()).toMatch(/Only at the station/)
+    ctrlD()
+    await act(async () => { ctrlD() })
+    expect(api.contestRemoveLast).toHaveBeenCalledWith('W9BBB', T0 + 60)
   })
 })

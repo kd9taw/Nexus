@@ -53,6 +53,7 @@ import { RecallPanel } from './RecallPanel'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
+import { isStreamInput } from '../remote-native/stream-input'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -695,6 +696,14 @@ export function LogEntry({
   const armedRef = useRef(removeArmed)
   armedRef.current = removeArmed
   const pressRemove = () => {
+    // Only at the station: a press or a Ctrl+D that comes through the Remote stream removes
+    // nothing, as removal is refused from afar. Read before anything awaits, while the stream's
+    // dispatch is still the one running.
+    if (isStreamInput()) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.remote'), alert: true })
+      return
+    }
     const armed = armedRef.current
     const now = Date.now()
     if (!newest) {

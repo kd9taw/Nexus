@@ -3567,12 +3567,18 @@ export interface FdClubStatus {
   boardFull?: { positions: number; shown: number }
   /** The HOST's alone: laptops it turned away, and the sentence each was sent. `handle` only on
    *  an entry for a laptop turned away because another laptop holds its position: the number
-   *  the host's Give button sends back (`fdClubGivePosition`), never a key. */
-  refused?: { posName: string; call: string; reason: string; handle?: number }[]
+   *  the host's Give button sends back (`fdClubGivePosition`), never a key. `clubCode` is the
+   *  code that laptop's own screen shows (absent for a JOIN with no key): the one thing on the
+   *  entry the laptop cannot choose. Neither reaches Remote. */
+  refused?: { posName: string; call: string; reason: string; handle?: number; clubCode?: string }[]
   /** The HOST's alone, for the rest of the event: how many contacts it kept out of the club's
    *  log, and the newest of them (at most 16), each with the position that sent it (its name
    *  and call) and the sentence saying why. Each stays in that position's own log. */
   keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
+  /** This laptop's own club code, for its club line: what the host compares with the code on
+   *  its turned-away list before it gives this laptop a position. Absent with no club key, and
+   *  never on Remote. */
+  clubCode?: string
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */
