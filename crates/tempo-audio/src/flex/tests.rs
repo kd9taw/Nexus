@@ -522,6 +522,7 @@ fn a_cw_word_the_client_does_not_send_says_why() {
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
     in_cw(&mut c, &d);
     assert_eq!(c.ask("b CQ", 1), "RPRT 0\n", "the control");
+    wait_count(&sim, "cwx send \"CQ\" 1", 1);
     assert_eq!(cwx_wire(&sim), ["cwx send \"CQ\" 1"]);
 
     // Break-in off.
