@@ -4306,8 +4306,6 @@ export const EN = {
   'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
   'contest.esm.phone.speak': 'Say his call and your exchange.',
   'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',
-  'contest.esm.refused.history':
-    '{{field}} came from call history: type it to accept it, then press Enter. Alt+Enter logs it as it is.',
   'contest.esm.stopped.logged': '{{step}} stopped. {{call}} is logged. Ctrl+D twice removes it.',
   'contest.esm.stopped.loggedClubSync':
     '{{step}} stopped. {{call}} is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
