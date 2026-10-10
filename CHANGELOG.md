@@ -368,6 +368,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with each contact, so the file is the same after the host restarts, even once the GOTA laptop
   has gone. The header, the club ADIF and the score are unchanged, and so is the club file of
   every other contest.
+- **Club sync takes a laptop's contacts only as that laptop, and only ones the club's file can
+  hold.** The host turns away, by name, a laptop whose Callsign on the air is not a call sign, at
+  ARRL Field Day too. It keeps out of the club's log a contact whose call is not a call sign, or
+  that holds something no line of the club's Cabrillo or ADIF file can carry, and names it on its
+  own screen; the contact stays in that laptop's own log. A laptop can no longer send contacts as
+  another one. Every other club file is unchanged.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

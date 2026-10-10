@@ -22,7 +22,11 @@
 //! capability beyond that. Unknown message types and unknown fields are
 //! ignored (forward compatibility AND attack surface: a hostile LAN peer's
 //! worst case is garbage rows in the club log, which the operator sees).
-//! Pinned by `the_inbound_surface_is_data_plane_only` below.
+//! Pinned by `the_inbound_surface_is_data_plane_only` below. Those rows go in only as
+//! the position the peer's connection JOINED as, never as another position, whose
+//! sequence numbers they would take (pinned by
+//! `a_row_under_another_positions_id_is_refused_and_merges_nothing`), and what they
+//! hold is the policy layer's to check before the club's files see it.
 //!
 //! The ping doubles as a position's clock probe ([`ClockSample`]): the position times its
 //! own ping, the host stamps its pong, and the position measures how far its clock is from
@@ -91,6 +95,13 @@ pub const LINE_PAST_THE_CAP: &str = "the host sent club state longer than the 8 
      Nexus reads, so this position cannot sync and keeps trying: the host's club has more \
      positions than its Nexus can carry. Update the host's Nexus. Contacts you log meanwhile \
      stay in your own log and go up when it can.";
+/// What the host answers a contact sent under another position than the one its connection
+/// JOINED as, before it closes that connection: every JOIN gate decided on that position, so a
+/// row naming another is refused rather than merged into a log no gate let it reach. A Nexus
+/// whose position id changed while it was connected rejoins under the new one.
+pub const ANOTHER_POSITIONS_ROW: &str = "this Nexus sent the host a contact as another club \
+     position than the one it joined as, and the host takes each position's contacts only on \
+     its own connection. It rejoins by itself; contacts you log meanwhile stay in your own log.";
 
 /// One slot of an exchange on the wire: the `(key, domain, raw)` triple, not a
 /// pair. `d` is the domain that matched an `Enum` value (`""` for every other
@@ -459,7 +470,9 @@ pub trait ClubBackend: Send + Sync {
         role: &str,
     ) -> Result<JoinAccept, String>;
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
-    /// the new high-water ack for `row.pos`.
+    /// the new high-water ack for `row.pos`. `row.pos` is always the position this
+    /// connection JOINED as, which every [`join`](Self::join) gate decided on: the socket
+    /// loop refuses a row naming any other ([`ANOTHER_POSITIONS_ROW`]).
     fn merge(&self, row: &WireQso) -> u64;
     /// A position's presence report (band board fodder). `report.name` is the
     /// position's current friendly name — EMPTY MEANS "no news" (an older
@@ -761,8 +774,11 @@ fn serve_club_connection(
                         sent_sections = s;
                         joined = Some(pos);
                     }
-                    Msg::Qso(row) => {
-                        if joined.is_some() {
+                    // ⭐ Merged only as the position this connection JOINED as: every gate
+                    // above decided on that JOIN, so a row naming another position is refused,
+                    // never merged into a log no gate let it reach.
+                    Msg::Qso(row) => match &joined {
+                        Some(pos) if *pos == row.pos => {
                             let acked = backend.merge(&row);
                             if writer
                                 .write_all(encode_line(&Msg::Ack { seq: acked }).as_bytes())
@@ -771,7 +787,17 @@ fn serve_club_connection(
                                 break;
                             }
                         }
-                    }
+                        Some(_) => {
+                            let _ = writer.write_all(
+                                encode_line(&Msg::Error {
+                                    msg: ANOTHER_POSITIONS_ROW.to_string(),
+                                })
+                                .as_bytes(),
+                            );
+                            break;
+                        }
+                        None => {}
+                    },
                     Msg::Pos {
                         band,
                         mode,
@@ -1868,6 +1894,55 @@ mod tests {
             got.iter()
                 .any(|m| matches!(m, Msg::Club(st) if !st.dupes.is_empty())),
             "club delta carries the merged dupe keys: {got:?}"
+        );
+    }
+
+    /// ⭐ **A connection merges contacts only as the position it JOINED as.** Every gate the
+    /// host runs at JOIN (the version, the contest, the role, the call) decides on that JOIN,
+    /// and the row's own `pos` used to choose whose log the row went into: a peer let in as
+    /// one position could write into another's (taking its `seq`s, so that position's own
+    /// contacts would then merge as repeats and be dropped) or into one no gate ever let in.
+    /// Refused by name, and the connection closes. CONTROL: the same peer's own row merges.
+    #[test]
+    fn a_row_under_another_positions_id_is_refused_and_merges_nothing() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let got = talk(
+            addr,
+            &[
+                join_msg("aaaa0001", 0),
+                qso("bbbb0002", 1, "W1AW"),
+                qso("aaaa0001", 1, "K1ABC"),
+            ],
+            700,
+        );
+        let control = talk(
+            addr,
+            &[join_msg("aaaa0001", 0), qso("aaaa0001", 1, "K1ABC")],
+            700,
+        );
+        sd.store(true, Ordering::Relaxed);
+        let calls = club.calls.lock().unwrap().clone();
+        assert!(
+            !calls.iter().any(|c| c.starts_with("merge bbbb0002")),
+            "a row under a position this connection did not join as merged: {calls:?}"
+        );
+        assert!(
+            got.iter()
+                .any(|m| matches!(m, Msg::Error { msg } if msg.as_str() == ANOTHER_POSITIONS_ROW)),
+            "the peer is told why: {got:?}"
+        );
+        assert!(
+            !got.iter().any(|m| matches!(m, Msg::Ack { .. })),
+            "nothing is acked on that connection: {got:?}"
+        );
+        assert!(
+            calls.iter().any(|c| c == "merge aaaa0001 1"),
+            "CONTROL: its own row merges: {calls:?}"
+        );
+        assert!(
+            control.iter().any(|m| matches!(m, Msg::Ack { seq: 1 })),
+            "{control:?}"
         );
     }
 

@@ -2461,7 +2461,11 @@ impl FieldDayLog {
             if let Some(t) = self.session.transmitter_id {
                 cols.push(t.to_string());
             }
-            s.push_str(&format!("QSO: {}\n", cols.join(" ")));
+            // Every value on the line came from a row; none of them can end it.
+            s.push_str(&format!(
+                "QSO: {}\n",
+                crate::contest::cabrillo::one_line(&cols.join(" "))
+            ));
         }
         s.push_str("END-OF-LOG:\n");
         Ok(s)
@@ -2729,6 +2733,9 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
 }
 
 fn adif_field(name: &str, value: &str) -> String {
+    // ADIF's String is printable characters, and a reader that goes by lines would read a
+    // record a value broke as two: no value can end its record's line.
+    let value = crate::contest::cabrillo::one_line(value);
     format!("<{}:{}>{} ", name, value.len(), value)
 }
 
@@ -4604,5 +4611,65 @@ mod cabrillo_header_tests {
             .cabrillo(14_074)
             .expect("a single-mode event exports");
         assert!(cab.contains("CATEGORY-OPERATOR: CHECKLOG\n"), "{cab}");
+    }
+
+    /// ⭐ **No value can open a line of either file this log writes** — the writers' own
+    /// guard, under club sync's boundary (which keeps out any contact that would need it): a
+    /// line feed, a carriage return or another control character inside a call, an exchange
+    /// value either way, a band or an operator is written as a space, so every line of the
+    /// Cabrillo and every record of the ADIF is one the writer opened. Winter Field Day,
+    /// whose `X-EXCHANGE` and `OPERATORS` headers are read off the rows, so headers are under
+    /// test too. A log holding none writes the bytes it always did (the §8(a) goldens).
+    #[test]
+    fn no_value_can_open_a_line_of_the_cabrillo_or_the_adif() {
+        let breaker = "\nQSO: 7000 CW 2027-01-23 1702 W9XYZ 3O WI K1FAK 1O CT\r\u{1b}\u{2028}";
+        let b = |v: &str| format!("{v}{breaker}");
+        let session = ContestSession::field_day(FdEvent::WinterFd, "3O", "WI");
+        let spec = session.exchange;
+        let fields = |class: &str, section: &str| -> Vec<crate::contest::FieldValue> {
+            [("CLASS", class), ("SECTION", section)]
+                .iter()
+                .filter_map(|(k, v)| spec.value(k, v))
+                .collect()
+        };
+        let mut log = FieldDayLog::new("W9XYZ", session, &b("40m"));
+        log.operator = b("K9OP");
+        assert!(log.log_exchange_at(
+            &b("K1ABC"),
+            fields(&b("2O"), &b("EMA")),
+            fields(&b("3O"), &b("WI")),
+            "CW",
+            "",
+            0,
+            1_800_000_000,
+        ));
+        let cab = log
+            .cabrillo_with(0, &crate::contest::CabrilloEntrant::default())
+            .unwrap();
+        let adif = log.adif();
+        let stray = |s: &str| {
+            s.chars()
+                .filter(|c| (c.is_control() && *c != '\n') || matches!(c, '\u{2028}' | '\u{2029}'))
+                .count()
+        };
+        assert_eq!((stray(&cab), stray(&adif)), (0, 0), "{cab}\n{adif}");
+        assert_eq!(
+            cab.lines().filter(|l| l.starts_with("QSO:")).count(),
+            1,
+            "{cab}"
+        );
+        assert!(
+            cab.lines()
+                .any(|l| l.starts_with("X-EXCHANGE: 3O ") && l.contains("K1FAK")),
+            "the sent class reaches a header, on its one line: {cab}"
+        );
+        assert!(
+            cab.lines()
+                .any(|l| l.starts_with("OPERATORS: K9OP ") && l.contains("K1FAK")),
+            "the operator reaches a header, on its one line: {cab}"
+        );
+        let records: Vec<&str> = adif.split_once("<EOH>\n").unwrap().1.lines().collect();
+        assert_eq!(records.len(), 1, "{adif}");
+        assert!(records[0].ends_with("<EOR>"), "{adif}");
     }
 }

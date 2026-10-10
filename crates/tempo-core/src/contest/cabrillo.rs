@@ -141,31 +141,32 @@ pub struct CabrilloHeaders {
 }
 
 impl CabrilloHeaders {
-    /// The header lines, `START-OF-LOG` first, each newline-terminated.
+    /// The header lines, `START-OF-LOG` first, each newline-terminated, and each value
+    /// [`one_line`]: none can end its header line or open another.
     pub fn render(&self) -> String {
         let mut s = String::new();
         s.push_str("START-OF-LOG: 3.0\n");
-        s.push_str(&format!("CONTEST: {}\n", self.contest));
-        s.push_str(&format!("CALLSIGN: {}\n", self.callsign));
+        s.push_str(&format!("CONTEST: {}\n", one_line(&self.contest)));
+        s.push_str(&format!("CALLSIGN: {}\n", one_line(&self.callsign)));
         s.push_str(&format!(
             "CATEGORY-OPERATOR: {}\n",
             self.category_operator.token()
         ));
         let optional = |s: &mut String, tag: &str, val: &str| {
             if !val.trim().is_empty() {
-                s.push_str(&format!("{tag}: {}\n", val.trim()));
+                s.push_str(&format!("{tag}: {}\n", one_line(val.trim())));
             }
         };
         optional(&mut s, "CATEGORY-ASSISTED", &self.category_assisted);
         optional(&mut s, "CATEGORY-BAND", &self.category_band);
         optional(&mut s, "CATEGORY-MODE", &self.category_mode);
         optional(&mut s, "CATEGORY-POWER", &self.category_power);
-        s.push_str(&format!("LOCATION: {}\n", self.location));
+        s.push_str(&format!("LOCATION: {}\n", one_line(&self.location)));
         if let Some(score) = self.claimed_score {
             s.push_str(&format!("CLAIMED-SCORE: {score}\n"));
         }
         optional(&mut s, "CLUB", &self.club);
-        s.push_str(&format!("CREATED-BY: {}\n", self.created_by));
+        s.push_str(&format!("CREATED-BY: {}\n", one_line(&self.created_by)));
         optional(&mut s, "EMAIL", &self.email);
         optional(&mut s, "NAME", &self.name);
         optional(&mut s, "OPERATORS", &self.operators);
@@ -173,9 +174,27 @@ impl CabrilloHeaders {
         optional(&mut s, "ENTRY-CLASS", &self.entry_class);
         optional(&mut s, "QRP-COMPETITION", &self.qrp_competition);
         for (tag, val) in &self.x_headers {
-            s.push_str(&format!("{tag}: {val}\n"));
+            s.push_str(&format!("{}: {}\n", one_line(tag), one_line(val)));
         }
         s
+    }
+}
+
+/// ⭐ **A value as it may sit inside one line of a file this crate writes** — every control
+/// character (a line feed, a carriage return, a tab and the rest) and every Unicode line or
+/// paragraph separator written as a space, so nothing a value holds can end the line it is on
+/// or open another. The Cabrillo header and QSO lines and every ADIF value go through it.
+///
+/// The writers' own guard, under the boundary that should make it unreachable: a club host keeps
+/// out a contact whose strings hold any of these (`tempo_app::fdevent`), and every value a
+/// position logs comes from a one-line box. A value holding none is returned as it is, so a file
+/// that never needed the guard is the bytes it always was.
+pub(crate) fn one_line(value: &str) -> std::borrow::Cow<'_, str> {
+    let breaks = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    if value.contains(breaks) {
+        value.replace(breaks, " ").into()
+    } else {
+        value.into()
     }
 }
 

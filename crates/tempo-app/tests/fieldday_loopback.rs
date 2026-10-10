@@ -506,3 +506,232 @@ fn the_hosts_board_carries_each_positions_measured_clock() {
     std::thread::sleep(Duration::from_millis(300));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A peer that speaks the wire by hand: send `lines`, then read what the host answers for
+/// `ms`. Nexus never writes these lines; a LAN peer can.
+fn raw_peer(addr: &str, lines: &[String], ms: u64) -> Vec<fdsync::Msg> {
+    use std::io::Write;
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    let mut w = s.try_clone().unwrap();
+    let mut r = std::io::BufReader::new(s);
+    for l in lines {
+        w.write_all(l.as_bytes()).unwrap();
+    }
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < deadline {
+        match fdsync::read_capped_line(&mut r) {
+            Ok(Some(line)) => got.extend(fdsync::decode_line(&line)),
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+    got
+}
+
+fn join_line(pos: &str, call: &str) -> String {
+    fdsync::encode_line(&fdsync::Msg::Join {
+        v: fdsync::PROTO_VERSION,
+        pos: pos.into(),
+        name: "TENT".into(),
+        call: call.into(),
+        max_seq: 0,
+        contest: "arrlfd".into(),
+        role: String::new(),
+    })
+}
+
+fn row_line(pos: &str, seq: u64, call: &str) -> String {
+    fdsync::encode_line(&fdsync::Msg::Qso(fdsync::WireQso {
+        pos: pos.into(),
+        seq,
+        call: call.into(),
+        class: "2A".into(),
+        sect: "EMA".into(),
+        band: "40m".into(),
+        mode: "CW".into(),
+        when: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        ..Default::default()
+    }))
+}
+
+fn told(got: &[fdsync::Msg], sentence: &str) -> bool {
+    got.iter()
+        .any(|m| matches!(m, fdsync::Msg::Error { msg } if msg.as_str() == sentence))
+}
+
+/// ⭐ **A LAN peer let in as one position cannot send contacts as another** — over the real
+/// bridge and sockets, at an ARRL Field Day club. The host's gates decide on the JOIN, and the
+/// merge used to go by the row's own position id: a peer let in on its own id that sent a row
+/// as the HOST's own position took that position's next sequence number, so the host's next
+/// real contact merged as a repeat and never reached the club's file, with nothing on screen.
+/// Refused by name now. CONTROL: the same peer's own contact merges.
+#[test]
+fn a_lan_peer_cannot_send_contacts_as_another_position() {
+    let dir = std::env::temp_dir().join(format!("fd-another-pos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_another.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    log_fd(&host, "W1AW", "CT", "CW");
+    wait_until("the host's own contact merged", 10, || {
+        club_rows(&host) == 1
+    });
+
+    let got = raw_peer(
+        &addr,
+        &[
+            join_line("dddd0004", "K9GOT"),
+            row_line("aaaa0001", 2, "K1ABC"),
+        ],
+        800,
+    );
+    log_fd(&host, "N0XYZ", "MN", "CW");
+    let peer_own = raw_peer(
+        &addr,
+        &[
+            join_line("dddd0004", "K9GOT"),
+            row_line("dddd0004", 1, "K1ABC"),
+        ],
+        800,
+    );
+    wait_until(
+        "the host's second contact and the peer's own one merged",
+        10,
+        || club_rows(&host) >= 3,
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        club_file_calls(&host),
+        [
+            ("K9GOT".to_string(), "K1ABC".to_string()),
+            ("W9XYZ".to_string(), "N0XYZ".to_string()),
+            ("W9XYZ".to_string(), "W1AW".to_string()),
+        ],
+        "the host's own two contacts, and the peer's under its own call alone"
+    );
+    assert!(
+        told(&got, fdsync::ANOTHER_POSITIONS_ROW),
+        "the peer is told why: {got:?}"
+    );
+    assert!(
+        peer_own
+            .iter()
+            .any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })),
+        "CONTROL: {peer_own:?}"
+    );
+    for sd in [host_sd, host_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **Nothing a LAN peer sends opens a line of the club's file** — over the real bridge and
+/// sockets, at an ARRL Field Day club, where a position on any call sign joins (the GOTA
+/// station's). A JOIN whose call is not a call sign is turned away by name and on the host's
+/// list, and a contact whose call is not one is kept out of the club's log and named on the
+/// host's screen. CONTROL: a GOTA position's JOIN as a Nexus older than the role field writes
+/// it joins, and its contact goes into the club's file under its own call.
+#[test]
+fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
+    let dir = std::env::temp_dir().join(format!("fd-breakers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_breakers.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    log_fd(&host, "W1AW", "CT", "CW");
+    wait_until("the host's own contact merged", 10, || {
+        club_rows(&host) == 1
+    });
+
+    let line = "\nQSO: 7000 CW 2026-06-27 1702 W9XYZ 3A WI K1FAK 1A CT";
+    let mut wrong = Vec::new();
+    let got = raw_peer(
+        &addr,
+        &[
+            join_line("eeee0005", "K9GOT"),
+            row_line("eeee0005", 1, &format!("K1ABC{line}")),
+        ],
+        800,
+    );
+    if got.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })) {
+        wrong.push(format!("the contact was acked: {got:?}"));
+    }
+    let got = raw_peer(
+        &addr,
+        &[join_line("ffff0006", &format!("K9GOT{line}"))],
+        800,
+    );
+    if !told(&got, tempo_app::fdevent::NOT_A_CALL_SIGN) {
+        wrong.push(format!("the JOIN was not turned away by name: {got:?}"));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let listed: Vec<String> = engine_lock(&host)
+        .fd_club_log()
+        .map(|c| c.refused(now).iter().map(|r| r.reason.clone()).collect())
+        .unwrap_or_default();
+    if !listed
+        .iter()
+        .any(|r| r == tempo_app::fdevent::NOT_A_CALL_SIGN)
+    {
+        wrong.push(format!(
+            "the host's list does not name the JOIN: {listed:?}"
+        ));
+    }
+    if !listed
+        .iter()
+        .any(|r| r.contains("is not in the club's log"))
+    {
+        wrong.push(format!(
+            "the host's list does not name the contact: {listed:?}"
+        ));
+    }
+    let cab = engine_lock(&host).fd_club_export(true).unwrap();
+    if cab.lines().filter(|l| l.starts_with("QSO:")).count() != 1 {
+        wrong.push(format!("the club's file:\n{cab}"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    let older = r#"{"t":"join","v":2,"pos":"cccc0003","name":"GOTA","call":"K9GOT","max_seq":0,"contest":"arrlfd"}"#;
+    let got = raw_peer(
+        &addr,
+        &[format!("{older}\n"), row_line("cccc0003", 1, "K1ABC")],
+        800,
+    );
+    assert!(
+        got.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })),
+        "CONTROL: an older GOTA position joins and its contact merges: {got:?}"
+    );
+    assert_eq!(
+        club_file_calls(&host),
+        [
+            ("K9GOT".to_string(), "K1ABC".to_string()),
+            ("W9XYZ".to_string(), "W1AW".to_string()),
+        ]
+    );
+    for sd in [host_sd, host_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
