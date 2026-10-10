@@ -41,6 +41,10 @@ interface Props {
   typeByCall?: Map<string, 'Pota' | 'Sota' | 'Dxped'>
   /** Calls already worked (UPPERCASE, from the log) — struck through, like the roster. */
   workedCalls?: Set<string>
+  /** Calls (UPPERCASE) the log has not answered about yet: "—" beside each, `unansweredTitle` its
+   *  tooltip, until it has. */
+  unansweredCalls?: Set<string>
+  unansweredTitle?: string
   /** When set (detached window only), shows Dock L/R buttons that snap this window to the
    *  screen edge as a full-height strip (persisted across launches). */
   onDock?: (side: 'left' | 'right' | 'none') => void
@@ -98,6 +102,8 @@ export function BandMap({
   needByCall,
   typeByCall,
   workedCalls,
+  unansweredCalls,
+  unansweredTitle,
   onDock,
   sideband,
   tuneEnabled,
@@ -389,6 +395,11 @@ export function BandMap({
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
                 <span className="bandmap-call mono">{s.call}</span>
+                {unansweredCalls?.has(cu) && (
+                  <span className="bandmap-call mono" title={unansweredTitle}>
+                    —
+                  </span>
+                )}
               </button>
             </span>
           )

@@ -2353,6 +2353,9 @@ export const ES: PartialCatalog = {
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
   "logbook.reading": "Leyendo el log…",
+  "logbook.readFailed": "No se pudo leer el log: {{reason}}.",
+  "logbook.readFailed.retry": "Reintentar",
+  "logbook.count.stale": "Desactualizado: contado antes del último cambio en el log.",
   "logbook.rows.loading": "Cargando…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ y ↓ pasan de un contacto a otro, PgUp y PgDn avanzan de página en página, Home y End van al primero y al último.",
@@ -3430,6 +3433,8 @@ export const ES: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "Límite de TX del equipo {{min}} min",
   "operate.strip.tune.noRadioTimeout": "El límite de tiempo de transmisión del equipo está desactivado. Si Nexus o la red fallan durante una sintonía, nada cortará la portadora. Configura un límite de tiempo de transmisión en SmartSDR.",
   "operate.strip.tune.radioRefused": "Tune no transmite aquí: la portadora propia del equipo quedaría fuera de tus privilegios de CW en esta frecuencia.",
+  "operate.strip.atu.radioStatus": "ATU del equipo: {{status}}",
+  "operate.strip.atu.radioRefused": "ATU no transmite aquí: la portadora propia del equipo quedaría fuera de tus privilegios de CW en esta frecuencia.",
   "operate.strip.txControls.aria": "Controles de transmisión",
   "operate.tx.aria": "Mensajes estándar (Tx1–Tx6)",
   "operate.tx.callCq.title": "Llamar CQ (Alt+6)",

@@ -14,7 +14,7 @@
 //! |---|---|---|
 //! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
 //! | `T 0` | everything of ours (`Connection::end_ours`): the open operation's own stop (`xmit 0`, `transmit tune 0`, `cwx clear`, or the ATU's `xmit 0` and `transmit tune 0`); with none open, every stop the radio's status shows an earlier session of ours may need | never gated; sent only for what is ours |
-//! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback) |
+//! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback); then a tuner the radio reports fitted, XIT off; a refusal, the client's or the radio's, says why on the ATU line ([`super::FlexDaemon::radio_atu`]) |
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | first, every character one Nexus can time; admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
 //! | `\stop_morse` | `TxStop::CwxClear` → `cwx clear` | never gated |
 //! | `L KEYSPD <wpm>` | `Command::CwSpeed` → `cw wpm <5–100>` | keys nothing; the engine's WPM control decides the value |
@@ -24,6 +24,7 @@
 //! | `L AF <0..1>` | `slice set <n> audio_level=` | the slice must be ours |
 //! | `U NB/NR/ANF <0/1>` | `slice set <n> nb=/nr=/anf=` | the slice must be ours |
 //! | `f`, `m`, `t`, `v`, `s`, `l RFPOWER`, `l AF`, `l KEYSPD`, `u NB/NR/ANF` | read from the status model | — |
+//! | `u TUNER` | the radio's `atu` status: `1` once a cycle has matched (`TUNE_SUCCESSFUL`, `TUNE_OK`), else `0` | only while the client runs the radio's ATU (its switch) and the radio reports a tuner fitted; otherwise not answered, so no ATU button is offered |
 //! | `\dump_caps` | the authored capabilities ([`authored_caps`]) | — |
 //!
 //! Everything else answers as the shared encoder answers a backend that lacks it (`RPRT -11`),
@@ -80,7 +81,7 @@ use std::time::{Duration, Instant};
 
 use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
 use tempo_net::flex::admission::{another_dax_feeder, Refusal};
-use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
+use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, StartKind, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
 use tempo_net::flex::session::{Connection, EndOutcome, Snapshot, StopOutcome};
 use tempo_net::flex::status::SliceDelta;
@@ -404,6 +405,52 @@ impl FlexShim {
             .is_some_and(|conn| conn.start(start).is_ok())
     }
 
+    /// `u TUNER`: whether the radio's tuner is in line, answered only while this client runs the
+    /// radio's ATU and the radio reports a tuner fitted; otherwise not at all, so no ATU button is
+    /// offered, as before the switch. In line once the radio's last cycle matched
+    /// (`TUNE_SUCCESSFUL`, `TUNE_OK`); every other status is the tuner bypassed, failed or not used
+    /// yet. ⚠️ Unconfirmed until a tester's bench, as is the key that says a tuner is fitted.
+    fn tuner(&self) -> Option<bool> {
+        let conn = self.conn.upgrade()?;
+        if !conn.switched_on(StartKind::Atu) {
+            return None;
+        }
+        conn.read(|s| {
+            let matched = matches!(
+                s.model.atu.status.as_deref(),
+                Some("TUNE_SUCCESSFUL" | "TUNE_OK")
+            );
+            s.model.atu_fitted().then_some(matched)
+        })
+    }
+
+    /// `U TUNER 2`: one ATU cycle, through the core's admission. The ATU line's reason is cleared
+    /// before the start goes out (the radio's refusal of it arrives later, through the watcher),
+    /// and a start the client refuses keeps its own words there.
+    fn start_atu(&self) -> bool {
+        *self
+            .state
+            .atu_refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+        let refused = match self
+            .conn
+            .upgrade()
+            .map(|conn| conn.start(TxStart::AtuStart))
+        {
+            Some(Ok(_)) => return true,
+            Some(Err(refusal)) => super::atu_refusal_words(refusal.as_ref()),
+            None => super::atu_refusal_words(None),
+        };
+        tempo_core::applog::info("cat", &format!("Flex client: {refused}"));
+        *self
+            .state
+            .atu_refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(refused);
+        false
+    }
+
     /// Run a stop, which is never gated. Nothing of ours to stop is success: there is nothing on
     /// the air of ours, and another client's transmission is never stopped from here.
     fn stop(&self, stop: TxStop) -> bool {
@@ -675,6 +722,9 @@ impl RigBackend for FlexShim {
     }
 
     fn func(&self, token: &str) -> Option<bool> {
+        if token == "TUNER" {
+            return self.tuner();
+        }
         let function = slice_function(token)?;
         self.read(|s| match function {
             SliceFunction::Nb => s.nb,
@@ -687,7 +737,7 @@ impl RigBackend for FlexShim {
         if token == "TUNER" {
             // The tuner function starts a tune cycle (`U TUNER 2`). Its off half has no sender
             // in Nexus and no meaning here: not implemented, as before.
-            return on.then(|| self.start(TxStart::AtuStart));
+            return on.then(|| self.start_atu());
         }
         let function = slice_function(token)?;
         Some(self.write(|slice| {

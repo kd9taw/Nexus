@@ -1,4 +1,7 @@
 import { expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseFieldDay } from './field-day'
 import { queryPage } from './application-query-protocol'
 import fixture from './__fixtures__/field-day.json'
@@ -27,6 +30,71 @@ it('refuses stale, incomplete, oversized and open-ended display shapes',()=>{
  expect(()=>parseFieldDay({...fieldDayPage(),meta:{capturedAgeMs:60000,source:fixture}})).toThrow()
 })
 
+// The station's `qsoCount` is the contacts that COUNT (the summary sheet's raw non-dupe number) and
+// its `log` is every row, so the two differ in two kinds of contest: one whose sponsor cross-checks
+// logs has a duplicate LOGGED and scored zero (Sweepstakes, CQ WW and WPX, the VHF runnings, the New
+// York QSO Party), and Winter Field Day logs a satellite contact that counts for nothing there. This
+// validator required the count to equal the rows, so one logged dupe refused the whole capture: the
+// contest view went blank through Remote and the status line called the station unavailable.
+type CountedFd={event:string,qsoCount:number,log:Record<string,unknown>[],satelliteCredit?:boolean}
+const countedPage=(event:string)=>{
+ const page=fieldDayPage(),source=(page.meta as {source:{fieldDay:CountedFd,ruleset:{event:string}}}).source
+ source.fieldDay.event=event;source.ruleset.event=event
+ return {page,fd:source.fieldDay}
+}
+it('takes a log holding a logged dupe or a contact that counts for nothing, counted as the station counts it',()=>{
+ // Sweepstakes works a station once: K2ABC again is logged, marked, and leaves the count at two.
+ const ss=countedPage('arrlss_cw')
+ ss.fd.log.push({...ss.fd.log[1],whenUnix:1782583380,dupe:true})
+ expect(parseFieldDay(ss.page).fieldDay).toMatchObject({qsoCount:2,log:[{call:'K1ABC'},{call:'K2ABC'},{call:'K2ABC',dupe:true}]})
+ // Winter Field Day: a contact through a bird counts for nothing there, and the status says so.
+ const wfd=countedPage('wfd')
+ wfd.fd.satelliteCredit=false
+ wfd.fd.log.push({...wfd.fd.log[1],call:'K3ABC',whenUnix:1782583380,sat:'SAUDISAT 1C (SO-50)'})
+ expect(parseFieldDay(wfd.page).fieldDay).toMatchObject({qsoCount:2,log:[{},{},{call:'K3ABC'}]})
+ // The count is still checked exactly: counting the dupe or the satellite contact, or leaving a
+ // real contact out, is refused.
+ for(const [name,{page,fd}] of [['Sweepstakes',ss],['Winter Field Day',wfd]] as const) for(const count of [3,1]){
+  fd.qsoCount=count
+  expect(()=>parseFieldDay(page),`${name}: ${count}`).toThrow('invalidFieldDay')
+ }
+ // CONTROL: a contest that credits a satellite contact (ARRL Field Day) counts it with the rest.
+ const arrl=countedPage('arrlfd')
+ arrl.fd.log.push({...arrl.fd.log[1],call:'K3ABC',whenUnix:1782583380,sat:'SAUDISAT 1C (SO-50)'})
+ arrl.fd.qsoCount=3
+ expect(parseFieldDay(arrl.page).fieldDay?.qsoCount).toBe(3)
+ arrl.fd.qsoCount=2
+ expect(()=>parseFieldDay(arrl.page)).toThrow('invalidFieldDay')
+})
+
+// Every ruleset the app ships, read from its own rules file. Where every row counts, the count must
+// equal the rows exactly as it always had to, one more or one fewer refused; a row leaves the count
+// only by a mark that ruleset's station sends: `sat` where it gives a satellite contact no credit
+// (the status then says `satelliteCredit: false`), and `dupe` where it logs duplicates.
+it('checks the count exactly under every shipped ruleset, for the rows that ruleset can send',()=>{
+ const {rulesets}=JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)),'../../../crates/tempo-core/src/fd_rules.seed.json'),'utf8')) as
+  {rulesets:{event:string,dupe:{log_dupes?:boolean},scoring:{satellite_credit?:boolean}}[]}
+ // Scene guard: the file holds rulesets of both kinds that leave a row out of the count.
+ expect([rulesets.some(r=>r.dupe.log_dupes===true),rulesets.some(r=>r.scoring.satellite_credit===false)]).toEqual([true,true])
+ const off:string[]=[]
+ for(const rs of rulesets){
+  const {page,fd}=countedPage(rs.event)
+  if(rs.scoring.satellite_credit===false) fd.satelliteCredit=false
+  const exactly=(scene:string,counted:number)=>{
+   const verdicts=[counted-1,counted,counted+1].map(count=>{fd.qsoCount=count;try{parseFieldDay(page);return 'taken'}catch{return 'refused'}})
+   if(verdicts.join()!=='refused,taken,refused') off.push(`${rs.event} ${scene}: ${verdicts.join()}`)
+  }
+  exactly('every row counts',2)
+  fd.log.push({...fd.log[1],call:'K3ABC',whenUnix:1782583380,sat:'AO-91'})
+  exactly('a satellite contact',rs.scoring.satellite_credit===false?2:3)
+  if(rs.dupe.log_dupes){
+   fd.log.push({...fd.log[0],whenUnix:1782583440,dupe:true})
+   exactly('a logged dupe',rs.scoring.satellite_credit===false?2:3)
+  }
+ }
+ expect(off).toEqual([])
+})
+
 // A station sends `sentExchange` (what {EXCH} keys next) on every contest payload. The validator
 // refuses keys it does not know, so without it here every Field Day view went blank through Remote.
 it('accepts the sent exchange a newer station sends, and still bounds it',()=>{
@@ -52,6 +120,8 @@ it('accepts the ruleset dupe rule and the keys built from it, and bounds all thr
   fd.dupeRule={byCall:true,byBand:true,byModeClass:true,byFields:['QTH'],bySentFields:['QTH'],modeClassGroups:[['CW','DIG']],logDupes:false}
   ;(fd.log as Record<string,unknown>[])[0].dkey=['W8XYZ','20M','CW','CUYA','MI']
   ;(fd.log as Record<string,unknown>[])[0].dupe=true
+  // A marked dupe is not in the station's count.
+  fd.qsoCount=1
   ;(fd.club as Record<string,unknown>).dkeys=[['K9CLUB','20M','CW']]
   mutate(fd)
   return p

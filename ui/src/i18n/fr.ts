@@ -2353,6 +2353,9 @@ export const FR: PartialCatalog = {
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
   "logbook.reading": "Lecture du journal…",
+  "logbook.readFailed": "Impossible de lire le journal : {{reason}}.",
+  "logbook.readFailed.retry": "Réessayer",
+  "logbook.count.stale": "Pas à jour : compté avant la dernière modification du journal.",
   "logbook.rows.loading": "Chargement…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑ et ↓ passent d’un contact à l’autre, Pg préc. et Pg suiv. d’une page à l’autre, Début et Fin vont au premier et au dernier.",
@@ -3430,6 +3433,8 @@ export const FR: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "Délai d'émission du poste {{min}} min",
   "operate.strip.tune.noRadioTimeout": "Le délai maximal d'émission du poste est désactivé. Si Nexus ou le réseau tombe en panne pendant un accord, rien n'arrêtera la porteuse. Réglez un délai maximal d'émission dans SmartSDR.",
   "operate.strip.tune.radioRefused": "Tune n'émet rien ici : la porteuse propre du poste sortirait de vos privilèges en CW sur cette fréquence.",
+  "operate.strip.atu.radioStatus": "ATU du poste : {{status}}",
+  "operate.strip.atu.radioRefused": "ATU n'émet rien ici : la porteuse propre du poste sortirait de vos privilèges en CW sur cette fréquence.",
   "operate.strip.txControls.aria": "Commandes d'émission",
   "operate.tx.aria": "Messages standard (Tx1–Tx6)",
   "operate.tx.callCq.title": "Appel CQ (Alt+6)",

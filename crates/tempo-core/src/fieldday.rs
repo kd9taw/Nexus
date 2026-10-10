@@ -1290,6 +1290,12 @@ impl FieldDayLog {
     /// ruleset that reports them, so for Field Day this yields the whole log and every
     /// number below is bit-identical to what it always was.
     ///
+    /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
+    /// is sent**, by the marks a row carries (its `dupe`, and its `sat` when the status says
+    /// the contest gives a satellite no credit), and refuses a capture whose count it cannot
+    /// reproduce. A row left out here for any other reason has to carry a mark the page
+    /// reads first, or that page's contest view goes blank.
+    ///
     /// `+ Clone` because [`score_rows`](Self::score_rows) must stay clonable — the
     /// scorer walks its rows twice, once for points and once for multipliers.
     fn counting(&self) -> impl Iterator<Item = &LoggedQso> + Clone {

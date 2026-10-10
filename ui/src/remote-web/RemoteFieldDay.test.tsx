@@ -70,6 +70,19 @@ it('ages club presence evidence and expires the whole captured event',async()=>{
  expect(test.container.textContent).not.toContain('K1ABC')
  expect(test.container.textContent).not.toContain('CW tent')
 })
+// Sweepstakes LOGS a duplicate and scores it zero, so the station counts one contact fewer than its log holds. The page
+// refused that capture whole: its status line said the station was unavailable, and no contest view was drawn.
+it('shows a contest log that holds a logged dupe, with the station\'s own count',async()=>{
+ const page=fieldDayPage()
+ const source=(page.meta as unknown as {source:{fieldDay:{event:string;log:Record<string,unknown>[]};ruleset:{event:string}}}).source
+ source.fieldDay.event='arrlss_cw';source.ruleset.event='arrlss_cw'
+ source.fieldDay.log.push({...source.fieldDay.log[1],whenUnix:1782583380,dupe:true})
+ const test=setup(vi.fn(async()=>page))
+ await waitFor(()=>expect(test.container.querySelector('.remote-insights-status span')?.textContent).not.toBe(t('remote.collectionLoading')))
+ expect(test.container.querySelector('.remote-insights-status span')?.textContent).toBe(t('remote.fieldDaySnapshot',{seconds:0}))
+ expect(test.container.querySelector('.fd-score-val')?.textContent).toBe('2')
+ expect([...test.container.querySelectorAll('.fd-log-row')].map(row=>row.classList.contains('dupe')).sort()).toEqual([false,false,true])
+})
 it('keeps Winter Field Day raw-point scoring distinct from ARRL totals',async()=>{
  const page=fieldDayPage()
  const source=(page.meta as unknown as {source:{fieldDay:{event:string};ruleset:{event:string;bannedModes:string[]}}}).source

@@ -4,7 +4,8 @@
 // Its rules, each one pinned against a transport the test answers by hand: one request per
 // question however many views show it; a new tick re-asks every shown question once, and a burst of
 // ticks costs one follow-up; an answer never goes backwards (v2 R4); a failure waits for the next
-// change instead of looping; a view keeps its old answer until the fresh one lands.
+// change instead of looping; a view keeps its old answer until the fresh one lands; and each answer
+// says where it stands: asking, current, stale or failed.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
@@ -13,7 +14,8 @@ import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from './logA
 // Imported here, not inside a test: loading the Logbook module (~0.6 s) then counts against no
 // test's time limit.
 import { Logbook } from '../components/Logbook'
-import { setLogSource, useLogAnswer, type LogSource } from './logSource'
+import { failureToShow, setLogSource, useLogAnswer, useLogStatus, type LogSource } from './logSource'
+import { NOT_ANSWERED } from './notAnswered'
 
 // THE BUDGET (2026-10-09). The slowest case here, "shows the same rows, the same count and the same order…", takes
 // 0.40 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -125,6 +127,122 @@ describe('the asking source', () => {
   })
 })
 
+// ---- WHERE AN ANSWER STANDS (`status`): asking, current, stale or failed. A view can then tell "no answer yet"
+// from "the read failed", and an answer that is up to date from one held from before the latest change. ----
+describe('the state of an answer', () => {
+  it('asking until the first answer, current once it lands, stale from the next change until the fresh one', async () => {
+    const { transport, calls } = handTransport()
+    const src = createAskingLogSource(transport)
+    src.follow(1)
+    expect(src.status(size), 'before a view asked').toBe('asking')
+    src.want(size)
+    await turn()
+    expect(src.status(size), 'on its way').toBe('asking')
+    await act(async () => calls.splice(0)[0].resolve(24))
+    expect(src.status(size)).toBe('current')
+    src.follow(2)
+    expect(src.status(size), 'a change the answer does not reflect').toBe('stale')
+    await turn()
+    expect([src.status(size), src.peek(size)], 'the old answer stays up while the fresh one is on its way').toEqual(['stale', 24])
+    await act(async () => calls.splice(0)[0].resolve(25))
+    expect([src.status(size), src.peek(size)]).toEqual(['current', 25])
+  })
+
+  it('failed when its ask fails, in the transport’s words; an answer held from before is kept', async () => {
+    const { transport, calls } = handTransport()
+    const src = createAskingLogSource(transport)
+    src.follow(1)
+    src.want(size)
+    await turn()
+    // The desktop's IPC rejects with the engine's words: a bare string.
+    await act(async () => calls.splice(0)[0].reject('database disk image is malformed'))
+    expect([src.status(size), src.failure(size), src.peek(size)]).toEqual(['failed', 'database disk image is malformed', undefined])
+    src.follow(2)
+    await turn()
+    await act(async () => calls.splice(0)[0].resolve(24))
+    expect([src.status(size), src.failure(size)], 'answered').toEqual(['current', undefined])
+    src.follow(3)
+    await turn()
+    await act(async () => calls.splice(0)[0].reject(new Error('engine busy')))
+    expect([src.status(size), src.failure(size), src.peek(size)], 'the count from before is kept').toEqual(['failed', 'engine busy', 24])
+  })
+
+  it('a failed question is asked again when a view shows it again, and on a refresh; never in a loop', async () => {
+    const { transport, calls } = handTransport()
+    const src = createAskingLogSource(transport)
+    src.follow(1)
+    const shown = src.want(size)
+    await turn()
+    await act(async () => calls.splice(0)[0].reject('database disk image is malformed'))
+    await turn()
+    expect(calls, 'retried in a loop').toHaveLength(0)
+    shown()
+    expect(src.status(size), 'no view shows it: the next one to show it asks again').toBe('asking')
+    // Reopening the view.
+    const reopened = src.want(size)
+    await turn()
+    expect(calls, 'reopening did not ask again').toHaveLength(1)
+    await act(async () => calls.splice(0)[0].reject('database disk image is malformed'))
+    await turn()
+    expect([calls.length, src.status(size)]).toEqual([0, 'failed'])
+    // Retry.
+    src.refresh()
+    await turn()
+    expect(calls, 'a refresh did not ask again').toHaveLength(1)
+    await act(async () => calls.splice(0)[0].resolve(24))
+    expect([src.status(size), src.peek(size)]).toEqual(['current', 24])
+    reopened()
+  })
+
+  it('tells its views when an answer goes stale, fails or lands, and not on a tick it already reflects', async () => {
+    const { transport, calls } = handTransport()
+    const src = createAskingLogSource(transport)
+    let told = 0
+    src.subscribe(() => told++)
+    src.follow(1)
+    src.want(size)
+    await turn()
+    await act(async () => calls.splice(0)[0].resolve(24))
+    let before = told
+    src.follow(1)
+    expect(told, 'the same tick').toBe(before)
+    src.follow(2)
+    expect(told, 'stale').toBeGreaterThan(before)
+    await turn()
+    before = told
+    await act(async () => calls.splice(0)[0].reject('engine busy'))
+    expect(told, 'failed').toBeGreaterThan(before)
+  })
+
+  it('a view shows any failure but the refusal while a change is being saved, which stays quiet', () => {
+    const refusal = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
+    expect(failureToShow({ state: 'failed', reason: 'database disk image is malformed' })).toBe('database disk image is malformed')
+    expect(failureToShow({ state: 'failed', reason: refusal }), 'a refusal').toBeNull()
+    expect(failureToShow({ state: 'stale', reason: undefined }), 'not failed').toBeNull()
+    expect(failureToShow(undefined), 'not reading').toBeNull()
+  })
+
+  it('a view reads the state as one value that changes when the source says so', async () => {
+    const { transport, calls } = handTransport()
+    setLogSource(createAskingLogSource(transport))
+    const View = ({ tick }: { tick: number }) => {
+      useLogAnswer(size, tick)
+      const status = useLogStatus(size)
+      return <p data-testid="s">{`${status?.state} ${status?.reason ?? ''}`.trim()}</p>
+    }
+    const { rerender } = render(<View tick={1} />)
+    expect(screen.getByTestId('s').textContent).toBe('asking')
+    await turn()
+    await act(async () => calls.splice(0)[0].resolve(24))
+    expect(screen.getByTestId('s').textContent).toBe('current')
+    rerender(<View tick={2} />)
+    await turn()
+    expect(screen.getByTestId('s').textContent).toBe('stale')
+    await act(async () => calls.splice(0)[0].reject('disk I/O error'))
+    expect(screen.getByTestId('s').textContent).toBe('failed disk I/O error')
+  })
+})
+
 // ---- The drop-in C17a relies on: the real Logbook through the ASKING source renders the list it
 // renders through the whole-log source, given a transport that answers today's answers. ----
 describe('the Logbook through the asking source', () => {
@@ -160,6 +278,8 @@ describe('the Logbook through the asking source', () => {
         if (!held.has(key)) held.set(key, answerFrom(log, q, 1))
         return held.get(key) as AnswerTo<Q>
       },
+      status: () => 'current',
+      failure: () => undefined,
       ask: async (q) => answerFrom(log, q, 1),
       want: () => () => {},
       follow: () => {},

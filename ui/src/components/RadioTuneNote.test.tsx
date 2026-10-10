@@ -77,6 +77,65 @@ describe('the note beside Tune', () => {
   })
 })
 
+describe('beside the ATU, while the ATU is the radio’s own', () => {
+  const atu = (extra: Partial<NonNullable<RadioStatus['flexAtu']>>) => ({
+    tune: { powerPct: 10, txTimeoutMs: 30_000 },
+    status: 'NONE',
+    refused: null,
+    ...extra,
+  })
+
+  it('shows the same readouts, and the warning, with Tune not the radio’s own', () => {
+    expect(note(radio({ flexAtu: atu({}) }))).toBe('Radio tune power 10 %Radio TX timeout 30 s')
+    render(<RadioTuneNote radio={radio({ flexAtu: atu({ tune: { powerPct: 10, txTimeoutMs: 0 } }) })} />)
+    const el = screen.getByRole('note')
+    expect(el.textContent).toBe(`Radio tune power 10 %${SIGNED_WARNING}`)
+    expect(el.classList.contains('warn')).toBe(true)
+  })
+
+  it('shows the radio’s word for its cycle, and nothing before the first', () => {
+    expect(note(radio({ flexAtu: atu({ status: 'TUNE_SUCCESSFUL' }) }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 sRadio ATU: TUNE_SUCCESSFUL',
+    )
+    expect(note(radio({ flexAtu: atu({ status: 'TUNE_FAIL' }) }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 sRadio ATU: TUNE_FAIL',
+    )
+    expect(note(radio({ flexAtu: atu({ status: null }) }))).toBe('Radio tune power 10 %Radio TX timeout 30 s')
+  })
+
+  it('says why the last press started no cycle, in the station’s words, in place of the status', () => {
+    const why = 'ATU not started: the radio refused it (0x5000002C).'
+    expect(note(radio({ flexAtu: atu({ status: 'TUNE_SUCCESSFUL', refused: why }) }))).toBe(
+      `Radio tune power 10 %Radio TX timeout 30 s${why}`,
+    )
+  })
+
+  it('says why the ATU keys nothing when the licence refuses the radio’s carrier here', () => {
+    expect(note(radio({ flexAtu: atu({}), flexAtuRefused: true }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' +
+        "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
+    )
+  })
+
+  it('with Tune the radio’s own too: the readouts once, then each line', () => {
+    expect(
+      note(
+        radio({
+          flexTune: { powerPct: 10, txTimeoutMs: 30_000 },
+          flexTuneRefused: true,
+          flexAtu: atu({ status: 'TUNE_SUCCESSFUL' }),
+          flexAtuRefused: true,
+        }),
+      ),
+    ).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' +
+        "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency." +
+        "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency." +
+        'Radio ATU: TUNE_SUCCESSFUL',
+    )
+  })
+})
+
 describe('in the TX strips: the last child, after the controls and the TX state', () => {
   const tune = { flexTune: { powerPct: 10, txTimeoutMs: 0 } }
 

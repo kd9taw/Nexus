@@ -98,6 +98,20 @@ pub enum Fault {
     /// tells the operator.
     HoldsCwx,
 
+    /// **An ATU cycle that never ends.** `atu start` keys the radio as its rule does, and the
+    /// cycle then reports no result and never lets go: the rule's statuses stop at its
+    /// TRANSMITTING. Which command ends a cycle part way is not documented, so this plays the worst
+    /// answer: `xmit 0` and `transmit tune 0` are acknowledged with success and change nothing
+    /// (their rules' statuses are withheld while this fault is set), and the radio stays
+    /// TRANSMITTING under that handle.
+    ///
+    /// *Guard:* the ATU's ceiling and Stop TX's escalation. A cycle counts as ended only once the
+    /// radio reports a result and the interlock is idle again. When that has not happened 20 s
+    /// after the start's reply, or 5 s after Stop TX sent both stops (`xmit 0`, `transmit tune 0`),
+    /// the client sends both again, closes the session and tells the operator the radio may still
+    /// be transmitting.
+    AtuNeverEnds,
+
     /// **A reason on every keying report**, as the radio sends it with an amplifier in line.
     /// AetherSDR's notes captured it on a FLEX-8600 on SmartSDR 4.2.20.41343 with a PowerGeniusXL
     /// (`docs/pgxl-telemetry-source-evidence.md`): during a TUNE the radio's PTT_REQUESTED carried
@@ -177,13 +191,15 @@ pub const REFUSED: &str = "5000002C";
 
 /// Whether a fault withholds the statuses of `command`'s rule, so the radio acknowledges the
 /// command and does nothing else: [`Fault::StuckTransmit`] for `xmit 0`, [`Fault::StuckTune`] for
-/// `transmit tune 0`. The simulator asks this, and so does a test that answers for the radio on its
-/// own clock, so the two cannot disagree.
+/// `transmit tune 0`, [`Fault::AtuNeverEnds`] for both. The simulator asks this, and so does a test
+/// that answers for the radio on its own clock, so the two cannot disagree.
 pub fn withholds(faults: &[Fault], command: &str) -> bool {
     faults.iter().any(|f| {
         matches!(
             (f, command),
-            (Fault::StuckTransmit, "xmit 0") | (Fault::StuckTune, "transmit tune 0")
+            (Fault::StuckTransmit, "xmit 0")
+                | (Fault::StuckTune, "transmit tune 0")
+                | (Fault::AtuNeverEnds, "xmit 0" | "transmit tune 0")
         )
     })
 }
@@ -196,15 +212,16 @@ pub const AMPLIFIERS: &str = "0x5A0F0001,0x5A0F0002";
 
 /// What `command`'s rule sends once the faults have acted on its `items`: nothing when a fault
 /// withholds them all ([`withholds`]); for [`Fault::HoldsCwx`], a `cwx send`'s items up to its
-/// TRANSMITTING; for [`Fault::KeyingReason`], each keying report carrying its reason or the
-/// amplifiers. The simulator applies this, and so does a test that answers for the radio on its
-/// own clock.
+/// TRANSMITTING, and for [`Fault::AtuNeverEnds`] an `atu start`'s; for [`Fault::KeyingReason`],
+/// each keying report carrying its reason or the amplifiers. The simulator applies this, and so
+/// does a test that answers for the radio on its own clock.
 pub fn statuses(faults: &[Fault], command: &str, mut items: Vec<Item>) -> Vec<Item> {
     if withholds(faults, command) {
         return Vec::new();
     }
     let holds = faults.iter().any(|f| matches!(f, Fault::HoldsCwx));
-    if holds && command.starts_with("cwx send ") {
+    let never_ends = faults.iter().any(|f| matches!(f, Fault::AtuNeverEnds));
+    if (holds && command.starts_with("cwx send ")) || (never_ends && command == "atu start") {
         let keyed = items
             .iter()
             .position(|i| matches!(i, Item::Send(l) if is_interlock(l, "TRANSMITTING")));
@@ -425,8 +442,19 @@ mod tests {
         assert!(!withholds(&[Fault::StuckTransmit], "transmit tune 0"));
         assert!(withholds(&[Fault::StuckTune], "transmit tune 0"));
         assert!(!withholds(&[Fault::StuckTune], "xmit 0"));
-        for other in ["xmit 1", "transmit tune 1", "cwx clear", "atu start"] {
-            assert!(!withholds(&both, other), "{other}");
+        // A cycle that never ends: neither stop is answered with statuses.
+        for command in ["xmit 0", "transmit tune 0"] {
+            assert!(withholds(&[Fault::AtuNeverEnds], command), "{command}");
+        }
+        let all = [Fault::StuckTransmit, Fault::StuckTune, Fault::AtuNeverEnds];
+        for other in [
+            "xmit 1",
+            "transmit tune 1",
+            "cwx clear",
+            "atu start",
+            "atu bypass",
+        ] {
+            assert!(!withholds(&all, other), "{other}");
         }
     }
 
@@ -500,6 +528,33 @@ mod tests {
         assert_eq!(sent(&pgxl, "sub tx all"), sent(none, "sub tx all"));
         // The stuck faults still withhold everything.
         assert!(sent(&[Fault::StuckTransmit], "xmit 0").is_empty());
+        // An ATU cycle that never ends: in progress, keyed, and nothing after (no result, no
+        // release); both stops withheld; every other rule as it was.
+        let never = [Fault::AtuNeverEnds];
+        let cycle = sent(&never, "atu start");
+        assert_eq!(
+            lines(&cycle),
+            [
+                "S0|atu status=TUNE_IN_PROGRESS",
+                "S0|interlock tx_client_handle=0x{h} state=PTT_REQUESTED reason= source=TUNE \
+                 tx_allowed=1 amplifier=",
+                "S0|interlock tx_client_handle=0x{h} state=TRANSMITTING reason= source=TUNE \
+                 tx_allowed=1 amplifier=",
+            ]
+        );
+        assert!(matches!(cycle.last(), Some(Item::Send(_))), "{cycle:?}");
+        assert_eq!(lines(&sent(none, "atu start")).len(), 7);
+        for stop in ["xmit 0", "transmit tune 0"] {
+            assert!(sent(&never, stop).is_empty(), "{stop}");
+        }
+        for other in [
+            "xmit 1",
+            "transmit tune 1",
+            "cwx send \"CQ\" 1",
+            "atu bypass",
+        ] {
+            assert_eq!(sent(&never, other), sent(none, other), "{other}");
+        }
     }
 
     #[test]

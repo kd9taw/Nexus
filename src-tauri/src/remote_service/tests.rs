@@ -739,6 +739,40 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
+        if value["type"] == "seedSweepstakes" {
+            // Sweepstakes works a station once and wants a repeat LOGGED, marked and scored
+            // zero, so the station counts one contact fewer than its log holds. Field Day is left
+            // first: a save made while a contest runs keeps that contest.
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.fd_active = false;
+            e.apply_settings(settings.clone());
+            settings.fd_active = true;
+            settings.fd_event = "arrlss_cw".into();
+            settings.contest_check = "68".into();
+            settings.fd_section = "EMA".into();
+            settings.contest_category_assisted = "NON-ASSISTED".into();
+            settings.contest_category_power = "LOW".into();
+            e.apply_settings(settings);
+            for nr in ["1", "2"] {
+                let fields = [
+                    ("NR", nr),
+                    ("PREC", "A"),
+                    ("CALL", "K9XYZ"),
+                    ("CK", "72"),
+                    ("SEC", "IL"),
+                ]
+                .map(|(k, v)| (k.to_string(), v.to_string()));
+                assert!(e.contest_log_manual("K9XYZ", &fields, "CW", None).unwrap());
+            }
+            let fd = e.snapshot().field_day.unwrap();
+            println!(
+                "REMOTE_TEST:{}",
+                json!({"event":fd.event,"qsoCount":fd.qso_count,"rows":fd.log.len()})
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         if value["type"] == "seedOta" {
             let fixture: serde_json::Value = serde_json::from_str(include_str!(
                 "../../../ui/src/remote-web/__fixtures__/ota.json"

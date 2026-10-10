@@ -241,6 +241,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not apply there. Tune is also refused where the radio's carrier would fall outside your
   CW privileges. Until it is switched on, Tune on the Flex native client works as before.
   NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: the radio's own ATU through the Flex native client, built and off until a tester
+  has checked it on a radio.** Once it is switched on, the Flex native client offers the ATU
+  button when the radio reports a tuner fitted, and each press runs one cycle of the radio's own
+  tuner. Beside the ATU, Nexus shows the radio's tune power and its transmit timeout, as beside
+  Tune, and says so when the radio has no transmit timeout; then the cycle's result in the
+  radio's own word (TUNE_SUCCESSFUL, TUNE_FAIL and so on), or why a press started no cycle. A
+  press the radio refuses ends there, with its reason and no alarm. FlexRadio documents no command
+  that stops a cycle part way, so Stop TX during a cycle sends the radio both its unkey and its
+  tune-off. If the radio has not reported the cycle finished and the transmitter idle 5 seconds
+  after Stop TX, or a cycle runs for more than 20 seconds, Nexus sends both again, says in red
+  that the radio may still be transmitting, and drops the connection. The ATU is also refused
+  where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
+  Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
 
 ### Changed
 
@@ -373,6 +386,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
   the station's country); the browser's Chase box and recall card show no bearing, because only the
   station can work it out.
+- **Nexus Remote shows a contest log that holds a duplicate.** In Sweepstakes, CQ WW, CQ WPX,
+  the ARRL VHF contests and the New York QSO Party a repeat contact is logged and scored zero, as
+  the sponsors ask. One such repeat in the log left the Contest screen on Nexus Remote blank, with
+  "Station data unavailable. Refresh or reconnect." however often you refreshed. It now shows the
+  log, the repeat marked, with the QSO count the shack shows; and a log that its repeats take past
+  what the browser can show says it is too large, rather than unavailable.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a
@@ -438,6 +457,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
   worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
   slow disk. The globe now shows its count once the squares are counted.
+- **The Logbook says when it couldn't read your log, with a Retry button.** When a read of the
+  logbook failed, on a database error for example, the Logbook kept saying "Reading the logbook…"
+  until your next contact, and closing and reopening it did not try again. It now says "Couldn't
+  read the logbook" with the reason and a Retry button, and reopening the Logbook tries again. While
+  a change is still being saved, the Logbook keeps saying "Reading the logbook…" as before, and
+  reopening it now tries again there too. A count from before your latest change says "Out of
+  date" in its tooltip, and an empty log no longer says "No logged contacts yet." while your first
+  contact is being counted.
+- **JS8's ✓ marks and the band map's struck-through calls no longer blink when a new station is
+  heard.** Each station newly heard in JS8, and each new call on the band-map window, cleared every
+  ✓, name and comment in the JS8 station list, and every strike-through on the band map, until the
+  log answered: for a moment, and longer on a slow disk. Every row now keeps its marks, and only
+  the new call shows "—" until the log has answered for it.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
