@@ -161,12 +161,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the club link, allowing for the time the measurement spends on the network. From 2 seconds
   off, its club line says so ("This PC's clock is 3 s behind the host's"); past 30 seconds it is
   the warning it has always been. The host's club board has a new **Clock** column: in step, how
-  many seconds ahead or behind, and a dash for a position running an older Nexus. Nexus Remote's
+  many seconds ahead or behind. Nexus Remote's
   Field Day view shows the column too, for the host. Nexus only shows the difference: it never
   changes a clock, FT8 and FT4 timing is untouched, and contact times still come from each
-  position's own clock, so put a wrong one right in that PC's date and time settings. Older
-  versions of Nexus keep working alongside: an older position shows a dash in the Clock column,
-  and with an older host each position goes by the rougher reading it takes when it joins.
+  position's own clock, so put a wrong one right in that PC's date and time settings.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and
@@ -417,14 +415,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A club position set up on the wrong side of the state line is turned away, by name.** At a
   QSO party a laptop with another state in Your station data sends its state instead of the
   club's county on every contact. The host now refuses it when it joins, and both that laptop's
-  club block and the host's say which exchange each sends and where to set it. A position on an
-  older Nexus, which cannot say, joins as before.
+  club block and the host's say which exchange each sends and where to set it.
 - **A club position on another callsign is turned away, by name.** Every laptop of one club
   entry sends the club's call, but a laptop still set to its owner's call sent that call on the
   air while the club's file claimed its contacts under the host's. The host now refuses it when
   it joins, and both that laptop's club block and the host's name the two calls and where to set
-  it: Callsign on the air, under Who's who at this event on the Contesting tab. Older Nexus
-  positions send their call too and are refused the same way. ARRL Field Day is the exception,
+  it: Callsign on the air, under Who's who at this event on the Contesting tab. ARRL Field Day
+  is the exception,
   because its GOTA station must use a call of its own: there a position on any call joins as
   before.
 - **ARRL Field Day: the club's Cabrillo writes the GOTA station's contacts under its own call.**
@@ -462,11 +459,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the 8 KB line every Nexus reads: each position
   dropped the connection on it and reconnected into the same line, with nothing on screen to say
   why. The sections and worked stations now go out over as many lines as they need, so a club of
-  about 59 positions fits, and older Nexus positions read the new lines unchanged. The host's
+  about 59 positions fits. The host's
   club block warns before one more position might not fit, naming how many it has; past that,
   each position's board leaves out the positions heard from least recently, while contacts, dupe
-  warnings and the score still sync. A position whose host is on an older Nexus with too big a
-  club now says so instead of reconnecting in silence.
+  warnings and the score still sync.
 - **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
   Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
@@ -520,12 +516,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call's chip puts that call in both.
 - **CW contest keys send your report.** In a contest whose exchange includes a signal report
   (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
-  cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois
-  QSO Party, F3 to K9AAA from Cook County sent `K9AAA DE <your call> COOK COOK K`. They now send
-  5NN before it. Sweepstakes, the California QSO Party and the ARRL VHF contests have no report
-  in their exchange, and their keys send what they did; so do Field Day's. Macro profiles you
-  saved are never changed: if you copied the contest keys into one of your own, add `{RST}`
-  before `{EXCH}` in its F3 and F4.
+  cockpit's built-in exchange keys sent your county, zone or serial without the 5NN: in the
+  Illinois QSO Party, F3 to K9AAA from Cook County sent `K9AAA DE <your call> COOK COOK K`. The
+  keys that send your exchange, F2 and F6 in the new layout, now send 5NN before it.
+  Sweepstakes, the California QSO Party and the ARRL VHF contests have no report in their
+  exchange, and no key sends one there, nor at Field Day. Macro profiles you saved are never
+  changed: if you copied the old contest keys into one of your own, add `{RST}` before `{EXCH}`
+  in its F3 and F4.
 - **A TV showing the spectator scoreboard on a position, or on a host running the Illinois QSO
   Party, got a grey "served from the host station" overlay.** A position now shows the host's
   board, from the host it joined (turn on Spectator scoreboard on the host too, on the same port),
@@ -548,7 +545,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are refused, with the reason on the contest screen, the club board window and in Settings ▸
   Contesting ▸ Field Day Club Sync: one with a serial number in the exchange (Sweepstakes, CQ
   WPX, the California QSO Party), and CQ World-Wide, whose log must say which transmitter made
-  each contact. The spectator scoreboard is Field Day only. Try a club on two of your own PCs
+  each contact. Try a club on two of your own PCs
   before the party; the Field Day manual has a checklist.
 - **A contact queued while a club position was offline keeps the operator who logged it.** The
   operator was read when the contact was sent rather than when it was logged, so after an outage
