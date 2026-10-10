@@ -21128,8 +21128,17 @@ fn whole_eqsl_download(body: String) -> Result<String, String> {
 /// check of part of the book would take a confirmation that was cut off for a misplaced one, so
 /// an answer that stops short checks nothing. A refusal is said in QRZ's own words, which may echo
 /// the request and its key: screen and session only, as [`sync_qrz`] treats them.
+///
+/// An empty book checks nothing either, and says so. QRZ answers a FETCH that matched nothing with
+/// a FAIL ([`tempo_core::qrz::QrzFetch::nothing_matched`]), which is no refused key; and a check
+/// never reads "QRZ holds none of these" off a book that may be the wrong one.
 fn whole_qrz_book(answer: &str) -> Result<String, String> {
     let fetched = tempo_core::qrz::parse_fetch(answer);
+    if fetched.nothing_matched {
+        return Err(
+            "QRZ's logbook for this API key holds no contacts, so nothing was checked.".to_string(),
+        );
+    }
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason).message.into_string());
     }
@@ -25151,6 +25160,24 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
     }
 }
 
+/// What the sync makes of QRZ's answer to its FETCH: the records to merge, or the refusal.
+/// Extracted from [`sync_qrz_since`] for the reason [`qrz_fetch_refused`] was.
+///
+/// A FETCH that matched nothing ([`tempo_core::qrz::QrzFetch::nothing_matched`]) is a sync that
+/// worked, with nothing to merge. QRZ answers it with a FAIL, and the hourly delta asks for exactly
+/// that whenever nothing changed at QRZ since the last pull. Read as a refusal, it put "QRZ
+/// rejected the FETCH — check your Logbook API key" in the connection log and left the high-water
+/// where it was, so the worker asked again every five minutes. See
+/// `a_sync_that_finds_nothing_new_is_not_refused`.
+fn qrz_sync_answer(resp: &str) -> Result<tempo_core::qrz::QrzFetch, QrzSyncFailure> {
+    let fetched = tempo_core::qrz::parse_fetch(resp);
+    if fetched.ok || fetched.nothing_matched {
+        Ok(fetched)
+    } else {
+        Err(qrz_fetch_refused(fetched.reason))
+    }
+}
+
 /// The QRZ pull. `since_unix` = the last SUCCESSFUL automatic sync, which turns this
 /// into a MODSINCE delta; `None` fetches the whole logbook (the manual button, and the
 /// first automatic run, which seeds the high-water).
@@ -25193,10 +25220,7 @@ fn sync_qrz_since(
             },
         )?
     };
-    let fetched = tempo_core::qrz::parse_fetch(&resp);
-    if !fetched.ok {
-        return Err(qrz_fetch_refused(fetched.reason));
-    }
+    let fetched = qrz_sync_answer(&resp)?;
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     let merge = || tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
     // The operator's sync makes it again when the store turns it back (another window changed
@@ -36296,6 +36320,41 @@ mod tests {
             "control: QRZ's own wording must still reach the operator's session"
         );
     }
+
+    /// The hourly sync's delta asks QRZ for what changed since its last pull, and when nothing
+    /// did, QRZ answers with a FAIL that says it matched nothing. That is a sync that worked, with
+    /// nothing to merge (and so the high-water moves), not "QRZ rejected the FETCH — check your
+    /// Logbook API key" in the connection log every five minutes.
+    #[test]
+    fn a_sync_that_finds_nothing_new_is_not_refused() {
+        for nothing in [
+            "RESULT=FAIL&COUNT=0",
+            "RESULT=FAIL&REASON=no+log+entries+found&COUNT=0",
+        ] {
+            let fetched = super::qrz_sync_answer(nothing).ok();
+            assert!(
+                fetched.as_ref().is_some_and(|f| f.adif.is_empty()),
+                "{nothing}: nothing new is not a refusal, and there is nothing to merge"
+            );
+        }
+        // The controls. A refusal is still one, in QRZ's words when it gives them…
+        for refused in [
+            "RESULT=AUTH&REASON=invalid+api+key",
+            "RESULT=FAIL&REASON=invalid+api+key",
+            "RESULT=FAIL",
+            "RESULT=AUTH",
+        ] {
+            assert!(super::qrz_sync_answer(refused).is_err(), "{refused}");
+        }
+        let refused = super::qrz_sync_answer("RESULT=FAIL&REASON=invalid+api+key").err();
+        assert_eq!(
+            refused.as_ref().map(|f| f.message.on_screen()),
+            Some("invalid api key")
+        );
+        // …and a book with a record in it is the record to merge.
+        let book = super::qrz_sync_answer("RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW&lt;eor&gt;");
+        assert!(book.is_ok_and(|f| f.adif.contains("<CALL:4>W1AW")));
+    }
     /// The JS8 station journal lives beside settings.json, exactly where pending_msgs.json
     /// does — one config dir, one backup story.
     #[test]
@@ -45153,6 +45212,26 @@ mod tests {
         assert_eq!(
             qrz_checked(&checks, session, &engine, &refused),
             Err("invalid api key".to_string())
+        );
+        let (downloads, _) = checks.take(session, &[]).expect("the check is still open");
+        assert!(downloads.is_empty(), "nothing was held");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// QRZ answers the FETCH of an empty book with a FAIL that says it matched nothing. That is
+    /// no refused key, and it checks nothing: the check says the book is empty, and holds nothing.
+    #[test]
+    fn an_empty_qrz_book_checks_nothing_and_says_so() {
+        let (dir, engine, _) = check_scene("check-empty-book");
+        let empty = FakeQrz::answering("RESULT=FAIL&COUNT=0".into());
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        assert_eq!(
+            qrz_checked(&checks, session, &engine, &empty),
+            Err(
+                "QRZ's logbook for this API key holds no contacts, so nothing was checked."
+                    .to_string()
+            )
         );
         let (downloads, _) = checks.take(session, &[]).expect("the check is still open");
         assert!(downloads.is_empty(), "nothing was held");

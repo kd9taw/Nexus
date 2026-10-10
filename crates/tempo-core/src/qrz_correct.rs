@@ -745,7 +745,9 @@ pub fn preview(
         .fetch_callsign(api_key, &local.call)
         .map_err(|e| transport_refusal(&e, api_key))?;
     let fetched = parse_fetch(&resp);
-    if !fetched.ok {
+    // QRZ answers a FETCH that matched nothing with a FAIL (`QrzFetch::nothing_matched`): it holds
+    // no copy of this call, which the plan refuses as the record-less case it is.
+    if !fetched.ok && !fetched.nothing_matched {
         return Err(Refusal::QrzRefusedRead(
             fetched.reason.map(|r| scrub_key(&r, api_key)),
         ));
@@ -1110,6 +1112,22 @@ mod tests {
         assert_eq!(plan(&r, &two, SIDEBAND_FIELDS), Err(Refusal::Ambiguous(2)));
         // Control: one record is planned.
         assert!(plan(&r, &qrz_copy("143200"), SIDEBAND_FIELDS).is_ok());
+    }
+
+    /// QRZ answers the FETCH for a call it holds no copy of with a FAIL that says it matched
+    /// nothing. That is the record-less case above, reached through QRZ, and the operator is told
+    /// so rather than that QRZ refused to read the contact back.
+    #[test]
+    fn qrz_matching_nothing_is_no_record_rather_than_a_refused_read() {
+        let r = local("USB");
+        let t = Canned::new("RESULT=FAIL&COUNT=0".into(), "RESULT=OK");
+        assert_eq!(preview(&t, KEY, &r, 1), Err(Refusal::NoQrzRecord));
+        // Control: a refusal that gives its reason is still a refused read.
+        let t = Canned::new("RESULT=FAIL&REASON=invalid+api+key".into(), "RESULT=OK");
+        assert_eq!(
+            preview(&t, KEY, &r, 1),
+            Err(Refusal::QrzRefusedRead(Some("invalid api key".into())))
+        );
     }
 
     #[test]

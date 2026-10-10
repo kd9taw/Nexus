@@ -288,6 +288,12 @@ they're heard on the air.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.
+- **A contest that is not on the list logs as one with the same exchange.** The
+  Scandinavian Activity Contest (RS plus a serial number, each station once per
+  band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
+  Field Day mode. Before you send the log, change the Cabrillo file's `CONTEST:`
+  line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
+  Nexus shows is WPX's, and the sponsor works out its own.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
   CW and Phone strips it stays on the general log while a session runs. Not a
   design choice; not wired up yet.
