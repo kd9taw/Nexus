@@ -6,13 +6,36 @@ import { resolve } from 'node:path'
 import { RecallPanel } from './RecallPanel'
 import { openQrzPage } from '../api'
 import { subscribeToasts } from '../toast'
-import { distanceLabel, bearingLabel, distanceLabelAt, bearingLabelAt, gridToLatLon } from '../grid'
+import { StationControlContext } from '../stationAccess'
 import type { CallHistory } from '../features/callHistory'
-import type { LoggedQso } from '../types'
+import type { CallBearing, LoggedQso } from '../types'
 
-vi.mock('../api', () => ({ openQrzPage: vi.fn(async () => {}) }))
+const api = vi.hoisted(() => ({
+  openQrzPage: vi.fn(async () => {}),
+  rotatorBearingToCall: vi.fn((_call: string): Promise<CallBearing> => Promise.reject(new Error('unset'))),
+}))
+vi.mock('../api', () => api)
 
-afterEach(cleanup)
+/** EC1DD from JO21EV, as the station answers it: its own grid IN52TK, 227.35° and 1422.5 km away. */
+const EC1DD: CallBearing = { pointed: { bearing: 227.35, to: 'grid', grid: 'IN52TK', country: null }, km: 1422.5 }
+/** The same call when the station knows nothing of it: the centre of Spain, 207.95° and 1418.9 km. Nearly
+ *  the same distance, 19° apart: the bearing is what says which one the card drew. */
+const SPAIN: CallBearing = { pointed: { bearing: 207.95, to: 'country', grid: null, country: 'Spain' }, km: 1418.9 }
+let answers: Record<string, CallBearing> = {}
+
+beforeEach(() => {
+  answers = { EC1DD }
+  api.rotatorBearingToCall.mockImplementation((call: string) =>
+    answers[call] ? Promise.resolve(answers[call]) : Promise.reject(new Error('unknownStation')),
+  )
+  // Metric, so a distance is the station's kilometres as they are (jsdom's en-US would read miles).
+  localStorage.setItem('nexus.units', 'metric')
+})
+afterEach(() => {
+  cleanup()
+  api.rotatorBearingToCall.mockClear()
+  localStorage.removeItem('nexus.units')
+})
 
 function qso(over: Partial<LoggedQso> = {}): LoggedQso {
   return {
@@ -114,80 +137,95 @@ describe('RecallPanel — the full card', () => {
     expect(container.querySelector('.recall-avatar-initials')).not.toBeNull()
   })
 
-  it('shows name, QTH · grid · country, and grid-derived distance + bearing from MY grid', () => {
+  // THE DISTANCE AND BEARING ARE THE STATION'S ANSWER for where a point at the call turns the antenna
+  // (`rotatorBearingToCall`, the point's own resolver read only; that it equals what the point turns to
+  // is proven by value in src-tauri), never one worked out from what the card was handed. EC1DD from
+  // JO21EV is the tester's case: its own grid IN52TK is at 227°, the centre of Spain at 208°.
+  it('shows name, QTH · grid · country, and the station\'s distance + bearing for the call', async () => {
     const { container } = render(
-      <RecallPanel
-        call="W1ABC"
-        band="20m"
-        name="Alice"
-        qth="Hartford, CT"
-        grid="FN31"
-        country="United States"
-        myGrid="EN52"
-        hist={hist()}
-      />,
+      <RecallPanel call="EC1DD" band="20m" name="Alice" qth="Ferrol" grid="IN52TK" country="Spain" myGrid="JO21EV" hist={hist()} />,
     )
     expect(screen.getByText('Alice')).toBeTruthy()
-    expect(container.querySelector('.recall-where')?.textContent).toBe('Hartford, CT (FN31) · United States')
-    // The geo line derives from ui/src/grid.ts against the OPERATOR'S grid — assert the same
-    // computation, not a hand-copied number that would rot if the haversine helper changed.
-    const geo = container.querySelector('.recall-geo')
-    expect(geo, 'no distance/bearing line').not.toBeNull()
-    expect(geo!.textContent).toBe(`${distanceLabel('EN52', 'FN31')} · ${bearingLabel('EN52', 'FN31')}`)
+    expect(container.querySelector('.recall-where')?.textContent).toBe('Ferrol (IN52TK) · Spain')
+    await waitFor(() => expect(container.querySelector('.recall-geo')?.textContent).toBe('1423 km · 227°'))
+    expect(container.querySelector('.recall-geo')!.getAttribute('title')).toBe(
+      'Great-circle distance · true bearing from your QTH (their grid IN52TK)',
+    )
+    expect(api.rotatorBearingToCall).toHaveBeenCalledWith('EC1DD')
   })
 
-  // Operator report 2026-08-01 (Phone + CW): "bearing does not match QRZ". QRZ computes
-  // from both stations' EXACT coordinates; the card was re-deriving the peer from the
-  // center of its grid square even when the lookup had handed us the real position.
-  it('computes from the callbook coordinates when the lookup vouched for a position', () => {
-    // W1AW's QRZ position (41.7147, -72.7272) against a 4-character FN31, whose center
-    // is ~60 km away: the card must show 835 mi · 88°, not the square's 823 mi · 89°.
-    const exact = { lat: 41.7147, lon: -72.7272 }
-    const { container } = render(
-      <RecallPanel call="W1ABC" band="20m" name="Alice" grid="FN31" lat={exact.lat} lon={exact.lon} myGrid="EN52" hist={hist()} />,
-    )
-    const me = gridToLatLon('EN52')!
-    const shown = container.querySelector('.recall-geo')!.textContent
-    expect(shown).toBe(`${distanceLabelAt(me, exact)} · ${bearingLabelAt(me, exact)}`)
-    // …and that is NOT what the grid square alone would have said.
-    expect(shown).not.toBe(`${distanceLabel('EN52', 'FN31')} · ${bearingLabel('EN52', 'FN31')}`)
+  it('draws the station\'s bearing to the grid it heard, where the card was handed only the country', async () => {
+    const { container } = render(<RecallPanel call="EC1DD" band="20m" country="Spain" myGrid="JO21EV" hist={hist()} />)
+    await waitFor(() => expect(container.querySelector('.recall-geo')?.textContent).toBe('1423 km · 227°'))
   })
 
-  it('falls back to the locator when the callbook vouched for no position', () => {
-    const { container } = render(
-      <RecallPanel call="W1ABC" band="20m" grid="FN31pr" lat={null} lon={null} myGrid="EN52" hist={hist()} />,
+  it('says so when the station knows only the centre of the country', async () => {
+    answers.EC1DD = SPAIN
+    const { container } = render(<RecallPanel call="EC1DD" band="20m" country="Spain" myGrid="JO21EV" hist={hist()} />)
+    await waitFor(() => expect(container.querySelector('.recall-geo')?.textContent).toBe('1419 km · 208°'))
+    expect(container.querySelector('.recall-geo')!.getAttribute('title')).toBe(
+      'Great-circle distance · true bearing from your QTH (the centre of Spain: no grid known for them)',
     )
-    expect(container.querySelector('.recall-geo')!.textContent).toBe(
-      `${distanceLabel('EN52', 'FN31pr')} · ${bearingLabel('EN52', 'FN31pr')}`,
+  })
+
+  it('draws the station\'s answer, not the centre of the square the card was handed', async () => {
+    // The typed IN52 sharpened by the callbook's position inside it (42.45° N, 8.36° W): 1420.7 km at
+    // 227.35°. The square's own centre is 1449 km at 229°, so the card must not have drawn that.
+    answers.EC1DD = { pointed: { bearing: 227.35, to: 'position', grid: null, country: null }, km: 1420.7 }
+    const { container } = render(<RecallPanel call="EC1DD" band="20m" grid="IN52" myGrid="JO21EV" hist={hist()} />)
+    await waitFor(() => expect(container.querySelector('.recall-geo')?.textContent).toBe('1421 km · 227°'))
+    // A position is a point, so only a square on the operator's side would be named; JO21EV is not one.
+    expect(container.querySelector('.recall-geo')!.getAttribute('title')).toBe(
+      'Great-circle distance · true bearing from your QTH (their callbook position)',
     )
   })
 
   // A 4-character square is ±1° of longitude — up to ~29° of bearing on a close-in
   // station. Saying which side is still a square is what keeps that visible rather
   // than silently disagreeing with QRZ.
-  it('says so when a side is still a grid square, and stays quiet when neither is', () => {
+  it('says so when a side is still a grid square, and stays quiet when neither is', async () => {
+    answers.W1ABC = { pointed: { bearing: 89.4, to: 'grid', grid: 'FN31', country: null }, km: 1324.8 }
     const coarse = render(<RecallPanel call="W1ABC" band="20m" grid="FN31" myGrid="EN52" hist={hist()} />)
+    await waitFor(() => expect(coarse.container.querySelector('.recall-geo')).not.toBeNull())
     const t = coarse.container.querySelector('.recall-geo')!.getAttribute('title')!
+    expect(t).toContain('(their grid FN31)')
     expect(t).toContain('approximate')
     expect(t).toContain('your EN52 square')
     expect(t).toContain('their FN31 square')
     expect(t).toContain('6-character grid in Settings')
     cleanup()
-    // Operator on a 6-char grid, peer position exact: nothing to apologise for.
-    const sharp = render(
-      <RecallPanel call="W1ABC" band="20m" grid="FN31pr" lat={41.7147} lon={-72.7272} myGrid="EN52ab" hist={hist()} />,
-    )
+    // Operator on a 6-char grid, the station's position exact (41.7147, -72.7272): nothing to apologise for.
+    answers.W1ABC = { pointed: { bearing: 85.76, to: 'position', grid: null, country: null }, km: 1424.5 }
+    const sharp = render(<RecallPanel call="W1ABC" band="20m" grid="FN31pr" myGrid="EN52ab" hist={hist()} />)
+    await waitFor(() => expect(sharp.container.querySelector('.recall-geo')?.textContent).toBe('1425 km · 86°'))
     expect(sharp.container.querySelector('.recall-geo')!.getAttribute('title')).toBe(
-      'Great-circle distance · true bearing from your QTH',
+      'Great-circle distance · true bearing from your QTH (their callbook position)',
     )
   })
 
-  it('omits the geo line when my grid or theirs is unknown (no "NaN mi")', () => {
-    const noMine = render(<RecallPanel call="W1ABC" band="20m" grid="FN31" hist={hist()} />)
-    expect(noMine.container.querySelector('.recall-geo')).toBeNull()
+  it('says in words that there is no bearing, never a number nobody resolved', async () => {
+    const unknown = render(<RecallPanel call="QQ1QQ" band="20m" myGrid="JO21EV" hist={hist()} />)
+    await waitFor(() => expect(unknown.container.querySelector('.recall-geo')?.textContent).toBe('location unknown'))
     cleanup()
-    const noTheirs = render(<RecallPanel call="W1ABC" band="20m" myGrid="EN52" hist={hist()} />)
-    expect(noTheirs.container.querySelector('.recall-geo')).toBeNull()
+    api.rotatorBearingToCall.mockImplementation(() => Promise.reject(new Error('noGrid')))
+    const noMine = render(<RecallPanel call="EC1DD" band="20m" grid="IN52TK" hist={hist()} />)
+    await waitFor(() =>
+      expect(noMine.container.querySelector('.recall-geo')?.textContent).toBe('set your grid in Settings for a bearing'),
+    )
+    expect(noMine.container.textContent).not.toMatch(/NaN|\b0°/)
+  })
+
+  it('in a browser asks the station nothing and draws no distance or bearing', async () => {
+    const { container } = render(
+      <StationControlContext.Provider value={false}>
+        <RecallPanel call="EC1DD" band="20m" grid="IN52TK" country="Spain" myGrid="JO21EV" hist={hist()} />
+      </StationControlContext.Provider>,
+    )
+    // Control: the card is drawn.
+    expect(container.querySelector('.recall-where')?.textContent).toBe('(IN52TK) · Spain')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(container.querySelector('.recall-geo')).toBeNull()
+    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
   })
 
   it('surfaces the most recent operator note', () => {

@@ -587,6 +587,9 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // …and the headline for the station's audio-error line, by the kind the station names —
+  // migrated from birth. The sentence passes through as data.
+  'features/audioError.ts',
   // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
   // are typed, and the strip words them from the catalog.
   'features/esm.ts',

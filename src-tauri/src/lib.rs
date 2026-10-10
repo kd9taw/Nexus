@@ -32718,6 +32718,23 @@ fn launch_engine(settings: Settings) -> Result<Engine, String> {
     Ok(launched)
 }
 
+/// What the station's audio-error line says when the radio loop ends, however it ends. The loop is
+/// the heartbeat, so TX and RX are dead until Nexus restarts: the one kind of problem the status
+/// lane heads "RADIO ENGINE STOPPED".
+#[cfg(feature = "radio")]
+fn radio_loop_end(
+    result: std::thread::Result<Result<(), String>>,
+) -> (tempo_app::dto::AudioErrorKind, String) {
+    let msg = match result {
+        Ok(Ok(())) => "Radio engine stopped unexpectedly — restart Nexus.".to_string(),
+        Ok(Err(e)) => {
+            format!("RADIO ENGINE STOPPED — TX/RX is dead until you restart Nexus ({e})")
+        }
+        Err(_) => "RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.".to_string(),
+    };
+    (tempo_app::dto::AudioErrorKind::EngineStopped, msg)
+}
+
 /// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
 /// logbook is open.
 ///
@@ -33491,15 +33508,7 @@ fn start_on_the_logbook(
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 tempo_audio::service::run_radio(eng_for_loop, radio_cfg)
             }));
-            let msg = match result {
-                Ok(Ok(())) => "Radio engine stopped unexpectedly — restart Nexus.".to_string(),
-                Ok(Err(e)) => {
-                    format!("RADIO ENGINE STOPPED — TX/RX is dead until you restart Nexus ({e})")
-                }
-                Err(_) => {
-                    "RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.".to_string()
-                }
-            };
+            let (kind, msg) = radio_loop_end(result);
             eprintln!("tempo: {msg}");
             tempo_core::applog::error("radio", &msg);
             // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
@@ -33508,7 +33517,7 @@ fn start_on_the_logbook(
             // form silently skipped the write then.
             engine_lock_result(&eng_for_report)
                 .unwrap_or_else(|e| e.into_inner())
-                .set_audio_error(Some(msg));
+                .set_audio_error(Some((kind, msg)));
         });
     }
 
@@ -38584,6 +38593,38 @@ mod tests {
             r.detail.contains("Last known status") && r.detail.contains("CAT confirmed"),
             "{}",
             r.detail
+        );
+    }
+
+    /// However the radio loop ends, its line is named a stopped radio engine, the one kind the
+    /// status lane heads "RADIO ENGINE STOPPED", in the words it always had.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_radio_loop_that_ends_is_named_a_stopped_radio_engine() {
+        use super::radio_loop_end;
+        use tempo_app::dto::AudioErrorKind::EngineStopped;
+        assert_eq!(
+            radio_loop_end(Ok(Ok(()))),
+            (
+                EngineStopped,
+                "Radio engine stopped unexpectedly — restart Nexus.".to_string()
+            )
+        );
+        assert_eq!(
+            radio_loop_end(Ok(Err("no usable sound card".to_string()))),
+            (
+                EngineStopped,
+                "RADIO ENGINE STOPPED — TX/RX is dead until you restart Nexus (no usable sound card)"
+                    .to_string()
+            )
+        );
+        let panic: Box<dyn std::any::Any + Send> = Box::new("the loop panicked");
+        assert_eq!(
+            radio_loop_end(Err(panic)),
+            (
+                EngineStopped,
+                "RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.".to_string()
+            )
         );
     }
 

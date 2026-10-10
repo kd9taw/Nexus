@@ -523,10 +523,6 @@ export function LogEntry({
   const [callbookState, setCallbookState] = useState('')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
   const [logImage, setLogImage] = useState<string | null>(null)
-  // The callbook's exact coordinates for this call (display-only, like logImage, and
-  // cleared with it when the call changes). Absent whenever the callbook vouched for no
-  // real position — the card then falls back to the locator.
-  const [logCoords, setLogCoords] = useState<{ lat: number; lon: number } | null>(null)
   // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
   const [logParkProgram, setLogParkProgram] = useState('POTA')
   const [logParkRef, setLogParkRef] = useState('')
@@ -896,7 +892,6 @@ export function LogEntry({
       setCallbookState('')
       setLogCountry('')
       setLogImage(null)
-      setLogCoords(null)
       setPark('') // the park was for the previous call; the prefill below decides in this commit
       // The wiped name may have been the CW decoder's copy — un-latch so it can refill for the
       // new call (declared below; the effect callback runs after render, so it's initialized).
@@ -1356,9 +1351,6 @@ export function LogEntry({
     if (r.country) setLogCountry((v) => (v.trim() ? v : r.country ?? ''))
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
     setCallbookState(r.state ?? '') // the recall card's, beside the callbook's town
-    // Same: display-only, and only when the callbook vouched for a REAL position (the
-    // backend refuses QRZ's grid-derived and DXCC-centroid fallbacks).
-    setLogCoords(r.lat != null && r.lon != null ? { lat: r.lat, lon: r.lon } : null)
     enrichedForRef.current = call.toUpperCase()
     // Feed the worked station's name/state to the engine for the {HISNAME}/{HISSTATE} CW-macro
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
@@ -1451,7 +1443,6 @@ export function LogEntry({
     setCallbookState('')
     setLogCountry('')
     setLogImage(null)
-    setLogCoords(null)
     setPark('')
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
@@ -2907,8 +2898,6 @@ export function LogEntry({
         // town, and the box where this contact counts.
         state={stateSource === 'park' ? callbookState : logState}
         grid={logGrid}
-        lat={logCoords?.lat ?? null}
-        lon={logCoords?.lon ?? null}
         country={logCountry}
         image={logImage}
         myGrid={snap.mygrid}

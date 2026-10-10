@@ -9,9 +9,10 @@ import type { CallHistory } from '../features/callHistory'
 import type { ContestDupeVerdict } from '../features/contestDupe'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
-import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
+import { useCallBearings } from '../features/callBearing'
+import { pointedTo } from './rotorPointAt'
 import { t } from '../i18n'
-import { useUnits } from '../units'
+import { fmtDistanceKm, useUnits } from '../units'
 import { useRovingList } from '../useRovingList'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useCallback, useState } from 'react'
@@ -30,15 +31,10 @@ interface Props {
    *  countries, and absent rather than guessed when no resolver is wired. */
   state?: string | null
   grid?: string | null
-  /** The station's exact callbook coordinates, when the lookup vouched for a real
-   *  position. Preferred over `grid` for the distance/bearing line — a locator is a
-   *  box, and its center is not where the station is. Absent ⇒ fall back to `grid`. */
-  lat?: number | null
-  lon?: number | null
   country?: string | null
   /** Callbook profile photo URL (QRZ/HamQTH). When present, replaces the initials avatar. */
   image?: string | null
-  /** Operator's own Maidenhead grid, for the distance/bearing line. */
+  /** Operator's own Maidenhead grid: the distance/bearing line says when it is only a square. */
   myGrid?: string
   hist: CallHistory
   newEntity?: boolean
@@ -171,7 +167,7 @@ export function recallCardClass(bounded?: boolean, kept?: boolean): string {
   return `recall-card${bounded ? ' cockpit-recall' : ''}${bounded && kept ? ' cockpit-recall-kept' : ''}`
 }
 
-export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -200,6 +196,8 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
       return next
     })
   }, [])
+  // The station's answer for the distance/bearing line (below), asked above the short-call return too.
+  const aim = useCallBearings(c.length >= 3 ? [cu] : []).get(cu)
   if (c.length < 3) return null
   const nm = name?.trim()
   // "KEKAHA, HI (BL01dx)" — the state rides with the town, the way an operator says it.
@@ -208,29 +206,39 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
   const place = [town, grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
   const ctry = country?.trim()
   const where = [place, ctry].filter(Boolean).join(' · ')
-  // Distance + true bearing from the operator's QTH, computed from the BEST position each
-  // side has: the callbook's exact coordinates when the lookup returned real ones (the very
-  // input QRZ derives ITS figures from), else the center of a reported grid square.
-  const me = myGrid ? gridToLatLon(myGrid) : null
-  const them = stationLatLon(lat != null && lon != null ? { lat, lon } : null, grid)
-  const geo = me && them ? `${distanceLabelAt(me, them, units)} · ${bearingLabelAt(me, them)}` : ''
+  // Distance + true bearing from the operator's QTH: the station's answer for where a point at this
+  // call turns the antenna (features/callBearing), the number the Rotor box shows and its Point turns
+  // to, never one worked out here. It is taken to the square typed into the log strip, sharpened by
+  // the callbook's position where that lies inside it; else to a grid heard off the air, the
+  // callbook's, or the one logged with the station; and only when none is known to the centre of its
+  // country. The tooltip names which, in the point's own words (`pointedTo`): the square the card
+  // shows may be the callbook's while the station is sending another. No bearing to give is said in
+  // words, never drawn as a number; a seat without station control (a browser) draws no line.
+  const bearing = aim && 'bearing' in aim ? aim.bearing : null
+  const why = aim && 'why' in aim ? aim.why : null
+  const geo = bearing ? `${fmtDistanceKm(bearing.km, units)} · ${Math.round(bearing.pointed.bearing) % 360}°` : ''
+  const noGeo =
+    why === 'unknownStation' ? t('rotor.pane.aim.unknown') : why === 'noGrid' ? t('rotor.pane.aim.noGrid') : ''
   // Name whichever side is still a SQUARE rather than a point. A 4-character locator is
   // ±1° of longitude — a degree or so on a DX path, but up to ~29° on a station ~125 miles
   // away, and the reason a grid-derived heading disagrees with QRZ's. Saying so is what
   // keeps that error visible instead of silently wrong.
   const coarse = (g: string | null | undefined) => Boolean(g?.trim()) && g!.trim().length < 6
+  const theirs = bearing?.pointed.to === 'grid' ? bearing.pointed.grid : null
   const approx = [
     coarse(myGrid) ? t('recall.geo.approx.mine', { grid: myGrid!.trim().toUpperCase() }) : '',
-    !them || (lat != null && lon != null) || !coarse(grid)
-      ? ''
-      : t('recall.geo.approx.theirs', { grid: grid!.trim().toUpperCase() }),
+    coarse(theirs) ? t('recall.geo.approx.theirs', { grid: theirs!.trim().toUpperCase() }) : '',
   ].filter(Boolean)
   // Whole sentences, never a clause glued onto a head: the "approximate" case is its own
   // message, and the word joining the two squares lives inside a message of its own — a
   // language that pairs them differently can only do that if the conjunction is translatable.
   const squares =
     approx.length === 2 ? t('recall.geo.approx.both', { mine: approx[0], theirs: approx[1] }) : approx[0]
-  const geoTitle = approx.length ? t('recall.geo.title.approx', { squares }) : t('recall.geo.title')
+  const to = bearing ? pointedTo(bearing.pointed) : ''
+  const geoTitle =
+    approx.length > 0 && bearing?.pointed.to !== 'country'
+      ? t('recall.geo.title.approx', { to, squares })
+      : t('recall.geo.title', { to })
   const confirmed = hist.confirmedCount > 0
   const needed = newEntity
     ? t('recall.need.entity')
@@ -317,6 +325,7 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
               {geo}
             </div>
           )}
+          {noGeo && <div className="recall-geo">{noGeo}</div>}
           {/* #204: the station this one is calling — one click to that station's card. */}
           {calling && onShowCall && calling.trim().toUpperCase() !== cu && (
             <button

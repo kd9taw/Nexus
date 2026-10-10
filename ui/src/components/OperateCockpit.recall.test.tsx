@@ -26,8 +26,7 @@ import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
 import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { RecallPanel } from './RecallPanel'
-import { distanceLabel, bearingLabel } from '../grid'
-import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
+import type { AppSnapshot, CallBearing, LoggedQso, QrzLookup } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
@@ -38,10 +37,14 @@ vi.setConfig({ testTimeout: 15_000 })
 
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
 const MY_GRID = 'EN61'
-/** What the CALLBOOK says — finer than the decoded square, and it must win. */
+/** What the CALLBOOK says: the square the card names beside the station's town. */
 const BOOK_GRID = 'FN31'
 /** What the DECODE said. The fallback when there is no callbook answer at all. */
 const DECODED_GRID = 'FN42'
+/** The station's answer for W1ABC: the square it is sending, which the point trusts over the callbook's
+ *  (src-tauri `best_fix`), 1324.8 km (823 mi) and 79.85° from EN61. The callbook's FN31 is 724 mi at 85°,
+ *  so a card that took the callbook's square would not draw this. */
+const W1ABC_AIM: CallBearing = { pointed: { bearing: 79.85, to: 'grid', grid: DECODED_GRID, country: null }, km: 1324.8 }
 
 const resolved: QrzLookup = {
   call: 'W1ABC',
@@ -108,6 +111,10 @@ vi.mock('../api', () => ({
   openPanelWindow: vi.fn(async () => null),
   notifyErase: vi.fn(async () => null),
   pointRotatorAtCall: vi.fn(async () => null),
+  // The card's distance and bearing: the station's answer for the call (features/callBearing).
+  rotatorBearingToCall: vi.fn(async (call: string) =>
+    call === 'W1ABC' ? W1ABC_AIM : Promise.reject(new Error('unknownStation')),
+  ),
   redecode: vi.fn(async () => null),
   startCq: vi.fn(async () => null),
   startQsoRecording: vi.fn(async () => null),
@@ -276,6 +283,10 @@ async function card(): Promise<HTMLElement> {
   await waitFor(() =>
     expect(document.querySelector('.recall-card .recall-log-list'), 'the log history never reached the card').not.toBeNull(),
   )
+  // …and the station's bearing for the call, an answer of its own.
+  await waitFor(() =>
+    expect(document.querySelector('.recall-card .recall-geo'), 'the bearing never reached the card').not.toBeNull(),
+  )
   return document.querySelector('.recall-card') as HTMLElement
 }
 
@@ -363,11 +374,11 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     // rig is on 20 m, so this band is a new slot for it.
     expect((await needBadge()).textContent).toContain('New band-slot')
 
-    // Distance + bearing from the operator's own square to the CALLBOOK's — the finer of
-    // the two positions wins over the decoded one.
-    expect(c.querySelector('.recall-geo')!.textContent).toBe(
-      `${distanceLabel(MY_GRID, BOOK_GRID)} · ${bearingLabel(MY_GRID, BOOK_GRID)}`,
-    )
+    // Distance + bearing: the station's answer for the call, the one its point turns to (W1ABC_AIM),
+    // and its tooltip says what it was taken to — here the square the station is sending, not the
+    // callbook's FN31 the card names beside it.
+    expect(c.querySelector('.recall-geo')!.textContent).toBe('823 mi · 80°')
+    expect(c.querySelector('.recall-geo')!.getAttribute('title')).toContain(`(their grid ${DECODED_GRID})`)
 
     // The operator's own private note on this station.
     expect(c.querySelector('.recall-note')!.textContent).toContain('runs 5 W to an attic dipole')
@@ -384,9 +395,7 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     expect(c.textContent).toContain('W1ABC')
     expect(c.querySelector('.recall-log-list')!.textContent).toContain('40m FT8')
     expect(c.querySelector('.recall-avatar-img'), 'a photo with no callbook answer').toBeNull()
-    expect(c.querySelector('.recall-geo')!.textContent).toBe(
-      `${distanceLabel(MY_GRID, DECODED_GRID)} · ${bearingLabel(MY_GRID, DECODED_GRID)}`,
-    )
+    expect(c.querySelector('.recall-geo')!.textContent).toBe('823 mi · 80°')
     // …and it must not tell the operator to press a Lookup button. There isn't one in this
     // cockpit: that line is the log strip's instruction, and it is the whole of `hasLookup`.
     expect(c.textContent).not.toContain('press Lookup')
