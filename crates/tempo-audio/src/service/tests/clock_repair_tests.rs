@@ -56,10 +56,12 @@ fn not_synchronised() -> ClockDiagnosis {
     d
 }
 
-/// The default Windows PC just after the clock jumped (a resume from sleep).
+/// The default Windows PC just after the clock jumped (a resume from sleep), which left the clock
+/// out by its RTC's own error.
 fn just_jumped() -> ClockDiagnosis {
     let d = decide(&Findings {
         just_stepped: true,
+        measured_offset_ms: Some(4_000),
         ..findings_of_default_windows()
     });
     assert_eq!(d.repair, Repair::Resync { rediscover: false }, "premise");
@@ -233,6 +235,53 @@ fn a_press_runs_the_offered_repair_once() {
         Err(ClockRepairRefusal::NothingToRepair)
     );
     assert_eq!(machine.elevations.get(), 1, "no second prompt");
+}
+
+/// A default Windows PC diagnosed through the real decision table, on what each pass hands it:
+/// the probe's offset and whether the clock stepped. Its elevated helper counts, and takes.
+struct DefaultWindows {
+    elevations: Cell<u32>,
+}
+
+impl ClockHost for DefaultWindows {
+    fn detect(&self, reached: bool, offset: Option<i64>, stepped: bool) -> ClockDiagnosis {
+        decide(&Findings {
+            probe_reached_network: reached,
+            measured_offset_ms: offset,
+            just_stepped: stepped,
+            ..findings_of_default_windows()
+        })
+    }
+
+    fn run_repair_elevated(&self, _repair: Repair) -> bool {
+        self.elevations.set(self.elevations.get() + 1);
+        true
+    }
+}
+
+/// ⛔ A REPAIR'S OWN STEP DOES NOT PUT THE BUTTON BACK. The resync a press runs steps a clock that
+/// was out, the step wakes the probe as a resume does, and that pass measures the clock right. It
+/// used to take the step for a fault again and offer the button the moment it said "Clock
+/// repaired".
+#[test]
+fn the_step_a_repair_makes_does_not_offer_it_again() {
+    let engine = engine();
+    let repair = ClockRepair::new();
+    let pc = DefaultWindows {
+        elevations: Cell::new(0),
+    };
+    // A resume left the clock 4 s out: the step is a fault, and the button shows.
+    clock_diagnose(&engine, &repair, &pc, Some(4_000), true);
+    assert!(shown(&engine).1, "premise: offered after the resume");
+    assert_eq!(repair_clock_with(&engine, &repair, &pc), Ok(true));
+    assert!(!shown(&engine).1, "withdrawn once it took");
+    // The resync stepped the clock, and the pass that step woke measures it right.
+    clock_diagnose(&engine, &repair, &pc, Some(20), true);
+    assert!(
+        !shown(&engine).1,
+        "the repair's own step put Repair clock back"
+    );
+    assert_eq!(pc.elevations.get(), 1);
 }
 
 /// A prompt answered No (or a step that failed) says so and leaves the button, so the operator
