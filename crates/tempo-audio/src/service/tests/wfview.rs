@@ -676,7 +676,7 @@ fn the_radio_loop_runs_a_radio_through_wfviews_rigctld() {
 /// installs `libhamlib-utils` so that scenes like these run there, and a pass that ran nothing
 /// would be a false one. Elsewhere its absence is said, loudly, and the scene is not run.
 fn hamlib_rigctld_here() -> bool {
-    let here = std::process::Command::new("rigctld")
+    let here = tempo_core::process::command("rigctld")
         .arg("--version")
         .output()
         .is_ok_and(|o| o.status.success());
