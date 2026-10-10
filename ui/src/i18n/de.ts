@@ -4378,6 +4378,7 @@ export const DE: PartialCatalog = {
   "fieldDay.export.dupeSheet.label": "Dupe-Liste",
   "fieldDay.export.dupeSheet.title": "Dupe-/Multiplikator-Prüfliste herunterladen (gearbeitete Sektionen + Rufzeichen)",
   "fieldDay.export.done": "Exportiert → {{path}}",
+  "fieldDay.export.remote": "Nur an der Station: Ein Klick über Remote exportiert kein Log.",
   "fieldDay.bonuses.head": "Boni",
   "fieldDay.bonuses.count": "{{claimed}}/{{total}} beansprucht · {{points}} Pkt.",
   "fieldDay.bonuses.aria": "Beanspruchte FD-Boni",

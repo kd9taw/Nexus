@@ -2642,6 +2642,7 @@ export const JA: PartialCatalog = {
   "fieldDay.export.dupeSheet.label": "デュープシート",
   "fieldDay.export.dupeSheet.title": "デュープ／マルチプライヤー確認シートをダウンロードします（交信済みセクションとコールサイン）",
   "fieldDay.export.done": "エクスポートしました → {{path}}",
+  "fieldDay.export.remote": "局でのみ操作できます: Remote 経由の操作ではログを書き出せません。",
   "fieldDay.bonuses.head": "ボーナス",
   "fieldDay.bonuses.count": "{{claimed}}/{{total}} 申請済み・{{points}}点",
   "fieldDay.bonuses.aria": "申請済みFDボーナス",

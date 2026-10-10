@@ -3952,6 +3952,7 @@ export const EN = {
   'fieldDay.export.dupeSheet.title':
     'Download a dupe / multiplier check sheet (sections + callsigns worked)',
   'fieldDay.export.done': 'Exported → {{path}}',
+  'fieldDay.export.remote': 'Only at the station: a press through Remote exports no log.',
 
   // The bonus checklist. The bonus NAMES come from `FD_BONUSES`; these are the words around
   // them, and `{{points}}` is a score.

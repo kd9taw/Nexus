@@ -262,10 +262,11 @@ describe('ContestView club sync section', () => {
   })
 })
 
-// The host's club files are written to the station's disk, so a press that comes through the
-// Remote stream writes neither. jsdom never lays out: `elementFromPoint` does not exist, so each
-// streamed press says what is under it.
-describe('a press through the Remote stream exports no club file', () => {
+// Every export on the screen is written to the station's disk: the station log's own four and,
+// while hosting, the club's two. So a press that comes through the Remote stream writes none of
+// them. jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what
+// is under it.
+describe('a press through the Remote stream exports no file', () => {
   let under: Element | null = null
   let stream: StreamInputDispatcher | null = null
   beforeEach(() => {
@@ -334,13 +335,46 @@ describe('a press through the Remote stream exports no club file', () => {
     expect(exportAlert(), 'the export clears the refusal').toBeNull()
   })
 
-  it('CONTROL: the station log’s own Export Cabrillo, pressed through the stream, still exports', async () => {
+  // The station log's own four, on a station with no club: Cabrillo and ADIF come from the
+  // backend, Summary and Dupe sheet are built here, and all four are written to Downloads.
+  it.each([
+    ['Export Cabrillo', 'pressed', [['cabrillo']], /^fd-log-.*\.cbr$/],
+    ['Export Cabrillo', 'keyed', [['cabrillo']], /^fd-log-.*\.cbr$/],
+    ['Export ADIF', 'pressed', [['adif']], /^fd-log-.*\.adi$/],
+    ['Export ADIF', 'keyed', [['adif']], /^fd-log-.*\.adi$/],
+    ['Summary', 'pressed', [], /^fd-summary-.*\.txt$/],
+    ['Summary', 'keyed', [], /^fd-summary-.*\.txt$/],
+    ['Dupe sheet', 'pressed', [], /^fd-dupesheet-.*\.txt$/],
+    ['Dupe sheet', 'keyed', [], /^fd-dupesheet-.*\.txt$/],
+  ] as const)('refuses the station log’s own %s %s through the stream, and says why; CONTROL: at the station it exports', async (label, way, backend, file) => {
+    render(<ContestView fieldDay={fd()} onSetMode={() => {}} />)
+    await settle()
+    const button = () => screen.getByRole('button', { name: label })
+    await through[way](button())
+    expect(saveTextToDownloads, 'no file written').not.toHaveBeenCalled()
+    expect(exportLog).not.toHaveBeenCalled()
+    expect(exportAlert()).toBe('Only at the station: a press through Remote exports no log.')
+    expect((button() as HTMLButtonElement).disabled, 'nothing started').toBe(false)
+    await act(async () => { fireEvent.click(button()) })
+    await settle()
+    expect(vi.mocked(exportLog).mock.calls).toEqual(backend)
+    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(file), expect.any(String))
+    expect(exportAlert(), 'the export clears the refusal').toBeNull()
+  })
+
+  it('refuses the station log’s own Export Cabrillo pressed through the stream while hosting, in the station’s words', async () => {
     await host()
-    await through.pressed(screen.getByRole('button', { name: 'Export Cabrillo' }))
-    expect(exportLog).toHaveBeenCalledWith('cabrillo')
-    expect(saveTextToDownloads).toHaveBeenCalledTimes(1)
+    const button = () => screen.getByRole('button', { name: 'Export Cabrillo' })
+    await through.pressed(button())
+    expect(exportLog).not.toHaveBeenCalled()
+    expect(saveTextToDownloads, 'no file written').not.toHaveBeenCalled()
     expect(fdClubExport).not.toHaveBeenCalled()
-    expect(exportAlert()).toBeNull()
+    expect(exportAlert()).toBe('Only at the station: a press through Remote exports no log.')
+    await act(async () => { fireEvent.click(button()) })
+    await settle()
+    expect(vi.mocked(exportLog).mock.calls).toEqual([['cabrillo']])
+    expect(fdClubExport, 'the station’s own export reads no club log').not.toHaveBeenCalled()
+    expect(exportAlert(), 'the export clears the refusal').toBeNull()
   })
 })
 

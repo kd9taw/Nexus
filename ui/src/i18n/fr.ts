@@ -1635,6 +1635,7 @@ export const FR: PartialCatalog = {
   "fieldDay.export.done": "Exporté → {{path}}",
   "fieldDay.export.dupeSheet.label": "Feuille des doubles",
   "fieldDay.export.dupeSheet.title": "Télécharger une feuille de contrôle doubles / multiplicateurs (sections et indicatifs contactés)",
+  "fieldDay.export.remote": "Seulement à la station : un clic via Remote n'exporte aucun journal.",
   "fieldDay.export.summary.label": "Résumé",
   "fieldDay.export.summary.title": "Télécharger un résumé de score sur une page (QSO par bande/mode, sections, puissance, bonus, total)",
   "fieldDay.log.column.band": "Bande",

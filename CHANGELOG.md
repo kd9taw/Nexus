@@ -470,11 +470,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own laptop holds its own position from the moment it starts hosting, two positions with one name
   read apart on every board, the TV and Remote, and a contest contact can no longer be removed
   through the Remote stream.
-- **Through the Remote stream, the Contest screen no longer exports the club's files, restores a
-  removed contact or merges contacts into your logbook.** A press of **Club Cabrillo**, **Club
-  ADIF**, **Restore** or **Merge … into my logbook** that comes through the stream does nothing
-  and says so ("Only at the station: …"), as Remove already does. The same press at the station
-  works as before.
+- **Through the Remote stream, the Contest screen no longer exports anything, restores a removed
+  contact or merges contacts into your logbook.** A press of **Export Cabrillo**, **Export ADIF**,
+  **Summary**, **Dupe sheet**, **Club Cabrillo**, **Club ADIF**, **Restore** or **Merge … into my
+  logbook** that comes through the stream does nothing and says so ("Only at the station: …"), as
+  Remove already does. The same press at the station works as before.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

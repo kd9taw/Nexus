@@ -2165,10 +2165,11 @@ export function ContestView({
   // read the score components computed just above.
   const handleExport = async (format: ExportFormat) => {
     if (observed) return
-    // Only at the station: a press that comes through the Remote stream writes no club file to
-    // the station's disk. Read before anything awaits, inside the stream's dispatch.
-    if ((format === 'club-cabrillo' || format === 'club-adif') && isStreamInput()) {
-      setExportError(t('fieldDay.club.export.remote'))
+    // Only at the station: a press that comes through the Remote stream writes no file to the
+    // station's disk, the station log's own or the club's. Read before anything awaits, inside
+    // the stream's dispatch.
+    if (isStreamInput()) {
+      setExportError(format.startsWith('club-') ? t('fieldDay.club.export.remote') : t('fieldDay.export.remote'))
       return
     }
     setExportError(null)
