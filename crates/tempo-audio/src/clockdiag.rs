@@ -1091,8 +1091,8 @@ TimeSync.exe                  9112 Console                    1     12,480 K
     }
 
     /// ⛔ A REPORT THAT CANNOT BE READ SAYS NOTHING. A query that failed or ran past
-    /// [`CMD_TIMEOUT`] reaches the parser as "" (one read in 24 came back with no report on the
-    /// machine above), and `w32tm` may print an error line in place of the report. Every
+    /// [`CMD_TIMEOUT`] reaches the parser as "" (one of 132 reads on the machine above came back
+    /// with no report), and `w32tm` may print an error line in place of the report. Every
     /// non-English Windows is in the same place: it prints the report with its labels translated
     /// (German's "Letzte erfolgr. Synchronisierungszeit"), and only the English labels are read.
     /// Each was taken for a service that has never synchronised, so Repair clock was offered on
