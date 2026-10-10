@@ -530,6 +530,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
   rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
   is on the line by then.
+- **A radio that does not answer a mode or frequency change is no longer reported as refusing it,
+  on native CI-V, OmniRig and Nexus's own FlexRadio client.** On a native CI-V Icom, a mode change
+  the radio did not answer (switched off, or a reply lost on the CI-V bus) read "rig rejected
+  PKTUSB"; after its 30 tries Nexus sent the plain mode to the silent radio as a fallback and said
+  "rig refused PKTUSB … select USB-D/DATA on the rig by hand". It now reads "no reply from the rig
+  over CAT — couldn't set PKTUSB (1/30)", gets the same 30 tries, then says "couldn't set PKTUSB:
+  no reply over CAT … gave up" and sends no fallback. A mode the radio answers NG to is still
+  reported as refused, and still gets its fallback. On OmniRig, while OmniRig says the radio is not
+  responding, a frequency change read "the radio refused … — it does not cover that frequency" and
+  a mode change "rig rejected"; both now say there was no reply from the rig, and the frequency
+  gets its three tries as before. Nothing is written to the radio either way, and OmniRig's other
+  states (not configured, switched off in OmniRig, port held by another program) still refuse. On
+  Nexus's own FlexRadio client, a frequency change the radio did not answer within half a second,
+  or sent after the connection to the radio ended, read "the radio refused …"; it now reads "… MHz
+  not sent — no reply from the rig", with the same three tries. In all three, the number of tries
+  and how long each one holds up the radio loop, and with it a transmission due to start, are
+  unchanged. NEEDS-BENCH: an Icom on native CI-V switched off during a mode change, a radio
+  switched off while OmniRig drives it, and a FLEX radio switched off or unplugged from the network
+  during a QSY should each say no reply from the rig, never that it refused.
 - **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
   (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
   wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus

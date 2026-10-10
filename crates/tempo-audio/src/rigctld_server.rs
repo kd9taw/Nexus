@@ -16,7 +16,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`]).
+/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`],
+/// [`RigBackend::try_set_mode`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetFault {
     /// The radio, or the backend, said no: `RPRT -1`.
@@ -60,7 +61,8 @@ pub trait RigBackend: Send + Sync {
     /// counts it toward its circuit breaker; only a refusal counts toward giving the dial up.
     ///
     /// The default is [`Self::set_freq`], whose `false` is a refusal: a backend that cannot tell
-    /// sends exactly the bytes it always sent. The native CI-V daemon overrides it.
+    /// sends exactly the bytes it always sent. The native CI-V daemon, the OmniRig shim and the
+    /// Flex client override it.
     fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
         if self.set_freq(hz) {
             Ok(())
@@ -69,6 +71,21 @@ pub trait RigBackend: Send + Sync {
         }
     }
     fn set_mode(&self, mode: &str, passband_hz: u32) -> bool;
+    /// The mode write as `M` relays it: [`Self::set_mode`], told apart the way
+    /// [`Self::try_set_freq`] tells a dial apart. The radio loop reads `RPRT -5` on a mode as the
+    /// link, as it does Hamlib's: "no reply" in its words and a miss for its breaker, the same try
+    /// budget as a refusal, and no refusal on record.
+    ///
+    /// The default is [`Self::set_mode`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon and the OmniRig shim
+    /// override it.
+    fn try_set_mode(&self, mode: &str, passband_hz: u32) -> Result<(), SetFault> {
+        if self.set_mode(mode, passband_hz) {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        }
+    }
     fn set_ptt(&self, on: bool) -> bool;
     fn set_vfo(&self, _vfo: &str) -> bool {
         true
@@ -349,7 +366,8 @@ fn rprt(ok: bool) -> String {
 }
 
 /// Map a write's outcome where the backend can tell a radio that did not answer from one that
-/// refused ([`RigBackend::try_set_freq`]): the silence is Hamlib's `RPRT -5` (ETIMEOUT).
+/// refused ([`RigBackend::try_set_freq`], [`RigBackend::try_set_mode`]): the silence is Hamlib's
+/// `RPRT -5` (ETIMEOUT).
 fn rprt_set(r: Result<(), SetFault>) -> String {
     match r {
         Ok(()) => rprt(true),
@@ -512,7 +530,11 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 Some("M") => {
                     let mode = p.next().unwrap_or("");
                     let pbw = p.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-                    rprt(!mode.is_empty() && backend.set_mode(mode, pbw))
+                    rprt_set(if mode.is_empty() {
+                        Err(SetFault::Refused)
+                    } else {
+                        backend.try_set_mode(mode, pbw)
+                    })
                 }
                 Some("v") => format!("{}\n", backend.vfo()),
                 Some("V") => rprt(p.next().map(|v| backend.set_vfo(v)).unwrap_or(false)),
@@ -1023,6 +1045,79 @@ pub(crate) mod tests {
         assert_eq!(reply("\\get_level RFPOWER", &b), "RPRT -11\n");
         // An unknown long verb is still unknown.
         assert_eq!(reply("\\warble", &b), "RPRT -11\n");
+    }
+
+    /// `M` answers a backend that cannot tell a refusal from a silence exactly as it always has:
+    /// `set_mode`'s `true` is `RPRT 0` and its `false` `RPRT -1` (the CAT broker that WSJT-X talks
+    /// to is such a backend). A backend that can tell answers a silence `RPRT -5`, and a mode-less
+    /// `M` is refused without asking the backend at all.
+    #[test]
+    fn a_mode_write_is_rprt_minus_5_only_from_a_backend_that_heard_nothing() {
+        struct Plain(bool, Mutex<u32>);
+        impl RigBackend for Plain {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 0)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                *self.1.lock().unwrap() += 1;
+                self.0
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+        }
+        struct Telling(Result<(), SetFault>);
+        impl RigBackend for Telling {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 0)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                self.0.is_ok()
+            }
+            fn try_set_mode(&self, _: &str, _: u32) -> Result<(), SetFault> {
+                self.0
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+        }
+        let took = Plain(true, Mutex::new(0));
+        let refused = Plain(false, Mutex::new(0));
+        assert_eq!(
+            (
+                reply("M PKTUSB 3000", &took),
+                reply("M PKTUSB 3000", &refused),
+                reply("M", &took),
+                *took.1.lock().unwrap(),
+                [Ok(()), Err(SetFault::Refused), Err(SetFault::NoAnswer)]
+                    .map(|r| reply("M PKTUSB -1", &Telling(r))),
+            ),
+            (
+                "RPRT 0\n".to_string(),
+                "RPRT -1\n".to_string(),
+                "RPRT -1\n".to_string(),
+                1,
+                ["RPRT 0\n", "RPRT -1\n", "RPRT -5\n"].map(String::from),
+            )
+        );
     }
 
     /// The morse long form takes the rest of the line as text, exactly like `b`.

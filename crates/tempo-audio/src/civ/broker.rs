@@ -1236,10 +1236,20 @@ impl RigBackend for CivBackend {
         self.answer(commands::set_freq(self.addr, hz, self.model))
     }
 
-    fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
+    fn set_mode(&self, mode: &str, passband_hz: u32) -> bool {
+        self.try_set_mode(mode, passband_hz).is_ok()
+    }
+
+    /// The mode write, an `FA` told apart from a radio that did not answer. A mode is one frame
+    /// by name (the IC-7610) or the `06` and `1A 06` pair, each sent as before, byte for byte; an
+    /// `FA` on any frame that has to take makes the whole a refusal, as it always was, and only a
+    /// mode the radio said nothing to is silence. A selection stranded on Sub, and a mode word
+    /// with no CI-V form, stay refusals: the daemon will not write blind, and the radio was
+    /// never asked.
+    fn try_set_mode(&self, mode: &str, _passband_hz: u32) -> Result<(), SetFault> {
         let mut g = self.band(); // the `06` write hits the SELECTED band
         if !self.ensure_main(&mut g) {
-            return false; // same stray-selection refusal as `set_freq`
+            return Err(SetFault::Refused); // same stray-selection refusal as `set_freq`
         }
         // PKT*/DATA-* = base mode + DATA mode on; every plain mode turns DATA off.
         let up = mode.to_ascii_uppercase();
@@ -1259,7 +1269,7 @@ impl RigBackend for CivBackend {
             "PKTFM" | "FM-D" | "PKT-FM" => (Mode::Fm, true),
             _ => match Mode::from_name(&up) {
                 Some(m) => (m, false),
-                None => return false,
+                None => return Err(SetFault::Refused),
             },
         };
         if self.main_dial_by_name() {
@@ -1267,25 +1277,31 @@ impl RigBackend for CivBackend {
             // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
             // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
             let n = data.then(|| self.data_mode_on_wire());
-            return self.ack(commands::set_band_mode(
+            return self.answer(commands::set_band_mode(
                 self.addr,
                 commands::BAND_MAIN,
                 base,
                 n,
             ));
         }
-        let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
+        let mode_set = self.answer(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
         // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
         // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n` — capped
-        // at what this radio has (`data_mode_on_wire`). Turning data OFF is still just off.
-        let data_ok = if data {
+        // at what this radio has (`data_mode_on_wire`). Turning data OFF is still just off, and
+        // whatever it answers, or does not, is tolerated the same way.
+        let data_set = if data {
             let n = self.data_mode_on_wire();
-            self.ack(commands::set_data_mode_n(self.addr, n, None))
+            self.answer(commands::set_data_mode_n(self.addr, n, None))
         } else {
-            self.ack(commands::set_data_mode(self.addr, false, None))
+            let _ = self.answer(commands::set_data_mode(self.addr, false, None));
+            Ok(())
         };
-        mode_ok && (data_ok || !data)
+        match (mode_set, data_set) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(SetFault::Refused), _) | (_, Err(SetFault::Refused)) => Err(SetFault::Refused),
+            _ => Err(SetFault::NoAnswer),
+        }
     }
 
     /// ⛔ KEY AND UNKEY — ONE FRAME, NO RECEIVER, NO LOCK, and that is deliberate on a
@@ -2932,6 +2948,75 @@ mod tests {
                 regs.lock().unwrap().main_hz
             ),
             ("RPRT 0\n", "RPRT -1\n", "RPRT -5\n", 7_074_000)
+        );
+    }
+
+    /// ⭐ A MODE THE RADIO DID NOT ANSWER IS NOT A MODE IT REFUSED. Three mode writes through the
+    /// encoder the daemon serves, on an IC-7300 (the `06` and `1A 06` pair) and an IC-7610 (one
+    /// `26 00` frame by name): PKTUSB, which it takes; CW, answered NG (`FA`) on every frame; CW
+    /// again, met with silence on every frame. The NG is `RPRT -1`, a refusal, as it always was;
+    /// the silence is Hamlib's `RPRT -5`, as an unanswered dial is, and the radio stays in USB-D
+    /// both times. The silence was `RPRT -1` as well, so the radio loop told the operator the rig
+    /// rejected the mode, and at its give-up sent a fallback mode to a radio that was not answering.
+    #[test]
+    fn a_mode_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let answers = |addr: u8, model: IcomModel| {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            let reply = |line: &str| match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            };
+            let taken = reply("M PKTUSB 0");
+            regs.lock().unwrap().nak_mode_writes = u32::MAX;
+            let refused = reply("M CW 0");
+            regs.lock().unwrap().nak_mode_writes = 0;
+            regs.lock().unwrap().drop_mode_writes = u32::MAX;
+            let unanswered = reply("M CW 0");
+            let r = regs.lock().unwrap();
+            (taken, refused, unanswered, r.main_mode, r.data_mode)
+        };
+        let want = (
+            "RPRT 0\n".to_string(),
+            "RPRT -1\n".to_string(),
+            "RPRT -5\n".to_string(),
+            0x01,
+            true,
+        );
+        assert_eq!(
+            [
+                answers(0x94, IcomModel::Ic7300),
+                answers(0x98, IcomModel::Ic7610)
+            ],
+            [want.clone(), want]
+        );
+    }
+
+    /// The DATA flag's own answer, after the mode frame took (IC-7300, the `06` and `1A 06` pair).
+    /// Turning DATA off for a plain mode is tolerated whatever the radio says to it, NG or
+    /// nothing, as it always was: some radios NG a redundant off. Turning it on is required, so
+    /// for PKTUSB its NG is a refusal, as it always was, and its silence is silence.
+    #[test]
+    fn the_data_flags_answer_decides_a_data_mode_and_never_a_plain_one() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let answer = |line: &str, knob: fn(&mut Regs)| {
+            let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+            knob(&mut regs.lock().unwrap());
+            match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            }
+        };
+        let ng: fn(&mut Regs) = |r| r.nak_data_writes = 1;
+        let quiet: fn(&mut Regs) = |r| r.drop_data_writes = 1;
+        assert_eq!(
+            [
+                answer("M USB 0", ng),
+                answer("M USB 0", quiet),
+                answer("M PKTUSB 0", ng),
+                answer("M PKTUSB 0", quiet),
+            ],
+            ["RPRT 0\n", "RPRT 0\n", "RPRT -1\n", "RPRT -5\n"]
         );
     }
 

@@ -82,18 +82,33 @@ use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
 use tempo_net::flex::admission::{another_dax_feeder, Refusal};
 use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, TxStart, TxStop};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
-use tempo_net::flex::session::{Connection, EndOutcome, Snapshot, StopOutcome};
+use tempo_net::flex::session::{ConnError, Connection, EndOutcome, Snapshot, StopOutcome};
 use tempo_net::flex::status::SliceDelta;
+use tempo_net::flex::wire::Reply;
 
 use crate::baud_ladder::{RigCaps, SplitDetect};
-use crate::rigctld_server::RigBackend;
+use crate::rigctld_server::{RigBackend, SetFault};
 
 use super::routing::{mode_class, ModeClass};
 use super::{effective_mode, routing_view, ClientState, COMMANDED_FOR};
 
 /// How long a write waits for the radio's reply: well inside the radio loop's own CAT deadline,
-/// so a radio that does not answer is a refused write, not a dropped CAT connection.
+/// so a radio that does not answer gets an answer of its own, not a dropped CAT connection. The
+/// dial tells that silence apart from a refusal ([`answered`]); every other write still answers
+/// it as a refusal.
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A write's reply as the rigctld answer it becomes: the radio's success is `Ok`; its error code,
+/// or the session declining to send the command, is a refusal (`RPRT -1`); no reply within the
+/// wait, or a session that has ended, is the radio not answering (`RPRT -5`), which the radio
+/// loop words and counts as silence.
+fn answered(reply: Result<Reply, ConnError>) -> Result<(), SetFault> {
+    match reply {
+        Ok(r) if r.code == 0 => Ok(()),
+        Err(ConnError::Timeout | ConnError::Closed) => Err(SetFault::NoAnswer),
+        _ => Err(SetFault::Refused),
+    }
+}
 
 /// The modes a slice offers when the radio has not sent its `mode_list` (FlexRadio's API
 /// documentation, `TCPIP-slice`).
@@ -346,13 +361,19 @@ impl FlexShim {
 
     /// Send `command` (built for the served slice) and say whether the radio took it.
     fn write(&self, command: impl FnOnce(u8) -> Option<Command>) -> bool {
+        self.try_write(command).is_ok()
+    }
+
+    /// [`Self::write`], saying why a write did not take ([`answered`]). No served slice, or no
+    /// command for it, is a refusal: nothing was sent.
+    fn try_write(&self, command: impl FnOnce(u8) -> Option<Command>) -> Result<(), SetFault> {
         let Some((conn, _, slice)) = self.served() else {
-            return false;
+            return Err(SetFault::Refused);
         };
         let Some(command) = command(slice) else {
-            return false;
+            return Err(SetFault::Refused);
         };
-        matches!(conn.request(command, REQUEST_TIMEOUT), Ok(r) if r.code == 0)
+        answered(conn.request(command, REQUEST_TIMEOUT))
     }
 
     /// Keep why a key was kept off the air, for the radio loop to put on screen
@@ -538,7 +559,12 @@ impl RigBackend for FlexShim {
     }
 
     fn set_freq(&self, hz: u64) -> bool {
-        self.write(|slice| {
+        self.try_set_freq(hz).is_ok()
+    }
+
+    /// The dial write: a tune the radio does not answer is silence, not a refusal ([`answered`]).
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        self.try_write(|slice| {
             Some(Command::SliceTune {
                 slice,
                 freq_hz: hz as f64,

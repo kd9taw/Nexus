@@ -389,6 +389,116 @@ fn the_flex_clients_range_is_unknown_to_the_engine() {
     );
 }
 
+/// A QSY to 7.074 MHz on the simulated FLEX-6400, which does not answer that tune; with
+/// `then_silent` it answers nothing at all from that tune on (switched off), otherwise it answers
+/// everything else. Stepped as `run_radio` steps until the loop gives the dial up, or 5 s. Returns
+/// what the operator was told about 7.074 MHz (each change of the CAT status line naming it, in
+/// order), whether any of them said "refused", the tunes to 7.074 MHz the radio was sent, the dial
+/// the radio refused and the dial given up on. How long each step that carried a tune held the loop
+/// goes to stderr (`--nocapture`): a tune the radio does not answer holds it for the client's
+/// request timeout.
+fn unanswered_tune(then_silent: bool) -> (Vec<String>, bool, usize, Option<f64>, Option<u64>) {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Unanswered {
+            starting: "slice tune 0 7.074".into(),
+            then_silent,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    let tunes = |s: &FlexScene| {
+        s.log()
+            .iter()
+            .filter(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("slice tune 0 7.074")))
+            .count()
+    };
+    let told = |s: &FlexScene| {
+        let snap = s.engine.lock().unwrap().snapshot();
+        (snap.radio.cat_detail, snap.radio.refused_dial_mhz)
+    };
+    s.engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    let (mut said, mut held_ms) = (Vec::new(), Vec::new());
+    let mut last = told(&s).0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.state.dial_giveup.is_none() && Instant::now() < deadline {
+        let (sent, started) = (tunes(&s), Instant::now());
+        s.step(now_unix_ms());
+        if tunes(&s) > sent {
+            held_ms.push(started.elapsed().as_millis());
+        }
+        let line = told(&s).0;
+        if line != last {
+            said.push(line.clone());
+            last = line;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    eprintln!(
+        "a tune the FLEX does not answer{}: {} tunes; the steps that carried one held the loop \
+         {held_ms:?} ms",
+        if then_silent { ", then silent" } else { "" },
+        tunes(&s)
+    );
+    let said: Vec<String> = said.into_iter().filter(|l| l.contains("7.0740")).collect();
+    (
+        said.clone(),
+        said.iter().any(|l| l.contains("refused")),
+        tunes(&s),
+        told(&s).1,
+        s.state.dial_giveup,
+    )
+}
+
+/// ⭐ A DIAL THE FLEX DOES NOT ANSWER IS SENT THREE TIMES, AND IS NOT CALLED REFUSED. The radio
+/// answers everything but the tune. The loop sends it three times, as it did when the client
+/// answered the silence as a refusal, says each time that the rig did not reply, then gives the
+/// dial up without recording a refusal and shows the dial the radio is on. It was "the radio
+/// refused 7.0740 MHz — it does not cover that frequency".
+#[test]
+fn a_dial_the_flex_does_not_answer_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_tune(false),
+        (
+            vec![
+                "7.0740 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(7_074_000),
+        )
+    );
+}
+
+/// ⭐ …AND THE SAME FOR A FLEX SWITCHED OFF AT THE TUNE. From the tune on, nothing is answered, its
+/// pings included. The dial still goes out three times and is not called refused; the status the
+/// client last heard is the dial it shows.
+#[test]
+fn a_dial_sent_to_a_flex_that_went_silent_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_tune(true),
+        (
+            vec![
+                "7.0740 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(7_074_000),
+        )
+    );
+}
+
 /// The bundled session, except that the radio reports a slice it switched to one of `modes`, as a
 /// radio does (the bundled session answers a mode change without a status).
 fn reports(modes: &[&str]) -> SimSession {

@@ -290,6 +290,44 @@ fn a_write_the_radio_cannot_take_is_refused_before_anything_is_sent() {
     );
 }
 
+/// ⭐ A DIAL THE RADIO DOES NOT ANSWER IS NOT A DIAL IT REFUSED. Four tunes through the shim: one
+/// the radio takes, one it never answers (the request waits out its timeout), one it answers with
+/// an error code, and one sent after the session to the radio has ended. The error code is
+/// `RPRT -1`, a refusal, as it always was. The silence and the ended session are Hamlib's
+/// `RPRT -5` (ETIMEOUT), which the radio loop words and counts as no reply from the rig; both were
+/// `RPRT -1`.
+#[test]
+fn a_dial_the_radio_does_not_answer_is_rprt_minus_5_and_its_error_code_stays_rprt_minus_1() {
+    let session = with(
+        SimSession::v4_gui_client(),
+        vec![rule("slice tune 0 21.074000", "50000016", &[])],
+    );
+    let sim = simulator(
+        session,
+        vec![Fault::Unanswered {
+            starting: "slice tune 0 7.074".into(),
+            then_silent: false,
+        }],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    let taken = c.ask("F 14080000", 1);
+    let unanswered = c.ask("F 7074000", 1);
+    let refused = c.ask("F 21074000", 1);
+    drop(sim);
+    wait_dead(&d);
+    let ended = c.ask("F 14090000", 1);
+    assert_eq!(
+        (
+            taken.as_str(),
+            unanswered.as_str(),
+            refused.as_str(),
+            ended.as_str()
+        ),
+        ("RPRT 0\n", "RPRT -5\n", "RPRT -1\n", "RPRT -5\n")
+    );
+}
+
 // ── Transmit ────────────────────────────────────────────────────────────────────────────────
 
 /// ⭐ `T 1` keys through the core's admission (`xmit 1`), `t` follows the radio's interlock, and

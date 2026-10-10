@@ -555,6 +555,20 @@ pub(crate) mod tests_support {
         /// nor NG, and the radio stays where it was: a radio that went silent, or a frame lost
         /// on the bus. The write times out, which is not a refusal.
         pub drop_dial_writes: u32,
+        /// Fault injection — the next N mode WRITES get no answer at all, and the radio stays as
+        /// it was: `06`, a by-name `26` carrying a mode, and the DATA flag `1A 06` with a value,
+        /// each frame one write (`M PKTUSB` is two). A radio that went quiet, which is not a
+        /// refusal.
+        pub drop_mode_writes: u32,
+        /// Fault injection — the next N mode writes, the same frames, are answered NG (`FA`) and
+        /// the radio stays as it was: this fixture's model of a radio refusing a mode, not a bench
+        /// measurement.
+        pub nak_mode_writes: u32,
+        /// Fault injection — the next N DATA-flag writes (`1A 06` with a value) alone get no
+        /// answer, and the flag stays as it was; the mode frame before one is answered as ever.
+        pub drop_data_writes: u32,
+        /// Fault injection — the next N DATA-flag writes alone are answered NG (`FA`).
+        pub nak_data_writes: u32,
         /// Fault injection — the radio is SWITCHED OFF (or its CI-V lead is out): every frame
         /// still goes out on the bus and is logged, and nothing answers any of them. Unlike
         /// [`FakeRadio::mute`] it can be thrown after the radio is handed to a daemon.
@@ -643,6 +657,31 @@ pub(crate) mod tests_support {
     /// reply to send: `None` = ack, `Some((0xFA, _))` = NAK, [`SILENT`] = say nothing.
     fn act(r: &mut Regs, addr: u8, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
         r.acted.push((on_sub, cmd, data.to_vec()));
+        // See `Regs::drop_data_writes` and `Regs::nak_data_writes`.
+        let data_write = cmd == 0x1A && data.first() == Some(&0x06) && data.len() > 1;
+        if data_write && r.drop_data_writes > 0 {
+            r.drop_data_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if data_write && r.nak_data_writes > 0 {
+            r.nak_data_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
+        // See `Regs::drop_mode_writes` and `Regs::nak_mode_writes`.
+        let mode_write = match cmd {
+            0x06 => true,
+            0x26 => data.len() > 1,
+            0x1A => data.first() == Some(&0x06) && data.len() > 1,
+            _ => false,
+        };
+        if mode_write && r.drop_mode_writes > 0 {
+            r.drop_mode_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if mode_write && r.nak_mode_writes > 0 {
+            r.nak_mode_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
         match (cmd, data.first().copied()) {
             (0x03, _) => {
                 let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
@@ -1066,6 +1105,10 @@ pub(crate) mod tests_support {
                         drop_dial_reads: 0,
                         covers_hz: Vec::new(),
                         drop_dial_writes: 0,
+                        drop_mode_writes: 0,
+                        nak_mode_writes: 0,
+                        drop_data_writes: 0,
+                        nak_data_writes: 0,
                         off: false,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose

@@ -63,6 +63,17 @@ pub enum Fault {
     /// (spec §6.3; §10.5, "A radio-side backstop").
     DropPings { first: usize, count: usize },
 
+    /// **A command the radio does not answer.** Every command whose text starts with `starting`
+    /// gets no reply and does nothing: no status, no change of state. With `then_silent`, the
+    /// first such command is the radio switching off: from it on, nothing on that connection is
+    /// answered at all, pings included, so the client's keepalive ends the session.
+    ///
+    /// *Guard:* a write the radio does not answer is the radio not answering, never a refusal.
+    /// The client's request timeout answers the radio loop's dial with rigctld's `RPRT -5`
+    /// (Hamlib's ETIMEOUT), where the radio's own error code is `RPRT -1`, so the operator is
+    /// never told the radio refused a frequency nothing was heard to refuse.
+    Unanswered { starting: String, then_silent: bool },
+
     /// **`tx=1` that never clears.** `xmit 0` is acknowledged with success, but the interlock
     /// never leaves TRANSMITTING: none of the rule's statuses is sent, and the radio stays keyed
     /// under that handle. A later connection's `sub tx all` reports the transmitter still held by
@@ -185,6 +196,17 @@ pub fn withholds(faults: &[Fault], command: &str) -> bool {
             (f, command),
             (Fault::StuckTransmit, "xmit 0") | (Fault::StuckTune, "transmit tune 0")
         )
+    })
+}
+
+/// Whether [`Fault::Unanswered`] leaves `command` unanswered: `Some(then_silent)` when it does.
+pub fn unanswered(faults: &[Fault], command: &str) -> Option<bool> {
+    faults.iter().find_map(|f| match f {
+        Fault::Unanswered {
+            starting,
+            then_silent,
+        } if command.starts_with(starting.as_str()) => Some(*then_silent),
+        _ => None,
     })
 }
 

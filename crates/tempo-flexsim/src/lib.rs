@@ -19,6 +19,7 @@
 //! | [`Fault::SplitLine`] | a status or reply line delivered in pieces, the rest held until the client's next command | Line assembly never returns a partial line as a value |
 //! | [`Fault::ReorderReply`] | one reply arrives after the next one | Replies matched by sequence number |
 //! | [`Fault::DropPings`] | ping replies missing; the radio's keepalive closes a silent session | Keepalive: one missed reply survives, five end the session; a missed ping during an over unkeys |
+//! | [`Fault::Unanswered`] | a command that gets no reply, or, from it on, a radio that answers nothing | A write the radio does not answer is answered as silence (rigctld's `RPRT -5`), never as a refusal |
 //! | [`Fault::StuckTransmit`] | `xmit 0` answered with success, but the interlock stays TRANSMITTING, also after a reconnect | The unkey readback: keyed clears only on the interlock sequence; past the deadline, unkey again, drop the session, tell the operator |
 //! | [`Fault::StuckTune`] | `transmit tune 0` answered with success, but the carrier stays up, also after a reconnect | The tune's readback: it ends only when the transmit status and the interlock agree; past the deadline, `transmit tune 0` again and `xmit 0`, drop the session, tell the operator |
 //! | [`Fault::HoldsCwx`] | a `cwx send` keys the radio and it stays keyed through `cwx clear`, until `xmit 0` | Stop TX mid-message: still transmitting just after the clear, the client sends `xmit 0`; unproven, it escalates and tells the operator |

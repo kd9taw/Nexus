@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use crate::rigctld_server::{serve_connection, RigBackend};
+use crate::rigctld_server::{serve_connection, RigBackend, SetFault};
 
 /// The COM ProgID Nexus creates. **v1 only** — `OmniRig.OmniRigX` is the v1 server; a v2
 /// path is deliberately not built (operator ruling).
@@ -608,9 +608,10 @@ impl OmniBackend {
 
     /// OmniRig's status for this slot, as a sentence — `Ok(())` when it is online.
     ///
-    /// Every WRITE goes through this first. OmniRig accepts a write to an offline rig and
-    /// drops it, so without the gate a dial move (or a key-down) would answer `RPRT 0` and do
-    /// nothing at all: the "healthy pill, dead radio" failure this project keeps paying for.
+    /// Every WRITE goes through this first (the dial and the mode as [`Self::write_gate`]).
+    /// OmniRig accepts a write to an offline rig and drops it, so without the gate a dial move
+    /// (or a key-down) would answer `RPRT 0` and do nothing at all: the "healthy pill, dead
+    /// radio" failure this project keeps paying for.
     pub fn require_online(&self) -> Result<(), OmniError> {
         let slot = self.slot;
         let (st, text) = self.link.call(|c| c.status())?;
@@ -623,6 +624,19 @@ impl OmniBackend {
             format!("{} — {}", st.describe(slot), text.trim())
         };
         Err(OmniError::RigOffline(text))
+    }
+
+    /// [`Self::require_online`] for a dial or mode write, as the rigctld answer it becomes.
+    /// OmniRig saying the rig is not responding is the radio not answering (`RPRT -5`), which the
+    /// radio loop words and counts as silence; every other "no" (not configured, switched off in
+    /// OmniRig, its port held by another program, a status read that failed) stays the refusal
+    /// it always was (`RPRT -1`). Either way nothing is written.
+    fn write_gate(&self) -> Result<(), SetFault> {
+        match self.link.call(|c| c.status()) {
+            Ok((st, _)) if st.online() => Ok(()),
+            Ok((OmniStatus::NotResponding, _)) => Err(SetFault::NoAnswer),
+            _ => Err(SetFault::Refused),
+        }
     }
 }
 
@@ -667,25 +681,36 @@ impl RigBackend for OmniBackend {
     }
 
     fn set_freq(&self, hz: u64) -> bool {
-        self.require_online().is_ok() && self.link.call(move |c| c.set_freq_hz(hz)).is_ok()
+        self.try_set_freq(hz).is_ok()
     }
 
-    fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
+    /// The dial write, behind [`OmniBackend::write_gate`]. A COM write that fails is a refusal.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        self.write_gate()?;
+        self.link
+            .call(move |c| c.set_freq_hz(hz))
+            .map_err(|_| SetFault::Refused)
+    }
+
+    fn set_mode(&self, mode: &str, passband_hz: u32) -> bool {
+        self.try_set_mode(mode, passband_hz).is_ok()
+    }
+
+    /// The mode write, behind [`OmniBackend::write_gate`]. A COM write that fails is a refusal.
+    fn try_set_mode(&self, mode: &str, _passband_hz: u32) -> Result<(), SetFault> {
         // An unmappable mode word is REFUSED, never approximated — see `OmniMode`.
         let Some(m) = OmniMode::from_rigctld(mode) else {
-            return false;
+            return Err(SetFault::Refused);
         };
-        if self.require_online().is_err() {
-            return false;
-        }
-        let ok = self.link.call(move |c| c.set_mode(m)).is_ok();
-        if ok {
-            *self
-                .last_mode
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m);
-        }
-        ok
+        self.write_gate()?;
+        self.link
+            .call(move |c| c.set_mode(m))
+            .map_err(|_| SetFault::Refused)?;
+        *self
+            .last_mode
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m);
+        Ok(())
     }
 
     fn set_ptt(&self, on: bool) -> bool {
@@ -1135,11 +1160,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// A rig OmniRig is NOT driving. Reads answer "nothing honest" (0 — which `Rig::read_freq`
-    /// rejects, so the pill goes red) and every write is refused instead of being accepted
-    /// into a queue nobody serves. THE UNKEY IS THE EXCEPTION and is deliberate.
+    /// A rig OmniRig is NOT driving because it is not responding. Reads answer "nothing honest"
+    /// (0 — which `Rig::read_freq` rejects, so the pill goes red), and no write is accepted into a
+    /// queue nobody serves: a dial or a mode is answered as silence, a key-down and a split are
+    /// refused. THE UNKEY IS THE EXCEPTION and is deliberate.
     #[test]
-    fn a_disconnected_rig_reads_as_nothing_and_refuses_writes_but_still_unkeys() {
+    fn a_rig_that_is_not_responding_reads_as_nothing_answers_no_dial_or_mode_refuses_a_key_and_still_unkeys(
+    ) {
         let mock = Arc::new(MockOmni::online());
         *mock.status.lock().unwrap() = (
             OmniStatus::NotResponding,
@@ -1148,13 +1175,16 @@ pub(crate) mod tests {
         let (b, _w) = backend_over(mock.clone());
 
         assert_eq!(reply("f", &b), "0\n", "no honest dial reading");
-        assert_eq!(reply("F 7035000", &b), "RPRT -1\n");
-        assert_eq!(reply("M USB 0", &b), "RPRT -1\n");
+        // The radio is not answering OmniRig, so a dial or a mode is not answered either: Hamlib's
+        // ETIMEOUT, which the radio loop words and counts as silence. It was `RPRT -1`, so the
+        // loop told the operator the radio refused the frequency.
+        assert_eq!(reply("F 7035000", &b), "RPRT -5\n");
+        assert_eq!(reply("M USB 0", &b), "RPRT -5\n");
         assert_eq!(reply("T 1", &b), "RPRT -1\n", "a key-down is refused");
         assert_eq!(reply("S 1 VFOB", &b), "RPRT -1\n");
         assert!(
             mock.calls.lock().unwrap().is_empty(),
-            "no refused write may reach the radio: {:?}",
+            "no unanswered or refused write may reach the radio: {:?}",
             mock.calls.lock().unwrap()
         );
 
@@ -1171,6 +1201,44 @@ pub(crate) mod tests {
         let msg = err.to_string();
         assert!(msg.contains("RIG 1"), "names the slot: {msg}");
         assert!(msg.contains("not responding"), "quotes OmniRig: {msg}");
+    }
+
+    /// The control for the test above: every other reason OmniRig cannot drive the slot is not a
+    /// radio going quiet, so a dial and a mode stay refused (`RPRT -1`) with nothing written; and
+    /// online, both are taken and written.
+    #[test]
+    fn a_rig_omnirig_cannot_drive_for_another_reason_still_refuses_a_dial_and_a_mode() {
+        let answers = |st: OmniStatus| {
+            let mock = Arc::new(MockOmni::online());
+            *mock.status.lock().unwrap() = (st, String::new());
+            let (b, _w) = backend_over(mock.clone());
+            let dial = reply("F 7035000", &b);
+            let mode = reply("M CW 0", &b);
+            let calls = mock.calls.lock().unwrap().clone();
+            (dial, mode, calls)
+        };
+        let refused = ("RPRT -1\n".to_string(), "RPRT -1\n".to_string(), vec![]);
+        assert_eq!(
+            [
+                OmniStatus::NotConfigured,
+                OmniStatus::Disabled,
+                OmniStatus::PortBusy,
+                OmniStatus::Other(9),
+                OmniStatus::Online,
+            ]
+            .map(answers),
+            [
+                refused.clone(),
+                refused.clone(),
+                refused.clone(),
+                refused,
+                (
+                    "RPRT 0\n".to_string(),
+                    "RPRT 0\n".to_string(),
+                    vec!["set_freq 7035000".to_string(), "set_mode CwU".to_string()],
+                ),
+            ]
+        );
     }
 
     /// OmniRig not installed: a clear message from `start`, not a crash and not a daemon that
