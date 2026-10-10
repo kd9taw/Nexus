@@ -325,17 +325,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
   the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
   export sections now describe the objectives and the sponsor's submission.
-- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says.** With
-  Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or localhost) where a
-  rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as it already did when
-  rigctld TCP Port was set to the same port. With any other port it started a rigctld of its own
-  between them, and in front of wfview that one refused every command, PTT included, whenever
-  wfview reported the radio switched off. Follow the wfview steps in the Icom guide and leave
-  rigctld TCP Port as it is. Start wfview first: when nothing answers at the address as Nexus
-  connects, Nexus still starts its own rigctld in front of it, as it does for a rigctld on another
-  computer. When the rigctld Nexus shares this way goes away, Test CAT names its address rather
-  than rigctld TCP Port. NEEDS-BENCH: wfview's rigctld on a real radio, with rigctld TCP Port left
-  at 4534, should connect, follow the dial and key PTT, Rear/Data keying the DATA input.
+- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says, and
+  waits for it.** With Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or
+  localhost) where a rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as
+  it already did when rigctld TCP Port was set to the same port. With any other port it started a
+  rigctld of its own between them, and in front of wfview that one refused every command, PTT
+  included, whenever wfview reported the radio switched off. When nothing answers at the address
+  yet, Nexus starts nothing in between either: the CAT status says "Nothing is answering at
+  127.0.0.1:4533 — start wfview (or your rigctld)", with your address, and Nexus asks again on its
+  own (after 10 seconds, then less often, at most 5 minutes apart) and connects once it answers.
+  Test CAT asks again at once. So wfview and Nexus can start in either order. Follow the wfview
+  steps in the Icom guide and leave rigctld TCP Port as it is. When the rigctld Nexus shares this
+  way goes away, Test CAT names its address rather than rigctld TCP Port. NEEDS-BENCH: wfview's
+  rigctld on a real radio, with rigctld TCP Port left at 4534, should connect, follow the dial and
+  key PTT, Rear/Data keying the DATA input, with wfview started before Nexus and after it.
 
 ### Fixed
 
