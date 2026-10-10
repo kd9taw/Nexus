@@ -1840,6 +1840,9 @@ impl Rig {
         let reply = self.command(line)?;
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
+        } else if rprt_code(&reply).is_some_and(rprt_is_link_fault) {
+            // The rig did not answer: the link, as for a dial or a mode, never a refusal.
+            Err(rprt_error(line.trim(), &reply))
         } else {
             Err(std::io::Error::other(format!(
                 "rigctld error for {line:?}: {reply:?}"
@@ -1911,6 +1914,45 @@ mod tests {
             super::rprt_error("freq", "nonsense\n").kind(),
             std::io::ErrorKind::Other,
             "an unparseable reply is still a refusal-class error, never a silent success"
+        );
+    }
+
+    /// ⭐ AN EXTENDED WRITE THE RIG DID NOT ANSWER IS THE LINK, AS A DIAL IS. A level and a split
+    /// each answered `RPRT -5` read as no reply (`TimedOut`), which the radio loop words as the
+    /// link; `RPRT -1` stays a refusal (`Other`) in the words it always had, and `RPRT 0` is done.
+    /// The silence read as a refusal.
+    #[test]
+    fn an_extended_write_the_rig_did_not_answer_is_the_link_and_a_refusal_stays_a_refusal() {
+        let (addr, _log) = mock_rigctld(|line| {
+            match line {
+                "L RFPOWER 0.500" | "S 1 VFOB" => "RPRT -5\n",
+                "L RFPOWER 0.250" | "S 0 VFOA" => "RPRT -1\n",
+                _ => "RPRT 0\n",
+            }
+            .to_string()
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let kinds = [
+            rig.set_power(0.5),
+            rig.set_power(0.25),
+            rig.set_power(0.75),
+            rig.set_split(true, "VFOB"),
+            rig.set_split(false, "VFOA"),
+        ]
+        .map(|r| r.map_err(|e| e.kind()));
+        let refusal = rig.set_power(0.25).unwrap_err().to_string();
+        assert_eq!(
+            (kinds, refusal.as_str()),
+            (
+                [
+                    Err(std::io::ErrorKind::TimedOut),
+                    Err(std::io::ErrorKind::Other),
+                    Ok(()),
+                    Err(std::io::ErrorKind::TimedOut),
+                    Err(std::io::ErrorKind::Other),
+                ],
+                "rigctld error for \"L RFPOWER 0.250\\n\": \"RPRT -1\\n\""
+            )
         );
     }
 

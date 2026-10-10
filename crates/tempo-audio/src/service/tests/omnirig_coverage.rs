@@ -233,3 +233,42 @@ fn a_dial_to_a_rig_omnirig_says_is_not_responding_is_not_called_refused() {
         )
     );
 }
+
+/// ⭐ A MODE TO A RIG OMNIRIG SAYS IS NOT RESPONDING GIVES UP IN WORDS THAT FIT OMNIRIG. The radio
+/// goes quiet, OmniRig says so, and the operator moves Phone to Digital; past the switch's own tick
+/// the dial is left given up, so only the mode goes out, and the steady loop's budget starts two
+/// short, so it gives up in two tries, with nothing written. The give-up says the rig did not answer
+/// and points at the radio and OmniRig's own setup. It told the operator to raise the rig's CI-V
+/// baud and turn CI-V Transceive off, settings an OmniRig link does not have in Nexus.
+#[test]
+fn a_mode_to_a_rig_omnirig_says_is_not_responding_gives_up_in_words_that_fit_omnirig() {
+    let mut s = OmniScene::new();
+    let written = s.mock.calls.lock().unwrap().len();
+    *s.mock.status.lock().unwrap() = (
+        OmniStatus::NotResponding,
+        "RIG 1 is not responding".to_string(),
+    );
+    s.engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("digital", false);
+    s.step();
+    s.state.dial_giveup = Some(14_074_000);
+    s.state.mode_fail_count = MODE_SET_MAX_TRIES - 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.state.mode_giveup.is_none() && Instant::now() < deadline {
+        s.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let written = s.mock.calls.lock().unwrap()[written..].to_vec();
+    assert_eq!(
+        (s.state.mode_giveup.clone(), s.told().0, written),
+        (
+            Some("PKTUSB".to_string()),
+            "couldn't set PKTUSB: no reply over CAT — OmniRig says the rig is not responding; \
+             check the radio is on and its CAT settings match OmniRig — gave up"
+                .to_string(),
+            Vec::<String>::new(),
+        )
+    );
+}

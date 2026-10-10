@@ -3827,6 +3827,11 @@ struct RadioLoop {
     /// Consecutive failed sends of the currently-commanded dial, refused or unanswered, against
     /// [`DIAL_SET_MAX_TRIES`].
     dial_fail_count: u32,
+    /// A filter width the radio has not answered, and how many times it has been sent: the dial's
+    /// rule, [`DIAL_SET_MAX_TRIES`] tries and then an honest give-up ([`width_try_spent`]). A width
+    /// that lands or is refused, a different width asked for, the link coming back, a handoff and a
+    /// rebuild all start the count again.
+    width_unanswered: Option<(u32, u32)>,
     /// The engine's CAT-status publish count ([`Engine::cat_probe_gen`]) just after this loop put
     /// a dial note up ("… not sent — no reply from the rig", "… refused by the rig (1/3)"). While
     /// the count has not moved, the note is still what the operator reads, so a dial that then
@@ -4187,6 +4192,7 @@ impl RadioLoop {
             cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
+            width_unanswered: None,
             dial_note_gen: None,
             rx_ranges: None,
             rx_ranges_probed: false,
@@ -4283,6 +4289,7 @@ impl RadioLoop {
     fn on_cat_link_back(&mut self) {
         self.dial_giveup = None;
         self.dial_fail_count = 0;
+        self.width_unanswered = None;
         self.cat_dead_probes = 0;
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
@@ -4473,6 +4480,30 @@ impl RadioLoop {
     /// native CI-V path where the scope is the fast one. The section is asked so it does not.
     fn scope_yields_to_audio_waterfall(&self) -> bool {
         mode_is_data(&self.last_mode) && !self.cur_section_cw
+    }
+
+    /// What carries this radio's CAT now ([`CatLink`]): the daemon serving it, and for a rigctld
+    /// the transport and the radio's model.
+    fn cat_link(&self) -> CatLink {
+        let t = &self.applied;
+        match self.rigctld_proc.as_ref() {
+            Some(CatDaemon::Native(_)) => CatLink::Civ,
+            Some(CatDaemon::IcomLan(_)) => CatLink::IcomLan,
+            Some(CatDaemon::Omni(_)) => CatLink::OmniRig,
+            Some(CatDaemon::Flex(_)) => CatLink::Flex,
+            Some(CatDaemon::Spawned(_)) | None if t.is_network() => {
+                CatLink::Network(t.rig_addr.clone())
+            }
+            Some(CatDaemon::Spawned(_)) | None => {
+                if crate::rigmodels::rig_model_name(t.rig_model)
+                    .is_some_and(|n| n.starts_with("Icom"))
+                {
+                    CatLink::Civ
+                } else {
+                    CatLink::HamlibSerial
+                }
+            }
+        }
     }
 
     /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
@@ -5920,6 +5951,7 @@ impl RadioLoop {
         self.rx_ranges_probed = false;
         self.dial_giveup = None;
         self.dial_fail_count = 0;
+        self.width_unanswered = None;
         // The new radio is not in OUR satellite-mode session; if the old one
         // was, the operator gets it back as-is (hand back, never restore).
         self.split_on_sub = false;
@@ -6295,10 +6327,12 @@ impl RadioLoop {
             // storm the give-ups were invented to stop, and it fed a give-up that outlived the
             // outage. The breaker owns recovery — its re-probe reads the rig, and the loop then
             // follows the dial the radio woke up on. (2026-09-02 overnight-radio review.)
-            let can_push_dial = can_retune
-                && !self.operator_keyed()
-                && !self.manual_ptt_applied
-                && (self.cat_ok != Some(false) || !self.cat_down_link_fault);
+            // The MODE is withheld the same way, on both retune paths below: a radio that was off
+            // got a mode write on every step of the trip, each holding the loop for the link's
+            // whole deadline. It goes out again once the re-probe finds the radio.
+            let link_down = self.cat_ok == Some(false) && self.cat_down_link_fault;
+            let can_push_dial =
+                can_retune && !self.operator_keyed() && !self.manual_ptt_applied && !link_down;
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
@@ -6563,6 +6597,7 @@ impl RadioLoop {
                 self.mode_saw_reject = false;
                 self.dial_giveup = None; // same for the dial: the refusal may have been the link
                 self.dial_fail_count = 0;
+                self.width_unanswered = None;
                 self.cat_dead_probes = 0;
                 self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
                 self.cat_port_present = None;
@@ -7244,7 +7279,7 @@ impl RadioLoop {
                     // WSJT-X has no such window: `Configuration.cpp:947` and `:3552` both emit one
                     // `cached_rig_state_` carrying frequency AND mode together.
                     let mode_changed = !md.trim().is_empty() && md != self.last_mode;
-                    if !md.trim().is_empty() {
+                    if !md.trim().is_empty() && !link_down {
                         // A dial-only QSY (wheel/nudge) re-enters this force path with the SAME mode;
                         // skip the diagnostic mode read-back then, so continuous wheel-tuning doesn't
                         // fire an extra `w MD0;` round-trip per ~120 ms flush. The mode is still
@@ -7341,7 +7376,7 @@ impl RadioLoop {
                         md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str());
                     // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
-                    if mode_changed {
+                    if mode_changed && !link_down {
                         let sent_pb = retry_passband(&md, self.mode_fail_count);
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
@@ -7400,7 +7435,12 @@ impl RadioLoop {
                                     if let Some(base) = fallback {
                                         self.last_mode = base.to_string();
                                     }
-                                    retune_note = Some(mode_giveup_note(&md, saw_reject, fallback));
+                                    retune_note = Some(mode_giveup_note(
+                                        &md,
+                                        saw_reject,
+                                        fallback,
+                                        &self.cat_link(),
+                                    ));
                                 }
                             }
                         }
@@ -8153,28 +8193,47 @@ impl RadioLoop {
                                         } else {
                                             d.set_filter_width(hz)
                                         };
+                                        // Nothing answered: a try, re-queued as on the Hamlib
+                                        // path, until the dial's DIAL_SET_MAX_TRIES are spent.
+                                        let spent = matches!(set, Err(Refusal::NoAnswer))
+                                            && width_try_spent(&mut self.width_unanswered, hz);
                                         match set {
                                             Ok(w) => {
+                                                self.width_unanswered = None;
                                                 engine_lock(engine).observe_rig_passband(Some(w))
                                             }
-                                            // Nothing answered: the same re-queue as the Hamlib path.
-                                            Err(Refusal::NoAnswer) => {
+                                            Err(Refusal::NoAnswer) if !spent => {
                                                 engine_lock(engine).request_filter_width(hz)
                                             }
-                                            // A REFUSAL IS FINAL — FM, DATA, an NG. Re-queued, it
-                                            // would be re-sent every cycle forever. Drop it, say why
-                                            // in the log, and put the radio's real width back where
-                                            // the optimistic one stands.
+                                            // A REFUSAL IS FINAL — FM, DATA, an NG — and so is a
+                                            // silence past its tries. Re-queued, it would be re-sent
+                                            // every cycle forever. Drop it, say why in the log (a
+                                            // silence on the CAT status too), and put the radio's
+                                            // real width back where the optimistic one stands.
                                             Err(why) => {
-                                                tempo_core::applog::info(
-                                                    "cat",
-                                                    &format!(
-                                                        "the radio kept its filter width: a {hz} Hz \
-                                                         width was not set ({why:?})"
-                                                    ),
-                                                );
+                                                self.width_unanswered = None;
                                                 // Read first: no CAT round trip under the engine lock.
                                                 let now = d.filter_width(mode);
+                                                let kept = match now {
+                                                    FilterWidthReading::Width(w) => Some(w),
+                                                    _ => None,
+                                                };
+                                                let note = spent.then(|| {
+                                                    width_giveup_note(
+                                                        hz,
+                                                        "no reply from the rig",
+                                                        kept,
+                                                    )
+                                                });
+                                                tempo_core::applog::info(
+                                                    "cat",
+                                                    &note.clone().unwrap_or_else(|| {
+                                                        format!(
+                                                            "the radio kept its filter width: a {hz} \
+                                                             Hz width was not set ({why:?})"
+                                                        )
+                                                    }),
+                                                );
                                                 let mut eng = engine_lock(engine);
                                                 match now {
                                                     FilterWidthReading::Width(w) => {
@@ -8185,11 +8244,15 @@ impl RadioLoop {
                                                     }
                                                     FilterWidthReading::Unread => {}
                                                 }
+                                                if let Some(note) = note {
+                                                    eng.set_cat_status(self.cat_ok, note);
+                                                }
                                             }
                                         }
                                     }
                                     (Some(hz), None) => match rig.set_passband(mode, hz) {
                                         Ok(()) => {
+                                            self.width_unanswered = None;
                                             let mut eng = engine_lock(engine);
                                             eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
@@ -8200,6 +8263,7 @@ impl RadioLoop {
                                         // read. The `m` read just above already put the radio's
                                         // own width back on screen.
                                         Err(e) if e.kind() == std::io::ErrorKind::Other => {
+                                            self.width_unanswered = None;
                                             tempo_core::applog::info(
                                                 "cat",
                                                 &format!(
@@ -8208,9 +8272,27 @@ impl RadioLoop {
                                                 ),
                                             );
                                         }
-                                        Err(_) => {
-                                            let mut eng = engine_lock(engine);
-                                            eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                        // NOT ANSWERED: the dial's rule. A hiccup is re-queued for
+                                        // the next cycle; DIAL_SET_MAX_TRIES of them give it up and
+                                        // say so, and the `m` read above has put the radio's own
+                                        // width back on screen. It used to be re-queued for good: a
+                                        // radio that answers reads and never this write was sent
+                                        // it on every poll, each holding the loop for the link's
+                                        // deadline.
+                                        Err(e) => {
+                                            if width_try_spent(&mut self.width_unanswered, hz) {
+                                                let note = width_giveup_note(
+                                                    hz,
+                                                    dial_failure_brief(&e),
+                                                    pb.filter(|w| *w > 0),
+                                                );
+                                                tempo_core::applog::info("cat", &note);
+                                                engine_lock(engine)
+                                                    .set_cat_status(self.cat_ok, note);
+                                            } else {
+                                                let mut eng = engine_lock(engine);
+                                                eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                            }
                                         }
                                     },
                                 }
@@ -8616,7 +8698,20 @@ impl RadioLoop {
                         }
                         if rig.has_control() && self.freq_misses >= FREQ_MISS_LIMIT {
                             self.cat_ok = Some(false);
-                            self.cat_down_link_fault = is_link_fault(&e);
+                            // DOWN ON THE LINK, which withholds the dial and the mode until the
+                            // re-probe finds the radio: Hamlib's own codes for a rig that did not
+                            // answer (`is_link_fault`), and any failed read through Nexus's CI-V
+                            // daemon, whose `f` answers 0 once the radio has stopped answering it
+                            // (`CivBackend::freq_hz`), where Hamlib's rigctld answers `RPRT -5`.
+                            // Read as a refusal, it left an Icom that was switched off getting a
+                            // mode write on every step of the trip, and a dial with nothing to
+                            // stop it but its three tries.
+                            self.cat_down_link_fault = is_link_fault(&e)
+                                || self
+                                    .rigctld_proc
+                                    .as_ref()
+                                    .and_then(CatDaemon::native)
+                                    .is_some();
                             // Arm the re-probe. Without this the breaker is a one-way door: it
                             // gates both read-back paths, and the only other clearer is a
                             // successful set_freq/set_mode, which the retune block does not send
@@ -8887,8 +8982,10 @@ impl RadioLoop {
                                 Ok(tx_vfo) => {
                                     // The operator-facing TX-VFO name for notes.
                                     let vfo_name = if tx_vfo == "Sub" { "Sub" } else { "VFO B" };
-                                    let ok = rig.set_split(true, tx_vfo).is_ok()
-                                        && rig.set_split_freq(tx_hz).is_ok();
+                                    let set = rig
+                                        .set_split(true, tx_vfo)
+                                        .and_then(|()| rig.set_split_freq(tx_hz));
+                                    let ok = set.is_ok();
                                     retune_note = Some(if ok {
                                         self.split_on_sub = tx_vfo == "Sub";
                                         // The rig ACKNOWLEDGED the split TX dial
@@ -8916,7 +9013,15 @@ impl RadioLoop {
                                             let mut eng = engine_lock(engine);
                                             eng.split_rejected(tx_mhz);
                                         }
-                                        "rig rejected split — work the pile-up manually".to_string()
+                                        // A silence is said as one, never as a refusal.
+                                        if set.as_ref().is_err_and(is_link_fault) {
+                                            "no reply from the rig — split not set; work the \
+                                             pile-up manually"
+                                                .to_string()
+                                        } else {
+                                            "rig rejected split — work the pile-up manually"
+                                                .to_string()
+                                        }
                                     });
                                     // The TX VFO's MODE, while a satellite pass holds it. On
                                     // a linear INVERTING transponder the sidebands swap —
@@ -8960,17 +9065,18 @@ impl RadioLoop {
                                                     // exactly like nobody answering, and the
                                                     // operator can fix it from the front panel in
                                                     // seconds once they know.
-                                                    let sent = rig
-                                                        .set_split_mode(md, passband_for(md))
-                                                        .is_ok();
-                                                    retune_note = Some(if sent {
-                                                        format!(
+                                                    let sent =
+                                                        rig.set_split_mode(md, passband_for(md));
+                                                    retune_note = Some(match &sent {
+                                                        Ok(()) => format!(
                                                             "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
-                                                        )
-                                                    } else {
-                                                        format!(
+                                                        ),
+                                                        Err(e) if is_link_fault(e) => format!(
+                                                            "no reply from the rig — the TX mode was not set; put {vfo_name} in {md} by hand"
+                                                        ),
+                                                        Err(_) => format!(
                                                             "rig would not set the TX mode — put {vfo_name} in {md} by hand"
-                                                        )
+                                                        ),
                                                     });
                                                     self.last_split_mode = want_md.clone();
                                                 }
@@ -10753,15 +10859,19 @@ impl RadioLoop {
                             self.last_rf_power = Some(p);
                             self.rf_power_giveup = None;
                         }
-                        Err(_) => {
+                        // Given up either way, the one try it always had; a silence is said as one.
+                        Err(e) => {
                             self.rf_power_giveup = Some(p);
+                            let why = if is_link_fault(&e) {
+                                "no reply from the rig"
+                            } else {
+                                "the rig didn't take it"
+                            };
                             let ok = self.cat_ok;
                             let mut eng = engine_lock(engine);
                             eng.set_cat_status(
                                 ok,
-                                "couldn't set RF power — the rig didn't take it; set power on \
-                                 the radio"
-                                    .to_string(),
+                                format!("couldn't set RF power — {why}; set power on the radio"),
                             );
                         }
                     }
@@ -14391,17 +14501,71 @@ fn giveup_fallback(md: &str, saw_reject: bool) -> Option<&'static str> {
     }
 }
 
+/// What carries a radio's CAT, for advice that fits it when the radio does not answer
+/// ([`mode_giveup_note`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CatLink {
+    /// CI-V on the radio's USB or serial port: Nexus's own daemon, or Hamlib's rigctld driving an
+    /// Icom. Both open the port at the Baud setting.
+    Civ,
+    /// Hamlib's rigctld on a serial port to any other radio.
+    HamlibSerial,
+    /// A rigctld at this network address: the radio itself, or a program serving its CAT there.
+    Network(String),
+    /// OmniRig, which drives the radio from its own setup.
+    OmniRig,
+    /// Nexus's own Flex client.
+    Flex,
+    /// Nexus's own Icom network client.
+    IcomLan,
+}
+
+impl CatLink {
+    /// The causes that fit this link, for a radio that did not answer.
+    fn no_reply_advice(&self) -> String {
+        match self {
+            // The case the note was written for: a slow CI-V bus, crowded by the radio's own
+            // Transceive traffic. The port opens at the Baud setting, so a faster rate has to be
+            // set on both sides.
+            CatLink::Civ => "link too slow or rig mute; try raising the CI-V baud to 115200 on \
+                             the rig and in Settings ▸ Radio ▸ Rig & CAT, and turning CI-V \
+                             Transceive off"
+                .to_string(),
+            CatLink::HamlibSerial => "the rig did not answer Hamlib; check that the radio is on \
+                                      and that the port, baud and rig model in Settings ▸ Radio \
+                                      ▸ Rig & CAT match it"
+                .to_string(),
+            CatLink::Network(addr) => format!(
+                "the radio did not answer through {addr}; check that the radio, or the program \
+                 serving its CAT there, is running and connected to it"
+            ),
+            // OmniRig's own words for this status (`OmniStatus::describe`).
+            CatLink::OmniRig => "OmniRig says the rig is not responding; check the radio is on \
+                                 and its CAT settings match OmniRig"
+                .to_string(),
+            CatLink::Flex => "the radio did not answer Nexus's Flex client; check that it is on \
+                              and reachable on the network"
+                .to_string(),
+            CatLink::IcomLan => "the radio did not answer over the network; check its network \
+                                 connection (Nexus reconnects a lost session by itself)"
+                .to_string(),
+        }
+    }
+}
+
 /// The give-up note after [`MODE_SET_MAX_TRIES`] failures. The old note said
 /// "rig has no {md} mode" for EVERY exhausted budget — but a run of link faults
 /// (timeouts on a slow CI-V baud, a mute rig) proves nothing about the rig's modes,
 /// and that wording sent an IC-7610 operator chasing a missing PKTUSB the rig has
 /// always had (as USB-D). Only a run containing an active rejection (`RPRT -1`)
 /// may blame the rig, and even then the note says what to DO, not just what failed.
-fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>) -> String {
+/// A run of silence names the causes that fit the `link` it ran over: the CI-V baud and CI-V
+/// Transceive on CI-V alone. It gave that advice on every link, OmniRig's and the Flex's too.
+fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>, link: &CatLink) -> String {
     if !saw_reject {
         return format!(
-            "couldn't set {md}: no reply over CAT — link too slow or rig mute; try raising \
-             the rig's CI-V baud (115200) and turning CI-V Transceive off — gave up"
+            "couldn't set {md}: no reply over CAT — {} — gave up",
+            link.no_reply_advice()
         );
     }
     match fallback {
@@ -14477,6 +14641,26 @@ fn mode_command_failed(md: &str, e: &std::io::Error) -> String {
         }
         _ => format!("can't reach the radio's CAT link — couldn't set {md}: {e}"),
     }
+}
+
+/// Count one more try at a filter width the radio did not answer; `true` once the dial's
+/// [`DIAL_SET_MAX_TRIES`] are spent, which also forgets it. A different width starts again.
+fn width_try_spent(unanswered: &mut Option<(u32, u32)>, hz: u32) -> bool {
+    let tries = match *unanswered {
+        Some((asked, n)) if asked == hz => n + 1,
+        _ => 1,
+    };
+    *unanswered = (tries < DIAL_SET_MAX_TRIES).then_some((hz, tries));
+    tries >= DIAL_SET_MAX_TRIES
+}
+
+/// The give-up for a filter width the radio did not answer, in the dial's words: the width asked
+/// for, why, and the width the radio kept when it reported one.
+fn width_giveup_note(hz: u32, brief: &str, kept_hz: Option<u32>) -> String {
+    let still = kept_hz
+        .map(|w| format!("; still {w} Hz"))
+        .unwrap_or_default();
+    format!("{hz} Hz filter width not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{still}")
 }
 
 /// One short clause naming WHY a dial set failed, for the retry notes. Distinguishes the rig
@@ -16744,7 +16928,7 @@ mod tests {
         assert_eq!(giveup_fallback("RTTY", false), None);
         // And the note has to say something the operator can DO. "Press the rig's DATA key"
         // is nonsense here — the rig has no FSK mode to reach, and the fix is a Nexus setting.
-        let note = mode_giveup_note("RTTY", true, Some("PKTLSB"));
+        let note = mode_giveup_note("RTTY", true, Some("PKTLSB"), &CatLink::Civ);
         assert!(note.contains("AFSK"), "the note names the way out: {note}");
         assert!(
             !note.contains("DATA key"),
@@ -17857,25 +18041,207 @@ mod tests {
         // the rig's modes — the old "rig has no PKTUSB mode" wording sent the operator
         // chasing a mode the rig has always had (USB-D). The note must blame the LINK
         // and say what to do about it.
-        let n = mode_giveup_note("PKTUSB", false, None);
+        let n = mode_giveup_note("PKTUSB", false, None, &CatLink::Civ);
         assert!(!n.contains("has no"), "must not blame the mode: {n}");
         assert!(!n.contains("refused"), "must not blame the rig: {n}");
         assert!(n.contains("CI-V baud"), "must be actionable: {n}");
 
         // Active rejection + the plain-sideband fallback landed: one front-panel DATA
         // press from working — the note says exactly that.
-        let n = mode_giveup_note("PKTUSB", true, Some("USB"));
+        let n = mode_giveup_note("PKTUSB", true, Some("USB"), &CatLink::Civ);
         assert!(n.contains("refused PKTUSB"), "{n}");
         assert!(n.contains("USB-D"), "must name the rig-side mode: {n}");
 
         // Active rejection and even plain USB failed: still actionable for DATA modes.
-        let n = mode_giveup_note("PKTUSB", true, None);
+        let n = mode_giveup_note("PKTUSB", true, None, &CatLink::Civ);
         assert!(n.contains("USB-D/DATA"), "{n}");
 
         // A non-DATA rejection: honest, no bogus DATA advice.
-        let n = mode_giveup_note("CW", true, None);
+        let n = mode_giveup_note("CW", true, None, &CatLink::Civ);
         assert!(n.contains("refused CW"), "{n}");
         assert!(!n.contains("USB-D"), "{n}");
+    }
+
+    /// ⭐ THE CI-V ADVICE IS FOR CI-V. A run of silence gives up with the causes that fit the
+    /// link it ran over; the CI-V baud and CI-V Transceive appear on CI-V alone, Nexus's daemon or
+    /// Hamlib's. A refusal's note is the same on every link.
+    #[test]
+    fn a_silent_give_up_names_the_causes_that_fit_its_link() {
+        let links = [
+            CatLink::Civ,
+            CatLink::HamlibSerial,
+            CatLink::Network("192.168.1.20:4532".to_string()),
+            CatLink::OmniRig,
+            CatLink::Flex,
+            CatLink::IcomLan,
+        ];
+        let notes = links
+            .clone()
+            .map(|l| mode_giveup_note("PKTUSB", false, None, &l));
+        assert_eq!(
+            notes.clone(),
+            [
+                "couldn't set PKTUSB: no reply over CAT — link too slow or rig mute; try raising \
+                 the CI-V baud to 115200 on the rig and in Settings ▸ Radio ▸ Rig & CAT, and \
+                 turning CI-V Transceive off — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the rig did not answer Hamlib; check \
+                 that the radio is on and that the port, baud and rig model in Settings ▸ Radio \
+                 ▸ Rig & CAT match it — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer through \
+                 192.168.1.20:4532; check that the radio, or the program serving its CAT there, \
+                 is running and connected to it — gave up",
+                "couldn't set PKTUSB: no reply over CAT — OmniRig says the rig is not responding; \
+                 check the radio is on and its CAT settings match OmniRig — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer Nexus's Flex \
+                 client; check that it is on and reachable on the network — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer over the \
+                 network; check its network connection (Nexus reconnects a lost session by \
+                 itself) — gave up",
+            ]
+            .map(String::from)
+        );
+        assert_eq!(
+            notes.map(|n| n.contains("CI-V")),
+            [true, false, false, false, false, false]
+        );
+        assert_eq!(
+            links.map(|l| mode_giveup_note("PKTUSB", true, None, &l)),
+            ["rig refused PKTUSB — couldn't set DATA mode; select USB-D/DATA on the rig by hand \
+              — gave up"; 6]
+                .map(String::from)
+        );
+    }
+
+    /// The width's tries are the dial's: two silences re-queue it, the third gives it up and
+    /// forgets it, and a different width starts its own count.
+    #[test]
+    fn a_silent_width_gets_the_dials_three_tries_and_a_new_width_its_own() {
+        let mut unanswered = None;
+        let mut spent = |hz| width_try_spent(&mut unanswered, hz);
+        assert_eq!(
+            [
+                spent(1800),
+                spent(1800),
+                spent(2400),
+                spent(2400),
+                spent(2400),
+                spent(2400)
+            ],
+            [false, false, false, false, true, false]
+        );
+        assert_eq!(
+            [
+                width_giveup_note(1800, "no reply from the rig", Some(2400)),
+                width_giveup_note(1800, "no reply from the rig", None),
+            ],
+            [
+                "1800 Hz filter width not sent — no reply from the rig after 3 tries; still 2400 Hz",
+                "1800 Hz filter width not sent — no reply from the rig after 3 tries",
+            ]
+            .map(String::from)
+        );
+    }
+
+    /// ⭐ THE GIVE-UP'S ADVICE FITS THE LINK, ON HAMLIB TOO. A switch to Digital the rig never
+    /// answers through Hamlib's rigctld (`RPRT -5`, Hamlib's own "the rig did not answer", to every
+    /// `M`), with the steady loop's budget started two short. On an FTDX10 the give-up points at
+    /// the port, baud and model Hamlib drives it with; on an IC-7300, whose CAT is CI-V, at the CI-V
+    /// baud on both sides and CI-V Transceive. Both were told to raise the rig's CI-V baud.
+    #[test]
+    fn a_mode_hamlib_never_answers_gives_up_in_words_that_fit_the_radios_link() {
+        /// Answers the dial and the mode reads, `RPRT -5` to every mode write, `RPRT 0` to the rest.
+        fn mode_unanswering_rigctld() -> String {
+            use std::io::{BufRead, BufReader, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let Ok(r) = stream.try_clone() else { continue };
+                    let mut reader = BufReader::new(r);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let reply = match line.trim() {
+                            "f" => "14074000\n",
+                            "m" => "USB\n2400\n",
+                            l if l.starts_with("M ") => "RPRT -5\n",
+                            _ => "RPRT 0\n",
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            addr
+        }
+        let gave_up = |model: u32| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+                e.set_operating_mode("phone", false);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            let mut rig = Rig::rigctld(&mode_unanswering_rigctld());
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+            let mut t = 0.0;
+            let mut step = |state: &mut RadioLoop, rig: &mut Rig| {
+                t += 100.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            };
+            step(&mut state, &mut rig);
+            engine.lock().unwrap().set_operating_mode("digital", false);
+            step(&mut state, &mut rig);
+            state.mode_fail_count = MODE_SET_MAX_TRIES - 2;
+            for _ in 0..10 {
+                if state.mode_giveup.is_some() {
+                    break;
+                }
+                step(&mut state, &mut rig);
+            }
+            let line = engine.lock().unwrap().snapshot().radio.cat_detail;
+            (state.mode_giveup.clone(), line)
+        };
+        assert_eq!(
+            [gave_up(1042), gave_up(3073)],
+            [
+                (
+                    Some("PKTUSB".to_string()),
+                    "couldn't set PKTUSB: no reply over CAT — the rig did not answer Hamlib; check \
+                     that the radio is on and that the port, baud and rig model in Settings ▸ \
+                     Radio ▸ Rig & CAT match it — gave up"
+                        .to_string()
+                ),
+                (
+                    Some("PKTUSB".to_string()),
+                    "couldn't set PKTUSB: no reply over CAT — link too slow or rig mute; try \
+                     raising the CI-V baud to 115200 on the rig and in Settings ▸ Radio ▸ Rig & \
+                     CAT, and turning CI-V Transceive off — gave up"
+                        .to_string()
+                ),
+            ]
+        );
     }
 
     /// ⭐ THE SAFETY NET UNDER THE CLASS-WIDE `PKTFM` CHANGE (audit, 2026-08-12).
@@ -17922,7 +18288,7 @@ mod tests {
 
         // The note stays accurate for the new word: no bogus "select USB-D by hand" advice on
         // an FM channel — the fallback landed, so it says which mode the rig is now in.
-        let n = mode_giveup_note("PKTFM", true, Some("FM"));
+        let n = mode_giveup_note("PKTFM", true, Some("FM"), &CatLink::Civ);
         assert!(n.contains("refused PKTFM"), "{n}");
         assert!(n.contains("FM-D"), "must name the rig-side mode: {n}");
     }

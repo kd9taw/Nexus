@@ -93,9 +93,9 @@ use super::routing::{mode_class, ModeClass};
 use super::{effective_mode, routing_view, ClientState, COMMANDED_FOR};
 
 /// How long a write waits for the radio's reply: well inside the radio loop's own CAT deadline,
-/// so a radio that does not answer gets an answer of its own, not a dropped CAT connection. The
-/// dial tells that silence apart from a refusal ([`answered`]); every other write still answers
-/// it as a refusal.
+/// so a radio that does not answer gets an answer of its own, not a dropped CAT connection. Every
+/// write that waits on it tells that silence apart from a refusal ([`answered`]): the dial, the mode
+/// and its width, the levels and the noise switches.
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// A write's reply as the rigctld answer it becomes: the radio's success is `Ok`; its error code,
@@ -359,13 +359,8 @@ impl FlexShim {
         snap.model.slices.get(&slice).and_then(f)
     }
 
-    /// Send `command` (built for the served slice) and say whether the radio took it.
-    fn write(&self, command: impl FnOnce(u8) -> Option<Command>) -> bool {
-        self.try_write(command).is_ok()
-    }
-
-    /// [`Self::write`], saying why a write did not take ([`answered`]). No served slice, or no
-    /// command for it, is a refusal: nothing was sent.
+    /// Send `command` (built for the served slice) and say how the radio answered ([`answered`]).
+    /// No served slice, or no command for it, is a refusal: nothing was sent.
     fn try_write(&self, command: impl FnOnce(u8) -> Option<Command>) -> Result<(), SetFault> {
         let Some((conn, _, slice)) = self.served() else {
             return Err(SetFault::Refused);
@@ -574,14 +569,20 @@ impl RigBackend for FlexShim {
     }
 
     fn set_mode(&self, mode: &str, passband_hz: u32) -> bool {
+        self.try_set_mode(mode, passband_hz).is_ok()
+    }
+
+    /// The mode write, with its width: a mode or a filter the radio does not answer is silence,
+    /// not a refusal ([`answered`]).
+    fn try_set_mode(&self, mode: &str, passband_hz: u32) -> Result<(), SetFault> {
         let Some((conn, snap, slice)) = self.served() else {
-            return false;
+            return Err(SetFault::Refused);
         };
         let Some(s) = snap.model.slices.get(&slice) else {
-            return false;
+            return Err(SetFault::Refused);
         };
         let Some(word) = flex_mode_for(mode, s.mode_list.as_deref()) else {
-            return false;
+            return Err(SetFault::Refused);
         };
         // Decide the whole change before sending any of it: a width that cannot be placed refuses
         // the verb without moving the mode.
@@ -594,30 +595,30 @@ impl RigBackend for FlexShim {
                 s.filter_low.zip(s.filter_high),
             ) {
                 Some(edges) => Some(edges),
-                None => return false,
+                None => return Err(SetFault::Refused),
             },
         };
         let Some(mode) = Mode::new(&word) else {
-            return false;
+            return Err(SetFault::Refused);
         };
-        let took = |command| matches!(conn.request(command, REQUEST_TIMEOUT), Ok(r) if r.code == 0);
-        let moved = took(Command::SliceMode { slice, mode });
-        if moved {
-            // The over goes out in this mode from now, whether or not the radio has said so yet.
-            *self
-                .state
-                .commanded
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some((slice, word, Instant::now()));
-        }
-        moved
-            && filter.is_none_or(|(low_hz, high_hz)| {
-                took(Command::SliceFilter {
+        answered(conn.request(Command::SliceMode { slice, mode }, REQUEST_TIMEOUT))?;
+        // The over goes out in this mode from now, whether or not the radio has said so yet.
+        *self
+            .state
+            .commanded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((slice, word, Instant::now()));
+        match filter {
+            None => Ok(()),
+            Some((low_hz, high_hz)) => answered(conn.request(
+                Command::SliceFilter {
                     slice,
                     low_hz,
                     high_hz,
-                })
-            })
+                },
+                REQUEST_TIMEOUT,
+            )),
+        }
     }
 
     fn set_ptt(&self, on: bool) -> bool {
@@ -667,35 +668,41 @@ impl RigBackend for FlexShim {
     }
 
     fn set_level(&self, name: &str, value: &str) -> Option<bool> {
+        self.try_set_level(name, value).map(|r| r.is_ok())
+    }
+
+    /// The level writes: a level the radio does not answer is silence, not a refusal
+    /// ([`answered`]). A value the command cannot carry is refused before anything is sent.
+    fn try_set_level(&self, name: &str, value: &str) -> Option<Result<(), SetFault>> {
+        let request = |command| match self.conn.upgrade() {
+            Some(conn) => answered(conn.request(command, REQUEST_TIMEOUT)),
+            None => Err(SetFault::Refused),
+        };
         match name {
-            "RFPOWER" => Some(percent(value).is_some_and(|level| {
-                self.conn.upgrade().is_some_and(|conn| {
-                    matches!(
-                        conn.request(Command::TransmitRfPower { level }, REQUEST_TIMEOUT),
-                        Ok(r) if r.code == 0
-                    )
-                })
+            "RFPOWER" => Some(percent(value).map_or(Err(SetFault::Refused), |level| {
+                request(Command::TransmitRfPower { level })
             })),
-            "AF" => Some(percent(value).is_some_and(|level| {
-                self.write(|slice| Some(Command::SliceAudioLevel { slice, level }))
+            "AF" => Some(percent(value).map_or(Err(SetFault::Refused), |level| {
+                self.try_write(|slice| Some(Command::SliceAudioLevel { slice, level }))
             })),
             // The keyer's speed, which CWX keys at too: the one CW setting Nexus owns.
-            "KEYSPD" => Some(value.trim().parse::<u32>().is_ok_and(|wpm| {
-                let took = self.conn.upgrade().is_some_and(|conn| {
-                    matches!(
-                        conn.request(Command::CwSpeed { wpm }, REQUEST_TIMEOUT),
-                        Ok(r) if r.code == 0
-                    )
-                });
-                if took {
-                    *self
-                        .state
-                        .cw_wpm
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner) = Some((wpm, Instant::now()));
-                }
-                took
-            })),
+            "KEYSPD" => Some(
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_or(Err(SetFault::Refused), |wpm| {
+                        let took = request(Command::CwSpeed { wpm });
+                        if took.is_ok() {
+                            *self
+                                .state
+                                .cw_wpm
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner) =
+                                Some((wpm, Instant::now()));
+                        }
+                        took
+                    }),
+            ),
             _ => None,
         }
     }
@@ -710,13 +717,25 @@ impl RigBackend for FlexShim {
     }
 
     fn set_func(&self, token: &str, on: bool) -> Option<bool> {
+        self.try_set_func(token, on).map(|r| r.is_ok())
+    }
+
+    /// The noise switches, told apart as the levels are ([`answered`]). The tuner's start goes
+    /// through the core's admission, which answers yes or no.
+    fn try_set_func(&self, token: &str, on: bool) -> Option<Result<(), SetFault>> {
         if token == "TUNER" {
             // The tuner function starts a tune cycle (`U TUNER 2`). Its off half has no sender
             // in Nexus and no meaning here: not implemented, as before.
-            return on.then(|| self.start(TxStart::AtuStart));
+            return on.then(|| {
+                if self.start(TxStart::AtuStart) {
+                    Ok(())
+                } else {
+                    Err(SetFault::Refused)
+                }
+            });
         }
         let function = slice_function(token)?;
-        Some(self.write(|slice| {
+        Some(self.try_write(|slice| {
             Some(Command::SliceDsp {
                 slice,
                 function,

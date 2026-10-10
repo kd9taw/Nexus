@@ -569,6 +569,13 @@ pub(crate) mod tests_support {
         pub drop_data_writes: u32,
         /// Fault injection — the next N DATA-flag writes alone are answered NG (`FA`).
         pub nak_data_writes: u32,
+        /// Fault injection — the next N split writes get no answer at all, and nothing changes:
+        /// `0F 00`/`0F 01`, and the unselected VFO's dial (`25 01`) and mode (`26 01`) with a value
+        /// on a radio that does not name its bands (`dial_by_band`). A radio that went quiet, which
+        /// is not a refusal.
+        pub drop_split_writes: u32,
+        /// Fault injection — the next N split writes, the same frames, are answered NG (`FA`).
+        pub nak_split_writes: u32,
         /// Fault injection — the radio is SWITCHED OFF (or its CI-V lead is out): every frame
         /// still goes out on the bus and is logged, and nothing answers any of them. Unlike
         /// [`FakeRadio::mute`] it can be thrown after the radio is handed to a daemon.
@@ -583,6 +590,10 @@ pub(crate) mod tests_support {
         pub sub_filter_raw: u8,
         /// Fault injection — NAK the next N `1A 03` commands, read or write.
         pub nak_filter_width: u32,
+        /// Fault injection — the next N `1A 03` WRITES (a width byte) get no answer at all, and the
+        /// width stays as it was; a read of it is answered as ever. A radio that answers reads but
+        /// not that write, which is not a refusal.
+        pub drop_filter_width_writes: u32,
         /// THE `1A 05` MENU, item → its one data byte. A read of an item held here is answered
         /// `1A 05 <item> <value>`; a read of any other item is refused (`FA`), the way a radio
         /// answers an item its menu does not have. A write is stored, so a test that must see
@@ -665,6 +676,20 @@ pub(crate) mod tests_support {
         }
         if data_write && r.nak_data_writes > 0 {
             r.nak_data_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
+        // See `Regs::drop_split_writes` and `Regs::nak_split_writes`.
+        let split_write = match cmd {
+            0x0F => matches!(data, [0x00 | 0x01]),
+            0x25 | 0x26 => !r.dial_by_band && data.first() == Some(&0x01) && data.len() > 1,
+            _ => false,
+        };
+        if split_write && r.drop_split_writes > 0 {
+            r.drop_split_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if split_write && r.nak_split_writes > 0 {
+            r.nak_split_writes -= 1;
             return Some((0xFA, Vec::new()));
         }
         // See `Regs::drop_mode_writes` and `Regs::nak_mode_writes`.
@@ -848,6 +873,10 @@ pub(crate) mod tests_support {
             // IF FILTER WIDTH (`1A 03`): a bare sub-command reads, one BCD byte writes — on the
             // band the command acts on, and never in FM (see [`Regs::filter_raw`]).
             (0x1A, Some(0x03)) => {
+                if data.len() > 1 && r.drop_filter_width_writes > 0 {
+                    r.drop_filter_width_writes -= 1;
+                    return Some((SILENT, Vec::new()));
+                }
                 let fm = (if on_sub { r.sub_mode } else { r.main_mode }) == 0x05;
                 if fm || r.nak_filter_width > 0 {
                     r.nak_filter_width = r.nak_filter_width.saturating_sub(1);
@@ -1109,10 +1138,13 @@ pub(crate) mod tests_support {
                         nak_mode_writes: 0,
                         drop_data_writes: 0,
                         nak_data_writes: 0,
+                        drop_split_writes: 0,
+                        nak_split_writes: 0,
                         off: false,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
                         nak_filter_width: 0,
+                        drop_filter_width_writes: 0,
                         menus: std::collections::BTreeMap::new(),
                         acted: Vec::new(),
                         wire: Vec::new(),

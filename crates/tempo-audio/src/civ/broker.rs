@@ -1415,12 +1415,23 @@ impl RigBackend for CivBackend {
     }
 
     fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
+        self.try_set_split(on, tx_vfo).map(|r| r.is_ok())
+    }
+
+    /// The split write, an `FA` to the A/B split's `0F` told apart from a radio that did not
+    /// answer it. The satellite-mode legs answer a refusal for any failure, silence included: each
+    /// is several frames, backed out on a failure.
+    fn try_set_split(&self, on: bool, tx_vfo: &str) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
         // TX on the SUB BAND = the rig's satellite mode, not `0F` (same-band
         // A/B split, which cannot be cross-band on this family). Any other
         // TX-VFO token keeps the shipped `0F` path byte-identical.
         if on && tx_vfo.eq_ignore_ascii_case("sub") {
-            return Some(self.engage_sat_split(&mut g));
+            return Some(if self.engage_sat_split(&mut g) {
+                Ok(())
+            } else {
+                Err(SetFault::Refused)
+            });
         }
         if g.engaged {
             // Any other split request while the split rides satellite mode
@@ -1431,37 +1442,42 @@ impl RigBackend for CivBackend {
             // band and TX leaves on the downlink band. A refused release
             // refuses the whole request.
             if !self.release_sat_split(&mut g) {
-                return Some(false);
+                return Some(Err(SetFault::Refused));
             }
             if !on {
-                return Some(true); // released — never 0F 00 at this rig
+                return Some(Ok(())); // released — never 0F 00 at this rig
             }
         }
         // The A/B split is SAME-BAND by construction on this family, so a rig
         // the operator left in (cross-band) satellite mode has to come out of
         // it first — and go back in when we hand the split back.
         if on && !self.clear_operator_satmode(&mut g) {
-            return Some(false);
+            return Some(Err(SetFault::Refused));
         }
-        let ok = self.ack(commands::set_split(self.addr, on));
-        if ok {
+        let set = self.answer(commands::set_split(self.addr, on));
+        if set.is_ok() {
             self.split.store(on, Ordering::Relaxed);
             if !on {
                 self.restore_operator_satmode(&mut g);
             }
         }
-        Some(ok)
+        Some(set)
     }
 
     fn set_split_freq(&self, hz: u64) -> Option<bool> {
+        self.try_set_split_freq(hz).map(|r| r.is_ok())
+    }
+
+    /// The split dial, the A/B split's `25 01` told apart as `0F` is ([`Self::try_set_split`]).
+    fn try_set_split_freq(&self, hz: u64) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
         if !self.ensure_main(&mut g) {
             // `25 01` writes the unselected VFO of the CURRENT band — with a
             // stray selection either path would write the wrong register.
-            return Some(false);
+            return Some(Err(SetFault::Refused));
         }
         if !g.engaged {
-            return Some(self.ack(commands::set_unselected_freq(self.addr, hz, self.model)));
+            return Some(self.answer(commands::set_unselected_freq(self.addr, hz, self.model)));
         }
         // Satellite mode: the TX dial lives in the SUB band. Select-write-
         // verify-restore, atomic under the band lock. Success ONLY when the
@@ -1486,13 +1502,24 @@ impl RigBackend for CivBackend {
         if restored {
             let _ = self.read(commands::read_freq(self.addr), 0x03, None);
         }
-        Some(ok && restored)
+        Some(if ok && restored {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        })
     }
 
-    fn set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<bool> {
+    fn set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<bool> {
+        self.try_set_split_mode(mode, passband_hz)
+            .map(|r| r.is_ok())
+    }
+
+    /// The split VFO's mode, the A/B split's `26 01` told apart as `0F` is
+    /// ([`Self::try_set_split`]).
+    fn try_set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
         let Some(m) = Mode::from_name(mode) else {
-            return Some(false);
+            return Some(Err(SetFault::Refused));
         };
         if !g.engaged {
             // ⚠️ NEEDS-BENCH (IC-9700 — field report 2026-08-16, V/U FM pass
@@ -1505,10 +1532,10 @@ impl RigBackend for CivBackend {
             // restore. Unacked ⇒ `Some(false)`, and the caller says so out loud
             // ("put VFO B in FM by hand") rather than leaving the operator to
             // discover it on the air.
-            return Some(self.ack(commands::set_unselected_mode(self.addr, m)));
+            return Some(self.answer(commands::set_unselected_mode(self.addr, m)));
         }
         if !self.ensure_main(&mut g) {
-            return Some(false); // same stray-selection refusal as the freq
+            return Some(Err(SetFault::Refused)); // same stray-selection refusal as the freq
         }
         // The uplink sideband (`X`, the inverting-bird LSB): command it on the
         // Sub band, selection restored, same discipline as the frequency —
@@ -1519,7 +1546,11 @@ impl RigBackend for CivBackend {
         if restored {
             let _ = self.read(commands::read_freq(self.addr), 0x03, None);
         }
-        Some(ok && restored)
+        Some(if ok && restored {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        })
     }
 
     /// RIT — a RECEIVE offset, so Main's. `21` has no band-directed mark on the IC-7610
@@ -3017,6 +3048,36 @@ mod tests {
                 answer("M PKTUSB 0", quiet),
             ],
             ["RPRT 0\n", "RPRT 0\n", "RPRT -1\n", "RPRT -5\n"]
+        );
+    }
+
+    /// ⭐ A SPLIT THE RADIO DID NOT ANSWER IS NOT A SPLIT IT REFUSED. The A/B split's three writes
+    /// through the encoder the daemon serves, on an IC-7300: split on (`0F 01`), its TX dial
+    /// (`25 01`) and its TX mode (`26 01`), each taken, then answered NG (`FA`), then met with
+    /// silence. The NG is `RPRT -1`, a refusal, as it always was; the silence is `RPRT -5`, as an
+    /// unanswered dial is. It was `RPRT -1`.
+    #[test]
+    fn a_split_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let answers = || {
+            ["S 1 VFOB", "I 14076000", "X USB 0"].map(|line| match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            })
+        };
+        let taken = answers();
+        regs.lock().unwrap().nak_split_writes = u32::MAX;
+        let refused = answers();
+        {
+            let mut r = regs.lock().unwrap();
+            r.nak_split_writes = 0;
+            r.drop_split_writes = u32::MAX;
+        }
+        let unanswered = answers();
+        assert_eq!(
+            [taken, refused, unanswered],
+            ["RPRT 0\n", "RPRT -1\n", "RPRT -5\n"].map(|a| [a; 3].map(String::from))
         );
     }
 

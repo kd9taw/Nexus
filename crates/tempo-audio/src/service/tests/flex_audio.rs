@@ -499,6 +499,104 @@ fn a_dial_sent_to_a_flex_that_went_silent_is_sent_three_times_and_not_called_ref
     );
 }
 
+/// The simulated FLEX-6400 with nothing answered to the commands starting with `unanswered`, its
+/// range probed.
+fn flex_not_answering(unanswered: &str) -> FlexScene {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Unanswered {
+            starting: unanswered.into(),
+            then_silent: false,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    s
+}
+
+/// How many commands the radio was sent with exactly `text`.
+fn times_sent(s: &FlexScene, text: &str) -> usize {
+    s.log().iter().filter(|(_, e)| command(e, text)).count()
+}
+
+/// ⭐ A WIDTH THE FLEX DOES NOT ANSWER IS SENT THREE TIMES, THEN GIVEN UP, AS A DIAL IS. The radio
+/// answers everything but the filter. The width goes out three times, the request is dropped, and
+/// the operator is told the radio did not answer and keeps its 3 kHz DATA filter. It went out once
+/// and was dropped without a word: the client answered the silence as a refusal.
+#[test]
+fn a_width_the_flex_does_not_answer_is_sent_three_times_then_given_up() {
+    let mut s = flex_not_answering("filt 0 0 2400");
+    s.engine.lock().unwrap().request_filter_width(2400);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.engine.lock().unwrap().passband_request_pending() && Instant::now() < deadline {
+        s.run(100);
+    }
+    s.run(1_500); // nothing more goes out after the give-up
+    let pending = s.engine.lock().unwrap().passband_request_pending();
+    assert_eq!(
+        (times_sent(&s, "filt 0 0 2400"), pending, cat_status(&s).1),
+        (
+            3,
+            false,
+            "2400 Hz filter width not sent — no reply from the rig after 3 tries; still 3000 Hz"
+                .to_string(),
+        )
+    );
+}
+
+/// ⭐ A MODE THE FLEX DOES NOT ANSWER IS NOT CALLED REFUSED, AND ITS GIVE-UP'S ADVICE FITS THE FLEX.
+/// Digital to Phone on the simulated FLEX-6400, which does not answer `mode=USB`; the steady loop's
+/// budget starts two short, so it gives up in two tries. The give-up says the radio did not answer
+/// the client and points at the radio and its network. It was "rig refused USB": the client
+/// answered the silence as a refusal.
+#[test]
+fn a_mode_the_flex_does_not_answer_is_not_called_refused_and_gives_up_in_words_that_fit_it() {
+    let mut s = flex_not_answering("slice set 0 mode=USB");
+    s.engine.lock().unwrap().set_operating_mode("phone", false);
+    s.step(now_unix_ms());
+    s.state.mode_fail_count = MODE_SET_MAX_TRIES - 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.state.mode_giveup.is_none() && Instant::now() < deadline {
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        (s.state.mode_giveup.clone(), cat_status(&s).1),
+        (
+            Some("USB".to_string()),
+            "couldn't set USB: no reply over CAT — the radio did not answer Nexus's Flex client; \
+             check that it is on and reachable on the network — gave up"
+                .to_string(),
+        )
+    );
+}
+
+/// ⭐ RF POWER THE FLEX DOES NOT ANSWER IS SENT ONCE, AS A REFUSED ONE IS, AND IS CALLED NO REPLY.
+/// The radio answers everything but `transmit set rfpower=40`. The level goes out once and that
+/// value is given up, the bound it always had; the operator is told the rig did not reply. It was
+/// "the rig didn't take it", the words for a refusal.
+#[test]
+fn rf_power_the_flex_does_not_answer_is_sent_once_and_called_no_reply() {
+    let mut s = flex_not_answering("transmit set rfpower=40");
+    s.engine.lock().unwrap().set_rf_power(0.4);
+    s.run(3_000);
+    assert_eq!(
+        (
+            times_sent(&s, "transmit set rfpower=40"),
+            s.state.rf_power_giveup,
+            cat_status(&s).1,
+        ),
+        (
+            1,
+            Some(0.4),
+            "couldn't set RF power — no reply from the rig; set power on the radio".to_string(),
+        )
+    );
+}
+
 /// The bundled session, except that the radio reports a slice it switched to one of `modes`, as a
 /// radio does (the bundled session answers a mode change without a status).
 fn reports(modes: &[&str]) -> SimSession {

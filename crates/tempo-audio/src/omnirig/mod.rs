@@ -608,7 +608,8 @@ impl OmniBackend {
 
     /// OmniRig's status for this slot, as a sentence — `Ok(())` when it is online.
     ///
-    /// Every WRITE goes through this first (the dial and the mode as [`Self::write_gate`]).
+    /// Every WRITE goes through this first (the dial, the mode and the split as
+    /// [`Self::write_gate`]).
     /// OmniRig accepts a write to an offline rig and drops it, so without the gate a dial move
     /// (or a key-down) would answer `RPRT 0` and do nothing at all: the "healthy pill, dead
     /// radio" failure this project keeps paying for.
@@ -626,7 +627,7 @@ impl OmniBackend {
         Err(OmniError::RigOffline(text))
     }
 
-    /// [`Self::require_online`] for a dial or mode write, as the rigctld answer it becomes.
+    /// [`Self::require_online`] for a dial, mode or split write, as the rigctld answer it becomes.
     /// OmniRig saying the rig is not responding is the radio not answering (`RPRT -5`), which the
     /// radio loop words and counts as silence; every other "no" (not configured, switched off in
     /// OmniRig, its port held by another program, a status read that failed) stays the refusal
@@ -726,11 +727,20 @@ impl RigBackend for OmniBackend {
         self.link.call(move |c| c.set_ptt(on)).is_ok()
     }
 
-    fn set_split(&self, on: bool, _tx_vfo: &str) -> Option<bool> {
-        if self.require_online().is_err() {
-            return Some(false);
+    fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
+        self.try_set_split(on, tx_vfo).map(|r| r.is_ok())
+    }
+
+    /// The split write, behind [`OmniBackend::write_gate`]. A COM write that fails is a refusal.
+    fn try_set_split(&self, on: bool, _tx_vfo: &str) -> Option<Result<(), SetFault>> {
+        if let Err(fault) = self.write_gate() {
+            return Some(Err(fault));
         }
-        Some(self.link.call(move |c| c.set_split(on)).is_ok())
+        Some(
+            self.link
+                .call(move |c| c.set_split(on))
+                .map_err(|_| SetFault::Refused),
+        )
     }
 
     /// UNKNOWN: the shim reads no receive range through its COM boundary ([`OmniRigClient`]),
@@ -1162,10 +1172,10 @@ pub(crate) mod tests {
 
     /// A rig OmniRig is NOT driving because it is not responding. Reads answer "nothing honest"
     /// (0 — which `Rig::read_freq` rejects, so the pill goes red), and no write is accepted into a
-    /// queue nobody serves: a dial or a mode is answered as silence, a key-down and a split are
+    /// queue nobody serves: a dial, a mode or a split is answered as silence, a key-down is
     /// refused. THE UNKEY IS THE EXCEPTION and is deliberate.
     #[test]
-    fn a_rig_that_is_not_responding_reads_as_nothing_answers_no_dial_or_mode_refuses_a_key_and_still_unkeys(
+    fn a_rig_that_is_not_responding_reads_as_nothing_answers_no_dial_mode_or_split_refuses_a_key_and_still_unkeys(
     ) {
         let mock = Arc::new(MockOmni::online());
         *mock.status.lock().unwrap() = (
@@ -1175,13 +1185,13 @@ pub(crate) mod tests {
         let (b, _w) = backend_over(mock.clone());
 
         assert_eq!(reply("f", &b), "0\n", "no honest dial reading");
-        // The radio is not answering OmniRig, so a dial or a mode is not answered either: Hamlib's
-        // ETIMEOUT, which the radio loop words and counts as silence. It was `RPRT -1`, so the
-        // loop told the operator the radio refused the frequency.
+        // The radio is not answering OmniRig, so a dial, a mode or a split is not answered either:
+        // Hamlib's ETIMEOUT, which the radio loop words as silence. Each was `RPRT -1`, so the loop
+        // told the operator the radio refused the frequency, and the split.
         assert_eq!(reply("F 7035000", &b), "RPRT -5\n");
         assert_eq!(reply("M USB 0", &b), "RPRT -5\n");
         assert_eq!(reply("T 1", &b), "RPRT -1\n", "a key-down is refused");
-        assert_eq!(reply("S 1 VFOB", &b), "RPRT -1\n");
+        assert_eq!(reply("S 1 VFOB", &b), "RPRT -5\n");
         assert!(
             mock.calls.lock().unwrap().is_empty(),
             "no unanswered or refused write may reach the radio: {:?}",
@@ -1204,20 +1214,26 @@ pub(crate) mod tests {
     }
 
     /// The control for the test above: every other reason OmniRig cannot drive the slot is not a
-    /// radio going quiet, so a dial and a mode stay refused (`RPRT -1`) with nothing written; and
-    /// online, both are taken and written.
+    /// radio going quiet, so a dial, a mode and a split stay refused (`RPRT -1`) with nothing
+    /// written; and online, all three are taken and written.
     #[test]
-    fn a_rig_omnirig_cannot_drive_for_another_reason_still_refuses_a_dial_and_a_mode() {
+    fn a_rig_omnirig_cannot_drive_for_another_reason_still_refuses_a_dial_a_mode_and_a_split() {
         let answers = |st: OmniStatus| {
             let mock = Arc::new(MockOmni::online());
             *mock.status.lock().unwrap() = (st, String::new());
             let (b, _w) = backend_over(mock.clone());
             let dial = reply("F 7035000", &b);
             let mode = reply("M CW 0", &b);
+            let split = reply("S 1 VFOB", &b);
             let calls = mock.calls.lock().unwrap().clone();
-            (dial, mode, calls)
+            (dial, mode, split, calls)
         };
-        let refused = ("RPRT -1\n".to_string(), "RPRT -1\n".to_string(), vec![]);
+        let refused = (
+            "RPRT -1\n".to_string(),
+            "RPRT -1\n".to_string(),
+            "RPRT -1\n".to_string(),
+            vec![],
+        );
         assert_eq!(
             [
                 OmniStatus::NotConfigured,
@@ -1235,7 +1251,12 @@ pub(crate) mod tests {
                 (
                     "RPRT 0\n".to_string(),
                     "RPRT 0\n".to_string(),
-                    vec!["set_freq 7035000".to_string(), "set_mode CwU".to_string()],
+                    "RPRT 0\n".to_string(),
+                    vec![
+                        "set_freq 7035000".to_string(),
+                        "set_mode CwU".to_string(),
+                        "set_split true".to_string(),
+                    ],
                 ),
             ]
         );

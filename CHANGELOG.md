@@ -570,6 +570,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. NEEDS-BENCH: an Icom on native CI-V switched off during a mode change, a radio
   switched off while OmniRig drives it, and a FLEX radio switched off or unplugged from the network
   during a QSY should each say no reply from the rig, never that it refused.
+- **A filter width the radio does not answer is sent three times, then given up, as a frequency
+  is, on every connection.** When the radio answered everything but a filter-width change (the
+  scope's filter edge, or the bandwidth control), Nexus on Hamlib's rigctld and on native CI-V sent
+  it again on every pass of the radio loop for as long as the radio stayed quiet, each try holding
+  up the loop, and with it a transmission due to start, for as long as the reply could take. Nexus's
+  own FlexRadio client sent it once and dropped it without a word. Now each sends it three times,
+  then stops, shows the width the radio really has, and says so: "2400 Hz filter width not sent —
+  no reply from the rig after 3 tries; still 3000 Hz". Ask for the width again to retry. A width the
+  radio refuses is still dropped after one try. NEEDS-BENCH: a radio that does not answer a
+  filter-width change, on Hamlib, native CI-V and the FlexRadio client.
+- **When a mode change gets no answer, the advice fits the connection.** After its 30 unanswered
+  tries, the CAT status told every radio to raise the rig's CI-V baud and turn CI-V Transceive off,
+  on OmniRig and Nexus's own FlexRadio client too. That advice is now given only for CI-V (an Icom
+  on Nexus's own CI-V connection, or on Hamlib's rigctld), and it says to set the faster baud on
+  both the rig and Settings ▸ Radio ▸ Rig & CAT, since Nexus opens the port at that setting. Any
+  other radio on Hamlib is pointed at the port, baud and rig model; a network address at the radio
+  or the program serving its CAT there; OmniRig at the radio and OmniRig's own setup; the FlexRadio
+  client at the radio and its network; the Icom network connection at the network.
+- **An Icom that is switched off is no longer sent mode changes while CAT is down.** On Nexus's own
+  CI-V connection, a radio that stopped answering tripped CAT's circuit breaker as if it had
+  refused a reading, not as a dead link, so Nexus kept sending it the mode change it was waiting
+  on, on every pass of the radio loop, each holding up the loop for the CI-V deadline. Now, on any
+  connection, neither the mode nor the frequency goes out while the breaker is tripped on a radio
+  that is not answering, and both go out as soon as it answers again. NEEDS-BENCH: an Icom on
+  native CI-V switched off during a mode change should get no more mode commands while it is off,
+  and take the mode once it is back on.
+- **A FlexRadio that does not answer a mode, filter, power, AF, CW speed or noise switch, and a
+  radio that does not answer a split, are no longer reported as refusing it.** On Nexus's own
+  FlexRadio client each of these read as a refusal when the radio did not answer within half a
+  second: RF power said "couldn't set RF power — the rig didn't take it", and a mode change said
+  "rig refused". They now say there was no reply from the rig, and a mode change the radio never
+  answers gets no plain-mode fallback at its give-up. A split that goes unanswered (on native CI-V,
+  OmniRig, or a rigctld reporting the rig did not answer) now reads "no reply from the rig — split
+  not set; work the pile-up manually", not "rig rejected split". Each is tried as many times as
+  before, and an OmniRig server that does not answer Nexus at all is still read as a refusal.
+  NEEDS-BENCH: a FLEX radio unplugged from the network during a power or mode change, and a radio
+  switched off during a split, should each say no reply from the rig.
 - **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
   (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
   wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus

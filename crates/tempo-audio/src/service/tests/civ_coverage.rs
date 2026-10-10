@@ -7,7 +7,8 @@
 //! The fake radio takes every dial unless a scene gives it `covers_hz`; then it answers NG (`FA`)
 //! outside those ranges. That a real radio NGs a dial it cannot tune is the fixture's model of
 //! CI-V, not a bench measurement. Its `drop_dial_writes` makes it say nothing to a dial write: a
-//! radio that went quiet, which is not a refusal.
+//! radio that went quiet, which is not a refusal. `drop_mode_writes` and `drop_split_writes` do the
+//! same to a mode and a split, and `off` to everything.
 use super::*;
 use crate::civ::broker::CivDaemon;
 use crate::civ::commands::IcomModel;
@@ -665,7 +666,8 @@ fn a_mode_the_radio_does_not_answer_is_not_called_rejected_and_its_give_up_sends
         "no reply from the rig over CAT — couldn't set PKTUSB: rigctld mode: the rig did not \
          answer (Hamlib RPRT -5) (29/30)",
         "couldn't set PKTUSB: no reply over CAT — link too slow or rig mute; try raising the \
-         rig's CI-V baud (115200) and turning CI-V Transceive off — gave up",
+         CI-V baud to 115200 on the rig and in Settings ▸ Radio ▸ Rig & CAT, and turning CI-V \
+         Transceive off — gave up",
     ];
     let ng = [
         "rig rejected PKTUSB: rigctld mode error: \"RPRT -1\\n\"",
@@ -736,5 +738,109 @@ fn an_unanswered_mode_write_counts_toward_the_breaker_and_the_give_up_and_an_ng_
     assert_eq!(
         (second_write(false), second_write(true)),
         ((2, 2, 2), (2, 0, 2))
+    );
+}
+
+/// ⭐ NO MODE WRITE REACHES A RADIO THAT IS OFF WHILE THE CIRCUIT BREAKER IS TRIPPED, nor a dial,
+/// and the mode lands once the radio answers. An IC-7300 switched off as the operator moves Phone
+/// to Digital: the mode goes out until the breaker trips on the dial read (the daemon's cached dial
+/// runs out first), and the trip is on the link, so nothing more in the next three seconds. The
+/// radio comes back, the breaker's next probe finds it, and PKTUSB lands. The trip was read as a
+/// refusal (the daemon's `f` answers 0 for a radio that has stopped answering), so neither was
+/// withheld, and the mode went out on every step of the trip, each one holding the loop for the
+/// CI-V deadline of both its frames.
+#[test]
+fn no_mode_write_reaches_a_radio_that_is_off_while_the_breaker_is_tripped_and_it_lands_when_it_answers(
+) {
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+    s.regs.lock().unwrap().off = true;
+    s.engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("digital", false);
+    let mode_writes = |s: &Scene, n: usize| {
+        s.regs.lock().unwrap().wire[n..]
+            .iter()
+            .filter(|f| f.get(4) == Some(&0x06))
+            .count()
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while s.state.cat_ok != Some(false) && Instant::now() < deadline {
+        s.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(s.state.cat_ok, Some(false), "premise: the breaker tripped");
+    let on_the_link = s.state.cat_down_link_fault;
+    let n = s.wire_len();
+    let end = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < end {
+        s.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let while_tripped = mode_writes(&s, n);
+    // The radio answers again, and the breaker's next probe is due now.
+    s.regs.lock().unwrap().off = false;
+    s.state.cat_retry_at = 0.0;
+    let landed = |s: &Scene| {
+        let r = s.regs.lock().unwrap();
+        (r.main_mode, r.data_mode) == (0x01, true)
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !landed(&s) && Instant::now() < deadline {
+        s.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        (on_the_link, while_tripped, landed(&s), s.state.cat_ok),
+        (true, 0, true, Some(true))
+    );
+}
+
+/// ⭐ A SPLIT THE RADIO DOES NOT ANSWER IS NOT CALLED REJECTED. A pile-up's split up 2 kHz to an
+/// IC-7300 that answers everything but the split: split on goes out once and its TX dial not at
+/// all, as when the radio refuses it, and the operator is told the rig did not reply. An NG, the
+/// control, keeps "rig rejected split". The silence was "rig rejected split" too.
+#[test]
+fn a_split_the_radio_does_not_answer_is_not_called_rejected() {
+    let split = |knob: fn(&mut Regs)| {
+        let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+        knob(&mut s.regs.lock().unwrap());
+        let n = s.wire_len();
+        s.engine.lock().unwrap().request_split(Some(14.076));
+        let said = s.said_until(|s| s.told().0.contains("split"));
+        let r = s.regs.lock().unwrap();
+        let sent = |cmd: u8| {
+            r.wire[n..]
+                .iter()
+                .filter(|f| f.get(4) == Some(&cmd))
+                .count()
+        };
+        (
+            said.into_iter()
+                .filter(|l| l.contains("split"))
+                .collect::<Vec<_>>(),
+            sent(0x0F),
+            sent(0x25),
+        )
+    };
+    assert_eq!(
+        (
+            split(|r| r.drop_split_writes = u32::MAX),
+            split(|r| r.nak_split_writes = u32::MAX),
+        ),
+        (
+            (
+                vec![
+                    "no reply from the rig — split not set; work the pile-up manually".to_string()
+                ],
+                1,
+                0,
+            ),
+            (
+                vec!["rig rejected split — work the pile-up manually".to_string()],
+                1,
+                0,
+            ),
+        )
     );
 }
