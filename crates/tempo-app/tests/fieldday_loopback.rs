@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::fdbridge::{EngineClubBackend, EnginePositionSync};
+use tempo_app::fdevent::sha256_hex;
 use tempo_net::fdsync::{self, ClubBackend, PositionSync};
 
 type Shared = Arc<Mutex<Engine>>;
@@ -35,12 +36,6 @@ fn club_key(posid: &str) -> fdsync::PositionKey {
     fdsync::PositionKey::new(throwaway_hex(posid))
 }
 
-/// The host bridge's key hash for this run, where the shell gives it SHA-256: one way, so a
-/// search of what the host keeps for a key can tell the two apart.
-fn test_hash(secret: &str) -> String {
-    throwaway_hex(&format!("hash of {secret}"))
-}
-
 /// A Field-Day-ready engine: master on, exchange set, S&P mode, posid set.
 fn fd_engine(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
     let mut e = Engine::new(call, "EN61", 0);
@@ -53,9 +48,7 @@ fn fd_engine(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter FD");
-    let key = club_key(posid);
-    let hash = test_hash(key.secret());
-    e.set_fd_position_key(key, hash);
+    e.set_fd_position_key(club_key(posid));
     Arc::new(Mutex::new(e))
 }
 
@@ -77,7 +70,7 @@ fn reusable_listener(port: u16) -> std::net::TcpListener {
 
 fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
-    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone(), test_hash));
+    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone()));
     let sd2 = sd.clone();
     std::thread::spawn(move || fdsync::serve_until(listener, backend, sd2));
     sd
@@ -798,7 +791,8 @@ fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
 /// screen names it. The position's own laptop keeps syncing, and rejoins after a host restart,
 /// when the peer is turned away still. Nothing the host keeps or shows holds a key: its journal
 /// keeps the hash, and the snapshot every screen and Remote read, the TV's board and Settings
-/// hold none. CONTROL: the JOIN line itself carries the key, so the searches find it there.
+/// hold none, nor any key's hash, the host's own included. CONTROLS: the JOIN line itself
+/// carries the key, and the journal the tent's hash and the host's, so the searches find them.
 #[test]
 fn a_lan_peer_cannot_join_as_another_laptops_position() {
     let dir = std::env::temp_dir().join(format!("fd-held-{}", std::process::id()));
@@ -883,7 +877,7 @@ fn a_lan_peer_cannot_join_as_another_laptops_position() {
         "the peer is still turned away after the restart: {got:?}"
     );
 
-    // Where the keys are, and where they are not.
+    // Where the keys and their hashes are, and where they are not.
     let keys = [club_key("aaaa0001"), club_key("bbbb0002"), peer_key];
     assert!(
         peer_join.contains(keys[2].secret()),
@@ -891,8 +885,12 @@ fn a_lan_peer_cannot_join_as_another_laptops_position() {
     );
     let kept = std::fs::read_to_string(&journal).unwrap();
     assert!(
-        kept.contains(&test_hash(keys[1].secret())),
+        kept.contains(&sha256_hex(keys[1].secret())),
         "the journal pins the tent by its key's hash"
+    );
+    assert!(
+        kept.contains(&sha256_hex(keys[0].secret())),
+        "the journal pins the host's own position by its key's hash, which its engine made"
     );
     let shown = {
         let h = engine_lock(&host);
@@ -926,6 +924,10 @@ fn a_lan_peer_cannot_join_as_another_laptops_position() {
     for (what, text) in &shown {
         for key in &keys {
             assert!(!text.contains(key.secret()), "{what} holds a club key");
+            if *what != "the host's journal" {
+                let hash = sha256_hex(key.secret());
+                assert!(!text.contains(&hash), "{what} holds a key's hash");
+            }
         }
     }
     for sd in [host_sd, host_pump_sd, tent_sd] {
@@ -1034,8 +1036,8 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
             "club file {:?}; holder {}; tent told {}; copy told {}; copy acked {}; buttons {:?}",
             worked(&host),
             match holder {
-                Some(h) if h == test_hash(tent_key.secret()) => "the tent",
-                Some(h) if h == test_hash(copy_key.secret()) => "the copy",
+                Some(h) if h == sha256_hex(tent_key.secret()) => "the tent",
+                Some(h) if h == sha256_hex(copy_key.secret()) => "the copy",
                 Some(_) => "another",
                 None => "none",
             },
@@ -1147,7 +1149,7 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
 
     // Where the keys and their hashes are, and where they are not.
     let keys = [club_key("aaaa0001"), club_key("bbbb0002"), copy_key];
-    let hashes: Vec<String> = keys.iter().map(|k| test_hash(k.secret())).collect();
+    let hashes: Vec<String> = keys.iter().map(|k| sha256_hex(k.secret())).collect();
     let join_line = fdsync::encode_line(&fdsync::Msg::Join {
         v: fdsync::PROTO_VERSION,
         pos: "bbbb0002".into(),
@@ -1166,6 +1168,10 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
     assert!(
         kept.contains(&hashes[1]) && kept.contains(&hashes[2]),
         "CONTROL: the journal pins and gives by the keys' hashes"
+    );
+    assert!(
+        kept.contains(&hashes[0]),
+        "the journal pins the host's own position by its key's hash, which its engine made"
     );
     let marker = format!("fd-give-{}", std::process::id());
     tempo_core::applog::info("fd-give-test", &marker);
@@ -1211,10 +1217,9 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
             assert!(!text.contains(hash.as_str()), "{what} holds a key's hash");
         }
     }
-    assert!(
-        !kept.contains(keys[1].secret()),
-        "the journal holds a club key"
-    );
+    for key in &keys {
+        assert!(!kept.contains(key.secret()), "the journal holds a club key");
+    }
     for sd in [host_sd, host_pump_sd, tent_sd, copy_sd] {
         sd.store(true, Ordering::Relaxed);
     }
@@ -1222,11 +1227,9 @@ fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// This laptop's club key, handed to the engine as the shell hands it at startup: with its hash
-/// as this run's host bridge makes one.
+/// This laptop's club key, handed to the engine as the shell hands it at startup.
 fn set_key(eng: &Shared, key: fdsync::PositionKey) {
-    let hash = test_hash(key.secret());
-    engine_lock(eng).set_fd_position_key(key, hash);
+    engine_lock(eng).set_fd_position_key(key);
 }
 
 /// A station's club block as its own screen reads it: the snapshot's, as JSON.
@@ -1794,7 +1797,7 @@ fn no_join_gets_past_the_key_check_whatever_its_key_holds() {
         ),
         (
             "the pinned hash as the key",
-            join_with(&format!(",\"key\":\"{}\"", test_hash(&real))),
+            join_with(&format!(",\"key\":\"{}\"", sha256_hex(&real))),
             Some(held),
         ),
         ("a number", join_with(",\"key\":7"), None),

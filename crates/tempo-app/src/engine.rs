@@ -2752,8 +2752,8 @@ pub struct Engine {
     /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
     /// this reaches only the JOIN line. Never logged, shown or put in any DTO.
     fd_position_key: tempo_net::fdsync::PositionKey,
-    /// ⛔ **The hash of this position's club key**, as a host pins it, which the shell makes with
-    /// the host's own hash and hands here with the key: what this laptop's club code is made from
+    /// ⛔ **The hash of this position's club key**, as a host pins it, made from the key when it
+    /// is set ([`crate::fdevent::sha256_hex`]): what this laptop's club code is made from
     /// (`fdevent::club_code`), and what its own position is pinned to the moment it starts
     /// hosting. Never logged, shown or put in any DTO; only the code is shown. Empty for no key.
     fd_position_key_hash: String,
@@ -12099,12 +12099,12 @@ impl Engine {
     }
 
     /// This position's club key, as the shell read or made it at startup (it is kept beside
-    /// settings.json, never in it), and `key_hash`, its hash as a host pins it. Every JOIN sends
-    /// the key; nothing else may read it. The hash is held for this laptop's club code and its
-    /// own pin as a host, and is no hash at all for a key a Nexus does not make.
-    pub fn set_fd_position_key(&mut self, key: tempo_net::fdsync::PositionKey, key_hash: String) {
+    /// settings.json, never in it). Every JOIN sends the key; nothing else may read it. Its hash
+    /// as a host pins it ([`crate::fdevent::sha256_hex`]) is held for this laptop's club code
+    /// and its own pin as a host, and is no hash at all for a key a Nexus does not make.
+    pub fn set_fd_position_key(&mut self, key: tempo_net::fdsync::PositionKey) {
         self.fd_position_key_hash = if key.is_club_key() {
-            key_hash
+            crate::fdevent::sha256_hex(key.secret())
         } else {
             String::new()
         };
@@ -27131,16 +27131,18 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
 
-    /// The key hash a test JOIN under `pos` carries: what the bridge would make of that
-    /// position's key, generated (a per-run seed through the operating system's hasher) so no
-    /// test holds a real one. The same position gets the same hash all through a run.
+    /// The key hash a test JOIN under `pos` carries: what the bridge makes of that position's
+    /// key ([`crate::fdevent::sha256_hex`]), for a key generated (a per-run seed through the
+    /// operating system's hasher) so no test holds a real one. The same position gets the same
+    /// hash all through a run.
     fn club_key_hash(pos: &str) -> String {
         use std::hash::BuildHasher;
         static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
         let seed = SEED.get_or_init(std::hash::RandomState::new);
-        (0..4u8)
+        let key: String = (0..4u8)
             .map(|i| format!("{:016x}", seed.hash_one((pos, i))))
-            .collect()
+            .collect();
+        crate::fdevent::sha256_hex(&key)
     }
 
     /// The contract a factory RESET depends on, pinned from the engine side.
@@ -44154,9 +44156,9 @@ mod tests {
     /// away by name. CONTROLS: the host's own laptop is served as its position, its club line
     /// shows its own code, and the journal pins it by its key's hash and holds no code.
     /// A laptop whose club key could not be made (no key a Nexus makes) shows no club code and
-    /// pins nothing when it hosts, whatever hash it is handed: a code for no key matches nothing
-    /// the host shows, and a pin of it would hold the host's own position for nobody. CONTROL:
-    /// with a key, the code is on its club line and its own position is pinned.
+    /// pins nothing when it hosts, though even no key has a hash: a code for no key matches
+    /// nothing the host shows, and a pin of it would hold the host's own position for nobody.
+    /// CONTROL: with a key, the code is on its club line and its own position is pinned.
     #[test]
     fn a_laptop_with_no_club_key_shows_no_code_and_pins_nothing() {
         let dir = std::env::temp_dir().join(format!(
@@ -44174,9 +44176,8 @@ mod tests {
         s.fd_position_id = "eeee0001".into();
         e.apply_settings(s);
         e.set_mode("fieldday-run").unwrap();
-        let hash = club_key_hash("eeee0001");
         let shown = |e: &mut Engine, key: tempo_net::fdsync::PositionKey, journal: &str| {
-            e.set_fd_position_key(key, hash.clone());
+            e.set_fd_position_key(key);
             e.fd_host_stop();
             e.fd_host_start(dir.join(journal)).unwrap();
             let code = e
@@ -44202,6 +44203,7 @@ mod tests {
             "no key: no code, no pin"
         );
         let with_key = tempo_net::fdsync::PositionKey::new(club_key_hash("this laptop's key"));
+        let hash = crate::fdevent::sha256_hex(with_key.secret());
         assert_eq!(
             shown(&mut e, with_key, "key.ndjson"),
             (crate::fdevent::club_code(&hash), Some(hash.clone())),
@@ -44230,11 +44232,9 @@ mod tests {
         s.fd_position_id = "eeee0001".into();
         e.apply_settings(s);
         e.set_mode("fieldday-run").unwrap();
-        let own = club_key_hash("eeee0001");
-        e.set_fd_position_key(
-            tempo_net::fdsync::PositionKey::new(club_key_hash("this laptop's key")),
-            own.clone(),
-        );
+        let own_key = tempo_net::fdsync::PositionKey::new(club_key_hash("this laptop's key"));
+        let own = crate::fdevent::sha256_hex(own_key.secret());
+        e.set_fd_position_key(own_key);
         e.fd_host_start(journal.clone()).unwrap();
         let mut wrong = Vec::new();
         let mut check = |what: &str, ok: bool| {
@@ -44481,10 +44481,8 @@ mod tests {
         }
         // The trait object is all the socket loop can reach — so this is the call
         // the accept loop makes, not a shortcut past it.
-        let backend: Arc<dyn ClubBackend> = Arc::new(crate::fdbridge::EngineClubBackend(
-            shared.clone(),
-            club_key_hash,
-        ));
+        let backend: Arc<dyn ClubBackend> =
+            Arc::new(crate::fdbridge::EngineClubBackend(shared.clone()));
         let none = PositionKey::default();
         let version_refusal = |v| {
             engine_lock(&shared)

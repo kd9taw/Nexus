@@ -33018,10 +33018,7 @@ fn start_on_the_logbook(
                 "tempo: couldn't keep the club key, so a host will not know it next run: {e}"
             );
         }
-        // …with its hash as this laptop's own host bridge makes one: what its club code is
-        // made from, and what its own position is pinned to when it hosts.
-        let key_hash = club_key::sha256_hex(club_key.secret());
-        eng.set_fd_position_key(club_key, key_hash);
+        eng.set_fd_position_key(club_key);
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
         // restart loses nothing. Per-POSITION file (suffixed by posid), with a
@@ -33822,11 +33819,9 @@ fn start_on_the_logbook(
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
-                                let backend: Arc<dyn tempo_net::fdsync::ClubBackend> =
-                                    Arc::new(tempo_app::fdbridge::EngineClubBackend(
-                                        mgr_engine.clone(),
-                                        club_key::sha256_hex,
-                                    ));
+                                let backend: Arc<dyn tempo_net::fdsync::ClubBackend> = Arc::new(
+                                    tempo_app::fdbridge::EngineClubBackend(mgr_engine.clone()),
+                                );
                                 let sd = shutdown.clone();
                                 std::thread::spawn(move || {
                                     tempo_net::fdsync::serve_until(listener, backend, sd)

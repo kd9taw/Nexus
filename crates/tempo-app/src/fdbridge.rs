@@ -12,10 +12,9 @@
 //! / `fd_sync_*` / `fd_mirror_*` seam — rows and club state. Nothing here
 //! (and nothing behind the traits) can key TX, touch CAT, or change settings.
 //!
-//! ⛔ **A JOIN's club key stops here.** The host role hashes it with the function it was
-//! built with and hands the engine only the hash, so the engine and the club log hold no
-//! position's key but this station's own. The function is the shell's SHA-256 (this crate
-//! has no hash of its own to give it); a test gives it a throwaway one.
+//! ⛔ **A JOIN's club key stops here.** The host role hashes it with SHA-256
+//! ([`crate::fdevent::sha256_hex`]) and hands the engine only the hash, so the engine and the
+//! club log hold no position's key but this station's own.
 
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
@@ -30,9 +29,8 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// The host role: `fdsync::serve_until`'s backend over the shared engine, and the hash it pins
-/// club keys by (`key_hash(secret)` → lower-case hex: the shell's SHA-256).
-pub struct EngineClubBackend(pub Arc<Mutex<Engine>>, pub fn(&str) -> String);
+/// The host role: `fdsync::serve_until`'s backend over the shared engine.
+pub struct EngineClubBackend(pub Arc<Mutex<Engine>>);
 
 impl ClubBackend for EngineClubBackend {
     fn join(
@@ -49,7 +47,7 @@ impl ClubBackend for EngineClubBackend {
         // Hashed before the engine lock is taken, and only a key a Nexus makes: anything else
         // is no key at all (`fdevent::NO_POSITION_KEY`).
         let key_hash = if key.is_club_key() {
-            (self.1)(key.secret())
+            crate::fdevent::sha256_hex(key.secret())
         } else {
             String::new()
         };
