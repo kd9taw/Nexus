@@ -2,26 +2,36 @@ import { t } from '../i18n'
 import type { RadioStatus } from '../types'
 
 /**
- * BESIDE TUNE, while Nexus's own Flex client tunes with the radio's own carrier (Beta, off until a
- * tester's bench: `radio.flexTune`). The carrier keys at the radio's tune power, which Nexus shows
- * and never writes (operator ruling, 2026-10-08, "Radio's, shown, nothing written"), and if Nexus or
- * the network fails during a tune only the radio's own transmit timeout ends it. So the timeout is
- * shown when the radio reports one, and when it reports none (0, or nothing yet) the signed warning,
- * word for word: Tune still starts ("Warn only", the same day). When the licence refuses the
- * radio's carrier here (`flexTuneRefused`) the note says so, since Tune then keys nothing. Renders
- * nothing on every other station.
+ * BESIDE TUNE AND THE ATU, while Nexus's own Flex client tunes with the radio's own carrier or runs
+ * the radio's own ATU (Beta, each off until a tester's bench: `radio.flexTune`, `radio.flexAtu`).
+ * Both carriers key at the radio's tune power, which Nexus shows and never writes (operator ruling,
+ * 2026-10-08, "Radio's, shown, nothing written"), and if Nexus or the network fails during one only
+ * the radio's own transmit timeout ends it. So the timeout is shown when the radio reports one, and
+ * when it reports none (0, or nothing yet) the signed warning, word for word: Tune and the ATU still
+ * start ("Warn only", the same day). When the licence refuses the radio's carrier here
+ * (`flexTuneRefused`, `flexAtuRefused`) the note says so, since that control then keys nothing.
+ * The ATU line follows: why the last press started no cycle, in the station's words, or else the
+ * radio's own word for its cycle (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …), as data. Renders nothing on
+ * every other station.
  *
  * Drawn AFTER a strip's controls, never between them: Tune, ATU and Stop TX keep their places.
  */
 export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
-  const tune = radio.flexTune
-  if (!tune) return null
-  const timeoutMs = tune.txTimeoutMs ?? 0
+  const atu = radio.flexAtu
+  const readouts = radio.flexTune ?? atu?.tune
+  if (!readouts) return null
+  const timeoutMs = readouts.txTimeoutMs ?? 0
   return (
     <span className={`radio-tune-note${timeoutMs > 0 ? '' : ' warn'}`} role="note">
-      {tune.powerPct != null && <span>{t('operate.strip.tune.radioPower', { pct: tune.powerPct })}</span>}
+      {readouts.powerPct != null && <span>{t('operate.strip.tune.radioPower', { pct: readouts.powerPct })}</span>}
       <span>{timeoutMs > 0 ? timeoutWords(timeoutMs) : t('operate.strip.tune.noRadioTimeout')}</span>
       {radio.flexTuneRefused && <span>{t('operate.strip.tune.radioRefused')}</span>}
+      {radio.flexAtuRefused && <span>{t('operate.strip.atu.radioRefused')}</span>}
+      {atu?.refused ? (
+        <span>{atu.refused}</span>
+      ) : (
+        atu?.status && atu.status !== 'NONE' && <span>{t('operate.strip.atu.radioStatus', { status: atu.status })}</span>
+      )}
     </span>
   )
 }

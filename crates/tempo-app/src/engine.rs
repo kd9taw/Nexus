@@ -2831,6 +2831,10 @@ pub struct Engine {
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_tune`].
     flex_tune: Option<crate::dto::FlexTune>,
+    /// While Nexus's own Flex client runs the radio's own ATU: what is shown beside it. It also
+    /// makes an ATU press judged as CW where the radio puts the carrier; see
+    /// [`Self::observe_flex_atu`].
+    flex_atu: Option<crate::dto::FlexAtu>,
     /// The Flex VITA **meter** worker is running — the only thing that produces a
     /// FlexLib-scaled SWR on this radio. Display-only; see
     /// [`Self::observe_flex_meter_stream`].
@@ -4596,6 +4600,11 @@ const SSTV_MAX_TX_SECS: f64 = 330.0;
 /// before the operator keyed the mic would fire when they unkeyed — see [`Engine::take_atu_tune`].
 /// Generous next to the ~750 ms poll it normally waits on, tight next to any real over.
 const ATU_REQUEST_MAX_AGE_SECS: u64 = 5;
+/// Why an ATU press keys nothing while Nexus's own Flex client runs the radio's ATU and the
+/// licence allows the section's emission but not CW where the radio transmits
+/// ([`Engine::atu_tune_gate`]).
+const FLEX_ATU_OUTSIDE_CW: &str = "ATU keys nothing here: the radio's own carrier would be \
+                                   outside your CW privileges on this frequency";
 
 /// What the SSTV RX decoder is actually HEARING — the readout that tells a
 /// picture-less screen apart from a picture-less band.
@@ -5431,6 +5440,7 @@ impl Engine {
             flex_dax_tx: false,
             flex_radio_has_mic: false,
             flex_tune: None,
+            flex_atu: None,
             flex_meter_stream: false,
             last_dx_tier: None,
             last_msg_tier: None,
@@ -7548,6 +7558,21 @@ impl Engine {
     /// "Warn only"). Pushed by the radio loop on the change.
     pub fn observe_flex_tune(&mut self, tune: Option<crate::dto::FlexTune>) {
         self.flex_tune = tune;
+    }
+
+    /// Nexus's own Flex client started or stopped running the radio's own ATU, or the radio
+    /// reported something new beside it: its tune power or transmit timeout, as beside Tune, a
+    /// cycle's status, or why a press started no cycle (the ATU line). `None`: the client does not
+    /// run the radio's ATU (its switch is off until a tester's bench, or the radio reports no
+    /// tuner), and the ATU is what the CAT path says, as on every other link.
+    ///
+    /// An ATU cycle is the radio's own carrier, put where the radio's transmit slice says, so while
+    /// this stands an ATU press is also judged as CW at the frequency the radio transmits on, as the
+    /// radio's tune carrier is ([`Self::tune_allowed`]): [`Self::atu_tune_gate`]. The radio's own
+    /// transmit timeout is shown beside the ATU, with the warning when it is off, and never refuses
+    /// a press (operator ruling, 2026-10-08, "Warn only"). Pushed by the radio loop on the change.
+    pub fn observe_flex_atu(&mut self, atu: Option<crate::dto::FlexAtu>) {
+        self.flex_atu = atu;
     }
 
     /// The Flex VITA **meter** worker just started or stopped.
@@ -10598,6 +10623,12 @@ impl Engine {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
+        }
+        // Nexus's own Flex client runs the radio's ATU: the cycle is the radio's carrier, where
+        // the radio transmits, so it is judged as CW there too, as its tune carrier is. Only ever
+        // refuses more.
+        if self.flex_atu.is_some() && !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
+            return Err(FLEX_ATU_OUTSIDE_CW.to_string());
         }
         if let Some(owner) = self.tx_owner() {
             return Err(owner.busy_reason());
@@ -22245,6 +22276,10 @@ contact yourself."
         s.radio.flex_tune = self.flex_tune;
         s.radio.flex_tune_refused =
             self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
+        s.radio.flex_atu = self.flex_atu.clone();
+        s.radio.flex_atu_refused = self.flex_atu.is_some()
+            && self.tx_allowed()
+            && !self.tx_allowed_as(crate::settings::OperatingMode::Cw);
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -30762,6 +30797,75 @@ mod tests {
             (s.radio.flex_tune, s.radio.flex_tune_refused),
             (None, false)
         );
+    }
+
+    /// ⭐ THE RADIO'S OWN ATU CYCLE IS JUDGED AS CW TOO. While Nexus's Flex client runs the radio's
+    /// ATU (`observe_flex_atu`), a cycle is the radio's carrier at its transmit slice, so a press
+    /// needs CW privileges there as well as the section's, as the radio's tune carrier does. A
+    /// General in DIGU at 14.024 MHz may send FT8 1.5 kHz up but holds no CW privilege at 14.024:
+    /// the ATU of any other CAT path runs there, the client's does not and the press says why, a
+    /// press made before the client said so is dropped at the wire, and the snapshot says why
+    /// beside the ATU. At 14.030 both are allowed. In Phone at 14.100 the licence's own lock
+    /// refuses it first, as before, and the CW judgement adds nothing there.
+    #[test]
+    fn the_radios_own_atu_cycle_is_judged_as_cw_where_the_radio_puts_it() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.024, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+        e.observe_rig_tuner(Some(false), true);
+        assert!(
+            e.tx_allowed() && e.tx_enabled(),
+            "scene guard: FT8 1.5 kHz above 14.024 is a General's, and TX is on"
+        );
+        let press = |e: &mut Engine| (e.atu_tune(), e.snapshot().radio.flex_atu_refused);
+        assert_eq!(press(&mut e), (Ok(()), false), "another CAT path's ATU");
+
+        let atu = crate::dto::FlexAtu {
+            tune: crate::dto::FlexTune {
+                power_pct: Some(10),
+                tx_timeout_ms: Some(0),
+            },
+            status: Some("NONE".to_string()),
+            refused: None,
+        };
+        e.observe_flex_atu(Some(atu.clone()));
+        assert!(
+            !e.take_atu_tune(),
+            "the press made before is dropped at the wire"
+        );
+        assert_eq!(
+            press(&mut e),
+            (Err(FLEX_ATU_OUTSIDE_CW.to_string()), true),
+            "the radio's own cycle"
+        );
+        assert!(!e.take_atu_tune(), "nothing queued");
+        assert_eq!(e.snapshot().radio.flex_atu, Some(atu));
+
+        e.set_frequency(14.030, "20m", "USB");
+        assert_eq!(press(&mut e), (Ok(()), false), "inside the CW segment");
+        assert!(e.take_atu_tune());
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.100, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "scene guard: no phone for a General at 14.100"
+        );
+        assert_eq!(
+            press(&mut e),
+            (
+                Err("TX locked — this frequency is outside your license privileges".to_string()),
+                false
+            ),
+            "CW is a General's at 14.100, phone is not"
+        );
+
+        e.observe_flex_atu(None);
+        let s = e.snapshot();
+        assert_eq!((s.radio.flex_atu, s.radio.flex_atu_refused), (None, false));
     }
 
     #[test]

@@ -96,7 +96,13 @@ function status(v: unknown): void {
     typeof f.running !== 'boolean' || !eventId(f.event) ||
     ![f.qsoCount,f.sections,f.points,f.poweredPoints,f.bonusPoints,f.totalScore,f.eventStartUnix,f.eventEndUnix,f.rulesYear].every(integer) ||
     Number(f.eventEndUnix) <= Number(f.eventStartUnix) || !texts(f.workedSections,2048) || !texts(f.assistanceOn,64) ||
-    !Array.isArray(f.log) || f.log.length > 2048 || f.qsoCount !== f.log.length || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
+    !Array.isArray(f.log) || f.log.length > 2048 || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
+  // `qsoCount` is the contacts that COUNT, the summary sheet's raw non-dupe number, and `log` is
+  // every row; requiring the two to be equal refused the whole capture for one logged dupe. Two
+  // marks take a row out of the station's count, and the rows carry both: `dupe`, a duplicate the
+  // sponsor asked to have logged and scored zero, and `sat`, a contact worked through a bird when
+  // the status says `satelliteCredit: false` (Winter Field Day). Counted over the rows checked below.
+  let counted = 0
   for (const raw of f.log) {
     // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
     // the session-level class/section pair is gone from the status struct. Optional so a log
@@ -119,7 +125,9 @@ function status(v: unknown): void {
       (q.dupe !== undefined && typeof q.dupe !== 'boolean') ||
       (q.sat !== undefined && !text(q.sat)) ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
+    if (q.dupe !== true && (f.satelliteCredit !== false || !q.sat)) counted++
   }
+  if (f.qsoCount !== counted) throw new Error('invalidFieldDay')
   if (f.club !== undefined && f.club !== null) {
     const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused','keptOut'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||

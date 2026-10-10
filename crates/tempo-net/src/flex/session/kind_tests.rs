@@ -12,8 +12,9 @@
 
 use super::*;
 use crate::flex::encode::CwxText;
+use crate::flex::ptt_evidence::ATU_CEILING_MS;
 use tempo_flexsim::fault::{statuses, PGXL};
-use tempo_flexsim::session::Item;
+use tempo_flexsim::session::{Item, Rule};
 use tempo_flexsim::{Fault, Foreign, Session as SimSession};
 
 /// The bundled session's first handle: ours.
@@ -271,6 +272,36 @@ impl Bench {
             )
         })
     }
+
+    /// The radio answers `command` by `rules` from now on, in place of its own.
+    fn answer_with(&mut self, command: &str, rules: Vec<Rule>) {
+        let group = self.radio.rules.lookup(command).expect("a rule");
+        self.radio.rules.rules[group].1 = rules;
+    }
+
+    /// The starts the radio refused, as the session reported them.
+    fn refused(&self) -> Vec<&Event> {
+        self.events
+            .iter()
+            .filter(|e| matches!(e, Event::StartRefused { .. }))
+            .collect()
+    }
+}
+
+/// The bundled radio's own rules for `command`.
+fn bundled(command: &str) -> Vec<Rule> {
+    let s = SimSession::v4_gui_client();
+    let group = s.lookup(command).expect("a rule");
+    s.rules[group].1.clone()
+}
+
+/// A radio that answers with `code` and sends nothing else.
+fn refuses(code: &str) -> Vec<Rule> {
+    vec![Rule {
+        code: code.to_string(),
+        message: String::new(),
+        items: Vec::new(),
+    }]
 }
 
 fn cwx(text: &str) -> TxStart {
@@ -620,4 +651,170 @@ fn a_long_word_stopped_part_way_ends_on_the_radios_release() {
     assert_eq!(b.count(&Event::UnkeyUnconfirmed), 0, "{:?}", b.events);
     assert_eq!(b.count(&Event::UnkeyConfirmed), 1);
     assert_eq!(b.transmit_wire(), ["cwx send \"CQ\" 1", "cwx clear"]);
+}
+
+/// ⭐ An ATU start the radio refuses in its reply, with nothing keyed before it, ends there: no
+/// stop, no alarm, the session up, nothing of ours left on the air or to stop, and the refusal
+/// reported in the radio's words. The next press starts a cycle. A refusal that comes after a
+/// keyed sample is not that: the radio keyed for the start, its end is not proven, and both stops
+/// go out, the operator told, as before. (Which code a radio refuses with is not established: the
+/// simulator's error code stands in.)
+#[test]
+fn a_refused_atu_start_ends_quietly_and_says_why() {
+    let none: Vec<String> = Vec::new();
+    let code = u32::from_str_radix(tempo_flexsim::fault::REFUSED, 16).unwrap();
+    let mut b = Bench::ready(vec![], vec![]);
+    b.answer_with("atu start", refuses(tempo_flexsim::fault::REFUSED));
+    b.start(TxStart::AtuStart, None).expect("written");
+    b.advance(ATU_CEILING_MS + TRANSITION_TIMEOUT_MS);
+    assert_eq!(
+        (
+            b.transmit_wire(),
+            b.s.keyed(),
+            b.s.snapshot().ours_on_air,
+            b.count(&Event::UnkeyUnconfirmed),
+            b.s.phase()
+        ),
+        (vec!["atu start".to_string()], false, false, 0, Phase::Ready)
+    );
+    assert_eq!(
+        b.refused(),
+        [&Event::StartRefused {
+            kind: StartKind::Atu,
+            code,
+            message: String::new()
+        }]
+    );
+    assert!(b.s.transmit_ready(), "the readback idle again");
+    assert_eq!(b.end_ours(), none, "nothing of ours to stop");
+    // The next press, which the radio takes: one cycle, proven.
+    b.answer_with("atu start", bundled("atu start"));
+    b.start(TxStart::AtuStart, None).expect("tuning");
+    b.advance(2_000);
+    assert_eq!(b.transmit_wire(), ["atu start", "atu start"]);
+    assert_eq!((b.count(&Event::UnkeyConfirmed), b.s.keyed()), (1, false));
+
+    // The radio keyed before it refused.
+    let mut b = Bench::ready(vec![], vec![]);
+    b.answer_with("atu start", refuses(tempo_flexsim::fault::REFUSED));
+    b.s.start_lasting(&mut b.out, TxStart::AtuStart, None, b.now)
+        .expect("written");
+    b.line(&keyed_by(OURS, "TUNE"));
+    b.advance(100);
+    assert_eq!(
+        b.transmit_wire(),
+        ["atu start", "xmit 0", "transmit tune 0"]
+    );
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+    assert!(b.closed_unconfirmed());
+    assert!(b.refused().is_empty(), "{:?}", b.events);
+}
+
+/// ⭐ One ATU press, one cycle: `atu start`, then keyed through the cycle until the radio reports a
+/// result AND the interlock is idle again. The result alone is not the end: the bundled radio
+/// reports it 530 ms after the reply and falls idle at 960 ms. A cycle that never ends (the
+/// simulator's AtuNeverEnds) is ended at its ceiling, 20 s from the start's reply and not a
+/// millisecond before: both stops again, the operator told, the session closed.
+#[test]
+fn an_atu_press_starts_one_cycle_its_status_ends_it_and_a_stuck_one_alarms() {
+    let mut b = Bench::ready(vec![], vec![]);
+    b.start(TxStart::AtuStart, None).expect("tuning");
+    let started = b.now;
+    let (mut result, mut ended) = (None, None);
+    for _ in 0..2_000 {
+        b.advance(1);
+        if result.is_none() && b.s.model().atu.status.as_deref() == Some("TUNE_SUCCESSFUL") {
+            result = Some(b.now - started);
+        }
+        if ended.is_none() && !b.s.keyed() {
+            ended = Some(b.now - started);
+        }
+    }
+    assert_eq!((result, ended), (Some(530), Some(960)));
+    assert_eq!(b.transmit_wire(), ["atu start"]);
+    assert_eq!(
+        (
+            b.count(&Event::UnkeyConfirmed),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.s.phase()
+        ),
+        (1, 0, Phase::Ready)
+    );
+
+    // The cycle that never ends.
+    let mut b = Bench::ready(vec![Fault::AtuNeverEnds], vec![]);
+    b.start(TxStart::AtuStart, None).expect("tuning");
+    let replied = b.now;
+    b.advance(ATU_CEILING_MS - 1);
+    assert_eq!(
+        (
+            b.transmit_wire(),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.s.keyed()
+        ),
+        (vec!["atu start".to_string()], 0, true)
+    );
+    b.advance(1);
+    assert_eq!(
+        b.transmit_wire(),
+        ["atu start", "xmit 0", "transmit tune 0"]
+    );
+    assert_eq!(b.written_at("xmit 0"), Some(replied + ATU_CEILING_MS));
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+    assert!(b.closed_unconfirmed());
+}
+
+/// ⭐ Stop TX during an ATU cycle (rigctld's `T 0`): no command that ends a cycle part way is
+/// documented, so both stops go out, `xmit 0` and `transmit tune 0`. A radio that then reports the
+/// cycle's result and the idle interlock ends it with no alarm. One that does neither
+/// (AtuNeverEnds) gets both stops again 5 s after the first, the operator is told and the session
+/// closes: every stop's deadline, long before the cycle's ceiling.
+#[test]
+fn stop_tx_mid_cycle_sends_both_stops_and_a_cycle_that_goes_on_alarms() {
+    let mut b = Bench::ready(vec![], vec![]);
+    b.start(TxStart::AtuStart, None).expect("tuning");
+    b.advance(100);
+    assert_eq!(b.end_ours(), ["xmit 0", "transmit tune 0"]);
+    b.advance(TRANSITION_TIMEOUT_MS + 1_000);
+    assert_eq!(
+        b.transmit_wire(),
+        ["atu start", "xmit 0", "transmit tune 0"]
+    );
+    assert_eq!(
+        (
+            b.count(&Event::UnkeyConfirmed),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.s.keyed(),
+            b.s.phase()
+        ),
+        (1, 0, false, Phase::Ready)
+    );
+
+    let mut b = Bench::ready(vec![Fault::AtuNeverEnds], vec![]);
+    b.start(TxStart::AtuStart, None).expect("tuning");
+    b.advance(100);
+    assert_eq!(b.end_ours(), ["xmit 0", "transmit tune 0"]);
+    let stopped = b.now;
+    b.advance(TRANSITION_TIMEOUT_MS - 1);
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 0);
+    b.advance(1);
+    assert_eq!(
+        b.transmit_wire(),
+        [
+            "atu start",
+            "xmit 0",
+            "transmit tune 0",
+            "xmit 0",
+            "transmit tune 0"
+        ]
+    );
+    let again: Vec<u64> = b
+        .wrote
+        .iter()
+        .filter(|(_, c)| c == "xmit 0")
+        .map(|(t, _)| *t)
+        .collect();
+    assert_eq!(again, [stopped, stopped + TRANSITION_TIMEOUT_MS]);
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+    assert!(b.closed_unconfirmed());
 }

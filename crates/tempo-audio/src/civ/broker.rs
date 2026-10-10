@@ -64,7 +64,7 @@ use super::engine::{CivEngine, CivError, CivHandle, Expect};
 use super::frame::Frame;
 use super::scope::ScopeSweep;
 use crate::dualrx::ReceiverId;
-use crate::rigctld_server::{serve_connection, RigBackend};
+use crate::rigctld_server::{serve_connection, RigBackend, SetFault};
 
 /// How THIS radio lets a command name the receiver it is for — decided once, from the model,
 /// never from the bus. See the module note.
@@ -595,6 +595,15 @@ impl CivBackend {
 
     fn ack(&self, f: Frame) -> bool {
         self.h.transact(f, Expect::Ack).is_ok()
+    }
+    /// [`Self::ack`] for a write whose client must hear WHY it did not take: `FA` is the radio
+    /// refusing it; no reply, or no engine left to carry one, is the radio not answering.
+    fn answer(&self, f: Frame) -> Result<(), SetFault> {
+        match self.h.transact(f, Expect::Ack) {
+            Ok(_) => Ok(()),
+            Err(CivError::Nak) => Err(SetFault::Refused),
+            Err(CivError::Timeout | CivError::Gone) => Err(SetFault::NoAnswer),
+        }
     }
     fn read(&self, f: Frame, cmd: u8, sub: Option<u8>) -> Result<Frame, CivError> {
         self.h.transact(f, Expect::Reply { cmd, sub })
@@ -1207,16 +1216,24 @@ impl RigBackend for CivBackend {
     }
 
     fn set_freq(&self, hz: u64) -> bool {
+        self.try_set_freq(hz).is_ok()
+    }
+
+    /// The dial write, an `FA` told apart from a radio that did not answer. A selection stranded
+    /// on Sub stays a refusal: the daemon will not write blind.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
         let mut g = self.band(); // the `05` write hits the SELECTED band
                                  // A write with the selection stranded on Sub would land the downlink
                                  // in the uplink's band — re-assert Main first, refuse otherwise.
+        if !self.ensure_main(&mut g) {
+            return Err(SetFault::Refused);
+        }
         if self.main_dial_by_name() {
             // IC-7610: MAIN's dial by name (`25 00`), whichever band the operator has selected —
-            // the receiver `f` reads. Same refusal over a selection Nexus stranded.
-            return self.ensure_main(&mut g)
-                && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
+            // the receiver `f` reads.
+            return self.answer(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
         }
-        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz, self.model))
+        self.answer(commands::set_freq(self.addr, hz, self.model))
     }
 
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
@@ -2885,6 +2902,36 @@ mod tests {
                 "0x0\n",
                 "0x0\n",
             )
+        );
+    }
+
+    /// ⭐ A DIAL THE RADIO DID NOT ANSWER IS NOT A DIAL IT REFUSED. Three dial writes to an IC-7300,
+    /// through the encoder the daemon serves: one it takes, one it answers NG (`FA`: 145 MHz, which
+    /// this fixture's IC-7300 does not tune) and one it says nothing to. The NG is `RPRT -1`, a
+    /// refusal, as it always was. The silence is Hamlib's `RPRT -5` (ETIMEOUT), which Nexus's own
+    /// client reads as the link, not the radio ([`crate::rig::rprt_is_link_fault`]); it was
+    /// `RPRT -1` as well, so a radio that went quiet mid-QSY was counted as refusing the dial.
+    #[test]
+    fn a_dial_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        regs.lock().unwrap().covers_hz = vec![(30_000, 74_800_000)];
+        let reply = |line: &str| match handle_command(line, &*b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("{line} closed the connection"),
+        };
+        let taken = reply("F 7074000.000000");
+        let refused = reply("F 145000000.000000");
+        regs.lock().unwrap().drop_dial_writes = 1;
+        let unanswered = reply("F 28400000.000000");
+        assert_eq!(
+            (
+                taken.as_str(),
+                refused.as_str(),
+                unanswered.as_str(),
+                regs.lock().unwrap().main_hz
+            ),
+            ("RPRT 0\n", "RPRT -1\n", "RPRT -5\n", 7_074_000)
         );
     }
 

@@ -2,11 +2,12 @@
 //! `\dump_state` carries for WSJT-X (135.7 kHz to 1.3 GHz). Checked through the real
 //! `RadioLoop::step`, a `Rig` over TCP and Nexus's own CI-V daemon in front of a fake radio: what
 //! the loop's capability probe hands the engine, what that does to a satellite pick, and what the
-//! operator is told when the radio itself refuses a frequency.
+//! operator is told when the radio itself refuses a frequency, or does not answer at all.
 //!
 //! The fake radio takes every dial unless a scene gives it `covers_hz`; then it answers NG (`FA`)
 //! outside those ranges. That a real radio NGs a dial it cannot tune is the fixture's model of
-//! CI-V, not a bench measurement.
+//! CI-V, not a bench measurement. Its `drop_dial_writes` makes it say nothing to a dial write: a
+//! radio that went quiet, which is not a refusal.
 use super::*;
 use crate::civ::broker::CivDaemon;
 use crate::civ::commands::IcomModel;
@@ -115,6 +116,30 @@ impl Scene {
             self.step();
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Step as [`Self::settle`] does, noting the CAT status line each time it changes: the words
+    /// the operator was shown, in order, from the first step on.
+    fn said_until(&mut self, done: impl Fn(&Self) -> bool) -> Vec<String> {
+        let mut said = Vec::new();
+        let mut last = self.told().0;
+        let mut step = |s: &mut Self| {
+            s.step();
+            let line = s.told().0;
+            if line != last {
+                said.push(line.clone());
+                last = line;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !done(self) && Instant::now() < deadline {
+            step(self);
+        }
+        for _ in 0..10 {
+            step(self);
+        }
+        said
     }
 
     fn wire_len(&self) -> usize {
@@ -349,6 +374,217 @@ fn the_licence_gate_still_refuses_phone_in_the_2_m_cw_segment_on_an_ic905() {
             144_050_000,
             (144.05, "2m".to_string(), false),
             (true, false),
+        )
+    );
+}
+
+/// A QSY from 20 m to 28.400 MHz on an IC-7300 that never answers the dial write, stepped as
+/// `run_radio` steps for `window`. `off` switches the whole radio off; otherwise it answers
+/// everything but a dial write. Returns what the operator was told about 28.400 MHz (each change
+/// of the CAT status line naming it, in order), whether any status line said "refused", the `05`
+/// writes on the wire, the dial the radio refused, the dial given up on, and the dials the engine
+/// and the radio are left on. How long each step that carried a write held the loop goes to
+/// stderr (`--nocapture`): every write to a silent radio holds it for the CI-V deadline.
+#[allow(clippy::type_complexity)]
+fn unanswered_dial(
+    off: bool,
+    window: Duration,
+) -> (Vec<String>, bool, usize, Option<f64>, Option<u64>, f64, u64) {
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+    {
+        let mut r = s.regs.lock().unwrap();
+        r.drop_dial_writes = u32::MAX;
+        r.off = off;
+    }
+    let n = s.wire_len();
+    s.engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+    let (mut said, mut held_ms) = (Vec::new(), Vec::new());
+    let mut last = s.told().0;
+    let end = Instant::now() + window;
+    while Instant::now() < end {
+        let writes = s.dial_writes(n).len();
+        let started = Instant::now();
+        s.step();
+        if s.dial_writes(n).len() > writes {
+            held_ms.push(started.elapsed().as_millis());
+        }
+        let line = s.told().0;
+        if line != last {
+            said.push(line.clone());
+            last = line;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let writes = s.dial_writes(n).len();
+    eprintln!(
+        "unanswered dial, radio {}: {writes} dial writes in {window:?}; the steps that carried \
+         one held the loop {held_ms:?} ms",
+        if off { "off" } else { "answering reads only" }
+    );
+    (
+        said.iter()
+            .filter(|l| l.contains("28.4000"))
+            .cloned()
+            .collect(),
+        said.iter().any(|l| l.contains("refused")),
+        writes,
+        s.told().1,
+        s.state.dial_giveup,
+        s.judged().0,
+        s.main_hz(),
+    )
+}
+
+/// ⭐ A DIAL THE RADIO DOES NOT ANSWER IS SENT THREE TIMES, AND IS NOT CALLED REFUSED. The IC-7300
+/// answers everything but the dial write. The loop sends the dial three times, as it did when it
+/// counted the silence as a refusal, says each time that the rig did not reply, then gives the
+/// dial up without recording a refusal and shows the dial the radio is really on. The silence was
+/// "the radio refused 28.4000 MHz — it does not cover that frequency"; and once it stopped being a
+/// refusal, the dial went out on every tick for as long as the radio stayed quiet.
+#[test]
+fn a_dial_the_radio_does_not_answer_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_dial(false, Duration::from_secs(5)),
+        (
+            vec![
+                "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(28_400_000),
+            14.074,
+            14_074_000,
+        )
+    );
+}
+
+/// ⭐ …AND THE SAME FOR A RADIO THAT IS SWITCHED OFF. Every frame goes unanswered, reads too, so the
+/// circuit breaker trips once the daemon's cached dial runs out. The dial still goes out three
+/// times, and no more across the trip; the heal reads the daemon's cached dial.
+#[test]
+fn a_dial_sent_to_a_radio_that_is_off_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_dial(true, Duration::from_secs(8)),
+        (
+            vec![
+                "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(28_400_000),
+            14.074,
+            14_074_000,
+        )
+    );
+}
+
+/// ⭐ AN UNANSWERED DIAL WRITE FEEDS THE CIRCUIT BREAKER AND THE GIVE-UP; AN NG THE GIVE-UP ALONE.
+/// Counted at the loop's second write, its first retry, where only the dial goes out: the QSY's own
+/// write comes with the mode, whose ack proves the link and clears the breaker's misses. A silence
+/// is then one miss and two tries toward giving the dial up. An NG, the control, is two tries and
+/// no miss. The silence was two tries and no miss when it counted as a refusal, and one miss and no
+/// tries when it stopped counting at all.
+#[test]
+fn an_unanswered_dial_write_counts_toward_the_breaker_and_the_give_up_and_an_ng_toward_the_give_up()
+{
+    let second_write = |covers_hz: &[(u64, u64)], silent: u32, to: (f64, &str)| {
+        let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), covers_hz);
+        s.regs.lock().unwrap().drop_dial_writes = silent;
+        let n = s.wire_len();
+        s.engine.lock().unwrap().set_frequency(to.0, to.1, "USB");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while s.dial_writes(n).len() < 2 && Instant::now() < deadline {
+            s.step();
+            // No heavy poll between the writes: its good read would clear the miss being counted.
+            s.state.last_rig_poll = now_unix_ms() + 60_000.0;
+        }
+        (
+            s.dial_writes(n).len(),
+            s.state.freq_misses,
+            s.state.dial_fail_count,
+        )
+    };
+    assert_eq!(
+        (
+            second_write(&[], u32::MAX, (28.4, "10m")),
+            second_write(&[(30_000, 74_800_000)], 0, (145.0, "2m")),
+        ),
+        ((2, 1, 2), (2, 0, 2))
+    );
+}
+
+/// ⭐ A DIAL NOTE COMES DOWN WHEN THE DIAL LANDS. A dial write the radio did not answer, and one it
+/// refused, are each followed by a write it takes: the note gives way to the confirmation, and the
+/// radio is on the dial. A line published after the note (here a Test CAT result) is newer than
+/// the dial and stays. The note stayed up over a radio that had taken the dial: "28.4000 MHz not
+/// sent — no reply from the rig" with the radio on 28.400 MHz.
+#[test]
+fn a_dial_note_comes_down_when_the_dial_lands_and_a_newer_line_stays() {
+    let confirmed = "CAT confirmed — rig accepted a command".to_string();
+    // A silence, then the retry lands.
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
+    s.regs.lock().unwrap().drop_dial_writes = 1;
+    s.engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+    let silent = (s.said_until(|s| s.main_hz() == 28_400_000), s.main_hz());
+    // An NG, then the radio takes the same dial on the retry; `newer` is published in between.
+    let refused_then_taken = |newer: Option<&str>| {
+        let mut s = Scene::new(
+            IcomModel::Ic7300,
+            3073,
+            (14.074, "20m"),
+            &[(30_000, 74_800_000)],
+        );
+        s.engine.lock().unwrap().set_frequency(145.0, "2m", "USB");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !s.told().0.contains("(1/3)") && Instant::now() < deadline {
+            s.step();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let note = s.told().0;
+        if let Some(line) = newer {
+            s.engine
+                .lock()
+                .unwrap()
+                .set_cat_status(Some(true), line.to_string());
+        }
+        s.regs.lock().unwrap().covers_hz.clear();
+        let said = s.said_until(|s| s.main_hz() == 145_000_000);
+        (note, said, s.told().0, s.main_hz())
+    };
+    assert_eq!(
+        (
+            silent,
+            refused_then_taken(None),
+            refused_then_taken(Some("Connected — 14.074 MHz")),
+        ),
+        (
+            (
+                vec![
+                    "28.4000 MHz not sent — no reply from the rig (1/3)".to_string(),
+                    confirmed.clone(),
+                ],
+                28_400_000,
+            ),
+            (
+                "145.0000 MHz refused by the rig (1/3)".to_string(),
+                vec![confirmed.clone()],
+                confirmed,
+                145_000_000,
+            ),
+            (
+                "145.0000 MHz refused by the rig (1/3)".to_string(),
+                vec![],
+                "Connected — 14.074 MHz".to_string(),
+                145_000_000,
+            ),
         )
     );
 }

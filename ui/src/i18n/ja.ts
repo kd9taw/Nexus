@@ -1095,6 +1095,9 @@ export const JA: PartialCatalog = {
   "logbook.empty": "記録された交信はまだありません。",
   "logbook.emptySearch": "「{{query}}」に一致する交信はありません。",
   "logbook.reading": "ログブックを読み込み中…",
+  "logbook.readFailed": "ログブックを読み込めませんでした: {{reason}}。",
+  "logbook.readFailed.retry": "再試行",
+  "logbook.count.stale": "最新ではありません: ログブックの最後の変更より前に数えた件数です。",
   "logbook.rows.loading": "読み込み中…",
   // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
   "logbook.keys.move": "↑と↓で交信を移動し、PgUpとPgDnで1ページずつ、HomeとEndで最初と最後に移動します。",
@@ -5679,6 +5682,8 @@ export const JA: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "無線機の送信タイムアウト {{min}} 分",
   "operate.strip.tune.noRadioTimeout": "無線機の送信タイムアウトがオフです。チューン中にNexusまたはネットワークが故障すると、キャリアを止めるものがありません。SmartSDRで送信タイムアウトを設定してください。",
   "operate.strip.tune.radioRefused": "ここではTuneは何も送信しません。無線機自身のキャリアは、この周波数ではCWの運用範囲外になります。",
+  "operate.strip.atu.radioStatus": "無線機のATU: {{status}}",
+  "operate.strip.atu.radioRefused": "ここではATUは何も送信しません。無線機自身のキャリアは、この周波数ではCWの運用範囲外になります。",
   "operate.strip.rigDiverge.label": "無線機: {{mode}}",
   "operate.strip.rigDiverge.title": "無線機は {{rigMode}} ですが、Nexus は {{mode}} です。無線機側で何かが変更しました（SmartSDR、他のプログラム、またはモードつまみ）。送信とログには {{mode}} を使います — 無線機を合わせるか、ここでバンドを選び直してください。",
   "operate.strip.narrowFilter.label": "フィルター {{hz}} Hz",

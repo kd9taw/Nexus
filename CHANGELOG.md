@@ -241,6 +241,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not apply there. Tune is also refused where the radio's carrier would fall outside your
   CW privileges. Until it is switched on, Tune on the Flex native client works as before.
   NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: the radio's own ATU through the Flex native client, built and off until a tester
+  has checked it on a radio.** Once it is switched on, the Flex native client offers the ATU
+  button when the radio reports a tuner fitted, and each press runs one cycle of the radio's own
+  tuner. Beside the ATU, Nexus shows the radio's tune power and its transmit timeout, as beside
+  Tune, and says so when the radio has no transmit timeout; then the cycle's result in the
+  radio's own word (TUNE_SUCCESSFUL, TUNE_FAIL and so on), or why a press started no cycle. A
+  press the radio refuses ends there, with its reason and no alarm. FlexRadio documents no command
+  that stops a cycle part way, so Stop TX during a cycle sends the radio both its unkey and its
+  tune-off. If the radio has not reported the cycle finished and the transmitter idle 5 seconds
+  after Stop TX, or a cycle runs for more than 20 seconds, Nexus sends both again, says in red
+  that the radio may still be transmitting, and drops the connection. The ATU is also refused
+  where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
+  Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
 
 ### Changed
 
@@ -312,6 +325,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
   the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
   export sections now describe the objectives and the sponsor's submission.
+- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says.** With
+  Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or localhost) where a
+  rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as it already did when
+  rigctld TCP Port was set to the same port. With any other port it started a rigctld of its own
+  between them, and in front of wfview that one refused every command, PTT included, whenever
+  wfview reported the radio switched off. Follow the wfview steps in the Icom guide and leave
+  rigctld TCP Port as it is. Start wfview first: when nothing answers at the address as Nexus
+  connects, Nexus still starts its own rigctld in front of it, as it does for a rigctld on another
+  computer. When the rigctld Nexus shares this way goes away, Test CAT names its address rather
+  than rigctld TCP Port. NEEDS-BENCH: wfview's rigctld on a real radio, with rigctld TCP Port left
+  at 4534, should connect, follow the dial and key PTT, Rear/Data keying the DATA input.
 
 ### Fixed
 
@@ -335,6 +359,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
   the station's country); the browser's Chase box and recall card show no bearing, because only the
   station can work it out.
+- **Nexus Remote shows a contest log that holds a duplicate.** In Sweepstakes, CQ WW, CQ WPX,
+  the ARRL VHF contests and the New York QSO Party a repeat contact is logged and scored zero, as
+  the sponsors ask. One such repeat in the log left the Contest screen on Nexus Remote blank, with
+  "Station data unavailable. Refresh or reconnect." however often you refreshed. It now shows the
+  log, the repeat marked, with the QSO count the shack shows; and a log that its repeats take past
+  what the browser can show says it is too large, rather than unavailable.
 - **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
   satellite contact no credit, and the contest journal was skipped for a log whose scored count
   was zero, so a log of satellite contacts alone was never written to disk and a restart or a
@@ -424,6 +454,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
   worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
   slow disk. The globe now shows its count once the squares are counted.
+- **The Logbook says when it couldn't read your log, with a Retry button.** When a read of the
+  logbook failed, on a database error for example, the Logbook kept saying "Reading the logbook…"
+  until your next contact, and closing and reopening it did not try again. It now says "Couldn't
+  read the logbook" with the reason and a Retry button, and reopening the Logbook tries again. While
+  a change is still being saved, the Logbook keeps saying "Reading the logbook…" as before, and
+  reopening it now tries again there too. A count from before your latest change says "Out of
+  date" in its tooltip, and an empty log no longer says "No logged contacts yet." while your first
+  contact is being counted.
+- **JS8's ✓ marks and the band map's struck-through calls no longer blink when a new station is
+  heard.** Each station newly heard in JS8, and each new call on the band-map window, cleared every
+  ✓, name and comment in the JS8 station list, and every strike-through on the band map, until the
+  log answered: for a moment, and longer on a slow disk. Every row now keeps its marks, and only
+  the new call shows "—" until the log has answered for it.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -543,6 +586,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
   is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
   on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
+- **A native CI-V Icom that does not answer a frequency change is no longer reported as refusing
+  it.** On Nexus's own CI-V connection (USB or the Icom network connection), a frequency change
+  the radio did not answer at all was counted as a refusal: after three, the CAT status said "the
+  radio refused … — it does not cover that frequency", the dial went back to where the radio was,
+  and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
+  frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
+  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig
+  (1/3)", the words Nexus already used for a radio on Hamlib's rigctld. After three tries, as
+  before, Nexus stops asking and shows the frequency the radio is on: "… MHz not sent — no reply
+  from the rig after 3 tries; still on …". Pick the frequency again to retry. A radio on Hamlib's
+  rigctld that does not answer a frequency change now gets the same three tries: Nexus used to send
+  it again on every pass of the radio loop until CAT dropped, and never stopped for a radio that
+  still answered reads, each try holding up the loop, and with it a transmission due to start, for
+  as long as the reply could take. NEEDS-BENCH: an Icom that stops answering during a QSY
+  (switched off, or its CI-V lead pulled) should say no reply from the rig, never that it refused
+  the frequency, stop after three tries, and take the frequency when you pick it again with the
+  radio answering.
+- **Nexus's own FlexRadio and OmniRig connections no longer give the radio a frequency range it
+  does not have.** Both reported 135.7 kHz to 1.3 GHz as the radio's receive range: the range the
+  CAT broker gives WSJT-X so that it will set any frequency, never the radio's own. So a FLEX-6400
+  was taken to receive 2 m, and a frequency above 1.3 GHz (a satellite downlink or a transverter's
+  band) was refused with "This radio doesn't cover…" before the radio was asked. Nexus now treats
+  their range as unknown, as it does a native CI-V radio's: the frequency goes to the radio, which
+  answers for itself. What WSJT-X and other programs read through the CAT broker is unchanged, and
+  so is the check against your licence privileges. NEEDS-BENCH: a FLEX radio, and a radio on
+  OmniRig, asked for a frequency it cannot tune should say that the radio refused it.
+- **The CAT status no longer says a frequency was not sent once the radio has taken it.** When a
+  frequency change went unanswered, or was refused once, and the next try went through, the CAT
+  status kept its note ("… MHz not sent — no reply from the rig", or "… MHz refused by the rig
+  (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
+  rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
+  is on the line by then.
+- **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
+  (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
+  wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus
+  refused the port: wfview answers Nexus's check with "ChkVFO: 0", which Nexus took for some other
+  program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
+  ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
+  Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
+  included; a frequency in that form from any other rigctld server is read too. Nexus now shares
+  wfview's rigctld this way whatever rigctld TCP Port says (see Changed). NEEDS-BENCH:
+  wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
+  (Rear/Data keying the DATA input).
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn

@@ -564,6 +564,36 @@ fn host_is_this_machine(host: &str) -> bool {
         || h.starts_with("127.")
 }
 
+/// The Network Address to share DIRECTLY: a NET rigctl radio's, when that address is on this
+/// machine (wfview's rigctld, or one the operator runs). `None` everywhere else.
+///
+/// NET rigctl means "the rigctld at this address", and one on this computer needs nothing in
+/// between: Nexus talks to it itself, as the coexist branch has always done when rigctld TCP Port
+/// happened to be the same number. With any other number Nexus started a second rigctld (`-m 2`)
+/// in front of it, and that one is not a neutral relay. Hamlib's rigctld (4.7.1, the one Nexus
+/// ships) asks the rigctld behind it for the power state as each client connects, and while that
+/// says off it refuses every command, PTT included. wfview says off until its radio has answered
+/// it, and again whenever it decides the radio is off.
+///
+/// Not for:
+/// * an address on another machine, which is still reached through Nexus's own rigctld;
+/// * rigctld TCP Port's own number, which the coexist probe asks already;
+/// * our own CAT broker's port, where Nexus would be talking to itself;
+/// * any other model, or any connection but Network (OmniRig and the Icom network client never
+///   are).
+///
+/// Pure config: the caller probes the address and shares only a rigctld's answer.
+fn net_rigctld_on_this_machine(t: &Transport) -> Option<&str> {
+    // 2 is Hamlib's NET rigctl.
+    if t.rig_model != 2 || !t.is_network() {
+        return None;
+    }
+    let (host, port) = split_host_port(&t.rig_addr)?;
+    let here =
+        host_is_this_machine(host) && port != t.rigctld_port && t.broker_self_port != Some(port);
+    here.then(|| t.rig_addr.trim())
+}
+
 /// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
 /// dial the rig at it: it would be its own rig. Pure config, so it needs no socket of its own
 /// — but it is only ASKABLE once the probe has said the port is free.
@@ -3631,6 +3661,9 @@ struct RadioLoop {
     /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
     /// pushed to the engine (`None` inside: Tune is Nexus's tone).
     flex_tune_pushed: Option<Option<tempo_app::dto::FlexTune>>,
+    /// What is shown beside the ATU while the Flex client runs the radio's own ATU, as last
+    /// pushed to the engine (`None` inside: the client does not).
+    flex_atu_pushed: Option<Option<tempo_app::dto::FlexAtu>>,
     /// The CW speed the Flex client's radio last reported, while its CW is switched on: a change
     /// to a speed this loop did not set is followed (`last_cat_wpm`).
     cw_radio_wpm: Option<u32>,
@@ -3818,13 +3851,20 @@ struct RadioLoop {
     cat_port_identity: Option<(u16, u16, String)>,
     /// (configured port, port actually in use) when the rig came back under a new name.
     cat_port_alias: Option<(String, String)>,
-    /// A dial frequency the rig REFUSED (`RPRT <negative>`) — do not keep re-sending it. Mirrors
-    /// `mode_giveup`: the operator's HF-only radio cannot be talked into covering 2 m by asking
-    /// 8 times a second. Cleared by an explicit operator retune (the force branch) or any
-    /// successful dial set.
+    /// A dial frequency the rig REFUSED (`RPRT <negative>`), or did not answer
+    /// [`DIAL_SET_MAX_TRIES`] times — do not keep re-sending it. Mirrors `mode_giveup`: the
+    /// operator's HF-only radio cannot be talked into covering 2 m by asking 8 times a second.
+    /// Cleared by an explicit operator retune (the force branch), a successful set of that dial,
+    /// or the link coming back (`on_cat_link_back`).
     dial_giveup: Option<u64>,
-    /// Consecutive refusals of the currently-commanded dial, against [`DIAL_SET_MAX_TRIES`].
+    /// Consecutive failed sends of the currently-commanded dial, refused or unanswered, against
+    /// [`DIAL_SET_MAX_TRIES`].
     dial_fail_count: u32,
+    /// The engine's CAT-status publish count ([`Engine::cat_probe_gen`]) just after this loop put
+    /// a dial note up ("… not sent — no reply from the rig", "… refused by the rig (1/3)"). While
+    /// the count has not moved, the note is still what the operator reads, so a dial that then
+    /// lands takes it down. It used to stay up after the radio had taken the dial.
+    dial_note_gen: Option<u64>,
     /// RX frequency ranges (Hz) read from the rig's Hamlib capability table once per CAT
     /// confirmation. `None` = not probed yet or unknown (must fail OPEN — see
     /// [`crate::rig::Rig::read_rx_ranges`]).
@@ -4134,6 +4174,7 @@ impl RadioLoop {
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
             flex_tune_pushed: None,
+            flex_atu_pushed: None,
             cw_radio_wpm: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
@@ -4180,6 +4221,7 @@ impl RadioLoop {
             cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
+            dial_note_gen: None,
             rx_ranges: None,
             rx_ranges_probed: false,
             handoff_deferred: false,
@@ -5631,6 +5673,9 @@ impl RadioLoop {
     ///  3. HEAL the app's belief from the rig itself. `set_frequency` writes the dial optimistically
     ///     the moment the operator asks, so on a refusal the UI is showing a frequency that exists
     ///     nowhere but in our own state. Read the rig and adopt what it says.
+    ///
+    /// A dial the rig does not ANSWER (a link fault) takes the same budget and the same heal, in
+    /// its own words, and records no refusal: see the `Err` arm.
     fn push_dial(
         &mut self,
         rig: &mut Rig,
@@ -5673,35 +5718,46 @@ impl RadioLoop {
             }
             Err(e) => {
                 let mhz = dial as f64 / 1_000_000.0;
-                // A LINK fault — the rig did not answer — is not a refusal and must not count
-                // toward the band give-up: it feeds the circuit breaker instead (the next heavy
-                // poll trips it with a real read), and the give-up stays clear so the band is
-                // not blacklisted for the rest of the session over a radio that was off.
-                if is_link_fault(&e) {
-                    if rig.has_control() {
-                        self.freq_misses = self.freq_misses.saturating_add(1);
-                    }
-                    return Some(format!(
-                        "{mhz:.4} MHz not sent — {}",
-                        dial_failure_brief(&e)
-                    ));
+                // A LINK fault — the rig did not answer — is not a refusal, and is never called
+                // one: it is "not sent", records no refused dial, and feeds the circuit breaker
+                // (the next heavy poll trips it with a real read). It still spends the same
+                // budget. Each send to a silent radio holds the loop for the link's whole
+                // deadline, and one in flight at a slot boundary delays an FT key-on by that
+                // much, so a dial the radio never answers is sent DIAL_SET_MAX_TRIES times, as
+                // when the silence was counted as a refusal, not on every tick until the breaker
+                // trips (never, for a radio that answers reads). The give-up blacklists nothing
+                // for the session: every recovery site forgives it (`on_cat_link_back`), and so
+                // does the operator's next retune. The try that spends the budget picks the words.
+                let silent = is_link_fault(&e);
+                if silent && rig.has_control() {
+                    self.freq_misses = self.freq_misses.saturating_add(1);
                 }
+                let brief = dial_failure_brief(&e);
                 self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
-                    return Some(format!(
-                        "{mhz:.4} MHz {} ({}/{DIAL_SET_MAX_TRIES})",
-                        dial_failure_brief(&e),
-                        self.dial_fail_count
-                    ));
+                    let tries = format!("({}/{DIAL_SET_MAX_TRIES})", self.dial_fail_count);
+                    return Some(if silent {
+                        format!("{mhz:.4} MHz not sent — {brief} {tries}")
+                    } else {
+                        format!("{mhz:.4} MHz {brief} {tries}")
+                    });
                 }
-                // Budget spent: this radio will not go there. Stop asking, and stop showing a dial
-                // the radio refused — the rig's own frequency is the only true answer.
+                // Budget spent: stop asking, and stop showing a dial the radio is not on — the
+                // rig's own frequency is the only true answer. A refusal also says the radio does
+                // not go there; a silence says only that it did not answer.
                 self.dial_giveup = Some(dial);
                 self.dial_fail_count = 0;
-                eprintln!(
-                    "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving up \
-                     (the radio does not appear to cover {mhz:.4} MHz)."
-                );
+                if silent {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) went unanswered {DIAL_SET_MAX_TRIES} times — \
+                         giving up until the link recovers or the dial is asked for again."
+                    );
+                } else {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving \
+                         up (the radio does not appear to cover {mhz:.4} MHz)."
+                    );
+                }
                 let healed = rig.read_freq().ok();
                 {
                     let mut eng = engine_lock(engine);
@@ -5709,17 +5765,21 @@ impl RadioLoop {
                         self.last_dial = hz;
                         eng.observe_rig_freq(hz);
                     }
-                    eng.set_rig_refused_dial(Some(mhz));
-                }
-                Some(match healed {
-                    Some(hz) => format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency; \
-                         still on {:.4} MHz",
-                        hz as f64 / 1_000_000.0
-                    ),
-                    None => {
-                        format!("the radio refused {mhz:.4} MHz — it does not cover that frequency")
+                    if !silent {
+                        eng.set_rig_refused_dial(Some(mhz));
                     }
+                }
+                let still_on = healed.map(|hz| format!("; still on {:.4} MHz", hz as f64 / 1e6));
+                Some(if silent {
+                    format!(
+                        "{mhz:.4} MHz not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{}",
+                        still_on.unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "the radio refused {mhz:.4} MHz — it does not cover that frequency{}",
+                        still_on.unwrap_or_default()
+                    )
                 })
             }
         }
@@ -6146,6 +6206,16 @@ impl RadioLoop {
         if self.flex_tune_pushed != Some(flex_tune) {
             self.flex_tune_pushed = Some(flex_tune);
             engine_lock(engine).observe_flex_tune(flex_tune);
+        }
+        // …and, while the client runs the radio's own ATU (switched on only once a tester's bench
+        // has confirmed it) and the radio reports a tuner fitted, what is shown beside the ATU:
+        // the same readouts, and the ATU line (a cycle's result, or why a press started none). The
+        // engine then judges an ATU press as CW where the radio transmits too. Pushed on the
+        // change, before the ATU press below is taken.
+        let flex_atu = flex.and_then(crate::flex::FlexDaemon::radio_atu);
+        if self.flex_atu_pushed.as_ref() != Some(&flex_atu) {
+            self.flex_atu_pushed = Some(flex_atu.clone());
+            engine_lock(engine).observe_flex_atu(flex_atu);
         }
 
         self.apply_remote_radio(engine, rig, now);
@@ -7173,6 +7243,8 @@ impl RadioLoop {
             let mut retune_note: Option<String> = None;
             // A DIAL refusal, held separately so the mode note below cannot bury it.
             let mut dial_note: Option<String> = None;
+            // The rig took a dial this tick: a dial note still up is out of date.
+            let mut dial_landed = false;
             if force_retune {
                 // New native intent (including local TX arming's existing
                 // assert) owns this work; an observation never sets this flag.
@@ -7278,6 +7350,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Band-crossing pick: the rig's band-stack may have just
                                 // overridden the mode commanded above — verify and win.
                                 self.reassert_mode_after_band_cross(
@@ -7380,8 +7453,8 @@ impl RadioLoop {
                     // force path: `set_mode` alone shifts a pitch-offset rig, so a mode change
                     // whose dial is unchanged must still re-assert the dial in the DESTINATION
                     // mode's convention, or the shift stands and the read-back adopts it.
-                    // `dial_giveup` still stops a frequency the radio has REFUSED from being
-                    // re-sent every tick — the HF-only-rig-on-2 m storm.
+                    // `dial_giveup` still stops a frequency the radio has REFUSED (or never
+                    // answered) from being re-sent every tick — the HF-only-rig-on-2 m storm.
                     if (dial != self.last_dial || mode_changed)
                         && self.dial_giveup != Some(dial)
                         && can_push_dial
@@ -7392,6 +7465,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Same band-stack window as the force path.
                                 self.reassert_mode_after_band_cross(
                                     rig, &md, prev_dial, dial, engine,
@@ -7732,14 +7806,26 @@ impl RadioLoop {
                         // Kenwood backends clamp `set_func TUNER 2` to "tuner in line" and
                         // still answer `RPRT 0` — see `rigmodels::hamlib_atu_start_tune_reaches`
                         // for the source lines — so the capability has to be read from the MODEL,
-                        // not from the rig's reply. Every path that answers `u TUNER` today is
-                        // Hamlib rigctld (the native CI-V gap above), so the model settles it.
+                        // not from the rig's reply. Every other path that answers `u TUNER` today
+                        // is Hamlib rigctld (the native CI-V gap above), so the model settles it;
+                        // Nexus's own Flex client answers it only behind its ATU switch, and says
+                        // itself whether it can start a tune.
                         if !self.tuner_probed {
                             self.tuner_probed = true;
                             let tuner = rig.read_func("TUNER");
-                            let start_tune = crate::rigmodels::hamlib_atu_start_tune_reaches(
-                                self.applied.rig_model,
-                            );
+                            // Nexus's own Flex client, once it runs the radio's ATU, says itself
+                            // whether it can start the radio's tuner (a tuner the radio reports
+                            // fitted): the profile's Hamlib model, 2036 for SmartSDR CAT,
+                            // describes a CAT path that is not in use, and says it cannot. Until
+                            // then the client answers no `u TUNER`, so no ATU button is offered,
+                            // and the model's answer stands, as before.
+                            let start_tune =
+                                match self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
+                                    Some(client) if client.runs_atu() => client.starts_atu(),
+                                    _ => crate::rigmodels::hamlib_atu_start_tune_reaches(
+                                        self.applied.rig_model,
+                                    ),
+                                };
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_tuner(tuner, start_tune);
@@ -8989,6 +9075,7 @@ impl RadioLoop {
             // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
+            let showing_dial = dial_note.is_some();
             if let Some(note) = dial_note.or(retune_note) {
                 // The note rides along; the VERDICT is the breaker's. This used to promote any
                 // note starting "rig set to" to `Some(true)` — including "rig set to … (mode
@@ -8998,6 +9085,18 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, note);
+                    self.dial_note_gen = showing_dial.then(|| eng.cat_probe_gen());
+                }
+            } else if dial_landed {
+                // The dial a note said was not sent, or was refused, has now landed. Take the note
+                // down, but only if it is still the line on screen: anything published since it
+                // (Test CAT, the breaker, another note) is newer than the dial and stays.
+                let mut eng = engine_lock(engine);
+                if self.dial_note_gen.take() == Some(eng.cat_probe_gen()) {
+                    eng.set_cat_status(
+                        self.cat_ok,
+                        "CAT confirmed — rig accepted a command".to_string(),
+                    );
                 }
             }
         }
@@ -14737,6 +14836,22 @@ fn open_cat(
     // listener. If the port is genuinely taken, the bind below fails and says so.
     // The Icom network client never coexists either: whatever is on the port is not its daemon.
     let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
+    // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
+    // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
+    // rigctld's answer is taken; anything else there, or nothing, goes on exactly as before. No
+    // `foreign_daemon_refusal`: NET rigctl is exempt from it, as whatever serves the address is
+    // what the operator chose.
+    if allow_coexist {
+        if let Some(direct) = net_rigctld_on_this_machine(t) {
+            if crate::rigctld_server::probe_rigctld(direct, Duration::from_millis(400)) {
+                let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
+                rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                let mut probe = finish_cat_open(&mut rig, t);
+                probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
+                return (rig, None, probe);
+            }
+        }
+    }
     let listening = if allow_coexist {
         crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
     } else {
@@ -14932,7 +15047,7 @@ fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
 
-/// The single shared tail of both `open_cat` branches (coexist + spawn): the open-time
+/// The single shared tail of every `open_cat` branch (direct share, coexist, spawn): the open-time
 /// dial/mode commands and the health probe. ONE copy on purpose — the read-only-launch
 /// flip deletes the two commands here, and a duplicated tail is how a future edit
 /// silently resurrects one of them (the tests exercise the coexist branch; this shared
@@ -14954,7 +15069,6 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
     // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
     // that is MOX and its tuner button that is a menu write (#385).
     rig.set_never_send(t.hamlib_never_send());
-    let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -14965,9 +15079,15 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
             // cached-mode caveat (rig.rs read_mode docs) is acceptable for display.
             mode: rig.read_mode(),
         },
+        // The address the rig dials: 127.0.0.1 at rigctld TCP Port, except for a rigctld shared
+        // at a NET rigctl Network Address, where naming rigctld TCP Port would send the operator
+        // to look for a daemon Nexus is not using.
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => CatProbe::status(
             Some(false),
-            format!("rigctld is not reachable on 127.0.0.1:{port}."),
+            format!(
+                "rigctld is not reachable on {}.",
+                rig.control_addr().unwrap_or_default()
+            ),
         ),
         // ⚠️ THE ADVICE MUST MATCH THE TRANSPORT (#144, vsboost, v1.7.5). `read_freq`'s
         // message ends "check the serial port, baud rate, and that CAT/CI-V is enabled on the
@@ -15093,10 +15213,12 @@ mod tests {
     mod flex_audio;
     mod ic905_ten_ghz;
     mod icom_lan;
+    mod omnirig_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod wfview;
     use super::should_command_rf_power;
 
     #[test]
@@ -30970,6 +31092,104 @@ mod tests {
         assert!(cat_down_message(&serial, &e).contains("radio is on"));
     }
 
+    /// Which NET rigctl stations are shared directly, by the address alone: a rigctld on this
+    /// computer, at any port but rigctld TCP Port's (the coexist probe's) and the CAT broker's.
+    #[test]
+    fn only_a_net_rigctl_address_on_this_computer_is_shared_directly() {
+        let net = |addr: &str| {
+            let mut t = cat_transport(4534, None);
+            t.rig_model = 2; // NET rigctl
+            t.rig_conn = "network".into();
+            t.rig_addr = addr.into();
+            t
+        };
+        let with = |addr: &str, change: &dyn Fn(&mut Transport)| {
+            let mut t = net(addr);
+            change(&mut t);
+            t
+        };
+        let rows = [
+            ("wfview here", net("127.0.0.1:4533"), Some("127.0.0.1:4533")),
+            ("localhost", net("localhost:4533"), Some("localhost:4533")),
+            ("IPv6 loopback", net("[::1]:4533"), Some("[::1]:4533")),
+            ("127.0.1.1", net("127.0.1.1:4533"), Some("127.0.1.1:4533")),
+            ("spaces", net(" 127.0.0.1:4533 "), Some("127.0.0.1:4533")),
+            ("another computer", net("192.168.1.50:4533"), None),
+            ("another computer by name", net("shack-pc:4533"), None),
+            ("rigctld TCP Port's number", net("127.0.0.1:4534"), None),
+            ("no port", net("127.0.0.1"), None),
+            (
+                "the CAT broker's port",
+                with("127.0.0.1:4532", &|t| t.broker_self_port = Some(4532)),
+                None,
+            ),
+            (
+                "the CAT broker elsewhere",
+                with("127.0.0.1:4533", &|t| t.broker_self_port = Some(4532)),
+                Some("127.0.0.1:4533"),
+            ),
+            (
+                "Thetis's profile",
+                with("127.0.0.1:4533", &|t| t.rig_model = 2054),
+                None,
+            ),
+            (
+                "Hamlib Dummy",
+                with("127.0.0.1:4533", &|t| t.rig_model = 1),
+                None,
+            ),
+            ("FLRig", with("127.0.0.1:4533", &|t| t.rig_model = 4), None),
+            (
+                "Connection Serial, an old address",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "serial".into()),
+                None,
+            ),
+            (
+                "OmniRig",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "omnirig".into()),
+                None,
+            ),
+            (
+                "the Icom network client",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "icomlan".into()),
+                None,
+            ),
+        ];
+        assert_eq!(
+            rows.iter()
+                .map(|(what, t, _)| (*what, net_rigctld_on_this_machine(t)))
+                .collect::<Vec<_>>(),
+            rows.iter()
+                .map(|(what, _, want)| (*what, *want))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Test CAT names the address Nexus dials when nothing answers there. A rigctld shared at a NET
+    /// rigctl Network Address (wfview's, closed since) is not on rigctld TCP Port, and naming that
+    /// port sent the operator to look for a rigctld Nexus never used. Every other rig Nexus builds
+    /// dials 127.0.0.1 at rigctld TCP Port, and its sentence is unchanged. Port 1 is one nothing
+    /// listens on.
+    #[test]
+    fn test_cat_names_the_address_nexus_dials_when_nothing_answers_there() {
+        let mut shared = cat_transport(4534, None);
+        shared.rig_model = 2; // NET rigctl
+        shared.rig_conn = "network".into();
+        shared.rig_addr = "127.0.0.1:1".into();
+        let ours = cat_transport(1, None);
+        let sentence = |t: &Transport| {
+            let mut rig = Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat);
+            probe_cat(&mut rig, t).detail
+        };
+        assert_eq!(
+            (sentence(&shared), sentence(&ours)),
+            (
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+            )
+        );
+    }
+
     /// Shared recording backend for the read-only-launch tests: a stand-in rig that
     /// logs every COMMAND (set_freq/set_mode/set_ptt) in order while serving reads
     /// from fixed state ("the rig was left on 40 m LSB last night").
@@ -35110,6 +35330,117 @@ mod tests {
             }
         });
         (addr, seen)
+    }
+
+    /// A rigctld whose rig answers every read and no frequency change: each `F` gets Hamlib's own
+    /// "the rig did not answer" (`RPRT -5`), and everything else is answered as
+    /// [`switchable_rigctld`] answers it with the rig on. The rig stays on `start`.
+    fn rigctld_deaf_to_dial_writes(start: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = match line.trim() {
+                        l if l.starts_with("F ") => "RPRT -5\n".to_string(),
+                        "f" => format!("{start}\n"),
+                        "m" => "USB\n2400\n".to_string(),
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// ⭐ A FREQUENCY CHANGE HAMLIB SAYS THE RIG DID NOT ANSWER IS SENT THREE TIMES. The rig behind
+    /// rigctld answers every read, so the circuit breaker never trips, and gets `RPRT -5` for every
+    /// `F`. A QSY to 28.400 MHz goes out three times, is given up in "not sent — no reply from the
+    /// rig" words with the rig's own dial shown, and records no refusal. It went out on every pass
+    /// of the loop for as long as the rig stayed that way.
+    #[test]
+    fn a_dial_hamlib_says_the_rig_did_not_answer_is_sent_three_times() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, seen) = rigctld_deaf_to_dial_writes(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_rig_poll = 0.0;
+        state.last_freq_poll = 0.0;
+        state.last_smeter_poll = 0.0;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut step = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            for _ in 0..n {
+                tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.074, "20m", "USB");
+        }
+        step(&mut state, &mut rig, 5);
+        let settled = seen.lock().unwrap().len();
+        engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+        step(&mut state, &mut rig, 40);
+        let dial_writes = seen.lock().unwrap()[settled..]
+            .iter()
+            .filter(|l| l.starts_with("F "))
+            .count();
+        let (said, refused, dial) = {
+            let e = engine.lock().unwrap();
+            let snap = e.snapshot();
+            (
+                snap.radio.cat_detail,
+                snap.radio.refused_dial_mhz,
+                e.settings().dial_mhz,
+            )
+        };
+        assert_eq!(
+            (
+                dial_writes,
+                said,
+                refused,
+                state.dial_giveup,
+                state.cat_ok,
+                dial
+            ),
+            (
+                3,
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+                None,
+                Some(28_400_000),
+                Some(true),
+                14.074,
+            )
+        );
     }
 
     /// The overnight-radio review (2026-09-02), first half: a rig that is OFF answers every

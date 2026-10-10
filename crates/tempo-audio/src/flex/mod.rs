@@ -54,7 +54,12 @@
 //! ([`FlexDaemon::tunes_natively`]), the radio loop starts and ends the radio's own carrier with
 //! typed calls ([`FlexDaemon::tune_on`], [`FlexDaemon::tune_off`]) and the screens show the radio's
 //! tune power and transmit timeout beside Tune ([`FlexDaemon::radio_tune`]); until then Tune is the
-//! loop's own tone over the client's audio route, as on every CAT link.
+//! loop's own tone over the client's audio route, as on every CAT link. So is the ATU: once its
+//! switch is on ([`FlexDaemon::runs_atu`]), the shim answers `u TUNER` from the radio's `atu`
+//! status, so the ATU button shows only for a radio that reports a tuner fitted, a press is
+//! `atu start`, and the screens show the same readouts beside the ATU with the cycle's result, or
+//! why a press started none ([`FlexDaemon::radio_atu`]); until then no ATU button is offered on
+//! this client.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
@@ -71,7 +76,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::dto::{FlexAudioRefusal, FlexTune};
+use tempo_app::dto::{FlexAtu, FlexAudioRefusal, FlexTune};
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
 use tempo_net::flex::admission::{another_dax_feeder, Refusal};
@@ -129,6 +134,10 @@ pub(crate) struct ClientState {
     /// The CW speed the shim last set (`cw wpm`), and when, until the radio reports it: a CW word
     /// is timed at the slower of it and the radio's.
     pub(crate) cw_wpm: Mutex<Option<(u32, Instant)>>,
+    /// Why the last ATU press started no cycle, for the ATU line ([`FlexDaemon::radio_atu`]): the
+    /// client's own refusal, kept by the shim, or the radio's in its reply, kept by the watcher.
+    /// The shim clears it as a start goes out.
+    pub(crate) atu_refused: Mutex<Option<String>>,
     /// The transmit audio routing ([`routing`]): carried out at the radio loop's quiet points
     /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
     /// leaves the radio on DAX ([`Routing::leaves_dax`]).
@@ -412,9 +421,10 @@ impl FlexDaemon {
             let stop = stop.clone();
             let weak = Arc::downgrade(&conn);
             let alarm = alarm.clone();
+            let state = state.clone();
             std::thread::Builder::new()
                 .name("flex-watch".into())
-                .spawn(move || watch(weak, radio, &stop, &alarm))?
+                .spawn(move || watch(weak, radio, &stop, &alarm, &state))?
         };
         Ok(FlexDaemon {
             radio,
@@ -497,18 +507,42 @@ impl FlexDaemon {
     /// What the radio reports beside Tune: its tune power and its own transmit timeout. Cheap: read
     /// in place.
     pub fn radio_tune(&self) -> FlexTune {
-        self.conn().read(|s| FlexTune {
-            power_pct: s
-                .model
-                .transmit
-                .tune_power
-                .and_then(|p| u8::try_from(p).ok()),
-            tx_timeout_ms: s
-                .model
-                .interlock
-                .config
-                .timeout
-                .and_then(|t| u64::try_from(t).ok()),
+        self.conn().read(readouts)
+    }
+
+    // ── The radio's own ATU (Beta, switched off until a tester's bench) ──────────────────────
+
+    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on
+    /// ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it, it is not:
+    /// the shim does not answer `u TUNER`, so no ATU button is offered on this client, as before.
+    pub fn runs_atu(&self) -> bool {
+        self.conn().switched_on(StartKind::Atu)
+    }
+
+    /// Whether an ATU press can start the radio's tuner through this client: it runs the radio's
+    /// ATU and the radio reports a tuner fitted. The client's own answer, for the engine's
+    /// start-tune capability: the radio profile's Hamlib model (2036, SmartSDR CAT's) describes a
+    /// CAT path that is not in use. Cheap.
+    pub fn starts_atu(&self) -> bool {
+        self.runs_atu() && self.conn().read(|s| s.model.atu_fitted())
+    }
+
+    /// What is shown beside the ATU while this client runs the radio's ATU and the radio reports a
+    /// tuner fitted: the radio's tune power and transmit timeout, as beside Tune, its ATU status
+    /// (a cycle's result in its own word), and why the last press started no cycle. `None`
+    /// otherwise. Cheap: read in place.
+    pub fn radio_atu(&self) -> Option<FlexAtu> {
+        if !self.runs_atu() {
+            return None;
+        }
+        // Not under the session's state lock: the watcher takes this one alone.
+        let refused = lock(&self.state.atu_refused).clone();
+        self.conn().read(|s| {
+            s.model.atu_fitted().then(|| FlexAtu {
+                tune: readouts(s),
+                status: s.model.atu.status.clone(),
+                refused,
+            })
         })
     }
 
@@ -864,6 +898,47 @@ pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
     }
 }
 
+/// The ATU line's words for a press the client did not start ([`FlexDaemon::radio_atu`]): what
+/// kept it back, and what to do. `None`: the session has gone.
+pub(crate) fn atu_refusal_words(refusal: Option<&Refusal>) -> String {
+    match refusal {
+        None => "ATU not started: the connection to the radio is closed.".to_string(),
+        Some(Refusal::XitOn) => "ATU not started: XIT is on for the radio's transmit slice, so \
+                                 the radio's carrier would sit off the frequency Nexus checked. \
+                                 Turn XIT off."
+            .to_string(),
+        Some(other) => format!("ATU not started: {other}."),
+    }
+}
+
+/// The ATU line's words for a start the radio refused in its reply, with its code and any words
+/// of its own.
+fn atu_refused_by_radio(code: u32, message: &str) -> String {
+    let message = message.trim();
+    if message.is_empty() {
+        format!("ATU not started: the radio refused it (0x{code:08X}).")
+    } else {
+        format!("ATU not started: the radio refused it (0x{code:08X} {message}).")
+    }
+}
+
+/// What the radio reports beside Tune and the ATU: its tune power and its own transmit timeout.
+fn readouts(s: &Snapshot) -> FlexTune {
+    FlexTune {
+        power_pct: s
+            .model
+            .transmit
+            .tune_power
+            .and_then(|p| u8::try_from(p).ok()),
+        tx_timeout_ms: s
+            .model
+            .interlock
+            .config
+            .timeout
+            .and_then(|t| u64::try_from(t).ok()),
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -982,13 +1057,15 @@ struct Alarm {
     new: bool,
 }
 
-/// Drain the session's events, log the ones that matter, and keep what the operator must be told.
-/// Ends at the session's last event (`Closed`: nothing follows it), or when the daemon stops.
+/// Drain the session's events, log the ones that matter, and keep what the operator must be told:
+/// the alarms, and why the radio started no ATU cycle for a press. Ends at the session's last
+/// event (`Closed`: nothing follows it), or when the daemon stops.
 fn watch(
     conn: std::sync::Weak<Connection>,
     radio: SocketAddr,
     stop: &AtomicBool,
     alarm: &Mutex<Alarm>,
+    state: &ClientState,
 ) {
     let raise = |text: &str| {
         tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {text}"));
@@ -1028,6 +1105,17 @@ fn watch(
                 "an earlier Nexus session (0x{handle:08X}) still holds the transmitter; Nexus \
                  will not key until it is released"
             )),
+            // The radio did not start a cycle for an ATU press and keyed nothing for it: no
+            // alarm, the reason on the ATU line.
+            Event::StartRefused {
+                kind: StartKind::Atu,
+                code,
+                message,
+            } => {
+                let why = atu_refused_by_radio(code, &message);
+                tempo_core::applog::info("cat", &format!("Flex client ({radio}): {why}"));
+                *lock(&state.atu_refused) = Some(why);
+            }
             Event::ProtocolRejected => tempo_core::applog::warn(
                 "cat",
                 &format!(

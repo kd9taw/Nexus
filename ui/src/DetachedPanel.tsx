@@ -71,7 +71,7 @@ import {
   type FdRulesetDto,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
-import { useLogAnswer } from './features/logSource'
+import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
@@ -287,9 +287,18 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // follows this window's own snapshot `logTick`, instead of holding the whole log to answer it.
   // The rule is the band map's own: the call upper-cased and NOT trimmed, on both sides. The
   // spot poll hands over a fresh array every 15 s; the question only changes with the call set.
+  // A poll that brings a new call asks a new question, and until it lands the map keeps the latest
+  // answer for the calls it covered (no strike-through drops for the round trip); a call that
+  // answer did not cover shows "—".
   const spotCalls = useMemo(() => [...new Set(allSpots.map((s) => s.call.toUpperCase()))].sort(), [allSpots])
-  const worked = useLogAnswer(isBandMap ? { kind: 'workedCalls', calls: spotCalls } : null, snap?.logTick)
-  const workedCalls = useMemo(() => new Set(worked ?? []), [worked])
+  const workedQuestion = isBandMap ? ({ kind: 'workedCalls', calls: spotCalls } as const) : null
+  const worked = useLatestLogAnswer(workedQuestion, snap?.logTick)
+  const workedFailed = failureToShow(useLogStatus(workedQuestion))
+  const workedCalls = useMemo(() => new Set(worked?.answer ?? []), [worked])
+  const unansweredCalls = useMemo(() => {
+    const answered = new Set(worked?.question.calls)
+    return new Set(spotCalls.filter((c) => !answered.has(c)))
+  }, [worked, spotCalls])
 
   // Refetch the band plan when the tier changes — FT8/FT4 use different dial frequencies
   // (14.074 vs 14.080), so a detached Operate window's QSY targets must follow the mode.
@@ -532,6 +541,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needByCall={needByCall}
           typeByCall={typeByCall}
           workedCalls={workedCalls}
+          unansweredCalls={unansweredCalls}
+          unansweredTitle={workedFailed !== null ? t('logbook.readFailed', { reason: workedFailed }) : t('logbook.reading')}
           onDock={(side) => void dockBandmapWindow(side)}
           // Tuning from the map (#39). The map is a frequency scale, so it can act as one.
           sideband={snap.radio.sideband || 'USB'}
