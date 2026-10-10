@@ -28,6 +28,18 @@ struct Capture {
     ruleset: crate::FdRulesetDto,
 }
 
+/// ⭐ **What only the host's own screen acts on stays out of the capture**: the Give button's
+/// handle on a turned-away entry (`FdClubRefusedDto::handle`). The button and its command exist on
+/// the host's desktop alone, and the page's Field Day check refuses a key it does not know, so
+/// leaving it out also keeps every published page able to read a host that shows the button.
+pub(super) fn leave_out_the_hosts_own(field_day: &mut Option<tempo_app::dto::FieldDayStatus>) {
+    if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
+        for r in &mut club.refused {
+            r.handle = None;
+        }
+    }
+}
+
 pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'static str> {
     let capture = {
         let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
@@ -52,9 +64,11 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
             tempo_core::fd_rules::CURRENT_RULES_YEAR,
         )
         .is_some_and(|rs| !rs.objective_menu.is_empty());
+        let mut field_day = e.bounded_field_day_status()?;
+        leave_out_the_hosts_own(&mut field_day);
         Capture {
             active: s.fd_active,
-            field_day: e.bounded_field_day_status()?,
+            field_day,
             settings: DisplaySettings {
                 fd_operator: s.fd_operator.clone(),
                 fd_power_mult: s.fd_power_mult,
@@ -126,6 +140,64 @@ mod tests {
             assert_eq!(e.lock().unwrap().field_day_log_adif(), original);
         }
     }
+    /// ⭐ **The host's Give button reaches Remote neither as a button nor as data.** A host that
+    /// turned a laptop away because another laptop holds its position shows the entry with its
+    /// handle on its own screen; the capture Remote reads carries the entry, its name, call and
+    /// sentence, and not the handle, so the page's Field Day check (which refuses a key it does
+    /// not know) reads it as before. CONTROL: the station's own snapshot carries the handle.
+    #[test]
+    fn the_capture_carries_a_turned_away_laptop_but_not_the_hosts_give_handle() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-fd-give-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "arrlfd".into(),
+            fd_class: "2A".into(),
+            fd_section: "WI".into(),
+            mycall: "W9XYZ".into(),
+            fd_host_enable: true,
+            fd_position_id: "aaaa0001".into(),
+            ..Default::default()
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(s);
+        e.restore_field_day_if_enabled();
+        e.fd_host_start(dir.join("fd_event_give.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let join = |e: &mut tempo_app::engine::Engine, hash: &str| {
+            e.fd_club_join(v, "bbbb0002", "CW tent", "W9XYZ", "arrlfd", "", hash)
+                .map(|_| ())
+        };
+        assert_eq!(join(&mut e, &"a".repeat(64)), Ok(()), "the first laptop");
+        assert_eq!(
+            join(&mut e, &"b".repeat(64)),
+            Err(tempo_app::fdevent::POSITION_HELD.to_string()),
+            "another laptop naming its position"
+        );
+        let native = e.snapshot().field_day.unwrap().club.unwrap().refused;
+        assert_eq!(native.len(), 1, "{native:?}");
+        assert!(
+            native[0].handle.is_some(),
+            "CONTROL: the host's own snapshot carries the handle"
+        );
+        let e = Arc::new(Mutex::new(e));
+        let value = read_engine(&e).unwrap();
+        let entry = &value["fieldDay"]["club"]["refused"][0];
+        let mut keys: Vec<&str> = entry
+            .as_object()
+            .expect("the turned-away entry is in the capture")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["call", "posName", "reason"], "{entry}");
+        assert_eq!(entry["posName"], "CW tent");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn disabled_and_busy_sources_are_distinct_and_recover_without_activation() {
         let e = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(

@@ -1000,6 +1000,8 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 pos_name: "SSB tent".into(),
                 call: "W1AW".into(),
                 reason: "this club sends the in-state exchange".into(),
+                // The host's Give button's: the capture leaves it out (below).
+                handle: Some(7),
             }],
             kept_out: Some(FdClubKeptOutDto {
                 total: 2,
@@ -1007,6 +1009,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     pos_name: "CW tent".into(),
                     call: "W1AW".into(),
                     reason: "its contact with K1ABC is not in the club's log".into(),
+                    handle: None,
                 }],
             }),
         }),
@@ -1037,9 +1040,17 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             other_running: 3,
         }),
     };
+    assert!(
+        serde_json::to_value(&written).unwrap()["club"]["refused"][0]["handle"] == 7,
+        "CONTROL: the station's own snapshot carries the Give button's handle"
+    );
+    // What the capture sends: the station's status with what only its own screen acts on left
+    // out, by the capture's own function.
+    let mut captured = Some(written);
+    super::field_day::leave_out_the_hosts_own(&mut captured);
     status(
         "fieldDay: every field",
-        &serde_json::to_value(written).unwrap(),
+        &serde_json::to_value(captured).unwrap(),
     );
 }
 

@@ -1649,3 +1649,36 @@ fn a_result_request_is_served_from_its_receipt_while_the_engine_is_busy() {
     );
     drop(held);
 }
+
+/// ⭐ **Giving a club position is refused from afar.** The host's Give button is on its own
+/// desktop and is none of Remote's operations: a request naming it, at the top or as a station
+/// control, is refused before anything reads it, whichever spelling it tries. CONTROL: a request
+/// and a station control the page does send are read.
+#[test]
+fn giving_a_club_position_is_refused_from_afar() {
+    for name in [
+        "fdClubGivePosition",
+        "fd_club_give_position",
+        "givePosition",
+        "club.givePosition",
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(json!({"type": name, "requestId": "r", "handle": 1}))
+                .is_err(),
+            "a request named {name} was read"
+        );
+        assert!(
+            serde_json::from_value::<station::Action>(json!({"action": name, "handle": 1}))
+                .is_err(),
+            "a station control named {name} was read"
+        );
+    }
+    assert!(
+        serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
+        "CONTROL: a request the page sends"
+    );
+    assert!(
+        serde_json::from_value::<station::Action>(json!({"action": "radio.disarm"})).is_ok(),
+        "CONTROL: a station control the page sends"
+    );
+}

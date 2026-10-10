@@ -37,7 +37,8 @@
 //! club submits.** A JOIN under a position id no Nexus makes, or whose call is not a call sign,
 //! is refused at every club, and so is one that cannot prove the position it names: the host
 //! takes each position only from the laptop whose club key it pinned at that position's first
-//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key). A row whose call is
+//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key), or the laptop its
+//! operator gave the position to from its own turned-away list ([`ClubLog::give`]). A row whose call is
 //! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
 //! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
 //! and listed on the host's screen until the event ends; the writers in `tempo_core` guard
@@ -220,15 +221,20 @@ pub const NOT_A_CALL_SIGN: &str = "this Nexus joined with a Callsign on the air 
      on again: this Nexus rejoins by itself. Contacts you log meanwhile stay in your own log.";
 
 /// ⭐ **The sentence for a JOIN under a position another laptop holds** ([`ClubLog::key_refusal`]):
-/// the host took that position from the laptop that first joined this event as it, and this
-/// JOIN's club key is not that laptop's. One laptop's settings copied onto another is how two
-/// come to share a position id, so it says how to give this one a position of its own.
+/// the host took that position from the laptop that first joined this event as it, or the one
+/// its operator gave it to ([`ClubLog::give`]), and this JOIN's club key is not that laptop's.
+/// One laptop's settings copied onto another is how two come to share a position id, so it says
+/// how to give this one a position of its own, and that the host can give it this one. A laptop
+/// whose position was given away is sent it too, as its connection closes.
 pub const POSITION_HELD: &str = "this Nexus joined as a club position that another laptop holds \
      at this event: the host takes each position only from the laptop that first joined as it, \
-     and this laptop's club key is not that one's. If this laptop's settings came from another \
-     laptop, quit Nexus here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus \
-     again: it makes a position of its own and rejoins by itself. Contacts you log meanwhile \
-     stay in your own log.";
+     or the one the host gave it to, and this laptop's club key is not that one's. If the \
+     position is this laptop's, the host can give it to this laptop: Give this laptop its \
+     position, on the host's Contest screen, beside the line in its club block that says it \
+     turned this laptop away. If this laptop's settings came from another laptop, quit Nexus \
+     here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus again: it makes a \
+     position of its own and rejoins by itself. Contacts you log stay in your own log and go up \
+     when this laptop rejoins.";
 
 /// ⭐ **The sentence for a JOIN with no club key a Nexus makes** ([`ClubLog::key_refusal`]):
 /// every Nexus speaking this protocol makes one and sends it, so only a startup that could not
@@ -661,7 +667,7 @@ pub struct ClubPosition {
     pub clock_ms: Option<i64>,
 }
 
-/// A position this host turned away, for the host's own screen ([`ClubLog::refused`]).
+/// A laptop this host turned away, for the host's own screen ([`ClubLog::refused`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refused {
     /// The name and station call its JOIN gave.
@@ -671,6 +677,42 @@ pub struct Refused {
     pub reason: String,
     /// Host clock at its last refused JOIN.
     pub at_unix: u64,
+    /// ⭐ **The host-made number that names this entry** to the host's own Give button
+    /// ([`ClubLog::give`]): kept while the laptop keeps trying, never made twice in one run of
+    /// Nexus, and nothing to do with its club key or the key's hash, which never leave the host.
+    pub handle: u64,
+}
+
+impl Refused {
+    /// Was this laptop turned away because another laptop holds its position
+    /// ([`POSITION_HELD`])? Only such an entry can be given its position ([`ClubLog::give`]).
+    pub fn held_out(&self) -> bool {
+        self.reason == POSITION_HELD
+    }
+}
+
+/// The handles [`Refused`] entries are named by: one counter for the whole run of Nexus, so a
+/// handle a screen still shows from before a club restarted names nothing in the new one.
+static NEXT_REFUSED_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Why the host's Give button changed nothing ([`ClubLog::give`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiveRefusal {
+    /// This Nexus is not hosting a club event.
+    NotHosting,
+    /// No laptop on the turned-away list now is held out of its position under that handle:
+    /// it joined, stopped trying, was given the position already, or the club restarted.
+    Stale,
+}
+
+impl GiveRefusal {
+    /// The refusal as the screen's catalog keys name it.
+    pub fn code(self) -> &'static str {
+        match self {
+            GiveRefusal::NotHosting => "notHosting",
+            GiveRefusal::Stale => "stale",
+        }
+    }
 }
 
 /// How long the host keeps showing a refused position after its last try. A refused
@@ -725,6 +767,14 @@ enum JournalNote {
     /// A contact kept out of the club's log ([`ClubLog::kept_out`]), so a restarted host still
     /// lists it for the rest of the event.
     KeptOut(KeptOut),
+    /// ⭐ A position the host's operator gave to another laptop ([`ClubLog::give`]): pinned to
+    /// that laptop's key hash, and started afresh at this line. Replayed in journal order, so
+    /// the last give of a position is the one a restarted host holds.
+    Give {
+        pos: String,
+        key_hash: String,
+        at: u64,
+    },
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -787,12 +837,18 @@ pub struct ClubLog {
     arrivals: VecDeque<(u64, String)>,
     /// The append-only event journal. `None` = not journaling (tests).
     journal: Option<std::fs::File>,
-    /// Positions this host turned away, by position id ([`note_refused`](Self::note_refused)).
-    refused: HashMap<String, Refused>,
+    /// Laptops this host turned away, by the position id their JOIN named and the hash of its
+    /// club key (empty for none): two laptops can name one position
+    /// ([`note_refused`](Self::note_refused)).
+    refused: HashMap<(String, String), Refused>,
     /// ⭐ Each position's club key, as the HASH of the key its first served JOIN of this event
-    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)).
-    /// Journaled, so a restarted host still holds every pin it made.
+    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)) — or of
+    /// the laptop the host's operator gave it to since ([`give`](Self::give)). Journaled, so a
+    /// restarted host still holds every pin it made.
     pins: HashMap<String, String>,
+    /// How often each position was given to another laptop, which is each served JOIN's hold
+    /// on it ([`hold`](Self::hold)): a give makes every earlier hold stale.
+    gives: HashMap<String, u64>,
     /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
     /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
     /// one entry per contact, however often its position sends it again; at most
@@ -960,6 +1016,79 @@ impl ClubLog {
             key_hash: key_hash.to_string(),
             at: now,
         });
+    }
+
+    /// ⭐ **Give a position to the laptop this host's turned-away list names under `handle`** —
+    /// the host's own Give button, on the entry of a laptop turned away because another laptop
+    /// holds its position ([`Refused::held_out`]). [`GiveRefusal::Stale`], and nothing changes,
+    /// unless that entry is on the list now ([`refused`](Self::refused)) and its laptop is still
+    /// held out.
+    ///
+    /// The position is pinned to that laptop's key hash, so whichever laptop tries next, only it
+    /// is served: no race with the laptop that held the position. Every hold on the position goes
+    /// stale ([`held`](Self::held)), so the connection of the laptop that held it is told
+    /// [`POSITION_HELD`] and closed within a tick, and it is turned away by name on its next try,
+    /// where its own entry gives the position back the same way.
+    ///
+    /// ⚠️ **And the position starts afresh.** The club keys each contact by its position and that
+    /// position's own count (`seq`), and tells a joining position how far it has (`acked`); each
+    /// laptop counts its own contacts from 1. Left in, the contacts the other laptop sent as this
+    /// position would stand in for the given laptop's: it would be told they are in and send none
+    /// of those, and any it sent would merge as repeats. So they leave the club's log (they stay
+    /// in the journal, and in the log of the laptop that sent them, which sends them again when it
+    /// rejoins), and the given laptop sends its whole log. One journal line
+    /// ([`JournalNote::Give`]), replayed in order at attach.
+    pub fn give(&mut self, handle: u64, now: u64) -> Result<(), GiveRefusal> {
+        let (pos, key_hash) = self
+            .refused
+            .iter()
+            .find(|((pos, key_hash), r)| {
+                r.handle == handle
+                    && r.held_out()
+                    && now.saturating_sub(r.at_unix) <= REFUSED_SHOWN_SECS
+                    && !key_hash.is_empty()
+                    && self.pins.get(pos) != Some(key_hash)
+            })
+            .map(|(id, _)| id.clone())
+            .ok_or(GiveRefusal::Stale)?;
+        self.refused.remove(&(pos.clone(), key_hash.clone()));
+        self.hand_over(&pos, &key_hash);
+        self.journal_note(&JournalNote::Give {
+            pos,
+            key_hash,
+            at: now,
+        });
+        Ok(())
+    }
+
+    /// [`give`](Self::give)'s change, live and at replay: the pin, every hold on the position
+    /// stale, and the position started afresh. The club's dupe keys and sections stay, as they
+    /// must: every position's mirror holds them by cursor, and a club dupe is a warning, never a
+    /// lock.
+    fn hand_over(&mut self, pos: &str, key_hash: &str) {
+        self.pins.insert(pos.to_string(), key_hash.to_string());
+        *self.gives.entry(pos.to_string()).or_default() += 1;
+        self.rows.retain(|r| r.posid != pos);
+        self.ids.retain(|(p, _)| p != pos);
+        self.kept_out.retain(|k| k.pos != pos);
+        self.arrivals.retain(|(_, p)| p != pos);
+        self.positions.remove(pos);
+    }
+
+    /// A served JOIN's hold on position `posid` (`tempo_net::fdsync::JoinAccept::hold`): how
+    /// often the host gave it to another laptop before that JOIN.
+    pub fn hold(&self, posid: &str) -> u64 {
+        self.gives.get(posid).copied().unwrap_or(0)
+    }
+
+    /// Does a JOIN served with `hold` still hold `posid`? `Err` with [`POSITION_HELD`] once the
+    /// host has given the position to another laptop ([`give`](Self::give)).
+    pub fn held(&self, posid: &str, hold: u64) -> Result<(), String> {
+        if self.hold(posid) == hold {
+            Ok(())
+        } else {
+            Err(POSITION_HELD.to_string())
+        }
     }
 
     /// List one kept-out contact, unless it is listed already, is in the club's log after all,
@@ -1133,6 +1262,12 @@ impl ClubLog {
                             self.list_kept_out(k);
                         }
                         JournalNote::KeptOut(_) => {}
+                        // In journal order: the rows above it under that position were the
+                        // laptop it was given away from, and leave the club's log as they did.
+                        JournalNote::Give { pos, key_hash, at } if at >= oldest_unix => {
+                            self.hand_over(&pos, &key_hash);
+                        }
+                        JournalNote::Give { .. } => {}
                     }
                     continue;
                 }
@@ -1291,7 +1426,10 @@ impl ClubLog {
     /// named none or one that is not a call sign: the call a GOTA station's rows are stamped
     /// with is never an earlier join's, and never one the gate would turn away.
     pub fn join(&mut self, posid: &str, label: &str, call: &str, now: u64) -> u64 {
-        self.refused.remove(posid);
+        // Its position's entries go, except the laptops this JOIN holds the position against:
+        // each of those keeps trying, and keeps the button that can give it the position.
+        self.refused
+            .retain(|(id, _), r| id != posid || r.held_out());
         let pos = self.positions.entry(posid.to_string()).or_default();
         let label = club_label(label);
         if !label.is_empty() {
@@ -1303,19 +1441,35 @@ impl ClubLog {
     }
 
     /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
-    /// while the position keeps trying ([`refused`](Self::refused)), under the position id its
-    /// join clears. The name and call come off the network, so each is read the way the club
+    /// while the laptop keeps trying ([`refused`](Self::refused)), under the position id its
+    /// join clears and `key_hash`, its club key's hash (empty for none), so two laptops naming
+    /// one position are two entries, each keeping its handle while it keeps trying. The name
+    /// and call come off the network, so each is read the way the club
     /// reads it ([`club_label`], [`shown_call`]): one line, at most 64 characters, and a call
     /// the gate turned away never shown as one it would have served. The list holds at most
     /// [`MAX_REFUSED`], the oldest going first.
-    pub fn note_refused(&mut self, posid: &str, label: &str, call: &str, reason: &str, now: u64) {
+    pub fn note_refused(
+        &mut self,
+        posid: &str,
+        key_hash: &str,
+        label: &str,
+        call: &str,
+        reason: &str,
+        now: u64,
+    ) {
+        let id = (posid.to_string(), key_hash.to_string());
+        let handle = self.refused.get(&id).map_or_else(
+            || NEXT_REFUSED_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            |r| r.handle,
+        );
         self.refused.insert(
-            posid.to_string(),
+            id,
             Refused {
                 label: club_label(label),
                 call: shown_call(call),
                 reason: reason.to_string(),
                 at_unix: now,
+                handle,
             },
         );
         while self.refused.len() > MAX_REFUSED {
@@ -1330,10 +1484,10 @@ impl ClubLog {
         }
     }
 
-    /// The positions refused within the last minute, by name (unnamed ones by id after) —
+    /// The laptops refused within the last minute, by name (unnamed ones by id after) —
     /// one that has stopped trying drops off, and one that joined went at its join.
     pub fn refused(&self, now: u64) -> Vec<&Refused> {
-        let mut out: Vec<(&String, &Refused)> = self
+        let mut out: Vec<(&(String, String), &Refused)> = self
             .refused
             .iter()
             .filter(|(_, r)| now.saturating_sub(r.at_unix) <= REFUSED_SHOWN_SECS)
@@ -1947,8 +2101,8 @@ mod tests {
                 .map(|r| (r.label.clone(), r.call.clone(), r.reason.clone()))
                 .collect()
         };
-        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "first", 100);
-        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "second", 110);
+        club.note_refused("aaaa0001", "", "SSB tent", "w9xyz", "first", 100);
+        club.note_refused("aaaa0001", "", "SSB tent", "w9xyz", "second", 110);
         assert_eq!(
             shown(&club, 120),
             vec![("SSB tent".into(), "W9XYZ".into(), "second".into())],
@@ -1960,19 +2114,21 @@ mod tests {
             "kept a minute after the last try"
         );
         assert!(shown(&club, 171).is_empty(), "and not a second longer");
-        club.note_refused("bbbb0002", "CW tent", "k9abc", "refused", 200);
+        club.note_refused("bbbb0002", "", "CW tent", "k9abc", "refused", 200);
         club.join("bbbb0002", "CW tent", "K9ABC", 201);
         assert!(
             shown(&club, 202).is_empty(),
             "a position that joins leaves the list"
         );
         for i in 0..20u64 {
-            club.note_refused(&format!("c{i:07}"), "", "K9ZZZ", "refused", 300 + i);
+            club.note_refused(&format!("c{i:07}"), "", "", "K9ZZZ", "refused", 300 + i);
         }
-        let ids: Vec<&String> = club.refused.keys().collect();
+        let ids: Vec<&String> = club.refused.keys().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 16, "never more than sixteen");
         assert!(
-            (4..20).all(|i| club.refused.contains_key(&format!("c{i:07}"))),
+            (4..20).all(|i| club
+                .refused
+                .contains_key(&(format!("c{i:07}"), String::new()))),
             "the four oldest went first: {ids:?}"
         );
     }
@@ -4389,7 +4545,7 @@ mod tests {
             if !club.rows().is_empty() {
                 wrong.push(format!("{how}, merge: {:?}", club.rows()[0].call));
             }
-            club.note_refused("dddd0004", "TENT", &call, NOT_A_CALL_SIGN, 3);
+            club.note_refused("dddd0004", "", "TENT", &call, NOT_A_CALL_SIGN, 3);
             let listed = club
                 .refused(3)
                 .iter()
@@ -4404,7 +4560,7 @@ mod tests {
         club.join("cccc0003", "GOTA", "\r\n k9got\t", 1);
         assert_eq!(club.positions()["cccc0003"].call, "K9GOT");
         assert_eq!(club.call_refusal(" w9xyz\t", "W9XYZ\n"), None);
-        club.note_refused("dddd0004", "TENT", " k9abc\t", "refused", 3);
+        club.note_refused("dddd0004", "", "TENT", " k9abc\t", "refused", 3);
         assert!(club.refused(3).iter().any(|r| r.call == "K9ABC"));
     }
 
@@ -4471,6 +4627,7 @@ mod tests {
         let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
         club.note_refused(
             "aaaa0001",
+            "",
             &format!("SSB tent{tail}"),
             &format!("K9GOT{tail}"),
             "refused",
@@ -4500,7 +4657,7 @@ mod tests {
             "{contest}"
         );
         assert!(role.contains("the \"dx?Turned?away?HQ??W9XYZ"), "{role}");
-        club.note_refused("bbbb0002", "Zelt Süd", "K9ABC", "refused", 1);
+        club.note_refused("bbbb0002", "", "Zelt Süd", "K9ABC", "refused", 1);
         assert!(club.refused(1).iter().any(|r| r.label == "Zelt Süd"));
         assert!(contest_mismatch("ARRL-FIELD-DAY", "ilqp").contains("logging IL QSO Party"));
     }
@@ -4630,6 +4787,143 @@ mod tests {
             next_event.pinned("aaaa0001"),
             None,
             "a previous event's pin"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A give is one journal line, replayed in order at attach, skipped by every older
+    /// reader and aged out with its event.** The host gives a position held by one laptop to the
+    /// laptop it turned away for it: the position is pinned to that laptop, every hold on it goes
+    /// stale, its contacts so far leave the club's log, and the entry and its handle are gone.
+    /// A restarted host replays the pin, the rows, the give and the rows after it in that order,
+    /// and so holds what the live one held. A build before gives reads the line as a note it
+    /// does not know and then as a row, which needs fields it lacks; a build before notes, as a
+    /// row only: each skips it. A give older than the cutoff gives nothing, and a give newer than
+    /// a pin it replaced still holds once that pin has aged out. CONTROL: a handle on an entry
+    /// turned away for another reason gives nothing.
+    #[test]
+    fn a_give_is_one_journal_line_replayed_in_order_and_aged_out_with_its_event() {
+        let dir = scratch("give");
+        let path = dir.join("fd_event_give.jsonl");
+        let (first, theirs) = (
+            throwaway_hash("the laptop that joined first"),
+            throwaway_hash("the laptop the position is"),
+        );
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        club.join("aaaa0001", "CW tent", "W9XYZ", 1_000);
+        club.pin("aaaa0001", &first, 1_000);
+        let first_hold = club.hold("aaaa0001");
+        club.merge(
+            &wq("aaaa0001", 1, "K1ABC", "40m", "CW", "EMA", 1_000),
+            1_000,
+        );
+        club.note_refused(
+            "aaaa0001",
+            &theirs,
+            "CW tent",
+            "W9XYZ",
+            POSITION_HELD,
+            1_001,
+        );
+        club.note_refused(
+            "bbbb0002",
+            "",
+            "SSB tent",
+            "W9XYZ",
+            "another contest",
+            1_001,
+        );
+        let handle_of = |club: &ClubLog, held: bool| {
+            club.refused(1_002)
+                .iter()
+                .find(|r| r.held_out() == held)
+                .map(|r| r.handle)
+                .unwrap()
+        };
+        let (handle, other) = (handle_of(&club, true), handle_of(&club, false));
+        assert_ne!(handle, other, "each entry has its own handle");
+        assert_eq!(
+            club.give(other, 1_002),
+            Err(GiveRefusal::Stale),
+            "CONTROL: an entry turned away for another reason gives nothing"
+        );
+        let lines_before = std::fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(club.give(handle, 1_002), Ok(()));
+        assert_eq!(club.pinned("aaaa0001"), Some(theirs.as_str()));
+        assert_eq!(
+            club.held("aaaa0001", first_hold),
+            Err(POSITION_HELD.to_string()),
+            "the first laptop's hold is stale"
+        );
+        assert!(club.rows().is_empty(), "the position starts afresh");
+        assert_eq!(
+            club.give(handle, 1_003),
+            Err(GiveRefusal::Stale),
+            "a used handle"
+        );
+        assert_eq!(
+            club.refused(1_003).len(),
+            1,
+            "the given laptop's entry is gone; the other stays"
+        );
+        let journal = std::fs::read_to_string(&path).unwrap();
+        let line = journal.lines().last().unwrap();
+        assert_eq!(journal.lines().count(), lines_before + 1, "one line");
+        assert_eq!(
+            line,
+            format!("{{\"give\":{{\"pos\":\"aaaa0001\",\"key_hash\":\"{theirs}\",\"at\":1002}}}}")
+        );
+        assert!(
+            serde_json::from_str::<MergedRow>(line).is_err(),
+            "a build before notes reads no row from it"
+        );
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum BeforeGives {
+            Pin {
+                pos: String,
+                key_hash: String,
+                at: u64,
+            },
+            KeptOut(KeptOut),
+        }
+        assert!(
+            serde_json::from_str::<BeforeGives>(line).is_err(),
+            "a build before gives reads no note from it"
+        );
+        let accept = club.join("aaaa0001", "CW tent", "W9XYZ", 1_004);
+        assert_eq!(accept, 0, "the given laptop sends its whole log");
+        club.merge(
+            &wq("aaaa0001", 1, "W5DEF", "40m", "CW", "STX", 1_004),
+            1_004,
+        );
+
+        let replayed = |cutoff: u64| {
+            let mut c = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+            c.attach_journal_since(&path, cutoff).unwrap();
+            let calls: Vec<String> = c.rows().iter().map(|r| r.call.clone()).collect();
+            (
+                c.pinned("aaaa0001").map(str::to_string),
+                calls,
+                c.hold("aaaa0001"),
+            )
+        };
+        assert_eq!(
+            replayed(0),
+            (Some(theirs.clone()), vec!["W5DEF".to_string()], 1),
+            "a restarted host holds what the live one held"
+        );
+        assert_eq!(
+            replayed(1_002),
+            (Some(theirs.clone()), vec!["W5DEF".to_string()], 1),
+            "the give outlives the pin it replaced"
+        );
+        assert_eq!(
+            replayed(1_003),
+            (None, vec!["W5DEF".to_string()], 0),
+            "an aged give"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

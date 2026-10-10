@@ -932,3 +932,290 @@ fn a_lan_peer_cannot_join_as_another_laptops_position() {
     std::thread::sleep(Duration::from_millis(300));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The position's own club line: the sentence its host last sent it, if any.
+fn last_error(eng: &Shared) -> Option<String> {
+    engine_lock(eng).fd_mirror_mut().last_error.clone()
+}
+
+/// The worked calls of the host's club file, sorted.
+fn worked(eng: &Shared) -> Vec<String> {
+    club_file_calls(eng).into_iter().map(|(_, w)| w).collect()
+}
+
+/// The handles the host's own screen shows a Give button for, from the snapshot it reads.
+fn give_handles(eng: &Shared) -> Vec<u64> {
+    engine_lock(eng)
+        .snapshot()
+        .field_day
+        .and_then(|f| f.club)
+        .map(|c| c.refused.iter().filter_map(|r| r.handle).collect())
+        .unwrap_or_default()
+}
+
+/// [`wait_until`], naming what it saw when the wait runs out: `show` reads the state.
+fn wait_showing(what: &str, secs: u64, mut cond: impl FnMut() -> bool, show: impl Fn() -> String) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        if cond() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for: {what}\nsaw: {}", show());
+}
+
+/// ⭐ **The host gives a club position to the laptop it belongs to, and gives it back the same
+/// way** — over the real bridge, sockets, pumps and engines, at an ARRL Field Day club.
+///
+/// A laptop whose settings came from the CW tent's (the tent's position id, a club key of its
+/// own) joins first and sends two contacts. The tent, with two of its own numbered 1 and 2 as
+/// the copy's are, is turned away by name on its screen and the host's, and its entry there
+/// carries a Give button. The host presses it: the copy is closed while it sends nothing and
+/// turned away by name; a contact it logs afterwards is never acked; the tent is served on its
+/// next try and both its contacts are in the club's file, the copy's out of it. The copy's entry
+/// then carries the button, and a press gives the position back with all three of the copy's
+/// contacts; a third press gives it to the tent again. A restarted host replays the three gives
+/// in order: the tent holds the position, with its contacts, and the copy is turned away still.
+/// No club key or key hash is in any snapshot, board, TV payload, Remote's source, Settings or the
+/// diagnostic log; the journal holds the hashes. CONTROLS: the JOIN line carries a key, the
+/// journal the hashes, and the diagnostic log a line written to it, so each search can find one.
+#[test]
+fn the_host_gives_a_held_position_to_the_laptop_it_belongs_to() {
+    let dir = std::env::temp_dir().join(format!("fd-give-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    tempo_core::applog::init(dir.join("nexus-diag.log"));
+    let journal = dir.join("fd_event_give.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let mut host_sd = start_host(&host, listener);
+    let mut host_pump_sd = start_pump(&host, &addr);
+    let held = Some(tempo_app::fdevent::POSITION_HELD.to_string());
+    let press = |handles: Vec<u64>| {
+        assert_eq!(
+            handles.len(),
+            1,
+            "one laptop held out of its position: {handles:?}"
+        );
+        engine_lock(&host)
+            .fd_club_give_position(handles[0])
+            .expect("the host gives the position");
+    };
+
+    let tent_key = club_key("bbbb0002");
+    let short = |e: Option<String>| match e.as_deref() {
+        None => "none".to_string(),
+        Some(t) if Some(t) == held.as_deref() => "POSITION_HELD".to_string(),
+        Some(t) => t.chars().take(60).collect(),
+    };
+    let copy = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let copy_key = club_key("a laptop with the CW tent's settings");
+    engine_lock(&copy).set_fd_position_key(copy_key.clone());
+    let copy_sd = start_pump(&copy, &addr);
+    log_fd(&copy, "K1ABC", "EMA", "CW");
+    log_fd(&copy, "N0XYZ", "MN", "CW");
+    wait_until("the copy's two contacts merged", 10, || {
+        club_rows(&host) == 2
+    });
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    log_fd(&tent, "W5DEF", "STX", "CW");
+    log_fd(&tent, "K7GHI", "OR", "CW");
+    let tent_sd = start_pump(&tent, &addr);
+    let show = || {
+        let holder = engine_lock(&host)
+            .fd_club_log()
+            .and_then(|c| c.pinned("bbbb0002").map(str::to_string));
+        format!(
+            "club file {:?}; holder {}; tent told {}; copy told {}; copy acked {}; buttons {:?}",
+            worked(&host),
+            match holder {
+                Some(h) if h == test_hash(tent_key.secret()) => "the tent",
+                Some(h) if h == test_hash(copy_key.secret()) => "the copy",
+                Some(_) => "another",
+                None => "none",
+            },
+            short(last_error(&tent)),
+            short(last_error(&copy)),
+            engine_lock(&copy).fd_mirror_mut().acked,
+            give_handles(&host),
+        )
+    };
+    wait_showing(
+        "the tent turned away by name",
+        10,
+        || last_error(&tent) == held,
+        show,
+    );
+    wait_showing(
+        "the host's list gives the tent a button",
+        10,
+        || give_handles(&host).len() == 1,
+        show,
+    );
+
+    press(give_handles(&host));
+    wait_showing(
+        "the copy closed and turned away by name",
+        10,
+        || last_error(&copy) == held,
+        show,
+    );
+    log_fd(&copy, "W1FAK", "CT", "CW");
+    wait_showing(
+        "the tent's contacts are the club's, and only those",
+        30,
+        || worked(&host) == ["K7GHI", "W5DEF"],
+        show,
+    );
+    wait_showing(
+        "the host's list gives the copy a button",
+        30,
+        || give_handles(&host).len() == 1,
+        show,
+    );
+    let copy_acked = engine_lock(&copy).fd_mirror_mut().acked;
+    assert_eq!(
+        copy_acked, 2,
+        "nothing the copy sent after the press was acked"
+    );
+    assert_eq!(last_error(&tent), None, "the tent is served");
+
+    press(give_handles(&host));
+    wait_showing(
+        "the tent closed and turned away by name",
+        10,
+        || last_error(&tent) == held,
+        show,
+    );
+    wait_showing(
+        "the copy's three contacts are the club's, and only those",
+        30,
+        || worked(&host) == ["K1ABC", "N0XYZ", "W1FAK"],
+        show,
+    );
+    wait_showing(
+        "the host's list gives the tent a button again",
+        30,
+        || give_handles(&host).len() == 1,
+        show,
+    );
+    press(give_handles(&host));
+    wait_showing(
+        "the copy turned away again",
+        10,
+        || last_error(&copy) == held,
+        show,
+    );
+    wait_showing(
+        "the tent's contacts are the club's again",
+        30,
+        || worked(&host) == ["K7GHI", "W5DEF"],
+        show,
+    );
+
+    // The host restarts on the same event's journal.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    engine_lock(&host).fd_host_stop();
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    assert_eq!(
+        worked(&host),
+        ["K7GHI", "W5DEF"],
+        "the replayed club log, before anyone rejoins"
+    );
+    host_sd = start_host(&host, reusable_listener(port));
+    host_pump_sd = start_pump(&host, &addr);
+    log_fd(&tent, "W0JKL", "CO", "CW");
+    wait_showing(
+        "the tent rejoined the restarted host as its position",
+        30,
+        || worked(&host) == ["K7GHI", "W0JKL", "W5DEF"],
+        show,
+    );
+    wait_showing(
+        "the copy turned away by the restarted host",
+        30,
+        || give_handles(&host).len() == 1,
+        show,
+    );
+
+    // Where the keys and their hashes are, and where they are not.
+    let keys = [club_key("aaaa0001"), club_key("bbbb0002"), copy_key];
+    let hashes: Vec<String> = keys.iter().map(|k| test_hash(k.secret())).collect();
+    let join_line = fdsync::encode_line(&fdsync::Msg::Join {
+        v: fdsync::PROTO_VERSION,
+        pos: "bbbb0002".into(),
+        name: "CW tent".into(),
+        call: "W9XYZ".into(),
+        max_seq: 0,
+        contest: "arrlfd".into(),
+        role: String::new(),
+        key: keys[2].clone(),
+    });
+    assert!(
+        join_line.contains(keys[2].secret()),
+        "CONTROL: the JOIN line carries the key"
+    );
+    let kept = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        kept.contains(&hashes[1]) && kept.contains(&hashes[2]),
+        "CONTROL: the journal pins and gives by the keys' hashes"
+    );
+    let marker = format!("fd-give-{}", std::process::id());
+    tempo_core::applog::info("fd-give-test", &marker);
+    tempo_core::applog::flush();
+    let diag = tempo_core::applog::path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    assert!(
+        diag.contains(&marker),
+        "CONTROL: the diagnostic log holds a line written to it"
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut shown = vec![("the diagnostic log".to_string(), diag)];
+    for (who, eng) in [("host", &host), ("tent", &tent), ("copy", &copy)] {
+        let e = engine_lock(eng);
+        shown.push((
+            format!("the {who}'s snapshot"),
+            serde_json::to_string(&e.snapshot()).unwrap(),
+        ));
+        shown.push((
+            format!("the {who}'s Settings"),
+            serde_json::to_string(e.settings()).unwrap(),
+        ));
+        shown.push((
+            format!("the {who}'s Field Day status Remote reads"),
+            serde_json::to_string(&e.bounded_field_day_status().unwrap()).unwrap(),
+        ));
+    }
+    {
+        let board = engine_lock(&host).fd_board_snapshot().unwrap();
+        shown.push((
+            "the TV's board".to_string(),
+            tempo_app::fd_scoreboard::build_data_core(&board, now)
+                + &tempo_app::fd_scoreboard::build_meta(&board, now),
+        ));
+    }
+    for (what, text) in &shown {
+        for (key, hash) in keys.iter().zip(&hashes) {
+            assert!(!text.contains(key.secret()), "{what} holds a club key");
+            assert!(!text.contains(hash.as_str()), "{what} holds a key's hash");
+        }
+    }
+    assert!(
+        !kept.contains(keys[1].secret()),
+        "the journal holds a club key"
+    );
+    for sd in [host_sd, host_pump_sd, tent_sd, copy_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -34,6 +34,12 @@
 //! key is on none. This module takes the key from the JOIN line to that one call and nowhere
 //! else, and never logs or prints it: its `Debug` shows none of it.
 //!
+//! ⭐ **A served JOIN holds its position until the host gives it to another laptop**: the
+//! backend answers each JOIN with a hold ([`JoinAccept::hold`], never on the wire), and the loop
+//! hands it back with every row and at every tick. Once the host's operator has given the
+//! position to the laptop it belongs to, the backend refuses the old hold, and the loop sends
+//! the refusal and closes, so nothing that connection sends afterwards is merged or acked.
+//!
 //! The ping doubles as a position's clock probe ([`ClockSample`]): the position times its
 //! own ping, the host stamps its pong, and the position measures how far its clock is from
 //! the host's. That is shown, on the position's club line and the host's board, and it
@@ -503,6 +509,11 @@ pub struct JoinAccept {
     pub acked: u64,
     /// The contest the club runs (the rules-file id) — the welcome's `contest`.
     pub contest: String,
+    /// ⭐ **This JOIN's hold on its position**, the backend's own number: never on the wire,
+    /// handed back with every row ([`ClubBackend::merge`]) and at every tick
+    /// ([`ClubBackend::held`]). A host can give a position to another laptop, and a connection
+    /// whose hold is older than that sends nothing more as it.
+    pub hold: u64,
 }
 
 /// Everything the socket loop can do to the application — and, deliberately,
@@ -544,7 +555,17 @@ pub trait ClubBackend: Send + Sync {
     /// the new high-water ack for `row.pos`. `row.pos` is always the position this
     /// connection JOINED as, which every [`join`](Self::join) gate decided on: the socket
     /// loop refuses a row naming any other ([`ANOTHER_POSITIONS_ROW`]).
-    fn merge(&self, row: &WireQso) -> u64;
+    ///
+    /// `hold` is that JOIN's ([`JoinAccept::hold`]). `Err(msg)` = the host has given the
+    /// position to another laptop since: the row is not merged or acked, `msg` is sent
+    /// verbatim, and the connection closes. Decided under the same lock as the give, so no
+    /// row this connection sends after it reaches the club log.
+    fn merge(&self, hold: u64, row: &WireQso) -> Result<u64, String>;
+    /// Does this connection still hold the position it JOINED as (`hold`, as for
+    /// [`merge`](Self::merge))? `Err(msg)` once the host gave it to another laptop: sent
+    /// verbatim, and the connection closes. Asked at every tick, so a connection that sends
+    /// no row is closed too.
+    fn held(&self, pos: &str, hold: u64) -> Result<(), String>;
     /// A position's presence report (band board fodder). `report.name` is the
     /// position's current friendly name — EMPTY MEANS "no news" (an older
     /// peer sends none), never "clear the label".
@@ -764,7 +785,8 @@ fn serve_club_connection(
         Err(_) => return,
     };
     let mut reader = BufReader::new(stream);
-    let mut joined: Option<String> = None;
+    // The position this connection JOINED as, and that JOIN's hold on it.
+    let mut joined: Option<(String, u64)> = None;
     let mut sent_dupes = 0usize;
     let mut sent_sections = 0usize;
     let mut garbage_run = 0u32;
@@ -845,21 +867,28 @@ fn serve_club_connection(
                         }
                         sent_dupes = d;
                         sent_sections = s;
-                        joined = Some(pos);
+                        joined = Some((pos, accept.hold));
                     }
                     // ⭐ Merged only as the position this connection JOINED as: every gate
                     // above decided on that JOIN, so a row naming another position is refused,
-                    // never merged into a log no gate let it reach.
+                    // never merged into a log no gate let it reach. And only while that JOIN
+                    // still holds it: a position the host gave to another laptop takes no more.
                     Msg::Qso(row) => match &joined {
-                        Some(pos) if *pos == row.pos => {
-                            let acked = backend.merge(&row);
-                            if writer
-                                .write_all(encode_line(&Msg::Ack { seq: acked }).as_bytes())
-                                .is_err()
-                            {
+                        Some((pos, hold)) if *pos == row.pos => match backend.merge(*hold, &row) {
+                            Ok(acked) => {
+                                if writer
+                                    .write_all(encode_line(&Msg::Ack { seq: acked }).as_bytes())
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Err(msg) => {
+                                let _ =
+                                    writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
                                 break;
                             }
-                        }
+                        },
                         Some(_) => {
                             let _ = writer.write_all(
                                 encode_line(&Msg::Error {
@@ -879,7 +908,7 @@ fn serve_club_connection(
                         name,
                         clock_ms,
                     } => {
-                        if let Some(pos) = &joined {
+                        if let Some((pos, _)) = &joined {
                             backend.position_status(
                                 pos,
                                 &PosReport {
@@ -933,8 +962,13 @@ fn serve_club_connection(
             break;
         }
         // Duty tick: club delta the moment there is one; ping + board-bearing
-        // heartbeat every PING_SECS.
-        if let Some(pos) = &joined {
+        // heartbeat every PING_SECS. First, whether this JOIN still holds its position: one the
+        // host gave to another laptop is told why and closed within a tick, rows or none.
+        if let Some((pos, hold)) = &joined {
+            if let Err(msg) = backend.held(pos, *hold) {
+                let _ = writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
+                break;
+            }
             let (d, s) = backend.counts();
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
             if d > sent_dupes || s > sent_sections || beat {
@@ -956,7 +990,7 @@ fn serve_club_connection(
             }
         }
     }
-    if let Some(pos) = joined {
+    if let Some((pos, _)) = joined {
         backend.disconnect(&pos);
     }
 }
@@ -1685,6 +1719,9 @@ mod tests {
         roles: Mutex<Vec<String>>,
         /// Each presence report's clock, in arrival order.
         clocks: Mutex<Vec<(String, Option<i64>)>>,
+        /// The hold the next JOIN is served with, and the only one `held` accepts: moving it
+        /// is the host giving the position away.
+        hold: Mutex<u64>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1721,9 +1758,11 @@ mod tests {
                 host_call: "W9ABC".into(),
                 acked: *self.acked.lock().unwrap().get(pos).unwrap_or(&0),
                 contest: "arrlfd".into(),
+                hold: *self.hold.lock().unwrap(),
             })
         }
-        fn merge(&self, row: &WireQso) -> u64 {
+        fn merge(&self, hold: u64, row: &WireQso) -> Result<u64, String> {
+            self.held(&row.pos, hold)?;
             self.log(format!("merge {} {}", row.pos, row.seq));
             self.merged
                 .lock()
@@ -1733,7 +1772,14 @@ mod tests {
             let mut acked = self.acked.lock().unwrap();
             let e = acked.entry(row.pos.clone()).or_insert(0);
             *e = (*e).max(row.seq);
-            *e
+            Ok(*e)
+        }
+        fn held(&self, _pos: &str, hold: u64) -> Result<(), String> {
+            if hold == *self.hold.lock().unwrap() {
+                Ok(())
+            } else {
+                Err(format!("given away {hold}"))
+            }
         }
         fn position_status(&self, pos: &str, r: &PosReport) {
             self.log(format!("pos {pos} {} name={}", r.band, r.name));
@@ -2050,6 +2096,94 @@ mod tests {
         assert!(
             control.iter().any(|m| matches!(m, Msg::Ack { seq: 1 })),
             "{control:?}"
+        );
+    }
+
+    /// ⭐ **A connection whose position the host gave to another laptop is told why and closed,
+    /// rows or none, and nothing it sends afterwards is merged or acked.** Two connections are
+    /// served as one position; the backend then refuses their hold, as a host does once its
+    /// operator gives the position away. The one that sends nothing is closed at a tick; the one
+    /// that sends a contact has it refused. CONTROL: before the give each one's contact merges,
+    /// and after it a new JOIN is served with the new hold and its contact merges.
+    #[test]
+    fn a_connection_whose_position_was_given_away_is_told_why_and_closed() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let open = |m: &[Msg]| {
+            let s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut w = s.try_clone().unwrap();
+            for line in m {
+                w.write_all(encode_line(line).as_bytes()).unwrap();
+            }
+            (w, BufReader::new(s))
+        };
+        let read = |r: &mut BufReader<TcpStream>, ms: u64| {
+            let mut got = Vec::new();
+            let deadline = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < deadline {
+                match read_capped_line(r) {
+                    Ok(Some(line)) => got.extend(decode_line(&line)),
+                    Ok(None) => return (got, true),
+                    Err(_) => {}
+                }
+            }
+            (got, false)
+        };
+        // One after the other, so each one's ack is its own contact's.
+        let (_idle_w, mut idle) = open(&[join_msg("aaaa0001", 0), qso("aaaa0001", 1, "K1ABC")]);
+        let (before_idle, _) = read(&mut idle, 600);
+        let (mut busy_w, mut busy) = open(&[join_msg("aaaa0001", 0), qso("aaaa0001", 2, "N0XYZ")]);
+        let (before_busy, _) = read(&mut busy, 600);
+        *club.hold.lock().unwrap() = 1;
+        busy_w
+            .write_all(encode_line(&qso("aaaa0001", 3, "W1FAK")).as_bytes())
+            .unwrap();
+        let (after_idle, idle_closed) = read(&mut idle, 1500);
+        let (after_busy, busy_closed) = read(&mut busy, 1500);
+        let control = talk(
+            addr,
+            &[join_msg("aaaa0001", 0), qso("aaaa0001", 4, "W5DEF")],
+            700,
+        );
+        sd.store(true, Ordering::Relaxed);
+        let calls = club.calls.lock().unwrap().clone();
+        let told = |got: &[Msg]| {
+            got.iter()
+                .any(|m| matches!(m, Msg::Error { msg } if msg.as_str() == "given away 0"))
+        };
+        let mut wrong = Vec::new();
+        for (what, got, closed) in [
+            ("the connection that sent nothing", &after_idle, idle_closed),
+            (
+                "the connection that sent a contact",
+                &after_busy,
+                busy_closed,
+            ),
+        ] {
+            if !told(got) || !closed {
+                wrong.push(format!(
+                    "{what}: told {}, closed {closed}: {got:?}",
+                    told(got)
+                ));
+            }
+            if got.iter().any(|m| matches!(m, Msg::Ack { .. })) {
+                wrong.push(format!("{what} had a contact acked: {got:?}"));
+            }
+        }
+        if calls.iter().any(|c| c == "merge aaaa0001 3") {
+            wrong.push(format!("a contact sent after the give merged: {calls:?}"));
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        assert!(
+            before_idle.iter().any(|m| matches!(m, Msg::Ack { seq: 1 }))
+                && before_busy.iter().any(|m| matches!(m, Msg::Ack { seq: 2 })),
+            "CONTROL: each merged before the give: {before_idle:?} {before_busy:?}"
+        );
+        assert!(
+            control.iter().any(|m| matches!(m, Msg::Ack { seq: 4 })),
+            "CONTROL: a JOIN after the give is served and its contact merges: {control:?}"
         );
     }
 
@@ -2598,7 +2732,7 @@ mod tests {
         let club = Arc::new(FakeClub::default());
         // Host already has row 1 (a previous session) → welcome acks 1, the
         // pump must stream ONLY rows 2..=3 (the gap).
-        club.merge(&WireQso {
+        let seed = WireQso {
             pos: "dddd0001".into(),
             seq: 1,
             call: "W1AW".into(),
@@ -2613,7 +2747,8 @@ mod tests {
             op: String::new(),
             sat: String::new(),
             sat_fm: false,
-        });
+        };
+        club.merge(0, &seed).unwrap();
         club.calls.lock().unwrap().clear(); // the seed above is not wire traffic
         let (addr, host_sd) = start_host(club.clone());
 

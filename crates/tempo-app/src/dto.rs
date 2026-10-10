@@ -2802,11 +2802,11 @@ pub struct FdClubDto {
     /// takes it is deployed before the release that writes it. Absent unless it applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_full: Option<FdBoardFullDto>,
-    /// ⭐ **The positions this host turned away, and what each was told** — the HOST's alone:
+    /// ⭐ **The laptops this host turned away, and what each was told** — the HOST's alone:
     /// the refusal a JOIN met (a version, a contest or an exchange role this club does not
-    /// run), the latest per position, kept while that position keeps trying. The position's
-    /// own screen shows the same sentence, from the host's `error` line, so both ends say
-    /// which value differs and where to set it.
+    /// run, a position another laptop holds), the latest per laptop, kept while it keeps
+    /// trying. The position's own screen shows the same sentence, from the host's `error` line,
+    /// so both ends say which value differs and where to set it.
     ///
     /// ⚠️ A key the hosted Remote page's Field Day check must know first, as `board_full`
     /// is. Absent when empty.
@@ -2842,6 +2842,16 @@ pub struct FdClubRefusedDto {
     pub call: String,
     /// The sentence the position was sent, verbatim.
     pub reason: String,
+    /// ⭐ **What the host's Give button sends back** (`Engine::fd_club_give_position`): on an
+    /// entry of the HOST's turned-away list for a laptop turned away because another laptop
+    /// holds its position, and absent from every other entry. A number the host made to name
+    /// the entry, never the laptop's club key or its hash.
+    ///
+    /// ⚠️ The host's own screen acts on it, and nothing else: the Remote capture leaves it out
+    /// (`remote_service::query::field_day`), so the hosted page's Field Day check, which refuses
+    /// a key it does not know, never meets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<u64>,
 }
 
 /// [`FdClubDto::board_full`]: how many positions the host's club has, and how many of them
