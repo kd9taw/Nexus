@@ -28800,6 +28800,32 @@ fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<Stri
     eng.fd_club_export(format == "cabrillo")
 }
 
+/// What the host's Give button did: the position given, or why nothing changed.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum FdGiveDto {
+    Given,
+    Refused { refusal: &'static str },
+}
+
+/// ⭐ **Give a club position to the laptop the host turned away for it** — the Give button on
+/// the host's own turned-away list, by the handle that entry carries
+/// ([`tempo_app::engine::Engine::fd_club_give_position`]): refused when this Nexus is not
+/// hosting, and for a handle no entry on the list now can be given by.
+///
+/// ⛔ Not one of Remote's operations: a club change is refused from afar, and the button refuses
+/// a press that comes through a stream.
+#[tauri::command(async)]
+fn fd_club_give_position(state: State<'_, SharedEngine>, handle: u64) -> FdGiveDto {
+    let given = engine_lock(&state).fd_club_give_position(handle);
+    match given {
+        Ok(()) => FdGiveDto::Given,
+        Err(refusal) => FdGiveDto::Refused {
+            refusal: refusal.code(),
+        },
+    }
+}
+
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
 /// on a datagram socket just resolves the route, so `local_addr` answers even
 /// on an offline site LAN. `None` = no route at all; the Settings row words
@@ -32992,7 +33018,10 @@ fn start_on_the_logbook(
                 "tempo: couldn't keep the club key, so a host will not know it next run: {e}"
             );
         }
-        eng.set_fd_position_key(club_key);
+        // …with its hash as this laptop's own host bridge makes one: what its club code is
+        // made from, and what its own position is pinned to when it hosts.
+        let key_hash = club_key::sha256_hex(club_key.secret());
+        eng.set_fd_position_key(club_key, key_hash);
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
         // restart loses nothing. Per-POSITION file (suffixed by posid), with a
@@ -34748,6 +34777,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_i_moved,
             fd_discover_events,
             fd_club_export,
+            fd_club_give_position,
             fd_scoreboard_status,
             n3fjp_test_connection,
             set_hold_tx_freq,
@@ -36670,6 +36700,51 @@ mod tests {
         for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
         }
+    }
+
+    /// ⭐ The host's Give button reaches the engine only if its command is REGISTERED and goes
+    /// through `Engine::fd_club_give_position`, and no Remote dispatcher names either: a club
+    /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the
+    /// engine calls they make.
+    #[test]
+    fn the_give_position_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_give_position,"),
+            "fd_club_give_position is not registered — the Give button would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_give_position(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(body.contains(".fd_club_give_position(handle)"), "{body}");
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("give_position"),
+            "Remote must not reach the Give button's command"
+        );
     }
 
     /// The RF scope pane's poll is also its request for the radio's scope, so it must be

@@ -2752,6 +2752,11 @@ pub struct Engine {
     /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
     /// this reaches only the JOIN line. Never logged, shown or put in any DTO.
     fd_position_key: tempo_net::fdsync::PositionKey,
+    /// ⛔ **The hash of this position's club key**, as a host pins it, which the shell makes with
+    /// the host's own hash and hands here with the key: what this laptop's club code is made from
+    /// (`fdevent::club_code`), and what its own position is pinned to the moment it starts
+    /// hosting. Never logged, shown or put in any DTO; only the code is shown. Empty for no key.
+    fd_position_key_hash: String,
     /// The highest contest seq the slot loop has handed to N3FJP, the N1MM broadcast and
     /// WSJT-X listeners — the forwarder's own cursor, told here each slot boundary
     /// ([`Self::note_fd_forwarded`]) so a removal can say whether the contact already went.
@@ -5415,6 +5420,7 @@ impl Engine {
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
             fd_position_key: Default::default(),
+            fd_position_key_hash: String::new(),
             fd_forwarded_seq: 0,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
@@ -12093,8 +12099,15 @@ impl Engine {
     }
 
     /// This position's club key, as the shell read or made it at startup (it is kept beside
-    /// settings.json, never in it). Every JOIN sends it; nothing else may read it.
-    pub fn set_fd_position_key(&mut self, key: tempo_net::fdsync::PositionKey) {
+    /// settings.json, never in it), and `key_hash`, its hash as a host pins it. Every JOIN sends
+    /// the key; nothing else may read it. The hash is held for this laptop's club code and its
+    /// own pin as a host, and is no hash at all for a key a Nexus does not make.
+    pub fn set_fd_position_key(&mut self, key: tempo_net::fdsync::PositionKey, key_hash: String) {
+        self.fd_position_key_hash = if key.is_club_key() {
+            key_hash
+        } else {
+            String::new()
+        };
         self.fd_position_key = key;
     }
 
@@ -12214,6 +12227,14 @@ impl Engine {
         let mut club = crate::fdevent::ClubLog::for_ruleset(rs, &name);
         self.fd_club_session(&club).map_err(std::io::Error::other)?;
         club.attach_journal(&journal_path)?;
+        // ⭐ The host's own position is this laptop's from the start. Its id is on every board
+        // line of every event it has hosted, and its own JOIN comes over loopback only once the
+        // listener is up, so a peer that JOINed as it first would take it. A journal that pins it
+        // to another key keeps that pin (the first pin wins), and the host can give it back.
+        let own = &self.settings.fd_position_id;
+        if crate::fdevent::club_position_id(own) && !self.fd_position_key_hash.is_empty() {
+            club.pin(own, &self.fd_position_key_hash, now_unix_secs());
+        }
         self.fd_club = Some(club);
         Ok(())
     }
@@ -12320,6 +12341,10 @@ impl Engine {
             .then(|| crate::fdevent::NOT_A_POSITION_ID.to_string())
             .or_else(|| club.version_refusal(v))
             .or_else(|| club.key_refusal(pos, key_hash))
+            .or_else(|| {
+                club.connected(pos)
+                    .then(|| crate::fdevent::POSITION_IN_USE.to_string())
+            })
             .or_else(|| club.join_refusal(v, contest))
             .or_else(|| {
                 (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
@@ -12327,7 +12352,7 @@ impl Engine {
             })
             .or_else(|| club.call_refusal(&self.settings.mycall, call));
         if let Some(msg) = refusal {
-            club.note_refused(pos, name, call, &msg, now);
+            club.note_refused(pos, key_hash, name, call, &msg, now);
             return Err(msg);
         }
         let acked = club.join(pos, name, call, now);
@@ -12337,16 +12362,54 @@ impl Engine {
             host_call: self.settings.mycall.clone(),
             acked,
             contest: club.event_id.clone(),
+            hold: club.hold(pos),
+            link: club.open_link(pos),
         })
     }
 
-    /// Merge one wire row (idempotent) → the position's ack high-water.
-    pub fn fd_club_merge(&mut self, row: &tempo_net::fdsync::WireQso) -> u64 {
+    /// Merge one wire row (idempotent) → the position's ack high-water. `Err` with the sentence
+    /// the connection is sent when the JOIN it came in on (`hold`) no longer holds its position:
+    /// the host gave it to another laptop ([`Self::fd_club_give_position`]), under this same
+    /// lock, so the row is neither merged nor acked.
+    pub fn fd_club_merge(
+        &mut self,
+        hold: u64,
+        row: &tempo_net::fdsync::WireQso,
+    ) -> Result<u64, String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Ok(0);
+        };
+        club.held(&row.pos, hold)?;
+        Ok(club.merge(row, now))
+    }
+
+    /// Does the JOIN served with `hold` still hold `pos`? Asked by its connection at every tick,
+    /// which is how the laptop a position was given away from is closed though it sends nothing.
+    pub fn fd_club_held(&self, pos: &str, hold: u64) -> Result<(), String> {
+        self.fd_club
+            .as_ref()
+            .map_or(Ok(()), |club| club.held(pos, hold))
+    }
+
+    /// ⭐ **Give a club position to the laptop the host turned away for it** — the host's own
+    /// Give button, on its turned-away list, by the host-made `handle` of the entry of a laptop
+    /// turned away because another laptop holds its position. Pinned to that laptop and
+    /// journaled; the laptop that held it is closed and turned away by name on its next try,
+    /// and its own entry can give the position back
+    /// ([`crate::fdevent::ClubLog::give`]). Refused when this Nexus is not hosting, and for a
+    /// handle no entry on the list now can be given by.
+    ///
+    /// ⛔ The host's own screen only: no Remote operation reaches it, as no club change does.
+    pub fn fd_club_give_position(
+        &mut self,
+        handle: u64,
+    ) -> Result<(), crate::fdevent::GiveRefusal> {
         let now = now_unix_secs();
         self.fd_club
             .as_mut()
-            .map(|c| c.merge(row, now))
-            .unwrap_or(0)
+            .ok_or(crate::fdevent::GiveRefusal::NotHosting)?
+            .give(handle, now)
     }
 
     pub fn fd_club_counts(&self) -> (usize, usize) {
@@ -12404,10 +12467,13 @@ impl Engine {
         }
     }
 
-    pub fn fd_club_disconnect(&mut self, _pos: &str) {
-        // Presence is age-based (last_seen), so a disconnect needs no state
-        // change: the board row stale-marks itself past 15 s. Kept as a seam
-        // so the shell impl is total over the trait.
+    /// The connection a JOIN served with `link` came in on has closed (or JOINed again): no
+    /// laptop is connected as `_pos` over it any more ([`crate::fdevent::ClubLog::connected`]).
+    /// Presence is age-based (last_seen), so the board row stale-marks itself past 15 s.
+    pub fn fd_club_disconnect(&mut self, _pos: &str, link: u64) {
+        if let Some(club) = self.fd_club.as_mut() {
+            club.close_link(link);
+        }
     }
 
     /// Club export from the host, deduped earliest-wins by the club ruleset's own dupe
@@ -12454,15 +12520,16 @@ impl Engine {
                     session: self.fd_club_session(club),
                     rows: club.rows().to_vec(),
                 });
+        // Named as the host shows them, so two positions with one name read apart on the TV.
+        let shown = club.shown_names();
         let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
             .positions()
             .iter()
             .map(|(id, p)| crate::fd_scoreboard::FdBoardPosition {
                 id: id.clone(),
-                label: if p.label.is_empty() {
-                    id.clone()
-                } else {
-                    p.label.clone()
+                label: match shown.get(id.as_str()) {
+                    Some(name) if !name.is_empty() => name.clone(),
+                    _ => id.clone(),
                 },
                 operator: p.operator.clone(),
                 band: p.band.clone(),
@@ -12828,6 +12895,10 @@ impl Engine {
                             pos_name: r.label.clone(),
                             call: r.call.clone(),
                             reason: r.reason.clone(),
+                            // The Give button's, on an entry it can act on alone.
+                            handle: r.held_out().then_some(r.handle),
+                            // What tells that laptop apart: the code its own screen shows.
+                            club_code: (!r.code.is_empty()).then(|| r.code.clone()),
                         })
                         .collect()
                 })
@@ -12837,18 +12908,26 @@ impl Engine {
             kept_out: self.fd_club.as_ref().and_then(|c| {
                 let all = c.kept_out();
                 let newest = all.len().saturating_sub(crate::fdevent::KEPT_OUT_SHOWN);
+                // Each position named as its board line names it, so two read apart here too.
+                let shown = c.shown_names();
                 (!all.is_empty()).then(|| crate::dto::FdClubKeptOutDto {
                     total: all.len() as u32,
                     latest: all[newest..]
                         .iter()
                         .map(|k| crate::dto::FdClubRefusedDto {
-                            pos_name: k.label.clone(),
+                            pos_name: shown
+                                .get(k.pos.as_str())
+                                .cloned()
+                                .unwrap_or_else(|| k.label.clone()),
                             call: k.call.clone(),
                             reason: k.reason.clone(),
+                            handle: None,
+                            club_code: None,
                         })
                         .collect(),
                 })
             }),
+            club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
         })
     }
 
@@ -43009,22 +43088,26 @@ mod tests {
             "",
             &club_key_hash("aaaa0001"),
         );
-        e.fd_club_merge(&tempo_net::fdsync::WireQso {
-            pos: "aaaa0001".into(),
-            seq: 1,
-            call: "W1AW".into(),
-            class: "1D".into(),
-            sect: "CT".into(),
-            ex: vec![],
-            mex: vec![],
-            band: "20m".into(),
-            mode: "DIG".into(),
-            sub: "FT8".into(),
-            when: 1_782_583_500,
-            op: "OP1".into(),
-            sat: String::new(),
-            sat_fm: false,
-        });
+        e.fd_club_merge(
+            0,
+            &tempo_net::fdsync::WireQso {
+                pos: "aaaa0001".into(),
+                seq: 1,
+                call: "W1AW".into(),
+                class: "1D".into(),
+                sect: "CT".into(),
+                ex: vec![],
+                mex: vec![],
+                band: "20m".into(),
+                mode: "DIG".into(),
+                sub: "FT8".into(),
+                when: 1_782_583_500,
+                op: "OP1".into(),
+                sat: String::new(),
+                sat_fm: false,
+            },
+        )
+        .unwrap();
         let board = e.fd_board_snapshot().expect("host role → Some");
         assert_eq!(board.call, "W9ABC");
         assert_eq!((board.class.as_str(), board.section.as_str()), ("3A", "WI"));
@@ -43756,15 +43839,19 @@ mod tests {
         );
         let shown = crate::fdevent::KEPT_OUT_SHOWN as u64;
         for seq in 1..=shown + 4 {
-            e.fd_club_merge(&tempo_net::fdsync::WireQso {
-                pos: "bbbb0002".into(),
-                seq,
-                call: format!("K9A\nB{seq}"),
-                band: "40m".into(),
-                mode: "CW".into(),
-                when: now_unix_secs(),
-                ..Default::default()
-            });
+            e.fd_club_merge(
+                0,
+                &tempo_net::fdsync::WireQso {
+                    pos: "bbbb0002".into(),
+                    seq,
+                    call: format!("K9A\nB{seq}"),
+                    band: "40m".into(),
+                    mode: "CW".into(),
+                    when: now_unix_secs(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         }
         let kept = club(&e)["keptOut"].clone();
         assert_eq!(kept["total"], shown + 4, "{kept}");
@@ -43814,7 +43901,14 @@ mod tests {
                 wrong.push(format!("{what}: {got:?}"));
             }
         };
-        check("the first laptop", join(&mut e, v, &mine), &Ok(0));
+        let first = e.fd_club_join(
+            v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state", &mine,
+        );
+        check(
+            "the first laptop",
+            first.as_ref().map(|a| a.acked).map_err(|e| e.clone()),
+            &Ok(0),
+        );
         check("another laptop", join(&mut e, v, &other), &held);
         let noted = e.fd_club_log().unwrap().refused(now_unix_secs()).len();
         check(
@@ -43828,6 +43922,10 @@ mod tests {
             join(&mut e, 2, ""),
             &Err(older.unwrap_or_default()),
         );
+        // Its connection closed and opened again: a rejoin, not a second laptop.
+        if let Ok(a) = &first {
+            e.fd_club_disconnect("aaaa0001", a.link);
+        }
         check("the first laptop again", join(&mut e, v, &mine), &Ok(0));
         e.fd_host_stop();
         e.fd_host_start(dir.join("ilqp.ndjson")).unwrap();
@@ -43850,6 +43948,372 @@ mod tests {
         );
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         assert_eq!(noted, 1, "the host's list names the laptop it turned away");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host gives a club position to the laptop its turned-away list names**, through
+    /// the engine's own commands and the snapshot the host's screen reads. Refused when this Nexus
+    /// is not hosting. Only the laptop held out of its position gets a handle there, and a handle
+    /// no such entry has gives nothing. The give pins the position to that laptop, which is then
+    /// served from the start of its log; the JOIN the other laptop was served with holds the
+    /// position no longer, so its next contact is refused by name, neither merged nor acked, and
+    /// so is its next tick; it is turned away by name with a handle of its own that gives the
+    /// position back, and a used handle gives nothing. A laptop that lost its key file is given
+    /// its position back the same way, and its contacts go into the club's log once, through a
+    /// host restart.
+    #[test]
+    fn the_host_gives_a_held_position_to_the_laptop_its_list_names() {
+        use crate::fdevent::{GiveRefusal, POSITION_HELD};
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-give-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("give.ndjson");
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let held = POSITION_HELD.to_string();
+        let mut wrong = Vec::new();
+        let mut check = |what: &str, ok: bool| {
+            if !ok {
+                wrong.push(what.to_string());
+            }
+        };
+        check(
+            "a station not hosting gives nothing",
+            Engine::new("W9XYZ", "EN61", 0).fd_club_give_position(1)
+                == Err(GiveRefusal::NotHosting),
+        );
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_host_enable = true;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e.fd_host_start(journal.clone()).unwrap();
+        let (tent, copy, lost) = (
+            club_key_hash("the tent"),
+            club_key_hash("a laptop with the tent's settings"),
+            club_key_hash("that laptop, after it lost its key file"),
+        );
+        let join = |e: &mut Engine, key: &str| {
+            e.fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "arrlfd", "", key)
+        };
+        let row = |seq: u64, call: &str| tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq,
+            call: call.into(),
+            class: "1D".into(),
+            sect: "CT".into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            when: now_unix_secs(),
+            ..Default::default()
+        };
+        let handles = |e: &Engine| -> Vec<u64> {
+            e.snapshot()
+                .field_day
+                .and_then(|f| f.club)
+                .map(|c| c.refused.iter().filter_map(|r| r.handle).collect())
+                .unwrap_or_default()
+        };
+        let calls = |e: &Engine| -> Vec<String> {
+            e.fd_club_log()
+                .unwrap()
+                .rows()
+                .iter()
+                .map(|r| r.call.clone())
+                .collect()
+        };
+
+        let copy_hold = join(&mut e, &copy).expect("the copy joined first").hold;
+        check(
+            "the copy's contact merges while it holds the position",
+            e.fd_club_merge(copy_hold, &row(1, "K1ABC")) == Ok(1),
+        );
+        check(
+            "the tent is turned away by name",
+            join(&mut e, &tent).map(|a| a.acked) == Err(held.clone()),
+        );
+        check(
+            "a laptop logging another contest is turned away",
+            e.fd_club_join(
+                v,
+                "bbbb0002",
+                "SSB tent",
+                "W9XYZ",
+                "wfd",
+                "",
+                &club_key_hash("ssb"),
+            )
+            .is_err(),
+        );
+        let listed = handles(&e);
+        check(
+            "only the laptop held out of its position has a handle",
+            listed.len() == 1 && e.fd_club_log().unwrap().refused(now_unix_secs()).len() == 2,
+        );
+        check(
+            "a handle no entry has gives nothing",
+            e.fd_club_give_position(u64::MAX) == Err(GiveRefusal::Stale),
+        );
+        check("the give", e.fd_club_give_position(listed[0]) == Ok(()));
+        check(
+            "the copy's next contact is refused by name, not merged",
+            e.fd_club_merge(copy_hold, &row(2, "W1FAK")) == Err(held.clone())
+                && calls(&e).is_empty(),
+        );
+        check(
+            "the copy's next tick is told the same",
+            e.fd_club_held("aaaa0001", copy_hold) == Err(held.clone()),
+        );
+        check(
+            "a used handle gives nothing",
+            e.fd_club_give_position(listed[0]) == Err(GiveRefusal::Stale),
+        );
+        let tent_join = join(&mut e, &tent);
+        check(
+            "the tent is served, from the start of its log",
+            tent_join.as_ref().map(|a| a.acked) == Ok(0),
+        );
+        let (tent_hold, tent_link) = tent_join.map(|a| (a.hold, a.link)).unwrap_or((u64::MAX, 0));
+        check(
+            "the tent's contact merges",
+            e.fd_club_merge(tent_hold, &row(1, "W5DEF")) == Ok(1) && calls(&e) == ["W5DEF"],
+        );
+        check(
+            "the copy is turned away by name",
+            join(&mut e, &copy).map(|a| a.acked) == Err(held.clone()),
+        );
+        let back = handles(&e);
+        check(
+            "the copy has a handle of its own",
+            back.len() == 1 && back[0] != listed[0],
+        );
+        // Its connection closed and opened again: a rejoin, not a second laptop.
+        e.fd_club_disconnect("aaaa0001", tent_link);
+        check(
+            "the tent rejoining keeps the copy's entry and its handle",
+            join(&mut e, &tent).is_ok() && handles(&e) == back,
+        );
+        check("the give back", e.fd_club_give_position(back[0]) == Ok(()));
+        check(
+            "the tent's hold is stale",
+            e.fd_club_held("aaaa0001", tent_hold) == Err(held.clone()),
+        );
+        let copy_join = join(&mut e, &copy);
+        let copy_hold = copy_join.as_ref().map(|a| a.hold).unwrap_or(u64::MAX);
+        check(
+            "the copy is served, from the start of its log",
+            copy_join.map(|a| a.acked) == Ok(0)
+                && e.fd_club_merge(copy_hold, &row(1, "K1ABC")) == Ok(1),
+        );
+        check(
+            "the laptop that lost its key file is turned away by name",
+            join(&mut e, &lost).map(|a| a.acked) == Err(held.clone()),
+        );
+        let again = handles(&e);
+        check(
+            "and given its position by its handle",
+            again.len() == 1 && e.fd_club_give_position(again[0]) == Ok(()),
+        );
+        let lost_join = join(&mut e, &lost);
+        let lost_hold = lost_join.as_ref().map(|a| a.hold).unwrap_or(u64::MAX);
+        check(
+            "it sends its log again, and each contact goes in once",
+            lost_join.map(|a| a.acked) == Ok(0)
+                && e.fd_club_merge(lost_hold, &row(1, "K1ABC")) == Ok(1)
+                && calls(&e) == ["K1ABC"],
+        );
+        e.fd_host_stop();
+        e.fd_host_start(journal.clone()).unwrap();
+        check(
+            "after a restart its contacts are in once",
+            calls(&e) == ["K1ABC"],
+        );
+        check(
+            "after a restart it holds the position",
+            join(&mut e, &lost).map(|a| a.acked) == Ok(1)
+                && join(&mut e, &copy).map(|a| a.acked) == Err(held.clone()),
+        );
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A second laptop with a position's club key is turned away by name while the first is
+    /// connected, and the host's own position is its own laptop's from the start**, through the
+    /// engine's own JOIN, the snapshot the host's screen reads and its journal. Two laptops with
+    /// one position id and one key are one laptop's settings folder copied to another: the second
+    /// is turned away while the first's link is open, the host's list shows it with the club code
+    /// both laptops show and no Give button, and it is served once that link has closed. A link
+    /// the host's give made stale holds the position against nobody. A JOIN as the host's own
+    /// position with another key, before the host's own laptop has joined its club, is turned
+    /// away by name. CONTROLS: the host's own laptop is served as its position, its club line
+    /// shows its own code, and the journal pins it by its key's hash and holds no code.
+    /// A laptop whose club key could not be made (no key a Nexus makes) shows no club code and
+    /// pins nothing when it hosts, whatever hash it is handed: a code for no key matches nothing
+    /// the host shows, and a pin of it would hold the host's own position for nobody. CONTROL:
+    /// with a key, the code is on its club line and its own position is pinned.
+    #[test]
+    fn a_laptop_with_no_club_key_shows_no_code_and_pins_nothing() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-no-key-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_host_enable = true;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        let hash = club_key_hash("eeee0001");
+        let shown = |e: &mut Engine, key: tempo_net::fdsync::PositionKey, journal: &str| {
+            e.set_fd_position_key(key, hash.clone());
+            e.fd_host_stop();
+            e.fd_host_start(dir.join(journal)).unwrap();
+            let code = e
+                .snapshot()
+                .field_day
+                .and_then(|f| f.club)
+                .unwrap()
+                .club_code;
+            let pinned = e
+                .fd_club_log()
+                .unwrap()
+                .pinned("eeee0001")
+                .map(str::to_string);
+            (code, pinned)
+        };
+        assert_eq!(
+            shown(
+                &mut e,
+                tempo_net::fdsync::PositionKey::default(),
+                "none.ndjson"
+            ),
+            (String::new(), None),
+            "no key: no code, no pin"
+        );
+        let with_key = tempo_net::fdsync::PositionKey::new(club_key_hash("this laptop's key"));
+        assert_eq!(
+            shown(&mut e, with_key, "key.ndjson"),
+            (crate::fdevent::club_code(&hash), Some(hash.clone())),
+            "CONTROL: a key"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_laptop_with_a_positions_key_is_turned_away_while_the_first_is_connected() {
+        use crate::fdevent::{club_code, POSITION_HELD, POSITION_IN_USE};
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-in-use-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("in-use.ndjson");
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_host_enable = true;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        let own = club_key_hash("eeee0001");
+        e.set_fd_position_key(
+            tempo_net::fdsync::PositionKey::new(club_key_hash("this laptop's key")),
+            own.clone(),
+        );
+        e.fd_host_start(journal.clone()).unwrap();
+        let mut wrong = Vec::new();
+        let mut check = |what: &str, ok: bool| {
+            if !ok {
+                wrong.push(what.to_string());
+            }
+        };
+        let join_as = |e: &mut Engine, pos: &str, key: &str| {
+            e.fd_club_join(v, pos, "CW tent", "W9XYZ", "arrlfd", "", key)
+        };
+        check(
+            "a peer is turned away as the host's own position before the host joins it",
+            join_as(&mut e, "eeee0001", &club_key_hash("a peer")).map(|a| a.acked)
+                == Err(POSITION_HELD.to_string()),
+        );
+        check(
+            "CONTROL: the host's own laptop is served as its position",
+            join_as(&mut e, "eeee0001", &own).is_ok(),
+        );
+        let club = |e: &Engine| e.snapshot().field_day.and_then(|f| f.club).unwrap();
+        check(
+            "CONTROL: the host's club line shows its own code",
+            club(&e).club_code == club_code(&own) && !club_code(&own).is_empty(),
+        );
+
+        let tent = club_key_hash("the tent");
+        let first = join_as(&mut e, "aaaa0001", &tent).expect("the tent joins");
+        check(
+            "the copy is turned away by name while the tent is connected",
+            join_as(&mut e, "aaaa0001", &tent).map(|a| a.acked) == Err(POSITION_IN_USE.to_string()),
+        );
+        let entry = club(&e)
+            .refused
+            .into_iter()
+            .find(|r| r.reason == POSITION_IN_USE);
+        check(
+            "the host's list shows the copy with the code both laptops show, and no button",
+            entry.as_ref().is_some_and(|r| {
+                r.club_code.as_deref() == Some(club_code(&tent).as_str()) && r.handle.is_none()
+            }),
+        );
+        e.fd_club_disconnect("aaaa0001", first.link);
+        let second = join_as(&mut e, "aaaa0001", &tent);
+        check(
+            "served once the tent's link has closed",
+            second.as_ref().map(|a| a.acked) == Ok(0),
+        );
+        check("an unknown link closes nothing", {
+            e.fd_club_disconnect("aaaa0001", u64::MAX);
+            join_as(&mut e, "aaaa0001", &tent).map(|a| a.acked) == Err(POSITION_IN_USE.to_string())
+        });
+
+        let other = club_key_hash("the laptop the position is");
+        check(
+            "another key is turned away as the position's",
+            join_as(&mut e, "aaaa0001", &other).map(|a| a.acked) == Err(POSITION_HELD.to_string()),
+        );
+        let handle = club(&e).refused.iter().find_map(|r| r.handle);
+        check(
+            "the give",
+            handle.is_some_and(|h| e.fd_club_give_position(h) == Ok(())),
+        );
+        check(
+            "the laptop it was given to is served, though the tent's link has not closed yet",
+            join_as(&mut e, "aaaa0001", &other).map(|a| a.acked) == Ok(0),
+        );
+
+        let kept = std::fs::read_to_string(&journal).unwrap();
+        check(
+            "the journal pins the host's own position by its key's hash",
+            kept.contains(&format!("\"pos\":\"eeee0001\",\"key_hash\":\"{own}\"")),
+        );
+        check(
+            "the journal holds no club code",
+            ![&own, &tent, &other]
+                .iter()
+                .any(|h| kept.contains(club_code(h).as_str())),
+        );
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -44408,7 +44872,7 @@ mod tests {
                 "W9XYZ",
             ),
         ] {
-            e.fd_club_merge(&row);
+            e.fd_club_merge(0, &row).unwrap();
         }
         let cab = e.fd_club_export(true).expect("the club file");
         for line in [
@@ -45232,22 +45696,26 @@ mod tests {
             &club_key_hash("aaaa0001"),
         );
         for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
-            e.fd_club_merge(&tempo_net::fdsync::WireQso {
-                pos: "aaaa0001".into(),
-                seq,
-                call: call.into(),
-                class: class.into(),
-                sect: section.into(),
-                ex: vec![],
-                mex: vec![],
-                band: band.into(),
-                mode: mode.into(),
-                sub: sub.into(),
-                when: 1_800_727_200 + seq * 60,
-                op: "AA9OP".into(),
-                sat: String::new(),
-                sat_fm: false,
-            });
+            e.fd_club_merge(
+                0,
+                &tempo_net::fdsync::WireQso {
+                    pos: "aaaa0001".into(),
+                    seq,
+                    call: call.into(),
+                    class: class.into(),
+                    sect: section.into(),
+                    ex: vec![],
+                    mex: vec![],
+                    band: band.into(),
+                    mode: mode.into(),
+                    sub: sub.into(),
+                    when: 1_800_727_200 + seq * 60,
+                    op: "AA9OP".into(),
+                    sat: String::new(),
+                    sat_fm: false,
+                },
+            )
+            .unwrap();
         }
         (e, dir)
     }
@@ -45376,9 +45844,11 @@ mod tests {
             sat: sat.into(),
             sat_fm: !sat.is_empty(),
         };
-        e.fd_club_merge(&row(4, "W5SAT", "STX", "SAUDISAT 1C (SO-50)"));
-        e.fd_club_merge(&row(5, "K5SAT", "NTX", "SAUDISAT 1C (SO-50)"));
-        e.fd_club_merge(&row(6, "W5SAT", "STX", ""));
+        e.fd_club_merge(0, &row(4, "W5SAT", "STX", "SAUDISAT 1C (SO-50)"))
+            .unwrap();
+        e.fd_club_merge(0, &row(5, "K5SAT", "NTX", "SAUDISAT 1C (SO-50)"))
+            .unwrap();
+        e.fd_club_merge(0, &row(6, "W5SAT", "STX", "")).unwrap();
         let club = e.fd_club_state(0, 0, "aaaa0001").score;
         let board: serde_json::Value =
             serde_json::from_str(&crate::fd_scoreboard::build_data_core(

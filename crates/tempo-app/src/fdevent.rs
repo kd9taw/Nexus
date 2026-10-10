@@ -37,7 +37,12 @@
 //! club submits.** A JOIN under a position id no Nexus makes, or whose call is not a call sign,
 //! is refused at every club, and so is one that cannot prove the position it names: the host
 //! takes each position only from the laptop whose club key it pinned at that position's first
-//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key). A row whose call is
+//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key), or the laptop its
+//! operator gave the position to from its own turned-away list ([`ClubLog::give`]), where each
+//! laptop shows the club code its own screen shows ([`club_code`]): a name and a call are what a
+//! laptop says about itself. A second laptop with a position's key (a copied settings folder) is
+//! turned away while the first is connected ([`ClubLog::connected`]), and two positions with one
+//! name read apart on every board ([`ClubLog::shown_names`]). A row whose call is
 //! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
 //! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
 //! and listed on the host's screen until the event ends; the writers in `tempo_core` guard
@@ -220,15 +225,39 @@ pub const NOT_A_CALL_SIGN: &str = "this Nexus joined with a Callsign on the air 
      on again: this Nexus rejoins by itself. Contacts you log meanwhile stay in your own log.";
 
 /// ⭐ **The sentence for a JOIN under a position another laptop holds** ([`ClubLog::key_refusal`]):
-/// the host took that position from the laptop that first joined this event as it, and this
-/// JOIN's club key is not that laptop's. One laptop's settings copied onto another is how two
-/// come to share a position id, so it says how to give this one a position of its own.
+/// the host took that position from the laptop that first joined this event as it, or the one
+/// its operator gave it to ([`ClubLog::give`]), and this JOIN's club key is not that laptop's.
+/// One laptop's settings copied onto another is how two come to share a position id, so it says
+/// how to give this one a position of its own, and that the host can give it this one. A laptop
+/// whose position was given away is sent it too, as its connection closes.
 pub const POSITION_HELD: &str = "this Nexus joined as a club position that another laptop holds \
      at this event: the host takes each position only from the laptop that first joined as it, \
-     and this laptop's club key is not that one's. If this laptop's settings came from another \
-     laptop, quit Nexus here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus \
-     again: it makes a position of its own and rejoins by itself. Contacts you log meanwhile \
-     stay in your own log.";
+     or the one the host gave it to, and this laptop's club key is not that one's. If the \
+     position is this laptop's, the host can give it to this laptop: Give this laptop its \
+     position, on the host's Contest screen, beside the line in its club block that says it \
+     turned this laptop away. If this laptop's settings came from another laptop, quit Nexus \
+     here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus again: it makes a \
+     position of its own and rejoins by itself, with a contest log of its own that starts empty, \
+     so log nothing here until then. Contacts you log meanwhile stay in your own log, and go up \
+     if the host gives this laptop its position.";
+
+/// ⭐ **The sentence for a JOIN under a position a laptop with the same club key is connected as
+/// now** ([`ClubLog::connected`]): two laptops with one position id and one key are one laptop's
+/// whole settings folder copied to another, and the host cannot tell them apart by either. Served,
+/// they would be one position, each numbering its own contacts from 1, so one laptop's contacts
+/// would never be sent and the other's would be dropped as repeats. So the second is turned away
+/// while the first is connected, and told how to get a position of its own. The same laptop
+/// back from a dropped link meets it until the host notices its old link is gone.
+pub const POSITION_IN_USE: &str = "this Nexus joined as a club position that a laptop with the \
+     same club key is connected as now. Did you copy this laptop's settings folder to another \
+     laptop, or that laptop's to this one? Then the two show the same club code beside Club on \
+     their Contest screens, and the host takes a position from one laptop at a time, or the \
+     contacts of one would be lost. Give this laptop a position of its own: quit Nexus here, \
+     delete fd_position.key from its settings folder, set \"fdPositionId\" in its settings.json \
+     to \"\", and start Nexus again. It makes a position and a club key of its own and rejoins \
+     by itself, with a contest log of its own that starts empty, so log nothing here until then. \
+     If this laptop has only lost its link to the host for a moment, it is let in by itself \
+     within about 30 seconds.";
 
 /// ⭐ **The sentence for a JOIN with no club key a Nexus makes** ([`ClubLog::key_refusal`]):
 /// every Nexus speaking this protocol makes one and sends it, so only a startup that could not
@@ -288,6 +317,34 @@ pub fn club_call(raw: &str) -> Option<String> {
     ok.then_some(call)
 }
 
+/// The characters a club code is written in: Crockford's base 32, the digits and the capitals
+/// without I, L, O and U, so no two of them read alike on a screen (0 and O, 1 and I or L).
+const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// ⭐ **A laptop's club code**: the first 40 bits of its club key's hash (`key_hash`, the hex the
+/// host pins), as eight characters of [`CODE_ALPHABET`] in two groups of four (`7KQ2-M9XD`), or
+/// `""` for no key.
+///
+/// Each laptop shows its own on its club line, and the host shows the code of every laptop on its
+/// turned-away list beside the name and the call, which are what a laptop says about itself and
+/// anybody can say. So before the host gives a laptop a position, its operator compares the code
+/// on the host's screen with the one on that laptop's own. The hash is one way, so the code never
+/// reveals the key; and since a code rides no board line and is on no TV, Remote page or log, a
+/// peer that has not read it off one of those two screens has one chance in 2^40 that a key it
+/// makes shows the same.
+pub fn club_code(key_hash: &str) -> String {
+    let Some(bits) = key_hash
+        .get(..10)
+        .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+    else {
+        return String::new();
+    };
+    let ch = |i: u64| CODE_ALPHABET[((bits >> (35 - 5 * i)) & 31) as usize] as char;
+    let (head, tail): (String, String) = ((0..4).map(ch).collect(), (4..8).map(ch).collect());
+    format!("{head}-{tail}")
+}
+
 /// ⭐ **A position id as club sync takes one**: exactly what every Nexus makes
 /// (`Engine::fd_ensure_position_id`), eight characters of `0` to `9` and `a` to `f`. The id is a
 /// position's identity in the club log, its rows' half of `(position id, seq)`, and it rides
@@ -343,6 +400,15 @@ pub fn club_label(raw: &str) -> String {
         .map(|c| if c.is_control() || unseen(c) { '?' } else { c })
         .take(64)
         .collect()
+}
+
+/// A name as two names are compared to tell positions apart ([`ClubLog::shown_names`]): lower
+/// case, and every run of spacing one space, so `CW tent` and `cw  Tent` are the same name.
+fn name_key(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// A character that changes what text reads as without being seen: a line or paragraph
@@ -659,9 +725,12 @@ pub struct ClubPosition {
     /// own board shows it ([`ClubLog::clock_ms`]); it rides no board line, so the lines
     /// every position is sent are no longer for it.
     pub clock_ms: Option<i64>,
+    /// When this run of the host first heard of this position, as a count (1 for the first): of
+    /// two positions with one name, the one heard of first keeps it ([`ClubLog::shown_names`]).
+    pub heard: u64,
 }
 
-/// A position this host turned away, for the host's own screen ([`ClubLog::refused`]).
+/// A laptop this host turned away, for the host's own screen ([`ClubLog::refused`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refused {
     /// The name and station call its JOIN gave.
@@ -671,6 +740,50 @@ pub struct Refused {
     pub reason: String,
     /// Host clock at its last refused JOIN.
     pub at_unix: u64,
+    /// ⭐ **The host-made number that names this entry** to the host's own Give button
+    /// ([`ClubLog::give`]): kept while the laptop keeps trying, never made twice in one run of
+    /// Nexus, and nothing to do with its club key or the key's hash, which never leave the host.
+    pub handle: u64,
+    /// ⭐ **The laptop's club code** ([`club_code`]), from the key its JOIN carried (`""` for
+    /// none): the one thing on the entry the laptop cannot choose, and the same code that laptop
+    /// shows on its own club line.
+    pub code: String,
+}
+
+impl Refused {
+    /// Was this laptop turned away because another laptop holds its position
+    /// ([`POSITION_HELD`])? Only such an entry can be given its position ([`ClubLog::give`]).
+    pub fn held_out(&self) -> bool {
+        self.reason == POSITION_HELD
+    }
+}
+
+/// The handles [`Refused`] entries are named by: one counter for the whole run of Nexus, so a
+/// handle a screen still shows from before a club restarted names nothing in the new one.
+static NEXT_REFUSED_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The links a served JOIN is given ([`ClubLog::open_link`]): one counter for the whole run of
+/// Nexus, so a connection still closing after the club restarted closes nothing of the new one.
+static NEXT_LINK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Why the host's Give button changed nothing ([`ClubLog::give`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiveRefusal {
+    /// This Nexus is not hosting a club event.
+    NotHosting,
+    /// No laptop on the turned-away list now is held out of its position under that handle:
+    /// it joined, stopped trying, was given the position already, or the club restarted.
+    Stale,
+}
+
+impl GiveRefusal {
+    /// The refusal as the screen's catalog keys name it.
+    pub fn code(self) -> &'static str {
+        match self {
+            GiveRefusal::NotHosting => "notHosting",
+            GiveRefusal::Stale => "stale",
+        }
+    }
 }
 
 /// How long the host keeps showing a refused position after its last try. A refused
@@ -725,6 +838,14 @@ enum JournalNote {
     /// A contact kept out of the club's log ([`ClubLog::kept_out`]), so a restarted host still
     /// lists it for the rest of the event.
     KeptOut(KeptOut),
+    /// ⭐ A position the host's operator gave to another laptop ([`ClubLog::give`]): pinned to
+    /// that laptop's key hash, and started afresh at this line. Replayed in journal order, so
+    /// the last give of a position is the one a restarted host holds.
+    Give {
+        pos: String,
+        key_hash: String,
+        at: u64,
+    },
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -787,12 +908,23 @@ pub struct ClubLog {
     arrivals: VecDeque<(u64, String)>,
     /// The append-only event journal. `None` = not journaling (tests).
     journal: Option<std::fs::File>,
-    /// Positions this host turned away, by position id ([`note_refused`](Self::note_refused)).
-    refused: HashMap<String, Refused>,
+    /// Laptops this host turned away, by the position id their JOIN named and the hash of its
+    /// club key (empty for none): two laptops can name one position
+    /// ([`note_refused`](Self::note_refused)).
+    refused: HashMap<(String, String), Refused>,
     /// ⭐ Each position's club key, as the HASH of the key its first served JOIN of this event
-    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)).
-    /// Journaled, so a restarted host still holds every pin it made.
+    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)) — or of
+    /// the laptop the host's operator gave it to since ([`give`](Self::give)). Journaled, so a
+    /// restarted host still holds every pin it made.
     pins: HashMap<String, String>,
+    /// How often each position was given to another laptop, which is each served JOIN's hold
+    /// on it ([`hold`](Self::hold)): a give makes every earlier hold stale.
+    gives: HashMap<String, u64>,
+    /// ⭐ The connections open now, by link ([`open_link`](Self::open_link)): the position each
+    /// one's JOIN was served as, and that JOIN's hold. In memory only: a restarted host has none.
+    links: HashMap<u64, (String, u64)>,
+    /// How many positions this run has heard of ([`ClubPosition::heard`]).
+    heard: u64,
     /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
     /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
     /// one entry per contact, however often its position sends it again; at most
@@ -960,6 +1092,102 @@ impl ClubLog {
             key_hash: key_hash.to_string(),
             at: now,
         });
+    }
+
+    /// ⭐ **Give a position to the laptop this host's turned-away list names under `handle`** —
+    /// the host's own Give button, on the entry of a laptop turned away because another laptop
+    /// holds its position ([`Refused::held_out`]). [`GiveRefusal::Stale`], and nothing changes,
+    /// unless that entry is on the list now ([`refused`](Self::refused)) and its laptop is still
+    /// held out.
+    ///
+    /// The position is pinned to that laptop's key hash, so whichever laptop tries next, only it
+    /// is served: no race with the laptop that held the position. Every hold on the position goes
+    /// stale ([`held`](Self::held)), so the connection of the laptop that held it is told
+    /// [`POSITION_HELD`] and closed within a tick, and it is turned away by name on its next try,
+    /// where its own entry gives the position back the same way.
+    ///
+    /// ⚠️ **And the position starts afresh.** The club keys each contact by its position and that
+    /// position's own count (`seq`), and tells a joining position how far it has (`acked`); each
+    /// laptop counts its own contacts from 1. Left in, the contacts the other laptop sent as this
+    /// position would stand in for the given laptop's: it would be told they are in and send none
+    /// of those, and any it sent would merge as repeats. So they leave the club's log (they stay
+    /// in the journal, and in the log of the laptop that sent them, which sends them again when it
+    /// rejoins), and the given laptop sends its whole log. One journal line
+    /// ([`JournalNote::Give`]), replayed in order at attach.
+    pub fn give(&mut self, handle: u64, now: u64) -> Result<(), GiveRefusal> {
+        let (pos, key_hash) = self
+            .refused
+            .iter()
+            .find(|((pos, key_hash), r)| {
+                r.handle == handle
+                    && r.held_out()
+                    && now.saturating_sub(r.at_unix) <= REFUSED_SHOWN_SECS
+                    && !key_hash.is_empty()
+                    && self.pins.get(pos) != Some(key_hash)
+            })
+            .map(|(id, _)| id.clone())
+            .ok_or(GiveRefusal::Stale)?;
+        self.refused.remove(&(pos.clone(), key_hash.clone()));
+        self.hand_over(&pos, &key_hash);
+        self.journal_note(&JournalNote::Give {
+            pos,
+            key_hash,
+            at: now,
+        });
+        Ok(())
+    }
+
+    /// [`give`](Self::give)'s change, live and at replay: the pin, every hold on the position
+    /// stale, and the position started afresh. The club's dupe keys and sections stay, as they
+    /// must: every position's mirror holds them by cursor, and a club dupe is a warning, never a
+    /// lock.
+    fn hand_over(&mut self, pos: &str, key_hash: &str) {
+        self.pins.insert(pos.to_string(), key_hash.to_string());
+        *self.gives.entry(pos.to_string()).or_default() += 1;
+        self.rows.retain(|r| r.posid != pos);
+        self.ids.retain(|(p, _)| p != pos);
+        self.kept_out.retain(|k| k.pos != pos);
+        self.arrivals.retain(|(_, p)| p != pos);
+        self.positions.remove(pos);
+    }
+
+    /// A served JOIN's hold on position `posid` (`tempo_net::fdsync::JoinAccept::hold`): how
+    /// often the host gave it to another laptop before that JOIN.
+    pub fn hold(&self, posid: &str) -> u64 {
+        self.gives.get(posid).copied().unwrap_or(0)
+    }
+
+    /// Does a JOIN served with `hold` still hold `posid`? `Err` with [`POSITION_HELD`] once the
+    /// host has given the position to another laptop ([`give`](Self::give)).
+    pub fn held(&self, posid: &str, hold: u64) -> Result<(), String> {
+        if self.hold(posid) == hold {
+            Ok(())
+        } else {
+            Err(POSITION_HELD.to_string())
+        }
+    }
+
+    /// A JOIN served as `posid`: the link its connection hands back when it closes
+    /// ([`close_link`](Self::close_link)). Until then a laptop is [`connected`](Self::connected) as
+    /// the position, under the hold it was served with.
+    pub fn open_link(&mut self, posid: &str) -> u64 {
+        let link = NEXT_LINK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.links
+            .insert(link, (posid.to_string(), self.hold(posid)));
+        link
+    }
+
+    /// The connection `link` was opened for has closed. A link this club never opened (one from
+    /// before the club restarted) changes nothing.
+    pub fn close_link(&mut self, link: u64) {
+        self.links.remove(&link);
+    }
+
+    /// ⭐ **Is a laptop connected as `posid` now?** A connection open under the position's current
+    /// hold: one whose position the host gave away since holds it no more, and is closing.
+    pub fn connected(&self, posid: &str) -> bool {
+        let hold = self.hold(posid);
+        self.links.values().any(|(p, h)| p == posid && *h == hold)
     }
 
     /// List one kept-out contact, unless it is listed already, is in the club's log after all,
@@ -1133,6 +1361,12 @@ impl ClubLog {
                             self.list_kept_out(k);
                         }
                         JournalNote::KeptOut(_) => {}
+                        // In journal order: the rows above it under that position were the
+                        // laptop it was given away from, and leave the club's log as they did.
+                        JournalNote::Give { pos, key_hash, at } if at >= oldest_unix => {
+                            self.hand_over(&pos, &key_hash);
+                        }
+                        JournalNote::Give { .. } => {}
                     }
                     continue;
                 }
@@ -1242,7 +1476,7 @@ impl ClubLog {
         // club's log, so the host's list no longer says it is not.
         self.kept_out
             .retain(|k| (k.pos.as_str(), k.seq) != (row.posid.as_str(), row.seq));
-        let pos = self.positions.entry(row.posid.clone()).or_default();
+        let pos = self.position(&row.posid);
         pos.qsos_raw += 1;
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
         pos.acked = pos.acked.max(row.seq);
@@ -1291,8 +1525,11 @@ impl ClubLog {
     /// named none or one that is not a call sign: the call a GOTA station's rows are stamped
     /// with is never an earlier join's, and never one the gate would turn away.
     pub fn join(&mut self, posid: &str, label: &str, call: &str, now: u64) -> u64 {
-        self.refused.remove(posid);
-        let pos = self.positions.entry(posid.to_string()).or_default();
+        // Its position's entries go, except the laptops this JOIN holds the position against:
+        // each of those keeps trying, and keeps the button that can give it the position.
+        self.refused
+            .retain(|(id, _), r| id != posid || r.held_out());
+        let pos = self.position(posid);
         let label = club_label(label);
         if !label.is_empty() {
             pos.label = label;
@@ -1303,19 +1540,36 @@ impl ClubLog {
     }
 
     /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
-    /// while the position keeps trying ([`refused`](Self::refused)), under the position id its
-    /// join clears. The name and call come off the network, so each is read the way the club
+    /// while the laptop keeps trying ([`refused`](Self::refused)), under the position id its
+    /// join clears and `key_hash`, its club key's hash (empty for none), so two laptops naming
+    /// one position are two entries, each keeping its handle while it keeps trying. The name
+    /// and call come off the network, so each is read the way the club
     /// reads it ([`club_label`], [`shown_call`]): one line, at most 64 characters, and a call
     /// the gate turned away never shown as one it would have served. The list holds at most
     /// [`MAX_REFUSED`], the oldest going first.
-    pub fn note_refused(&mut self, posid: &str, label: &str, call: &str, reason: &str, now: u64) {
+    pub fn note_refused(
+        &mut self,
+        posid: &str,
+        key_hash: &str,
+        label: &str,
+        call: &str,
+        reason: &str,
+        now: u64,
+    ) {
+        let id = (posid.to_string(), key_hash.to_string());
+        let handle = self.refused.get(&id).map_or_else(
+            || NEXT_REFUSED_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            |r| r.handle,
+        );
         self.refused.insert(
-            posid.to_string(),
+            id,
             Refused {
                 label: club_label(label),
                 call: shown_call(call),
                 reason: reason.to_string(),
                 at_unix: now,
+                handle,
+                code: club_code(key_hash),
             },
         );
         while self.refused.len() > MAX_REFUSED {
@@ -1330,10 +1584,10 @@ impl ClubLog {
         }
     }
 
-    /// The positions refused within the last minute, by name (unnamed ones by id after) —
+    /// The laptops refused within the last minute, by name (unnamed ones by id after) —
     /// one that has stopped trying drops off, and one that joined went at its join.
     pub fn refused(&self, now: u64) -> Vec<&Refused> {
-        let mut out: Vec<(&String, &Refused)> = self
+        let mut out: Vec<(&(String, String), &Refused)> = self
             .refused
             .iter()
             .filter(|(_, r)| now.saturating_sub(r.at_unix) <= REFUSED_SHOWN_SECS)
@@ -1355,7 +1609,7 @@ impl ClubLog {
     /// operator by [`club_operator`], a band and a mode as [`inert`] ASCII (a mode upper-cased
     /// the ASCII way), and one that is not reads as nothing.
     pub fn position_status(&mut self, posid: &str, r: &PosReport, now: u64) {
-        let pos = self.positions.entry(posid.to_string()).or_default();
+        let pos = self.position(posid);
         let name = club_label(&r.name);
         if !name.is_empty() {
             pos.label = name;
@@ -1422,6 +1676,47 @@ impl ClubLog {
 
     pub fn positions(&self) -> &HashMap<String, ClubPosition> {
         &self.positions
+    }
+
+    /// `posid`'s entry, made, when this is the first the host hears of it, in the order it heard.
+    fn position(&mut self, posid: &str) -> &mut ClubPosition {
+        let heard = &mut self.heard;
+        self.positions.entry(posid.to_string()).or_insert_with(|| {
+            *heard += 1;
+            ClubPosition {
+                heard: *heard,
+                ..Default::default()
+            }
+        })
+    }
+
+    /// ⭐ **Each position's name as the host shows it**, by position id: its own name, and for a
+    /// position named as one the host heard of earlier (compared case-blind, a run of spaces as
+    /// one), that name with the first number after it that no name shown so far has, `CW tent
+    /// (2)` for the second. So no two positions read alike on any board, the TV or Remote, and a
+    /// peer cannot pass as another position by naming itself as it: the one heard of first keeps
+    /// its name, and the later one reads as another. Empty for a position with no name, which
+    /// the screens name their own way.
+    ///
+    /// Letters of another script that look like these (a Cyrillic `е` for a Latin `e`) make
+    /// another name, shown as it is: the hand-over never goes by a name, but by the club code
+    /// ([`club_code`]).
+    pub fn shown_names(&self) -> HashMap<&str, String> {
+        let mut heard: Vec<(&String, &ClubPosition)> = self.positions.iter().collect();
+        heard.sort_by_key(|(id, p)| (p.heard, *id));
+        let mut taken: HashSet<String> = HashSet::new();
+        heard
+            .into_iter()
+            .map(|(id, p)| {
+                let mut shown = p.label.clone();
+                let mut n = 1;
+                while !shown.is_empty() && !taken.insert(name_key(&shown)) {
+                    n += 1;
+                    shown = format!("{} ({n})", p.label);
+                }
+                (id.as_str(), shown)
+            })
+            .collect()
     }
 
     pub fn qsos_raw(&self) -> u64 {
@@ -1666,6 +1961,7 @@ impl ClubLog {
                 *rate.entry(p.as_str()).or_insert(0) += 1;
             }
         }
+        let shown = self.shown_names();
         let mut ids: Vec<&String> = self.positions.keys().collect();
         ids.sort();
         ids.iter()
@@ -1679,8 +1975,9 @@ impl ClubLog {
                     // internal plumbing (it exists so two positions' contacts can never
                     // collide) and is not something to show anybody. The UI decides what
                     // an unnamed position reads as, because that fallback is prose and
-                    // prose belongs in the catalogs, not in a Rust string literal.
-                    name: p.label.clone(),
+                    // prose belongs in the catalogs, not in a Rust string literal. Named as
+                    // the host shows it: two positions with one name read apart.
+                    name: shown.get(id.as_str()).cloned().unwrap_or_default(),
                     band: p.band.clone(),
                     mode: p.mode.clone(),
                     op: p.operator.clone(),
@@ -1947,8 +2244,8 @@ mod tests {
                 .map(|r| (r.label.clone(), r.call.clone(), r.reason.clone()))
                 .collect()
         };
-        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "first", 100);
-        club.note_refused("aaaa0001", "SSB tent", "w9xyz", "second", 110);
+        club.note_refused("aaaa0001", "", "SSB tent", "w9xyz", "first", 100);
+        club.note_refused("aaaa0001", "", "SSB tent", "w9xyz", "second", 110);
         assert_eq!(
             shown(&club, 120),
             vec![("SSB tent".into(), "W9XYZ".into(), "second".into())],
@@ -1960,19 +2257,21 @@ mod tests {
             "kept a minute after the last try"
         );
         assert!(shown(&club, 171).is_empty(), "and not a second longer");
-        club.note_refused("bbbb0002", "CW tent", "k9abc", "refused", 200);
+        club.note_refused("bbbb0002", "", "CW tent", "k9abc", "refused", 200);
         club.join("bbbb0002", "CW tent", "K9ABC", 201);
         assert!(
             shown(&club, 202).is_empty(),
             "a position that joins leaves the list"
         );
         for i in 0..20u64 {
-            club.note_refused(&format!("c{i:07}"), "", "K9ZZZ", "refused", 300 + i);
+            club.note_refused(&format!("c{i:07}"), "", "", "K9ZZZ", "refused", 300 + i);
         }
-        let ids: Vec<&String> = club.refused.keys().collect();
+        let ids: Vec<&String> = club.refused.keys().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 16, "never more than sixteen");
         assert!(
-            (4..20).all(|i| club.refused.contains_key(&format!("c{i:07}"))),
+            (4..20).all(|i| club
+                .refused
+                .contains_key(&(format!("c{i:07}"), String::new()))),
             "the four oldest went first: {ids:?}"
         );
     }
@@ -4389,7 +4688,7 @@ mod tests {
             if !club.rows().is_empty() {
                 wrong.push(format!("{how}, merge: {:?}", club.rows()[0].call));
             }
-            club.note_refused("dddd0004", "TENT", &call, NOT_A_CALL_SIGN, 3);
+            club.note_refused("dddd0004", "", "TENT", &call, NOT_A_CALL_SIGN, 3);
             let listed = club
                 .refused(3)
                 .iter()
@@ -4404,7 +4703,7 @@ mod tests {
         club.join("cccc0003", "GOTA", "\r\n k9got\t", 1);
         assert_eq!(club.positions()["cccc0003"].call, "K9GOT");
         assert_eq!(club.call_refusal(" w9xyz\t", "W9XYZ\n"), None);
-        club.note_refused("dddd0004", "TENT", " k9abc\t", "refused", 3);
+        club.note_refused("dddd0004", "", "TENT", " k9abc\t", "refused", 3);
         assert!(club.refused(3).iter().any(|r| r.call == "K9ABC"));
     }
 
@@ -4471,6 +4770,7 @@ mod tests {
         let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
         club.note_refused(
             "aaaa0001",
+            "",
             &format!("SSB tent{tail}"),
             &format!("K9GOT{tail}"),
             "refused",
@@ -4500,7 +4800,7 @@ mod tests {
             "{contest}"
         );
         assert!(role.contains("the \"dx?Turned?away?HQ??W9XYZ"), "{role}");
-        club.note_refused("bbbb0002", "Zelt Süd", "K9ABC", "refused", 1);
+        club.note_refused("bbbb0002", "", "Zelt Süd", "K9ABC", "refused", 1);
         assert!(club.refused(1).iter().any(|r| r.label == "Zelt Süd"));
         assert!(contest_mismatch("ARRL-FIELD-DAY", "ilqp").contains("logging IL QSO Party"));
     }
@@ -4632,6 +4932,316 @@ mod tests {
             "a previous event's pin"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A give is one journal line, replayed in order at attach, skipped by every older
+    /// reader and aged out with its event.** The host gives a position held by one laptop to the
+    /// laptop it turned away for it: the position is pinned to that laptop, every hold on it goes
+    /// stale, its contacts so far leave the club's log, and the entry and its handle are gone.
+    /// A restarted host replays the pin, the rows, the give and the rows after it in that order,
+    /// and so holds what the live one held. A build before gives reads the line as a note it
+    /// does not know and then as a row, which needs fields it lacks; a build before notes, as a
+    /// row only: each skips it. A give older than the cutoff gives nothing, and a give newer than
+    /// a pin it replaced still holds once that pin has aged out. CONTROL: a handle on an entry
+    /// turned away for another reason gives nothing.
+    #[test]
+    fn a_give_is_one_journal_line_replayed_in_order_and_aged_out_with_its_event() {
+        let dir = scratch("give");
+        let path = dir.join("fd_event_give.jsonl");
+        let (first, theirs) = (
+            throwaway_hash("the laptop that joined first"),
+            throwaway_hash("the laptop the position is"),
+        );
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        club.join("aaaa0001", "CW tent", "W9XYZ", 1_000);
+        club.pin("aaaa0001", &first, 1_000);
+        let first_hold = club.hold("aaaa0001");
+        club.merge(
+            &wq("aaaa0001", 1, "K1ABC", "40m", "CW", "EMA", 1_000),
+            1_000,
+        );
+        club.note_refused(
+            "aaaa0001",
+            &theirs,
+            "CW tent",
+            "W9XYZ",
+            POSITION_HELD,
+            1_001,
+        );
+        // With a key of its own, as every JOIN this build sends has: only being held out of its
+        // position can be what lets an entry give one.
+        club.note_refused(
+            "bbbb0002",
+            &throwaway_hash("a laptop logging another contest"),
+            "SSB tent",
+            "W9XYZ",
+            "another contest",
+            1_001,
+        );
+        let handle_of = |club: &ClubLog, held: bool| {
+            club.refused(1_002)
+                .iter()
+                .find(|r| r.held_out() == held)
+                .map(|r| r.handle)
+                .unwrap()
+        };
+        let (handle, other) = (handle_of(&club, true), handle_of(&club, false));
+        assert_ne!(handle, other, "each entry has its own handle");
+        assert_eq!(
+            club.give(other, 1_002),
+            Err(GiveRefusal::Stale),
+            "CONTROL: an entry turned away for another reason gives nothing"
+        );
+        let lines_before = std::fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(club.give(handle, 1_002), Ok(()));
+        assert_eq!(club.pinned("aaaa0001"), Some(theirs.as_str()));
+        assert_eq!(
+            club.held("aaaa0001", first_hold),
+            Err(POSITION_HELD.to_string()),
+            "the first laptop's hold is stale"
+        );
+        assert!(club.rows().is_empty(), "the position starts afresh");
+        assert_eq!(
+            club.give(handle, 1_003),
+            Err(GiveRefusal::Stale),
+            "a used handle"
+        );
+        assert_eq!(
+            club.refused(1_003).len(),
+            1,
+            "the given laptop's entry is gone; the other stays"
+        );
+        let journal = std::fs::read_to_string(&path).unwrap();
+        let line = journal.lines().last().unwrap();
+        assert_eq!(journal.lines().count(), lines_before + 1, "one line");
+        assert_eq!(
+            line,
+            format!("{{\"give\":{{\"pos\":\"aaaa0001\",\"key_hash\":\"{theirs}\",\"at\":1002}}}}")
+        );
+        assert!(
+            serde_json::from_str::<MergedRow>(line).is_err(),
+            "a build before notes reads no row from it"
+        );
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum BeforeGives {
+            Pin {
+                pos: String,
+                key_hash: String,
+                at: u64,
+            },
+            KeptOut(KeptOut),
+        }
+        assert!(
+            serde_json::from_str::<BeforeGives>(line).is_err(),
+            "a build before gives reads no note from it"
+        );
+        let accept = club.join("aaaa0001", "CW tent", "W9XYZ", 1_004);
+        assert_eq!(accept, 0, "the given laptop sends its whole log");
+        club.merge(
+            &wq("aaaa0001", 1, "W5DEF", "40m", "CW", "STX", 1_004),
+            1_004,
+        );
+
+        let replayed = |cutoff: u64| {
+            let mut c = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+            c.attach_journal_since(&path, cutoff).unwrap();
+            let calls: Vec<String> = c.rows().iter().map(|r| r.call.clone()).collect();
+            (
+                c.pinned("aaaa0001").map(str::to_string),
+                calls,
+                c.hold("aaaa0001"),
+            )
+        };
+        assert_eq!(
+            replayed(0),
+            (Some(theirs.clone()), vec!["W5DEF".to_string()], 1),
+            "a restarted host holds what the live one held"
+        );
+        assert_eq!(
+            replayed(1_002),
+            (Some(theirs.clone()), vec!["W5DEF".to_string()], 1),
+            "the give outlives the pin it replaced"
+        );
+        assert_eq!(
+            replayed(1_003),
+            (None, vec!["W5DEF".to_string()], 0),
+            "an aged give"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- what tells laptops and positions apart on the host's screen -------------------
+
+    /// ⭐ **A club code is eight characters no two of which read alike, made from the key's hash
+    /// alone**: the first 40 bits of it, in two groups of four, the same every time. SHA-256 of
+    /// "abc" (FIPS 180-2's example) gives `Q9W1-DFWF`; the lowest and highest 40 bits give
+    /// `0000-0000` and `ZZZZ-ZZZZ`. No I, L, O or U, and a thousand hashes give a thousand codes.
+    /// No key, or anything but hex, gives no code. CONTROL: what follows the first ten digits
+    /// changes nothing.
+    #[test]
+    fn a_club_code_is_eight_unambiguous_characters_from_the_key_hash_alone() {
+        assert_eq!(
+            club_code("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            "Q9W1-DFWF"
+        );
+        assert_eq!(
+            club_code(&format!("0000000000{}", "f".repeat(54))),
+            "0000-0000"
+        );
+        assert_eq!(
+            club_code(&format!("ffffffffff{}", "0".repeat(54))),
+            "ZZZZ-ZZZZ"
+        );
+        let hash = throwaway_hash("a laptop");
+        assert_eq!(
+            club_code(&hash),
+            club_code(&format!("{}{}", &hash[..10], "0".repeat(54))),
+            "CONTROL: only the first ten digits"
+        );
+        let codes: HashSet<String> = (0..1000)
+            .map(|i| club_code(&throwaway_hash(&format!("laptop {i}"))))
+            .collect();
+        assert_eq!(codes.len(), 1000, "a thousand laptops, a thousand codes");
+        for code in &codes {
+            assert!(
+                code.len() == 9
+                    && code.as_bytes()[4] == b'-'
+                    && code
+                        .bytes()
+                        .enumerate()
+                        .all(|(i, b)| i == 4 || CODE_ALPHABET.contains(&b)),
+                "{code}"
+            );
+            assert!(!code.contains(['I', 'L', 'O', 'U']), "{code}");
+        }
+        for none in [
+            "",
+            "abc",
+            "zzzzzzzzzzzz",
+            "+123456789abcdef",
+            "12345\u{e9}6789",
+        ] {
+            assert_eq!(club_code(none), "", "{none:?}");
+        }
+    }
+
+    /// ⭐ **Two positions with one name read apart, and the one heard of first keeps it**: the
+    /// same name compared case-blind and with its spacing read as one space, numbered from (2) in
+    /// the order the host heard of each, whatever their position ids; a name a peer chose to read
+    /// like a numbered one is numbered past it; a rename moves a position's name and not its place.
+    /// The board's lines carry these names. A restarted host hears of its positions in its
+    /// journal's order. CONTROLS: a position with a name of its own keeps it, and one with no name
+    /// has none.
+    #[test]
+    fn two_positions_with_one_name_read_apart_and_the_first_keeps_it() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        club.join("bbbb0002", "CW tent", "W9XYZ", 100);
+        club.join("cccc0003", "cw  Tent", "W9XYZ", 101);
+        club.join("aaaa0009", "CW tent", "W9XYZ", 102);
+        club.join("dddd0004", "CW tent (2)", "W9XYZ", 103);
+        club.join("eeee0005", "SSB tent", "W9XYZ", 104);
+        club.join("ffff0006", "", "W9XYZ", 105);
+        let shown = |c: &ClubLog| -> Vec<(String, String)> {
+            let mut v: Vec<(String, String)> = c
+                .shown_names()
+                .into_iter()
+                .map(|(id, n)| (id.to_string(), n))
+                .collect();
+            v.sort();
+            v
+        };
+        let want = |rows: &[(&str, &str)]| -> Vec<(String, String)> {
+            rows.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            shown(&club),
+            want(&[
+                ("aaaa0009", "CW tent (3)"),
+                ("bbbb0002", "CW tent"),
+                ("cccc0003", "cw  Tent (2)"),
+                ("dddd0004", "CW tent (2) (2)"),
+                ("eeee0005", "SSB tent"),
+                ("ffff0006", ""),
+            ])
+        );
+        let mut board: Vec<(String, String)> = club
+            .board_rows(110)
+            .into_iter()
+            .map(|r| (r.pos, r.name))
+            .collect();
+        board.sort();
+        assert_eq!(board, shown(&club), "the board's lines carry them");
+        club.position_status("bbbb0002", &report("Phone tent", "20m", "PH", "K9OP"), 111);
+        assert_eq!(
+            shown(&club)[..3],
+            want(&[
+                ("aaaa0009", "CW tent (2)"),
+                ("bbbb0002", "Phone tent"),
+                ("cccc0003", "cw  Tent"),
+            ])[..],
+            "renamed, the tent frees its name for the one heard of next"
+        );
+
+        let dir = scratch("names");
+        let path = dir.join("fd_event_names.jsonl");
+        let mut live = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        live.attach_journal_since(&path, 0).unwrap();
+        for (seq, pos) in [(1, "cccc0003"), (1, "bbbb0002")] {
+            live.merge(&wq(pos, seq, "K1ABC", "20m", "CW", "EMA", 1_000), 1_000);
+        }
+        let mut restarted = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        restarted.join("bbbb0002", "CW tent", "W9XYZ", 2_000);
+        restarted.join("cccc0003", "CW tent", "W9XYZ", 2_001);
+        assert_eq!(
+            shown(&restarted),
+            want(&[("bbbb0002", "CW tent (2)"), ("cccc0003", "CW tent")]),
+            "heard of in the journal's order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A laptop is connected as a position from its served JOIN until its connection
+    /// closes, and only under the position's current hold**: a link the host's give made stale
+    /// holds the position no more though its connection has not closed yet, and a link this club
+    /// never opened closes nothing. CONTROL: another position is not connected because one is.
+    #[test]
+    fn a_laptop_is_connected_as_its_position_until_its_link_closes() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        assert!(!club.connected("bbbb0002"), "nobody yet");
+        let first = club.open_link("bbbb0002");
+        let second = club.open_link("bbbb0002");
+        assert!(club.connected("bbbb0002"));
+        assert!(!club.connected("cccc0003"), "CONTROL: another position");
+        club.close_link(first);
+        assert!(club.connected("bbbb0002"), "one link is still open");
+        club.close_link(second);
+        assert!(!club.connected("bbbb0002"), "both closed");
+        club.close_link(u64::MAX);
+        let held = club.open_link("bbbb0002");
+        club.note_refused(
+            "bbbb0002",
+            &throwaway_hash("the laptop the position is"),
+            "CW tent",
+            "W9XYZ",
+            POSITION_HELD,
+            1_000,
+        );
+        let handle = club.refused(1_000)[0].handle;
+        club.give(handle, 1_000).unwrap();
+        assert!(
+            !club.connected("bbbb0002"),
+            "the link the give made stale, before its connection closes"
+        );
+        club.close_link(held);
+        let given = club.open_link("bbbb0002");
+        assert!(club.connected("bbbb0002"), "the laptop it was given to");
+        club.close_link(given);
     }
 
     // ---- the host's lasting list of contacts kept out of the club's log ----------------

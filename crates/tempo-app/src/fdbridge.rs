@@ -56,8 +56,12 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_join(v, pos, name, call, contest, role, &key_hash)
     }
 
-    fn merge(&self, row: &WireQso) -> u64 {
-        engine_lock(&self.0).fd_club_merge(row)
+    fn merge(&self, hold: u64, row: &WireQso) -> Result<u64, String> {
+        engine_lock(&self.0).fd_club_merge(hold, row)
+    }
+
+    fn held(&self, pos: &str, hold: u64) -> Result<(), String> {
+        engine_lock(&self.0).fd_club_held(pos, hold)
     }
 
     fn position_status(&self, pos: &str, report: &PosReport) {
@@ -72,8 +76,8 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_state(dupes_from, sections_from, mark_seen)
     }
 
-    fn disconnect(&self, pos: &str) {
-        engine_lock(&self.0).fd_club_disconnect(pos);
+    fn disconnect(&self, pos: &str, link: u64) {
+        engine_lock(&self.0).fd_club_disconnect(pos, link);
     }
 }
 

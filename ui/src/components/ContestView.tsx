@@ -9,7 +9,8 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdClubGivePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdGiveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
@@ -862,6 +863,30 @@ const CLUB_NOTE: CSSProperties = {
   fontSize: textPx(12),
   color: 'var(--text-dim)',
 }
+/** A club code, in a box of its own: set apart from the names and calls the laptops send, so no
+ *  name can pass for one. */
+const CLUB_CODE: CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 6px',
+  border: '1px solid var(--border-soft)',
+  borderRadius: 'var(--radius-sm)',
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  color: 'var(--text)',
+  whiteSpace: 'nowrap',
+}
+/** The host's check before it gives a laptop a position, under the entry it asks about. */
+const CLUB_CONFIRM: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: 6,
+  padding: '8px 10px',
+  border: '1px solid var(--status-new-entity)',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: textPx(12),
+  color: 'var(--text)',
+}
 
 /** The club line says this PC's clock against the host's from here, in whole seconds… */
 const CLOCK_SHOW_SECS = 2
@@ -1099,6 +1124,7 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
 export function FdClubSection({
   club,
   onExport,
+  onGivePosition,
   busy = false,
   detached = false,
   readOnly = false,
@@ -1107,6 +1133,10 @@ export function FdClubSection({
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
+  /** The host's own contest screen only: give a club position to the laptop a turned-away
+   *  entry names, by the entry's `handle`. Not passed on Remote, in the pop-out or on a
+   *  position, so no Give button shows there. */
+  onGivePosition?: (handle: number) => Promise<FdGiveAnswer>
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
@@ -1120,6 +1150,51 @@ export function FdClubSection({
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
   const big = detached
+  // What the last Give press did, until the next one.
+  const [giveNote, setGiveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The entry a Give press asks about, until the host answers: the position goes only to the
+  // laptop whose own screen shows this code. Pinned to the entry's handle, so the list moving
+  // under the pointer cannot change which laptop is asked about, and asked only while that entry
+  // is on the list.
+  const [asking, setAsking] = useState<{ handle: number; name: string; call: string; code: string } | null>(null)
+  const askingListed = asking != null && (club.refused ?? []).some((r) => r.handle === asking.handle)
+  // The codes are this laptop's screen's and the host's, never the pop-out's or Remote's.
+  const showCodes = !detached && !readOnly
+  function ask(handle: number, r: { posName: string; call: string; clubCode?: string }) {
+    // Only at the host: a press that comes through a stream gives no position. Read before
+    // anything awaits, while the stream's dispatch is still the one running.
+    if (isStreamInput()) {
+      setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
+      return
+    }
+    setGiveNote(null)
+    setAsking({ handle, name: r.posName, call: r.call, code: r.clubCode ?? '' })
+  }
+  function give() {
+    if (isStreamInput()) {
+      setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
+      return
+    }
+    if (!asking) return
+    const { handle, name: posName, call } = asking
+    const name = posName || call
+    setAsking(null)
+    onGivePosition?.(handle).then(
+      (answer) =>
+        setGiveNote(
+          answer.outcome === 'given'
+            ? { text: t('fieldDay.club.give.given', { name }), alert: false }
+            : {
+                text:
+                  answer.refusal === 'notHosting'
+                    ? t('fieldDay.club.give.refused.notHosting')
+                    : t('fieldDay.club.give.refused.stale'),
+                alert: true,
+              },
+        ),
+      () => setGiveNote({ text: t('fieldDay.club.give.failed'), alert: true }),
+    )
+  }
   return (
     <div
       style={
@@ -1144,6 +1219,12 @@ export function FdClubSection({
         {(club.event || club.hostCall) && (
           <span style={{ fontSize: textPx(big ? 15 : 12), color: 'var(--text-dim)' }}>
             {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
+          </span>
+        )}
+        {/* This laptop's own club code: what the host checks before it gives it a position. */}
+        {showCodes && club.clubCode && (
+          <span className="mono" data-club-code="" style={{ ...CLUB_CODE, fontSize: textPx(12) }} title={t('fieldDay.club.code.title')}>
+            {t('fieldDay.club.code', { code: club.clubCode })}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />
@@ -1215,15 +1296,68 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
-      {/* The host's alone: the positions it turned away, each with the sentence it was sent,
-          which that position's own screen shows as its host error. */}
-      {club.refused?.map((r, i) => (
-        <div key={i} style={CLUB_WARN} role="alert">
+      {/* The host's alone: the laptops it turned away, each with the sentence it was sent,
+          which that laptop's own screen shows as its host error. One turned away because another
+          laptop holds its position has a Give button, on the host's own contest screen alone. */}
+      {club.refused?.map(({ handle, ...r }, i) => (
+        <div key={handle !== undefined ? `h${handle}` : `i${i}`} style={CLUB_WARN} role="alert">
           {r.posName
             ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
             : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+          {/* The laptop's club code, the one thing on the line it cannot choose: the same code
+              that laptop's own screen shows. */}
+          {showCodes && r.clubCode && (
+            <>
+              {' '}
+              <span className="mono" data-club-code="" style={CLUB_CODE}>
+                {t('fieldDay.club.code', { code: r.clubCode })}
+              </span>
+            </>
+          )}
+          {club.hosting && onGivePosition && handle !== undefined && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="export-btn"
+                onClick={() => ask(handle, r)}
+                title={t('fieldDay.club.give.title')}
+              >
+                {t('fieldDay.club.give.label')}
+              </button>
+            </>
+          )}
         </div>
       ))}
+      {/* Before the host gives a position: the code of the laptop it would go to, to check
+          against the code on that laptop's own screen. */}
+      {asking && askingListed && (
+        <div role="group" aria-label={t('fieldDay.club.give.confirm.aria')} style={CLUB_CONFIRM}>
+          <div>{t('fieldDay.club.give.confirm.head')}</div>
+          <span className="mono" data-club-code="" style={{ ...CLUB_CODE, fontSize: textPx(22), padding: '2px 10px' }}>
+            {asking.code}
+          </span>
+          <div>
+            {t('fieldDay.club.give.confirm.check')}{' '}
+            {asking.name
+              ? t('fieldDay.club.give.confirm.says', { name: asking.name, call: asking.call })
+              : t('fieldDay.club.give.confirm.saysCall', { call: asking.call })}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" className="export-btn" onClick={give}>
+              {t('fieldDay.club.give.confirm.yes')}
+            </button>
+            <button type="button" className="export-btn" onClick={() => setAsking(null)}>
+              {t('fieldDay.club.give.confirm.no')}
+            </button>
+          </div>
+        </div>
+      )}
+      {giveNote && (
+        <div style={giveNote.alert ? CLUB_WARN : CLUB_NOTE} role={giveNote.alert ? 'alert' : 'status'}>
+          {giveNote.text}
+        </div>
+      )}
       {/* The host's alone, for the rest of the event: every contact it kept out of the club's
           log, how many and the newest of them, each with the position that sent it and why. */}
       {club.keptOut && (
@@ -1781,6 +1915,13 @@ export function ContestView({
   }, [removeAsk])
   const removeNewest = () => {
     if (!newest) return
+    // Only at the station: a press that comes through the Remote stream removes nothing, as
+    // removal is refused from afar. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setRemoveAsk(null)
+      setRemovedNote({ text: t('logEntry.remove.remote'), alert: true })
+      return
+    }
     const now = Date.now()
     const asked = removeAsk != null && removeAsk.call === newest.call && removeAsk.whenUnix === newest.whenUnix
     if (!asked || now - removeAsk.at > REMOVE_CONFIRM_MS) {
@@ -2400,6 +2541,7 @@ export function ContestView({
         <FdClubSection
           club={fieldDay.club}
           onExport={observed ? undefined : handleExport}
+          onGivePosition={observed ? undefined : fdClubGivePosition}
           busy={busy !== null}
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}

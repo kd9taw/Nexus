@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 mod configuration;
 mod confirmations;
 mod dxpeditions;
-mod field_day;
+pub(super) mod field_day;
 mod insights;
 mod js8;
 #[cfg(test)]

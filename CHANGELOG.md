@@ -252,6 +252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that the radio may still be transmitting, and drops the connection. The ATU is also refused
   where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
   Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
+- **Club sync: the host can give a club position to the laptop it belongs to.** A laptop turned
+  away because another laptop holds its position (one whose settings were copied from it, say,
+  or a laptop that lost its club key file) has **Give this laptop its position** on its line in
+  the club block on the host's Contest screen. One press gives it the position: it joins on its
+  next try and sends the club its whole log, and the laptop that held the position is closed and
+  turned away by name, its contacts out of the club's log until it rejoins. Its line then has the
+  same button, so a wrong press is undone the same way. The host keeps the change through a
+  restart. Only on the host's own screen: never from Remote.
 
 ### Changed
 
@@ -448,6 +456,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each position for the rest of the event, through a restart; a new Event name starts afresh.
   Every laptop of a club needs this version: the host turns away an older Nexus by name, saying to
   update Nexus on that laptop, and an older host turns this one away the same way.
+- **Club sync: the host gives a club position only to the laptop whose club code it checked.**
+  Every laptop's club block now shows its own club code, and the host shows the code of each
+  laptop it turned away, beside the name and call that laptop gave, which any laptop can give.
+  **Give this laptop its position** first shows the code and asks the host to check it against the
+  one on that laptop's own Contest screen. A laptop whose whole settings folder was copied from
+  one connected now is turned away by name and told how to get a position of its own, the host's
+  own laptop holds its own position from the moment it starts hosting, two positions with one name
+  read apart on every board, the TV and Remote, and a contest contact can no longer be removed
+  through the Remote stream.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

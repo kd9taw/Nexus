@@ -4,12 +4,13 @@
 // there), asked before it acts, and the Removed list with Restore. Nothing is deleted — the
 // engine keeps a removed contact and the list reads it back. Never offered when observing from
 // afar.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayQso, FieldDayStatus } from '../types'
 import type { RemovedContest } from '../api'
+import { StreamInputDispatcher } from '../remote-native/stream-input'
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
@@ -148,5 +149,45 @@ describe('never from afar', () => {
     expect(document.querySelector('.fd-removed')).toBeNull()
     expect(api.contestRemoved).not.toHaveBeenCalled()
     api.contestRemoved.mockResolvedValue([])
+  })
+})
+
+// jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
+// under it.
+describe('a press through the Remote stream removes nothing', () => {
+  let under: Element | null = null
+  let stream: StreamInputDispatcher | null = null
+  beforeEach(() => {
+    under = null
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => under })
+    stream = new StreamInputDispatcher(window)
+  })
+  afterEach(() => {
+    stream?.dispose()
+    stream = null
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+  const pointer = (action: 'down' | 'up') =>
+    ({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+      modifiers: 0, pointerType: 'mouse', clicks: 1 })
+
+  it('refuses Remove clicked twice through the stream, and says why; CONTROL: at the station it removes', async () => {
+    api.contestRemoveLast.mockResolvedValue({
+      outcome: 'removed',
+      entry: { id: 2, removedUnix: T0 + 90, rows: [LOG[1]] },
+      sentTo: { wsjtx: false, logbook: false, uploaded: [] },
+    })
+    await show(LOG)
+    for (let i = 0; i < 2; i++) {
+      under = removeButtons()[0]
+      await act(async () => { stream!.handle(pointer('down')); stream!.handle(pointer('up')) })
+    }
+    await settle()
+    expect(api.contestRemoveLast).not.toHaveBeenCalled()
+    expect(note()).toMatch(/Only at the station/)
+    fireEvent.click(removeButtons()[0])
+    await act(async () => { fireEvent.click(removeButtons()[0]) })
+    await settle()
+    expect(api.contestRemoveLast).toHaveBeenCalledWith('W9BBB', T0 + 60)
   })
 })

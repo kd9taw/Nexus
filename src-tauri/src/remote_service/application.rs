@@ -314,7 +314,9 @@ impl Publisher {
                     Ok(value)
                 }
                 Command::Snapshot => {
-                    let snapshot = eng.snapshot();
+                    let mut snapshot = eng.snapshot();
+                    // The host's own Give handles and the club codes are its screen's alone.
+                    super::query::field_day::leave_out_the_hosts_own(&mut snapshot.field_day);
                     let ft_runtime = eng.remote_ft_runtime();
                     let ft_settings = eng.remote_ft_settings();
                     let current_key = eng.current_qso_log_key();
@@ -1082,6 +1084,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(meter["data"]["smeterDb"], -12);
+    }
+
+    /// ⭐ **Remote's snapshot carries none of what only the host's own screen acts on**: the
+    /// Give button's handle and the club codes, the host's own and the turned-away laptop's. The
+    /// snapshot carries the entry, its name, call and sentence. CONTROL: the station's own
+    /// snapshot carries all three (`host_showing_codes`).
+    #[test]
+    fn remotes_snapshot_carries_no_give_handle_and_no_club_code() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-snapshot-codes-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (e, codes) = crate::remote_service::query::field_day::tests::host_showing_codes(&dir);
+        let engine = Arc::new(Mutex::new(e));
+        let sent = Publisher::default()
+            .read(&engine, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let value: Value = serde_json::from_str(&sent).unwrap();
+        let club = &value["data"]["fieldDay"]["club"];
+        assert!(
+            club.as_object()
+                .is_some_and(|c| !c.contains_key("clubCode")),
+            "{club}"
+        );
+        let mut keys: Vec<&str> = club["refused"][0]
+            .as_object()
+            .expect("the turned-away entry is in Remote's snapshot")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["call", "posName", "reason"]);
+        for code in &codes {
+            assert!(
+                !sent.contains(code.as_str()),
+                "Remote's snapshot holds {code}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The radio loop holds the Engine across blocking CAT, so a `try_lock` miss is routine. It
