@@ -2812,9 +2812,27 @@ pub struct FdClubDto {
     /// is. Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused: Vec<FdClubRefusedDto>,
+    /// ⭐ **The contacts this host kept out of the club's log** — the HOST's alone, for the rest
+    /// of the event (`fdevent::ClubLog::kept_out`): how many, and the newest it names, each with
+    /// the position that sent it and why. Each stays in that position's own log.
+    ///
+    /// ⚠️ A key the hosted Remote page's Field Day check must know first, as `board_full`
+    /// is. Absent when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_out: Option<FdClubKeptOutDto>,
 }
 
-/// One entry of [`FdClubDto::refused`].
+/// [`FdClubDto::kept_out`]: how many contacts the host keeps listed, and the newest of them
+/// (at most `fdevent::KEPT_OUT_SHOWN`), oldest of those first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubKeptOutDto {
+    pub total: u32,
+    pub latest: Vec<FdClubRefusedDto>,
+}
+
+/// One entry of [`FdClubDto::refused`], and of [`FdClubKeptOutDto::latest`] (there `call` is
+/// the call of the position that sent the contact, and `reason` the sentence about it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FdClubRefusedDto {

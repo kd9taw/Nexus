@@ -2747,6 +2747,11 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⛔ **This position's club key** — what its JOIN proves the position with, which the shell
+    /// reads (or makes) once at startup and hands here ([`Self::set_fd_position_key`]). Held
+    /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
+    /// this reaches only the JOIN line. Never logged, shown or put in any DTO.
+    fd_position_key: tempo_net::fdsync::PositionKey,
     /// The highest contest seq the slot loop has handed to N3FJP, the N1MM broadcast and
     /// WSJT-X listeners — the forwarder's own cursor, told here each slot boundary
     /// ([`Self::note_fd_forwarded`]) so a removal can say whether the contact already went.
@@ -5409,6 +5414,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_position_key: Default::default(),
             fd_forwarded_seq: 0,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
@@ -12024,6 +12030,18 @@ impl Engine {
         (id, true)
     }
 
+    /// This position's club key, as the shell read or made it at startup (it is kept beside
+    /// settings.json, never in it). Every JOIN sends it; nothing else may read it.
+    pub fn set_fd_position_key(&mut self, key: tempo_net::fdsync::PositionKey) {
+        self.fd_position_key = key;
+    }
+
+    /// The club key this position's JOIN sends ([`Self::set_fd_position_key`]): empty until the
+    /// shell has set one, which a host refuses by name (`fdevent::NO_POSITION_KEY`).
+    pub fn fd_position_key(&self) -> tempo_net::fdsync::PositionKey {
+        self.fd_position_key.clone()
+    }
+
     /// The rules-file id of the contest a club run from this station runs: the picker's,
     /// with the blank default read as ARRL Field Day — what `set_mode` builds for it.
     /// The host's club log runs it, and the shell's supervisor restarts hosting when it
@@ -12192,8 +12210,9 @@ impl Engine {
 
     // --- host half (the ClubBackend impl calls these) ----------------------
 
-    /// A position joined. Err when not hosting (a race with the toggle), Err with
-    /// §18.2's refusal when an OLDER position cannot run this club's contest, Err
+    /// A position joined. Err when not hosting (a race with the toggle), Err when its position
+    /// id is not one Nexus makes (`fdevent::club_position_id`: the id rides every board line),
+    /// Err with §18.2's refusal when an OLDER position cannot run this club's contest, Err
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
     /// rules-file id — Err when it is set up in another exchange ROLE than the club's
     /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
@@ -12206,6 +12225,13 @@ impl Engine {
     /// (both Field Days), or it is older than the field and cannot say. So is any position
     /// of a club whose own session Settings can no longer build — there is no role to hold
     /// it to, and that club already scores nothing until Settings are put right.
+    ///
+    /// ⭐ **And every JOIN must prove the position it names** (`key_hash`: the hash of the
+    /// JOIN's club key, made by the bridge, so no key is held here): an older position, which
+    /// has none, is turned away by its version, a JOIN without one is turned away, and a JOIN
+    /// under a position id this club pinned to another key is turned away by name. The first
+    /// JOIN this club serves under an id pins it ([`crate::fdevent::ClubLog::pin`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn fd_club_join(
         &mut self,
         v: u32,
@@ -12214,6 +12240,7 @@ impl Engine {
         call: &str,
         contest: &str,
         role: &str,
+        key_hash: &str,
     ) -> Result<tempo_net::fdsync::JoinAccept, String> {
         let now = now_unix_secs();
         // The club's own role, read before the club is borrowed to change it.
@@ -12227,8 +12254,11 @@ impl Engine {
             return Err("this station is not hosting a club event".into());
         };
         let theirs = role.trim();
-        let refusal = club
-            .join_refusal(v, contest)
+        let refusal = (!crate::fdevent::club_position_id(pos))
+            .then(|| crate::fdevent::NOT_A_POSITION_ID.to_string())
+            .or_else(|| club.version_refusal(v))
+            .or_else(|| club.key_refusal(pos, key_hash))
+            .or_else(|| club.join_refusal(v, contest))
             .or_else(|| {
                 (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
                     .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
@@ -12239,6 +12269,7 @@ impl Engine {
             return Err(msg);
         }
         let acked = club.join(pos, name, call, now);
+        club.pin(pos, key_hash, now);
         Ok(tempo_net::fdsync::JoinAccept {
             event: club.event_name.clone(),
             host_call: self.settings.mycall.clone(),
@@ -12739,6 +12770,23 @@ impl Engine {
                         .collect()
                 })
                 .unwrap_or_default(),
+            // The host's alone: every contact it kept out of the club's log, for the rest of
+            // the event: how many, and the newest it names.
+            kept_out: self.fd_club.as_ref().and_then(|c| {
+                let all = c.kept_out();
+                let newest = all.len().saturating_sub(crate::fdevent::KEPT_OUT_SHOWN);
+                (!all.is_empty()).then(|| crate::dto::FdClubKeptOutDto {
+                    total: all.len() as u32,
+                    latest: all[newest..]
+                        .iter()
+                        .map(|k| crate::dto::FdClubRefusedDto {
+                            pos_name: k.label.clone(),
+                            call: k.call.clone(),
+                            reason: k.reason.clone(),
+                        })
+                        .collect(),
+                })
+            }),
         })
     }
 
@@ -26932,6 +26980,18 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// The key hash a test JOIN under `pos` carries: what the bridge would make of that
+    /// position's key, generated (a per-run seed through the operating system's hasher) so no
+    /// test holds a real one. The same position gets the same hash all through a run.
+    fn club_key_hash(pos: &str) -> String {
+        use std::hash::BuildHasher;
+        static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+        let seed = SEED.get_or_init(std::hash::RandomState::new);
+        (0..4u8)
+            .map(|i| format!("{:016x}", seed.hash_one((pos, i))))
+            .collect()
+    }
 
     /// The contract a factory RESET depends on, pinned from the engine side.
     ///
@@ -42876,6 +42936,7 @@ mod tests {
             "KD9TAW",
             "arrlfd",
             "",
+            &club_key_hash("aaaa0001"),
         );
         e.fd_club_merge(&tempo_net::fdsync::WireQso {
             pos: "aaaa0001".into(),
@@ -42939,8 +43000,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "bbbb0002", "SSB tent", "KD9TAW", "arrlfd", "");
-        let _ = e.fd_club_join(v, "cccc0003", "GOTA tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(
+            v,
+            "bbbb0002",
+            "SSB tent",
+            "KD9TAW",
+            "arrlfd",
+            "",
+            &club_key_hash("bbbb0002"),
+        );
+        let _ = e.fd_club_join(
+            v,
+            "cccc0003",
+            "GOTA tent",
+            "KD9TAW",
+            "arrlfd",
+            "",
+            &club_key_hash("cccc0003"),
+        );
         e.fd_club_pos_status(
             "bbbb0002",
             &tempo_net::fdsync::PosReport {
@@ -43018,6 +43095,7 @@ mod tests {
                 "W9ABC",
                 "arrlfd",
                 "",
+                &club_key_hash(&pos),
             );
             e.fd_club_pos_status(
                 &pos,
@@ -43079,8 +43157,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
         let v = tempo_net::fdsync::PROTO_VERSION;
-        let _ = e.fd_club_join(v, "aaaa0001", "CW tent", "KD9TAW", "arrlfd", "");
-        let _ = e.fd_club_join(v, "bbbb0002", "GOTA tent", "KD9TAW", "arrlfd", "");
+        let _ = e.fd_club_join(
+            v,
+            "aaaa0001",
+            "CW tent",
+            "KD9TAW",
+            "arrlfd",
+            "",
+            &club_key_hash("aaaa0001"),
+        );
+        let _ = e.fd_club_join(
+            v,
+            "bbbb0002",
+            "GOTA tent",
+            "KD9TAW",
+            "arrlfd",
+            "",
+            &club_key_hash("bbbb0002"),
+        );
         e.fd_club_pos_status(
             "aaaa0001",
             &tempo_net::fdsync::PosReport {
@@ -43256,7 +43350,15 @@ mod tests {
         let mut e = party_host(&dir);
         let v = tempo_net::fdsync::PROTO_VERSION;
         let err = e
-            .fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "w_ve")
+            .fd_club_join(
+                v,
+                "aaaa0001",
+                "SSB tent",
+                "W9XYZ",
+                "ilqp",
+                "w_ve",
+                &club_key_hash("aaaa0001"),
+            )
             .expect_err("a position set up out of state is refused");
         assert!(
             err.contains("in-state") && err.contains("out-of-state"),
@@ -43276,15 +43378,39 @@ mod tests {
         assert_eq!(refused, vec![("SSB tent", "W9XYZ", err.as_str())]);
         // A DX one, by its own word.
         let dx = e
-            .fd_club_join(v, "cccc0003", "DX tent", "W9XYZ", "ilqp", "dx")
+            .fd_club_join(
+                v,
+                "cccc0003",
+                "DX tent",
+                "W9XYZ",
+                "ilqp",
+                "dx",
+                &club_key_hash("cccc0003"),
+            )
             .expect_err("a position set up as DX is refused");
         assert!(dx.contains("DX"), "{dx}");
         // CONTROLS. The same position set up in the club's role joins, and the host's note
         // for it goes; an older position, which cannot say its role, is served as before.
-        e.fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state")
-            .expect("the club's own role joins");
-        e.fd_club_join(v, "bbbb0002", "CW tent", "W9XYZ", "ilqp", "")
-            .expect("an older position joins as it always has");
+        e.fd_club_join(
+            v,
+            "aaaa0001",
+            "SSB tent",
+            "W9XYZ",
+            "ilqp",
+            "in_state",
+            &club_key_hash("aaaa0001"),
+        )
+        .expect("the club's own role joins");
+        e.fd_club_join(
+            v,
+            "bbbb0002",
+            "CW tent",
+            "W9XYZ",
+            "ilqp",
+            "",
+            &club_key_hash("bbbb0002"),
+        )
+        .expect("an older position joins as it always has");
         let club = e.snapshot().field_day.unwrap().club.unwrap();
         assert_eq!(
             club.refused
@@ -43358,7 +43484,15 @@ mod tests {
         };
         let mut e = party_host(&dir);
         let err = e
-            .fd_club_join(v, "aaaa0001", "SSB tent", "k9abc", "ilqp", "in_state")
+            .fd_club_join(
+                v,
+                "aaaa0001",
+                "SSB tent",
+                "k9abc",
+                "ilqp",
+                "in_state",
+                &club_key_hash("aaaa0001"),
+            )
             .expect_err("a position on its owner's call is refused");
         assert!(
             err.contains("on the air as W9XYZ and this Nexus as K9ABC,"),
@@ -43378,10 +43512,26 @@ mod tests {
         );
         // CONTROLS: the club's call, however it is typed, joins and the host's note goes; a
         // position that cannot say its call joins as before.
-        e.fd_club_join(v, "aaaa0001", "SSB tent", " w9xyz ", "ilqp", "in_state")
-            .expect("the club's own call joins");
-        e.fd_club_join(v, "bbbb0002", "CW tent", "", "ilqp", "in_state")
-            .expect("a position that cannot say its call joins as before");
+        e.fd_club_join(
+            v,
+            "aaaa0001",
+            "SSB tent",
+            " w9xyz ",
+            "ilqp",
+            "in_state",
+            &club_key_hash("aaaa0001"),
+        )
+        .expect("the club's own call joins");
+        e.fd_club_join(
+            v,
+            "bbbb0002",
+            "CW tent",
+            "",
+            "ilqp",
+            "in_state",
+            &club_key_hash("bbbb0002"),
+        )
+        .expect("a position that cannot say its call joins as before");
         assert_eq!(refused(&e), Vec::new());
         e.fd_host_stop();
 
@@ -43402,7 +43552,15 @@ mod tests {
         };
         let mut wfd = host("wfd", "3O", "wfd.jsonl");
         let err = wfd
-            .fd_club_join(v, "cccc0003", "Tent 2", "K9ABC", "wfd", "")
+            .fd_club_join(
+                v,
+                "cccc0003",
+                "Tent 2",
+                "K9ABC",
+                "wfd",
+                "",
+                &club_key_hash("cccc0003"),
+            )
             .expect_err("Winter Field Day has no GOTA station");
         assert!(
             err.contains("on the air as W9XYZ and this Nexus as K9ABC, and in WFD every"),
@@ -43411,11 +43569,216 @@ mod tests {
         wfd.fd_host_stop();
         let mut fd = host("", "3A", "fd.jsonl");
         let accept = fd
-            .fd_club_join(v, "dddd0004", "GOTA", "K9GOT", "arrlfd", "")
+            .fd_club_join(
+                v,
+                "dddd0004",
+                "GOTA",
+                "K9GOT",
+                "arrlfd",
+                "",
+                &club_key_hash("dddd0004"),
+            )
             .expect("an ARRL Field Day GOTA position joins on its own call");
         assert_eq!(accept.host_call, "W9XYZ");
         assert_eq!(refused(&fd), Vec::new());
         fd.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A JOIN under a position id no Nexus makes is turned away by name**, before any gate
+    /// that would let it in: the id rides every board line to every position, the TV and
+    /// Remote, and one that only looks like another position's (`aaaa0001` and a zero-width
+    /// space), or carries a line of its own, or runs past what Remote takes, would ride there
+    /// too. Nothing of it reaches the board; the host's list names it. CONTROL: an id Nexus
+    /// makes joins, one a fresh Engine just made among them.
+    #[test]
+    fn a_join_under_a_position_id_no_nexus_makes_is_refused_by_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-position-id-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = party_host(&dir);
+        let odd = [
+            "aaaa0001\u{200B}".to_string(),
+            "AAAA0001".into(),
+            "aaaa001".into(),
+            "aaaa0001\nbbbb0002".into(),
+            "a".repeat(2048),
+            String::new(),
+        ];
+        let mut served = Vec::new();
+        for pos in &odd {
+            let got = e.fd_club_join(
+                v,
+                pos,
+                "SSB tent",
+                "W9XYZ",
+                "ilqp",
+                "in_state",
+                &club_key_hash(pos),
+            );
+            if got.as_ref().err().map(String::as_str) != Some(crate::fdevent::NOT_A_POSITION_ID) {
+                let shown: String = pos.chars().take(16).collect();
+                served.push(format!("{shown:?}: {:?}", got.map(|a| a.acked)));
+            }
+        }
+        assert!(served.is_empty(), "{}", served.join("\n"));
+        assert!(e.fd_board_snapshot().unwrap().positions.is_empty());
+        let listed = e.fd_club_log().unwrap().refused(now_unix_secs());
+        assert!(listed
+            .iter()
+            .all(|r| r.reason == crate::fdevent::NOT_A_POSITION_ID));
+        assert!(listed
+            .iter()
+            .any(|r| r.label == "SSB tent" && r.call == "W9XYZ"));
+        let (made, generated) = Engine::new("W9XYZ", "EN61", 0).fd_ensure_position_id();
+        assert!(generated, "a fresh Engine makes its id");
+        for pos in ["aaaa0001", "0000005a", made.as_str()] {
+            e.fd_club_join(
+                v,
+                pos,
+                "SSB tent",
+                "W9XYZ",
+                "ilqp",
+                "in_state",
+                &club_key_hash(pos),
+            )
+            .unwrap_or_else(|why| panic!("{pos}: {why}"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host's status lists every contact it kept out of the club's log** — the
+    /// `club.keptOut` block every screen and Remote read: how many, and the newest named (at most
+    /// `KEPT_OUT_SHOWN`, oldest of those first), with the position that sent each and why.
+    /// CONTROL: absent while the club has kept nothing out, so a club that never does sends the
+    /// bytes it always sent.
+    #[test]
+    fn the_hosts_status_lists_every_contact_it_kept_out() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-kept-out-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = party_host(&dir);
+        e.fd_club_join(
+            v,
+            "bbbb0002",
+            "CW tent",
+            "W9XYZ",
+            "ilqp",
+            "in_state",
+            &club_key_hash("bbbb0002"),
+        )
+        .unwrap();
+        let club =
+            |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["fieldDay"]["club"].clone();
+        assert!(club(&e).is_object(), "the host's club block");
+        assert!(
+            club(&e).get("keptOut").is_none(),
+            "CONTROL: nothing kept out, nothing sent"
+        );
+        let shown = crate::fdevent::KEPT_OUT_SHOWN as u64;
+        for seq in 1..=shown + 4 {
+            e.fd_club_merge(&tempo_net::fdsync::WireQso {
+                pos: "bbbb0002".into(),
+                seq,
+                call: format!("K9A\nB{seq}"),
+                band: "40m".into(),
+                mode: "CW".into(),
+                when: now_unix_secs(),
+                ..Default::default()
+            });
+        }
+        let kept = club(&e)["keptOut"].clone();
+        assert_eq!(kept["total"], shown + 4, "{kept}");
+        let latest = kept["latest"].as_array().unwrap();
+        assert_eq!(latest.len() as u64, shown, "the newest it names");
+        assert_eq!(latest[0]["posName"], "CW tent");
+        assert_eq!(latest[0]["call"], "W9XYZ");
+        assert!(
+            latest[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("is not in the club's log"),
+            "{kept}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A club position is taken only from the laptop that first joined as it**, through
+    /// the engine's own JOIN and the host's journal. A position id is on every board line, so
+    /// a second laptop naming it with another key is turned away by name, and the host's list
+    /// says so; so is a JOIN with no key, and every older Nexus, which has none to send. The
+    /// pins outlive a host restart (the same event's journal) and do not carry into another
+    /// event (another journal). CONTROLS: the laptop that holds the position rejoins before and
+    /// after the restart, and in the next event the second laptop's JOIN is served.
+    #[test]
+    fn a_club_position_is_taken_only_from_the_laptop_that_first_joined_as_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-held-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = party_host(&dir);
+        let (mine, other) = (
+            club_key_hash("this laptop"),
+            club_key_hash("another laptop"),
+        );
+        let join = |e: &mut Engine, v: u32, key: &str| {
+            e.fd_club_join(v, "aaaa0001", "SSB tent", "W9XYZ", "ilqp", "in_state", key)
+                .map(|accept| accept.acked)
+        };
+        let held = Err(crate::fdevent::POSITION_HELD.to_string());
+        let mut wrong = Vec::new();
+        let mut check = |what: &str, got: Result<u64, String>, want: &Result<u64, String>| {
+            if &got != want {
+                wrong.push(format!("{what}: {got:?}"));
+            }
+        };
+        check("the first laptop", join(&mut e, v, &mine), &Ok(0));
+        check("another laptop", join(&mut e, v, &other), &held);
+        let noted = e.fd_club_log().unwrap().refused(now_unix_secs()).len();
+        check(
+            "no key",
+            join(&mut e, v, ""),
+            &Err(crate::fdevent::NO_POSITION_KEY.to_string()),
+        );
+        let older = e.fd_club_log().unwrap().version_refusal(2);
+        check(
+            "a v2 Nexus",
+            join(&mut e, 2, ""),
+            &Err(older.unwrap_or_default()),
+        );
+        check("the first laptop again", join(&mut e, v, &mine), &Ok(0));
+        e.fd_host_stop();
+        e.fd_host_start(dir.join("ilqp.ndjson")).unwrap();
+        check(
+            "another laptop, after a restart",
+            join(&mut e, v, &other),
+            &held,
+        );
+        check(
+            "the first laptop, after a restart",
+            join(&mut e, v, &mine),
+            &Ok(0),
+        );
+        e.fd_host_stop();
+        e.fd_host_start(dir.join("the-party.ilqp.ndjson")).unwrap();
+        check(
+            "another laptop, in the next event",
+            join(&mut e, v, &other),
+            &Ok(0),
+        );
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        assert_eq!(noted, 1, "the host's list names the laptop it turned away");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -43560,12 +43923,14 @@ mod tests {
     ///
     /// `version_refusal`'s own test asserts the wording. A correct message that
     /// never arrives is exactly the failure this ruling exists to prevent — the
-    /// point of naming the version and the contest is that somebody on a Field Day
-    /// site reads it — so the wording being right is only half of it.
+    /// point of naming the versions is that somebody on a Field Day site reads it,
+    /// and updates that laptop — so the wording being right is only half of it.
+    /// Since v3 an older position is turned away at a Field Day club too: it cannot
+    /// prove which position it is.
     #[test]
-    fn a_v1_positions_join_refusal_reaches_the_wire_through_the_bridge() {
+    fn an_older_positions_join_refusal_reaches_the_wire_through_the_bridge() {
         use std::sync::{Arc, Mutex};
-        use tempo_net::fdsync::{ClubBackend, PROTO_VERSION};
+        use tempo_net::fdsync::{ClubBackend, PositionKey, PROTO_VERSION};
 
         let dir = std::env::temp_dir().join(format!("fd-join-gate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -43581,18 +43946,38 @@ mod tests {
         }
         // The trait object is all the socket loop can reach — so this is the call
         // the accept loop makes, not a shortcut past it.
-        let backend: Arc<dyn ClubBackend> =
-            Arc::new(crate::fdbridge::EngineClubBackend(shared.clone()));
+        let backend: Arc<dyn ClubBackend> = Arc::new(crate::fdbridge::EngineClubBackend(
+            shared.clone(),
+            club_key_hash,
+        ));
+        let none = PositionKey::default();
+        let version_refusal = |v| {
+            engine_lock(&shared)
+                .fd_club
+                .as_ref()
+                .unwrap()
+                .version_refusal(v)
+                .unwrap()
+        };
 
-        // A Field Day club serves a v1 tent exactly as it always did.
-        assert!(
-            backend
-                .join(1, "aaaa0001", "CW tent", "KD9TAW", 0, "", "")
-                .is_ok(),
-            "a mixed-version FIELD DAY club must be unaffected by the gate"
-        );
+        // A Field Day club turns away a v1 tent and a v2 one (every release up to 1.17).
+        for v in [1, 2] {
+            let msg = backend
+                .join(v, "aaaa0001", "CW tent", "W9ABC", 0, "", "", &none)
+                .expect_err("an older tent cannot prove its position");
+            assert!(
+                msg.contains(&format!("v{v}")) && msg.contains("v3"),
+                "the refusal that reaches the wire names both versions: {msg}"
+            );
+            assert!(msg.contains("Update Nexus on this laptop"), "{msg}");
+            assert_eq!(
+                msg,
+                version_refusal(v),
+                "and it is the policy layer's own wording, not a summary of it"
+            );
+        }
 
-        // The same club running a QSO party refuses it, naming both.
+        // The same club running a QSO party refuses it the same way.
         {
             let mut e = engine_lock(&shared);
             let club = e.fd_club.as_mut().unwrap();
@@ -43600,22 +43985,9 @@ mod tests {
             club.event_id = "tnqp".into();
         }
         let msg = backend
-            .join(1, "bbbb0002", "GOTA tent", "KD9TAW", 0, "", "")
-            .expect_err("a v1 tent cannot run a QSO party");
-        assert!(
-            msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"),
-            "the refusal that reaches the wire names the contest AND both versions: {msg}"
-        );
-        assert_eq!(
-            msg,
-            engine_lock(&shared)
-                .fd_club
-                .as_ref()
-                .unwrap()
-                .version_refusal(1)
-                .unwrap(),
-            "and it is the policy layer's own wording, not a summary of it"
-        );
+            .join(1, "bbbb0002", "GOTA tent", "W9ABC", 0, "", "", &none)
+            .expect_err("a v1 tent cannot run a QSO party either");
+        assert_eq!(msg, version_refusal(1));
 
         // POSITIVE CONTROL: the same refusing club welcomes a CURRENT position. A
         // gate that refused everybody would satisfy every assertion above while
@@ -43630,8 +44002,9 @@ mod tests {
                 0,
                 "tnqp",
                 "",
+                &PositionKey::new(club_key_hash("cccc0003")),
             )
-            .expect("a v2 tent joins the QSO party");
+            .expect("a current tent joins the QSO party");
         assert_eq!(accept.host_call, "W9ABC");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -43867,16 +44240,40 @@ mod tests {
             .expect("the party is hosted");
         let v = tempo_net::fdsync::PROTO_VERSION;
         let accept = e
-            .fd_club_join(v, "aaaa0001", "CW tent", "W9XYZ", "ilqp", "")
+            .fd_club_join(
+                v,
+                "aaaa0001",
+                "CW tent",
+                "W9XYZ",
+                "ilqp",
+                "",
+                &club_key_hash("aaaa0001"),
+            )
             .expect("a party position joins the party");
         assert_eq!(
             accept.contest, "ilqp",
             "the welcome names the club's contest"
         );
-        e.fd_club_join(v, "bbbb0002", "SSB tent", "W9XYZ", "ilqp", "")
-            .expect("a second party position");
+        e.fd_club_join(
+            v,
+            "bbbb0002",
+            "SSB tent",
+            "W9XYZ",
+            "ilqp",
+            "",
+            &club_key_hash("bbbb0002"),
+        )
+        .expect("a second party position");
         let refused = e
-            .fd_club_join(v, "cccc0003", "GOTA", "W9XYZ", "arrlfd", "")
+            .fd_club_join(
+                v,
+                "cccc0003",
+                "GOTA",
+                "W9XYZ",
+                "arrlfd",
+                "",
+                &club_key_hash("cccc0003"),
+            )
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
             refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
@@ -44761,6 +45158,7 @@ mod tests {
             "W9XYZ",
             "wfd",
             "",
+            &club_key_hash("aaaa0001"),
         );
         for (seq, (call, class, section, _, band, mode, sub)) in (1u64..).zip(contacts) {
             e.fd_club_merge(&tempo_net::fdsync::WireQso {

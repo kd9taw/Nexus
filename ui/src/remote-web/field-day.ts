@@ -129,7 +129,7 @@ function status(v: unknown): void {
   }
   if (f.qsoCount !== counted) throw new Error('invalidFieldDay')
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused','keptOut'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
@@ -148,6 +148,16 @@ function status(v: unknown): void {
     if (c.refused !== undefined) {
       if (!Array.isArray(c.refused) || c.refused.length > 16) throw new Error('invalidFieldDay')
       for (const raw of c.refused) {
+        const r = object(raw,['posName','call','reason'])
+        if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
+      }
+    }
+    // A host's alone, once it has kept a contact out of the club's log: how many, and the
+    // newest it names (at most 16, never more than it kept out), each like a refusal.
+    if (c.keptOut !== undefined) {
+      const k = object(c.keptOut,['total','latest'])
+      if (!integer(k.total) || !Array.isArray(k.latest) || k.latest.length > 16 || k.latest.length > Number(k.total)) throw new Error('invalidFieldDay')
+      for (const raw of k.latest) {
         const r = object(raw,['posName','call','reason'])
         if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
       }

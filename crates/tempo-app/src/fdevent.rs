@@ -29,7 +29,21 @@
 //! different contest is refused at JOIN, by name ([`ClubLog::join_refusal`]), so is
 //! one on another station call than the host's outside ARRL Field Day
 //! ([`ClubLog::call_refusal`]), and a contest the club log cannot run faithfully is
-//! refused before a club is built at all ([`club_refusal`]).
+//! refused before a club is built at all ([`club_refusal`]). At ARRL Field Day that other
+//! call is the GOTA station's, and the club's file writes its contacts under it
+//! ([`MergedRow::station_call`]).
+//!
+//! ⚠️ **Every string a peer sends is data off the network, and the club's files are what the
+//! club submits.** A JOIN under a position id no Nexus makes, or whose call is not a call sign,
+//! is refused at every club, and so is one that cannot prove the position it names: the host
+//! takes each position only from the laptop whose club key it pinned at that position's first
+//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key). A row whose call is
+//! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
+//! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
+//! and listed on the host's screen until the event ends; the writers in `tempo_core` guard
+//! each line too. Each kind of string has one reader (the section "One reading of every
+//! string a peer sends"), and what the host shows, or says back, is that reading: one line of
+//! plain text, a `?` where a character cannot be shown.
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
@@ -133,11 +147,12 @@ pub fn canonical_contest(event_id: &str) -> String {
     }
 }
 
-/// The sponsor's contest id for a rules-file id — what a refusal names — or the id
-/// itself for one this build's rules table does not carry.
+/// The sponsor's contest id for a rules-file id — what a refusal names — or, for one this
+/// build's rules table does not carry, the id as [`shown_id`] shows it: it can have come off
+/// the network (a JOIN's, a welcome's), and a sentence repeats it to a screen.
 pub fn contest_name(event_id: &str) -> String {
     tempo_core::fd_rules::ruleset_by_id(event_id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
-        .map_or_else(|| event_id.to_string(), |rs| rs.contest_id.to_string())
+        .map_or_else(|| shown_id(event_id), |rs| rs.contest_id.to_string())
 }
 
 /// ⭐ **The sentence for a position logging one contest at a club running another** —
@@ -160,7 +175,7 @@ fn role_words(role: &str) -> (String, &'static str) {
         "in_state" => ("in-state".into(), "its county"),
         "out_of_state" | "w_ve" => ("out-of-state".into(), "its state or province"),
         "dx" => ("DX".into(), "DX"),
-        other => (format!("\"{other}\""), "another exchange"),
+        other => (format!("\"{}\"", shown_id(other)), "another exchange"),
     }
 }
 
@@ -192,6 +207,236 @@ pub fn call_mismatch(contest: &str, club: &str, mine: &str) -> String {
          mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
          in your own log."
     )
+}
+
+/// ⭐ **The sentence for a position whose station call is not a call sign** ([`club_call`]),
+/// at every club: the club's file writes each contact under the call its position was on, so
+/// one that is not a call sign is turned away rather than written. It does not repeat the
+/// call, which came off the network and may not be one line of text.
+pub const NOT_A_CALL_SIGN: &str = "this Nexus joined with a Callsign on the air that is not a \
+     call sign (3 to 15 letters, digits and /, with at least one letter and one digit), and the \
+     club writes every contact under the call it was made on. Set Callsign on the air under \
+     Who's who at this event on the Contesting tab in Settings, then turn Field Day mode off and \
+     on again: this Nexus rejoins by itself. Contacts you log meanwhile stay in your own log.";
+
+/// ⭐ **The sentence for a JOIN under a position another laptop holds** ([`ClubLog::key_refusal`]):
+/// the host took that position from the laptop that first joined this event as it, and this
+/// JOIN's club key is not that laptop's. One laptop's settings copied onto another is how two
+/// come to share a position id, so it says how to give this one a position of its own.
+pub const POSITION_HELD: &str = "this Nexus joined as a club position that another laptop holds \
+     at this event: the host takes each position only from the laptop that first joined as it, \
+     and this laptop's club key is not that one's. If this laptop's settings came from another \
+     laptop, quit Nexus here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus \
+     again: it makes a position of its own and rejoins by itself. Contacts you log meanwhile \
+     stay in your own log.";
+
+/// ⭐ **The sentence for a JOIN with no club key a Nexus makes** ([`ClubLog::key_refusal`]):
+/// every Nexus speaking this protocol makes one and sends it, so only a startup that could not
+/// make one, or a peer that is not Nexus, sends none.
+pub const NO_POSITION_KEY: &str =
+    "this Nexus did not send a club key, which every Nexus makes for \
+     itself and the host tells club positions apart by. Restart Nexus on this laptop: it makes \
+     one and rejoins by itself. Contacts you log meanwhile stay in your own log.";
+
+/// ⭐ **The sentence for a JOIN under a position id no Nexus makes** ([`club_position_id`]). It
+/// does not repeat the id, which came off the network. Only a settings file edited by hand
+/// holds such an id, so it says how to get a new one.
+pub const NOT_A_POSITION_ID: &str = "this Nexus joined under a club position id that is not one \
+     Nexus makes (eight characters, 0 to 9 and a to f). Quit Nexus on this laptop, set \
+     \"fdPositionId\" in its settings.json to \"\", and start Nexus again: it makes a new id and \
+     rejoins by itself. Contacts you log meanwhile stay in your own log.";
+
+// ---------------------------------------------------------------------------
+// One reading of every string a peer sends
+// ---------------------------------------------------------------------------
+//
+// ⭐ Each kind of field a peer sends has ONE reading below, and the check and everything that
+// acts on the value or prints it afterwards use that reading: the gate, the stamp, the journal,
+// the club's files, the board and the host's screen. A reader with an alphabet of its own (a
+// Unicode trim, a Unicode case fold) is how a string comes to compare equal in one place and
+// print as something else in another. The club's files are ASCII formats, so a field that
+// reaches them, or is compared, is read as ASCII.
+
+/// The most characters a call sign has here: a compound call with a prefix and a suffix
+/// (`VP2E/W9XYZ/P` is twelve) fits with room to spare.
+const MAX_CALL_CHARS: usize = 15;
+
+/// ⭐ **A call as club sync reads one**: ASCII spacing trimmed, upper-cased the ASCII way, then 3
+/// to 15 letters, digits and `/`, with at least one letter and one digit (every amateur call
+/// sign has both), or `None` for anything else, a character outside ASCII included.
+///
+/// Both calls the club's file prints come off the network: a JOIN's (a GOTA station's, as the
+/// call sent: [`MergedRow::station_call`]) and every row's (the station worked). A space, a line
+/// break or a control character in either would put another column, or another line, into the
+/// file the club submits. So the gate ([`ClubLog::call_refusal`]), the stamp
+/// ([`ClubLog::join`]) and the merge ([`ClubLog::merge`]) read a call through this one function
+/// and act on the very value it returns, and the host's screen shows one through
+/// [`shown_call`].
+///
+/// ASCII only, because that is what keeps the readers agreeing: a full-width or Cyrillic
+/// letter, a zero-width character or a byte-order mark, an `ß` that `to_uppercase` makes `SS`,
+/// a no-break or ideographic space that a Unicode trim removes. Each makes a string one reader
+/// takes for a call and another prints as something else, and none is a call here.
+pub fn club_call(raw: &str) -> Option<String> {
+    let call = raw.trim_ascii().to_ascii_uppercase();
+    let ok = (3..=MAX_CALL_CHARS).contains(&call.len())
+        && call
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+        && call.bytes().any(|b| b.is_ascii_digit())
+        && call.bytes().any(|b| b.is_ascii_uppercase());
+    ok.then_some(call)
+}
+
+/// ⭐ **A position id as club sync takes one**: exactly what every Nexus makes
+/// (`Engine::fd_ensure_position_id`), eight characters of `0` to `9` and `a` to `f`. The id is a
+/// position's identity in the club log, its rows' half of `(position id, seq)`, and it rides
+/// every board line to every position, the TV and Remote, so a JOIN under any other is turned
+/// away ([`NOT_A_POSITION_ID`]) before anything of it is kept.
+pub fn club_position_id(raw: &str) -> bool {
+    raw.len() == 8 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// ⭐ **A call that came off the network, as the host's screen shows it**: [`club_call`]'s value
+/// when it is a call sign, else the text upper-cased the ASCII way with a `?` for every
+/// character a call sign does not hold, so a call the gate turned away never prints as one it
+/// would have served (`w9aß` shows as `W9A?`, never as the `W9ASS` a Unicode fold makes of it).
+/// At most 64 characters.
+pub fn shown_call(raw: &str) -> String {
+    club_call(raw).unwrap_or_else(|| {
+        raw.trim_ascii()
+            .chars()
+            .map(|c| match c.to_ascii_uppercase() {
+                c @ ('A'..='Z' | '0'..='9' | '/') => c,
+                _ => '?',
+            })
+            .take(64)
+            .collect()
+    })
+}
+
+/// A rules-file or exchange-role id as a sentence repeats one that came off the network: its
+/// ASCII letters, digits, `_` and `-`, a `?` for anything else, at most 32 characters. Every id
+/// this build knows is made of those, and one it does not know is shown as the gate read it.
+fn shown_id(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '?'
+            }
+        })
+        .take(32)
+        .collect()
+}
+
+/// ⭐ **A position's name as club sync reads it** (the JOIN's, every presence report's, the one
+/// on the host's list of turned-away positions): trimmed, and every control character, line or
+/// paragraph separator and invisible or direction-changing character a `?`, at most 64
+/// characters. A name is only ever shown, never compared or written into a club file, so it
+/// keeps its letters in any script; what it cannot do is break the line it is shown on, or
+/// read as something it is not.
+pub fn club_label(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .map(|c| if c.is_control() || unseen(c) { '?' } else { c })
+        .take(64)
+        .collect()
+}
+
+/// A character that changes what text reads as without being seen: a line or paragraph
+/// separator, a zero-width character or joiner, a direction mark, embedding, override or
+/// isolate, a soft hyphen, a byte-order mark, an interlinear annotation or a tag character.
+fn unseen(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{61C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
+}
+
+/// The most characters a value a peer sends may hold here (each is plain ASCII, so these are
+/// bytes too): far past any value a club's file holds (a county, a grid, a satellite's name, an
+/// operator's call). Each reaches the board, the TV or Remote, as itself or inside a dupe key,
+/// and Remote's Field Day view takes no string past 1024 bytes: one longer would blank it.
+const MAX_VALUE_CHARS: usize = 64;
+
+/// Can `s` sit inside one field of a line of the club's files: printable ASCII only, no `<`
+/// (which opens an ADIF tag for a reader that does not count a value's length), and at most
+/// [`MAX_VALUE_CHARS`]. Anything else (a line break, a control character, a letter from
+/// another script, an invisible character) either breaks a line of an ASCII file or reads one
+/// way here and another there.
+fn inert(s: &str) -> bool {
+    s.len() <= MAX_VALUE_CHARS && s.bytes().all(|b| (b' '..=b'~').contains(&b) && b != b'<')
+}
+
+/// An operator as club sync reads one, a row's (the club's `OPERATORS`, its ADIF `OPERATOR`)
+/// and a presence report's (the board): [`inert`], then trimmed and upper-cased the ASCII way,
+/// which is also how the station's own call is compared with it. `None` for anything else.
+fn club_operator(raw: &str) -> Option<String> {
+    inert(raw).then(|| raw.trim().to_ascii_uppercase())
+}
+
+/// ⭐ **A wire row as it enters the club log, or the sentence for keeping it out**
+/// ([`ClubLog::merge`], the boundary where a peer's row enters the club log).
+///
+/// Its call must be a call sign ([`club_call`]), its operator one [`club_operator`] reads, and
+/// every other string it carries [`inert`]: an exchange value either way, a band, a mode, a
+/// satellite. All of them come off the network and most reach a line of the club's Cabrillo or
+/// ADIF, so one that could end that line, open another, or read differently to another reader
+/// is turned away here, before anything is keyed, journaled or written, rather than written and
+/// left to the writers' own guard. The row it gives back carries the call and the operator as
+/// they were read, so the journal and every printer hold that one value. No contact a position
+/// logged is rewritten: a row kept out stays in that position's own log, and the host's screen
+/// says so.
+fn admit(q: &WireQso) -> Result<MergedRow, String> {
+    let kept_out = |why: String| {
+        Err(format!(
+            "{why} It stays in that position's own log, and the club's file goes without it."
+        ))
+    };
+    let Some(call) = club_call(&q.call) else {
+        return kept_out(format!(
+            "a contact it sent is not in the club's log: the call it was logged with is not a \
+             call sign (3 to {MAX_CALL_CHARS} letters, digits and /, with at least one letter and \
+             one digit)."
+        ));
+    };
+    let slots = |fs: &[WireField]| fs.iter().all(|f| inert(&f.k) && inert(&f.d) && inert(&f.r));
+    let operator = club_operator(&q.op);
+    let part = [
+        (
+            "the exchange it copied",
+            slots(&q.ex) && inert(&q.class) && inert(&q.sect),
+        ),
+        ("the exchange it sent", slots(&q.mex)),
+        ("its band", inert(&q.band)),
+        ("its mode", inert(&q.mode) && inert(&q.sub)),
+        ("its operator", operator.is_some()),
+        ("its satellite", inert(&q.sat)),
+    ]
+    .into_iter()
+    .find_map(|(part, ok)| (!ok).then_some(part));
+    if let Some(part) = part {
+        return kept_out(format!(
+            "its contact with {call} is not in the club's log: {part} holds what the club's \
+             log does not take (a line break, a control character, a <, a character outside \
+             plain ASCII, or more than {MAX_VALUE_CHARS} characters)."
+        ));
+    }
+    Ok(MergedRow {
+        call,
+        operator: operator.unwrap_or_default(),
+        ..MergedRow::from_wire(q)
+    })
 }
 
 /// A field vector as it travels — the wire's and the journal's one shape.
@@ -281,6 +526,23 @@ pub struct MergedRow {
     /// contact through a linear bird.
     #[serde(default)]
     pub sat_fm: bool,
+    /// ⭐ **The station call the logging position JOINED this club on**, stamped by the host
+    /// as the row merges ([`ClubLog::merge`]) and only by a club with a GOTA station
+    /// ([`ClubLog::has_gota_station`]: ARRL Field Day), whose GOTA station *"must use a
+    /// different callsign from the primary Field Day station"* (rule 4.1.1.1). The club's
+    /// Cabrillo writes it as the call sent wherever it is not the club's
+    /// ([`ClubLog::unique_log_with`]).
+    ///
+    /// It is on the row because a host restart replays the journal before any position has
+    /// joined again, and the file exported then must still say which station made each
+    /// contact. Empty on every other club's rows, on a row from a position whose JOIN sent no
+    /// call (or one that is not a call sign: [`club_call`]), and on every row merged before it
+    /// existed. A position that changes its call keeps the old one here until it joins again.
+    ///
+    /// ⚠️ `#[serde(default)]` on this type's standing rule, and skipped when empty, so every
+    /// other club's journal line is the bytes it was.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub station_call: String,
 }
 
 impl MergedRow {
@@ -302,6 +564,8 @@ impl MergedRow {
             operator: q.op.clone(),
             sat: q.sat.clone(),
             sat_fm: q.sat_fm,
+            // The host's to fill: a wire row names no station (`ClubLog::merge`).
+            station_call: String::new(),
         }
     }
 
@@ -339,7 +603,7 @@ impl MergedRow {
     /// is why this is not `dkey`'s first three components.
     pub fn dupe_key(&self) -> (String, String, String) {
         (
-            self.call.to_uppercase(),
+            self.call.to_ascii_uppercase(),
             self.band.clone(),
             self.mode_class.to_ascii_uppercase(),
         )
@@ -374,7 +638,8 @@ pub struct ClubPosition {
     /// presence report (so a rename mid-event lands). Empty until a position
     /// sends one — what an unnamed position reads as is the UI's business.
     pub label: String,
-    /// Station callsign from the JOIN.
+    /// Station callsign from the latest JOIN, as [`club_call`] read it: empty when that JOIN
+    /// named none, or one that is not a call sign.
     pub call: String,
     /// Presence, from `pos` reports (band board fodder).
     pub band: String,
@@ -415,6 +680,52 @@ const REFUSED_SHOWN_SECS: u64 = 60;
 /// The most refused positions the host keeps: the JOIN that fills this list comes off the
 /// network, and a peer that cycles position ids must not grow it without bound.
 const MAX_REFUSED: usize = 16;
+/// The largest whole number a JSON number carries exactly to a browser (2^53 − 1).
+const JSON_EXACT: u64 = (1 << 53) - 1;
+
+/// ⭐ **A contact this host kept out of the club's log** ([`ClubLog::kept_out`]): which
+/// position sent it, and what the host's screen says of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptOut {
+    /// The position that sent it, and the contact's seq there: one entry per contact, however
+    /// often that position sends it again.
+    pub pos: String,
+    pub seq: u64,
+    /// That position's name and call as the host knew them, read the way the club reads them.
+    pub label: String,
+    pub call: String,
+    /// The sentence the host's screen shows ([`admit`]'s).
+    pub reason: String,
+    /// Host clock when it was first kept out.
+    pub at: u64,
+}
+
+/// The most kept-out contacts the host keeps, journals and lists: a peer can send any number,
+/// and a list past this is a peer's flood, not a club's typing.
+const MAX_KEPT_OUT: usize = 256;
+/// The most of them the host's status names, the newest, beside how many it keeps: each is a
+/// sentence, and the whole Field Day view Remote reads is bounded.
+pub const KEPT_OUT_SHOWN: usize = 16;
+
+/// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
+/// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
+/// `call` are required) and skips it, as it skips a torn line; this build reads each before
+/// trying a row. `at` is this host's clock, and a note from a previous event ages out with
+/// that event's rows ([`ClubLog::attach_journal_since`]).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JournalNote {
+    /// A position's key hash, pinned at its first served JOIN ([`ClubLog::pin`]): the hash,
+    /// never the key.
+    Pin {
+        pos: String,
+        key_hash: String,
+        at: u64,
+    },
+    /// A contact kept out of the club's log ([`ClubLog::kept_out`]), so a restarted host still
+    /// lists it for the rest of the event.
+    KeptOut(KeptOut),
+}
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -478,6 +789,15 @@ pub struct ClubLog {
     journal: Option<std::fs::File>,
     /// Positions this host turned away, by position id ([`note_refused`](Self::note_refused)).
     refused: HashMap<String, Refused>,
+    /// ⭐ Each position's club key, as the HASH of the key its first served JOIN of this event
+    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)).
+    /// Journaled, so a restarted host still holds every pin it made.
+    pins: HashMap<String, String>,
+    /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
+    /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
+    /// one entry per contact, however often its position sends it again; at most
+    /// [`MAX_KEPT_OUT`].
+    kept_out: Vec<KeptOut>,
     /// `(positions, shown)` while the board last sent was as big as one club line carries,
     /// from [`tempo_net::fdsync::board_fit`] ([`note_board_sent`](Self::note_board_sent)).
     /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
@@ -584,31 +904,91 @@ impl ClubLog {
     /// ⭐ **§18.2 — why a joining position of protocol version `v` cannot be
     /// served, or `None` to serve it.**
     ///
-    /// A v1 position running Field Day is served exactly as it always was, so a
-    /// mixed-version Field Day club is unaffected. Running anything else, it is
-    /// refused AT JOIN: it cannot enter, display or transmit that contest's
-    /// exchange, so its rows would arrive with an empty exchange and score as
-    /// zero-multiplier ones. A club discovering at hour six that one tent's 300
-    /// contacts carry no county is worse than that tent knowing at hour zero.
+    /// ⭐ **Since v3, every older position is refused, at every club.** A v3 JOIN proves the
+    /// position it names ([`key_refusal`](Self::key_refusal)); an older one has no key to
+    /// send, and a host that served it would let any peer take another laptop's position by
+    /// claiming to be older. (Until v3 a v1 position was served at a Field Day club, and
+    /// refused elsewhere because it cannot enter, show or send another contest's exchange.)
     ///
-    /// The message names the version AND the contest because it is the only thing
+    /// The message names the versions and says what to do, because it is the only thing
     /// its reader has: a bare "incompatible" leaves an operator on a field at 0200
     /// with no idea what to do. It also says what happens to the contacts they log
     /// meanwhile, which is true — the position journals them, and its outbox is
     /// "every own row past the host's ack", so they all go up on the first join
     /// that succeeds.
     pub fn version_refusal(&self, v: u32) -> Option<String> {
-        if v >= tempo_net::fdsync::PROTO_VERSION || self.is_field_day() {
-            return None;
+        let need = tempo_net::fdsync::PROTO_VERSION;
+        (v < need).then(|| {
+            format!(
+                "this club's host needs club sync v{need} on every laptop, so that each laptop \
+                 proves which club position it is, and this Nexus speaks v{v}. Update Nexus on \
+                 this laptop, then rejoin: contacts you log meanwhile stay in your own log and \
+                 go up when you do."
+            )
+        })
+    }
+
+    /// ⭐ **Why a JOIN cannot be served as position `posid`, or `None`** — `key_hash` is the hash
+    /// of the club key the JOIN carried (empty for none, or for one no Nexus makes), hashed
+    /// before it reached the engine (`fdbridge::EngineClubBackend`), so no key is ever held here.
+    ///
+    /// A position id is no secret: every board line carries every position's. So the first
+    /// JOIN this host serves under an id pins that JOIN's key ([`pin`](Self::pin)), and a later
+    /// JOIN under the same id with another key is another laptop, turned away by name
+    /// ([`POSITION_HELD`]); every row comes in on a connection whose JOIN this let in, as that
+    /// JOIN's position. A JOIN with no key is turned away too ([`NO_POSITION_KEY`]).
+    pub fn key_refusal(&self, posid: &str, key_hash: &str) -> Option<String> {
+        if key_hash.is_empty() {
+            return Some(NO_POSITION_KEY.to_string());
         }
-        Some(format!(
-            "this club is running {contest} and needs club sync v{need} — this Nexus \
-             speaks v{v}, which cannot enter, show or send the {contest} exchange. \
-             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
-             log and go up when you do.",
-            contest = self.contest_id,
-            need = tempo_net::fdsync::PROTO_VERSION,
-        ))
+        match self.pins.get(posid) {
+            Some(pinned) if pinned != key_hash => Some(POSITION_HELD.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Pin `posid` to the key hash its first served JOIN of this event carried, and journal
+    /// the pin, so a restarted host holds it. A pinned position keeps its pin: a JOIN with
+    /// another key never reaches here ([`key_refusal`](Self::key_refusal)).
+    pub fn pin(&mut self, posid: &str, key_hash: &str, now: u64) {
+        if key_hash.is_empty() || self.pins.contains_key(posid) {
+            return;
+        }
+        self.pins.insert(posid.to_string(), key_hash.to_string());
+        self.journal_note(&JournalNote::Pin {
+            pos: posid.to_string(),
+            key_hash: key_hash.to_string(),
+            at: now,
+        });
+    }
+
+    /// List one kept-out contact, unless it is listed already, is in the club's log after all,
+    /// or the list is full. `true` = it was listed (and the caller journals it).
+    fn list_kept_out(&mut self, k: KeptOut) -> bool {
+        let id = (k.pos.clone(), k.seq);
+        if self.ids.contains(&id)
+            || self.kept_out.len() >= MAX_KEPT_OUT
+            || self
+                .kept_out
+                .iter()
+                .any(|o| (o.pos.as_str(), o.seq) == (id.0.as_str(), id.1))
+        {
+            return false;
+        }
+        self.kept_out.push(k);
+        true
+    }
+
+    /// ⭐ **Every contact this host kept out of the club's log**, oldest first, for the rest of
+    /// the event — its screen's lasting list, through a restart. Each stays in its position's
+    /// own log; the club's file goes without it.
+    pub fn kept_out(&self) -> &[KeptOut] {
+        &self.kept_out
+    }
+
+    /// The key hash `posid` is pinned to, if any (the host's own tests and the shell's).
+    pub fn pinned(&self, posid: &str) -> Option<&str> {
+        self.pins.get(posid).map(String::as_str)
     }
 
     /// ⭐ **Why a joining position cannot be served, or `None` to serve it** — the
@@ -663,7 +1043,13 @@ impl ClubLog {
     /// ⚠️ **Except ARRL Field Day**, whose GOTA station "must use a different callsign from
     /// the primary Field Day station" (rule 4.1.1.1) and whose contacts "may be claimed for
     /// credit by its primary Field Day operation" (4.1.1.5): a position there is served on
-    /// any call. Winter Field Day has no GOTA station.
+    /// any call sign, and its rows keep that call into the club's file
+    /// ([`MergedRow::station_call`]). Winter Field Day has no GOTA station.
+    ///
+    /// ⚠️ **A call that is not a call sign is refused at every club, ARRL Field Day included**
+    /// ([`NOT_A_CALL_SIGN`]), because that exception writes the JOIN's call into the club's
+    /// file: what the gate reads is [`club_call`]'s value, and so is what [`ClubLog::join`]
+    /// stamps.
     ///
     /// Compared trimmed and case-blind, and nothing more: `W9XYZ/P` is another call on the
     /// air, and none of the rules the club runs that were read for this (ARRL Field Day and
@@ -671,19 +1057,32 @@ impl ClubLog {
     /// parties) counts a portable suffix as the same station; an ARRL VHF rover signs `/R`
     /// as an entry of its own. A call either end cannot say (empty) is served as before.
     pub fn call_refusal(&self, club: &str, theirs: &str) -> Option<String> {
-        let (club, theirs) = (club.trim(), theirs.trim());
-        if club.is_empty()
-            || theirs.is_empty()
-            || club.eq_ignore_ascii_case(theirs)
-            || self.event_id == FdEvent::ArrlFd.code()
-        {
+        if theirs.trim_ascii().is_empty() {
             return None;
         }
-        Some(call_mismatch(
-            &self.contest_id,
-            &club.to_uppercase(),
-            &theirs.to_uppercase(),
-        ))
+        let Some(theirs) = club_call(theirs) else {
+            return Some(NOT_A_CALL_SIGN.to_string());
+        };
+        // The host's own call, read the same way: one that is not a call sign cannot be
+        // compared, and is served as an empty one always was (the host's own position is
+        // refused by the line above, which says where to set it).
+        let club = club_call(club)?;
+        if club == theirs || self.has_gota_station() {
+            return None;
+        }
+        Some(call_mismatch(&self.contest_id, &club, &theirs))
+    }
+
+    /// ⭐ **Does this club's contest have a GOTA station** — the one position that is on the
+    /// air under another call than the host's? ARRL Field Day only: its GOTA station *"must
+    /// use a different callsign from the primary Field Day station"* (rule 4.1.1.1). Winter
+    /// Field Day has none, and neither has any other contest the club log runs.
+    ///
+    /// One predicate for the JOIN that serves such a position ([`call_refusal`](Self::call_refusal))
+    /// and for the rows that keep its call ([`MergedRow::station_call`]), so the two cannot
+    /// come to disagree about which club that is.
+    pub fn has_gota_station(&self) -> bool {
+        self.event_id == FdEvent::ArrlFd.code()
     }
 
     /// Open (creating if absent) the append-only journal at `path`, replaying
@@ -720,6 +1119,23 @@ impl ClubLog {
         }
         if let Ok(text) = std::fs::read_to_string(path) {
             for line in text.lines() {
+                if let Ok(note) = serde_json::from_str::<JournalNote>(line) {
+                    match note {
+                        // A pin from a previous event pins nothing in this one, and the first
+                        // pin of a position wins, as it does live.
+                        JournalNote::Pin { pos, key_hash, at } if at >= oldest_unix => {
+                            self.pins.entry(pos).or_insert(key_hash);
+                        }
+                        JournalNote::Pin { .. } => {}
+                        // A previous event's are as stale as its rows; a contact a later row
+                        // merged under the same id is in the club's log after all.
+                        JournalNote::KeptOut(k) if k.at >= oldest_unix => {
+                            self.list_kept_out(k);
+                        }
+                        JournalNote::KeptOut(_) => {}
+                    }
+                    continue;
+                }
                 // Tolerant per line: one torn tail line (power loss mid-append)
                 // must not poison the rest of the journal.
                 if let Ok(row) = serde_json::from_str::<MergedRow>(line) {
@@ -749,8 +1165,50 @@ impl ClubLog {
     /// unchanged) high-water ack for the row's position. Idempotent: a known
     /// `(posid, seq)` changes nothing — which is what makes every re-push
     /// after an outage free.
+    ///
+    /// A club with a GOTA station keeps on each row the call its position joined on
+    /// ([`MergedRow::station_call`]); a journal replay is not a merge, and keeps the call
+    /// each row was journaled with.
+    ///
+    /// ⭐ **THE BOUNDARY where a peer's row enters the club log** ([`admit`]): a row whose call
+    /// is not a call sign, or whose strings hold anything that could end a line of the club's
+    /// files or open another, is kept out (not merged, not acked, no row journaled), and the
+    /// host's lasting list names it, with the position that sent it, until the event ends
+    /// ([`kept_out`](Self::kept_out): journaled as a note of its own). Every other
+    /// row merges with its call and operator as [`admit`] read them. `q.pos` is the position its
+    /// connection JOINED as: the socket loop refuses a row naming any other
+    /// (`tempo_net::fdsync::ANOTHER_POSITIONS_ROW`), so the stamp is that JOIN's call.
     pub fn merge(&mut self, q: &WireQso, now: u64) -> u64 {
-        self.merge_row(MergedRow::from_wire(q), now);
+        match admit(q) {
+            Ok(mut row) => {
+                if self.has_gota_station() {
+                    row.station_call = self
+                        .positions
+                        .get(&q.pos)
+                        .map(|p| p.call.clone())
+                        .unwrap_or_default();
+                }
+                self.merge_row(row, now);
+            }
+            Err(reason) => {
+                let (label, call) = self
+                    .positions
+                    .get(&q.pos)
+                    .map(|p| (p.label.clone(), p.call.clone()))
+                    .unwrap_or_default();
+                let kept = KeptOut {
+                    pos: q.pos.clone(),
+                    seq: q.seq,
+                    label,
+                    call,
+                    reason,
+                    at: now,
+                };
+                if self.list_kept_out(kept.clone()) {
+                    self.journal_note(&JournalNote::KeptOut(kept));
+                }
+            }
+        }
         self.positions.get(&q.pos).map(|p| p.acked).unwrap_or(0)
     }
 
@@ -776,10 +1234,14 @@ impl ClubLog {
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
         }
-        let sect = row.section.trim().to_uppercase();
+        let sect = row.section.trim().to_ascii_uppercase();
         if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
+        // A contact once kept out and now merged (a later build's rules let it in) is in the
+        // club's log, so the host's list no longer says it is not.
+        self.kept_out
+            .retain(|k| (k.pos.as_str(), k.seq) != (row.posid.as_str(), row.seq));
         let pos = self.positions.entry(row.posid.clone()).or_default();
         pos.qsos_raw += 1;
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
@@ -813,32 +1275,45 @@ impl ClubLog {
         }
     }
 
+    /// One [`JournalNote`] line, appended and flushed like a merged row's.
+    fn journal_note(&mut self, note: &JournalNote) {
+        if let (Some(j), Ok(line)) = (&mut self.journal, serde_json::to_string(note)) {
+            let _ = j.write_all(line.as_bytes());
+            let _ = j.write_all(b"\n");
+            let _ = j.flush();
+        }
+    }
+
     /// A position joined (or rejoined): remember its identity, return the
     /// high-water ack it should stream past.
+    ///
+    /// Its call is THIS join's, as the gate read it ([`club_call`]), and nothing when the join
+    /// named none or one that is not a call sign: the call a GOTA station's rows are stamped
+    /// with is never an earlier join's, and never one the gate would turn away.
     pub fn join(&mut self, posid: &str, label: &str, call: &str, now: u64) -> u64 {
         self.refused.remove(posid);
         let pos = self.positions.entry(posid.to_string()).or_default();
-        if !label.trim().is_empty() {
-            pos.label = label.trim().to_string();
+        let label = club_label(label);
+        if !label.is_empty() {
+            pos.label = label;
         }
-        if !call.trim().is_empty() {
-            pos.call = call.trim().to_uppercase();
-        }
+        pos.call = club_call(call).unwrap_or_default();
         pos.last_seen_unix = now;
         pos.acked
     }
 
     /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
     /// while the position keeps trying ([`refused`](Self::refused)), under the position id its
-    /// join clears. The name and call come off the network, so each is cut to 64 characters,
-    /// and the list to [`MAX_REFUSED`], the oldest going first.
+    /// join clears. The name and call come off the network, so each is read the way the club
+    /// reads it ([`club_label`], [`shown_call`]): one line, at most 64 characters, and a call
+    /// the gate turned away never shown as one it would have served. The list holds at most
+    /// [`MAX_REFUSED`], the oldest going first.
     pub fn note_refused(&mut self, posid: &str, label: &str, call: &str, reason: &str, now: u64) {
-        let cut = |s: &str| s.trim().chars().take(64).collect::<String>();
         self.refused.insert(
             posid.to_string(),
             Refused {
-                label: cut(label),
-                call: cut(call).to_uppercase(),
+                label: club_label(label),
+                call: shown_call(call),
                 reason: reason.to_string(),
                 at_unix: now,
             },
@@ -874,19 +1349,34 @@ impl ClubLog {
     /// wins (that is how a rename mid-event reaches the board), an empty one
     /// changes nothing — an older peer sends no name at all, and treating
     /// that as "clear it" would blank a label the join already established.
+    ///
+    /// The board this feeds goes to every position, the host's TV and the hosted Remote page,
+    /// so a report is read the way the club reads its rows: the name by [`club_label`], the
+    /// operator by [`club_operator`], a band and a mode as [`inert`] ASCII (a mode upper-cased
+    /// the ASCII way), and one that is not reads as nothing.
     pub fn position_status(&mut self, posid: &str, r: &PosReport, now: u64) {
         let pos = self.positions.entry(posid.to_string()).or_default();
-        if !r.name.trim().is_empty() {
-            pos.label = r.name.trim().to_string();
+        let name = club_label(&r.name);
+        if !name.is_empty() {
+            pos.label = name;
         }
-        pos.band = r.band.clone();
-        pos.mode = r.mode.to_uppercase();
-        pos.operator = r.op.to_uppercase();
+        pos.band = if inert(&r.band) {
+            r.band.clone()
+        } else {
+            String::new()
+        };
+        pos.mode = if inert(&r.mode) {
+            r.mode.to_ascii_uppercase()
+        } else {
+            String::new()
+        };
+        pos.operator = club_operator(&r.op).unwrap_or_default();
         pos.freq = r.freq;
         // An unmeasured report is no news either: a reconnect's first report leaves
-        // before its first round trip has closed.
-        if r.clock_ms.is_some() {
-            pos.clock_ms = r.clock_ms;
+        // before its first round trip has closed. Nor is a difference no JSON number holds
+        // exactly: no clock is 285,000 years off, and Remote's Field Day view refuses one.
+        if let Some(ms) = r.clock_ms.filter(|ms| ms.unsigned_abs() <= JSON_EXACT) {
+            pos.clock_ms = Some(ms);
         }
         pos.last_seen_unix = now;
     }
@@ -1007,7 +1497,8 @@ impl ClubLog {
     }
 
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the
-    /// HOST's station identity — the one artifact both exports and the score
+    /// HOST's station identity (a GOTA station's rows keep their own call:
+    /// [`MergedRow::station_call`]) — the one artifact both exports and the score
     /// derive from, so they can never disagree with each other.
     pub fn unique_log(&self, mycall: &str, class: &str, section: &str) -> FieldDayLog {
         self.unique_log_with(
@@ -1046,11 +1537,19 @@ impl ClubLog {
         // Day club's rows name nobody, because its exports are pinned to the bytes 1.x
         // wrote, which carried no `OPERATOR`.
         let names_operators = self.field_day_event().is_none();
-        let station = mycall.trim().to_ascii_uppercase();
+        let station = club_call(mycall).unwrap_or_default();
+        let gota = self.has_gota_station();
         let mut log = FieldDayLog::new(mycall, session, "");
         for i in self.export_indices() {
             let r = &self.rows[i];
             log.band = r.band.clone();
+            // ⭐ A GOTA station's row is sent under its own call, which its QSO line carries;
+            // every other row is the club's, written under `mycall` exactly as before.
+            log.station_call = if gota && r.station_call != station {
+                r.station_call.clone()
+            } else {
+                String::new()
+            };
             if names_operators {
                 // A position with nobody named at the key sends the station's own call
                 // (`Engine::fd_sync_outbox`, for the band board), and a row's operator is
@@ -1257,7 +1756,7 @@ impl ClubLog {
     ) -> Result<String, String> {
         let mut entrant = entrant.clone();
         if self.field_day_event().is_some() {
-            let station = mycall.trim().to_ascii_uppercase();
+            let station = club_call(mycall).unwrap_or_default();
             let mut named: Vec<String> = Vec::new();
             for i in self.export_indices() {
                 let op = self.rows[i].operator.trim().to_ascii_uppercase();
@@ -1715,6 +2214,14 @@ mod tests {
         );
         club.position_status("aaaa", &clocked(Some(400)), 1004);
         assert_eq!(club.clock_ms("aaaa"), Some(400));
+        // A difference no JSON number holds exactly is no news either: Remote's Field Day
+        // view refuses one, and it would blank the host's whole view. The largest it holds is
+        // taken as measured.
+        club.position_status("aaaa", &clocked(Some(i64::MAX)), 1005);
+        club.position_status("aaaa", &clocked(Some(-(1 << 53))), 1006);
+        assert_eq!(club.clock_ms("aaaa"), Some(400));
+        club.position_status("aaaa", &clocked(Some((1 << 53) - 1)), 1007);
+        assert_eq!(club.clock_ms("aaaa"), Some((1 << 53) - 1));
     }
 
     #[test]
@@ -1754,6 +2261,7 @@ mod tests {
                         operator: "KD9TAW".into(),
                         sat: String::new(),
                         sat_fm: false,
+                        station_call: String::new(),
                     },
                     last_year,
                 );
@@ -1789,6 +2297,7 @@ mod tests {
                     operator: "KD9TAW".into(),
                     sat: String::new(),
                     sat_fm: false,
+                    station_call: String::new(),
                 },
                 now,
             );
@@ -1824,6 +2333,7 @@ mod tests {
                 operator: "KD9TAW".into(),
                 sat: String::new(),
                 sat_fm: false,
+                station_call: String::new(),
             },
             now,
         );
@@ -2033,6 +2543,7 @@ mod tests {
             operator: "KD9TAW".into(),
             sat: String::new(),
             sat_fm: false,
+            station_call: String::new(),
         })
         .unwrap();
         let as_v1: V1MergedRow =
@@ -2321,42 +2832,42 @@ mod tests {
         );
     }
 
-    /// ⭐ §18.2 — the operator's ruling. A v1 position is refused at JOIN when the
-    /// club is running a contest it cannot enter, show or send, and the message
-    /// names BOTH the required version and the contest.
+    /// ⭐ §18.2 — since v3, **every older position is refused at JOIN, at every club**, and
+    /// the message names both versions and says what to do: an older Nexus has no club key
+    /// to prove its position with, and a host that served one would let any peer take another
+    /// laptop's position by claiming to be older.
     #[test]
-    fn a_v1_position_is_refused_only_when_the_club_is_not_running_field_day() {
-        // Field Day keeps today's behaviour: a same-or-lower join is served, so a
-        // mixed-version Field Day club is unaffected.
-        for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
-            let club = ClubLog::new(event, "TEST FD");
-            assert!(club.is_field_day());
-            assert_eq!(
-                club.version_refusal(1),
-                None,
-                "a v1 tent may still join a Field Day club"
-            );
-        }
-
-        // Anything else refuses a v1 position.
+    fn every_older_position_is_refused_by_name_at_every_club() {
+        let need = tempo_net::fdsync::PROTO_VERSION;
+        let mut clubs = vec![
+            ClubLog::new(FdEvent::ArrlFd, "TEST FD"),
+            ClubLog::new(FdEvent::WinterFd, "TEST WFD"),
+            ClubLog::for_ruleset(party("ilqp"), "ILQP TEST"),
+        ];
         let mut qp = ClubLog::new(FdEvent::ArrlFd, "TNQP 2026");
         qp.contest_id = "TN-QSO-PARTY".into();
-        assert!(!qp.is_field_day());
-        let msg = qp.version_refusal(1).expect("a v1 tent is refused");
-        assert_eq!(
-            msg,
-            "this club is running TN-QSO-PARTY and needs club sync v2 — this Nexus \
-             speaks v1, which cannot enter, show or send the TN-QSO-PARTY exchange. \
-             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
-             log and go up when you do.",
-            "the refusal names the version AND the contest — it is all its reader has"
-        );
-        // POSITIVE CONTROL for the "names both" claim: neither half is incidental.
-        assert!(msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"));
-
-        // …and a CURRENT position is served by the same club. Refusing on version
-        // when the version is fine would lock every tent out of the QSO party.
-        assert_eq!(qp.version_refusal(tempo_net::fdsync::PROTO_VERSION), None);
+        clubs.push(qp);
+        for club in &clubs {
+            for v in 1..need {
+                let msg = club.version_refusal(v).expect("an older tent is refused");
+                assert_eq!(
+                    msg,
+                    format!(
+                        "this club's host needs club sync v{need} on every laptop, so that each \
+                         laptop proves which club position it is, and this Nexus speaks v{v}. \
+                         Update Nexus on this laptop, then rejoin: contacts you log meanwhile \
+                         stay in your own log and go up when you do."
+                    ),
+                    "{}",
+                    club.contest_id
+                );
+                assert_eq!(club.join_refusal(v, &club.event_id), Some(msg));
+            }
+            // …and a CURRENT position is served by the same club. Refusing on version when
+            // the version is fine would lock every tent out.
+            assert_eq!(club.version_refusal(need), None, "{}", club.contest_id);
+        }
+        assert_eq!(need, 3, "the version this rule was written for");
     }
 
     /// The legacy triple ships only for Field Day; the generalised key always
@@ -3079,9 +3590,9 @@ mod tests {
     }
 
     /// ⭐ **A position logging a different contest is refused at JOIN, by name** — the
-    /// club and the position's contest both named, and what to do about it. A position too
-    /// old to name one is served by a Field Day club as it always was, and refused by any
-    /// other.
+    /// club and the position's contest both named, and what to do about it. A JOIN naming
+    /// none is served by a Field Day club as it always was, and refused by any other; a
+    /// position too old to name one is refused by its version first.
     #[test]
     fn a_position_logging_another_contest_is_refused_by_name() {
         let v = tempo_net::fdsync::PROTO_VERSION;
@@ -3107,14 +3618,18 @@ mod tests {
             old.contains("IL QSO Party") && old.contains("too old"),
             "{old}"
         );
-        // Field Day: an older position is served as before; the OTHER Field Day is not.
+        // Field Day: a JOIN naming no contest is served as before; the OTHER Field Day is not.
         let fd = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
         assert_eq!(
             fd.join_refusal(v, ""),
             None,
-            "an older position joins Field Day as before"
+            "a JOIN naming no contest joins Field Day as before"
         );
-        assert_eq!(fd.join_refusal(1, ""), None, "…a v1 one too");
+        assert_eq!(
+            fd.join_refusal(1, ""),
+            fd.version_refusal(1),
+            "…and a v1 position is turned away by its version"
+        );
         assert_eq!(fd.join_refusal(v, "arrlfd"), None);
         let wfd = fd
             .join_refusal(v, "wfd")
@@ -3232,6 +3747,986 @@ mod tests {
             (wfd.event, wfd.contest_id.as_str()),
             (FdEvent::WinterFd, "WFD")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1700Z, Saturday 27 June 2026 — ARRL Field Day's first minute, as the 1.x fixture's.
+    const FD_START: u64 = 1_782_579_600;
+
+    /// The `QSO:` lines of a Cabrillo file, in order.
+    fn qso_lines(cab: &str) -> Vec<&str> {
+        cab.lines().filter(|l| l.starts_with("QSO:")).collect()
+    }
+
+    /// ⭐ **An ARRL Field Day club's file says which station made each contact: a GOTA
+    /// position's QSO lines carry the GOTA station's own call, and every other line the
+    /// club's.**
+    ///
+    /// ARRL Field Day rules (2026): the GOTA station *"must use a different callsign from
+    /// the primary Field Day station"* and *"uses the same exchange as its parent"*
+    /// (4.1.1.1), and *"QSOs made by this station may be claimed for credit by its primary
+    /// Field Day operation"* (4.1.1.5). A Cabrillo QSO line's first call is the one SENT,
+    /// and the club's file, written under the host's call, wrote every GOTA contact as one
+    /// the primary station made.
+    #[test]
+    fn a_gota_positions_lines_carry_its_own_call_and_every_other_line_the_clubs() {
+        let session = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let entrant = CabrilloEntrant::default();
+        let dir = scratch("gota");
+        // The host and a second tent on the club's call (the tent's as typed), and the GOTA
+        // tent on `gota_call`; every row sends the club's 3A WI, as the GOTA station must.
+        let club_with = |gota_call: &str, journal: &PathBuf| {
+            let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+            club.attach_journal_since(journal, 0).unwrap();
+            club.join("aaaa0001", "HQ", "W9XYZ", 1);
+            club.join("bbbb0002", "CW tent", " w9xyz ", 1);
+            club.join("cccc0003", "GOTA", gota_call, 1);
+            for (pos, seq, call, band, mode, sect, minute) in [
+                ("aaaa0001", 1, "W1AW", "20m", "PH", "CT", 0),
+                ("cccc0003", 1, "K1ABC", "40m", "CW", "EMA", 1),
+                ("bbbb0002", 1, "N0XYZ", "15m", "CW", "MN", 2),
+                ("cccc0003", 2, "W5DEF", "20m", "DIG", "STX", 3),
+            ] {
+                let when = FD_START + 60 * minute;
+                let row = with_sent(wq(pos, seq, call, band, mode, sect, when), ("3A", "WI"));
+                club.merge(&row, when);
+            }
+            club
+        };
+        let journal = dir.join("fd_event_gota.jsonl");
+        let club = club_with("K9GOT", &journal);
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session(), &entrant)
+            .unwrap();
+        assert!(
+            cab.contains("\nCALLSIGN: W9XYZ\n"),
+            "the club's entry: {cab}"
+        );
+        assert_eq!(
+            qso_lines(&cab),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 W9XYZ 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 W9XYZ 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 K9GOT 3A WI W5DEF 2A STX",
+            ],
+            "the GOTA tent's two contacts under its own call, the rest under the club's"
+        );
+        // A host restart replays the journal before any position has joined again, so the
+        // call has to come back with the rows.
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        restarted.attach_journal_since(&journal, 0).unwrap();
+        assert_eq!(
+            restarted
+                .export_cabrillo_with("W9XYZ", session(), &entrant)
+                .unwrap(),
+            cab,
+            "the replayed club writes the same file, with no position joined"
+        );
+        // The club's own lines are written under the club's call exactly as given, however
+        // the positions typed it.
+        assert_eq!(
+            qso_lines(
+                &club
+                    .export_cabrillo_with("w9xyz", session(), &entrant)
+                    .unwrap()
+            ),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 w9xyz 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 w9xyz 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 K9GOT 3A WI W5DEF 2A STX",
+            ]
+        );
+
+        // CONTROL: that tent on the club's call is no GOTA station, and every line is the
+        // club's. The call column of those two lines is the whole difference between the
+        // files, and the ADIF (which names no station on any record) and the score are the
+        // same bytes and numbers: only how the Cabrillo prints moved.
+        let control = club_with("W9XYZ", &dir.join("fd_event_control.jsonl"));
+        let control_cab = control
+            .export_cabrillo_with("W9XYZ", session(), &entrant)
+            .unwrap();
+        assert_eq!(
+            qso_lines(&control_cab),
+            [
+                "QSO: 14000 PH 2026-06-27 1700 W9XYZ 3A WI W1AW 2A CT",
+                "QSO: 7000 CW 2026-06-27 1701 W9XYZ 3A WI K1ABC 2A EMA",
+                "QSO: 21000 CW 2026-06-27 1702 W9XYZ 3A WI N0XYZ 2A MN",
+                "QSO: 14000 DG 2026-06-27 1703 W9XYZ 3A WI W5DEF 2A STX",
+            ]
+        );
+        assert_eq!(cab.replace(" K9GOT ", " W9XYZ "), control_cab);
+        assert_eq!(
+            club.export_adif_with("W9XYZ", session()),
+            control.export_adif_with("W9XYZ", session())
+        );
+        assert_eq!(
+            club.score_with("W9XYZ", session(), 2, &[], &[]),
+            control.score_with("W9XYZ", session(), 2, &[], &[])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **CONTROLS: only ARRL Field Day writes the call a position joined on.** Winter Field
+    /// Day, the QSO parties and the VHF contests have no GOTA station, and the engine refuses
+    /// a position on another call at JOIN ([`ClubLog::call_refusal`]). A club that holds one
+    /// anyway writes the file and the journal of the same club with that position on the
+    /// club's call, byte for byte, and its QSO line is the position's own line, under the
+    /// club's call. Run over every contest the club log runs but ARRL Field Day.
+    #[test]
+    fn no_other_contests_club_file_or_journal_carries_the_call_a_position_joined_on() {
+        // (contest, the host's session, the exchange the station worked sent)
+        let cases = vec![
+            (
+                "wfd",
+                ContestSession::field_day(FdEvent::WinterFd, "3O", "WI"),
+                vec![("CLASS", "2O"), ("SECTION", "CT")],
+            ),
+            (
+                "ilqp",
+                party_session("ilqp", "IL", "MCLN"),
+                vec![("RST", "599"), ("QTH", "COOK")],
+            ),
+            (
+                "tnqp",
+                party_session("tnqp", "TN", "ANDE"),
+                vec![("RST", "599"), ("QTH", "BEDF")],
+            ),
+            (
+                "ohqp",
+                party_session("ohqp", "OH", "ADAM"),
+                vec![("RST", "599"), ("QTH", "ALLE")],
+            ),
+            (
+                "txqp",
+                party_session("txqp", "TX", "ANDE"),
+                vec![("RST", "599"), ("QTH", "ANDR")],
+            ),
+            (
+                "nyqp",
+                party_session("nyqp", "NY", "ALB"),
+                vec![("RST", "599"), ("QTH", "BRX")],
+            ),
+            (
+                "arrlvhf_jan",
+                party_session("arrlvhf_jan", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+            (
+                "arrlvhf_jun",
+                party_session("arrlvhf_jun", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+            (
+                "arrlvhf_sep",
+                party_session("arrlvhf_sep", "", ""),
+                vec![("GRID", "FN31")],
+            ),
+        ];
+        for (event, session, fields) in &cases {
+            let rs = party(event);
+            let dir = scratch(&format!("call-{event}"));
+            let fields: Vec<(String, String)> = fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let mut own = FieldDayLog::new("W9XYZ", session.clone(), "20m");
+            assert!(
+                own.log_fields_at("K9AAA", &fields, "CW", "", 0, ILQP_START),
+                "{event}: fixture contact refused"
+            );
+            let q = &own.qsos()[0];
+            // The outbox's own row shape (`Engine::fd_sync_outbox`).
+            let row = WireQso {
+                pos: "aaaa0001".into(),
+                seq: q.seq,
+                call: q.call.clone(),
+                class: q.class().to_string(),
+                sect: q.section().to_string(),
+                ex: to_wire_fields(&q.rx),
+                mex: to_wire_fields(&q.tx),
+                band: q.band.clone(),
+                mode: q.mode.clone(),
+                sub: q.submode.clone(),
+                when: q.when_unix,
+                op: String::new(),
+                sat: String::new(),
+                sat_fm: false,
+            };
+            let joined_on = |call: &str| {
+                let journal = dir.join(format!("{call}.jsonl"));
+                let mut club = ClubLog::for_ruleset(rs, "TEST");
+                club.attach_journal_since(&journal, 0).unwrap();
+                club.join("aaaa0001", "", call, 1);
+                club.merge(&row, 1);
+                let cab = club
+                    .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
+                    .unwrap();
+                (cab, std::fs::read_to_string(&journal).unwrap())
+            };
+            let (cab, journal) = joined_on("K9GOT");
+            let (club_cab, club_journal) = joined_on("W9XYZ");
+            assert_eq!(cab, club_cab, "{event}: the club's file");
+            assert_eq!(journal, club_journal, "{event}: the club's journal");
+            assert_eq!(
+                qso_lines(&cab),
+                qso_lines(&own.cabrillo(0).unwrap()),
+                "{event}: the position's own line"
+            );
+            assert!(
+                qso_lines(&cab)[0].contains(" W9XYZ ") && !cab.contains("K9GOT"),
+                "{event}: {cab}"
+            );
+            assert!(!journal.contains("K9GOT"), "{event}: {journal}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Every contest the club log runs is above, but ARRL Field Day: a contest added to
+        // the seed must be run here.
+        for event in seeded_events() {
+            if club_refusal(party(&event)).is_none() && event != "arrlfd" {
+                assert!(
+                    cases.iter().any(|(e, _, _)| *e == event),
+                    "{event} is run by the club log and not tested here"
+                );
+            }
+        }
+    }
+
+    // ---- nothing a peer sends can open a line of the club's files -------------------
+
+    /// The ways a string off the network could open a line of a club file, or break what shows
+    /// it, each behind a value that would otherwise pass: a line feed and a carriage return
+    /// before a QSO line of its own, a control character, ADIF's record end, Cabrillo's last
+    /// line as a word, an invisible character (the value reads as itself and is not), and a
+    /// value longer than any a club's file holds (Remote takes no string past 1024 bytes).
+    fn breakers(value: &str) -> Vec<(&'static str, String)> {
+        let line = "QSO: 7000 CW 2026-06-27 1702 W9XYZ 3A WI K1FAK 1A CT";
+        vec![
+            ("LF", format!("{value}\n{line}")),
+            ("CR", format!("{value}\r{line}")),
+            ("control", format!("{value}\u{1b}")),
+            ("ADIF token", format!("{value}<EOR><CALL:5>K1FAK<EOR>")),
+            ("Cabrillo token", format!("{value} END-OF-LOG:")),
+            ("outside ASCII", format!("{value}\u{200B}")),
+            ("too long", format!("{value}{}", "9".repeat(2048))),
+        ]
+    }
+
+    /// The shape of a club's two files: each Cabrillo line's tag, how many record ends each
+    /// line of the ADIF's records holds, and how many characters either file holds that end or
+    /// garble a line (a control character but the line end, a line or paragraph separator).
+    fn shape(cab: &str, adif: &str) -> (Vec<String>, Vec<usize>, usize) {
+        let tags = cab
+            .lines()
+            .map(|l| l.split(':').next().unwrap_or("").to_string())
+            .collect();
+        let records = adif
+            .lines()
+            .skip_while(|l| !l.starts_with("<EOH>"))
+            .skip(1)
+            .map(|l| l.matches("<EOR>").count())
+            .collect();
+        let stray = cab
+            .chars()
+            .chain(adif.chars())
+            .filter(|c| (c.is_control() && *c != '\n') || matches!(c, '\u{2028}' | '\u{2029}'))
+            .count();
+        (tags, records, stray)
+    }
+
+    /// ⭐ **A position whose Callsign on the air is not a call sign is turned away by name, at
+    /// every club** — ARRL Field Day too, where a position on any CALL SIGN joins (its GOTA
+    /// station must use one of its own), so a JOIN's call reached the club's file there
+    /// unchecked. CONTROLS: ARRL Field Day still serves a call sign of its own, as typed or
+    /// not; every club serves the club's own call and a position that names none; and
+    /// elsewhere a call sign that is not the club's is refused as before, naming both.
+    #[test]
+    fn a_position_whose_call_is_not_a_call_sign_is_refused_by_name_at_every_club() {
+        let mut wrong = Vec::new();
+        for event in ["arrlfd", "wfd", "ilqp"] {
+            let club = ClubLog::for_ruleset(party(event), "TEST");
+            let odd = [
+                ("a space", "K9 GOT".to_string()),
+                ("no digit", "GOTA".to_string()),
+                ("16 characters", "VP2E/K9GOTABCD/P".to_string()),
+            ];
+            for (how, call) in breakers("K9GOT").into_iter().chain(odd) {
+                let got = club.call_refusal("W9XYZ", &call);
+                if got.as_deref() != Some(NOT_A_CALL_SIGN) {
+                    wrong.push(format!("{event}, {how}: {got:?}"));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "served, or refused for something else:\n{}",
+            wrong.join("\n")
+        );
+        let fd = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        for call in ["K9GOT", " k9got ", "VP2E/K9GOT/P", "W9XYZ", ""] {
+            assert_eq!(fd.call_refusal("W9XYZ", call), None, "arrlfd {call:?}");
+        }
+        for event in ["wfd", "ilqp"] {
+            let club = ClubLog::for_ruleset(party(event), "TEST");
+            for call in ["W9XYZ", " w9xyz ", ""] {
+                assert_eq!(club.call_refusal("W9XYZ", call), None, "{event} {call:?}");
+            }
+            assert_eq!(
+                club.call_refusal("W9XYZ", " k9got "),
+                Some(call_mismatch(&club.contest_id, "W9XYZ", "K9GOT")),
+                "{event}"
+            );
+        }
+    }
+
+    /// ⭐ **The call a row is stamped with is the one its position's JOIN was let in on**,
+    /// normalised exactly as the gate reads it, and nothing else: never a call that is not a
+    /// call sign (the engine turns that JOIN away, and one that reaches the log anyway keeps
+    /// no call), and never an EARLIER join's call when the latest named none. CONTROL: a call
+    /// sign is stamped as the gate read it and written as the call sent.
+    #[test]
+    fn the_call_a_row_is_stamped_with_is_the_one_its_join_was_let_in_on() {
+        let session = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let file = |club: &ClubLog| {
+            club.export_cabrillo_with("W9XYZ", session(), &CabrilloEntrant::default())
+                .unwrap()
+        };
+        let row = with_sent(
+            wq("cccc0003", 1, "K1ABC", "40m", "CW", "EMA", FD_START + 60),
+            ("3A", "WI"),
+        );
+        let clubs_line = "QSO: 7000 CW 2026-06-27 1701 W9XYZ 3A WI K1ABC 2A EMA";
+        let mut stamped = Vec::new();
+        for (how, call) in breakers("K9GOT") {
+            let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+            club.join("cccc0003", "GOTA", &call, 1);
+            club.merge(&row, 1);
+            let cab = file(&club);
+            let kept = &club.positions()["cccc0003"].call;
+            if !kept.is_empty()
+                || !club.rows()[0].station_call.is_empty()
+                || qso_lines(&cab) != [clubs_line]
+            {
+                stamped.push(format!(
+                    "{how}: kept {kept:?}, stamped {:?}",
+                    club.rows()[0].station_call
+                ));
+            }
+        }
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        club.join("cccc0003", "GOTA", "K9GOT", 1);
+        club.join("cccc0003", "GOTA", "", 2);
+        club.merge(&row, 2);
+        if !club.rows()[0].station_call.is_empty() {
+            stamped.push(format!(
+                "a rejoin naming no call: stamped {:?}",
+                club.rows()[0].station_call
+            ));
+        }
+        assert!(stamped.is_empty(), "{}", stamped.join("\n"));
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        club.join("cccc0003", "GOTA", " k9got ", 1);
+        club.merge(&row, 1);
+        assert_eq!(club.rows()[0].station_call, "K9GOT");
+        assert_eq!(
+            qso_lines(&file(&club)),
+            ["QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI K1ABC 2A EMA"]
+        );
+    }
+
+    /// ⭐ **A contact carrying what no line of the club's file can hold is kept out of the
+    /// club's log, and the host's screen names it** — at the boundary where a peer's row
+    /// enters the club log, before anything is keyed, journaled or written. Every string a
+    /// row carries, in an ARRL Field Day club (QSO lines), a Winter Field Day club (its
+    /// `X-EXCHANGE` and `OPERATORS` headers come off the rows) and an Illinois QSO Party club
+    /// (`OPERATORS` straight off the rows).
+    ///
+    /// Kept out, the club's files are the bytes of the club that never received it, the ack
+    /// does not move, and the host's list of kept-out contacts names the position. The one
+    /// string that is let in is Cabrillo's last line as a WORD inside a free-text value: it
+    /// opens no line, so it is merged and every line is still the one the writer opened (a
+    /// call is a call sign, so there it is kept out like the rest).
+    #[test]
+    fn a_contact_that_could_open_a_line_of_the_club_file_is_kept_out_by_name() {
+        let wfd = |q: WireQso| WireQso {
+            ex: fd_fields(FdEvent::WinterFd, "2O", &q.sect.clone()),
+            mex: fd_fields(FdEvent::WinterFd, "3O", "WI"),
+            ..q
+        };
+        let fd = |q: WireQso| with_sent(q, ("3A", "WI"));
+        // (contest, the host's session, the club's own contact, the peer's contact)
+        let clubs: Vec<(&str, ContestSession, WireQso, WireQso)> = vec![
+            (
+                "arrlfd",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                fd(wq("aaaa0001", 1, "W1AW", "20m", "PH", "CT", FD_START)),
+                fd(wq(
+                    "bbbb0002",
+                    1,
+                    "K1ABC",
+                    "40m",
+                    "CW",
+                    "EMA",
+                    FD_START + 60,
+                )),
+            ),
+            (
+                "wfd",
+                ContestSession::field_day(FdEvent::WinterFd, "3O", "WI"),
+                wfd(wq("aaaa0001", 1, "W1AW", "20m", "PH", "CT", FD_START)),
+                wfd(wq(
+                    "bbbb0002",
+                    1,
+                    "K1ABC",
+                    "40m",
+                    "CW",
+                    "EMA",
+                    FD_START + 60,
+                )),
+            ),
+            (
+                "ilqp",
+                party_session("ilqp", "IL", "MCLN"),
+                ilqp_row(
+                    "aaaa0001", 1, "W1AW", "40m", "CW", "", "COOK", "MCLN", ILQP_START,
+                ),
+                ilqp_row(
+                    "bbbb0002",
+                    1,
+                    "K1ABC",
+                    "20m",
+                    "CW",
+                    "",
+                    "WILL",
+                    "MCLN",
+                    ILQP_START + 60,
+                ),
+            ),
+        ];
+        type Field = fn(&mut WireQso) -> &mut String;
+        let fields: [(&str, Field); 12] = [
+            ("call", |q| &mut q.call),
+            ("copied value", |q| &mut q.ex[0].r),
+            ("copied slot", |q| &mut q.ex[0].k),
+            ("copied domain", |q| &mut q.ex[0].d),
+            ("sent value", |q| &mut q.mex[0].r),
+            ("legacy class", |q| {
+                q.ex.clear();
+                &mut q.class
+            }),
+            ("legacy section", |q| {
+                q.ex.clear();
+                &mut q.sect
+            }),
+            ("band", |q| &mut q.band),
+            ("mode", |q| &mut q.mode),
+            // A digital contact, so the value a breaker rides behind is a real one.
+            ("submode", |q| {
+                q.mode = "DIG".into();
+                q.sub = "RTTY".into();
+                &mut q.sub
+            }),
+            ("operator", |q| &mut q.op),
+            // A contact through a bird on both sides of the comparison, so a contest that
+            // gives a satellite no credit leaves it out of both files alike.
+            ("satellite", |q| {
+                q.sat = "AO-91".into();
+                &mut q.sat
+            }),
+        ];
+        let entrant = CabrilloEntrant {
+            operators: "W9OP1".into(),
+            ..Default::default()
+        };
+        let mut wrong = Vec::new();
+        for (event, session, own, theirs) in &clubs {
+            let fresh = || {
+                let mut club = ClubLog::for_ruleset(party(event), "TEST");
+                club.join("aaaa0001", "HQ", "W9XYZ", 1);
+                club.join("bbbb0002", "CW tent", "W9XYZ", 1);
+                club.merge(own, 1);
+                club
+            };
+            let files = |club: &ClubLog| {
+                club.export_cabrillo_with("W9XYZ", session.clone(), &entrant)
+                    .map(|cab| (cab, club.export_adif_with("W9XYZ", session.clone())))
+            };
+            let without = files(&fresh()).expect("the club's own contact exports");
+            for (field, at) in fields {
+                let mut clean = theirs.clone();
+                let base = at(&mut clean).clone();
+                let mut kept = fresh();
+                kept.merge(&clean, 2);
+                let clean_files = files(&kept);
+                for (how, bad) in breakers(&base) {
+                    let mut q = theirs.clone();
+                    *at(&mut q) = bad;
+                    let mut club = fresh();
+                    let ack = club.merge(&q, 2);
+                    let merged = club.rows().len() == 2;
+                    let case = format!("{event}, {field}, {how}");
+                    let opens = merged
+                        && match (files(&club), &clean_files) {
+                            (Ok((cab, adif)), Ok((c, a))) => shape(&cab, &adif) != shape(c, a),
+                            _ => false,
+                        };
+                    if how == "Cabrillo token" && field != "call" {
+                        if !merged || opens {
+                            wrong.push(format!("{case}: merged {merged}, opens a line {opens}"));
+                        }
+                        continue;
+                    }
+                    let named = club.kept_out().iter().any(|k| {
+                        k.label == "CW tent"
+                            && k.call == "W9XYZ"
+                            && k.reason.contains("is not in the club's log")
+                    });
+                    if merged || ack != 0 || files(&club).ok() != Some(without.clone()) || !named {
+                        wrong.push(format!(
+                            "{case}: merged {merged}{}, acked {ack}, named {named}",
+                            if opens { ", OPENS A LINE" } else { "" }
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} cases:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// The host's journal holds each row on its own line whatever the row's strings hold: JSON
+    /// writes a line feed, a carriage return and every other control character escaped, and
+    /// the replay reads back the very row. Not a way in, so the boundary above is the only
+    /// guard the journal needs; pinned so it stays that way.
+    #[test]
+    fn the_journal_keeps_every_row_on_its_own_line_whatever_its_strings_hold() {
+        let dir = scratch("journal-breakers");
+        let path = dir.join("fd_event_breakers.jsonl");
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        club.attach_journal_since(&path, 0).unwrap();
+        let mut row = MergedRow::from_wire(&with_sent(
+            wq("aaaa0001", 1, "K1ABC", "40m", "CW", "EMA", FD_START),
+            ("3A", "WI"),
+        ));
+        let tail = "\n\r\u{1b}\u{2028}<EOR> END-OF-LOG:";
+        for s in [
+            &mut row.call,
+            &mut row.band,
+            &mut row.operator,
+            &mut row.station_call,
+            &mut row.ex[0].r,
+            &mut row.mex[1].r,
+        ] {
+            s.push_str(tail);
+        }
+        assert!(club.merge_row(row.clone(), 1));
+        let journal = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(journal.lines().count(), 1, "{journal}");
+        let mut replayed = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        replayed.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(replayed.rows(), club.rows());
+        assert_eq!(replayed.rows()[0], row);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- one reading of every peer string, wherever it is read -----------------------
+
+    /// Calls that a reader that is not ASCII-only reads as the call they imitate, and none is
+    /// it: `(how, the club's call, the call as sent, how the host's list must show it)`. The
+    /// fold is the one `to_uppercase` makes and an ASCII compare does not (`ß` → `SS`).
+    fn lookalikes() -> Vec<(&'static str, &'static str, String, &'static str)> {
+        vec![
+            ("full-width", "W9XYZ", "Ｗ９ＸＹＺ".into(), "?????"),
+            ("Cyrillic", "W9XYZ", "W9\u{425}YZ".into(), "W9?YZ"),
+            ("zero-width", "W9XYZ", "W9X\u{200B}YZ".into(), "W9X?YZ"),
+            ("byte-order mark", "W9XYZ", "\u{FEFF}W9XYZ".into(), "?W9XYZ"),
+            ("case fold", "W9ASS", "w9aß".into(), "W9A?"),
+            ("NUL", "W9XYZ", "W9XYZ\0".into(), "W9XYZ?"),
+            (
+                "ideographic space",
+                "W9XYZ",
+                "\u{3000}W9XYZ".into(),
+                "?W9XYZ",
+            ),
+            ("no-break space", "W9XYZ", "W9XYZ\u{A0}".into(), "W9XYZ?"),
+        ]
+    }
+
+    /// ⭐ **A call is read ONE way: at the gate, in the stamp, at the merge and on the host's
+    /// list.** ASCII only, a call sign's characters only, so no call compares equal at the gate
+    /// and prints as something else, or prints as the club's own call while the gate refused it.
+    /// Each lookalike is refused by name at every club, stamps nothing, is kept out as a row's
+    /// call, and shows on the host's list with a `?` where the gate saw a character that is not
+    /// a call sign's. CONTROLS: ASCII spacing around a call (a tab, a line end) is read away the
+    /// same way everywhere.
+    #[test]
+    fn a_call_reads_one_way_at_the_gate_the_stamp_the_merge_and_the_hosts_list() {
+        let mut wrong = Vec::new();
+        for (how, club_call, call, shown) in lookalikes() {
+            for event in ["arrlfd", "wfd", "ilqp"] {
+                let got = ClubLog::for_ruleset(party(event), "TEST").call_refusal(club_call, &call);
+                if got.as_deref() != Some(NOT_A_CALL_SIGN) {
+                    wrong.push(format!("{how}, {event} gate: {got:?}"));
+                }
+            }
+            let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+            club.join("cccc0003", "GOTA", &call, 1);
+            let stamped = club.positions()["cccc0003"].call.clone();
+            if !stamped.is_empty() {
+                wrong.push(format!("{how}, stamp: {stamped:?}"));
+            }
+            let mut row = with_sent(
+                wq("bbbb0002", 1, "K1ABC", "40m", "CW", "EMA", FD_START),
+                ("3A", "WI"),
+            );
+            row.call = call.clone();
+            club.merge(&row, 2);
+            if !club.rows().is_empty() {
+                wrong.push(format!("{how}, merge: {:?}", club.rows()[0].call));
+            }
+            club.note_refused("dddd0004", "TENT", &call, NOT_A_CALL_SIGN, 3);
+            let listed = club
+                .refused(3)
+                .iter()
+                .map(|r| r.call.clone())
+                .collect::<Vec<_>>();
+            if !listed.contains(&shown.to_string()) {
+                wrong.push(format!("{how}, the host's list: {listed:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        club.join("cccc0003", "GOTA", "\r\n k9got\t", 1);
+        assert_eq!(club.positions()["cccc0003"].call, "K9GOT");
+        assert_eq!(club.call_refusal(" w9xyz\t", "W9XYZ\n"), None);
+        club.note_refused("dddd0004", "TENT", " k9abc\t", "refused", 3);
+        assert!(club.refused(3).iter().any(|r| r.call == "K9ABC"));
+    }
+
+    /// ⭐ **A journal round trip gives back every value as the boundary read it** — the stamp,
+    /// the row's call and its operator, all normalised before anything is journaled, so a
+    /// restarted host reads exactly what the running one did and writes the same file.
+    #[test]
+    fn a_journal_round_trip_gives_back_every_value_as_the_boundary_read_it() {
+        let dir = scratch("journal-normalised");
+        let path = dir.join("fd_event_normalised.jsonl");
+        let session = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let file = |club: &ClubLog| {
+            club.export_cabrillo_with("W9XYZ", session(), &CabrilloEntrant::default())
+                .unwrap()
+        };
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        club.join("cccc0003", "GOTA", " k9got\t", 1);
+        let mut row = with_sent(
+            wq("cccc0003", 1, "W9ABC", "40m", "CW", "EMA", FD_START + 60),
+            ("3A", "WI"),
+        );
+        row.call = "\t w9abc \r\n".into();
+        row.op = " w9op ".into();
+        club.merge(&row, 1);
+        let read = |c: &ClubLog| {
+            let r = &c.rows()[0];
+            (r.call.clone(), r.station_call.clone(), r.operator.clone())
+        };
+        assert_eq!(read(&club), ("W9ABC".into(), "K9GOT".into(), "W9OP".into()));
+        let mut replayed = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        replayed.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(replayed.rows(), club.rows(), "the very rows come back");
+        assert_eq!(file(&replayed), file(&club));
+        assert_eq!(
+            qso_lines(&file(&club)),
+            ["QSO: 7000 CW 2026-06-27 1701 K9GOT 3A WI W9ABC 2A EMA"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Does `s` hold nothing that could break a line or change what it reads as: no control
+    /// character, no line or paragraph separator, no invisible or direction-changing character.
+    fn plain(s: &str) -> bool {
+        !s.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '\u{2028}' | '\u{2029}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+                        | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+                )
+        })
+    }
+
+    /// ⭐ **What the host shows and sends back is one line of plain text** — the name and the
+    /// call on its list of turned-away positions (its screen and the hosted Remote page), and
+    /// the contest or exchange role a refusal sentence repeats (sent back to that position,
+    /// whose screen shows it). Each came off the network; a character that cannot be shown is
+    /// a `?`, so the text still says where it was. CONTROL: an ordinary name and a known
+    /// contest read as they always did.
+    #[test]
+    fn what_the_host_shows_and_sends_back_is_one_line_of_plain_text() {
+        let tail = "\nTurned away HQ (W9XYZ).\r\u{1b}\u{202E}\u{200B}";
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        club.note_refused(
+            "aaaa0001",
+            &format!("SSB tent{tail}"),
+            &format!("K9GOT{tail}"),
+            "refused",
+            1,
+        );
+        let listed = club.refused(1)[0].clone();
+        let contest = club
+            .join_refusal(tempo_net::fdsync::PROTO_VERSION, &format!("ilqp{tail}"))
+            .unwrap_or_default();
+        let role = role_mismatch("IL QSO Party", "in_state", &format!("dx{tail}"));
+        let shown = [
+            ("label", listed.label.as_str()),
+            ("call", listed.call.as_str()),
+            ("contest sentence", contest.as_str()),
+            ("role sentence", role.as_str()),
+        ];
+        let wrong: Vec<String> = shown
+            .iter()
+            .filter(|(_, s)| !plain(s))
+            .map(|(what, s)| format!("{what}: {s:?}"))
+            .collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        assert_eq!(listed.label, "SSB tent?Turned away HQ (W9XYZ).????");
+        assert_eq!(listed.call, "K9GOT?TURNED?AWAY?HQ??W9XYZ??????");
+        assert!(
+            contest.contains("logging ilqp?Turned?away?HQ??W9XYZ"),
+            "{contest}"
+        );
+        assert!(role.contains("the \"dx?Turned?away?HQ??W9XYZ"), "{role}");
+        club.note_refused("bbbb0002", "Zelt Süd", "K9ABC", "refused", 1);
+        assert!(club.refused(1).iter().any(|r| r.label == "Zelt Süd"));
+        assert!(contest_mismatch("ARRL-FIELD-DAY", "ilqp").contains("logging IL QSO Party"));
+    }
+
+    /// ⭐ **A position's report reaches the board as the club reads it.** The board goes to
+    /// every position, the host's TV and the hosted Remote page. A name keeps its letters, in
+    /// any script, and shows anything invisible or line-breaking as a `?`; a band, a mode and
+    /// an operator are ASCII, upper-cased the ASCII way (the club's file's: `ß` is not `SS`
+    /// there), and one holding anything else, or longer than any club file's value, reads as
+    /// nothing. CONTROLS: the club line that
+    /// carries the board was never at risk (the wire is JSON), and an ordinary report reads as
+    /// it always did.
+    #[test]
+    fn a_positions_report_reaches_the_board_as_the_club_reads_it() {
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST");
+        club.join("aaaa0001", "HQ", "W9XYZ", 1);
+        club.join("bbbb0002", "CW tent", "W9XYZ", 1);
+        club.position_status(
+            "aaaa0001",
+            &report("Zelt Süd\n\u{202E}x", "20m\u{1b}", "cw\u{200B}", "straße"),
+            2,
+        );
+        club.position_status("bbbb0002", &report("CW tent", "40m", "cw", "w9op"), 2);
+        // Longer than Remote takes (1024 bytes): a whole view blanked, by one presence report.
+        let long = "9".repeat(2048);
+        club.join("cccc0003", "VHF tent", "W9XYZ", 1);
+        club.position_status("cccc0003", &report("VHF tent", &long, &long, &long), 2);
+        let line = tempo_net::fdsync::encode_line(&tempo_net::fdsync::Msg::Club(
+            club.club_state(0, 0, 0, 2),
+        ));
+        assert_eq!(line.matches('\n').count(), 1, "{line}");
+        let board: Vec<(String, String, String, String)> = club
+            .board_rows(2)
+            .into_iter()
+            .map(|r| (r.name, r.band, r.mode, r.op))
+            .collect();
+        let row = |n: &str, b: &str, m: &str, o: &str| {
+            (n.to_string(), b.to_string(), m.to_string(), o.to_string())
+        };
+        assert_eq!(
+            board,
+            [
+                row("Zelt Süd??x", "", "", ""),
+                row("CW tent", "40m", "CW", "W9OP"),
+                row("VHF tent", "", "", "")
+            ]
+        );
+        assert!(inert(&"9".repeat(MAX_VALUE_CHARS)) && !inert(&"9".repeat(MAX_VALUE_CHARS + 1)));
+    }
+
+    // ---- a position is taken only from the laptop that first joined as it --------------
+
+    /// A key hash for one test: generated (a per-run seed through the operating system's
+    /// hasher), so no test holds a real one, and the same `tag` the same hash all run.
+    fn throwaway_hash(tag: &str) -> String {
+        use std::hash::BuildHasher;
+        static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+        let seed = SEED.get_or_init(std::hash::RandomState::new);
+        (0..4u8)
+            .map(|i| format!("{:016x}", seed.hash_one((tag, i))))
+            .collect()
+    }
+
+    /// ⭐ **A position is held by the key it first joined with, across a host restart, and
+    /// the journal holds that key's hash and nothing more.** The first JOIN served under a
+    /// position id pins its key hash; a later JOIN under the id with another is turned away by
+    /// name, and one with none is turned away too. A pinned position keeps its pin. The pin is
+    /// one journal line, so a restarted host holds it; a previous event's pin pins nothing
+    /// (the same cutoff as its rows), and an older Nexus's replay reads no pin line as a row.
+    /// CONTROLS: the laptop that pinned a position rejoins, and another position pins its own.
+    #[test]
+    fn a_position_is_held_by_the_key_it_first_joined_with_across_a_restart() {
+        let dir = scratch("pins");
+        let path = dir.join("fd_event_pins.jsonl");
+        let (mine, other) = (
+            throwaway_hash("this laptop"),
+            throwaway_hash("another laptop"),
+        );
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            club.key_refusal("aaaa0001", &mine),
+            None,
+            "nobody holds it yet"
+        );
+        club.pin("aaaa0001", &mine, 1_000);
+        let held = Some(POSITION_HELD.to_string());
+        assert_eq!(
+            club.key_refusal("aaaa0001", &mine),
+            None,
+            "CONTROL: the laptop itself"
+        );
+        assert_eq!(club.key_refusal("aaaa0001", &other), held, "another laptop");
+        assert_eq!(
+            club.key_refusal("aaaa0001", ""),
+            Some(NO_POSITION_KEY.to_string())
+        );
+        assert_eq!(
+            club.key_refusal("bbbb0002", &other),
+            None,
+            "CONTROL: its own position"
+        );
+        club.pin("aaaa0001", &other, 1_001);
+        assert_eq!(
+            club.pinned("aaaa0001"),
+            Some(mine.as_str()),
+            "a pin is kept"
+        );
+
+        let journal = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            journal,
+            format!("{{\"pin\":{{\"pos\":\"aaaa0001\",\"key_hash\":\"{mine}\",\"at\":1000}}}}\n")
+        );
+        assert!(
+            serde_json::from_str::<MergedRow>(journal.trim_end()).is_err(),
+            "an older Nexus's replay skips the line rather than read a row from it"
+        );
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(restarted.pinned("aaaa0001"), Some(mine.as_str()));
+        assert_eq!(restarted.key_refusal("aaaa0001", &other), held);
+        assert!(restarted.rows().is_empty(), "a pin is no contact");
+        let mut next_event = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        next_event.attach_journal_since(&path, 1_001).unwrap();
+        assert_eq!(
+            next_event.pinned("aaaa0001"),
+            None,
+            "a previous event's pin"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- the host's lasting list of contacts kept out of the club's log ----------------
+
+    /// ⭐ **A contact kept out of the club's log stays on the host's list until the event
+    /// ends**: past the minute a turned-away JOIN is shown, past its position's next JOIN, and
+    /// through a host restart (the journal), one entry per contact however often it is sent
+    /// again, oldest first. A previous event's are not listed, an older Nexus's replay reads
+    /// none as a row, and one a later row merged under the same id is in the log after all.
+    /// CONTROLS: a contact the club takes is not listed, and the turned-away list, which is
+    /// for JOINs, names no contact.
+    #[test]
+    fn a_kept_out_contact_stays_listed_until_the_event_ends() {
+        let dir = scratch("kept-out");
+        let path = dir.join("fd_event_kept.jsonl");
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        club.join("bbbb0002", "CW tent", "W9XYZ", 1_000);
+        let row = |seq: u64, call: &str, band: &str| {
+            with_sent(
+                wq(
+                    "bbbb0002",
+                    seq,
+                    call,
+                    band,
+                    "CW",
+                    "EMA",
+                    FD_START + seq * 60,
+                ),
+                ("3A", "WI"),
+            )
+        };
+        club.merge(&row(1, "K1ABC", "40m"), 1_000);
+        club.merge(&row(2, "W1AW", "40m\u{200B}"), 1_001);
+        club.merge(&row(2, "W1AW", "40m\u{200B}"), 1_002);
+        club.merge(&row(3, "K1F\nAKE", "20m"), 1_003);
+        let listed = |c: &ClubLog| {
+            c.kept_out()
+                .iter()
+                .map(|k| (k.seq, k.label.clone(), k.call.clone()))
+                .collect::<Vec<_>>()
+        };
+        let want = vec![
+            (2, "CW tent".to_string(), "W9XYZ".to_string()),
+            (3, "CW tent".to_string(), "W9XYZ".to_string()),
+        ];
+        assert_eq!(
+            listed(&club),
+            want,
+            "once each, oldest first, sent again or not"
+        );
+        let reason = &club.kept_out()[0].reason;
+        assert!(
+            reason.contains("its contact with W1AW is not in the club's log: its band"),
+            "{reason}"
+        );
+        club.join("bbbb0002", "CW tent", "W9XYZ", 1_100);
+        assert_eq!(
+            listed(&club),
+            want,
+            "a minute on, and after its position rejoined"
+        );
+        assert!(
+            club.refused(1_100).is_empty(),
+            "the turned-away list names no contact"
+        );
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(listed(&restarted), want, "after a host restart");
+        assert_eq!(
+            restarted.rows().len(),
+            1,
+            "CONTROL: the contact the club took"
+        );
+        let journal = std::fs::read_to_string(&path).unwrap();
+        let notes: Vec<&str> = journal
+            .lines()
+            .filter(|l| l.starts_with("{\"kept_out\""))
+            .collect();
+        assert_eq!(notes.len(), 2, "{journal}");
+        assert!(
+            notes
+                .iter()
+                .all(|l| serde_json::from_str::<MergedRow>(l).is_err()),
+            "an older Nexus's replay skips them"
+        );
+        restarted.merge(&row(2, "W1AW", "40m"), 1_200);
+        assert_eq!(
+            listed(&restarted),
+            want[1..],
+            "merged after all: in the log"
+        );
+        let mut next_event = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        next_event.attach_journal_since(&path, 1_004).unwrap();
+        assert!(next_event.kept_out().is_empty(), "a previous event's");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -11,11 +11,16 @@
 //! Data-plane discipline: these impls can only call the engine's `fd_club_*`
 //! / `fd_sync_*` / `fd_mirror_*` seam — rows and club state. Nothing here
 //! (and nothing behind the traits) can key TX, touch CAT, or change settings.
+//!
+//! ⛔ **A JOIN's club key stops here.** The host role hashes it with the function it was
+//! built with and hands the engine only the hash, so the engine and the club log hold no
+//! position's key but this station's own. The function is the shell's SHA-256 (this crate
+//! has no hash of its own to give it); a test gives it a throwaway one.
 
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
 use tempo_net::fdsync::{
-    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionSync, WireQso,
+    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionKey, PositionSync, WireQso,
 };
 
 fn now_unix() -> u64 {
@@ -25,8 +30,9 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// The host role: `fdsync::serve_until`'s backend over the shared engine.
-pub struct EngineClubBackend(pub Arc<Mutex<Engine>>);
+/// The host role: `fdsync::serve_until`'s backend over the shared engine, and the hash it pins
+/// club keys by (`key_hash(secret)` → lower-case hex: the shell's SHA-256).
+pub struct EngineClubBackend(pub Arc<Mutex<Engine>>, pub fn(&str) -> String);
 
 impl ClubBackend for EngineClubBackend {
     fn join(
@@ -38,8 +44,16 @@ impl ClubBackend for EngineClubBackend {
         _max_seq: u64,
         contest: &str,
         role: &str,
+        key: &PositionKey,
     ) -> Result<JoinAccept, String> {
-        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest, role)
+        // Hashed before the engine lock is taken, and only a key a Nexus makes: anything else
+        // is no key at all (`fdevent::NO_POSITION_KEY`).
+        let key_hash = if key.is_club_key() {
+            (self.1)(key.secret())
+        } else {
+            String::new()
+        };
+        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest, role, &key_hash)
     }
 
     fn merge(&self, row: &WireQso) -> u64 {
@@ -71,6 +85,10 @@ pub struct EnginePositionSync(pub Arc<Mutex<Engine>>);
 impl PositionSync for EnginePositionSync {
     fn identity(&self) -> (String, String, String, u64) {
         engine_lock(&self.0).fd_sync_identity()
+    }
+
+    fn key(&self) -> PositionKey {
+        engine_lock(&self.0).fd_position_key()
     }
 
     fn contest(&self) -> String {

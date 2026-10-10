@@ -22,6 +22,28 @@ use tempo_net::fdsync::{self, ClubBackend, PositionSync};
 
 type Shared = Arc<Mutex<Engine>>;
 
+/// 64 hex digits for `tag`, generated (a per-run seed through the operating system's hasher):
+/// the same all through one run, and never a real key or hash.
+fn throwaway_hex(tag: &str) -> String {
+    use std::hash::BuildHasher;
+    static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+    let seed = SEED.get_or_init(std::hash::RandomState::new);
+    (0..4u8)
+        .map(|i| format!("{:016x}", seed.hash_one((tag, i))))
+        .collect()
+}
+
+/// The club key a position `posid` sends this run: the same through its restarts, as a
+/// laptop's own key is (the shell keeps it beside settings.json).
+fn club_key(posid: &str) -> fdsync::PositionKey {
+    fdsync::PositionKey::new(throwaway_hex(posid))
+}
+
+/// The host bridge's key hash for this run, where the shell gives it SHA-256.
+fn test_hash(secret: &str) -> String {
+    throwaway_hex(&format!("hash of {secret}"))
+}
+
 /// An Illinois QSO Party position at an Illinois county: master on, the party picked,
 /// S&P, a position id and a name, pointed at the club.
 fn party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
@@ -42,6 +64,7 @@ fn party_engine_on(call: &str, posid: &str, name: &str, join_addr: &str) -> Shar
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter the party");
+    e.set_fd_position_key(club_key(posid));
     Arc::new(Mutex::new(e))
 }
 
@@ -56,6 +79,7 @@ fn field_day_engine(posid: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter Field Day");
+    e.set_fd_position_key(club_key(posid));
     Arc::new(Mutex::new(e))
 }
 
@@ -77,7 +101,7 @@ fn reusable_listener(port: u16) -> std::net::TcpListener {
 
 fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
-    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone()));
+    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone(), test_hash));
     let sd2 = sd.clone();
     std::thread::spawn(move || fdsync::serve_until(listener, backend, sd2));
     sd
@@ -331,6 +355,7 @@ fn indiana_party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter the party");
+    e.set_fd_position_key(club_key(posid));
     Arc::new(Mutex::new(e))
 }
 

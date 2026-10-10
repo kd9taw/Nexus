@@ -3567,6 +3567,10 @@ export interface FdClubStatus {
   boardFull?: { positions: number; shown: number }
   /** The HOST's alone: positions it turned away, and the sentence each was sent. */
   refused?: { posName: string; call: string; reason: string }[]
+  /** The HOST's alone, for the rest of the event: how many contacts it kept out of the club's
+   *  log, and the newest of them (at most 16), each with the position that sent it (its name
+   *  and call) and the sentence saying why. Each stays in that position's own log. */
+  keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */

@@ -34,6 +34,9 @@
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
+/// This station's club key for Field Day club sync (kept beside settings.json, never logged or
+/// shown), and the SHA-256 a club host pins position keys by.
+mod club_key;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
@@ -5146,6 +5149,15 @@ fn fd_backup_path_for(posid: &str) -> PathBuf {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join(format!("fieldday_backup_{posid}.adi"))
+}
+
+/// This instance's club key (`club_key`), beside settings.json and never in it.
+fn fd_position_key_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("fd_position.key")
 }
 
 /// The club host's append-only event journal (one merged row per NDJSON
@@ -32890,6 +32902,15 @@ fn start_on_the_logbook(
                 eprintln!("tempo: couldn't persist the FD position id: {e}")
             });
         }
+        // The club key that proves this position to a club host: made once and kept beside
+        // settings.json, never in it. The message names the failure, never the key.
+        let (club_key, kept) = club_key::load_or_make(&fd_position_key_path());
+        if let Err(e) = kept {
+            eprintln!(
+                "tempo: couldn't keep the club key, so a host will not know it next run: {e}"
+            );
+        }
+        eng.set_fd_position_key(club_key);
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
         // restart loses nothing. Per-POSITION file (suffixed by posid), with a
@@ -33690,9 +33711,11 @@ fn start_on_the_logbook(
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
-                                let backend: Arc<dyn tempo_net::fdsync::ClubBackend> = Arc::new(
-                                    tempo_app::fdbridge::EngineClubBackend(mgr_engine.clone()),
-                                );
+                                let backend: Arc<dyn tempo_net::fdsync::ClubBackend> =
+                                    Arc::new(tempo_app::fdbridge::EngineClubBackend(
+                                        mgr_engine.clone(),
+                                        club_key::sha256_hex,
+                                    ));
                                 let sd = shutdown.clone();
                                 std::thread::spawn(move || {
                                     tempo_net::fdsync::serve_until(listener, backend, sd)

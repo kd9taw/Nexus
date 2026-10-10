@@ -1224,6 +1224,23 @@ export function FdClubSection({
             : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
         </div>
       ))}
+      {/* The host's alone, for the rest of the event: every contact it kept out of the club's
+          log, how many and the newest of them, each with the position that sent it and why. */}
+      {club.keptOut && (
+        <div style={CLUB_WARN} role="status">
+          <div>{t('fieldDay.club.keptOut.total', { count: club.keptOut.total })}</div>
+          {club.keptOut.latest.map((k, i) => (
+            <div key={i}>
+              {k.posName
+                ? t('fieldDay.club.keptOut.position', { name: k.posName, call: k.call, reason: k.reason })
+                : t('fieldDay.club.keptOut.call', { call: k.call, reason: k.reason })}
+            </div>
+          ))}
+          {club.keptOut.total > club.keptOut.latest.length && (
+            <div>{t('fieldDay.club.keptOut.more', { count: club.keptOut.total - club.keptOut.latest.length })}</div>
+          )}
+        </div>
+      )}
       {/* The host's alone: its board is as big as the club line every position is sent can
           carry — said before one more position might not fit, and once it is cut. */}
       {club.boardFull && (
