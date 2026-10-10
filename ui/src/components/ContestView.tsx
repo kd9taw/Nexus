@@ -1942,6 +1942,12 @@ export function ContestView({
       .catch(() => {})
   }
   const restore = (entry: RemovedContest) => {
+    // Only at the station, as removal is: a press that comes through the Remote stream restores
+    // nothing. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setRemovedNote({ text: t('fieldDay.removed.restore.remote'), alert: true })
+      return
+    }
     const call = entry.rows[0]?.call ?? ''
     contestRestore(entry.id)
       .then(
@@ -1989,6 +1995,13 @@ export function ContestView({
   const [mergeError, setMergeError] = useState<string | null>(null)
   const mergeCount = log.length
   const runMerge = async () => {
+    // Only at the station: a press that comes through the Remote stream writes nothing into the
+    // logbook. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setMergeReport(null)
+      setMergeError(t('fieldDay.merge.remote'))
+      return
+    }
     setMerging(true)
     setMergeError(null)
     try {
@@ -2152,6 +2165,13 @@ export function ContestView({
   // read the score components computed just above.
   const handleExport = async (format: ExportFormat) => {
     if (observed) return
+    // Only at the station: a press that comes through the Remote stream writes no file to the
+    // station's disk, the station log's own or the club's. Read before anything awaits, inside
+    // the stream's dispatch.
+    if (isStreamInput()) {
+      setExportError(format.startsWith('club-') ? t('fieldDay.club.export.remote') : t('fieldDay.export.remote'))
+      return
+    }
     setExportError(null)
     setBusy(format)
     try {
