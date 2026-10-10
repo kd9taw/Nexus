@@ -3565,8 +3565,10 @@ export interface FdClubStatus {
    *  many positions it has, and how many of them each position's board shows (`shown`
    *  below `positions` = already cut to the ones heard from most recently). */
   boardFull?: { positions: number; shown: number }
-  /** The HOST's alone: positions it turned away, and the sentence each was sent. */
-  refused?: { posName: string; call: string; reason: string }[]
+  /** The HOST's alone: laptops it turned away, and the sentence each was sent. `handle` only on
+   *  an entry for a laptop turned away because another laptop holds its position: the number
+   *  the host's Give button sends back (`fdClubGivePosition`), never a key. */
+  refused?: { posName: string; call: string; reason: string; handle?: number }[]
   /** The HOST's alone, for the rest of the event: how many contacts it kept out of the club's
    *  log, and the newest of them (at most 16), each with the position that sent it (its name
    *  and call) and the sentence saying why. Each stays in that position's own log. */

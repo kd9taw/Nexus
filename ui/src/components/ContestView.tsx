@@ -9,7 +9,8 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdClubGivePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdGiveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
@@ -1099,6 +1100,7 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
 export function FdClubSection({
   club,
   onExport,
+  onGivePosition,
   busy = false,
   detached = false,
   readOnly = false,
@@ -1107,6 +1109,10 @@ export function FdClubSection({
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
+  /** The host's own contest screen only: give a club position to the laptop a turned-away
+   *  entry names, by the entry's `handle`. Not passed on Remote, in the pop-out or on a
+   *  position, so no Give button shows there. */
+  onGivePosition?: (handle: number) => Promise<FdGiveAnswer>
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
@@ -1120,6 +1126,31 @@ export function FdClubSection({
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
   const big = detached
+  // What the last Give press did, until the next one.
+  const [giveNote, setGiveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  function give(handle: number, name: string) {
+    // Only at the host: a press that comes through a stream gives no position. Read before
+    // anything awaits, while the stream's dispatch is still the one running.
+    if (isStreamInput()) {
+      setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
+      return
+    }
+    onGivePosition?.(handle).then(
+      (answer) =>
+        setGiveNote(
+          answer.outcome === 'given'
+            ? { text: t('fieldDay.club.give.given', { name }), alert: false }
+            : {
+                text:
+                  answer.refusal === 'notHosting'
+                    ? t('fieldDay.club.give.refused.notHosting')
+                    : t('fieldDay.club.give.refused.stale'),
+                alert: true,
+              },
+        ),
+      () => setGiveNote({ text: t('fieldDay.club.give.failed'), alert: true }),
+    )
+  }
   return (
     <div
       style={
@@ -1215,15 +1246,34 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
-      {/* The host's alone: the positions it turned away, each with the sentence it was sent,
-          which that position's own screen shows as its host error. */}
-      {club.refused?.map((r, i) => (
+      {/* The host's alone: the laptops it turned away, each with the sentence it was sent,
+          which that laptop's own screen shows as its host error. One turned away because another
+          laptop holds its position has a Give button, on the host's own contest screen alone. */}
+      {club.refused?.map(({ handle, ...r }, i) => (
         <div key={i} style={CLUB_WARN} role="alert">
           {r.posName
             ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
             : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+          {club.hosting && onGivePosition && handle !== undefined && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="export-btn"
+                onClick={() => give(handle, r.posName || r.call)}
+                title={t('fieldDay.club.give.title')}
+              >
+                {t('fieldDay.club.give.label')}
+              </button>
+            </>
+          )}
         </div>
       ))}
+      {giveNote && (
+        <div style={giveNote.alert ? CLUB_WARN : CLUB_NOTE} role={giveNote.alert ? 'alert' : 'status'}>
+          {giveNote.text}
+        </div>
+      )}
       {/* The host's alone, for the rest of the event: every contact it kept out of the club's
           log, how many and the newest of them, each with the position that sent it and why. */}
       {club.keptOut && (
@@ -2400,6 +2450,7 @@ export function ContestView({
         <FdClubSection
           club={fieldDay.club}
           onExport={observed ? undefined : handleExport}
+          onGivePosition={observed ? undefined : fdClubGivePosition}
           busy={busy !== null}
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}

@@ -4092,6 +4092,13 @@ export const EN = {
   'fieldDay.club.refused.unknown': 'Club sync does not run {{contest}}: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refusedPosition': 'Turned away {{name}} ({{call}}). It was told: “{{reason}}”',
   'fieldDay.club.refusedCall': 'Turned away {{call}}. It was told: “{{reason}}”',
+  'fieldDay.club.give.label': 'Give this laptop its position',
+  'fieldDay.club.give.title': "Takes this club position from the laptop that holds it now and gives it to this one. The other laptop is closed and turned away, and the contacts it sent as this position leave the club's log until it rejoins; this one sends the club every contact in its log. The other laptop's line here then has this button too, so a wrong press is undone the same way.",
+  'fieldDay.club.give.given': '{{name}} gets its position on its next try, within 15 seconds, and sends the club every contact in its log. The laptop that held it is turned away, and its line here can give the position back.',
+  'fieldDay.club.give.refused.stale': 'Nothing changed: that laptop is no longer on this list. It joined, stopped trying, or the club event restarted.',
+  'fieldDay.club.give.refused.notHosting': 'Nothing changed: this Nexus is not hosting a club event.',
+  'fieldDay.club.give.refused.remote': 'Only at the host: a press through Remote gives no position.',
+  'fieldDay.club.give.failed': 'Nothing changed: Nexus could not give the position. Press it again.',
   'fieldDay.club.keptOut.total': {
     one: "{{count}} contact the positions sent is not in the club's log, and stays in its own position's log:",
     other: "{{count}} contacts the positions sent are not in the club's log, and each stays in its own position's log:",

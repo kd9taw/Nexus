@@ -931,6 +931,20 @@ export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string>
   return invoke<string>('fd_club_export', { format })
 }
 
+/** What the host's Give button did: the position given, or why nothing changed. */
+export type FdGiveAnswer =
+  | { outcome: 'given' }
+  | { outcome: 'refused'; refusal: 'notHosting' | 'stale' }
+
+/** ⭐ **Give a club position to the laptop the host turned away for it** — the Give button on
+ *  the host's own turned-away list, by the `handle` that entry carries. The position is pinned
+ *  to that laptop, the laptop that held it is closed and turned away by name, and its own entry
+ *  can give the position back. Refused when this Nexus is not hosting, and for a handle no
+ *  entry on the list now can be given by. Never on Remote. */
+export async function fdClubGivePosition(handle: number): Promise<FdGiveAnswer> {
+  return invoke<FdGiveAnswer>('fd_club_give_position', { handle })
+}
+
 /** The spectator scoreboard's bound state, for the Settings row: running?,
  * the URL a TV on the LAN should open, the last bind error. */
 export interface FdScoreboardStatus {
