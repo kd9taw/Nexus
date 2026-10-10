@@ -343,6 +343,17 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
         crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state);
 }
 
+/// The transport the launch opens: the startup seed ([`Transport::from_cfg`]) with what the first
+/// open must already know from the settings. That is the #145 declarations
+/// ([`seed_line_declarations`]), and a NET rigctl address one of Nexus's own listeners holds
+/// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first.
+fn launch_transport(cfg: &RadioConfig, s: &Settings) -> Transport {
+    let mut t = Transport::from_cfg(cfg);
+    seed_line_declarations(&mut t, s);
+    t.address_refusal = AddressRefusal::of(&t, s);
+    t
+}
+
 /// Which CAT backend is actually serving, for probe/status attribution — the operator
 /// must never have to guess whether "isn't answering" came from the native CI-V daemon
 /// or from Hamlib. `native_wanted` = the transport opted into native CI-V (and keying
@@ -1904,13 +1915,14 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // connection status so the UI shows green/red right away. The transport is
     // rebuilt **live** below when the operator changes rig/PTT/audio settings, so
     // CAT connects on Save without an app restart.
-    let mut applied = Transport::from_cfg(&cfg);
-    // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, so they are overlaid onto
-    // the startup seed here — see [`seed_line_declarations`].
-    let remote_radio_id = {
+    // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, and so does a refused NET
+    // rigctl address, so both are overlaid onto the startup seed here — see [`launch_transport`].
+    let (applied, remote_radio_id) = {
         let eng = engine_lock(&engine);
-        seed_line_declarations(&mut applied, eng.settings());
-        eng.settings().active_radio
+        (
+            launch_transport(&cfg, eng.settings()),
+            eng.settings().active_radio,
+        )
     };
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
@@ -2305,6 +2317,7 @@ impl Transport {
             icom_lan_port: p.icom_lan_port,
             radio_id: p.id,
             broker_self_port: None,
+            address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -2346,21 +2359,22 @@ fn open_read_only(
     if !t.cat_available() {
         return (Rig::vox(), None, None);
     }
+    // A NET rigctl address one of Nexus's own listeners holds is never opened (`AddressRefusal`):
+    // what answers there is another radio, or Nexus itself serving the active radio (the broker).
+    if t.address_refusal.0.is_some() {
+        return (Rig::vox(), None, Some(false));
+    }
     // NET rigctl to a rigctld on THIS computer: the one the operator runs there (wfview's, or their
     // own) is this radio, as Nexus's port bookkeeping keeps every daemon of its own off that address
     // (`tempo_app::settings::net_rigctl_port_here`). So it is shared directly, as the active open
     // shares it, whatever rigctld TCP Port says, and never fronted by a rigctld of ours: where
     // nothing answers yet, nothing is started, and the pool asks again on its backoff. Something
-    // that answers, but not as a rigctld, takes the spawn below, as the active open's does. Our own
-    // CAT broker's port is never this radio: what answers there is Nexus, serving the active radio.
-    if let Some((direct, port)) =
+    // that answers, but not as a rigctld, takes the spawn below, as the active open's does.
+    if let Some((direct, _)) =
         tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)
     {
         // A network radio keys no line on a CAT port (`keys_on_the_cat_port`).
         debug_assert!(ptt_line.is_none());
-        if t.broker_self_port == Some(port) {
-            return (Rig::vox(), None, Some(false));
-        }
         match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
             crate::rigctld_server::PortReply::Rigctld => {
                 let mut rig = Rig::with_control(Some(direct.to_string()), PttMode::Vox);
@@ -2466,6 +2480,8 @@ fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
             // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
             t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            // And whether one of Nexus's own listeners holds this radio's NET rigctl address.
+            t.address_refusal = AddressRefusal::of(&t, s);
             (p.id, t)
         })
         .collect();
@@ -6462,12 +6478,15 @@ impl RadioLoop {
             // the retry ladder, or for the operator after it ended the session or refused the
             // login, is tried again now, through a fresh session rather than a probe of nothing.
             // A radio waiting for the rigctld at its Network Address asks that address again now,
-            // for the same reason.
+            // for the same reason, and one whose address is refused says why again (its open reads
+            // nothing), rather than probe a link it never opened.
             if reprobe_req && self.rigctld_proc.is_none() {
                 if let Some(t) = want.icom_lan_target() {
                     crate::icomlan::registry::operator_acted(t.key());
                     self.cat_reopen_at = 0.0;
-                } else if self.waits_for_a_rigctld_here(rig) {
+                } else if self.waits_for_a_rigctld_here(rig)
+                    || self.applied.address_refusal.0.is_some()
+                {
                     self.cat_reopen_at = 0.0;
                 }
             }
@@ -13984,9 +14003,48 @@ impl Transport {
 /// next field anyone added would have been dropped the same way.
 ///
 /// This makes the mistake unrepresentable: `Transport` derives `PartialEq` again, so every
-/// field — present and future — is compared by default, and exactly one type opts out.
+/// field — present and future — is compared by default, and only display text opts out: this
+/// type, and the words of an [`AddressRefusal`].
 #[derive(Clone, Debug, Default)]
 struct LogLabel(String);
+
+/// Why a radio's NET rigctl Network Address may not be opened: `Some`, in the status lane's words,
+/// while one of Nexus's own listeners holds its port, another radio's CAT daemon on its rigctld TCP
+/// Port or the CAT broker ([`tempo_app::settings::net_rigctl_address_refusal`]). What answers there
+/// is that other radio, or Nexus itself. A save can no longer make such a clash, and nothing
+/// renumbers one an older build stored, so every opener refuses it first ([`open_cat`],
+/// [`open_read_only`]): nothing there is read, keyed or relayed to by a rigctld of ours until the
+/// operator changes the port.
+///
+/// A station fact, like `broker_self_port`: it is set wherever a transport is built from the
+/// settings ([`Transport::from_settings`], [`monitor_want`], [`launch_transport`]).
+///
+/// Compared by PRESENCE, for [`LogLabel`]'s reason: the words name radios, and renaming one must
+/// not tear down CAT. Being refused is identity, so changing the port reopens the radio at once,
+/// and a clash that arrives (another radio given a rig model) lets go of its link first.
+#[derive(Clone, Debug, Default)]
+struct AddressRefusal(Option<String>);
+
+impl PartialEq for AddressRefusal {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.is_some() == o.0.is_some()
+    }
+}
+
+impl AddressRefusal {
+    /// `t`'s, under the station `s`: the address as `t` dials it, against `s`'s other radios and
+    /// its broker.
+    fn of(t: &Transport, s: &Settings) -> Self {
+        Self(tempo_app::settings::net_rigctl_address_refusal(
+            &s.radios,
+            s.cat_broker.then_some(s.cat_broker_port),
+            t.radio_id,
+            t.rig_model,
+            &t.rig_conn,
+            &t.rig_addr,
+        ))
+    }
+}
 
 impl PartialEq for LogLabel {
     fn eq(&self, _: &Self) -> bool {
@@ -14061,6 +14119,9 @@ struct Transport {
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
+    /// Why this radio's NET rigctl Network Address may not be opened, while one of Nexus's own
+    /// listeners holds its port ([`AddressRefusal`]).
+    address_refusal: AddressRefusal,
     audio_in: String,
     audio_out: String,
     /// Dedicated voice-mic device for recordings ("" = record from the shared input).
@@ -14116,6 +14177,7 @@ impl Transport {
             icom_lan_port: c.icom_lan_port,
             radio_id: c.radio_id,
             broker_self_port: c.broker_self_port,
+            address_refusal: AddressRefusal::default(),
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
             // The voice mic is not part of the startup seed — the initial applied state
@@ -14132,7 +14194,7 @@ impl Transport {
     }
 
     fn from_settings(s: &Settings) -> Self {
-        Self {
+        let mut t = Self {
             icom_data_mode: s.icom_data_mode,
             tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
@@ -14180,6 +14242,7 @@ impl Transport {
             } else {
                 None
             },
+            address_refusal: AddressRefusal::default(),
             audio_in: s.audio_in.clone(),
             audio_out: s.audio_out.clone(),
             voice_mic_device: s.voice_mic_device.clone(),
@@ -14188,7 +14251,9 @@ impl Transport {
             monitor_enabled: s.monitor_enabled,
             monitor_device: s.monitor_device.clone(),
             monitor_level: s.monitor_level,
-        }
+        };
+        t.address_refusal = AddressRefusal::of(&t, s);
+        t
     }
 
     /// The serial port the RTS/DTR keying line lives on: the dedicated `ptt_serial_port`
@@ -14228,6 +14293,7 @@ impl Transport {
             // like the Flex client's: an address edit on a serial radio restarts nothing.
             || self.icom_lan_target() != o.icom_lan_target()
             || self.broker_self_port != o.broker_self_port
+            || self.address_refusal != o.address_refusal
     }
 
     /// Is CAT for this radio Nexus's own Icom network client? The rule lives in tempo-app
@@ -15051,6 +15117,16 @@ fn open_cat(
         ptt_line.is_none() || !allow_coexist,
         "shared-port keying must own its daemon — coexisting risks silent no-key"
     );
+    // A NET rigctl address one of Nexus's own listeners holds is never opened (`AddressRefusal`):
+    // no probe, no share, no rigctld of ours in front of it. The status says what holds the port
+    // and what to change.
+    if let Some(words) = &t.address_refusal.0 {
+        return (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), words.clone()),
+        );
+    }
     let addr = format!("127.0.0.1:{}", t.rigctld_port);
     if t.broker_self_port == Some(t.rigctld_port) {
         // Misconfig: our own CAT broker and the launched rigctld want the same port.
@@ -30727,6 +30803,7 @@ mod tests {
             omnirig_slot: 1,
             rigctld_port,
             broker_self_port,
+            address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),

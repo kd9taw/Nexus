@@ -241,3 +241,33 @@ describe('rig form writes go to the radio they describe', () => {
     }
   })
 })
+
+// A save the backend refuses names why: here a port another radio's rigctld holds. Save has always
+// shown those words; Test CAT and Auto-test save first, and their refusal read only "Could not run
+// the CAT test." / "Could not run the port auto-test." Tauri rejects with the Err string, as these
+// mocks do.
+describe('a refused save says why, in Test CAT and Auto-test too', () => {
+  const refusal =
+    "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's rigctld TCP Port " +
+    "is 4533 too: IC-9700 and FTDX10 could each read and command the other's radio. Give FTDX10 " +
+    'a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced).'
+  const shown = () => document.querySelector('.settings-cat-test .cat-result')?.textContent
+
+  it('Test CAT shows the refusal of the radio it saved', async () => {
+    api.get('updateRadioProfile').mockImplementation(() => Promise.reject(refusal))
+    renderPanel()
+    await editTheNonActiveRadio()
+    fireEvent.click(await screen.findByRole('button', { name: /test cat/i }))
+    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
+    await waitFor(() => expect(shown()).toBe(`✗ ${refusal}`))
+  })
+
+  it('Auto-test shows the refusal of the save it made', async () => {
+    api.get('setSettings').mockImplementation(() => Promise.reject(refusal))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    fireEvent.click(await screen.findByRole('button', { name: /auto-test/i }))
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    await waitFor(() => expect(shown()).toBe(`✗ ${refusal}`))
+  })
+})

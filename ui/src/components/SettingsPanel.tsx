@@ -2859,8 +2859,10 @@ export function SettingsPanel({
         const result = await testCat()
         setCatResult(result)
       }
-    } catch {
-      setCatResult({ ok: false, detail: t('settings.cat.test.failed') })
+    } catch (err) {
+      // A refused save names why (Tauri rejects with the Err string), as Save shows it.
+      const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
+      setCatResult({ ok: false, detail: msg || t('settings.cat.test.failed') })
     } finally {
       setCatTesting(false)
     }
@@ -2899,8 +2901,10 @@ export function SettingsPanel({
       } else {
         setCatResult({ ok: false, detail: r.detail })
       }
-    } catch {
-      setCatResult({ ok: false, detail: t('settings.cat.autoTest.failed') })
+    } catch (err) {
+      // A refused save names why (Tauri rejects with the Err string), as Save shows it.
+      const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
+      setCatResult({ ok: false, detail: msg || t('settings.cat.autoTest.failed') })
     } finally {
       setCatTesting(false)
     }
