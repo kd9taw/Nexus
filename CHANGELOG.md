@@ -376,6 +376,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another one. Names, calls and contest names another laptop sent show as plain text on the
   host's screen, the club board, the TV and Remote, with a ? where a character cannot be shown,
   and the diagnostic log keeps every entry on its own line. Every other club file is unchanged.
+- **Club sync takes each club position only from the laptop that first joined as it.** Each
+  laptop's Nexus now makes a key of its own the first time it starts, and every time it joins a
+  club it proves its position with it. Another laptop naming the same position is turned away by
+  name, on its screen and the host's, and nothing it sends reaches the club's log. The host keeps
+  each position for the rest of the event, through a restart; a new Event name starts afresh.
+  Every laptop of a club needs this version: the host turns away an older Nexus by name, saying to
+  update Nexus on that laptop, and an older host turns this one away the same way.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

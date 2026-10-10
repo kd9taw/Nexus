@@ -35,10 +35,12 @@
 //!
 //! ⚠️ **Every string a peer sends is data off the network, and the club's files are what the
 //! club submits.** A JOIN under a position id no Nexus makes, or whose call is not a call sign,
-//! is refused at every club, and a row whose call is not one, or whose strings could end a line
-//! of the Cabrillo or ADIF, open another, or outgrow what the board and Remote carry, is kept
-//! out where it enters ([`ClubLog::merge`]) and named on the host's screen; the writers in
-//! `tempo_core` guard each line too. Each kind of string has one reader (the section "One
+//! is refused at every club, and so is one that cannot prove the position it names: the host
+//! takes each position only from the laptop whose club key it pinned at that position's first
+//! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key). A row whose call is
+//! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
+//! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
+//! and named on the host's screen; the writers in `tempo_core` guard each line too. Each kind of string has one reader (the section "One
 //! reading of every string a peer sends"), and what the host shows, or says back, is that
 //! reading: one line of plain text, a `?` where a character cannot be shown.
 //!
@@ -215,6 +217,25 @@ pub const NOT_A_CALL_SIGN: &str = "this Nexus joined with a Callsign on the air 
      club writes every contact under the call it was made on. Set Callsign on the air under \
      Who's who at this event on the Contesting tab in Settings, then turn Field Day mode off and \
      on again: this Nexus rejoins by itself. Contacts you log meanwhile stay in your own log.";
+
+/// ⭐ **The sentence for a JOIN under a position another laptop holds** ([`ClubLog::key_refusal`]):
+/// the host took that position from the laptop that first joined this event as it, and this
+/// JOIN's club key is not that laptop's. One laptop's settings copied onto another is how two
+/// come to share a position id, so it says how to give this one a position of its own.
+pub const POSITION_HELD: &str = "this Nexus joined as a club position that another laptop holds \
+     at this event: the host takes each position only from the laptop that first joined as it, \
+     and this laptop's club key is not that one's. If this laptop's settings came from another \
+     laptop, quit Nexus here, set \"fdPositionId\" in its settings.json to \"\", and start Nexus \
+     again: it makes a position of its own and rejoins by itself. Contacts you log meanwhile \
+     stay in your own log.";
+
+/// ⭐ **The sentence for a JOIN with no club key a Nexus makes** ([`ClubLog::key_refusal`]):
+/// every Nexus speaking this protocol makes one and sends it, so only a startup that could not
+/// make one, or a peer that is not Nexus, sends none.
+pub const NO_POSITION_KEY: &str =
+    "this Nexus did not send a club key, which every Nexus makes for \
+     itself and the host tells club positions apart by. Restart Nexus on this laptop: it makes \
+     one and rejoins by itself. Contacts you log meanwhile stay in your own log.";
 
 /// ⭐ **The sentence for a JOIN under a position id no Nexus makes** ([`club_position_id`]). It
 /// does not repeat the id, which came off the network. Only a settings file edited by hand
@@ -661,6 +682,23 @@ const MAX_REFUSED: usize = 16;
 /// The largest whole number a JSON number carries exactly to a browser (2^53 − 1).
 const JSON_EXACT: u64 = (1 << 53) - 1;
 
+/// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
+/// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
+/// `call` are required) and skips it, as it skips a torn line; this build reads each before
+/// trying a row. `at` is this host's clock, and a note from a previous event ages out with
+/// that event's rows ([`ClubLog::attach_journal_since`]).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JournalNote {
+    /// A position's key hash, pinned at its first served JOIN ([`ClubLog::pin`]): the hash,
+    /// never the key.
+    Pin {
+        pos: String,
+        key_hash: String,
+        at: u64,
+    },
+}
+
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClubScore {
@@ -723,6 +761,10 @@ pub struct ClubLog {
     journal: Option<std::fs::File>,
     /// Positions this host turned away, by position id ([`note_refused`](Self::note_refused)).
     refused: HashMap<String, Refused>,
+    /// ⭐ Each position's club key, as the HASH of the key its first served JOIN of this event
+    /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)).
+    /// Journaled, so a restarted host still holds every pin it made.
+    pins: HashMap<String, String>,
     /// `(positions, shown)` while the board last sent was as big as one club line carries,
     /// from [`tempo_net::fdsync::board_fit`] ([`note_board_sent`](Self::note_board_sent)).
     /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
@@ -829,31 +871,67 @@ impl ClubLog {
     /// ⭐ **§18.2 — why a joining position of protocol version `v` cannot be
     /// served, or `None` to serve it.**
     ///
-    /// A v1 position running Field Day is served exactly as it always was, so a
-    /// mixed-version Field Day club is unaffected. Running anything else, it is
-    /// refused AT JOIN: it cannot enter, display or transmit that contest's
-    /// exchange, so its rows would arrive with an empty exchange and score as
-    /// zero-multiplier ones. A club discovering at hour six that one tent's 300
-    /// contacts carry no county is worse than that tent knowing at hour zero.
+    /// ⭐ **Since v3, every older position is refused, at every club.** A v3 JOIN proves the
+    /// position it names ([`key_refusal`](Self::key_refusal)); an older one has no key to
+    /// send, and a host that served it would let any peer take another laptop's position by
+    /// claiming to be older. (Until v3 a v1 position was served at a Field Day club, and
+    /// refused elsewhere because it cannot enter, show or send another contest's exchange.)
     ///
-    /// The message names the version AND the contest because it is the only thing
+    /// The message names the versions and says what to do, because it is the only thing
     /// its reader has: a bare "incompatible" leaves an operator on a field at 0200
     /// with no idea what to do. It also says what happens to the contacts they log
     /// meanwhile, which is true — the position journals them, and its outbox is
     /// "every own row past the host's ack", so they all go up on the first join
     /// that succeeds.
     pub fn version_refusal(&self, v: u32) -> Option<String> {
-        if v >= tempo_net::fdsync::PROTO_VERSION || self.is_field_day() {
-            return None;
+        let need = tempo_net::fdsync::PROTO_VERSION;
+        (v < need).then(|| {
+            format!(
+                "this club's host needs club sync v{need} on every laptop, so that each laptop \
+                 proves which club position it is, and this Nexus speaks v{v}. Update Nexus on \
+                 this laptop, then rejoin: contacts you log meanwhile stay in your own log and \
+                 go up when you do."
+            )
+        })
+    }
+
+    /// ⭐ **Why a JOIN cannot be served as position `posid`, or `None`** — `key_hash` is the hash
+    /// of the club key the JOIN carried (empty for none, or for one no Nexus makes), hashed
+    /// before it reached the engine (`fdbridge::EngineClubBackend`), so no key is ever held here.
+    ///
+    /// A position id is no secret: every board line carries every position's. So the first
+    /// JOIN this host serves under an id pins that JOIN's key ([`pin`](Self::pin)), and a later
+    /// JOIN under the same id with another key is another laptop, turned away by name
+    /// ([`POSITION_HELD`]); every row comes in on a connection whose JOIN this let in, as that
+    /// JOIN's position. A JOIN with no key is turned away too ([`NO_POSITION_KEY`]).
+    pub fn key_refusal(&self, posid: &str, key_hash: &str) -> Option<String> {
+        if key_hash.is_empty() {
+            return Some(NO_POSITION_KEY.to_string());
         }
-        Some(format!(
-            "this club is running {contest} and needs club sync v{need} — this Nexus \
-             speaks v{v}, which cannot enter, show or send the {contest} exchange. \
-             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
-             log and go up when you do.",
-            contest = self.contest_id,
-            need = tempo_net::fdsync::PROTO_VERSION,
-        ))
+        match self.pins.get(posid) {
+            Some(pinned) if pinned != key_hash => Some(POSITION_HELD.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Pin `posid` to the key hash its first served JOIN of this event carried, and journal
+    /// the pin, so a restarted host holds it. A pinned position keeps its pin: a JOIN with
+    /// another key never reaches here ([`key_refusal`](Self::key_refusal)).
+    pub fn pin(&mut self, posid: &str, key_hash: &str, now: u64) {
+        if key_hash.is_empty() || self.pins.contains_key(posid) {
+            return;
+        }
+        self.pins.insert(posid.to_string(), key_hash.to_string());
+        self.journal_note(&JournalNote::Pin {
+            pos: posid.to_string(),
+            key_hash: key_hash.to_string(),
+            at: now,
+        });
+    }
+
+    /// The key hash `posid` is pinned to, if any (the host's own tests and the shell's).
+    pub fn pinned(&self, posid: &str) -> Option<&str> {
+        self.pins.get(posid).map(String::as_str)
     }
 
     /// ⭐ **Why a joining position cannot be served, or `None` to serve it** — the
@@ -984,6 +1062,17 @@ impl ClubLog {
         }
         if let Ok(text) = std::fs::read_to_string(path) {
             for line in text.lines() {
+                if let Ok(note) = serde_json::from_str::<JournalNote>(line) {
+                    match note {
+                        // A pin from a previous event pins nothing in this one, and the first
+                        // pin of a position wins, as it does live.
+                        JournalNote::Pin { pos, key_hash, at } if at >= oldest_unix => {
+                            self.pins.entry(pos).or_insert(key_hash);
+                        }
+                        JournalNote::Pin { .. } => {}
+                    }
+                    continue;
+                }
                 // Tolerant per line: one torn tail line (power loss mid-append)
                 // must not poison the rest of the journal.
                 if let Ok(row) = serde_json::from_str::<MergedRow>(line) {
@@ -1105,6 +1194,15 @@ impl ClubLog {
             .is_some_and(|(t, _)| now.saturating_sub(*t) > 3600)
         {
             self.arrivals.pop_front();
+        }
+    }
+
+    /// One [`JournalNote`] line, appended and flushed like a merged row's.
+    fn journal_note(&mut self, note: &JournalNote) {
+        if let (Some(j), Ok(line)) = (&mut self.journal, serde_json::to_string(note)) {
+            let _ = j.write_all(line.as_bytes());
+            let _ = j.write_all(b"\n");
+            let _ = j.flush();
         }
     }
 
@@ -2656,42 +2754,42 @@ mod tests {
         );
     }
 
-    /// ⭐ §18.2 — the operator's ruling. A v1 position is refused at JOIN when the
-    /// club is running a contest it cannot enter, show or send, and the message
-    /// names BOTH the required version and the contest.
+    /// ⭐ §18.2 — since v3, **every older position is refused at JOIN, at every club**, and
+    /// the message names both versions and says what to do: an older Nexus has no club key
+    /// to prove its position with, and a host that served one would let any peer take another
+    /// laptop's position by claiming to be older.
     #[test]
-    fn a_v1_position_is_refused_only_when_the_club_is_not_running_field_day() {
-        // Field Day keeps today's behaviour: a same-or-lower join is served, so a
-        // mixed-version Field Day club is unaffected.
-        for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
-            let club = ClubLog::new(event, "TEST FD");
-            assert!(club.is_field_day());
-            assert_eq!(
-                club.version_refusal(1),
-                None,
-                "a v1 tent may still join a Field Day club"
-            );
-        }
-
-        // Anything else refuses a v1 position.
+    fn every_older_position_is_refused_by_name_at_every_club() {
+        let need = tempo_net::fdsync::PROTO_VERSION;
+        let mut clubs = vec![
+            ClubLog::new(FdEvent::ArrlFd, "TEST FD"),
+            ClubLog::new(FdEvent::WinterFd, "TEST WFD"),
+            ClubLog::for_ruleset(party("ilqp"), "ILQP TEST"),
+        ];
         let mut qp = ClubLog::new(FdEvent::ArrlFd, "TNQP 2026");
         qp.contest_id = "TN-QSO-PARTY".into();
-        assert!(!qp.is_field_day());
-        let msg = qp.version_refusal(1).expect("a v1 tent is refused");
-        assert_eq!(
-            msg,
-            "this club is running TN-QSO-PARTY and needs club sync v2 — this Nexus \
-             speaks v1, which cannot enter, show or send the TN-QSO-PARTY exchange. \
-             Update this Nexus and rejoin: contacts you log meanwhile stay in your own \
-             log and go up when you do.",
-            "the refusal names the version AND the contest — it is all its reader has"
-        );
-        // POSITIVE CONTROL for the "names both" claim: neither half is incidental.
-        assert!(msg.contains("TN-QSO-PARTY") && msg.contains("v2") && msg.contains("v1"));
-
-        // …and a CURRENT position is served by the same club. Refusing on version
-        // when the version is fine would lock every tent out of the QSO party.
-        assert_eq!(qp.version_refusal(tempo_net::fdsync::PROTO_VERSION), None);
+        clubs.push(qp);
+        for club in &clubs {
+            for v in 1..need {
+                let msg = club.version_refusal(v).expect("an older tent is refused");
+                assert_eq!(
+                    msg,
+                    format!(
+                        "this club's host needs club sync v{need} on every laptop, so that each \
+                         laptop proves which club position it is, and this Nexus speaks v{v}. \
+                         Update Nexus on this laptop, then rejoin: contacts you log meanwhile \
+                         stay in your own log and go up when you do."
+                    ),
+                    "{}",
+                    club.contest_id
+                );
+                assert_eq!(club.join_refusal(v, &club.event_id), Some(msg));
+            }
+            // …and a CURRENT position is served by the same club. Refusing on version when
+            // the version is fine would lock every tent out.
+            assert_eq!(club.version_refusal(need), None, "{}", club.contest_id);
+        }
+        assert_eq!(need, 3, "the version this rule was written for");
     }
 
     /// The legacy triple ships only for Field Day; the generalised key always
@@ -3414,9 +3512,9 @@ mod tests {
     }
 
     /// ⭐ **A position logging a different contest is refused at JOIN, by name** — the
-    /// club and the position's contest both named, and what to do about it. A position too
-    /// old to name one is served by a Field Day club as it always was, and refused by any
-    /// other.
+    /// club and the position's contest both named, and what to do about it. A JOIN naming
+    /// none is served by a Field Day club as it always was, and refused by any other; a
+    /// position too old to name one is refused by its version first.
     #[test]
     fn a_position_logging_another_contest_is_refused_by_name() {
         let v = tempo_net::fdsync::PROTO_VERSION;
@@ -3442,14 +3540,18 @@ mod tests {
             old.contains("IL QSO Party") && old.contains("too old"),
             "{old}"
         );
-        // Field Day: an older position is served as before; the OTHER Field Day is not.
+        // Field Day: a JOIN naming no contest is served as before; the OTHER Field Day is not.
         let fd = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
         assert_eq!(
             fd.join_refusal(v, ""),
             None,
-            "an older position joins Field Day as before"
+            "a JOIN naming no contest joins Field Day as before"
         );
-        assert_eq!(fd.join_refusal(1, ""), None, "…a v1 one too");
+        assert_eq!(
+            fd.join_refusal(1, ""),
+            fd.version_refusal(1),
+            "…and a v1 position is turned away by its version"
+        );
         assert_eq!(fd.join_refusal(v, "arrlfd"), None);
         let wfd = fd
             .join_refusal(v, "wfd")
@@ -4369,5 +4471,88 @@ mod tests {
             ]
         );
         assert!(inert(&"9".repeat(MAX_VALUE_CHARS)) && !inert(&"9".repeat(MAX_VALUE_CHARS + 1)));
+    }
+
+    // ---- a position is taken only from the laptop that first joined as it --------------
+
+    /// A key hash for one test: generated (a per-run seed through the operating system's
+    /// hasher), so no test holds a real one, and the same `tag` the same hash all run.
+    fn throwaway_hash(tag: &str) -> String {
+        use std::hash::BuildHasher;
+        static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+        let seed = SEED.get_or_init(std::hash::RandomState::new);
+        (0..4u8)
+            .map(|i| format!("{:016x}", seed.hash_one((tag, i))))
+            .collect()
+    }
+
+    /// ⭐ **A position is held by the key it first joined with, across a host restart, and
+    /// the journal holds that key's hash and nothing more.** The first JOIN served under a
+    /// position id pins its key hash; a later JOIN under the id with another is turned away by
+    /// name, and one with none is turned away too. A pinned position keeps its pin. The pin is
+    /// one journal line, so a restarted host holds it; a previous event's pin pins nothing
+    /// (the same cutoff as its rows), and an older Nexus's replay reads no pin line as a row.
+    /// CONTROLS: the laptop that pinned a position rejoins, and another position pins its own.
+    #[test]
+    fn a_position_is_held_by_the_key_it_first_joined_with_across_a_restart() {
+        let dir = scratch("pins");
+        let path = dir.join("fd_event_pins.jsonl");
+        let (mine, other) = (
+            throwaway_hash("this laptop"),
+            throwaway_hash("another laptop"),
+        );
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            club.key_refusal("aaaa0001", &mine),
+            None,
+            "nobody holds it yet"
+        );
+        club.pin("aaaa0001", &mine, 1_000);
+        let held = Some(POSITION_HELD.to_string());
+        assert_eq!(
+            club.key_refusal("aaaa0001", &mine),
+            None,
+            "CONTROL: the laptop itself"
+        );
+        assert_eq!(club.key_refusal("aaaa0001", &other), held, "another laptop");
+        assert_eq!(
+            club.key_refusal("aaaa0001", ""),
+            Some(NO_POSITION_KEY.to_string())
+        );
+        assert_eq!(
+            club.key_refusal("bbbb0002", &other),
+            None,
+            "CONTROL: its own position"
+        );
+        club.pin("aaaa0001", &other, 1_001);
+        assert_eq!(
+            club.pinned("aaaa0001"),
+            Some(mine.as_str()),
+            "a pin is kept"
+        );
+
+        let journal = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            journal,
+            format!("{{\"pin\":{{\"pos\":\"aaaa0001\",\"key_hash\":\"{mine}\",\"at\":1000}}}}\n")
+        );
+        assert!(
+            serde_json::from_str::<MergedRow>(journal.trim_end()).is_err(),
+            "an older Nexus's replay skips the line rather than read a row from it"
+        );
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(restarted.pinned("aaaa0001"), Some(mine.as_str()));
+        assert_eq!(restarted.key_refusal("aaaa0001", &other), held);
+        assert!(restarted.rows().is_empty(), "a pin is no contact");
+        let mut next_event = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        next_event.attach_journal_since(&path, 1_001).unwrap();
+        assert_eq!(
+            next_event.pinned("aaaa0001"),
+            None,
+            "a previous event's pin"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -28,6 +28,12 @@
 //! `a_row_under_another_positions_id_is_refused_and_merges_nothing`), and what they
 //! hold is the policy layer's to check before the club's files see it.
 //!
+//! ⭐ **A JOIN proves the position it names** (v3): it carries that position's club key
+//! ([`PositionKey`]), and the backend holds every later JOIN under that position id to the key
+//! it pinned at the first ([`ClubBackend::join`]). Position ids are on every board line; the
+//! key is on none. This module takes the key from the JOIN line to that one call and nowhere
+//! else, and never logs or prints it: its `Debug` shows none of it.
+//!
 //! The ping doubles as a position's clock probe ([`ClockSample`]): the position times its
 //! own ping, the host stamps its pong, and the position measures how far its clock is from
 //! the host's. That is shown, on the position's club line and the host's board, and it
@@ -49,17 +55,22 @@ use std::time::{Duration, Instant};
 
 /// Protocol version, carried in `join`/`welcome`/`beacon`. A host refuses a
 /// JOIN with a higher version (the joiner is newer — it knows things we
-/// don't); same-or-lower joins are served, with unknown fields ignored.
+/// don't); same-or-lower joins reach the policy layer, with unknown fields ignored.
+///
+/// **v3 proves the position** ([`PositionKey`] on the JOIN). It went to 3 so that neither
+/// direction is quiet: a v3 position joining a v2 host is refused there by that host's own
+/// version check, verbatim, and a v2 position, which has no key to send, is refused by name at
+/// a v3 host (the policy layer's, which says to update Nexus on that laptop). Served instead,
+/// any peer could join under another position's id by claiming to be older.
 ///
 /// **v2 carries the exchange as data** ([`WireQso::ex`]/[`WireQso::mex`],
 /// [`ClubState::dkeys`]). It went to 2 so the new→old direction stays loud: a v2
-/// position joining a v1 host is refused there, verbatim, at hour zero. The
-/// old→new direction is served — every v2 field is `#[serde(default)]` and the
-/// legacy `class`/`sect` pair is still read — EXCEPT when the host is running a
-/// contest a v1 position cannot enter, show or send, which the host refuses at
-/// JOIN naming the version and the contest (`ClubBackend::join` takes the
-/// joiner's `v` for exactly that decision).
-pub const PROTO_VERSION: u32 = 2;
+/// position joining a v1 host is refused there, verbatim, at hour zero. Until v3 the
+/// old→new direction was served — every v2 field is `#[serde(default)]` and the
+/// legacy `class`/`sect` pair is still read — EXCEPT when the host was running a
+/// contest a v1 position cannot enter, show or send (`ClubBackend::join` takes the
+/// joiner's `v` for that decision, and for v3's).
+pub const PROTO_VERSION: u32 = 3;
 /// Default host TCP port. Arbitrary but conflict-checked against the ham
 /// ecosystem's squatters: 2237 (WSJT-X UDP), 2242 (JS8Call), 1100 (N3FJP),
 /// 12060 (N1MM) are all avoided. A setting, not a constant, at the caller.
@@ -102,6 +113,55 @@ pub const LINE_PAST_THE_CAP: &str = "the host sent club state longer than the 8 
 pub const ANOTHER_POSITIONS_ROW: &str = "this Nexus sent the host a contact as another club \
      position than the one it joined as, and the host takes each position's contacts only on \
      its own connection. It rejoins by itself; contacts you log meanwhile stay in your own log.";
+
+/// ⭐ **A position's club key**: the secret a Nexus makes once for itself (32 random bytes,
+/// as 64 lower-case hex digits) and sends on every JOIN, so a host can tell the laptop that
+/// first joined as a position from any other naming the same position id. A host keeps only
+/// its hash (`ClubBackend::join`).
+///
+/// ⛔ It is a credential: never logged, printed or shown, and on no board line. So this type
+/// has no `Display`, its `Debug` prints none of it, and the one way to read it is
+/// [`secret`](Self::secret), for the host's hash and nothing else. On the wire it is a plain
+/// string (`serde(transparent)`), and an empty one is never written.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PositionKey(String);
+
+impl PositionKey {
+    /// A key from its secret: 64 hex digits from a Nexus, anything at all from a peer that
+    /// is not one ([`is_club_key`](Self::is_club_key)).
+    pub fn new(secret: String) -> Self {
+        Self(secret)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Is this a key a Nexus makes: exactly 64 characters of `0` to `9` and `a` to `f`?
+    pub fn is_club_key(&self) -> bool {
+        self.0.len() == 64
+            && self
+                .0
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    }
+
+    /// The key itself — for the hash a host pins and compares, and for nothing else.
+    pub fn secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PositionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "PositionKey(none)"
+        } else {
+            "PositionKey(hidden)"
+        })
+    }
+}
 
 /// One slot of an exchange on the wire: the `(key, domain, raw)` triple, not a
 /// pair. `d` is the domain that matched an `Enum` value (`""` for every other
@@ -289,6 +349,12 @@ pub enum Msg {
         /// so those JOINs are the bytes they always were. An older host ignores it.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         role: String,
+        /// ⭐ **This position's club key** ([`PositionKey`]), on every v3 JOIN: the host pins its
+        /// hash at the position's first JOIN of an event and refuses, by name, a later JOIN
+        /// under that position id with any other. Absent from an older position's JOIN, which
+        /// the host refuses by its version; never written empty. An older host ignores it.
+        #[serde(default, skip_serializing_if = "PositionKey::is_empty")]
+        key: PositionKey,
     },
     /// host→pos, the join's answer.
     Welcome {
@@ -458,6 +524,10 @@ pub trait ClubBackend: Send + Sync {
     /// reaches the backend for the same reason: whether a position logging that
     /// contest may join this club is the policy layer's question. So does `role`, the
     /// exchange role the position sends under (`""` when it has none to say).
+    ///
+    /// ⭐ `key` is the JOIN's [`PositionKey`] (empty from an older position). The backend
+    /// holds a JOIN under a position id it has seen to the key that position first joined
+    /// with, and keeps no more of it than its hash: the key reaches this call and no other.
     #[allow(clippy::too_many_arguments)]
     fn join(
         &self,
@@ -468,6 +538,7 @@ pub trait ClubBackend: Send + Sync {
         max_seq: u64,
         contest: &str,
         role: &str,
+        key: &PositionKey,
     ) -> Result<JoinAccept, String>;
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
     /// the new high-water ack for `row.pos`. `row.pos` is always the position this
@@ -729,6 +800,7 @@ fn serve_club_connection(
                         max_seq,
                         contest,
                         role,
+                        key,
                     } => {
                         if v > PROTO_VERSION {
                             let _ = writer.write_all(
@@ -742,15 +814,16 @@ fn serve_club_connection(
                             );
                             break;
                         }
-                        let accept =
-                            match backend.join(v, &pos, &name, &call, max_seq, &contest, &role) {
-                                Ok(a) => a,
-                                Err(msg) => {
-                                    let _ = writer
-                                        .write_all(encode_line(&Msg::Error { msg }).as_bytes());
-                                    break;
-                                }
-                            };
+                        let accept = match backend
+                            .join(v, &pos, &name, &call, max_seq, &contest, &role, &key)
+                        {
+                            Ok(a) => a,
+                            Err(msg) => {
+                                let _ =
+                                    writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
+                                break;
+                            }
+                        };
                         let welcome = Msg::Welcome {
                             v: PROTO_VERSION,
                             event: accept.event,
@@ -975,6 +1048,9 @@ pub trait PositionSync: Send + Sync {
     /// This position's identity for the JOIN line:
     /// `(pos id, friendly name, station call, own max seq)`.
     fn identity(&self) -> (String, String, String, u64);
+    /// This position's club key for the JOIN line ([`PositionKey`]): what proves to the host
+    /// that this laptop is the one that first joined as this position id.
+    fn key(&self) -> PositionKey;
     /// The contest this position is logging, for the JOIN line (the rules-file id).
     fn contest(&self) -> String;
     /// The exchange role this position sends under, for the JOIN line (`""` when the
@@ -1052,6 +1128,7 @@ fn run_position_session(
             max_seq,
             contest: backend.contest(),
             role: backend.role(),
+            key: backend.key(),
         })
         .as_bytes(),
     )?;
@@ -1324,6 +1401,18 @@ mod tests {
                 max_seq: 42,
                 contest: String::new(),
                 role: String::new(),
+                key: PositionKey::default(),
+            },
+            // A v3 position's JOIN: the key travels as a plain string.
+            Msg::Join {
+                v: PROTO_VERSION,
+                pos: "a1b2c3d4".into(),
+                name: "CW tent".into(),
+                call: "W9ABC".into(),
+                max_seq: 42,
+                contest: "arrlfd".into(),
+                role: String::new(),
+                key: throwaway_key(),
             },
             Msg::Welcome {
                 v: 1,
@@ -1421,6 +1510,7 @@ mod tests {
             max_seq: 0,
             contest: String::new(),
             role: String::new(),
+            key: PositionKey::default(),
         });
         assert!(j.contains("\"t\":\"join\"") && j.contains("\"max_seq\""));
         let w = encode_line(&Msg::Welcome {
@@ -1586,9 +1676,11 @@ mod tests {
         acked: Mutex<std::collections::HashMap<String, u64>>,
         /// What the POLICY layer answers an older position with, if anything —
         /// the seam §18.2's refusal comes down.
-        refuse_below_v2: Mutex<Option<String>>,
+        refuse_older: Mutex<Option<String>>,
         /// The contest each JOIN named, in arrival order — what reached the policy layer.
         contests: Mutex<Vec<String>>,
+        /// The key each JOIN carried, in arrival order (throwaway values, test-only).
+        keys: Mutex<Vec<String>>,
         /// The role each JOIN named, in arrival order.
         roles: Mutex<Vec<String>>,
         /// Each presence report's clock, in arrival order.
@@ -1609,14 +1701,16 @@ mod tests {
             _max_seq: u64,
             contest: &str,
             role: &str,
+            key: &PositionKey,
         ) -> Result<JoinAccept, String> {
             self.log(format!("join v{v} {pos}"));
             self.contests.lock().unwrap().push(contest.to_string());
             self.roles.lock().unwrap().push(role.to_string());
+            self.keys.lock().unwrap().push(key.secret().to_string());
             // The guard is dropped before the branch, not held across it: an
             // `if let` scrutinee lives until the end of the body, which is how a
             // lock taken here would still be held while the arm runs.
-            let refusal = self.refuse_below_v2.lock().unwrap().clone();
+            let refusal = self.refuse_older.lock().unwrap().clone();
             if v < PROTO_VERSION {
                 if let Some(msg) = refusal {
                     return Err(msg);
@@ -1752,7 +1846,20 @@ mod tests {
             max_seq,
             contest: String::new(),
             role: String::new(),
+            key: throwaway_key(),
         }
+    }
+
+    /// A key for one test, never a real one: 64 hex digits from the operating system's
+    /// randomly seeded hasher, new on every run.
+    fn throwaway_key() -> PositionKey {
+        use std::hash::BuildHasher;
+        let seeded = std::hash::RandomState::new();
+        PositionKey::new(
+            (0..4u8)
+                .map(|i| format!("{:016x}", seeded.hash_one(i)))
+                .collect(),
+        )
     }
 
     fn qso(pos: &str, seq: u64, call: &str) -> Msg {
@@ -2038,9 +2145,8 @@ mod tests {
     #[test]
     fn the_host_sends_the_policy_layers_version_refusal_verbatim() {
         let club = Arc::new(FakeClub::default());
-        *club.refuse_below_v2.lock().unwrap() = Some(
-            "this club is running TN-QSO-PARTY and needs club sync v2 — this Nexus \
-             speaks v1, which cannot enter, show or send the TN-QSO-PARTY exchange."
+        *club.refuse_older.lock().unwrap() = Some(
+            "this club's host needs club sync v3 on every laptop. Update Nexus on this laptop."
                 .into(),
         );
         let (addr, sd) = start_host(club.clone());
@@ -2052,35 +2158,31 @@ mod tests {
         sd.store(true, Ordering::Relaxed);
         assert!(
             matches!(got.first(), Some(Msg::Error { msg })
-                if msg == &club.refuse_below_v2.lock().unwrap().clone().unwrap()),
+                if msg == &club.refuse_older.lock().unwrap().clone().unwrap()),
             "the refusal reaches the operator unaltered: {got:?}"
         );
         // POSITIVE CONTROL: the SAME host serves a current position. A gate that
         // refused everybody would pass the assertion above.
         let (addr2, sd2) = start_host(club.clone());
-        let ok = talk_raw(
-            addr2,
-            &[r#"{"t":"join","v":2,"pos":"bbbb0002","name":"","call":"","max_seq":0}"#],
-            500,
-        );
+        let ok = talk(addr2, &[join_msg("bbbb0002", 0)], 500);
         sd2.store(true, Ordering::Relaxed);
         assert!(
             ok.iter().any(|m| matches!(m, Msg::Welcome { .. })),
-            "control: a v2 position is welcomed by the same host: {ok:?}"
+            "control: a current position is welcomed by the same host: {ok:?}"
         );
     }
 
-    /// ⭐ THE new→old direction, and the reason `PROTO_VERSION` went to 2 at all:
-    /// a v2 position joining a SHIPPED v1 host is refused there, loudly, at hour
-    /// zero — and shows the operator that host's own words.
+    /// ⭐ THE new→old direction, and why `PROTO_VERSION` moves at all: a v3 position
+    /// joining a SHIPPED v2 host (1.12 to 1.17) is refused there, loudly, at hour zero —
+    /// and shows the operator that host's own words.
     ///
-    /// The v1 host is a socket speaking v1's rule, because the shipped build
-    /// cannot be linked in here; the bytes it answers with are `fdsync.rs`'s v1
-    /// error text, which is what a 1.x host actually writes.
+    /// The v2 host is a socket speaking v2's rule, because the shipped build
+    /// cannot be linked in here; the bytes it answers with are `fdsync.rs`'s
+    /// error text with v2 in it, which is what a 1.17 host actually writes.
     #[test]
-    fn a_v2_position_joining_a_v1_host_gets_that_hosts_refusal_verbatim() {
-        const V1_ERROR: &str =
-            "this host speaks Field Day sync v1, you sent v2 — update the host's Nexus";
+    fn a_v3_position_joining_a_v2_host_gets_that_hosts_refusal_verbatim() {
+        const V2_ERROR: &str =
+            "this host speaks Field Day sync v2, you sent v3 — update the host's Nexus";
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let seen_v = Arc::new(Mutex::new(0u32));
@@ -2092,11 +2194,11 @@ mod tests {
             let line = read_capped_line(&mut r).unwrap().unwrap();
             if let Some(Msg::Join { v, .. }) = decode_line(&line) {
                 *seen_v2.lock().unwrap() = v;
-                // v1's rule, verbatim: refuse a higher version and close.
-                if v > 1 {
+                // v2's rule, verbatim: refuse a higher version and close.
+                if v > 2 {
                     let _ = w.write_all(
                         encode_line(&Msg::Error {
-                            msg: V1_ERROR.into(),
+                            msg: V2_ERROR.into(),
                         })
                         .as_bytes(),
                     );
@@ -2119,12 +2221,12 @@ mod tests {
 
         assert_eq!(
             *seen_v.lock().unwrap(),
-            2,
-            "this build's position announces v2, which is what makes the old host refuse it"
+            3,
+            "this build's position announces v3, which is what makes the old host refuse it"
         );
         assert_eq!(
             pos.errors.lock().unwrap().as_slice(),
-            [V1_ERROR.to_string()],
+            [V2_ERROR.to_string()],
             "the old host's own words reach the operator unaltered"
         );
     }
@@ -2247,6 +2349,7 @@ mod tests {
                 max_seq: 0,
                 contest: String::new(),
                 role: String::new(),
+                key: throwaway_key(),
             }],
             500,
         );
@@ -2260,7 +2363,7 @@ mod tests {
         // moved when PROTO_VERSION did.
         assert!(
             matches!(got.first(), Some(Msg::Error { msg })
-                if msg == "this host speaks Field Day sync v2, you sent v3 — update the host's Nexus"),
+                if msg == "this host speaks Field Day sync v3, you sent v4 — update the host's Nexus"),
             "the refusal names both versions: {got:?}"
         );
         // Control: the backend never even saw the join.
@@ -2398,6 +2501,8 @@ mod tests {
         refuse_host: Mutex<Option<String>>,
         /// Every round trip the pump handed back, in arrival order.
         samples: Mutex<Vec<ClockSample>>,
+        /// This position's club key, a throwaway one.
+        key: PositionKey,
     }
     impl Default for FakePosition {
         fn default() -> Self {
@@ -2411,12 +2516,16 @@ mod tests {
                 host_contests: Mutex::new(Vec::new()),
                 refuse_host: Mutex::new(None),
                 samples: Mutex::new(Vec::new()),
+                key: throwaway_key(),
             }
         }
     }
     impl PositionSync for FakePosition {
         fn identity(&self) -> (String, String, String, u64) {
             ("dddd0001".into(), "SSB tent".into(), "KD9TAW".into(), 3)
+        }
+        fn key(&self) -> PositionKey {
+            self.key.clone()
         }
         fn contest(&self) -> String {
             "ilqp".into()
@@ -2552,6 +2661,66 @@ mod tests {
             vec![true, false],
             "link chip saw up then down"
         );
+        assert_eq!(
+            *club.keys.lock().unwrap(),
+            [posn.key.secret().to_string()],
+            "the pump's JOIN carried the position's key to the host's backend"
+        );
+    }
+
+    /// ⭐ **A JOIN carries its position's key to the host's backend, and nothing prints it.**
+    /// The key is a credential (`PositionKey`): the JOIN line is the one place it is written,
+    /// in full, and the host's backend the one place it is handed. `Debug` (every `{:?}` of a
+    /// message, a panic's, a failing assertion's) shows none of it. An older position's JOIN,
+    /// which has none, is the bytes it always was. CONTROL: the encoded line does carry it, so
+    /// the searches below can find it where it is.
+    #[test]
+    fn a_join_carries_its_key_to_the_host_and_nothing_prints_it() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let join = join_msg("aaaa0001", 0);
+        let Msg::Join { key, .. } = &join else {
+            unreachable!()
+        };
+        let secret = key.secret().to_string();
+        assert!(key.is_club_key(), "a throwaway key has a Nexus key's shape");
+        let line = encode_line(&join);
+        assert!(line.contains(&secret), "CONTROL: the JOIN line carries it");
+        let got = talk(addr, std::slice::from_ref(&join), 500);
+        sd.store(true, Ordering::Relaxed);
+        assert!(
+            got.iter().any(|m| matches!(m, Msg::Welcome { .. })),
+            "{got:?}"
+        );
+        assert_eq!(*club.keys.lock().unwrap(), std::slice::from_ref(&secret));
+        for shown in [
+            format!("{join:?}"),
+            format!("{key:?}"),
+            format!("{:?}", decode_line(&line)),
+        ] {
+            assert!(!shown.contains(&secret), "{shown}");
+            assert!(shown.contains("PositionKey(hidden)"), "{shown}");
+        }
+        let older = encode_line(&Msg::Join {
+            v: 2,
+            pos: "aaaa0001".into(),
+            name: String::new(),
+            call: String::new(),
+            max_seq: 0,
+            contest: String::new(),
+            role: String::new(),
+            key: PositionKey::default(),
+        });
+        assert_eq!(
+            older,
+            "{\"t\":\"join\",\"v\":2,\"pos\":\"aaaa0001\",\"name\":\"\",\"call\":\"\",\"max_seq\":0,\"contest\":\"\"}\n"
+        );
+        for not_one in ["", "abcd", &"A".repeat(64), &format!("{secret}0")] {
+            assert!(
+                !PositionKey::new(not_one.into()).is_club_key(),
+                "{not_one:?}"
+            );
+        }
     }
 
     /// ⭐ **The contest travels both ways at JOIN**, because a club log keys, scores and
@@ -2621,6 +2790,7 @@ mod tests {
             max_seq: 0,
             contest: "arrlfd".into(),
             role: String::new(),
+            key: throwaway_key(),
         });
         assert!(!no_role.contains("role"), "{no_role}");
         host_sd.store(true, Ordering::Relaxed);

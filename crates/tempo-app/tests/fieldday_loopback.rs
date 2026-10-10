@@ -18,6 +18,29 @@ use tempo_net::fdsync::{self, ClubBackend, PositionSync};
 
 type Shared = Arc<Mutex<Engine>>;
 
+/// 64 hex digits for `tag`, generated (a per-run seed through the operating system's hasher):
+/// the same all through one run, and never a real key or hash.
+fn throwaway_hex(tag: &str) -> String {
+    use std::hash::BuildHasher;
+    static SEED: std::sync::OnceLock<std::hash::RandomState> = std::sync::OnceLock::new();
+    let seed = SEED.get_or_init(std::hash::RandomState::new);
+    (0..4u8)
+        .map(|i| format!("{:016x}", seed.hash_one((tag, i))))
+        .collect()
+}
+
+/// The club key a position `posid` sends this run: the same through its restarts, as a
+/// laptop's own key is (the shell keeps it beside settings.json).
+fn club_key(posid: &str) -> fdsync::PositionKey {
+    fdsync::PositionKey::new(throwaway_hex(posid))
+}
+
+/// The host bridge's key hash for this run, where the shell gives it SHA-256: one way, so a
+/// search of what the host keeps for a key can tell the two apart.
+fn test_hash(secret: &str) -> String {
+    throwaway_hex(&format!("hash of {secret}"))
+}
+
 /// A Field-Day-ready engine: master on, exchange set, S&P mode, posid set.
 fn fd_engine(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
     let mut e = Engine::new(call, "EN61", 0);
@@ -30,6 +53,7 @@ fn fd_engine(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
     s.fd_join_addr = join_addr.into();
     e.apply_settings(s);
     e.set_mode("fieldday-sp").expect("enter FD");
+    e.set_fd_position_key(club_key(posid));
     Arc::new(Mutex::new(e))
 }
 
@@ -51,7 +75,7 @@ fn reusable_listener(port: u16) -> std::net::TcpListener {
 
 fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
-    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone()));
+    let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone(), test_hash));
     let sd2 = sd.clone();
     std::thread::spawn(move || fdsync::serve_until(listener, backend, sd2));
     sd
@@ -540,6 +564,7 @@ fn join_line(pos: &str, call: &str) -> String {
         max_seq: 0,
         contest: "arrlfd".into(),
         role: String::new(),
+        key: club_key(pos),
     })
 }
 
@@ -641,8 +666,9 @@ fn a_lan_peer_cannot_send_contacts_as_another_position() {
 /// sockets, at an ARRL Field Day club, where a position on any call sign joins (the GOTA
 /// station's). A JOIN whose call is not a call sign is turned away by name and on the host's
 /// list, and a contact whose call is not one is kept out of the club's log and named on the
-/// host's screen. CONTROL: a GOTA position's JOIN as a Nexus older than the role field writes
-/// it joins, and its contact goes into the club's file under its own call.
+/// host's screen. A GOTA position's JOIN as an older Nexus writes it (1.17's bytes, no club
+/// key) is turned away by name, and nothing it sends merges. CONTROL: the same GOTA position
+/// on this build joins, and its contact goes into the club's file under its own call.
 #[test]
 fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
     let dir = std::env::temp_dir().join(format!("fd-breakers-{}", std::process::id()));
@@ -718,9 +744,29 @@ fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
         &[format!("{older}\n"), row_line("cccc0003", 1, "K1ABC")],
         800,
     );
+    let update = engine_lock(&host)
+        .fd_club_log()
+        .and_then(|c| c.version_refusal(2))
+        .expect("a v2 JOIN is refused by its version");
+    assert!(
+        told(&got, &update),
+        "an older Nexus is told to update: {got:?}"
+    );
+    assert!(
+        !got.iter().any(|m| matches!(m, fdsync::Msg::Ack { .. })),
+        "nothing it sent merged: {got:?}"
+    );
+    let got = raw_peer(
+        &addr,
+        &[
+            join_line("cccc0003", "K9GOT"),
+            row_line("cccc0003", 1, "K1ABC"),
+        ],
+        800,
+    );
     assert!(
         got.iter().any(|m| matches!(m, fdsync::Msg::Ack { seq: 1 })),
-        "CONTROL: an older GOTA position joins and its contact merges: {got:?}"
+        "CONTROL: the GOTA position on this build joins and its contact merges: {got:?}"
     );
     assert_eq!(
         club_file_calls(&host),
@@ -730,6 +776,150 @@ fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
         ]
     );
     for sd in [host_sd, host_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⭐ **A LAN peer cannot join as another laptop's position** — over the real bridge and
+/// sockets, at an ARRL Field Day club. A position id rides every board line, so any peer can
+/// read one off the board; with another key than the one that position first joined with, its
+/// JOIN is turned away by name before it can send a contact as that position, and the host's
+/// screen names it. The position's own laptop keeps syncing, and rejoins after a host restart,
+/// when the peer is turned away still. Nothing the host keeps or shows holds a key: its journal
+/// keeps the hash, and the snapshot every screen and Remote read, the TV's board and Settings
+/// hold none. CONTROL: the JOIN line itself carries the key, so the searches find it there.
+#[test]
+fn a_lan_peer_cannot_join_as_another_laptops_position() {
+    let dir = std::env::temp_dir().join(format!("fd-held-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_held.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = fd_engine("W9XYZ", "aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let tent = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let tent_sd = start_pump(&tent, &addr);
+    log_fd(&tent, "K1ABC", "EMA", "CW");
+    wait_until("the tent's contact merged", 10, || club_rows(&host) == 1);
+
+    let peer_key = club_key("a peer that read bbbb0002 off the board");
+    let peer_join = fdsync::encode_line(&fdsync::Msg::Join {
+        v: fdsync::PROTO_VERSION,
+        pos: "bbbb0002".into(),
+        name: "CW tent".into(),
+        call: "W9XYZ".into(),
+        max_seq: 0,
+        contest: "arrlfd".into(),
+        role: String::new(),
+        key: peer_key.clone(),
+    });
+    let got = raw_peer(
+        &addr,
+        &[peer_join.clone(), row_line("bbbb0002", 2, "W1FAK")],
+        800,
+    );
+    let mut wrong = Vec::new();
+    if !told(&got, tempo_app::fdevent::POSITION_HELD) {
+        wrong.push(format!("the peer was not told why: {got:?}"));
+    }
+    if got.iter().any(|m| matches!(m, fdsync::Msg::Ack { .. })) {
+        wrong.push(format!("the peer's contact was acked: {got:?}"));
+    }
+    log_fd(&tent, "N0XYZ", "MN", "CW");
+    wait_until("the tent's second contact merged", 10, || {
+        club_rows(&host) == 2
+    });
+    let calls = club_file_calls(&host);
+    if calls
+        != [
+            ("W9XYZ".to_string(), "K1ABC".to_string()),
+            ("W9XYZ".to_string(), "N0XYZ".to_string()),
+        ]
+    {
+        wrong.push(format!("the club's file: {calls:?}"));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let listed: Vec<String> = engine_lock(&host)
+        .fd_club_log()
+        .map(|c| c.refused(now).iter().map(|r| r.reason.clone()).collect())
+        .unwrap_or_default();
+    if listed != [tempo_app::fdevent::POSITION_HELD] {
+        wrong.push(format!("the host's list: {listed:?}"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    // The host restarts on the same event's journal: the same pins.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    engine_lock(&host).fd_host_stop();
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, reusable_listener(port));
+    let host_pump_sd = start_pump(&host, &addr);
+    log_fd(&tent, "W5DEF", "STX", "CW");
+    wait_until("the tent rejoined the restarted host", 30, || {
+        club_rows(&host) == 3
+    });
+    let got = raw_peer(&addr, std::slice::from_ref(&peer_join), 800);
+    assert!(
+        told(&got, tempo_app::fdevent::POSITION_HELD),
+        "the peer is still turned away after the restart: {got:?}"
+    );
+
+    // Where the keys are, and where they are not.
+    let keys = [club_key("aaaa0001"), club_key("bbbb0002"), peer_key];
+    assert!(
+        peer_join.contains(keys[2].secret()),
+        "CONTROL: the JOIN line carries it"
+    );
+    let kept = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        kept.contains(&test_hash(keys[1].secret())),
+        "the journal pins the tent by its key's hash"
+    );
+    let shown = {
+        let h = engine_lock(&host);
+        let t = engine_lock(&tent);
+        let board = h.fd_board_snapshot().unwrap();
+        vec![
+            ("the host's journal", kept),
+            (
+                "the host's snapshot",
+                serde_json::to_string(&h.snapshot()).unwrap(),
+            ),
+            (
+                "the tent's snapshot",
+                serde_json::to_string(&t.snapshot()).unwrap(),
+            ),
+            (
+                "the host's Settings",
+                serde_json::to_string(h.settings()).unwrap(),
+            ),
+            (
+                "the tent's Settings",
+                serde_json::to_string(t.settings()).unwrap(),
+            ),
+            (
+                "the TV's board",
+                tempo_app::fd_scoreboard::build_data_core(&board, now)
+                    + &tempo_app::fd_scoreboard::build_meta(&board, now),
+            ),
+        ]
+    };
+    for (what, text) in &shown {
+        for key in &keys {
+            assert!(!text.contains(key.secret()), "{what} holds a club key");
+        }
+    }
+    for sd in [host_sd, host_pump_sd, tent_sd] {
         sd.store(true, Ordering::Relaxed);
     }
     std::thread::sleep(Duration::from_millis(300));
