@@ -359,6 +359,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on this computer. Save refuses a change that would put one there and says which port to change.
   A setup an earlier version saved that way is kept as it is, and the status bar names it until you
   change it. A rotator's port there is moved for you, since Settings has no control for it.
+- **A port an earlier version left clashing is refused until you change it.** A radio on NET rigctl
+  whose address on this computer an earlier version gave to another radio's rigctld, or to Share
+  this radio with other programs, read and could key that other radio, or Nexus itself. Nexus now
+  never opens that address, for the radio you operate, one in the radio switcher or one picked from
+  the Remote: nothing is sent there, a key included, and the CAT status names the radio or the
+  Share this radio port to change. Changing it connects at once. Test CAT and Auto-test now show
+  why Settings refused their save, as Save does, rather than "Could not run the CAT test."
+  NEEDS-BENCH: wfview's rigctld on a real radio, with a settings file from 1.17.0 where another
+  radio's rigctld TCP Port is wfview's port: CAT stays off with that message until the port is
+  changed, then follows the dial and keys through wfview.
 - **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
   opened no connection at all (your own rigctld not started yet, a port something else holds,
   Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
