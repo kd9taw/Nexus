@@ -365,6 +365,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those it now shows only while the clock is more than a second off UTC, which is when the clock
   chip turns amber. A stopped Windows Time service, or one that has never synchronised, still gets
   the button whatever the clock reads.
+- **A clock repair that Windows refuses part-way says so.** Repair clock said "Clock repaired"
+  whenever the administrator prompt was accepted, even when Windows then refused a step of the
+  repair, so the button went away and came back at the next clock check. It now says the clock
+  was not repaired and stays, so you can press it again.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16

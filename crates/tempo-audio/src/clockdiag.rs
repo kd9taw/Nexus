@@ -686,9 +686,7 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
         .map(|c| c.join(" "))
         .collect::<Vec<_>>()
         .join(" && ");
-    let script = format!(
-        "Start-Process -FilePath cmd.exe -ArgumentList '/c',\"{joined}\" -Verb RunAs -Wait -WindowStyle Hidden"
-    );
+    let script = elevated_script(&joined);
     // Absolute path: a GUI-launched process gets a minimal `PATH`, the trap this
     // tree documents in `rigctld_proc.rs`.
     tempo_core::process::command(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
@@ -696,6 +694,18 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
         .status()
         .map(|st| st.success())
         .unwrap_or(false)
+}
+
+/// The PowerShell that runs `joined` under one elevation and exits with its
+/// status. `-Wait` alone exits 0 whatever the command returned, so a repair
+/// Windows refused part-way read as one that took
+/// (`the_elevated_script_exits_with_the_repairs_own_status`). `Stop` keeps a
+/// `Start-Process` that fails (a declined prompt) from running on to the `exit`,
+/// which would exit 0 with no process to ask.
+fn elevated_script(joined: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath cmd.exe -ArgumentList '/c',\"{joined}\" -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+    )
 }
 
 /// The operator-facing line after a repair attempt.
@@ -1308,6 +1318,26 @@ TimeSync.exe                  9112 Console                    1     12,480 K
             repair_outcome_note(&d, true),
             "started the Windows Time service"
         );
+    }
+
+    /// ⚠️ A REPAIR WINDOWS REFUSED PART-WAY MUST READ AS ONE. PowerShell's own exit status is all
+    /// [`run_repair_elevated`] sees, and `Start-Process -Wait` exits 0 whatever the command it
+    /// waited for returned. Measured with Windows PowerShell on a Windows 11 machine (2026-10-10,
+    /// unelevated, `cmd /c exit 5` in place of the repair): that shape exited 0, and this one
+    /// (`-PassThru`, then `exit` with the command's own code) exited 5, and 0 for `exit 0`. A
+    /// repair that failed said "Clock repaired", came off offer, and was offered again by the
+    /// next pass. With `Start-Process` itself failing (a program that is not there, standing in
+    /// for a declined prompt), `-PassThru` alone exited 0 and with `Stop` first exited 1.
+    #[test]
+    fn the_elevated_script_exits_with_the_repairs_own_status() {
+        let s = elevated_script("w32tm.exe /resync");
+        assert!(s.contains("-Verb RunAs"), "still one elevation: {s}");
+        assert!(
+            s.starts_with("$ErrorActionPreference = 'Stop'; $p = Start-Process "),
+            "{s}"
+        );
+        assert!(s.contains(" -Wait -PassThru "), "{s}");
+        assert!(s.ends_with("; exit $p.ExitCode"), "{s}");
     }
 
     /// The elevated helper never runs anything off Windows, and never runs
