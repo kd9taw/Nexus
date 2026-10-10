@@ -412,9 +412,47 @@ describe('the host\'s club block names who it turned away and how full its board
     expect(screen.getByText(/Each position's club board shows 59 of this club's 70 positions/)).toBeTruthy()
   })
 
+  // ⭐ THE HOST'S LASTING LIST of contacts it kept out of the club's log: who sent each and
+  // why, for the rest of the event, not a minute's note that goes when that position rejoins.
+  it('lists the contacts it kept out of the club\'s log, and who sent each', () => {
+    render(
+      <FdClubSection
+        club={{
+          ...HOST,
+          keptOut: {
+            total: 2,
+            latest: [
+              {
+                posName: 'SSB tent',
+                call: 'W9XYZ',
+                reason: "its contact with K1ABC is not in the club's log: its band holds what the club's log does not take.",
+              },
+              { posName: '', call: 'K9GOT', reason: "a contact it sent is not in the club's log." },
+            ],
+          },
+        }}
+      />,
+    )
+    expect(screen.getByText(/2 contacts the positions sent are not in the club's log/)).toBeTruthy()
+    expect(screen.getByText(/From SSB tent \(W9XYZ\): its contact with K1ABC is not in the club's log/)).toBeTruthy()
+    expect(screen.getByText(/From K9GOT: a contact it sent is not in the club's log/)).toBeTruthy()
+    expect(screen.queryByText(/more, not listed/)).toBeNull()
+  })
+
+  it('says how many more it keeps than it lists', () => {
+    render(
+      <FdClubSection
+        club={{ ...HOST, keptOut: { total: 20, latest: [{ posName: 'SSB tent', call: 'W9XYZ', reason: 'x' }] } }}
+      />,
+    )
+    expect(screen.getByText(/20 contacts the positions sent are not in the club's log/)).toBeTruthy()
+    expect(screen.getByText(/19 more, not listed here/)).toBeTruthy()
+  })
+
   it('POSITIVE CONTROL: a club with room and no refusals says neither', () => {
     render(<FdClubSection club={HOST} />)
     expect(screen.queryByText(/Turned away/)).toBeNull()
     expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
+    expect(screen.queryByText(/not in the club's log/)).toBeNull()
   })
 })

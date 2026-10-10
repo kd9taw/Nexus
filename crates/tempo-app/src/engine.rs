@@ -12739,6 +12739,23 @@ impl Engine {
                         .collect()
                 })
                 .unwrap_or_default(),
+            // The host's alone: every contact it kept out of the club's log, for the rest of
+            // the event: how many, and the newest it names.
+            kept_out: self.fd_club.as_ref().and_then(|c| {
+                let all = c.kept_out();
+                let newest = all.len().saturating_sub(crate::fdevent::KEPT_OUT_SHOWN);
+                (!all.is_empty()).then(|| crate::dto::FdClubKeptOutDto {
+                    total: all.len() as u32,
+                    latest: all[newest..]
+                        .iter()
+                        .map(|k| crate::dto::FdClubRefusedDto {
+                            pos_name: k.label.clone(),
+                            call: k.call.clone(),
+                            reason: k.reason.clone(),
+                        })
+                        .collect(),
+                })
+            }),
         })
     }
 
@@ -43527,6 +43544,66 @@ mod tests {
             )
             .unwrap_or_else(|why| panic!("{pos}: {why}"));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host's status lists every contact it kept out of the club's log** — the
+    /// `club.keptOut` block every screen and Remote read: how many, and the newest named (at most
+    /// `KEPT_OUT_SHOWN`, oldest of those first), with the position that sent each and why.
+    /// CONTROL: absent while the club has kept nothing out, so a club that never does sends the
+    /// bytes it always sent.
+    #[test]
+    fn the_hosts_status_lists_every_contact_it_kept_out() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-kept-out-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut e = party_host(&dir);
+        e.fd_club_join(
+            v,
+            "bbbb0002",
+            "CW tent",
+            "W9XYZ",
+            "ilqp",
+            "in_state",
+            &club_key_hash("bbbb0002"),
+        )
+        .unwrap();
+        let club =
+            |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["fieldDay"]["club"].clone();
+        assert!(club(&e).is_object(), "the host's club block");
+        assert!(
+            club(&e).get("keptOut").is_none(),
+            "CONTROL: nothing kept out, nothing sent"
+        );
+        let shown = crate::fdevent::KEPT_OUT_SHOWN as u64;
+        for seq in 1..=shown + 4 {
+            e.fd_club_merge(&tempo_net::fdsync::WireQso {
+                pos: "bbbb0002".into(),
+                seq,
+                call: format!("K9A\nB{seq}"),
+                band: "40m".into(),
+                mode: "CW".into(),
+                when: now_unix_secs(),
+                ..Default::default()
+            });
+        }
+        let kept = club(&e)["keptOut"].clone();
+        assert_eq!(kept["total"], shown + 4, "{kept}");
+        let latest = kept["latest"].as_array().unwrap();
+        assert_eq!(latest.len() as u64, shown, "the newest it names");
+        assert_eq!(latest[0]["posName"], "CW tent");
+        assert_eq!(latest[0]["call"], "W9XYZ");
+        assert!(
+            latest[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("is not in the club's log"),
+            "{kept}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

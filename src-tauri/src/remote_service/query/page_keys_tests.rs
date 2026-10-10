@@ -672,8 +672,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubRefusedDto, FdKeptOutDto,
-        FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto, FdClubRefusedDto,
+        FdKeptOutDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -777,8 +777,22 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     "dupes",
                     "board",
                 ],
-                &["lastError", "dkeys", "boardFull", "refused"],
+                &["lastError", "dkeys", "boardFull", "refused", "keptOut"],
             );
+            if let Some(kept) = club.get("keptOut") {
+                takes(
+                    &format!("{what}: the contacts the club kept out"),
+                    kept,
+                    &["total", "latest"],
+                );
+                for contact in kept["latest"].as_array().unwrap() {
+                    takes(
+                        &format!("{what}: a contact the club kept out"),
+                        contact,
+                        &["posName", "call", "reason"],
+                    );
+                }
+            }
             if let Some(full) = club.get("boardFull") {
                 takes(
                     &format!("{what}: the club's full board"),
@@ -987,6 +1001,14 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 call: "W1AW".into(),
                 reason: "this club sends the in-state exchange".into(),
             }],
+            kept_out: Some(FdClubKeptOutDto {
+                total: 2,
+                latest: vec![FdClubRefusedDto {
+                    pos_name: "CW tent".into(),
+                    call: "W1AW".into(),
+                    reason: "its contact with K1ABC is not in the club's log".into(),
+                }],
+            }),
         }),
         upload: Default::default(),
         receives: Vec::new(),

@@ -296,3 +296,18 @@ it('accepts a host club\'s full board and the positions it turned away, and stil
   expect(()=>parseFieldDay(page),JSON.stringify(bad).slice(0,60)).toThrow('invalidFieldDay')
  }
 })
+// A host's lasting list of the contacts it kept out of the club's log (`keptOut`): how many,
+// and the latest it names. Sent only by a host that kept one out, so the page that takes it is
+// deployed before the release that writes it.
+it('accepts the contacts a host club kept out of its log, and still bounds them',()=>{
+ const page=fieldDayPage()
+ const club=(page.meta as {source:{fieldDay:{club:Record<string,unknown>}}}).source.fieldDay.club
+ const entry={posName:'SSB tent',call:'W9XYZ',reason:"its contact with K1ABC is not in the club's log"}
+ club.keptOut={total:20,latest:[entry]}
+ expect(parseFieldDay(page).fieldDay?.club?.keptOut).toEqual({total:20,latest:[entry]})
+ for(const bad of [{total:1},{latest:[]},{total:-1,latest:[]},{total:1.5,latest:[]},{total:0,latest:[entry]},
+  {total:1,latest:[{posName:'a',call:'b'}]},{total:17,latest:Array(17).fill(entry)},{total:1,latest:[entry],extra:0},[],null]){
+  club.keptOut=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad).slice(0,60)).toThrow('invalidFieldDay')
+ }
+})

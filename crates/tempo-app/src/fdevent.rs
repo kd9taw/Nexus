@@ -40,9 +40,10 @@
 //! JOIN ([`ClubLog::key_refusal`]; it keeps the key's hash, never the key). A row whose call is
 //! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
 //! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
-//! and named on the host's screen; the writers in `tempo_core` guard each line too. Each kind of string has one reader (the section "One
-//! reading of every string a peer sends"), and what the host shows, or says back, is that
-//! reading: one line of plain text, a `?` where a character cannot be shown.
+//! and listed on the host's screen until the event ends; the writers in `tempo_core` guard
+//! each line too. Each kind of string has one reader (the section "One reading of every
+//! string a peer sends"), and what the host shows, or says back, is that reading: one line of
+//! plain text, a `?` where a character cannot be shown.
 //!
 //! Pure logic, no sockets — unit-testable. Engine wiring: `Engine::fd_club_*`.
 
@@ -682,6 +683,30 @@ const MAX_REFUSED: usize = 16;
 /// The largest whole number a JSON number carries exactly to a browser (2^53 − 1).
 const JSON_EXACT: u64 = (1 << 53) - 1;
 
+/// ⭐ **A contact this host kept out of the club's log** ([`ClubLog::kept_out`]): which
+/// position sent it, and what the host's screen says of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptOut {
+    /// The position that sent it, and the contact's seq there: one entry per contact, however
+    /// often that position sends it again.
+    pub pos: String,
+    pub seq: u64,
+    /// That position's name and call as the host knew them, read the way the club reads them.
+    pub label: String,
+    pub call: String,
+    /// The sentence the host's screen shows ([`admit`]'s).
+    pub reason: String,
+    /// Host clock when it was first kept out.
+    pub at: u64,
+}
+
+/// The most kept-out contacts the host keeps, journals and lists: a peer can send any number,
+/// and a list past this is a peer's flood, not a club's typing.
+const MAX_KEPT_OUT: usize = 256;
+/// The most of them the host's status names, the newest, beside how many it keeps: each is a
+/// sentence, and the whole Field Day view Remote reads is bounded.
+pub const KEPT_OUT_SHOWN: usize = 16;
+
 /// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
 /// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
 /// `call` are required) and skips it, as it skips a torn line; this build reads each before
@@ -697,6 +722,9 @@ enum JournalNote {
         key_hash: String,
         at: u64,
     },
+    /// A contact kept out of the club's log ([`ClubLog::kept_out`]), so a restarted host still
+    /// lists it for the rest of the event.
+    KeptOut(KeptOut),
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -765,6 +793,11 @@ pub struct ClubLog {
     /// carried — never the key ([`pin`](Self::pin), [`key_refusal`](Self::key_refusal)).
     /// Journaled, so a restarted host still holds every pin it made.
     pins: HashMap<String, String>,
+    /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
+    /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
+    /// one entry per contact, however often its position sends it again; at most
+    /// [`MAX_KEPT_OUT`].
+    kept_out: Vec<KeptOut>,
     /// `(positions, shown)` while the board last sent was as big as one club line carries,
     /// from [`tempo_net::fdsync::board_fit`] ([`note_board_sent`](Self::note_board_sent)).
     /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
@@ -929,6 +962,30 @@ impl ClubLog {
         });
     }
 
+    /// List one kept-out contact, unless it is listed already, is in the club's log after all,
+    /// or the list is full. `true` = it was listed (and the caller journals it).
+    fn list_kept_out(&mut self, k: KeptOut) -> bool {
+        let id = (k.pos.clone(), k.seq);
+        if self.ids.contains(&id)
+            || self.kept_out.len() >= MAX_KEPT_OUT
+            || self
+                .kept_out
+                .iter()
+                .any(|o| (o.pos.as_str(), o.seq) == (id.0.as_str(), id.1))
+        {
+            return false;
+        }
+        self.kept_out.push(k);
+        true
+    }
+
+    /// ⭐ **Every contact this host kept out of the club's log**, oldest first, for the rest of
+    /// the event — its screen's lasting list, through a restart. Each stays in its position's
+    /// own log; the club's file goes without it.
+    pub fn kept_out(&self) -> &[KeptOut] {
+        &self.kept_out
+    }
+
     /// The key hash `posid` is pinned to, if any (the host's own tests and the shell's).
     pub fn pinned(&self, posid: &str) -> Option<&str> {
         self.pins.get(posid).map(String::as_str)
@@ -1070,6 +1127,12 @@ impl ClubLog {
                             self.pins.entry(pos).or_insert(key_hash);
                         }
                         JournalNote::Pin { .. } => {}
+                        // A previous event's are as stale as its rows; a contact a later row
+                        // merged under the same id is in the club's log after all.
+                        JournalNote::KeptOut(k) if k.at >= oldest_unix => {
+                            self.list_kept_out(k);
+                        }
+                        JournalNote::KeptOut(_) => {}
                     }
                     continue;
                 }
@@ -1109,8 +1172,9 @@ impl ClubLog {
     ///
     /// ⭐ **THE BOUNDARY where a peer's row enters the club log** ([`admit`]): a row whose call
     /// is not a call sign, or whose strings hold anything that could end a line of the club's
-    /// files or open another, is kept out (not merged, not acked, nothing journaled), and the
-    /// host's list of turned-away positions names it ([`refused`](Self::refused)). Every other
+    /// files or open another, is kept out (not merged, not acked, no row journaled), and the
+    /// host's lasting list names it, with the position that sent it, until the event ends
+    /// ([`kept_out`](Self::kept_out): journaled as a note of its own). Every other
     /// row merges with its call and operator as [`admit`] read them. `q.pos` is the position its
     /// connection JOINED as: the socket loop refuses a row naming any other
     /// (`tempo_net::fdsync::ANOTHER_POSITIONS_ROW`), so the stamp is that JOIN's call.
@@ -1132,7 +1196,17 @@ impl ClubLog {
                     .get(&q.pos)
                     .map(|p| (p.label.clone(), p.call.clone()))
                     .unwrap_or_default();
-                self.note_refused(&q.pos, &label, &call, &reason, now);
+                let kept = KeptOut {
+                    pos: q.pos.clone(),
+                    seq: q.seq,
+                    label,
+                    call,
+                    reason,
+                    at: now,
+                };
+                if self.list_kept_out(kept.clone()) {
+                    self.journal_note(&JournalNote::KeptOut(kept));
+                }
             }
         }
         self.positions.get(&q.pos).map(|p| p.acked).unwrap_or(0)
@@ -1164,6 +1238,10 @@ impl ClubLog {
         if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
+        // A contact once kept out and now merged (a later build's rules let it in) is in the
+        // club's log, so the host's list no longer says it is not.
+        self.kept_out
+            .retain(|k| (k.pos.as_str(), k.seq) != (row.posid.as_str(), row.seq));
         let pos = self.positions.entry(row.posid.clone()).or_default();
         pos.qsos_raw += 1;
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
@@ -4065,10 +4143,10 @@ mod tests {
     /// (`OPERATORS` straight off the rows).
     ///
     /// Kept out, the club's files are the bytes of the club that never received it, the ack
-    /// does not move, and the host's list names the position. The one string that is let in
-    /// is Cabrillo's last line as a WORD inside a free-text value: it opens no line, so it
-    /// is merged and every line is still the one the writer opened (a call is a call sign,
-    /// so there it is kept out like the rest).
+    /// does not move, and the host's list of kept-out contacts names the position. The one
+    /// string that is let in is Cabrillo's last line as a WORD inside a free-text value: it
+    /// opens no line, so it is merged and every line is still the one the writer opened (a
+    /// call is a call sign, so there it is kept out like the rest).
     #[test]
     fn a_contact_that_could_open_a_line_of_the_club_file_is_kept_out_by_name() {
         let wfd = |q: WireQso| WireQso {
@@ -4199,10 +4277,10 @@ mod tests {
                         }
                         continue;
                     }
-                    let named = club.refused(2).iter().any(|r| {
-                        r.label == "CW tent"
-                            && r.call == "W9XYZ"
-                            && r.reason.contains("is not in the club's log")
+                    let named = club.kept_out().iter().any(|k| {
+                        k.label == "CW tent"
+                            && k.call == "W9XYZ"
+                            && k.reason.contains("is not in the club's log")
                     });
                     if merged || ack != 0 || files(&club).ok() != Some(without.clone()) || !named {
                         wrong.push(format!(
@@ -4553,6 +4631,102 @@ mod tests {
             None,
             "a previous event's pin"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- the host's lasting list of contacts kept out of the club's log ----------------
+
+    /// ⭐ **A contact kept out of the club's log stays on the host's list until the event
+    /// ends**: past the minute a turned-away JOIN is shown, past its position's next JOIN, and
+    /// through a host restart (the journal), one entry per contact however often it is sent
+    /// again, oldest first. A previous event's are not listed, an older Nexus's replay reads
+    /// none as a row, and one a later row merged under the same id is in the log after all.
+    /// CONTROLS: a contact the club takes is not listed, and the turned-away list, which is
+    /// for JOINs, names no contact.
+    #[test]
+    fn a_kept_out_contact_stays_listed_until_the_event_ends() {
+        let dir = scratch("kept-out");
+        let path = dir.join("fd_event_kept.jsonl");
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        club.join("bbbb0002", "CW tent", "W9XYZ", 1_000);
+        let row = |seq: u64, call: &str, band: &str| {
+            with_sent(
+                wq(
+                    "bbbb0002",
+                    seq,
+                    call,
+                    band,
+                    "CW",
+                    "EMA",
+                    FD_START + seq * 60,
+                ),
+                ("3A", "WI"),
+            )
+        };
+        club.merge(&row(1, "K1ABC", "40m"), 1_000);
+        club.merge(&row(2, "W1AW", "40m\u{200B}"), 1_001);
+        club.merge(&row(2, "W1AW", "40m\u{200B}"), 1_002);
+        club.merge(&row(3, "K1F\nAKE", "20m"), 1_003);
+        let listed = |c: &ClubLog| {
+            c.kept_out()
+                .iter()
+                .map(|k| (k.seq, k.label.clone(), k.call.clone()))
+                .collect::<Vec<_>>()
+        };
+        let want = vec![
+            (2, "CW tent".to_string(), "W9XYZ".to_string()),
+            (3, "CW tent".to_string(), "W9XYZ".to_string()),
+        ];
+        assert_eq!(
+            listed(&club),
+            want,
+            "once each, oldest first, sent again or not"
+        );
+        let reason = &club.kept_out()[0].reason;
+        assert!(
+            reason.contains("its contact with W1AW is not in the club's log: its band"),
+            "{reason}"
+        );
+        club.join("bbbb0002", "CW tent", "W9XYZ", 1_100);
+        assert_eq!(
+            listed(&club),
+            want,
+            "a minute on, and after its position rejoined"
+        );
+        assert!(
+            club.refused(1_100).is_empty(),
+            "the turned-away list names no contact"
+        );
+        let mut restarted = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(listed(&restarted), want, "after a host restart");
+        assert_eq!(
+            restarted.rows().len(),
+            1,
+            "CONTROL: the contact the club took"
+        );
+        let journal = std::fs::read_to_string(&path).unwrap();
+        let notes: Vec<&str> = journal
+            .lines()
+            .filter(|l| l.starts_with("{\"kept_out\""))
+            .collect();
+        assert_eq!(notes.len(), 2, "{journal}");
+        assert!(
+            notes
+                .iter()
+                .all(|l| serde_json::from_str::<MergedRow>(l).is_err()),
+            "an older Nexus's replay skips them"
+        );
+        restarted.merge(&row(2, "W1AW", "40m"), 1_200);
+        assert_eq!(
+            listed(&restarted),
+            want[1..],
+            "merged after all: in the log"
+        );
+        let mut next_event = ClubLog::for_ruleset(party("arrlfd"), "TEST FD");
+        next_event.attach_journal_since(&path, 1_004).unwrap();
+        assert!(next_event.kept_out().is_empty(), "a previous event's");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

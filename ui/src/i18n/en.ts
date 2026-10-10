@@ -4087,6 +4087,16 @@ export const EN = {
   'fieldDay.club.refused.unknown': 'Club sync does not run {{contest}}: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refusedPosition': 'Turned away {{name}} ({{call}}). It was told: “{{reason}}”',
   'fieldDay.club.refusedCall': 'Turned away {{call}}. It was told: “{{reason}}”',
+  'fieldDay.club.keptOut.total': {
+    one: "{{count}} contact the positions sent is not in the club's log, and stays in its own position's log:",
+    other: "{{count}} contacts the positions sent are not in the club's log, and each stays in its own position's log:",
+  },
+  'fieldDay.club.keptOut.position': 'From {{name}} ({{call}}): {{reason}}',
+  'fieldDay.club.keptOut.call': 'From {{call}}: {{reason}}',
+  'fieldDay.club.keptOut.more': {
+    one: '{{count}} more, not listed here.',
+    other: '{{count}} more, not listed here.',
+  },
   'fieldDay.club.boardFull':
     "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
   'fieldDay.club.boardCut':

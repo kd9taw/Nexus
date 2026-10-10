@@ -724,13 +724,20 @@ fn nothing_a_lan_peer_sends_opens_a_line_of_the_club_file() {
             "the host's list does not name the JOIN: {listed:?}"
         ));
     }
-    if !listed
+    let kept: Vec<String> = engine_lock(&host)
+        .fd_club_log()
+        .map(|c| c.kept_out().iter().map(|k| k.reason.clone()).collect())
+        .unwrap_or_default();
+    if !kept.iter().any(|r| r.contains("is not in the club's log")) {
+        wrong.push(format!(
+            "the host's kept-out list does not name the contact: {kept:?}"
+        ));
+    }
+    if listed
         .iter()
         .any(|r| r.contains("is not in the club's log"))
     {
-        wrong.push(format!(
-            "the host's list does not name the contact: {listed:?}"
-        ));
+        wrong.push(format!("the turned-away list names a contact: {listed:?}"));
     }
     let cab = engine_lock(&host).fd_club_export(true).unwrap();
     if cab.lines().filter(|l| l.starts_with("QSO:")).count() != 1 {

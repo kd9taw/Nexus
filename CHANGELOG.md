@@ -372,7 +372,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hold.** The host turns away, by name, a laptop whose Callsign on the air is not a call sign, at
   ARRL Field Day too, and one whose club position id Nexus did not make. It keeps out of the club's
   log a contact whose call is not a call sign, or that holds something the club's Cabrillo or ADIF
-  file cannot carry, and names it on its own screen; the contact stays in that laptop's own log. A laptop can no longer send contacts as
+  file cannot carry, and lists it on its own screen, with the laptop that sent it, for the rest of
+  the event and through a restart; the contact stays in that laptop's own log. A laptop can no longer send contacts as
   another one. Names, calls and contest names another laptop sent show as plain text on the
   host's screen, the club board, the TV and Remote, with a ? where a character cannot be shown,
   and the diagnostic log keeps every entry on its own line. Every other club file is unchanged.
