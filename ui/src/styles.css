@@ -18872,6 +18872,22 @@ button.cq-skiptx1.on {
   min-height: 0;
   overflow-y: auto;
 }
+/* THE CONTEST LOGGER WINDOW (ContestLogger.tsx): the contest screen above, scrolling inside its
+   own panel exactly as it does docked (`.layout` grows and may shrink to nothing, and
+   `.layout.single > .panel` owns the deficit), and the log line pinned under it at its content
+   height, so the line never scrolls away and the screen takes every pixel the line leaves. The
+   line is a control strip: it cannot use surplus, so it never grows. */
+.contest-logger-entry {
+  flex: 0 0 auto;
+  background: var(--bg-elev);
+}
+/* …and the line keeps the screen's own measure (`.layout.single > .panel.fieldday`, 1600 px from md
+   up), centred under it: across a 3440 px window the Call box measured 2837 px wide, a field for a
+   callsign. Below md the window is narrower than the cap, so the floor is untouched. */
+.contest-logger-entry > .log-entry-fd {
+  max-width: 1600px;
+  margin-inline: auto;
+}
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor
    (0.65 × 1.25 ≈ 0.81 effective). That floor was the per-surface-natural bug in

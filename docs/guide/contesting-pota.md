@@ -99,6 +99,27 @@ board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
 
+### An operator and a logger on one radio
+
+Many clubs put two people on one station: the operator on the radio, and a logger on a second
+keyboard and mouse at a second monitor (MouseMux gives each of them their own). Click
+**⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box,
+and drag the window to the logger's monitor. It holds the whole Contest screen with a log line
+under it, and it opens on that monitor again next time.
+
+- **One contact, two windows.** The logger's line and your own contest log strip are the same
+  contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
+  Super Check Partial line, call-history fill and Ctrl+D take-back line. Enter in either window
+  logs it, once: if you both press it at the same moment, the second window is told it was
+  already logged.
+- **Nothing in the logger window transmits.** It has no PTT, no F-key messages and no Tune, and
+  the F-keys and Space do nothing there but type. Its Esc clears the log line and never touches
+  your over. Stop TX and every transmit control stay on your screen; the contest switch,
+  Running / S&P and scoring are read-only in the logger window.
+- It logs as this computer's own position, under the mode you are operating (phone, CW, RTTY or
+  digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
+  main window.
+
 ### Export and club interop
 
 Exports are submittable: **Cabrillo 3.0** with real per-QSO UTC timestamps and

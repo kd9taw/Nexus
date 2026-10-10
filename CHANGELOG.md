@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
+  **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
+  It holds the whole Contest screen with a log line under it, and that line shares the contact in
+  progress with your own contest strip: whatever either of you types shows in both windows as it is
+  typed, with the same dupe warning, Super Check Partial line, call-history fill and Ctrl+D take-back
+  line, and Enter in either window logs it once, even when you both press it at the same moment.
+  Nothing in the logger window transmits: no PTT, no F-key messages, no Tune; the F-keys and Space do
+  nothing there but type, and its Esc clears the log line without touching your over. Stop TX and
+  every transmit control stay on your screen, and the contest switch, Running / S&P and scoring are
+  read-only in the logger window. It logs as this computer's own position under the mode you are
+  operating, so club sync and your exports are unchanged, and it reopens on the monitor where you
+  left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two keyboards and
+  mice with MouseMux, logging voice contacts.
 - **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
   ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
   and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,

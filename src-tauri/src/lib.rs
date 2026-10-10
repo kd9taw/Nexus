@@ -101,6 +101,7 @@ use tempo_app::dto::{
     SourceKind, Spectrum, Tier, UploadReportDto, WinlinkAttachment, WinlinkMessage, WinlinkRow,
     WinlinkSession,
 };
+use tempo_app::engine::contest_entry::EntryClaim;
 use tempo_app::engine::{engine_lock, engine_lock_result, engine_try_lock, Engine};
 use tempo_app::settings::writer::SettingsWriter;
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -19212,6 +19213,11 @@ fn set_psk_macros(
     Ok(eng.settings().macros.clone())
 }
 
+/// The contest logger window's panel slug: the whole contest screen and the log line, for a
+/// second person logging at a second monitor and keyboard. Its strip shares the contact in
+/// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
+pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -19239,6 +19245,11 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         "connect" => (1600.0, 1000.0),
         "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
         "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
+        // The contest logger: the whole contest screen with the log line under it, for a second
+        // person logging at a second monitor. Wide enough for the screen's header strip
+        // (class/section, Running/S&P, four exports) on one line, tall enough for the scoreboard
+        // and the log line without scrolling at a 1080p desk.
+        "contestlog" => (1100.0, 860.0),
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
@@ -19261,6 +19272,8 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
+        // The log line's boxes and its Log button in a row, and a look at the screen above it.
+        "contestlog" => (640.0, 480.0),
         // The picture scales to fit, so the viewer drags smaller than most pop-outs —
         // but not below what its details strip and its three buttons need in a row.
         "sstvviewer" => (420.0, 320.0),
@@ -19318,6 +19331,7 @@ async fn open_panel_window(
         // The contest screen's scoreboard, for whichever contest is picked.
         "fieldday" => "Nexus — Contest".to_string(),
         "fdclub" => "Nexus — Club band board".to_string(),
+        "contestlog" => "Nexus — Contest logger".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
@@ -19410,6 +19424,12 @@ async fn open_panel_window(
     // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
     // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
     let win = builder.build().map_err(|e| e.to_string())?;
+    // THE CONTEST LOGGER WINDOW shares the contest strip's contact with the main window for as
+    // long as it exists: from here, once it is built, to its `Destroyed` event (the app's window
+    // handler). Never persisted, so a restart cannot leave it shared.
+    if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
+        engine_lock(&app.state::<SharedEngine>()).contest_entry_share(true);
+    }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
         // resolution change since last session can't strand it off-screen.
@@ -28461,6 +28481,11 @@ async fn fd_log_manual(
 /// [`fd_log_manual`] stays for the two positional Field Day slots the FT sequencer and
 /// the club host hand off the air. Answers once the contact is in the journal on disk
 /// ([`journaled_command`]).
+///
+/// `entry` is the shared entry the strip logged from while the contest logger window is open
+/// ([`EntryClaim`]): checked and logged in one hold of the lock, so Enter pressed in both windows
+/// at once logs the contact once ([`Engine::contest_log_entry`]). The same on the two commands
+/// below. Absent from every other caller, which logs exactly as before.
 #[tauri::command]
 async fn contest_log_manual(
     state: State<'_, SharedEngine>,
@@ -28468,10 +28493,16 @@ async fn contest_log_manual(
     fields: Vec<(String, String)>,
     mode: String,
     submode: Option<String>,
+    entry: Option<EntryClaim>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if !eng.contest_log_manual(&call, &fields, &mode, sub)? {
+        let logged = eng.contest_log_entry(
+            entry.as_ref(),
+            |e| e.contest_log_manual(&call, &fields, &mode, sub),
+            |logged| *logged,
+        )?;
+        if !logged {
             return Err(format!("{call} is a dupe on this band/mode"));
         }
         Ok(eng.snapshot())
@@ -28495,10 +28526,15 @@ async fn contest_log_manual_rows(
     rows: Vec<Vec<(String, String)>>,
     mode: String,
     submode: Option<String>,
+    entry: Option<EntryClaim>,
 ) -> Result<Vec<bool>, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        eng.contest_log_manual_rows(&call, &rows, &mode, sub)
+        eng.contest_log_entry(
+            entry.as_ref(),
+            |e| e.contest_log_manual_rows(&call, &rows, &mode, sub),
+            |landed| landed.contains(&true),
+        )
     })
     .await
 }
@@ -28523,10 +28559,16 @@ async fn contest_log_satellite(
     fields: Vec<(String, String)>,
     mode: String,
     submode: Option<String>,
+    entry: Option<EntryClaim>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if !eng.contest_log_satellite(&call, &fields, &mode, sub)? {
+        let logged = eng.contest_log_entry(
+            entry.as_ref(),
+            |e| e.contest_log_satellite(&call, &fields, &mode, sub),
+            |logged| *logged,
+        )?;
+        if !logged {
             return Err(format!("{call} is a dupe on this band/mode"));
         }
         Ok(eng.snapshot())
@@ -28564,6 +28606,20 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
     let mut eng = engine_lock(&state);
     eng.contest_entry_reset();
     Ok(eng.snapshot())
+}
+
+/// ⭐ **The contest strip changed in one window** while the contest logger window is open: what
+/// it now shows becomes the entry both windows show ([`Engine::contest_entry_put`]). The answer
+/// is the entry's new rev. Refused with the logger window closed, and for an entry larger than
+/// any strip writes. Text in memory only: nothing is logged, written to disk or sent.
+#[tauri::command(async)]
+fn contest_entry_put(
+    state: State<'_, SharedEngine>,
+    call: String,
+    fields: std::collections::BTreeMap<String, String>,
+    marks: serde_json::Value,
+) -> Result<u64, String> {
+    engine_lock(&state).contest_entry_put(&call, fields, marks)
 }
 
 /// A contest contact the operator removed, as the contest screen lists it: its rows as the log
@@ -34788,6 +34844,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_log_satellite,
             contest_working,
             contest_entry_reset,
+            contest_entry_put,
             contest_remove_last,
             contest_restore,
             contest_removed,
@@ -35068,6 +35125,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(checks) = window.app_handle().try_state::<SharedConfirmationChecks>() {
                     checks.window_closed(window.label());
+                }
+                // The contest logger window is gone: the strips stop sharing their contact, and
+                // each keeps what it shows.
+                if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).contest_entry_share(false);
+                    }
                 }
             }
         })
@@ -36706,6 +36770,68 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
             "contest_log_manual_rows is not registered — a county line would fail at runtime"
+        );
+    }
+
+    /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
+    /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
+    /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
+    /// hold of the lock that makes Enter in both windows log the contact once.
+    #[test]
+    fn the_contest_logger_window_shares_the_entry_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "contest_entry_put,"),
+            "contest_entry_put is not registered — the two windows would never share a contact"
+        );
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let shared = open
+            .find("contest_entry_share(true)")
+            .expect("opening the logger window shares the entry");
+        assert!(built < shared, "only once the window exists");
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        assert!(
+            build[destroyed..].contains("contest_entry_share(false)"),
+            "the logger window's Destroyed event ends the sharing"
+        );
+        for command in [
+            "\nasync fn contest_log_manual(",
+            "\nasync fn contest_log_manual_rows(",
+            "\nasync fn contest_log_satellite(",
+        ] {
+            let b = body(command);
+            assert!(
+                b.contains("journaled_command(") && b.contains(".contest_log_entry("),
+                "{command} must log through the engine's claim, journaled"
+            );
+        }
+        // The size tables name the slug literally (the UI's natural-footprint guard parses
+        // them), so a rename of the constant alone would leave the logger at the generic size.
+        assert_ne!(
+            crate::panel_default_inner(crate::CONTEST_LOGGER_SLUG),
+            crate::panel_default_inner("")
+        );
+        assert_ne!(
+            crate::panel_min_inner(crate::CONTEST_LOGGER_SLUG),
+            crate::panel_min_inner("")
         );
     }
 

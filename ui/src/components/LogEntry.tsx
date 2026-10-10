@@ -43,6 +43,7 @@ import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
+import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
 import type { EsmHost } from '../features/esmHost'
 import { esmRefusalText, esmStepName } from '../features/esmWords'
 import { isFieldDay } from '../fdEvent'
@@ -438,6 +439,15 @@ interface Props {
    * or off, and Enter is exactly what it always was. Never on the hosted page.
    */
   esm?: EsmHost
+  /**
+   * CONTEST STRIP ONLY — this is the contest logger window's strip. While that window is open
+   * every contest strip on screen shares one contact in progress (`features/contestEntryShare`);
+   * the logger's never puts what it holds over the shared entry when the sharing starts (the
+   * main window's strip does, so a logger opened mid-contact shows that contact), and in its
+   * window Esc clears the entry as Clear does. Nothing in that window transmits, so its Esc has
+   * no over to stop. Absent everywhere else.
+   */
+  sharedEntry?: 'logger'
 }
 
 /**
@@ -471,6 +481,7 @@ export function LogEntry({
   active = true,
   remote,
   esm,
+  sharedEntry,
 }: Props) {
   const remoteMode = remote != null
   // A station that offers its park directory answers the two offline park reads below.
@@ -847,6 +858,53 @@ export function LogEntry({
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
   const [movingTo, setMovingTo] = useState<Record<string, string> | null>(null)
+
+  // ⭐ ONE CONTACT, TWO WINDOWS (`features/contestEntryShare`). While the contest logger window is
+  // open (`snap.contestEntry`), this strip and the logger's show one entry: the call, the boxes,
+  // which boxes hold a call-history fill, and the take-back line. What is typed here is put to the
+  // engine and the other window takes it up at its next snapshot, so every hint — the dupe
+  // verdict, Super Check Partial, call history, Ctrl+D — follows the one contact in both. Only a
+  // strip on screen takes part (`active`), and never on the Remote. With the window closed the
+  // snapshot carries no entry and this strip is its own, exactly as before.
+  const shareContent: StripContent = {
+    call: logCall,
+    fields: fdFields,
+    fill: fillRef.current,
+    take: { armed: removeArmed, note: removeNote },
+  }
+  const share = useSharedEntry({
+    entry: snap.contestEntry,
+    on: fdActive && !remoteMode && active,
+    seeds: sharedEntry !== 'logger',
+    content: shareContent,
+    adopt: (c) => {
+      setLogCall(c.call)
+      setFdFields(c.fields)
+      fillRef.current = c.fill
+      setFillMarks(c.fill.filled)
+      setRemoveArmed(c.take.armed)
+      setRemoveNote(c.take.note)
+    },
+  })
+  /** The engine's two refusals of an Enter made on the shared entry, said in words, logging
+   *  nothing: the other window logged the contact first, or changed it since this one showed it.
+   *  Anything else is the log command's own failure and goes to its toast as before. */
+  const sharedRefusal = async <T,>(logged: Promise<T>, call: string): Promise<T | null> => {
+    try {
+      return await logged
+    } catch (err) {
+      const why = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
+      if (why === ENTRY_LOGGED) {
+        pushToast(t('logEntry.shared.logged', { call }), 'info')
+        return null
+      }
+      if (why === ENTRY_CHANGED) {
+        pushToast(t('logEntry.shared.changed'), 'error')
+        return null
+      }
+      throw err
+    }
+  }
 
 
   // Live mirror of the typed call so a slow lookup can tell if the operator has since
@@ -1480,6 +1538,24 @@ export function LogEntry({
     onReset?.()
   }
 
+  // THE LOGGER WINDOW'S ESC (`sharedEntry`): it clears the entry, as Clear does, from anywhere in
+  // that window. Nothing in that window transmits, so its Esc has no over to stop, and a logger
+  // clearing a typo never reaches the operator's. On every other strip Esc stays the cockpit's
+  // (in CW, Operate, RTTY and PSK it stops TX), exactly as before. Left alone in the "I moved"
+  // editor, whose own Esc backs out of the edit, and while a dialog has the key.
+  const resetRef = useRef(reset)
+  resetRef.current = reset
+  useEffect(() => {
+    if (sharedEntry !== 'logger' || !fdActive) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented) return
+      if (e.target instanceof Element && e.target.closest('.le-fd-sent, [role="dialog"]')) return
+      resetRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sharedEntry, fdActive])
+
   // FD exchange gate: every REQUIRED received slot must be satisfied. Never substitute '?' for a
   // blank (it would fake a section multiplier) — the manual log is blocked until class is present
   // AND section is a real ARRL/RAC code (validated against the same universe as Settings).
@@ -1587,11 +1663,19 @@ export function LogEntry({
       // refused a line with a part that is not a county.
       const lineSlot = fdReceives.find((f) => fdLineDomain(f) && isCountyLine(fdValue(f)))
       const lineRead = lineSlot ? readCountyLine(fdLineDomain(lineSlot)!, fdValue(lineSlot)) : undefined
+      // ⭐ THE SHARED ENTRY'S ENTER: with the logger window open, the log names the entry this strip
+      // shows, so Enter pressed in both windows at once logs the contact once (the engine refuses
+      // the second). With it closed nothing is named and the commands get what they always got.
+      const entry = share.sharing ? await share.claim(shareContent) : undefined
       if (lineSlot && lineRead?.ok) {
         const exchangeWith = (county: string) =>
           ex.map(([k, v]) => [k, k === lineSlot.key ? county : v] as [string, string])
+        const rows = lineRead.counties.map(exchangeWith)
         const r = await withErrorToast(
-          () => contestLogManualRows(call, lineRead.counties.map(exchangeWith), fmode, fsub),
+          () =>
+            entry
+              ? sharedRefusal(contestLogManualRows(call, rows, fmode, fsub, entry), call)
+              : contestLogManualRows(call, rows, fmode, fsub),
           t('logEntry.fd.failed'),
         )
         if (r) {
@@ -1636,7 +1720,10 @@ export function LogEntry({
       // held does not make a contact typed into the Phone cockpit a satellite contact.
       const logToContest = exchange === 'satellite' ? contestLogSatellite : contestLogManual
       const r = await withErrorToast(
-        () => logToContest(call, ex, fmode, fsub),
+        () =>
+          entry
+            ? sharedRefusal(logToContest(call, ex, fmode, fsub, entry), call)
+            : logToContest(call, ex, fmode, fsub),
         t('logEntry.fd.failed'),
       )
       if (r) {

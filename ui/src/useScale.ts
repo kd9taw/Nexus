@@ -118,6 +118,11 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // without the position and operator cells collapsing; `panel_min_inner` gained
   // an `fdclub` arm (560×400) to keep it under the 65%-floor ceiling.
   ['fdclub', { w: 820, h: 420 }],
+  // The contest logger: the contest screen's header strip (class/section, Running / S&P and its
+  // buttons, which wrap) and the log line's boxes in a row with Log beside them. The screen above
+  // the line scrolls inside its own panel, so height is elastic down to the line plus a look at
+  // the screen. Measured in Chrome at the sizes the ui-layout skill lists.
+  ['contestlog', { w: 900, h: 560 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

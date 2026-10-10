@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+pub mod contest_entry;
+/// The contest strip's contact in progress, shared with the logger window, through the engine.
+#[cfg(test)]
+mod contest_entry_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
@@ -3661,6 +3665,13 @@ pub struct Engine {
     tx_alarms: Vec<crate::dto::TxAlarm>,
     /// The last alarm id handed out. Never reused, so a dismissal names exactly one alarm.
     tx_alarm_seq: u64,
+    /// The contest strip's contact in progress, shared by the main window and the contest logger
+    /// window while that window is open (`contest_entry.rs`). `None` while it is not, which is
+    /// every station that never opens it.
+    contest_entry: Option<contest_entry::SharedEntry>,
+    /// The last rev the shared entry handed out, kept across a close so the next sharing starts
+    /// past it.
+    contest_entry_revs: u64,
     remote_readings: crate::remote_monitor::provenance::Observations,
     /// Dual-radio: LIVE read-back state for the NON-active radios, keyed by radio id. The monitor
     /// thread (one CAT poll per non-active radio, read-only) feeds these via `observe_radio_*`; the
@@ -5653,6 +5664,8 @@ impl Engine {
             cat_status: (None, String::new()),
             tx_alarms: Vec::new(),
             tx_alarm_seq: 0,
+            contest_entry: None,
+            contest_entry_revs: 0,
             remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_port_hold_until: None,
@@ -23012,6 +23025,7 @@ contact yourself."
             .collect();
         s.parsec_presence = self.parsec_presence_dto();
         s.tx_alarms = self.tx_alarms.clone();
+        s.contest_entry = self.contest_entry_dto();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

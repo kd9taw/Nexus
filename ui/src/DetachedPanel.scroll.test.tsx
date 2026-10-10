@@ -122,6 +122,8 @@ vi.mock('./api', async () => {
     return () => {}
   })
   out.getBandPlan = vi.fn().mockResolvedValue([])
+  // The contest logger window draws the whole contest screen, whose Removed list is a list.
+  out.contestRemoved = vi.fn().mockResolvedValue([])
   out.getNeedAlerts = vi.fn().mockResolvedValue([])
   out.getAllSpots = vi.fn().mockResolvedValue([])
   out.parksCount = vi.fn().mockResolvedValue(0)
@@ -381,7 +383,7 @@ describe('every pop-out the shell can host', () => {
   // has an arm for each. Kept whole rather than sampled: this bug reached a shipped beta
   // because one arm was reasoned about in isolation.
   const PANELS = [
-    'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub',
+    'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub', 'contestlog',
     'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
   ]
 
@@ -421,4 +423,52 @@ describe('every pop-out the shell can host', () => {
         `reach it:\n  ${trapped.join('\n  ')}\n`,
     ).toEqual([])
   }, 60_000)
+})
+
+// ── 3. the contest logger window: the screen scrolls, the log line never does ───────────────
+
+/** The `flex` that actually applies to `el`, by the same cascade as `overflowY` above, over the
+ *  shorthand alone: the one rule that sizes the log line writes the shorthand. */
+function flexOf(el: Element): string {
+  let win: Cand | null = null
+  for (const { rule, order } of FLAT) {
+    let hit = false
+    try {
+      hit = el.matches(rule.selectorText)
+    } catch {
+      continue
+    }
+    const value = hit ? rule.style.getPropertyValue('flex').trim() : ''
+    if (!value) continue
+    const cand: Cand = {
+      prop: 'flex',
+      value,
+      important: rule.style.getPropertyPriority('flex') === 'important',
+      spec: specificity(rule.selectorText),
+      order,
+    }
+    if (better(cand, win)) win = cand
+  }
+  return win ? (win as Cand).value : ''
+}
+
+describe('the contest logger window', () => {
+  it('pins the log line under the contest screen, outside the screen\'s scroller', async () => {
+    const { app } = await mountPopout('contestlog')
+    const screenBox = app.querySelector(':scope > main.layout.single')
+    const line = app.querySelector(':scope > section.contest-logger-entry')
+    expect(screenBox, 'the contest screen is the window\'s first child').not.toBeNull()
+    expect(line, 'the log line is the window\'s own child, not the screen\'s').not.toBeNull()
+    expect(screenBox!.nextElementSibling, 'the line is UNDER the screen').toBe(line)
+    // The screen's deficit has its valve: its panel scrolls, exactly as it does docked.
+    const panel = screenBox!.querySelector(':scope > section.panel.fieldday')!
+    expect(overflowY(panel)).toBe('auto')
+    // The line is a control strip: content height, never grown, never shrunk away.
+    expect(flexOf(line!)).toBe('0 0 auto')
+    // Nothing between the Log button and the window clips it or scrolls it out of view.
+    const log = line!.querySelector('.le-fd-log-btn')!
+    expect(deficitFate(log, app).fate).toBe('none')
+    // Control: the same walk from a row of the screen's log meets the panel's scroller.
+    expect(deficitFate(panel.querySelector('.fd-log-head')!, app).fate).toBe('scroll')
+  })
 })
