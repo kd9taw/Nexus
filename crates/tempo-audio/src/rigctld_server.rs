@@ -755,7 +755,8 @@ pub fn serve_until(
 pub enum PortReply {
     /// Nothing there, or nothing said: connect refused, or connected and the port stayed
     /// quiet for the whole budget. A rigctld that is merely slow lands here too — which is
-    /// the safe side, because it only costs a spawn attempt.
+    /// the safe side, because it only costs a spawn attempt (at a NET rigctl Network Address on
+    /// this computer, a wait for the next ask).
     Silent,
     /// A rigctld-protocol server (Hamlib's, or another Nexus's broker). Safe to share.
     Rigctld,

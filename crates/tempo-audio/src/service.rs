@@ -1949,6 +1949,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         ),
     }
     let init_freq = init_probe.freq_hz;
+    let init_ok = init_probe.ok;
     {
         let mut eng = engine_lock(&engine);
         eng.set_cat_status(init_probe.ok, init_probe.detail);
@@ -1992,6 +1993,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // and injects their re-open side-effects.
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
     state.remote_radio_id = Some(remote_radio_id);
+    state.after_the_launch_open(&rig, init_ok);
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
     let mut station = StationSinks::new();
@@ -4385,6 +4387,26 @@ impl RadioLoop {
         self.cat_dead_probes >= CAT_DEAD_PROBES_BEFORE_REBUILD && now >= self.cat_rebuild_at
     }
 
+    /// A NET rigctl radio WAITING for the rigctld at its Network Address on this computer: its
+    /// open found nothing there and started nothing in between (`open_cat`), so the loop holds no
+    /// daemon and no link. Asking that address again is all a reopen does for it.
+    fn waits_for_a_rigctld_here(&self, rig: &Rig) -> bool {
+        self.rigctld_proc.is_none()
+            && !rig.has_control()
+            && net_rigctld_on_this_machine(&self.applied).is_some()
+    }
+
+    /// What the launch open said, where the loop must act on it. Every reopen hands the loop its
+    /// verdict (`cat_ok`); the launch open, in `run_radio`, only publishes its own. That is enough
+    /// but in one case, a radio that [waits for a rigctld here](Self::waits_for_a_rigctld_here):
+    /// the reopen backoff that asks its address again runs only once CAT reads down, and with no
+    /// link nothing would ever read it down, so the radio waited for a Test CAT press or a Save.
+    fn after_the_launch_open(&mut self, rig: &Rig, ok: Option<bool>) {
+        if ok == Some(false) && self.waits_for_a_rigctld_here(rig) {
+            self.cat_ok = Some(false);
+        }
+    }
+
     /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
     /// PRESENT edge. An empty enumeration says nothing (no `serial` feature, or the platform
     /// walk failed) and leaves the verdict untouched — it must never read as "absent".
@@ -6362,9 +6384,13 @@ impl RadioLoop {
             // Test CAT on the Icom network connection is the operator acting: a radio waiting on
             // the retry ladder, or for the operator after it ended the session or refused the
             // login, is tried again now, through a fresh session rather than a probe of nothing.
+            // A radio waiting for the rigctld at its Network Address asks that address again now,
+            // for the same reason.
             if reprobe_req && self.rigctld_proc.is_none() {
                 if let Some(t) = want.icom_lan_target() {
                     crate::icomlan::registry::operator_acted(t.key());
+                    self.cat_reopen_at = 0.0;
+                } else if self.waits_for_a_rigctld_here(rig) {
                     self.cat_reopen_at = 0.0;
                 }
             }
@@ -6476,6 +6502,9 @@ impl RadioLoop {
                 || suspect_rebuild
             {
                 self.cat_hold_active = false;
+                // A radio waiting for the rigctld at its Network Address had no link: its retry
+                // reopens no port, and says only what the address answered.
+                let waited = self.waits_for_a_rigctld_here(rig);
                 // A saved change to the Icom network connection is the operator acting too: the
                 // new configuration is tried at once, whatever the old one was waiting for.
                 if want.rig_differs(&self.applied) {
@@ -6527,7 +6556,7 @@ impl RadioLoop {
                 self.remote_radio_id = Some(remote_want_radio);
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
-                let detail = if suspect_rebuild && !daemon_died {
+                let detail = if suspect_rebuild && !daemon_died && !waited {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
                         .trim_end()
                         .to_string()
@@ -14786,17 +14815,37 @@ fn open_cat(
     let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
     // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
     // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
-    // rigctld's answer is taken; anything else there, or nothing, goes on exactly as before. No
+    // rigctld's answer is taken. Where nothing answers, nothing is started either: the radio
+    // waits for that rigctld (wfview not started yet), the CAT status says so, and the loop asks
+    // the address again on the reopen backoff (`RadioLoop::waits_for_a_rigctld_here`), so the
+    // order the two programs start in does not matter. Something that answers, but not as a
+    // rigctld, goes on exactly as before: a server this probe does not recognise may still work
+    // through Hamlib's NET client, as wfview did before its `ChkVFO` answer was read. No
     // `foreign_daemon_refusal`: NET rigctl is exempt from it, as whatever serves the address is
     // what the operator chose.
     if allow_coexist {
         if let Some(direct) = net_rigctld_on_this_machine(t) {
-            if crate::rigctld_server::probe_rigctld(direct, Duration::from_millis(400)) {
-                let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
-                rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
-                let mut probe = finish_cat_open(&mut rig, t);
-                probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
-                return (rig, None, probe);
+            match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+                crate::rigctld_server::PortReply::Rigctld => {
+                    let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
+                    rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                    let mut probe = finish_cat_open(&mut rig, t);
+                    probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
+                    return (rig, None, probe);
+                }
+                crate::rigctld_server::PortReply::Silent => {
+                    return (
+                        Rig::vox(),
+                        None,
+                        CatProbe::status(
+                            Some(false),
+                            format!(
+                                "Nothing is answering at {direct} — start wfview (or your rigctld)"
+                            ),
+                        ),
+                    );
+                }
+                crate::rigctld_server::PortReply::NotRigctld(_) => {}
             }
         }
     }
