@@ -2474,6 +2474,8 @@ export const FR: PartialCatalog = {
   "fieldDay.unmerged.days": "{{count}} contacts de {{contest}}, journalisés du {{first}} au {{last}} (UTC), ne sont pas dans votre carnet. Le journal de concours de cet ordinateur les garde jusqu'à ce qu'ils y soient.",
   "fieldDay.unmerged.merge": { "one": "Le fusionner dans mon carnet", "other": "Fusionner ces {{count}} dans mon carnet" },
   "fieldDay.unmerged.title": "Ajoute ces contacts à votre carnet général tels qu'ils ont été journalisés. Vous pouvez appuyer deux fois sans risque : un contact déjà présent est ignoré, jamais dupliqué. Rien n'est mis en file d'envoi.",
+  "fieldDay.unmerged.dismiss": "Ignorer",
+  "fieldDay.unmerged.dismissTitle": "Ne plus proposer ceux-ci. Ils restent dans le journal de concours de cet ordinateur, et rien n'est supprimé. Un contact qui n'a pas encore été proposé ici l'est de nouveau.",
   "fieldDay.club.board.empty": "Aucune position entendue pour l'instant — chaque autre position Nexus de ce réseau apparaît ici dès qu'elle journalise.",
   "fieldDay.club.board.column.position": "Position",
   "fieldDay.club.bands.column.band": "Bande",

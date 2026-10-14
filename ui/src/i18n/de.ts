@@ -6167,6 +6167,8 @@ export const DE: PartialCatalog = {
   "fieldDay.unmerged.days": "{{count}} Kontakte aus {{contest}}, geloggt vom {{first}} bis {{last}} (UTC), sind nicht in deinem Logbuch. Das Contest-Journal dieses Computers behält sie, bis sie es sind.",
   "fieldDay.unmerged.merge": { "one": "In mein Logbuch übernehmen", "other": "Diese {{count}} in mein Logbuch übernehmen" },
   "fieldDay.unmerged.title": "Diese Kontakte so, wie sie geloggt wurden, in dein allgemeines Logbuch übernehmen. Zweimal drücken ist unbedenklich — ein bereits vorhandener Kontakt wird übersprungen, nie doppelt eingetragen. Nichts wird zum Hochladen vorgemerkt.",
+  "fieldDay.unmerged.dismiss": "Ausblenden",
+  "fieldDay.unmerged.dismissTitle": "Diese nicht mehr anbieten. Sie bleiben im Contest-Journal dieses Computers, nichts wird gelöscht. Ein Kontakt, der hier noch nicht angeboten wurde, wird wieder angeboten.",
   "fieldDay.club.board.empty": "Noch keine Positionen gehört — jede weitere Nexus-Position in diesem Netz erscheint hier, sobald sie loggt.",
   "fieldDay.club.board.column.position": "Position",
   "fieldDay.club.bands.column.band": "Band",

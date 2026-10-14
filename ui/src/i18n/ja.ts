@@ -4042,6 +4042,8 @@ export const JA: PartialCatalog = {
   "fieldDay.unmerged.days": "{{contest}} の{{count}}件の交信（{{first}}〜{{last}} UTC に記録）はログブックに入っていません。ログブックに入るまで、このコンピューターのコンテストジャーナルに残ります。",
   "fieldDay.unmerged.merge": "この{{count}}件をログブックに統合",
   "fieldDay.unmerged.title": "これらの交信を、記録されたとおりに一般ログブックへ追加します。二度押しても安全です — すでにある交信はスキップされ、重複することはありません。アップロードの予約はしません。",
+  "fieldDay.unmerged.dismiss": "表示しない",
+  "fieldDay.unmerged.dismissTitle": "これらを今後は表示しません。このコンピューターのコンテストジャーナルに残り、何も削除されません。ここでまだ表示されていない交信は、改めて表示されます。",
   "fieldDay.club.board.empty": "まだポジションが見つかりません — このネットワーク上の他の Nexus ポジションは、ログを取った時点でここに表示されます。",
   "fieldDay.club.board.column.position": "ポジション",
   "fieldDay.club.bands.column.band": "バンド",

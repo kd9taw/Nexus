@@ -2474,6 +2474,8 @@ export const ES: PartialCatalog = {
   "fieldDay.unmerged.days": "{{count}} contactos de {{contest}}, registrados del {{first}} al {{last}} (UTC), no están en tu libro de guardia. El diario de concursos de este ordenador los conserva hasta que lo estén.",
   "fieldDay.unmerged.merge": { "one": "Fusionarlo en mi libro de guardia", "other": "Fusionar estos {{count}} en mi libro de guardia" },
   "fieldDay.unmerged.title": "Añade estos contactos a tu libro de guardia general tal como se registraron. Puedes pulsarlo dos veces sin riesgo: un contacto que ya esté se omite, nunca se duplica. No se pone nada en cola para subir.",
+  "fieldDay.unmerged.dismiss": "Descartar",
+  "fieldDay.unmerged.dismissTitle": "Deja de ofrecer estos. Siguen en el diario de concursos de este ordenador y no se borra nada. Un contacto que aún no se ofreció aquí se vuelve a ofrecer.",
   "fieldDay.club.board.empty": "Aún no se oyen posiciones — cada otra posición Nexus de esta red aparece aquí en cuanto registra.",
   "fieldDay.club.board.column.position": "Posición",
   "fieldDay.club.bands.column.band": "Banda",

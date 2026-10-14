@@ -6175,6 +6175,11 @@ export const EN = {
   },
   'fieldDay.unmerged.title':
     'Add these contacts to your general logbook as they were logged. Safe to press twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.',
+  // Dismiss puts away the offer as it stands (its contest, count and days), on this computer, for
+  // good; the contacts stay in the journal. A changed offer is shown again.
+  'fieldDay.unmerged.dismiss': 'Dismiss',
+  'fieldDay.unmerged.dismissTitle':
+    "Stop offering these. They stay in this computer's contest journal, and nothing is deleted. A contact not offered here before is offered again.",
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',

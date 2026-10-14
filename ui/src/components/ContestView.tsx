@@ -2606,7 +2606,8 @@ function FdKeptOutNote({
  * than four days ago) and the logbook does not hold — how many, from which contest and when —
  * with the merge for each contest. The journal keeps them until they are merged; the merge is the
  * end-of-contest one's rule, so a press never writes a contact twice. The report stays when the
- * offer it answered goes.
+ * offer it answered goes. Dismiss puts one offer away (`dismissUnmerged`): its contacts stay in
+ * the journal.
  */
 function FdUnmergedNote({
   unmerged,
@@ -2614,12 +2615,14 @@ function FdUnmergedNote({
   report,
   error,
   onMerge,
+  onDismiss,
 }: {
   unmerged: ContestUnmerged[]
   busy: string | null
   report: FdMergeReport | null
   error: string | null
   onMerge: (event: string) => void
+  onDismiss: (offer: ContestUnmerged) => void
 }) {
   return (
     <>
@@ -2642,6 +2645,15 @@ function FdUnmergedNote({
             >
               {busy === u.event ? t('fieldDay.merge.busy') : t('fieldDay.unmerged.merge', { count: u.count })}
             </button>
+            <button
+              type="button"
+              className="export-btn fd-merge-btn"
+              disabled={busy !== null}
+              onClick={() => onDismiss(u)}
+              title={t('fieldDay.unmerged.dismissTitle')}
+            >
+              {t('fieldDay.unmerged.dismiss')}
+            </button>
           </div>
         )
       })}
@@ -2660,6 +2672,44 @@ function FdUnmergedNote({
       )}
     </>
   )
+}
+
+/**
+ * ⭐ THE UNMERGED OFFERS THE OPERATOR DISMISSED, on this computer, by contest: each as it stood when
+ * dismissed (its count, its first and its last day), the way the offer is keyed. An offer is shown
+ * unless it is exactly the one dismissed, so a contact the journal had not offered before brings
+ * its contest's offer back. Dismissing deletes nothing: the journal keeps the contacts, and the
+ * station is asked as before. It is the one answer to a contact whose Logbook copy was deleted on
+ * purpose, which the journal would otherwise offer at every opening. SHARED storage, kept across a
+ * relaunch: every window shows the same offers.
+ */
+const UNMERGED_DISMISSED_KEY = 'nexus.contest.unmergedDismissed'
+type DismissedUnmerged = Record<string, { count: number; firstUnix: number; lastUnix: number }>
+
+function readDismissedUnmerged(): DismissedUnmerged {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(UNMERGED_DISMISSED_KEY) ?? '{}')
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as DismissedUnmerged) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Puts `u` away, and answers what is dismissed now. */
+function dismissUnmerged(u: ContestUnmerged): DismissedUnmerged {
+  const next = { ...readDismissedUnmerged(), [u.event]: { count: u.count, firstUnix: u.firstUnix, lastUnix: u.lastUnix } }
+  try {
+    localStorage.setItem(UNMERGED_DISMISSED_KEY, JSON.stringify(next))
+  } catch {
+    // Storage refused: it is put away until the screen is opened again.
+  }
+  return next
+}
+
+/** Is `u` exactly the offer dismissed for its contest? */
+function isDismissedUnmerged(u: ContestUnmerged, d: DismissedUnmerged): boolean {
+  const x = d[u.event]
+  return x != null && x.count === u.count && x.firstUnix === u.firstUnix && x.lastUnix === u.lastUnix
 }
 
 /** A Unix time's UTC day, YYYY-MM-DD: the date a contest log gives a contact. */
@@ -3474,6 +3524,12 @@ export function ContestView({
   const [unmergedBusy, setUnmergedBusy] = useState<string | null>(null)
   const [unmergedReport, setUnmergedReport] = useState<FdMergeReport | null>(null)
   const [unmergedError, setUnmergedError] = useState<string | null>(null)
+  const [unmergedDismissed, setUnmergedDismissed] = useState<DismissedUnmerged>(readDismissedUnmerged)
+  // Read as a list only when it is one: a host whose catch-all answers every command with an
+  // object (the App tests' invoke mock) showed no offer before Dismiss, and still shows none.
+  const unmergedShown = Array.isArray(unmerged)
+    ? unmerged.filter((u) => !isDismissedUnmerged(u, unmergedDismissed))
+    : []
   const contestOn = fieldDay != null
   const shownContest = fieldDay?.event
   useEffect(() => {
@@ -4251,13 +4307,14 @@ export function ContestView({
       )}
       {/* …and the ones past its four days that the logbook does not hold, with their merge: never
           asked for by a Remote observer, so never shown there, and never pressed from afar. */}
-      {(unmerged.length > 0 || unmergedReport || unmergedError) && (
+      {(unmergedShown.length > 0 || unmergedReport || unmergedError) && (
         <FdUnmergedNote
-          unmerged={unmerged}
+          unmerged={unmergedShown}
           busy={unmergedBusy}
           report={unmergedReport}
           error={unmergedError}
           onMerge={(event) => void mergeUnmerged(event)}
+          onDismiss={(u) => setUnmergedDismissed(dismissUnmerged(u))}
         />
       )}
 

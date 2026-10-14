@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for CQ WW SSB, say) was left in place when the contest ended, so the next contest's Cabrillo
   file claimed it. The checklist now lists the Band category beside the other settings the contest
   changed, as it is now and as it was before, and puts it back when you tick it.
+- **The offer to merge old contest contacts can be dismissed.** Contacts the contest journal keeps
+  that are not in your logbook (because you deleted their logbook copies, for example) were offered
+  every time the Contest screen opened. Dismiss puts that offer away for good on this computer,
+  across a restart. Nothing is deleted: the contacts stay in the journal, and a contact that was
+  not in the offer before brings it back.
 
 ## [1.23.0] — 2026-11-05
 

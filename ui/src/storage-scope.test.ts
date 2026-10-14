@@ -307,6 +307,10 @@ const SHARED = [
   // operator is running the event, not about one window — a torn-off board showing a different
   // goal than the cockpit would be two surfaces disagreeing about the same target.
   'nexus.fd.rateGoal',
+  // The unmerged-contacts offers the operator dismissed (ContestView). SHARED: the offer is about
+  // this computer's contest journal, not one window, so a pop-out must not offer what the main
+  // window put away. Not durable: dismissing deletes nothing, and a lost record only offers again.
+  'nexus.contest.unmergedDismissed',
   'nexus.dxped.alarms',
   'nexus.dxped.chasing',
   'nexus.features.v1',
