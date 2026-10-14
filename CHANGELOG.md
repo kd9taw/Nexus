@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every time the Contest screen opened. Dismiss puts that offer away for good on this computer,
   across a restart. Nothing is deleted: the contacts stay in the journal, and a contact that was
   not in the offer before brings it back.
+- **A legal contact after one in a banned mode with the same station now counts.** At the Illinois
+  QSO Party, an RTTY contact with a station you had already worked on FT8, on the same band and
+  between the same counties, was marked a dupe and scored nothing, although the sponsor credits it
+  (the FT8 one earns nothing). It now counts on your screen, the club line, every laptop's county
+  board and the claimed score, and is not marked a dupe; the same at Winter Field Day after a WSJT
+  contact. A second RTTY contact with that station is still a dupe. The FT8 and FT4 sequencers'
+  "worked before" is unchanged.
 
 ## [1.23.0] — 2026-11-05
 

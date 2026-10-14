@@ -1086,13 +1086,22 @@ pub struct ClubLog {
     sections_set: HashSet<String>,
     /// ⭐ **The multiplier values the club has worked** — `(slot, value)` for every slot a
     /// multiplier board of this contest is over ([`mult_slots`](Self::mult_slots)), in
-    /// first-seen order, each with the index in [`dkeys_list`](Self::dkeys_list) of the key
-    /// its contact brought: a value is taken only from a contact that brings a NEW key, the
-    /// row a club counts, as a position's own board reads only the rows its log counts. So
-    /// the list is append-only within a generation and rides the dupe cursor
-    /// ([`club_state`](Self::club_state)).
+    /// first-seen order, each with the length [`dkeys_list`](Self::dkeys_list) had when its
+    /// contact came, which is the index of the key it brought when it brought one: a value is
+    /// taken only from the first CREDITED contact of a key
+    /// ([`credited_keys`](Self::credited_keys)), the row a club counts, as a position's own board
+    /// reads only the rows its log counts. So the list is append-only within a generation and
+    /// rides the dupe cursor ([`club_state`](Self::club_state)); a value whose key a contact in a
+    /// banned mode brought first is sent from the cursor it came at, and again until the cursor
+    /// passes it, which the position's set takes once.
     mults_list: Vec<(usize, String, String)>,
     mults_set: HashSet<(String, String)>,
+    /// The scoring list: the club dupe keys of the contacts the sponsor CREDITS — every key of
+    /// [`dkeys_set`](Self::dkeys_set) a contact brought in a mode the contest does not ban. A
+    /// contact in a banned mode keys the club's dupes, which every laptop is sent for its
+    /// "worked before", and stays off this, so a legal contact after it with the same station
+    /// is the one the club counts, as a position's own log counts it.
+    credited_keys: HashSet<Vec<String>>,
     positions: HashMap<String, ClubPosition>,
     /// Merge ARRIVAL times (host clock) with the row's `(posid, seq)`, pruned to the trailing
     /// hour — the per-position rate meter. In-memory only: after a host restart the rate
@@ -2063,23 +2072,24 @@ impl ClubLog {
         // file, so it lights no cell on any laptop's board.
         let credited = counts && !self.ruleset().mode_banned(&row.submode);
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
+        let at = self.dkeys_list.len();
         if counts && self.dkeys_set.insert(dkey.clone()) {
-            let at = self.dkeys_list.len();
-            self.dkeys_list.push(dkey);
+            self.dkeys_list.push(dkey.clone());
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
-            if credited {
-                for slot in self.mult_slots() {
-                    let value = row
-                        .ex
-                        .iter()
-                        .find(|f| f.k == slot)
-                        .map(|f| f.r.trim().to_ascii_uppercase())
-                        .unwrap_or_default();
-                    if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone()))
-                    {
-                        self.mults_list.push((at, slot.to_string(), value));
-                    }
+        }
+        // The first CREDITED contact of a key brings its values, though a contact in a banned
+        // mode brought the key itself.
+        if credited && self.credited_keys.insert(dkey) {
+            for slot in self.mult_slots() {
+                let value = row
+                    .ex
+                    .iter()
+                    .find(|f| f.k == slot)
+                    .map(|f| f.r.trim().to_ascii_uppercase())
+                    .unwrap_or_default();
+                if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone())) {
+                    self.mults_list.push((at, slot.to_string(), value));
                 }
             }
         }
@@ -2105,6 +2115,7 @@ impl ClubLog {
         self.sections_set.clear();
         self.mults_list.clear();
         self.mults_set.clear();
+        self.credited_keys.clear();
         for p in self.positions.values_mut() {
             p.qsos_raw = 0;
             p.last_qso_unix = 0;
@@ -2470,20 +2481,30 @@ impl ClubLog {
     /// that logged it FIRST by the position's own clock (merge order breaks
     /// ties — an offline position's late re-push of an EARLIER contact takes
     /// the key back, which is the honest reading of "earliest").
+    ///
+    /// ⭐ **And the first CREDITED row of a key whose first row was in a mode the contest bans**:
+    /// the sponsor gives that one no credit, so the legal contact after it with the same station
+    /// is the first one it credits, a row of the club's files and score and no one's duplicate.
+    /// A contest that bans no mode keeps exactly the earliest row of each key.
     fn earliest_unique_indices(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.rows.len()).collect();
         order.sort_by_key(|&i| (self.rows[i].when_unix, i));
         let rule = self.dupe_rule();
         let spec = self.exchange();
-        let credit = self.ruleset().satellite_credit;
+        let rs = self.ruleset();
+        let credit = rs.satellite_credit;
         let mut seen: HashSet<Vec<String>> = HashSet::new();
+        let mut credited: HashSet<Vec<String>> = HashSet::new();
         let mut keep: Vec<usize> = Vec::new();
         for i in order {
             // A satellite contact the contest gives no credit is in no file and no score.
             if !credit && !self.rows[i].sat.is_empty() {
                 continue;
             }
-            if seen.insert(self.rows[i].dkey(&rule, spec)) {
+            let key = self.rows[i].dkey(&rule, spec);
+            let first = seen.insert(key.clone());
+            let first_credited = !rs.mode_banned(&self.rows[i].submode) && credited.insert(key);
+            if first || first_credited {
                 keep.push(i);
             }
         }
@@ -5448,6 +5469,117 @@ mod tests {
             )
         );
         assert!(cab.contains("CLAIMED-SCORE: 108\n"), "{cab}");
+    }
+
+    /// ⭐ **A club's legal contact after a banned one with the same station counts, and the
+    /// club's board and score agree on it.** The second laptop worked K9FT8 from Lake on FT8,
+    /// which the sponsor gives no credit, and then on RTTY, which it does: the RTTY contact is the
+    /// first one of that station the club's score holds, so it brings its points, Lake on every
+    /// laptop's board and a scoring row on its position's line, and the club's own log does not
+    /// mark it a duplicate.
+    ///
+    /// Measured before: rows 3, CLAIMED-SCORE 2, Cook alone on the board, no scoring row, and
+    /// the RTTY contact marked a duplicate on the host's screen; the sponsor credits 8.
+    ///
+    /// CONTROL: the club's dupe keys, which every laptop is sent for its "worked before", are the
+    /// two they were (the FT8 contact's key stays the club's from the FT8 contact on).
+    #[test]
+    fn a_clubs_legal_contact_after_a_banned_one_with_the_same_station_counts() {
+        let mut club = ilqp_club_with_digital("K9FT8", "LAKE", "FT8");
+        let keys = club.dkeys_list.clone();
+        assert_eq!(keys.len(), 2, "CONTROL: K9AAA's key and the FT8 contact's");
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                2,
+                "K9FT8",
+                "20m",
+                "DIG",
+                "RTTY",
+                "LAKE",
+                "MCLN",
+                ILQP_START + 300,
+            ),
+            3,
+        );
+        let (numbers, board, uniq, cab) = club_outcome(&club);
+        assert_eq!(
+            (numbers, board, uniq),
+            (
+                (3, 4, Some(2), 0, 8),
+                vec!["COOK".to_string(), "LAKE".to_string()],
+                1
+            ),
+            "((rows, points, multipliers, bonus, total), the board, the second laptop's scoring rows)"
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+        assert_eq!(
+            club.newest(10)
+                .iter()
+                .map(|e| (e.row.submode.as_str(), e.dupe))
+                .collect::<Vec<_>>(),
+            [("RTTY", false), ("FT8", false), ("", false)],
+            "the host's screen marks no duplicate"
+        );
+        assert_eq!(
+            club.dkeys_list, keys,
+            "CONTROL: the club's dupe keys are unchanged"
+        );
+        // CONTROL: a second RTTY contact with K9FT8 is a duplicate and scores nothing.
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                3,
+                "K9FT8",
+                "20m",
+                "DIG",
+                "RTTY",
+                "LAKE",
+                "MCLN",
+                ILQP_START + 360,
+            ),
+            4,
+        );
+        let ((rows, _, _, _, total), _, uniq, _) = club_outcome(&club);
+        assert_eq!((rows, total, uniq), (4, 8, 1));
+        assert!(club.newest(1)[0].dupe, "the repeat is marked");
+    }
+
+    /// ⭐ **…and the same at a Winter Field Day club**, whose files hold one contact per key: the
+    /// RTTY contact after the FT8 one is a line of the club's file, and its points count.
+    /// CONTROL: a second RTTY contact is still left out of the file, as any duplicate is.
+    #[test]
+    fn a_winter_field_day_clubs_legal_contact_after_a_banned_one_counts() {
+        let mut club = ClubLog::new(FdEvent::WinterFd, "TEST CLUB");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 100), 1);
+        // `wq` gives a digital row FT8.
+        club.merge(&wq("bbbb", 1, "K1ABC", "20m", "DIG", "EMA", 200), 2);
+        let mut rtty = wq("bbbb", 2, "K1ABC", "20m", "DIG", "EMA", 300);
+        rtty.sub = "RTTY".into();
+        club.merge(&rtty, 3);
+        let lines = |club: &ClubLog| {
+            club.export_cabrillo("W9ABC", "2O", "WI")
+                .expect("one entry")
+                .lines()
+                .filter(|l| l.starts_with("QSO:"))
+                .count()
+        };
+        assert_eq!(
+            (
+                club.sections(),
+                club.scored("W9ABC", "2O", "WI", 1, &[]).0,
+                lines(&club)
+            ),
+            (&["CT".to_string(), "EMA".to_string()][..], 4, 3),
+            "(the sections sent, QSO points, the file's lines): W1AW and the RTTY K1ABC"
+        );
+        let mut again = wq("bbbb", 3, "K1ABC", "20m", "DIG", "EMA", 400);
+        again.sub = "RTTY".into();
+        club.merge(&again, 4);
+        assert_eq!(
+            (club.scored("W9ABC", "2O", "WI", 1, &[]).0, lines(&club)),
+            (4, 3)
+        );
     }
 
     /// `call`'s record in an ADIF file.

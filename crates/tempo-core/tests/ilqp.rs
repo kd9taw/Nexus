@@ -890,6 +890,70 @@ fn a_bonus_station_worked_only_in_a_banned_mode_earns_no_bonus() {
         .contains("CLAIMED-SCORE: 108\n"));
 }
 
+/// ⭐ **A legal contact after a banned one with the same station counts.** The sponsor gives the
+/// FT8 contact no credit, so the RTTY contact that follows it with the same station, on the same
+/// band, in the same mode group and between the same two counties is the first one it credits,
+/// and is no duplicate of anything the score holds. A second RTTY contact after it is a duplicate.
+///
+/// Measured before: K9AAA on CW from Cook, K9FT8 on FT8 from Lake, then K9FT8 on RTTY from Lake
+/// claimed 2 and one contact, the RTTY one marked a dupe; the sponsor credits 8 and two.
+///
+/// CONTROL: the log's dupe index, which the FT sequencer asks whether a station was worked, holds
+/// K9FT8 from the FT8 contact on, exactly as before.
+#[test]
+fn a_legal_contact_after_a_banned_one_with_the_same_station_counts() {
+    use tempo_core::contest::CabrilloEntrant;
+    let mut log = cook_then_digital("K9FT8", "LAKE", "FT8");
+    let worked_before = |log: &FieldDayLog| {
+        let q = &log.qsos()[1];
+        (
+            log.is_dupe_row(&q.call, &q.band, &q.mode, &q.rx, &q.tx),
+            log.worked_keys().len(),
+        )
+    };
+    assert_eq!(
+        worked_before(&log),
+        (true, 2),
+        "CONTROL: after the FT8 contact the FT sequencer reads K9FT8 as worked"
+    );
+    let lake = fields(&[("RST", "599"), ("QTH", "LAKE")]);
+    assert!(log.log_fields_at("K9FT8", &lake, "DIG", "RTTY", 0, PARTY + 180));
+    assert_eq!(
+        worked_before(&log),
+        (true, 2),
+        "CONTROL: the RTTY contact changes nothing the FT sequencer reads"
+    );
+    assert_eq!(
+        (score(&log), log.qso_count(), log.worked_values("QTH")),
+        (
+            (4, 4, Some(2), 8),
+            2,
+            vec!["COOK".to_string(), "LAKE".to_string()]
+        ),
+        "((QSO points, powered, multipliers, total), contacts, the county board): \
+         K9AAA and the RTTY K9FT8"
+    );
+    assert_eq!(
+        log.qsos().iter().map(|q| q.dupe).collect::<Vec<_>>(),
+        [false, false, false],
+        "the RTTY contact is not marked a dupe, so the log table and the Remote page count it too"
+    );
+    assert!(log
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry")
+        .contains("CLAIMED-SCORE: 8\n"));
+    // CONTROL: a second RTTY contact with K9FT8 is a duplicate and scores nothing.
+    assert!(log.log_fields_at("K9FT8", &lake, "DIG", "RTTY", 0, PARTY + 240));
+    assert_eq!(
+        (
+            score(&log).3,
+            log.qso_count(),
+            log.qsos().last().map(|q| q.dupe)
+        ),
+        (8, 2, Some(true))
+    );
+}
+
 /// A digital contact that recorded no on-air mode, as a row from before the mode was recorded,
 /// is not read as FT8 (which is what its export falls back to calling it): a mode nobody
 /// recorded is never a banned one, and the contact counts as it always has.
