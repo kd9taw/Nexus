@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FreeDV contacts land in the Nexus log by themselves.** Run FreeDV's own app beside Nexus,
+  point its QSO Logging at `127.0.0.1:2239`, and each contact you log in FreeDV goes into the Nexus
+  log as a FreeDV contact (written `MODE=DIGITALVOICE SUBMODE=FREEDV`, which LoTW counts as phone),
+  through the same import companion contacts use, so a repeat is one contact. On by default, for
+  this computer only, and receive only: nothing FreeDV sends can key or tune the radio. A contact
+  FreeDV logs under a call that is not your station call is refused, never written under the wrong
+  call, and the reason shows in Settings ▸ Radio ▸ Transmit limits & sharing, in the FreeDV pane
+  and in the connection log. FreeDV sends one time for a contact, so its start and end are the
+  same. New guide: [FreeDV beside Nexus](docs/manual/FreeDV.md).
+- **A FreeDV pane on the Phone screen** (add it from ⊞ Panels): whether FreeDV is talking to Nexus,
+  the last contact it logged, any refusal, and the calls FreeDV 2.4 hears, once you turn listening
+  on (off by default; Windows may ask once about the network). A click on a heard call puts it in
+  the log strip. Nothing in the pane logs, keys or tunes.
+- **FreeDV is a mode of its own on the Needed board**, as FT8, JS8 and PSK31 are. This reverses the
+  1.18.0 note that judged FreeDV stations by their kind (phone): a FreeDV station is now "New mode"
+  for a country until you log a FreeDV contact with it. A `MODE=DIGITALVOICE SUBMODE=FREEDV`
+  contact imported from another logger is stored as FreeDV and written back exactly as it came.
+- **FreeDV in the log strip's mode list**, for a FreeDV contact logged by hand.
+- **FreeDV's channels** (1.870 to 28.720 MHz, from FreeDV's own list, each on FreeDV's sideband;
+  5.3685 is not offered to a US station) are in the band plan, and the SSTV channel on 14.236 now
+  says it is FreeDV's 20 m centre.
+
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor
@@ -126,6 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The docs said the CAT broker is off by default.** It has been on since 1.1.0; the interop
+  guide's ports table and the Integrations page now say so.
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The
