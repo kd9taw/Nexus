@@ -402,6 +402,7 @@ describe('turning the mode off offers the contest-over checklist first', () => {
       contestCategoryOperator: '',
       contestEntryClass: '',
       contestCategoryPower: '',
+      contestCategoryBand: '',
       unassistedMode: false,
     },
   }

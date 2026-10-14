@@ -1238,10 +1238,11 @@ impl KeysToConfirm {
     }
 }
 
-/// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
+/// ⭐ **The eight settings a contest weekend changes, as they were before it changed them** —
 /// the note the contest-over checklist offers back when Contest mode goes off: the station
 /// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
-/// the entry class, the power category and Unassisted. Each field is the [`Settings`] field of
+/// the entry class, the power category, the band category and Unassisted. A note an earlier
+/// build wrote has no band category: it reads as blank, the band category's own "not declared". Each field is the [`Settings`] field of
 /// the same name. Who takes the note, when, and when it is let go: `engine/contest_before.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1252,11 +1253,12 @@ pub struct ContestBefore {
     pub contest_category_operator: String,
     pub contest_entry_class: String,
     pub contest_category_power: String,
+    pub contest_category_band: String,
     pub unassisted_mode: bool,
 }
 
 impl ContestBefore {
-    /// The seven, as `s` holds them now.
+    /// The eight, as `s` holds them now.
     pub fn of(s: &Settings) -> Self {
         Self {
             mycall: s.mycall.clone(),
@@ -1265,6 +1267,7 @@ impl ContestBefore {
             contest_category_operator: s.contest_category_operator.clone(),
             contest_entry_class: s.contest_entry_class.clone(),
             contest_category_power: s.contest_category_power.clone(),
+            contest_category_band: s.contest_category_band.clone(),
             unassisted_mode: s.unassisted_mode,
         }
     }

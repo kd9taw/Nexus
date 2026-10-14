@@ -5216,7 +5216,7 @@ export interface KeyboardMacroProfile {
 }
 
 /** Persistent operator + radio settings. */
-/** The seven settings a contest weekend changes, as they were before it changed them (Rust
+/** The eight settings a contest weekend changes, as they were before it changed them (Rust
  *  `ContestBefore`). Each field is the Settings field of the same name. */
 export interface ContestBefore {
   mycall: string
@@ -5225,6 +5225,8 @@ export interface ContestBefore {
   contestCategoryOperator: string
   contestEntryClass: string
   contestCategoryPower: string
+  /** Blank in a note an earlier build wrote: the band category's own "not declared". */
+  contestCategoryBand: string
   unassistedMode: boolean
 }
 

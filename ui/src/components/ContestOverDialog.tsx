@@ -3,7 +3,7 @@
 // merge the contest's contacts into the logbook (the Contest screen's own merge, with its count),
 // export the Cabrillo log (the Contest screen's own export), and put back what the contest changed
 // — the station callsign a club set, the operator at the key, the position, the entry category,
-// the entry class, the power category and Unassisted — each shown as it is now and as it was
+// the entry class, the power category, the band category and Unassisted — each shown as it is now and as it was
 // before the contest.
 //
 // It also offers the Summary export, names the Cabrillo lines the sponsor requires that the log leaves
@@ -56,6 +56,7 @@ const PUT_BACK = [
   'contestCategoryOperator',
   'contestEntryClass',
   'contestCategoryPower',
+  'contestCategoryBand',
   'unassistedMode',
 ] as const
 export type PutBackKey = (typeof PUT_BACK)[number]
@@ -76,6 +77,8 @@ function settingLabel(key: PutBackKey): string {
       return t('settings.contestPick.entryClass.label')
     case 'contestCategoryPower':
       return t('settings.contestPick.power.label')
+    case 'contestCategoryBand':
+      return t('settings.contestPick.band.label')
     case 'unassistedMode':
       return t('settings.contestCategory.unassisted.label')
   }

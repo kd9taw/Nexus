@@ -63,6 +63,7 @@ function openOn(held: Partial<Settings> = {}, live?: FieldDayStatus | null) {
       contestCategoryOperator: '',
       contestEntryClass: '',
       contestCategoryPower: '',
+      contestCategoryBand: '',
       unassistedMode: false,
     },
     ...held,

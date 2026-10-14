@@ -51,6 +51,7 @@ const EVERYDAY: ContestBefore = {
   contestCategoryOperator: '',
   contestEntryClass: '',
   contestCategoryPower: '',
+  contestCategoryBand: '',
   unassistedMode: false,
 }
 
@@ -148,6 +149,23 @@ describe('the checklist', () => {
       ['Power category', 'LOW', 'not declared', false],
       ['Unassisted entry', 'On', 'Off', false],
     ])
+  })
+
+  it('offers the Band category a contest replaced, and Turn off puts back the band it was before', async () => {
+    const offer = contestOverOffer(
+      clubNow({ contestCategoryBand: 'ALL', contestBefore: { ...EVERYDAY, contestCategoryBand: '20M' } }),
+      0,
+      'cqww_cw',
+    )
+    expect(offer.putBack.find((r) => r.key === 'contestCategoryBand')).toEqual({
+      key: 'contestCategoryBand',
+      now: 'ALL',
+      before: '20M',
+    })
+    const { turnOff } = open(offer)
+    fireEvent.click(box(/Put back Band category: ALL back to 20M/))
+    await press(/Turn off/)
+    expect(turnOff).toHaveBeenCalledWith({ contestCategoryBand: '20M' })
   })
 
   it('Not now does nothing at all', async () => {

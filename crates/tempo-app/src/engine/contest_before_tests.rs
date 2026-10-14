@@ -221,6 +221,7 @@ fn the_note_round_trips_through_settings_json_and_an_older_file_reads_as_none() 
             contest_category_operator: "MULTI-OP".into(),
             contest_entry_class: "ILLINOIS FIXED".into(),
             contest_category_power: "LOW".into(),
+            contest_category_band: "20M".into(),
             unassisted_mode: true,
         }),
         ..Settings::default()
@@ -234,6 +235,7 @@ fn the_note_round_trips_through_settings_json_and_an_older_file_reads_as_none() 
         "\"contestCategoryOperator\":\"MULTI-OP\"",
         "\"contestEntryClass\":\"ILLINOIS FIXED\"",
         "\"contestCategoryPower\":\"LOW\"",
+        "\"contestCategoryBand\":\"20M\"",
         "\"unassistedMode\":true}",
     ] {
         assert!(json.contains(key), "missing {key} in the settings file");
@@ -518,4 +520,41 @@ fn a_declined_note_goes_once_its_contest_is_over() {
         "W9CLB",
         "what was not put back stays as it is"
     );
+}
+
+/// ⭐ The Band category is one of the contest's changes: a `20M` left from an earlier contest is
+/// what the note holds when this contest's change replaces it, and putting it back uses the note.
+/// Read through the wire key the checklist reads.
+#[test]
+fn the_band_category_a_contest_replaced_is_noted_and_putting_it_back_uses_the_note() {
+    // A month before the party, outside its week: an everyday save leaves 20M declared.
+    at(ilqp_2026().start_unix - 30 * DAY);
+    let mut e = Engine::new("K9ABC", "EN52", 0);
+    save(&mut e, |s| {
+        s.mycall = "K9ABC".into();
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.contest_category_band = "20M".into();
+    });
+    assert_eq!(e.settings().contest_before, None, "premise: no note yet");
+    at(ilqp_friday());
+    save(&mut e, |s| s.contest_category_band = "ALL".into());
+    let band = e
+        .settings()
+        .contest_before
+        .as_ref()
+        .map(|n| serde_json::to_value(n).unwrap()["contestCategoryBand"].clone());
+    assert_eq!(band, Some(serde_json::json!("20M")));
+    save(&mut e, |s| s.fd_active = true);
+    save(&mut e, |s| {
+        s.contest_category_band = "20M".into();
+        s.fd_active = false;
+    });
+    assert_eq!(
+        e.settings().contest_before,
+        None,
+        "all of it put back: used"
+    );
+    assert_eq!(e.settings().contest_category_band, "20M");
 }

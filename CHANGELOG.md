@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Closing a satellite alarm stops it.** Closing the pass alarm's notice with ✕ hid it but left the alarm sounding for up to a minute. It now stops the alarm, and the notice's button, **Open in Satellites**, stops it too and takes you to that pass on the Satellites screen. (#478)
 - **An internal error during Stop TX no longer holds the transmitter on.** If something inside Nexus failed while a Stop TX was being carried out, Nexus could wait up to two seconds to write the error to its diagnostic log before the radio unkeyed, and a remote computer's next Stop could wait that long too. It now writes the error without waiting, so the unkey goes ahead at once. The error is still recorded in the log.
 - **Settings search finds the Tune timeout under "tuner".** Searching Settings for "tuner" or "tuner timeout" now lands on Settings ▸ Digital ▸ Digital (FT8/FT4), where the Tune timeout is. (#487)
+- **Contest over? puts back the Band category.** A band category declared for one contest (20M
+  for CQ WW SSB, say) was left in place when the contest ended, so the next contest's Cabrillo
+  file claimed it. The checklist now lists the Band category beside the other settings the contest
+  changed, as it is now and as it was before, and puts it back when you tick it.
 
 ## [1.23.0] — 2026-11-05
 

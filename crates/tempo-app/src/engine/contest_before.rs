@@ -1,13 +1,13 @@
 //! ⭐ **The station as it was before the contest changed it** — the note the contest-over
 //! checklist offers back when Contest mode goes off: the station callsign a club set, the operator
-//! at the key, the position, the entry category (MULTI-OP), the entry class, the power category and
-//! Unassisted ([`ContestBefore`]).
+//! at the key, the position, the entry category (MULTI-OP), the entry class, the power category, the
+//! band category and Unassisted ([`ContestBefore`]).
 //!
 //! **When it is taken.** Only for a contest: from a week before the contest picked in Settings
 //! until it ends, or while Contest mode is on. The picker's blank default is ARRL Field Day, the
 //! contest the mode runs from it (`fdevent::canonical_contest`), so it has Field Day's week. Then,
-//! the first time since the last contest ended that one of those seven changes — a Settings save, a
-//! seat swap, the Unassisted switch — or Contest mode goes on: the seven as they were just BEFORE
+//! the first time since the last contest ended that one of those eight changes — a Settings save, a
+//! seat swap, the Unassisted switch — or Contest mode goes on: the eight as they were just BEFORE
 //! that change. A club picks its contest and types its call, its position and MULTI-OP into
 //! Settings on the Friday, long before anyone turns the mode on, so a note taken only at the switch
 //! would hold the club's call as "before" and offer nothing back; taken at the first change it
@@ -68,10 +68,10 @@ fn pick_counts(s: &Settings, now: u64) -> bool {
 }
 
 impl Engine {
-    /// After a change to the settings: `was` is the seven as they were before it, `was_active`
+    /// After a change to the settings: `was` is the eight as they were before it, `was_active`
     /// whether Contest mode was on. When the mode went off, lets the note go if it is used or its
     /// contest is over. Otherwise, while a pick counts or the mode is on, takes it, if none is
-    /// open, when the mode went on or one of the seven moved; with neither, takes none and lets go
+    /// open, when the mode went on or one of the eight moved; with neither, takes none and lets go
     /// of one whose contest is over.
     pub(super) fn note_contest_before(&mut self, was: ContestBefore, was_active: bool) {
         let active = self.settings.fd_active;
@@ -92,7 +92,7 @@ impl Engine {
             self.settings.contest_before = None;
             return;
         }
-        // None open, and this change is the contest's first: the mode went on, or one of the seven
+        // None open, and this change is the contest's first: the mode went on, or one of the eight
         // moved. What they were just before it is the station's own.
         let moved = ContestBefore::of(&self.settings) != was;
         if self.settings.contest_before.is_none() && ((active && !was_active) || moved) {
