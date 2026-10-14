@@ -32,8 +32,11 @@ fn datagram(id: &str, my_call: &str, dx_call: &str) -> Vec<u8> {
     encode_qso_logged(id, &qso(my_call, dx_call))
 }
 
-/// An engine whose station call is K2DEF, and a note that counts its lines by level.
-fn station() -> (Mutex<Engine>, Note, Arc<Mutex<Vec<(String, String)>>>) {
+/// The lines a note was given, `(level, message)`, in order.
+type Lines = Arc<Mutex<Vec<(String, String)>>>;
+
+/// An engine whose station call is K2DEF, and a note that keeps its lines.
+fn station() -> (Mutex<Engine>, Note, Lines) {
     let lines = Arc::new(Mutex::new(Vec::new()));
     let l = Arc::clone(&lines);
     let note: Note = Arc::new(move |level, msg| {
