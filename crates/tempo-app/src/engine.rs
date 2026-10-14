@@ -5154,6 +5154,9 @@ pub struct Engine {
     /// The last such message the Flex client dropped without keying, and why
     /// ([`Engine::drop_flex_voice`]). Kept until the keyer accepts the next message.
     voice_dropped: Option<crate::dto::VoiceDropped>,
+    /// The last ATU press that did not end in a tune-up the radio took, after [`Self::atu_tune`]
+    /// accepted it ([`Self::note_atu_failed`]). Kept until the next press it accepts.
+    atu_failed: Option<crate::dto::AtuFailed>,
     /// One-shot voice-keyer abort: the loop flushes the output ring + unkeys, then clears it.
     voice_abort: bool,
     /// True while recording a voice message — the radio loop appends captured audio to
@@ -7890,6 +7893,7 @@ impl Engine {
             voice_on_air: false,
             voice_dax: None,
             voice_dropped: None,
+            atu_failed: None,
             voice_abort: false,
             recording: false,
             record_buf: Vec::new(),
@@ -14826,6 +14830,7 @@ impl Engine {
         self.atu_tune_gate()?;
         self.pending_atu_tune = Some(now_unix_secs());
         self.pending_atu_tune_stand_down = self.remote_transmit_stand_down.generation();
+        self.atu_failed = None;
         Ok(())
     }
 
@@ -14854,9 +14859,24 @@ impl Engine {
         let Some(at) = self.pending_atu_tune.take() else {
             return false;
         };
-        self.pending_atu_tune_stand_down == self.remote_transmit_stand_down.generation()
-            && now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
-            && self.atu_tune_gate().is_ok()
+        // The same three tests in the same order; the reason is kept for the status lane.
+        let dropped =
+            if self.pending_atu_tune_stand_down != self.remote_transmit_stand_down.generation() {
+                Some("transmit was stood down after it was pressed".to_string())
+            } else if now_unix_secs().saturating_sub(at) > ATU_REQUEST_MAX_AGE_SECS {
+                Some(format!(
+                    "it waited more than {ATU_REQUEST_MAX_AGE_SECS} seconds to reach the radio"
+                ))
+            } else {
+                self.atu_tune_gate().err()
+            };
+        match dropped {
+            None => true,
+            Some(why) => {
+                self.note_atu_failed(crate::dto::AtuFailCause::Dropped, Some(why));
+                false
+            }
+        }
     }
 
     /// Switch the rig's built-in tuner OUT of line — "Switch tuner out" in the ATU button's menu
@@ -14934,6 +14954,32 @@ impl Engine {
     /// Nexus never sees. Other sections are untouched, for the reasons given at the Tune release.
     pub fn note_atu_tune_started(&mut self) {
         self.note_atu_tune_started_with_reset(reset_ft8_a7_without_waiting);
+    }
+
+    /// ⭐ AN ATU PRESS THE BUTTON ACCEPTED THAT CAME TO NOTHING SAYS SO, on the status lane
+    /// ([`crate::dto::RadioStatus::atu_failed`]). The button's own refusals are toasts; these come
+    /// later, from the radio loop and from [`Self::take_atu_tune`], and used to reach only the CI-V
+    /// diagnostic log or nothing at all — the FT-710 report: "Click does nothing". REPORTING ONLY:
+    /// it neither keys, re-queues nor stands anything down; [`Self::note_atu_tune_started`] does
+    /// that, and the loop calls it before this on no answer.
+    pub fn note_atu_failed(&mut self, cause: crate::dto::AtuFailCause, why: Option<String>) {
+        let stood_down = cause == crate::dto::AtuFailCause::NoAnswer
+            && self.settings.operating_mode == crate::settings::OperatingMode::Digital;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "ATU press came to nothing: {cause:?}{}",
+                why.as_deref()
+                    .map(|w| format!(" ({w})"))
+                    .unwrap_or_default()
+            ),
+        );
+        self.atu_failed = Some(crate::dto::AtuFailed {
+            at: now_unix_secs(),
+            cause,
+            why,
+            stood_down,
+        });
     }
 
     fn note_atu_tune_started_with_reset(&mut self, reset: impl FnOnce()) {
@@ -22576,7 +22622,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // `set_tx_enabled`. Visible in an operator's DEBUG-mode log, 2026-08-19, which is the
         // second time this same pair has been logged as its steps.
         self.quiet_tx_log = true;
+        // An ATU press the button accepted and this halt drops (a halt drops it, see `halt_tx`)
+        // came to nothing, and nothing the operator did said so: it is told, with the cause. An
+        // operator's own Stop TX drops it too and says nothing, since the operator asked for that.
+        let atu_press_dropped = self.pending_atu_tune.is_some();
         self.halt_tx();
+        if atu_press_dropped {
+            self.note_atu_failed(
+                crate::dto::AtuFailCause::Dropped,
+                Some(format!("{why} before it was sent")),
+            );
+        }
         self.voice_mem_halt = voice_mem_halt;
         tempo_core::applog::info(
             "tx",
@@ -31982,6 +32038,7 @@ contact yourself."
         s.radio.ptt_refused = self.ptt_refused.clone();
         s.radio.pc_mic_ended = self.pc_mic.ended.clone();
         s.radio.voice_dropped = self.voice_dropped.clone();
+        s.radio.atu_failed = self.atu_failed.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -42959,6 +43016,169 @@ mod tests {
             e.take_atu_tune(),
             "a press after the switch belongs to the new radio"
         );
+    }
+
+    /// The status lane's copy of a failed ATU press, without its timestamp.
+    fn atu_failed(e: &Engine) -> Option<(crate::dto::AtuFailCause, Option<String>, bool)> {
+        e.snapshot()
+            .radio
+            .atu_failed
+            .map(|f| (f.cause, f.why, f.stood_down))
+    }
+
+    /// ★ AN ATU PRESS THE BUTTON ACCEPTED AND THE LOOP THEN DROPPED SAYS SO, AND WHY. The button
+    /// answers every refusal it can see with a toast; a press that goes stale, meets a gate that
+    /// closed after the click, or belongs to a radio the operator switched away from is dropped
+    /// later, in the radio loop, where nothing used to tell anyone ("click does nothing").
+    #[test]
+    fn an_atu_press_dropped_after_the_button_accepted_it_says_why() {
+        use crate::dto::AtuFailCause::Dropped;
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.pending_atu_tune = Some(now_unix_secs().saturating_sub(ATU_REQUEST_MAX_AGE_SECS + 1));
+        assert!(
+            !e.take_atu_tune(),
+            "scene guard: the stale press is dropped"
+        );
+        assert_eq!(
+            atu_failed(&e),
+            Some((
+                Dropped,
+                Some("it waited more than 5 seconds to reach the radio".to_string()),
+                false
+            )),
+            "a stale press"
+        );
+
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.set_tx_enabled(false);
+        assert!(!e.take_atu_tune(), "scene guard: the re-run gate drops it");
+        assert_eq!(
+            atu_failed(&e),
+            Some((
+                Dropped,
+                Some("TX is off — enable TX first".to_string()),
+                false
+            )),
+            "a gate that closed after the click names itself"
+        );
+
+        // A transmit stand-down that moved after the press (Remote's Stop, a lease lost) without
+        // a halt here.
+        let mut e = atu_engine();
+        let stand_down = crate::remote_control::Revocation::default();
+        e.set_remote_transmit_revocation(stand_down.clone());
+        e.atu_tune().unwrap();
+        stand_down.revoke();
+        assert!(!e.take_atu_tune(), "scene guard: the stand-down drops it");
+        assert_eq!(
+            atu_failed(&e),
+            Some((
+                Dropped,
+                Some("transmit was stood down after it was pressed".to_string()),
+                false
+            )),
+            "a stand-down after the click"
+        );
+
+        // A context halt drops the press before the loop sees it, and names its cause.
+        let mut e = phone_armed_engine();
+        let other = e.add_radio();
+        e.set_active_radio(0);
+        e.set_frequency(14.290, "20m", "USB");
+        e.observe_rig_tuner(Some(true), true);
+        e.atu_tune().unwrap();
+        e.set_active_radio(other);
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "scene guard: the switch dropped it"
+        );
+        assert_eq!(
+            atu_failed(&e),
+            Some((
+                Dropped,
+                Some("radio handoff before it was sent".to_string()),
+                false
+            )),
+            "a press for the radio being left"
+        );
+
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.halt_tx_for_context_change("band change");
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "scene guard: the halt dropped it"
+        );
+        assert_eq!(
+            atu_failed(&e),
+            Some((
+                Dropped,
+                Some("band change before it was sent".to_string()),
+                false
+            )),
+            "a band change after the click"
+        );
+    }
+
+    /// CONTROL: the operator's own Stop TX drops a queued ATU press too, and says nothing about
+    /// it, since the operator asked for exactly that; a context halt with no press queued says
+    /// nothing either.
+    #[test]
+    fn a_stop_tx_or_a_halt_with_no_press_queued_raises_no_atu_failure() {
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        e.halt_tx();
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "scene guard: Stop TX dropped it"
+        );
+        assert_eq!(atu_failed(&e), None, "Stop TX");
+        let mut e = atu_engine();
+        e.halt_tx_for_context_change("band change");
+        assert_eq!(atu_failed(&e), None, "no press was queued");
+    }
+
+    /// The loop's own verdicts reach the same lane: the radio refused the tune-up, or never
+    /// answered it. No answer names the stand-down only where there was one, the Digital section.
+    #[test]
+    fn the_radios_answer_to_a_tune_up_reaches_the_status_lane() {
+        use crate::dto::AtuFailCause::{NoAnswer, Refused};
+        let mut e = atu_engine();
+        e.note_atu_failed(Refused, None);
+        assert_eq!(atu_failed(&e), Some((Refused, None, false)));
+        e.note_atu_failed(NoAnswer, None);
+        assert_eq!(
+            atu_failed(&e),
+            Some((NoAnswer, None, false)),
+            "Phone: nothing was stood down"
+        );
+        let mut e = atu_engine();
+        e.set_operating_mode("digital", false);
+        e.note_atu_failed(NoAnswer, None);
+        assert_eq!(
+            atu_failed(&e),
+            Some((NoAnswer, None, true)),
+            "Digital: the section stood down in case it is tuning"
+        );
+    }
+
+    /// CONTROL: a press that goes out leaves the lane empty, and the next press the button
+    /// accepts clears an earlier failure.
+    #[test]
+    fn a_press_that_goes_out_raises_no_atu_failure_and_a_new_press_clears_one() {
+        let mut e = atu_engine();
+        e.atu_tune().unwrap();
+        assert!(e.take_atu_tune(), "scene guard: it goes out");
+        assert_eq!(atu_failed(&e), None, "a tune-up on its way says nothing");
+        e.note_atu_failed(crate::dto::AtuFailCause::Refused, None);
+        assert!(
+            atu_failed(&e).is_some(),
+            "scene guard: a failure is showing"
+        );
+        e.atu_tune().unwrap();
+        assert_eq!(atu_failed(&e), None, "the next accepted press clears it");
     }
 
     /// ★ A halt asks the loop for a voice-memory stop, once. A context halt neither asks for one

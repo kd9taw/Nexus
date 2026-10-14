@@ -11668,12 +11668,23 @@ impl RadioLoop {
                         let fire_atu = engine_lock(engine).take_atu_tune();
                         // ⛔ The radio's carrier comes out of its TX VFO: never VFO B on the last
                         // over's TX dial. A refusal drops the press, as `may_key` does.
-                        if fire_atu
-                            && self.may_key()
-                            && self
-                                .split_ready_for_a_non_slot_key(engine, rig, "ATU tune-up")
-                                .is_ok()
-                        {
+                        // The two loop doors in the same order as ever (the split check runs only
+                        // when `may_key` passes, exactly once); the reason a drained press is not
+                        // sent is kept for the status lane.
+                        let atu_door = if !fire_atu {
+                            Err(None)
+                        } else if !self.may_key() {
+                            Err(Some("the radio connection was changing over".to_string()))
+                        } else {
+                            self.split_ready_for_a_non_slot_key(engine, rig, "ATU tune-up")
+                                .map_err(|why| {
+                                    Some(format!(
+                                        "Split Operation could not put the radio's TX VFO back \
+                                         on the dial ({why})"
+                                    ))
+                                })
+                        };
+                        if atu_door.is_ok() {
                             crate::civ::diag::note("ATU: operator asked the rig to tune up");
                             // ⭐⭐ THREE OUTCOMES, NOT TWO (transmit review R1, 2026-09-19).
                             //
@@ -11713,6 +11724,10 @@ impl RadioLoop {
                                     crate::civ::diag::note(&format!(
                                         "ATU: the rig refused it: {why}"
                                     ));
+                                    engine_lock(engine).note_atu_failed(
+                                        tempo_app::dto::AtuFailCause::Refused,
+                                        None,
+                                    );
                                 }
                                 // ⚠️ NO VERDICT ⇒ STAND DOWN, and the asymmetry is the whole
                                 // point: the command is already on the wire, so the rig may be
@@ -11730,8 +11745,19 @@ impl RadioLoop {
                                     self.end_key_watch(rig);
                                     self.atu_tune_started_at = Some(now);
                                     self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
+                                    engine_lock(engine).note_atu_failed(
+                                        tempo_app::dto::AtuFailCause::NoAnswer,
+                                        None,
+                                    );
                                 }
                             }
+                        } else if let Err(Some(why)) = atu_door {
+                            // Drained and NOT sent (a loop door above): dropped, never held, as
+                            // before — and now the operator is told so. `switch_unhanded` cannot be
+                            // up here; this whole block is skipped while it is.
+                            crate::civ::diag::note(&format!("ATU: press dropped: {why}"));
+                            engine_lock(engine)
+                                .note_atu_failed(tempo_app::dto::AtuFailCause::Dropped, Some(why));
                         }
                         // ⭐ "SWITCH TUNER OUT" (#344, the ATU button's menu): `U TUNER 0` — the
                         // same verb the tune-up sends with `2`. NOT a keying command, but never
@@ -38356,6 +38382,87 @@ mod tests {
         assert!(
             engine.lock().unwrap().tx_enabled(),
             "the radio refused it, so nothing tuned and the QSO stays armed"
+        );
+    }
+
+    /// ★ WHAT BECAME OF AN ATU PRESS AFTER THE BUTTON ACCEPTED IT REACHES THE OPERATOR ("click
+    /// does nothing", FT-710 on Hamlib). The radio's refusal and its silence used to go to the
+    /// CI-V diagnostic log only, and a press this block could not send went nowhere at all. Each
+    /// now lands on the status lane (`RadioStatus::atu_failed`), read here by value off the
+    /// snapshot, beside what reached the wire.
+    #[test]
+    fn every_way_an_accepted_atu_press_comes_to_nothing_reaches_the_snapshot() {
+        use tempo_app::dto::AtuFailCause::{Dropped, NoAnswer, Refused};
+        let outcome = |engine: &Arc<Mutex<Engine>>| {
+            engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .atu_failed
+                .map(|f| (f.cause, f.why, f.stood_down))
+        };
+        // (reply to `U TUNER 2`, a deferred handoff at the press, what the lane must say)
+        let cases = [
+            ("RPRT -9\n", false, Some((Refused, None, false))),
+            (ATU_SILENT, false, Some((NoAnswer, None, false))),
+            (
+                "RPRT 0\n",
+                true,
+                Some((
+                    Dropped,
+                    Some("the radio connection was changing over".to_string()),
+                    false,
+                )),
+            ),
+            // CONTROL: the radio took it, and the lane stays empty.
+            ("RPRT 0\n", false, None),
+        ];
+        for (reply, deferred, want) in cases {
+            let engine = atu_engine();
+            let (addr, log) = mock_rigctld_with_atu_answering(14_290_000, reply);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+            engine.lock().unwrap().atu_tune().expect("the gate passes");
+            state.handoff_deferred = deferred;
+            run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 1);
+            let sent = log.lock().unwrap().clone();
+            assert_eq!(
+                sent.iter().any(|l| l == "U TUNER 2"),
+                !deferred,
+                "{reply:?}/{deferred}: what reached the radio — saw {sent:?}"
+            );
+            assert_eq!(outcome(&engine), want, "{reply:?}/{deferred}");
+        }
+    }
+
+    /// No answer in the Digital section names the stand-down that went with it.
+    #[test]
+    fn a_tune_up_with_no_answer_in_the_digital_section_says_tx_stood_down() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_frequency(14.074, "20m", "USB");
+            e.set_tx_enabled(true);
+        }
+        let (addr, _log) = mock_rigctld_with_atu_answering(14_074_000, ATU_SILENT);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        let e = engine.lock().unwrap();
+        assert!(!e.tx_enabled(), "scene guard: the section stood down");
+        assert_eq!(
+            e.snapshot()
+                .radio
+                .atu_failed
+                .map(|f| (f.cause, f.stood_down)),
+            Some((tempo_app::dto::AtuFailCause::NoAnswer, true))
         );
     }
 
