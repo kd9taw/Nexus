@@ -86,9 +86,9 @@ Score updates every snapshot cycle (approximately every 300 ms).
 
 | Tier | Condition | Multiplier |
 |---|---|---|
-| QRP/battery | No commercial power | ×5 |
-| Low power | ≤100 W | ×2 (default) |
-| High power | >100 W | ×1 |
+| QRP/battery | ≤5 W, from neither commercial mains nor a motor-driven generator (batteries, solar, wind, water) | ×5 |
+| Low power | ≤100 W from any source, including ≤5 W on mains or a generator | ×2 (default) |
+| High power | >100 W from any source | ×1 |
 
 **Distinct section count** (the FD multiplier equivalent) is computed and displayed in the scoreboard. New sections receive a **Mult!** tag in the log table as they are worked.
 
@@ -182,6 +182,8 @@ The bonus checklist contains ARRL Field Day's 16 bonuses. Toggle each one on the
 | Web submission | 50 |
 
 **Total possible bonus: 1 550 points.**
+
+⚠️ **The checklist does not yet score every bonus the way ARRL's 2026 rules do.** Each box above adds its points once. ARRL's rules (7.3) give: **emergency power** 100 points per transmitter, up to 20 transmitters (2,000), with the GOTA station and the free VHF station not counted; **youth** 20 points for each participant 18 or younger who completes a contact, up to 100; **GOTA** 5 points for each GOTA contact, not multiplied, plus a single 100 for a GOTA coach who supervises at least 10 of them; **message handling** 10 points per formal message, up to 100; and **site responsibilities** 50 points (Classes B to F). The last two have no box. Claim the right amounts on ARRL's entry form, which is where ARRL takes bonuses from; the score Nexus shows can differ from your entry by that much.
 
 The bonus checklist is ARRL Field Day's. Winter Field Day has no bonus list: it scores by its objectives (see [Winter Field Day Scoring](#winter-field-day-scoring)).
 

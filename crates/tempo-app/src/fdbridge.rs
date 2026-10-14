@@ -33,6 +33,23 @@ fn now_unix() -> u64 {
 /// The host role: `fdsync::serve_until`'s backend over the shared engine.
 pub struct EngineClubBackend(pub Arc<Mutex<Engine>>);
 
+impl EngineClubBackend {
+    /// Run `f` on the engine, then — with the lock released — fsync the club journal it may
+    /// have appended to, so what a laptop is answered (an ack, a welcome) is on the host's
+    /// disk first ([`crate::fdevent::ClubJournal::sync`]).
+    fn journaled<T>(&self, f: impl FnOnce(&mut Engine) -> T) -> T {
+        let (out, journal) = {
+            let mut e = engine_lock(&self.0);
+            let out = f(&mut e);
+            (out, e.fd_club_journal())
+        };
+        if let Some(j) = journal {
+            j.sync();
+        }
+        out
+    }
+}
+
 impl ClubBackend for EngineClubBackend {
     fn join(
         &self,
@@ -52,11 +69,11 @@ impl ClubBackend for EngineClubBackend {
         } else {
             String::new()
         };
-        engine_lock(&self.0).fd_club_join(v, pos, name, call, contest, role, &key_hash)
+        self.journaled(|e| e.fd_club_join(v, pos, name, call, contest, role, &key_hash))
     }
 
     fn merge(&self, hold: u64, row: &WireQso) -> Result<u64, String> {
-        engine_lock(&self.0).fd_club_merge(hold, row)
+        self.journaled(|e| e.fd_club_merge(hold, row))
     }
 
     fn held(&self, pos: &str, hold: u64) -> Result<(), String> {
@@ -83,11 +100,11 @@ impl ClubBackend for EngineClubBackend {
     }
 
     fn retract(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
-        engine_lock(&self.0).fd_club_retract(hold, pos, seq)
+        self.journaled(|e| e.fd_club_retract(hold, pos, seq))
     }
 
     fn restore(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
-        engine_lock(&self.0).fd_club_restore(hold, pos, seq)
+        self.journaled(|e| e.fd_club_restore(hold, pos, seq))
     }
 
     fn retracted(&self, pos: &str) -> Vec<u64> {

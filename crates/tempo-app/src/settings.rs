@@ -1718,7 +1718,7 @@ pub struct Settings {
     ///
     /// ⚠️ **Not [`Self::fd_power_mult`]**, which is Field Day's scoring TIER
     /// picked from a legal set. §6.1 rules that neither is derived from the
-    /// other: the thresholds differ (SS: 5 W / 100 W / 1500 W; FD's tier: 150 W)
+    /// other: the thresholds differ (SS: 5 W / 100 W / 1500 W; FD's tiers: 5 W / 100 W)
     /// and one is a claim about the entry while the other multiplies a score.
     #[serde(default)]
     pub contest_category_power: String,
@@ -1884,7 +1884,9 @@ pub struct Settings {
     /// that contact only. OFF by default, and then the entry is exactly what it always was.
     #[serde(default)]
     pub contest_rst_sent_box: bool,
-    /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
+    /// Power multiplier tier (ARRL Field Day rules 7.2.1-7.2.4): 5 = 5 W or less from a source
+    /// other than commercial mains or a motor-driven generator, 2 = 100 W or less (5 W or less
+    /// on mains or a generator included), 1 = more than 100 W, from any source.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
     /// Claimed bonus ids (the UI checklist; each maps to points in the bonus

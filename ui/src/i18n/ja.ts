@@ -4283,7 +4283,7 @@ export const JA: PartialCatalog = {
   "settings.fieldDay.power.hundred.label": "×2 ≤100W",
   "settings.fieldDay.power.hundred.hint": "電源を問わず100W以下",
   "settings.fieldDay.power.high.label": "×1 >100W",
-  "settings.fieldDay.power.high.hint": "100W超 — 商用電源／発電機",
+  "settings.fieldDay.power.high.hint": "電源を問わず100W超",
   "settings.fieldDay.power.hint": "QSO得点に掛かる倍率です。QRP／バッテリー = ×5（オフグリッド運用へのARRLボーナス）。イベント前に選択してください。",
   "settings.fdRules.update.action": "ルール更新を確認",
   "settings.fdRules.update.busy": "確認中…",

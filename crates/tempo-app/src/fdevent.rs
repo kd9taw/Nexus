@@ -3,7 +3,8 @@
 //!
 //! The HOST holds a [`ClubLog`]: every position's rows merged idempotently by
 //! `(position id, seq)`, an append-only NDJSON event journal (one merged row
-//! per line, flushed per merge — no whole-file clobber window, unlike the ADIF
+//! per line, written per merge and fsynced once the Engine lock is released
+//! ([`ClubJournal::sync`]) — no whole-file clobber window, unlike the ADIF
 //! journal's rewrite), the club dupe index, sections, the multiplier values
 //! worked, per-position stats and the scored total. **The club log is always
 //! reconstructible as the union of the position journals** — the invariant
@@ -975,6 +976,75 @@ pub struct ClubLogEntry<'a> {
     pub dupe: bool,
 }
 
+/// ⭐ **The host's club journal, held so it can be fsynced OFF the Engine lock.**
+///
+/// The club log appends each merged row and note under the Engine lock (the write reaches the
+/// operating system, not yet the disk). An fsync waits on the disk, and the radio loop takes
+/// the Engine lock every tick, so the sync is made by whoever changed the club, after it
+/// released the lock: the bridge, before it acks the row to the laptop that sent it, and the
+/// host's own buttons. A note made anywhere else (a change of the hosted call or class) reaches
+/// the disk with the next sync, which syncs the whole file.
+#[derive(Clone, Debug)]
+pub struct ClubJournal {
+    file: std::sync::Arc<std::fs::File>,
+    path: PathBuf,
+    /// The folder is synced once, after the first sync, so the journal's own entry in it
+    /// survives a power cut when the file was new.
+    folder_synced: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ClubJournal {
+    /// fsync the journal — every line appended before this call — and, the first time, its
+    /// folder (unix only: Windows has no folder handle to sync). A failure is reported, as a
+    /// position journal's is, and the line stays written for the operating system to flush.
+    pub fn sync(&self) {
+        tempo_core::logbook::io_fence::off_engine_lock("a sync of the club journal");
+        if let Err(e) = self.file.sync_data() {
+            eprintln!("tempo: club journal sync failed: {e}");
+        }
+        if !self
+            .folder_synced
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            #[cfg(unix)]
+            if let Some(dir) = self.path.parent() {
+                if let Ok(d) = std::fs::File::open(dir) {
+                    let _ = d.sync_all();
+                }
+            }
+        }
+        #[cfg(test)]
+        club_journal_seam::record(&self.path);
+    }
+}
+
+/// The test seam for [`ClubJournal::sync`]: every journal path synced, so a test sees the
+/// sync happen on the path it drove. Global to the test binary; a test reads its own path.
+#[cfg(test)]
+pub(crate) mod club_journal_seam {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static SYNCED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn record(path: &Path) {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+
+    /// How many syncs of the journal at `path` were made.
+    pub(crate) fn count(path: &Path) -> usize {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|p| p.as_path() == path)
+            .count()
+    }
+}
+
 /// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
 /// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
 /// `call` are required) and skips it, as it skips a torn line; this build reads each before
@@ -1108,7 +1178,7 @@ pub struct ClubLog {
     /// honestly reads 0 until fresh merges arrive.
     arrivals: VecDeque<(u64, String, u64)>,
     /// The append-only event journal. `None` = not journaling (tests).
-    journal: Option<std::fs::File>,
+    journal: Option<ClubJournal>,
     /// Laptops this host turned away, by the position id their JOIN named and the hash of its
     /// club key (empty for none): two laptops can name one position
     /// ([`note_refused`](Self::note_refused)).
@@ -1902,12 +1972,16 @@ impl ClubLog {
                 }
             }
         }
-        self.journal = Some(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?,
-        );
+        self.journal = Some(ClubJournal {
+            file: std::sync::Arc::new(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?,
+            ),
+            path: path.clone(),
+            folder_synced: std::sync::Arc::default(),
+        });
         Ok(())
     }
 
@@ -2047,14 +2121,22 @@ impl ClubLog {
         true
     }
 
-    /// One merged row onto the journal, flushed per merge: append-only, so a crash can cost at
-    /// most the final line — and the position that sent it re-pushes it on reconnect anyway.
+    /// One merged row onto the journal, written per merge: append-only, so a crash can cost at
+    /// most the final line — and the position that sent it re-pushes it on reconnect anyway. It
+    /// reaches the disk when the caller syncs the journal after releasing the Engine lock
+    /// ([`ClubJournal::sync`]).
     fn journal_row(&mut self, row: &MergedRow) {
-        if let (Some(j), Ok(line)) = (&mut self.journal, serde_json::to_string(row)) {
-            let _ = j.write_all(line.as_bytes());
-            let _ = j.write_all(b"\n");
-            let _ = j.flush();
+        if let (Some(j), Ok(line)) = (&self.journal, serde_json::to_string(row)) {
+            let mut f = &*j.file;
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(b"\n");
         }
+    }
+
+    /// ⭐ **The journal, for a sync after the Engine lock is released** — `None` when this
+    /// club journals nothing.
+    pub fn journal(&self) -> Option<ClubJournal> {
+        self.journal.clone()
     }
 
     /// One live row into the club's dupe keys, sections, multiplier values and its position's
@@ -2139,12 +2221,12 @@ impl ClubLog {
         }
     }
 
-    /// One [`JournalNote`] line, appended and flushed like a merged row's.
+    /// One [`JournalNote`] line, appended like a merged row's and synced the same way.
     fn journal_note(&mut self, note: &JournalNote) {
-        if let (Some(j), Ok(line)) = (&mut self.journal, serde_json::to_string(note)) {
-            let _ = j.write_all(line.as_bytes());
-            let _ = j.write_all(b"\n");
-            let _ = j.flush();
+        if let (Some(j), Ok(line)) = (&self.journal, serde_json::to_string(note)) {
+            let mut f = &*j.file;
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(b"\n");
         }
     }
 

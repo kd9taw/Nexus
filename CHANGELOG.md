@@ -72,6 +72,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode turned back on to reach **Club Cabrillo**, now stays in that laptop's own log instead of going
   into the Club Cabrillo under the club's call. The GOTA station and the other laptops send their
   contacts as before.
+- **A Field Day host's club log survives a sudden power cut.** The host wrote each contact the
+  laptops sent into its club journal but left it to the operating system to put on the disk, so a
+  hard power cut could lose the newest ones (the laptops sent them again when they rejoined). The
+  host now puts each one on the disk before it tells the laptop it has it, and the contacts of a
+  laptop's file it imports before it shows what it added. Each laptop's own contest
+  log, the message queue and the JS8 inbox also make sure the file's new name is on the disk after
+  every save, so a power cut can no longer bring back the version from before it (Linux and macOS;
+  Windows has no such step).
+- **The ×1 Field Day power hint is right.** It said "Over 100W — commercial/generator power", but
+  ARRL's rules give ×1 for more than 100 W from any power source. It now says so.
 
 ## [1.23.0] — 2026-11-05
 

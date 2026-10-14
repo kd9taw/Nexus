@@ -6519,7 +6519,7 @@ export const EN = {
   'settings.fieldDay.power.hundred.label': '×2 ≤100W',
   'settings.fieldDay.power.hundred.hint': '100W or less from any power source',
   'settings.fieldDay.power.high.label': '×1 >100W',
-  'settings.fieldDay.power.high.hint': 'Over 100W — commercial/generator power',
+  'settings.fieldDay.power.high.hint': 'Over 100W from any power source',
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
 

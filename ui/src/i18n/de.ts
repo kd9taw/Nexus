@@ -911,7 +911,7 @@ export const DE: PartialCatalog = {
   "settings.fieldDay.power.hundred.label": "×2 ≤100W",
   "settings.fieldDay.power.hundred.hint": "100W oder weniger aus beliebiger Stromquelle",
   "settings.fieldDay.power.high.label": "×1 >100W",
-  "settings.fieldDay.power.high.hint": "Über 100W — Netz- oder Generatorstrom",
+  "settings.fieldDay.power.high.hint": "Über 100W aus beliebiger Stromquelle",
   "settings.fieldDay.power.hint": "Multipliziert Ihre QSO-Punkte. QRP/Akku = ×5 (ARRL-Bonus für netzunabhängigen Betrieb). Vor der Veranstaltung wählen.",
   "settings.fdRules.update.action": "Nach Regel-Updates suchen",
   "settings.fdRules.update.busy": "Wird geprüft…",

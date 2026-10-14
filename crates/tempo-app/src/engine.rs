@@ -17390,6 +17390,12 @@ impl Engine {
         self.fd_club.as_ref()
     }
 
+    /// The host's club journal, taken under the lock and synced after it is released
+    /// ([`crate::fdevent::ClubJournal::sync`]) — `None` when this laptop hosts nothing.
+    pub fn fd_club_journal(&self) -> Option<crate::fdevent::ClubJournal> {
+        self.fd_club.as_ref().and_then(|c| c.journal())
+    }
+
     /// ⭐ **The club log, as the contest screen lists it** — the newest
     /// [`CLUB_LOG_SHOWN`](crate::fdevent::CLUB_LOG_SHOWN) of the club's merged contacts, newest
     /// first ([`crate::fdevent::ClubLog::newest`]), each with the position that logged it, named as
@@ -37701,8 +37707,16 @@ fn fd_club_import_with(
     let plan = engine_lock(engine).fd_club_import_plan(text, posid)?;
     let mut read = read(plan, text);
     loop {
-        let done = engine_lock(engine).fd_club_import_merge(&mut read)?;
-        if done {
+        // Each hold's rows reach the host's disk once the lock is let go, as the club link's
+        // do ([`crate::fdevent::ClubJournal::sync`]).
+        let (done, journal) = {
+            let mut e = engine_lock(engine);
+            (e.fd_club_import_merge(&mut read), e.fd_club_journal())
+        };
+        if let Some(j) = journal {
+            j.sync();
+        }
+        if done? {
             return Ok(read.dto);
         }
         between();
@@ -59771,6 +59785,27 @@ mod tests {
                 .map(|c| c.qsos_raw()),
             Some(2),
             "CONTROL: the contacts read are merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **An imported laptop's contacts reach the host's disk as a link's do**: the club journal
+    /// is synced after the merge, with the Engine lock let go
+    /// ([`crate::fdevent::ClubJournal::sync`]), so a power cut on the host after the import's
+    /// answer cannot cost them. Seen through the journal's test seam, by its own path.
+    #[test]
+    fn a_laptops_file_import_syncs_the_club_journal() {
+        use crate::fdevent::club_journal_seam::count;
+        let dir = import_dir("synced");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let journal = dir.join("ilqp.ndjson");
+        let before = count(&journal);
+        let got = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(got.added, 2, "CONTROL: {got:?}");
+        assert!(
+            count(&journal) > before,
+            "the import synced the club journal"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

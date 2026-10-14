@@ -5800,7 +5800,11 @@ fn write_sync(path: &Path, body: &[u8]) -> std::io::Result<()> {
 /// succeeded: this upgrades "the save happened" to "the save survives a power cut", and a
 /// filesystem that will not open a directory for sync (or Windows, which has no directory
 /// handle to sync at all) must not turn that upgrade into a failed save.
-fn sync_parent_dir(path: &Path) {
+///
+/// The small journals' writer (`crate::journal`) calls it after its rename too.
+pub(crate) fn sync_parent_dir(path: &Path) {
+    #[cfg(test)]
+    dir_sync_seam::record(path);
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
         if let Ok(d) = std::fs::File::open(dir) {
@@ -5809,6 +5813,34 @@ fn sync_parent_dir(path: &Path) {
     }
     #[cfg(not(unix))]
     let _ = path;
+}
+
+/// ⭐ **The test seam for [`sync_parent_dir`]**: every path it was asked to sync the folder
+/// of, on every platform, so a test can see that a writer asked for the folder's fsync after
+/// its rename. Global to the test binary; a test looks for a path under a folder of its own.
+#[cfg(test)]
+pub(crate) mod dir_sync_seam {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static SYNCED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn record(path: &Path) {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
+    }
+
+    /// How many times the folder of `path` was asked to be synced for `path`.
+    pub(crate) fn count(path: &Path) -> usize {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|p| p.as_path() == path)
+            .count()
+    }
 }
 
 /// Proof-to-be that one append reached the disk: taken under the engine lock, redeemed with

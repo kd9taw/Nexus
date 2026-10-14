@@ -7834,7 +7834,7 @@ export const FR: PartialCatalog = {
   "settings.fieldDay.mode.label": "Mode Concours",
   "settings.fieldDay.needExchange": "<b>Renseignez votre Classe + Section pour commencer à trafiquer.</b> Le mode Concours est actif, mais la station ne participera pas à {{contest}} tant que les deux ne sont pas remplis ci-dessous.",
   "settings.fieldDay.power.aria": "Multiplicateur de puissance Field Day",
-  "settings.fieldDay.power.high.hint": "Plus de 100W — secteur / groupe électrogène",
+  "settings.fieldDay.power.high.hint": "Plus de 100W, quelle que soit la source d'alimentation",
   "settings.fieldDay.power.high.label": "×1 >100W",
   "settings.fieldDay.power.hint": "Multiplie vos points QSO. QRP/batterie = ×5 (bonus ARRL pour le hors-réseau). À choisir avant l'événement.",
   "settings.fdRules.update.action": "Vérifier les mises à jour des règles",
