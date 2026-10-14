@@ -1546,7 +1546,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed') || inRegion('freedv') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
+      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
         ? 3
         : leadPresent
           ? 2

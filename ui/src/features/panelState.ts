@@ -1248,7 +1248,8 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
 /*  `freedv` (2026-10-14) is FreeDV's own app beside Nexus, RECEIVE ONLY: whether FreeDV is talking
  *  to Nexus, the last contact it put in the log, and the calls it heard — a click on one fills the
  *  log strip's call. A feed like Needed: no stop control, no sender (nothing in it keys, logs or
- *  tunes), a hide that ends nothing, so its entry carries no note and it ships hidden. */
+ *  tunes), a hide that ends nothing, so its entry carries no note and it ships hidden. It stands
+ *  under Spots in the leading column, the other feed there, and after Needed below three tracks. */
 export const PHONE_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'rigscope',
@@ -1282,8 +1283,8 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // the left side included; where they stand is no part of the stock grouping (features/panelPlace).
   arrange: {
     columns: {
-      a: ['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS],
-      b: ['rigscope', 'receiver', 'transmitter', 'needed', 'freedv'],
+      a: ['bandActivity', 'voiceKeyer', 'spots', 'freedv', ...BOX_IDS],
+      b: ['rigscope', 'receiver', 'transmitter', 'needed'],
       log: [],
     },
     pinned: ['voiceKeyer'],

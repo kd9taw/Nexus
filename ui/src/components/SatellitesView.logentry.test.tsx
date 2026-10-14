@@ -675,7 +675,9 @@ describe('Satellites — logging the contact you just made', () => {
       .querySelector('.le-ov-mode') as HTMLSelectElement | null
     expect(picker, 'the override has no mode picker at all').not.toBeNull()
     const offered = Array.from(picker!.options).map((o) => o.value)
-    expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'])
+    // FREEDV (2026-10-14) is digital VOICE, not a WSJT-X tier, and FreeDV is worked through
+    // QO-100: the same kind of addition PSK31 was.
+    expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4', 'FREEDV'])
     for (const tier of [
       'FT2',
       'Q65',

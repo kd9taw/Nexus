@@ -321,8 +321,8 @@ describe('the boxes in a cockpit’s columns', () => {
       'transmitter',
       'spots',
       'needed',
-      'freedv',
       'box3',
+      'freedv',
     ])
     // Without the boxes it is exactly the stock merged order.
     expect(regionGroups(spec, rec.place, 2, (id) => !id.startsWith('box'))[0].ids).toEqual([...spec.stockMerged!])
