@@ -28,7 +28,8 @@ impl Engine {
         // 100 each to whoever works them ("added to the final score"), and nothing asks
         // the operator to claim them — a screen that showed only the ticked menu would
         // be 200 points light on the number the sponsor credits.
-        let bonus = rs.bonus_points(&self.settings.fd_bonuses) + log.bonus_station_points();
+        let bonus = rs.claimed_bonus_points(self.settings.fd_bonus_claim(), log.gota_contacts())
+            + log.bonus_station_points();
         // The exchange and the role this session is running — read ONCE here, so the
         // strip's boxes, the sent display and the multiplier boards cannot disagree
         // about which role the operator is in.

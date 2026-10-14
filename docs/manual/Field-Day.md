@@ -160,30 +160,35 @@ The Contest screen carries a live scoreboard: QSO and section counts, per-mode c
 
 ## Bonus Checklist
 
-The bonus checklist contains ARRL Field Day's 16 bonuses. Toggle each one on the Contest screen as your club achieves it:
+The bonus checklist contains ARRL Field Day's 19 bonuses. Toggle each one on the Contest screen as your club achieves it. Four are worth so much per unit (ARRL 2026 rules, 7.3): type the number beside the ticked box, and a ticked box with no number counts as one.
 
 | Bonus | Points |
 |---|---|
-| Emergency power | 100 |
+| Emergency power | 100 per transmitter, up to 20 (2,000). The GOTA station and the free VHF station are not counted (7.3.1) |
 | Media publicity | 100 |
 | Public location | 100 |
 | Public info table | 100 |
 | NTS message | 100 |
+| Message handling | 10 per formal message, up to 100 (7.3.6) |
 | W1AW bulletin | 100 |
 | Natural power | 100 |
 | Elected official visit | 100 |
 | Agency visit | 100 |
-| GOTA | 100 |
-| Youth | 100 |
+| GOTA | 5 per GOTA contact, no limit, not multiplied (7.3.13.1). Counted from the club log; nothing to tick |
+| GOTA coach | 100 |
+| Youth | 20 per participant 18 or younger, up to 100; a Class B station up to 40 (7.3.15) |
 | Safety officer | 100 |
 | Social media | 100 |
 | Educational activity | 100 |
 | Satellite QSO | 100 |
 | Web submission | 50 |
+| Site responsibilities | 50 |
 
-**Total possible bonus: 1 550 points.**
+The GOTA points appear in the club's score on the host, which holds the GOTA station's contacts; a laptop's own score does not include them.
 
-⚠️ **The checklist does not yet score every bonus the way ARRL's 2026 rules do.** Each box above adds its points once. ARRL's rules (7.3) give: **emergency power** 100 points per transmitter, up to 20 transmitters (2,000), with the GOTA station and the free VHF station not counted; **youth** 20 points for each participant 18 or younger who completes a contact, up to 100; **GOTA** 5 points for each GOTA contact, not multiplied, plus a single 100 for a GOTA coach who supervises at least 10 of them; **message handling** 10 points per formal message, up to 100; and **site responsibilities** 50 points (Classes B to F). The last two have no box. Claim the right amounts on ARRL's entry form, which is where ARRL takes bonuses from; the score Nexus shows can differ from your entry by that much.
+**Natural power list.** Rule 7.3.8 asks for "a separate list of natural power QSOs" with your entry. Tick **On natural power now** beside the Natural Power bonus while the station runs on solar, wind or other natural power, and each contact the laptop logs is marked. **Export ▸ Natural power** saves the marked contacts as a text file. Each laptop exports its own list; club sync does not carry the mark.
+
+Class eligibility (for example, emergency power is for Classes A, B, C, E and F) is not checked: claim only the bonuses your class can earn.
 
 The bonus checklist is ARRL Field Day's. Winter Field Day has no bonus list: it scores by its objectives (see [Winter Field Day Scoring](#winter-field-day-scoring)).
 

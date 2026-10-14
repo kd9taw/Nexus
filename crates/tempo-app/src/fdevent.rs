@@ -2782,7 +2782,11 @@ impl ClubLog {
             mycall,
             ContestSession::field_day(self.event, class, section),
             power_mult,
-            bonuses,
+            tempo_core::fd_rules::BonusClaim {
+                claimed: bonuses,
+                counts: &std::collections::BTreeMap::new(),
+                class,
+            },
             &[],
         );
         (s.qso_points, s.powered, s.bonus, s.total)
@@ -2804,13 +2808,16 @@ impl ClubLog {
         mycall: &str,
         session: ContestSession,
         power_mult: u32,
-        bonuses: &[String],
+        bonuses: tempo_core::fd_rules::BonusClaim<'_>,
         objectives: &[String],
     ) -> ClubScore {
         let rs = self.ruleset();
         let log = self.unique_log_with(mycall, session);
         let (qso_points, powered, mults, scored) = rs.scoring.score(log.score_rows(), power_mult);
-        let bonus = rs.bonus_points(bonuses) + log.bonus_station_points();
+        // The menu at its counts, the GOTA station's contacts among the club's rows (ARRL
+        // 7.3.13.1: five each), and the bonus stations the club worked.
+        let bonus =
+            rs.claimed_bonus_points(bonuses, log.gota_contacts()) + log.bonus_station_points();
         ClubScore {
             qso_points,
             powered,
@@ -4983,7 +4990,13 @@ mod tests {
         assert_eq!(cab.matches("QSO:").count(), 3, "{cab}");
         assert!(log.qsos()[1].dupe, "the RTTY repeat is marked");
         // 2 CW contacts × 2 points, × 2 counties (Cook, Will).
-        let s = club.score_with("W9XYZ", session, 1, &[], &[]);
+        let s = club.score_with(
+            "W9XYZ",
+            session,
+            1,
+            tempo_core::fd_rules::BonusClaim::none(),
+            &[],
+        );
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
     }
@@ -5440,7 +5453,13 @@ mod tests {
         club: &ClubLog,
     ) -> ((u64, u32, Option<u32>, u32, u32), Vec<String>, u64, String) {
         let session = party_session("ilqp", "IL", "MCLN");
-        let s = club.score_with("W9XYZ", session.clone(), 1, &[], &[]);
+        let s = club.score_with(
+            "W9XYZ",
+            session.clone(),
+            1,
+            tempo_core::fd_rules::BonusClaim::none(),
+            &[],
+        );
         let uniq = club
             .board_rows(ILQP_START + 300)
             .iter()
@@ -6000,7 +6019,13 @@ mod tests {
             ),
             2,
         );
-        let s = club.score_with("W9XYZ", party_session("ilqp", "IL", "MCLN"), 1, &[], &[]);
+        let s = club.score_with(
+            "W9XYZ",
+            party_session("ilqp", "IL", "MCLN"),
+            1,
+            tempo_core::fd_rules::BonusClaim::none(),
+            &[],
+        );
         // CW 2 + phone 1, × one county (McDonough), + 100 once.
         assert_eq!(
             (s.qso_points, s.mults, s.bonus, s.total),
@@ -6605,7 +6630,13 @@ mod tests {
             "the entrant's lines are written only where the ruleset lists them — never for Field Day"
         );
         assert_eq!(host.export_adif_with("W9ABC", session.clone()), J1X_ADI);
-        let s = host.score_with("W9ABC", session, 2, &[], &[]);
+        let s = host.score_with(
+            "W9ABC",
+            session,
+            2,
+            tempo_core::fd_rules::BonusClaim::none(),
+            &[],
+        );
         assert_eq!(
             (s.qso_points, s.powered, s.bonus, s.total),
             host.scored("W9ABC", "3A", "WI", 2, &[]),
@@ -6625,6 +6656,57 @@ mod tests {
     /// The `QSO:` lines of a Cabrillo file, in order.
     fn qso_lines(cab: &str) -> Vec<&str> {
         cab.lines().filter(|l| l.starts_with("QSO:")).collect()
+    }
+
+    /// ⭐ **The club's score counts its GOTA station's contacts, five each** (ARRL 7.3.13.1:
+    /// *"Any successfully completed contacts made by an operator at the GOTA station are worth
+    /// five (5) bonus points"*), with nothing ticked, and a per-unit bonus at the count typed:
+    /// three transmitters on emergency power are 300 (7.3.1), not the one box's 100.
+    #[test]
+    fn the_clubs_score_counts_its_gota_contacts_and_the_typed_bonus_counts() {
+        let session = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let mut club = ClubLog::for_ruleset(party("arrlfd"), "GOTA FD");
+        club.join("aaaa0001", "HQ", "W9XYZ", 1);
+        club.join("cccc0003", "GOTA", "K9GOT", 1);
+        for (pos, seq, call, band, mode, sect, minute) in [
+            ("aaaa0001", 1, "W1AW", "20m", "PH", "CT", 0),
+            ("cccc0003", 1, "K1ABC", "40m", "CW", "EMA", 1),
+            ("cccc0003", 2, "W5DEF", "20m", "DIG", "STX", 3),
+            // The GOTA station working K1ABC again on 40 m CW: a dupe, worth nothing.
+            ("cccc0003", 3, "K1ABC", "40m", "CW", "EMA", 4),
+        ] {
+            let when = FD_START + 60 * minute;
+            let row = with_sent(wq(pos, seq, call, band, mode, sect, when), ("3A", "WI"));
+            club.merge(&row, when);
+        }
+        let none = club.score_with(
+            "W9XYZ",
+            session(),
+            2,
+            tempo_core::fd_rules::BonusClaim::none(),
+            &[],
+        );
+        assert_eq!(none.bonus, 10, "two counting GOTA contacts, nothing ticked");
+        assert_eq!(none.total, none.powered + 10);
+
+        let claimed: Vec<String> = vec!["emergency-power".into(), "youth".into()];
+        let counts: std::collections::BTreeMap<String, u32> =
+            [("emergency-power".to_string(), 3), ("youth".to_string(), 7)]
+                .into_iter()
+                .collect();
+        let claim = |class| tempo_core::fd_rules::BonusClaim {
+            claimed: &claimed,
+            counts: &counts,
+            class,
+        };
+        let a = club.score_with("W9XYZ", session(), 2, claim("3A"), &[]);
+        assert_eq!(
+            a.bonus,
+            10 + 300 + 100,
+            "3 transmitters, youth at its limit of 5"
+        );
+        let b = club.score_with("W9XYZ", session(), 2, claim("2B"), &[]);
+        assert_eq!(b.bonus, 10 + 300 + 40, "Class B's youth limit is 40");
     }
 
     /// ⭐ **An ARRL Field Day club's file says which station made each contact: a GOTA
@@ -6730,10 +6812,30 @@ mod tests {
             club.export_adif_with("W9XYZ", session()),
             control.export_adif_with("W9XYZ", session())
         );
-        assert_eq!(
-            club.score_with("W9XYZ", session(), 2, &[], &[]),
-            control.score_with("W9XYZ", session(), 2, &[], &[])
+        // The same contacts score the same; the GOTA station's two add five each (ARRL
+        // 7.3.13.1), which the control, with no GOTA station, does not earn.
+        let (gota, plain) = (
+            club.score_with(
+                "W9XYZ",
+                session(),
+                2,
+                tempo_core::fd_rules::BonusClaim::none(),
+                &[],
+            ),
+            control.score_with(
+                "W9XYZ",
+                session(),
+                2,
+                tempo_core::fd_rules::BonusClaim::none(),
+                &[],
+            ),
         );
+        assert_eq!(
+            (gota.qso_points, gota.powered),
+            (plain.qso_points, plain.powered)
+        );
+        assert_eq!((gota.bonus, plain.bonus), (10, 0));
+        assert_eq!(gota.total, plain.total + 10);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

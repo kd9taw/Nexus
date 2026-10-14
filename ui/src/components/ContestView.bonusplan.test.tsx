@@ -88,9 +88,10 @@ describe('the three-state model', () => {
 
   it('never counts one bonus in both columns', () => {
     const t = fdBonusTally(['youth'], ['youth', 'safety-officer'])
-    expect(t.earnedPoints).toBe(100)
+    // Youth is 20 per participant (ARRL 7.3.15), and one when no count is typed.
+    expect(t.earnedPoints).toBe(20)
     expect(t.plannedPoints).toBe(100) // safety-officer only
-    expect(t.potentialPoints).toBe(200)
+    expect(t.potentialPoints).toBe(120)
     expect(t.earnedCount).toBe(1)
     expect(t.plannedCount).toBe(1)
   })
@@ -99,12 +100,12 @@ describe('the three-state model', () => {
 describe('ONLY EARNED BONUSES SCORE', () => {
   it('the score line ignores a fully planned menu', async () => {
     const { container } = await mount({ fdBonuses: [], fdBonusesPlanned: ALL_IDS })
-    // 6 QSO pts × 2 = 12, and 1550 points of plan add exactly nothing.
-    expect(ALL_POINTS).toBe(1550)
+    // 6 QSO pts × 2 = 12, and 1710 points of plan add exactly nothing.
+    expect(ALL_POINTS).toBe(1710)
     const math = container.querySelector('.fd-score-math')!.textContent!
     expect(math).toContain('bonuses 0')
     expect(math).toContain('= 12')
-    expect(math).not.toContain('1550')
+    expect(math).not.toContain('1710')
   })
 
   it('the downloaded score summary claims nothing that was only planned', async () => {
@@ -152,14 +153,15 @@ describe('the chase is visible and says which number is real', () => {
     const chase = container.querySelector('.fd-chase')!.textContent!
     expect(chase).toContain('Earned 100 pts')
     expect(chase).toContain('counted in your score')
-    expect(chase).toContain('Planned +200 pts')
+    // Youth planned at one participant is 20 (ARRL 7.3.15), safety officer 100.
+    expect(chase).toContain('Planned +120 pts')
     expect(chase).toContain('not scored until you tick it')
-    expect(chase).toContain('If all land 300 pts')
+    expect(chase).toContain('If all land 220 pts')
   })
 
   it('names the chase on the collapsed header too', async () => {
     await mount({ fdBonuses: [], fdBonusesPlanned: ['youth', 'safety-officer'] })
-    expect(screen.getByRole('button', { name: /2 planned · \+200 pts/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /2 planned · \+120 pts/ })).toBeTruthy()
   })
 })
 

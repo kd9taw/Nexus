@@ -6050,6 +6050,13 @@ export interface Settings {
   /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
    *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
   fdBonusesPlanned?: string[]
+  /** The count typed beside each per-unit bonus (transmitters on emergency power, youth
+   *  participants, messages handled), by bonus id. Read only for a claimed id; a claimed box
+   *  with no count is one unit. */
+  fdBonusCounts?: Record<string, number>
+  /** This station is on natural power now: each contact logged is marked for ARRL Field
+   *  Day 7.3.8's separate list. This laptop's own. */
+  fdNaturalPower?: boolean
   /** Ticked OBJECTIVE ids — Winter Field Day's completed objectives, what its claimed score
    *  multiplies by. Its own list: a bonus adds points, an objective multiplies them. */
   fdObjectives?: string[]

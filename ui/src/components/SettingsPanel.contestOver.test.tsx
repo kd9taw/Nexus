@@ -350,15 +350,16 @@ describe('Settings reads the contest state off the live station, not its own cop
     openOn({ fdEvent: 'arrlfd', fdClass: '1D', fdSection: 'WI', fdBonuses: [] }, { ...running('arrlfd'), log, qsoCount: 1 })
     api.get('saveTextToDownloads').mockImplementation((name: string) => Promise.resolve(`/dl/${name}`))
     await screen.findAllByDisplayValue('W9CLB')
-    // Ticked on the Contest screen after Settings opened (bonus ticks save at once).
-    station = { ...station, fdBonuses: ['emergency-power'] }
+    // Ticked on the Contest screen after Settings opened (bonus ticks save at once), with its
+    // count: three transmitters on emergency power, 100 points each.
+    station = { ...station, fdBonuses: ['emergency-power'], fdBonusCounts: { 'emergency-power': 3 } }
     await pressStop()
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Export the Summary to Downloads' }))
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
     await waitFor(() => expect(api.get('saveTextToDownloads')).toHaveBeenCalled())
     const text = api.get('saveTextToDownloads').mock.calls[0][1] as string
-    expect(text).toContain('Bonuses claimed (1, 100 pts):')
-    expect(text).toContain('  Emergency Power — 100 pts')
+    expect(text).toContain('Bonuses claimed (1, 300 pts):')
+    expect(text).toContain('  Emergency Power — 3 × 100 = 300 pts')
   })
 
   it('Stop contest… says so when the station cannot be read', async () => {

@@ -1345,6 +1345,7 @@ mod tests {
             reference: "US-0001,US-0002".into(),
             state: "ND".into(),
         };
+        log.natural_power = true;
         let rx = [("GRID".to_string(), "FN31".to_string())];
         assert!(log.log_fields_at("K1ABC", &rx, "PH", "USB", 7, 1_782_583_500));
         {
@@ -1417,6 +1418,7 @@ mod tests {
             tx_power,
             grid,
             activation,
+            natural_power,
         } = row.clone();
         let checks: Vec<(&str, bool)> = vec![
             ("call", rec.call == call && reborn.call == call),
@@ -1498,6 +1500,12 @@ mod tests {
                     && [&rec, &reborn, &stored]
                         .iter()
                         .all(|r| r.ota.my_ref.as_deref() == Some("US-0001,US-0002")),
+            ),
+            // The contest's own natural power list alone (ARRL Field Day 7.3.8): the Logbook
+            // has no place for it, and no upload made from it carries it.
+            (
+                "natural_power",
+                natural_power && [&out, &back, &kept].iter().all(|f| !f.contains("NATPOWER")),
             ),
         ];
         let failed: Vec<&str> = checks

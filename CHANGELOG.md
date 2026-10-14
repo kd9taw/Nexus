@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A caller's grid square opens on a map.** Click the grid square on a caller's card to open that square on OpenStreetMap in your browser. Only the square goes to the website; Nexus itself downloads nothing. (#483)
 - **Listening volume in the top bar.** While Nexus plays receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer), clicking the RX level meter in the top bar opens a volume slider on every screen, so changing how loud the band is no longer means opening Settings. It is the same Listening level setting. (#468)
 - **Pick the RTTY baud rate on the RTTY screen.** A picker in the receive pane, next to Arm RX, switches between 45.45, 50 and 75 baud, the same setting as in Settings ▸ RTTY. It cannot be changed while you are transmitting. (#488)
+- **ARRL Field Day bonuses that count per unit score per unit.** Emergency power is 100 points per
+  transmitter, up to 20 (rule 7.3.1); youth participation 20 per young operator, up to 100, or 40 for
+  a Class B station (7.3.15); message handling, new, 10 per formal message, up to 100 (7.3.6). Type
+  the number beside the ticked box. The club's score adds five points for each contact the GOTA
+  station makes (7.3.13.1), counted from the club log with nothing to tick. Two new boxes: the GOTA
+  coach (100, 7.3.13.2) and site responsibilities (50, 7.3.18). A box ticked before this update
+  counts as one unit, so Emergency Power still scores 100. Two older ticks change: a ticked Youth
+  box now scores 20, one young operator, until you type how many; and the old GOTA tick adds
+  nothing, because GOTA points now come from the club log. The values come with the rules data, and
+  older Nexus versions keep scoring each box once, as before.
+- **The natural power list ARRL Field Day asks for (rule 7.3.8).** Tick "On natural power now" beside
+  the Natural Power bonus, and each contact this laptop logs while it is on is marked. Export ▸
+  Natural power saves the list. Each laptop exports its own list; club sync does not carry the mark.
 
 ### Changed
 - **P.533 is now the default prediction engine.** It uses your station power and antenna gain, models the long path and gives per-mode answers, so some band answers change after updating: Band Outlook, the path card, the region strips and the DXpedition windows may name a different band or hour than before. It is a monthly median, so in a geomagnetic storm Nexus lowers its hours by the same storm penalty the fast heuristic always used: the current hour from today's Kp, later hours from SWPC's Kp forecast, and an hour with no forecast is left alone. The pane says when it has done this (a storm from Kp 5, unsettled conditions below), and which power it assumed: your Station power setting, the power your radio measured on your last transmission, or 100 W when neither is known. Live spots still win over any model. Band Outlook's words now follow the modes a band carries, so Excellent means SSB is usable most days at its best hour and a band no longer reads Excellent just because FT8 gets through, and the outlook to DX reads what a band reaches toward at least half the directions; the Chase pane's "call it now" follows the same words. The Band Advisor and the DXpedition cards' "work now" status still use the fast heuristic; the Band Advisor says so. Stations already on the fast heuristic move to P.533 once when they update, and a notice in the pop-up corner says so until you dismiss it. If you want the heuristic, set it in Settings ▸ Services ▸ Prediction engine and it stays. If P.533 cannot run, the pane shows the fast heuristic's answer and says so instead of going blank. Predictions run below normal priority, so a burst of them gives way to decoding.

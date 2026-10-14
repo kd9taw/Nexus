@@ -15008,6 +15008,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex: 1;
   min-width: 0;
 }
+/* A per-unit bonus's count (transmitters, youth, messages), and the GOTA row's note that the
+   club log counts it. */
+.fd-bonus-count {
+  flex: 0 0 auto;
+  width: 4.5em;
+}
+.fd-bonus-auto {
+  flex: 0 0 auto;
+  width: 15px;
+  text-align: center;
+}
+.fd-bonus-note {
+  display: block;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-faint);
+}
+.fd-bonus-natural {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(11px * var(--text-scale));
+}
 .fd-bonus-pts {
   font-family: var(--font-mono);
   font-size: calc(11px * var(--text-scale));
