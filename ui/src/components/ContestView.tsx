@@ -2019,17 +2019,13 @@ export function FdClubSection({
     setImporting(null)
     onImport?.(text, posid).then(
       (r) => {
-        const kept = (
-          [
-            ['otherContest', r.otherContest],
-            ['otherRunning', r.otherRunning],
-            ['otherCall', r.otherCall],
-            ['takenBack', r.takenBack],
-            ['unreadable', r.unreadable],
-          ] as const
-        )
-          .filter(([, n]) => n > 0)
-          .map(([key, n]) => t(`fieldDay.club.import.${key}`, { n }))
+        const kept = [
+          r.otherContest > 0 && t('fieldDay.club.import.otherContest', { n: r.otherContest }),
+          r.otherRunning > 0 && t('fieldDay.club.import.otherRunning', { n: r.otherRunning }),
+          r.otherCall > 0 && t('fieldDay.club.import.otherCall', { n: r.otherCall }),
+          r.takenBack > 0 && t('fieldDay.club.import.takenBack', { n: r.takenBack }),
+          r.unreadable > 0 && t('fieldDay.club.import.unreadable', { n: r.unreadable }),
+        ].filter((line): line is string => typeof line === 'string')
         setImportNote({
           lines: [
             t('fieldDay.club.import.done', { file, added: r.added, dupes: r.dupes, alreadyIn: r.alreadyIn }),
