@@ -317,6 +317,136 @@ fn a_gota_positions_contacts_keep_its_own_call_in_the_club_file_across_a_host_re
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// ⭐ **At ARRL Field Day the host's own contacts after its "Contest over?" stay out of the
+/// club's log**, as they do at every other contest. "Contest over?" puts the operator's own call
+/// back on the host laptop, and the operator turns Contest mode on again under it to reach the
+/// Club Cabrillo button; a contact logged then is the operator's own, not the club's. ARRL Field
+/// Day takes every call from the other laptops, because its GOTA station is on another call by
+/// rule, and that stays as it was.
+///
+/// Measured before: the host's K9EEE, logged on K9OWN, went up over its own link into the club's
+/// log and the Club Cabrillo under the club's call, W9XYZ.
+///
+/// CONTROLs: the GOTA laptop's contact during the event is in under its own call; after the
+/// put-back the CW tent's contact on the club's call and the GOTA laptop's next one are both in.
+#[test]
+fn at_arrl_field_day_the_hosts_own_contact_after_contest_over_stays_out_of_the_club_log() {
+    let dir = std::env::temp_dir().join(format!("fd-host-over-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let journal = dir.join("fd_event_host_over.jsonl");
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    // The host keeps its own contest journal, as every laptop does, so Contest mode turned on
+    // again brings its contacts back and numbers on from them.
+    let host = {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_fd_log_path(dir.join("hq.adi"));
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_position_id = "aaaa0001".into();
+        s.fd_position_name = "HQ".into();
+        s.fd_join_addr = addr.clone();
+        e.apply_settings(s);
+        e.set_mode("fieldday-sp").expect("enter FD");
+        e.set_fd_position_key(club_key("aaaa0001"));
+        Arc::new(Mutex::new(e))
+    };
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let cw = fd_engine("W9XYZ", "bbbb0002", "CW tent", &addr);
+    let cw_sd = start_pump(&cw, &addr);
+    let gota = fd_engine("K9GOT", "cccc0003", "GOTA", &addr);
+    let gota_sd = start_pump(&gota, &addr);
+    let raw = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_log()
+            .map(|c| c.qsos_raw())
+            .unwrap_or(0)
+    };
+    log_fd(&host, "W1AW", "CT", "CW");
+    log_fd(&gota, "K1ABC", "EMA", "PH");
+    wait_until("the event's two contacts merged", 10, || raw(&host) == 2);
+    assert_eq!(
+        club_file_calls(&host),
+        [
+            ("K9GOT".to_string(), "K1ABC".to_string()),
+            ("W9XYZ".to_string(), "W1AW".to_string()),
+        ],
+        "CONTROL: the GOTA laptop's contact under its own call, the host's under the club's"
+    );
+
+    // "Contest over?" on the host, ONE save, then Contest mode back on under the operator's own
+    // call to reach the Club Cabrillo button.
+    {
+        let mut e = engine_lock(&host);
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        s.mycall = "K9OWN".into();
+        e.apply_settings(s);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        e.apply_settings(s);
+        assert_eq!(
+            (
+                e.settings().mycall.as_str(),
+                e.fd_hosting(),
+                e.fd_club_call()
+            ),
+            ("K9OWN", true, "W9XYZ".to_string()),
+            "CONTROL: the put-back landed and the host holds the club's call"
+        );
+    }
+    log_fd(&host, "K9EEE", "IL", "CW");
+    log_fd(&cw, "K9FFF", "WI", "CW");
+    log_fd(&gota, "K9GGG", "IN", "PH");
+    wait_until(
+        "the CW tent's and the GOTA laptop's contacts merged",
+        10,
+        || raw(&host) >= 4,
+    );
+    // The host's own link has nothing left to send: its club chip reads Synced.
+    let chip = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| (c.sync_state, c.queued))
+            .unwrap_or_default()
+    };
+    wait_until("the host's chip settles", 20, || {
+        chip(&host) == ("synced".to_string(), 0)
+    });
+    // Long enough for the host's own link to send anything it was going to.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        club_file_calls(&host),
+        [
+            ("K9GOT".to_string(), "K1ABC".to_string()),
+            ("W9XYZ".to_string(), "K9FFF".to_string()),
+            ("K9GOT".to_string(), "K9GGG".to_string()),
+            ("W9XYZ".to_string(), "W1AW".to_string()),
+        ],
+        "the contact the host logged on its own call is not in the Club Cabrillo"
+    );
+    assert_eq!(raw(&host), 4, "…nor in the club's log");
+    let own: Vec<String> = engine_lock(&host)
+        .snapshot()
+        .field_day
+        .map(|f| f.log.iter().map(|r| r.call.clone()).collect())
+        .unwrap_or_default();
+    assert_eq!(own, ["W1AW", "K9EEE"], "it is in the host's own log");
+
+    for sd in [host_sd, host_pump_sd, cw_sd, gota_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The name a position shows on the club board, as the HOST holds it.
 fn board_label(eng: &Shared, posid: &str) -> String {
     engine_lock(eng)

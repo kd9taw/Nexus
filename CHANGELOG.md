@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   board and the claimed score, and is not marked a dupe; the same at Winter Field Day after a WSJT
   contact. A second RTTY contact with that station is still a dupe. The FT8 and FT4 sequencers'
   "worked before" is unchanged.
+- **At ARRL Field Day, the host's own contacts after Contest over? stay out of the club's log.**
+  As at every other contest, a contact logged on the host laptop under your own call, with Contest
+  mode turned back on to reach **Club Cabrillo**, now stays in that laptop's own log instead of going
+  into the Club Cabrillo under the club's call. The GOTA station and the other laptops send their
+  contacts as before.
 
 ## [1.23.0] — 2026-11-05
 
