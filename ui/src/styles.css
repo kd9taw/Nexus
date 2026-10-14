@@ -15028,7 +15028,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: calc(11px * var(--text-scale));
 }
 .fd-bonus-pts {
