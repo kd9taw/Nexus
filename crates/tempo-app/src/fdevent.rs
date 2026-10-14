@@ -5543,6 +5543,15 @@ mod tests {
         let ((rows, _, _, _, total), _, uniq, _) = club_outcome(&club);
         assert_eq!((rows, total, uniq), (4, 8, 1));
         assert!(club.newest(1)[0].dupe, "the repeat is marked");
+        // The second laptop takes the repeat back: the club rebuilds its keys and boards from
+        // its rows, and they come out the same.
+        assert!(club.take_back("bbbb", 3, ILQP_START + 400));
+        let (numbers, board, uniq, _) = club_outcome(&club);
+        assert_eq!(
+            (numbers.4, board, uniq, club.dkeys_list == keys),
+            (8, vec!["COOK".to_string(), "LAKE".to_string()], 1, true),
+            "after a rebuild: (total, the board, scoring rows, the dupe keys unchanged)"
+        );
     }
 
     /// ⭐ **…and the same at a Winter Field Day club**, whose files hold one contact per key: the

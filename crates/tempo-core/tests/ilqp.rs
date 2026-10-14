@@ -952,6 +952,18 @@ fn a_legal_contact_after_a_banned_one_with_the_same_station_counts() {
         ),
         (8, 2, Some(true))
     );
+    // Taking that repeat back rebuilds the marks from the rows, and they come out the same.
+    assert!(log.remove_last("K9FT8", PARTY + 240, PARTY + 300).is_ok());
+    assert_eq!(
+        (
+            score(&log).3,
+            log.qso_count(),
+            log.qsos().iter().map(|q| q.dupe).collect::<Vec<_>>(),
+            worked_before(&log)
+        ),
+        (8, 2, vec![false, false, false], (true, 2)),
+        "after a rebuild: (total, contacts, the marks, what the FT sequencer reads)"
+    );
 }
 
 /// A digital contact that recorded no on-air mode, as a row from before the mode was recorded,
