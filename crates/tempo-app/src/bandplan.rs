@@ -296,7 +296,7 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
         // report came from 14.236) found their own frequency nowhere in the app. If a
         // watering hole is real enough to sit on, it is real enough to be pickable.
         ch("20m-alt", "HF", 14.233, "USB", "20 m · SSTV (alt)", "the first overflow when 14.230 is busy"),
-        ch("20m-alt2", "HF", 14.236, "USB", "20 m · SSTV (alt 2)", "the second overflow — commonly used during contests and nets"),
+        ch("20m-alt2", "HF", 14.236, "USB", "20 m · SSTV (alt 2)", "the second overflow — commonly used during contests and nets; also FreeDV's 20 m centre (digital voice), so listen first"),
         ch("17m", "HF", 18.160, "USB", "17 m · SSTV", "the conventional 17 m image frequency"),
         ch("15m", "HF", 21.340, "USB", "15 m · SSTV", "worldwide 15 m SSTV calling"),
         ch("12m", "HF", 24.975, "USB", "12 m · SSTV", "the conventional 12 m image frequency"),
@@ -309,6 +309,80 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
         ch("2m", "VHF", 145.800, "FM", "2 m · ISS downlink", "ARISS events transmit PD120 images here — the SSTV event of the year, FM"),
         ch("2m-call", "VHF", 144.500, "FM", "2 m · SSTV calling", "terrestrial VHF SSTV calling (regional conventions vary — check locally)"),
     ]
+}
+
+/// **FreeDV's channels** — where FreeDV stations are: the frequencies FreeDV's own app lists as
+/// its default reporting frequencies (freedv-gui, read as data; nothing of its code is here),
+/// 160 m to 10 m. RADE, FreeDV's current mode, is 1.5 kHz wide and FreeDV puts it on the sideband
+/// SSB uses: LSB below 10 MHz and USB above, so each row carries that side. 60 m is the
+/// exception and is USB, as the rules there require.
+///
+/// FreeDV is PHONE (47 CFR 97.3(c)(5): digital voice), so these sit in the phone segments, and the
+/// transmit gate judges them as phone. The 80 m channels below 3.700 are in the US Extra-only
+/// phone segment, and 7.177's passband reaches below the US General 40 m phone edge; their notes
+/// say so.
+///
+/// ⚠️ 60 m DIFFERS BY COUNTRY, and this is the one place the list does. 5.4035 is the US channel
+/// centred on 5405.0 kHz (dial = centre − 1.5 kHz). 5.3685 is in neither a US channel nor the US
+/// 5351.5–5366.5 kHz segment, so a US station (`us_station`, from [`is_us_callsign`]) is not
+/// offered it; everyone else gets both, with a note to check their own band plan.
+///
+/// 14.236 is FreeDV's 20 m centre and also the second SSTV overflow; [`sstv_band_plan`]'s note on
+/// that channel says whose frequency it is.
+pub fn freedv_band_plan(us_station: bool) -> Vec<BandChannel> {
+    let n = "a FreeDV channel (FreeDV's own frequency list)";
+    let extra =
+        "a FreeDV channel (FreeDV's own frequency list) - US Extra class only (phone below 3.700)";
+    let mut plan = vec![
+        ch("160m", "HF", 1.870, "LSB", "160 m · FreeDV", n),
+        ch("80m", "HF", 3.625, "LSB", "80 m · FreeDV 3.625", extra),
+        ch("80m-2", "HF", 3.643, "LSB", "80 m · FreeDV 3.643", extra),
+        ch("80m-3", "HF", 3.693, "LSB", "80 m · FreeDV 3.693", extra),
+        ch("80m-4", "HF", 3.697, "LSB", "80 m · FreeDV 3.697", extra),
+        ch("80m-5", "HF", 3.803, "LSB", "80 m · FreeDV 3.803", n),
+        ch(
+            "60m",
+            "HF",
+            5.4035,
+            "USB",
+            "60 m · FreeDV 5.4035",
+            "a FreeDV channel (FreeDV's own frequency list) - the US channel centred on 5405.0 kHz; \
+             60 m is USB, and differs country to country - check your own band plan",
+        ),
+        ch(
+            "60m-2",
+            "HF",
+            5.3685,
+            "USB",
+            "60 m · FreeDV 5.3685",
+            "a FreeDV channel (FreeDV's own frequency list) - not a US channel; 60 m is USB, and \
+             differs country to country - check your own band plan",
+        ),
+        // ⚠️ RADE is 1.5 kHz wide around a 1500 Hz audio centre, so on LSB 7.177 occupies
+        // 7.17475-7.17625: its lowest 250 Hz is below 7.175, where US General phone begins.
+        // Measured by the transmit gate in `freedv_channels_sit_in_phone_privileges`.
+        ch(
+            "40m",
+            "HF",
+            7.177,
+            "LSB",
+            "40 m · FreeDV 7.177",
+            "a FreeDV channel (FreeDV's own frequency list) - not for a US General: its passband \
+             reaches below the 7.175 phone edge; 7.197 is clear",
+        ),
+        ch("40m-2", "HF", 7.197, "LSB", "40 m · FreeDV 7.197", n),
+        ch("20m", "HF", 14.236, "USB", "20 m · FreeDV 14.236", "FreeDV's 20 m centre (FreeDV's own frequency list) - also the second SSTV overflow"),
+        ch("20m-2", "HF", 14.240, "USB", "20 m · FreeDV 14.240", n),
+        ch("17m", "HF", 18.118, "USB", "17 m · FreeDV", n),
+        ch("15m", "HF", 21.313, "USB", "15 m · FreeDV", n),
+        ch("12m", "HF", 24.933, "USB", "12 m · FreeDV", n),
+        ch("10m", "HF", 28.330, "USB", "10 m · FreeDV 28.330", n),
+        ch("10m-2", "HF", 28.720, "USB", "10 m · FreeDV 28.720", n),
+    ];
+    if us_station {
+        plan.retain(|c| c.band != "60m-2");
+    }
+    plan
 }
 
 /// The band/calling plan for the active tier.
@@ -807,6 +881,8 @@ mod tests {
         plans.push(rtty_band_plan());
         plans.push(sstv_band_plan());
         plans.push(psk_band_plan());
+        plans.push(freedv_band_plan(true));
+        plans.push(freedv_band_plan(false));
         plans.into_iter().flatten().collect()
     }
 
@@ -1221,6 +1297,102 @@ mod tests {
                 "{band} needs an SSTV calling frequency"
             );
         }
+    }
+
+    /// FreeDV's channels, by value: the frequencies FreeDV's own app lists as where FreeDV is
+    /// (its default reporting-frequency list, read as data), each on the sideband FreeDV uses —
+    /// LSB below 10 MHz, USB above, and USB on 60 m, where the rule is USB. 14.236 is FreeDV's
+    /// 20 m centre, which until now the app knew only as an SSTV overflow.
+    #[test]
+    fn freedv_channels_are_freedvs_own_list_on_its_sidebands() {
+        let got = |us: bool| -> Vec<(String, f64, String)> {
+            freedv_band_plan(us)
+                .into_iter()
+                .map(|c| (c.band, c.dial_mhz, c.mode))
+                .collect()
+        };
+        let row = |b: &str, f: f64, m: &str| (b.to_string(), f, m.to_string());
+        let world = vec![
+            row("160m", 1.870, "LSB"),
+            row("80m", 3.625, "LSB"),
+            row("80m-2", 3.643, "LSB"),
+            row("80m-3", 3.693, "LSB"),
+            row("80m-4", 3.697, "LSB"),
+            row("80m-5", 3.803, "LSB"),
+            row("60m", 5.4035, "USB"),
+            row("60m-2", 5.3685, "USB"),
+            row("40m", 7.177, "LSB"),
+            row("40m-2", 7.197, "LSB"),
+            row("20m", 14.236, "USB"),
+            row("20m-2", 14.240, "USB"),
+            row("17m", 18.118, "USB"),
+            row("15m", 21.313, "USB"),
+            row("12m", 24.933, "USB"),
+            row("10m", 28.330, "USB"),
+            row("10m-2", 28.720, "USB"),
+        ];
+        assert_eq!(got(false), world, "a station outside the US");
+        // 5.3685 is no US channel (the US has four 60 m channels and the 5351.5-5366.5 segment;
+        // 5368.5 is in neither), so a US station is not offered it. 5.4035 is the US channel
+        // centred on 5405.0 kHz.
+        let us: Vec<_> = world.into_iter().filter(|r| r.0 != "60m-2").collect();
+        assert_eq!(got(true), us, "a US station");
+    }
+
+    /// Every US FreeDV channel is one an Extra may key as PHONE (FreeDV is phone, 47 CFR
+    /// 97.3(c)(5)), judged on the whole 1.5 kHz RADE passband (a 1500 Hz audio centre) on the
+    /// channel's own side. A General is refused by the same gate on the four 80 m channels below
+    /// 3.700 (Extra-only phone) and on 7.177, whose LSB passband reaches 250 Hz below the 7.175
+    /// General edge; their notes say so, and on no other channel.
+    #[test]
+    fn freedv_channels_sit_in_phone_privileges() {
+        use crate::privileges::tx_allowed;
+        use crate::settings::{LicenseClass, OperatingMode};
+        let passband = |c: &BandChannel| -> [f64; 2] {
+            let (near, far) = (0.000_75, 0.002_25);
+            if c.mode == "LSB" {
+                [c.dial_mhz - far, c.dial_mhz - near]
+            } else {
+                [c.dial_mhz + near, c.dial_mhz + far]
+            }
+        };
+        for c in freedv_band_plan(true) {
+            for f in passband(&c) {
+                assert!(
+                    tx_allowed(LicenseClass::Extra, f, OperatingMode::Phone),
+                    "{}: an Extra cannot key FreeDV at {f}",
+                    c.band
+                );
+            }
+            let general = passband(&c)
+                .iter()
+                .all(|f| tx_allowed(LicenseClass::General, *f, OperatingMode::Phone));
+            let not_general =
+                (c.dial_mhz > 3.6 && c.dial_mhz < 3.7) || (c.dial_mhz - 7.177).abs() < 1e-9;
+            assert_eq!(
+                general, !not_general,
+                "{}: General at {}",
+                c.band, c.dial_mhz
+            );
+            assert_eq!(
+                c.note.contains("Extra class only") || c.note.contains("not for a US General"),
+                not_general,
+                "{}: the note names an Extra-only channel: {}",
+                c.band,
+                c.note
+            );
+        }
+    }
+
+    /// 14.236 stays an SSTV channel (images are sent there), and its note says it is FreeDV's
+    /// 20 m centre, so an operator picking it to send an image knows whose frequency it is.
+    #[test]
+    fn the_sstv_overflow_on_14_236_names_freedvs_centre() {
+        let alt2 = sstv_band_plan()
+            .into_iter()
+            .find(|c| (c.dial_mhz - 14.236).abs() < 1e-9)
+            .expect("14.236 stays an SSTV channel");
+        assert!(alt2.note.contains("FreeDV"), "{}", alt2.note);
     }
 }
 
