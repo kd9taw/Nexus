@@ -17,6 +17,7 @@ const DIRECT: Record<string, string> = {
   'App.tsx': 'memory recall and the setup wizard read the settings immediately before writing',
   'DetachedPanel.tsx': 'memory recall in a pop-out reads the settings immediately before writing',
   'components/AprsCockpit.tsx': 'the board reads the settings immediately before writing',
+  'components/FreedvPane.tsx': 'Listen for them reads the settings immediately before writing',
   'components/OperateCockpit.tsx': 'the special-op chips read the settings immediately before writing',
   'components/SatellitesView.tsx': 'the Doppler switch reads the settings immediately before writing',
   'components/SettingsPanel.tsx': 'loading a named configuration merges it over a fresh read',

@@ -491,7 +491,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
-      'spots', 'needed', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
+      'spots', 'needed', 'freedv', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
@@ -545,10 +545,11 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
   // vocabulary's `defaultRemoved` is the answer, and each case below drives one reader of an
   // absent state: `stateOf`, `undoRemoves`, `reset`, and a record written by today's build.
   const PHONE_KEY = panelStorageKey('phone')
-  // The two feeds, and the six boxes (2026-10-07), which ship hidden for the same reason.
-  const HIDDEN = ['spots', 'needed', ...BOX_IDS] as const
+  // The two feeds, the six boxes (2026-10-07) and the FreeDV pane (2026-10-14), which ship hidden for
+  // the same reason.
+  const HIDDEN = ['spots', 'needed', 'freedv', ...BOX_IDS] as const
 
-  it('a FRESH record shows Spots, Needed and the boxes hidden, and every other Phone pane docked', () => {
+  it('a FRESH record shows Spots, Needed, FreeDV and the boxes hidden, and every other Phone pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
     for (const id of HIDDEN) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of PHONE_PANELS.panelIds) {
@@ -614,7 +615,7 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
   })
 
-  it('Phone and CW ship their Spots and Needed hidden, the five digital cockpits their RF scope pane — and each hidden id is its own', () => {
+  it('Phone and CW ship their Spots and Needed hidden (Phone its FreeDV pane too), the five digital cockpits their RF scope pane — and each hidden id is its own', () => {
     // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
     // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
     // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
@@ -624,7 +625,7 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
     expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
-    expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
+    expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual(HIDDEN.filter((id) => id !== 'freedv'))
     for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
     }

@@ -29,6 +29,7 @@ const LABELS: Record<PhonePanelId, string> = {
   voiceKeyer: 'Voice Keyer',
   spots: 'Spots',
   needed: 'Needed',
+  freedv: 'FreeDV',
   ...boxLabels({}),
 }
 // Phone's region with Spots, Needed and the rig scope strip hidden, as on a stock screen with no

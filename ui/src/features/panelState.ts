@@ -1245,6 +1245,10 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
  *  hide ends nothing, so their entries carry no note. That last property is ALSO what lets them
  *  be default-hidden: ⊞ Reset hides them with no warning, which is only right for a hide that
  *  ends nothing. */
+/*  `freedv` (2026-10-14) is FreeDV's own app beside Nexus, RECEIVE ONLY: whether FreeDV is talking
+ *  to Nexus, the last contact it put in the log, and the calls it heard — a click on one fills the
+ *  log strip's call. A feed like Needed: no stop control, no sender (nothing in it keys, logs or
+ *  tunes), a hide that ends nothing, so its entry carries no note and it ships hidden. */
 export const PHONE_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'rigscope',
@@ -1255,6 +1259,7 @@ export const PHONE_PANEL_IDS = [
   'voiceKeyer',
   'spots',
   'needed',
+  'freedv',
   ...BOX_IDS,
 ] as const
 export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
@@ -1262,7 +1267,7 @@ export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', 'freedv', ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
   // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
   // (no id) alone in the last column. The scope above the region and the meters in the dock are not
@@ -1278,11 +1283,11 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   arrange: {
     columns: {
       a: ['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS],
-      b: ['rigscope', 'receiver', 'transmitter', 'needed'],
+      b: ['rigscope', 'receiver', 'transmitter', 'needed', 'freedv'],
       log: [],
     },
     pinned: ['voiceKeyer'],
-    stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
+    stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed', 'freedv'],
     leftSide: ['bandActivity', 'spots', 'needed', ...BOX_IDS],
     boxes: BOX_IDS,
   },

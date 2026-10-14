@@ -34454,6 +34454,24 @@ fn start_on_the_logbook(
     // cross-platform resource dir is available — the DeepCW model ships as a bundled
     // resource, and resolving it by hand from the exe path only worked on Windows.
 
+    // FreeDV's own app beside Nexus, RECEIVE ONLY: its logged contacts (127.0.0.1 alone) and,
+    // when the operator asks for them, the calls it hears. The manager follows the settings once
+    // a second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
+    {
+        let freedv_engine = engine.clone();
+        let note: tempo_app::freedv::Note =
+            std::sync::Arc::new(|level, msg| conn_log("FreeDV", level, msg));
+        let spawned = std::thread::Builder::new()
+            .name("nexus-freedv".into())
+            .spawn(move || tempo_app::freedv::run(freedv_engine, note));
+        if let Err(e) = spawned {
+            tempo_core::applog::error(
+                "freedv",
+                &format!("the FreeDV listeners could not start: {e}"),
+            );
+        }
+    }
+
     // CAT broker: let other apps (WSJT-X / N1MM / loggers) share the radio THROUGH
     // Nexus over the rigctld protocol. Localhost-only (never expose the rig to the
     // network). A manager thread HOT-APPLIES the setting — turning "Share my radio" on

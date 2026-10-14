@@ -257,6 +257,9 @@ const MIGRATED = [
   // path a second time: `SpotLegend.tsx`'s two badge tables resolve their words when read,
   // so `BandStrip.tsx` — which this batch does not own — reads them unchanged.
   'components/SpotsPanel.tsx',
+  // The Phone FreeDV pane (2026-10-14) — born migrated: calls, mode names, SNRs, frequencies and the
+  // address are tokens.
+  'components/FreedvPane.tsx',
   'components/SpotDialog.tsx',
   'components/ParkStateReview.tsx',
   // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes

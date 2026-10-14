@@ -3803,6 +3803,9 @@ pub struct Engine {
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
+    /// FreeDV's own app beside Nexus: its listeners, last contact, notice and heard calls
+    /// ([`crate::freedv`]). Written by the FreeDV listeners; read by the snapshot.
+    freedv: crate::freedv::FreedvDto,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -5789,6 +5792,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             cat_share_error: None,
+            freedv: crate::freedv::FreedvDto::default(),
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -22457,6 +22461,11 @@ contact yourself."
     /// off, clear it. A setter that were only ever called on failure would leave an operator who
     /// fixed the collision staring at the complaint about it — which is the same defect as the
     /// stale address this replaced, pointing the other way.
+    /// FreeDV's state for the screens ([`crate::freedv`]), for its listeners to write.
+    pub fn freedv_mut(&mut self) -> &mut crate::freedv::FreedvDto {
+        &mut self.freedv
+    }
+
     pub fn set_cat_share_error(&mut self, err: Option<String>) {
         self.cat_share_error = err;
     }
@@ -24387,6 +24396,7 @@ contact yourself."
         s.contest_entry = self.contest_entry_dto();
         s.contest_cq = self.contest_running_cq();
         s.contest_cq_typed = self.contest_cq_typed();
+        s.freedv = self.freedv.is_shown().then(|| self.freedv.clone());
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

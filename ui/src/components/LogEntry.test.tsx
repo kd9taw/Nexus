@@ -348,6 +348,22 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(modes).not.toContain('USB')
     expect(modes).not.toContain('LSB')
   })
+
+  // FreeDV from the Phone strip: a FreeDV contact can be logged by hand, without FreeDV's own
+  // hand-off, under the spelling the logbook writes DIGITALVOICE/FREEDV.
+  it('logs a FreeDV contact by hand from the override', () => {
+    renderStd()
+    fireEvent.click(overrideToggle())
+    fireEvent.change(screen.getByLabelText('Freq (MHz)'), { target: { value: '14.236' } })
+    fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'FREEDV' } })
+    expect((screen.getByLabelText('Mode') as HTMLSelectElement).value).toBe('FREEDV')
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w5fdv' } })
+    fireEvent.click(logBtn())
+    expect(mockedLogQso).toHaveBeenCalledTimes(1)
+    expect(mockedLogQso.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ call: 'W5FDV', band: '20m', freqMhz: 14.236, mode: 'FREEDV' }),
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -321,6 +321,7 @@ describe('the boxes in a cockpit’s columns', () => {
       'transmitter',
       'spots',
       'needed',
+      'freedv',
       'box3',
     ])
     // Without the boxes it is exactly the stock merged order.

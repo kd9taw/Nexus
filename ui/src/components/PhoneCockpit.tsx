@@ -36,6 +36,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { FreedvPane } from './FreedvPane'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { LeftSide } from './panes/LeftSide'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
@@ -202,6 +203,9 @@ interface Props {
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
    * `ts` changes on each click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
+  /** The host offers the FreeDV pane (receive only, `FreedvPane`): the desktop, where the station's
+   *  FreeDV listeners run. Absent, the pane never renders, whatever the ⊞ record says. */
+  freedvPane?: boolean
   /** Called once the prefill has been applied, so the parent can clear it. */
   onConsumeWork?: () => void
   /** Apply a fresh snapshot returned by a command (so the REC toggle updates instantly
@@ -283,6 +287,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   voiceKeyer: t('phone.panel.voiceKeyer'),
   spots: t('phone.panel.spots'),
   needed: t('phone.panel.needed'),
+  freedv: t('phone.panel.freedv'),
 })
 
 /** THE SPOTS PANE'S OWN VIEW OF THE BOARD (#345, the operator's pick: "Phone spots, this band —
@@ -608,7 +613,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -619,6 +624,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   const dspControl = useReceiverDsp(snap, 'phone')
   const phoneModeControl = usePhoneMode(snap, phoneMode)
   const control = useStationControl()
+  // A call picked in the FreeDV pane, for the log strip — the Needed board's hand-off shape, held
+  // here because it never leaves this cockpit.
+  const [freedvWork, setFreedvWork] = useState<{ call: string; ts: number } | null>(null)
   // A browser moves the rig scope with the station's rigScope hint; the station judges the family.
   const rigScope = useStationCapability('rigScope')
   const scopeControl = control || rigScope
@@ -1468,6 +1476,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // (PHONE_PANELS.defaultRemoved), so a stock Phone screen is exactly what it was.
   const hasSpotsPane = spotsBoard != null && shown('spots')
   const hasNeededPane = neededBoard != null && shown('needed')
+  // FreeDV's pane (receive only): hidden until added, like the two feeds, and like them offered only
+  // where the host wires it (`freedvPane`: the desktop, whose station runs the FreeDV listeners).
+  const hasFreedvPane = freedvPane === true && shown('freedv')
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -1495,6 +1506,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           voiceKeyer: hasKeyerPane,
           spots: hasSpotsPane,
           needed: hasNeededPane,
+          freedv: hasFreedvPane,
           rigscope: hasRigScopePane,
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
@@ -1524,7 +1536,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   const folded = boxes?.rail?.folded?.boxes ?? []
   const boxInA = placed3[0].ids.some(isBoxId) || folded.length > 0
   const boxInB = placed3[1].ids.some(isBoxId)
-  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || boxInA || boxInB
+  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
@@ -1534,7 +1546,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
+      : (auxPresent || inRegion('needed') || inRegion('freedv') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
         ? 3
         : leadPresent
           ? 2
@@ -1991,6 +2003,16 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         className="in-column"
       />
     ) : null
+
+  // FreeDV's pane: a fill pane like the feeds, receive only. A click on a heard call fills the log
+  // strip's call field through the same hand-off the Needed board's click uses, and nothing else.
+  const freedvPaneEl = hasFreedvPane ? (
+    <CockpitPaneFrame title={t('phone.pane.freedv.title')} paneId="freedv" {...closeProps('freedv')}>
+      <div className={feedWrap('freedv')}>
+        <FreedvPane freedv={snap.freedv} control={control} onPickCall={(call) => setFreedvWork({ call, ts: Date.now() })} />
+      </div>
+    </CockpitPaneFrame>
+  ) : null
 
   /* Aux panes — rig-scope / DSP / RX-DSP-levels control strips. In the 3-column tier
      they share the middle column with the voice keyer; below that they append to the
@@ -2481,8 +2503,8 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           setSpotOpen(true)
         }}
         onCallChange={setWorkedCall}
-        pendingWork={pendingWork}
-        onConsumeWork={onConsumeWork}
+        pendingWork={freedvWork ?? pendingWork}
+        onConsumeWork={freedvWork ? () => setFreedvWork(null) : onConsumeWork}
         onSnap={onSnap}
         fieldDay={fieldDay}
         scoreChip={false}
@@ -2501,6 +2523,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     voiceKeyer: keyerPane,
     spots: spotsPane,
     needed: neededPane,
+    freedv: freedvPaneEl,
     rigscope: rigscopePane,
     receiver: receiverPane,
     transmitter: transmitterPane,

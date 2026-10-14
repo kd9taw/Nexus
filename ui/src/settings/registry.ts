@@ -251,6 +251,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
       'share rig', 'rigctld address', 'other programs',
       'foreign ptt', 'wsjt-x share', 'n1mm share',
+      // FreeDV's own app beside Nexus: its logged contacts and the calls it hears.
+      'freedv', 'freedv log', 'qso logging', 'digital voice',
       // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',

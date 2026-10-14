@@ -47,6 +47,7 @@ pub mod flex;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
+pub mod freedv;
 pub mod icom;
 pub mod mqtt;
 pub mod n1mm;

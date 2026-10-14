@@ -340,6 +340,8 @@ impl Publisher {
                             // Remote page the row keeps `start_cq`, which sends the CQ it shows.
                             fields.remove("contestCq");
                             fields.remove("contestCqTyped");
+                            // FreeDV's listeners are this computer's, and so is their remedy.
+                            fields.remove("freedv");
                         }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);

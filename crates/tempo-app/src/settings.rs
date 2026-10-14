@@ -1833,6 +1833,25 @@ pub struct Settings {
     /// TCP port the CAT broker listens on (Hamlib NET rigctl default 4532).
     pub cat_broker_port: u16,
 
+    /// Listen for the contacts FreeDV's own app logs (its "QSO Logging", WSJT-X protocol) on
+    /// `127.0.0.1:freedv_log_port`, and put each in the log as a FreeDV contact
+    /// ([`crate::freedv`]). ON by default (the operator's call, 2026-10-13): FreeDV sends nothing
+    /// there until its logging is pointed at this port, and the port is bound to this computer
+    /// alone. Receive only: nothing it reads can key or tune the radio. The container default
+    /// applies, so a file written before this field existed comes up ON.
+    pub freedv_log: bool,
+    /// UDP port on 127.0.0.1 for FreeDV's logged contacts. 2239, NOT 2237: 2237 is where Nexus
+    /// sends its own WSJT-X telemetry and where GridTracker and JTAlert listen. 0 = not listening.
+    pub freedv_log_port: u16,
+    /// Listen for FreeDV's callsign broadcast (FreeDV 2.4) and list the calls it hears in the
+    /// Phone screen's FreeDV pane ([`crate::freedv`]). OFF by default: the listener joins
+    /// FreeDV's group on every adapter (dropping anything not from this computer), and Windows
+    /// may ask once whether Nexus may use the network, so it starts only when the operator asks
+    /// for it in the pane or in Settings.
+    pub freedv_heard: bool,
+    /// UDP port of FreeDV's callsign broadcast (FreeDV's default 7177). 0 = not listening.
+    pub freedv_heard_port: u16,
+
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
     /// points at the *PC's* CAT port, not the radio). Empty = no native Flex scope.
@@ -4908,6 +4927,10 @@ impl Default for Settings {
             // operators flip it in the share block; pre-1.0.5 files lack the field and get ON.
             cat_broker: true,
             cat_broker_port: 4532,
+            freedv_log: true,
+            freedv_log_port: crate::freedv::DEFAULT_LOG_PORT,
+            freedv_heard: false,
+            freedv_heard_port: crate::freedv::DEFAULT_HEARD_PORT,
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,

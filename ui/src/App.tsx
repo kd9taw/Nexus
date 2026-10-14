@@ -3278,6 +3278,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       panels={phonePanels}
       theme={theme}
       pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+      // FreeDV's listeners are the station computer's own; the Remote is not sent their state.
+      freedvPane={!remote}
       onConsumeWork={() => setPendingWork(null)}
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
@@ -3477,6 +3479,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             targetSeq={settingsTarget?.seq}
             radio={snap.radio}
             parsecPresence={snap.parsecPresence}
+            freedv={snap.freedv}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
             scale={scale}

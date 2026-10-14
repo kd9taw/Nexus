@@ -7343,6 +7343,13 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
+  'settings.transmit.freedv.log.label': "FreeDV contacts into the log",
+  'settings.transmit.freedv.log.hint':
+    "FreeDV's own app can hand each contact you log in it to Nexus: in FreeDV, turn on QSO Logging and give it the address shown here. Each one lands in the log as a FreeDV contact, and only under your own station call: one FreeDV logs under another call is refused, and the reason shows here. Only for this computer, and receive only: nothing FreeDV sends here can key or tune the radio.",
+  'settings.transmit.freedv.logPort.label': "FreeDV logging port",
+  'settings.transmit.freedv.heard.label': "Calls FreeDV hears",
+  'settings.transmit.freedv.heard.hint':
+    "Lists the calls FreeDV decodes (FreeDV 2.4 and later) in the Phone screen's FreeDV pane. Only the FreeDV on this computer is listened to. Windows may ask once whether Nexus may use the network.",
 
   // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
   //
@@ -10577,6 +10584,20 @@ export const EN = {
   'phone.pane.voiceKeyer.title': 'Voice keyer',
   'phone.pane.spots.title': 'Spots',
   'phone.pane.needed.title': 'Needed',
+  'phone.panel.freedv': "FreeDV",
+  'phone.pane.freedv.title': "FreeDV",
+  'phone.freedv.off':
+    "Nexus is not listening for FreeDV. Turn it on in Settings ▸ Radio ▸ Transmit limits & sharing.",
+  'phone.freedv.logOff':
+    "Contacts from FreeDV are off (Settings ▸ Radio ▸ Transmit limits & sharing).",
+  'phone.freedv.connected': "FreeDV connected",
+  'phone.freedv.waiting': "Waiting for FreeDV: point its QSO Logging at {{address}}.",
+  'phone.freedv.lastContact': "Last contact: {{contact}}",
+  'phone.freedv.heard.off': "Heard calls are off.",
+  'phone.freedv.heard.listen': "Listen for them",
+  'phone.freedv.heard.empty': "No calls heard yet.",
+  'phone.freedv.heard.label': "Calls FreeDV heard",
+  'phone.freedv.heard.pick': "Put {{call}} in the log",
   // The divider between those two panes (its accessible name, and the resize tooltip's).
   'phone.seam.spotsNeeded.label': 'Spots / Needed',
   'phone.seam.columns.label': 'Band activity column / Receiver column',

@@ -25,6 +25,7 @@ pub mod engine;
 pub mod fd_scoreboard;
 pub mod fdbridge;
 pub mod fdevent;
+pub mod freedv;
 pub mod keyboard;
 pub mod logexport;
 pub mod logfill;
@@ -1031,6 +1032,7 @@ impl AppState {
             // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
             contest_cq: None,
             contest_cq_typed: false,
+            freedv: None,
         }
     }
 
