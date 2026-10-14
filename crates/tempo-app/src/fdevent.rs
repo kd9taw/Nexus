@@ -909,6 +909,20 @@ pub struct KeptOut {
     pub at: u64,
 }
 
+/// What [`ClubLog::import`] did with one contact of a laptop's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Imported {
+    /// A new contact in the club's log.
+    Added,
+    /// Merged as sync merges a duplicate of a contact the club already holds: kept, and the
+    /// club's files keep the earliest.
+    Dupe,
+    /// The club already holds it, by its position and sequence number.
+    AlreadyIn,
+    /// Kept out where every contact enters, with the host screen's sentence ([`admit`]'s).
+    KeptOut(String),
+}
+
 /// ⭐ **A position sending another county than the club** ([`ClubLog::other_location`]): named as
 /// its line on the host's board names it, with what its newest contact sent and what the club
 /// sends there.
@@ -1928,6 +1942,37 @@ impl ClubLog {
         let p = self.position(pos);
         p.acked = p.acked.max(seq);
         p.acked
+    }
+
+    /// ⭐ **One contact of a laptop's file, merged as its position's sync would merge it**
+    /// ([`merge`](Self::merge), the one path in), and what that did: the host's "Import a laptop's
+    /// file" (`Engine::fd_club_import`). A contact the club already holds under the same
+    /// `(position, seq)` adds nothing, so a file imported twice, or after its laptop synced, adds
+    /// nothing the second time. A duplicate of another contact the club holds merges as sync
+    /// merges one (kept in the log, no new key, the files keep the earliest), and is said to be one.
+    pub fn import(&mut self, q: &WireQso, now: u64) -> Imported {
+        if q.seq == 0 || self.ids.contains(&(q.pos.clone(), q.seq)) {
+            return Imported::AlreadyIn;
+        }
+        let dupe = match admit(q) {
+            Err(reason) => {
+                self.merge(q, now);
+                return Imported::KeptOut(reason);
+            }
+            Ok(row) => {
+                let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
+                counts
+                    && self
+                        .dkeys_set
+                        .contains(&row.dkey(&self.dupe_rule(), self.exchange()))
+            }
+        };
+        self.merge(q, now);
+        if dupe {
+            Imported::Dupe
+        } else {
+            Imported::Added
+        }
     }
 
     /// [`merge`](Self::merge) minus the wire type; `now == 0` = a journal

@@ -29533,6 +29533,22 @@ fn fd_club_log_newest(state: State<'_, SharedEngine>) -> Option<tempo_app::dto::
     engine_lock(&state).fd_club_log_newest()
 }
 
+/// ⭐ **Merge a laptop's contest file into the host's club log**, as that laptop's sync would have
+/// merged it, recorded as from position `posid` — the host's "Import a laptop's file…"
+/// ([`tempo_app::engine::Engine::fd_club_import`]). `text` is the file the host's screen read.
+/// `Err` with the sentence to show when this Nexus is not hosting or the position cannot be used.
+///
+/// ⛔ Not one of Remote's operations: a club change is refused from afar, and the button refuses a
+/// press that comes through a stream.
+#[tauri::command(async)]
+fn fd_club_import(
+    state: State<'_, SharedEngine>,
+    text: String,
+    posid: String,
+) -> Result<tempo_app::dto::FdClubImportDto, String> {
+    engine_lock(&state).fd_club_import(&text, &posid)
+}
+
 /// What the host's Give button did: the position given, or why nothing changed.
 #[derive(serde::Serialize)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
@@ -35609,6 +35625,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fd_club_export,
             fd_club_log_newest,
             fd_club_give_position,
+            fd_club_import,
             fd_club_remove_position,
             fd_club_allow_back,
             fd_scoreboard_status,
@@ -37809,6 +37826,51 @@ mod tests {
         assert!(
             !remote.contains("give_position"),
             "Remote must not reach the Give button's command"
+        );
+    }
+
+    /// ⭐ The host's "Import a laptop's file…" reaches the engine only if its command is REGISTERED
+    /// and goes through `Engine::fd_club_import`, and no Remote dispatcher names either: a club
+    /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
+    /// calls they make.
+    #[test]
+    fn the_club_import_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_import,"),
+            "fd_club_import is not registered — the Import button would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_import(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(body.contains(".fd_club_import(&text, &posid)"), "{body}");
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("club_import"),
+            "Remote must not reach the Import button's command"
         );
     }
 

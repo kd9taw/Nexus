@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Import a laptop's file into the club log.** The host's Contest screen has a new button in the
+  club section, **Import a laptop's file…**. Choose a laptop's contest journal (the file named
+  `fieldday_backup_` and 8 characters, `.adi`, in that laptop's Nexus settings folder) and its
+  contacts go into the club's log exactly as club sync would have sent them: the same dupe rules, and
+  the same contacts kept out (another contest, an earlier running such as a rehearsal, a contact
+  logged on another call than the club's, one taken back on that laptop). The host then says how
+  many it added, how many were duplicates or already in the club log, and how many it kept out and
+  why. Importing the same file twice adds nothing, and nothing is ever taken out of the club log.
+  This covers a host PC that dies with contacts only on its own disk, and a laptop that never
+  synced. The Field Day manual's club checklist has the steps.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor

@@ -14,7 +14,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubImport, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdClubImport, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
@@ -1877,6 +1877,7 @@ export function FdClubSection({
   onGivePosition,
   onRemovePosition,
   onAllowBack,
+  onImport,
   busy = false,
   detached = false,
   readOnly = false,
@@ -1899,6 +1900,9 @@ export function FdClubSection({
    *  that applies, but the host's own. */
   onRemovePosition?: (posid: string) => Promise<FdRemoveAnswer>
   onAllowBack?: (posid: string) => Promise<FdRemoveAnswer>
+  /** The host's own contest screen only, as `onGivePosition` is: merge a laptop's contest file
+   *  into the club's log as from position `posid`. */
+  onImport?: (text: string, posid: string) => Promise<FdClubImport>
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
@@ -1982,6 +1986,66 @@ export function FdClubSection({
   const manage = showLink && !detached && !readOnly && onRemovePosition != null && onAllowBack != null
   // What the last Remove or Allow back did, until the next press.
   const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // ⭐ IMPORT A LAPTOP'S FILE, the host's own contest screen alone. The file read, and whose
+  // contacts it holds: the position its journal's name carries (`fieldday_backup_<id>.adi`), or
+  // the one the host picks from its board.
+  const importInput = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState<{ text: string; file: string; posid: string; fromFile: string } | null>(
+    null,
+  )
+  const [importNote, setImportNote] = useState<{ lines: string[]; alert: boolean } | null>(null)
+  const canImport = club.hosting && onImport != null && !detached && !readOnly
+  function pickImport() {
+    if (isStreamInput()) {
+      setImportNote({ lines: [t('fieldDay.club.import.refusedRemote')], alert: true })
+      return
+    }
+    setImportNote(null)
+    importInput.current?.click()
+  }
+  async function readImport(f: File | undefined) {
+    if (!f) return
+    const text = await f.text()
+    const fromFile = /fieldday_backup_([0-9a-f]{8})\.adi$/i.exec(f.name)?.[1]?.toLowerCase() ?? ''
+    setImporting({ text, file: f.name, posid: fromFile, fromFile })
+  }
+  function runImport() {
+    if (isStreamInput()) {
+      setImportNote({ lines: [t('fieldDay.club.import.refusedRemote')], alert: true })
+      return
+    }
+    if (!importing || !importing.posid) return
+    const { text, file, posid } = importing
+    setImporting(null)
+    onImport?.(text, posid).then(
+      (r) => {
+        const kept = (
+          [
+            ['otherContest', r.otherContest],
+            ['otherRunning', r.otherRunning],
+            ['otherCall', r.otherCall],
+            ['takenBack', r.takenBack],
+            ['unreadable', r.unreadable],
+          ] as const
+        )
+          .filter(([, n]) => n > 0)
+          .map(([key, n]) => t(`fieldDay.club.import.${key}`, { n }))
+        setImportNote({
+          lines: [
+            t('fieldDay.club.import.done', { file, added: r.added, dupes: r.dupes, alreadyIn: r.alreadyIn }),
+            ...(kept.length > 0 ? [t('fieldDay.club.import.keptOut', { list: kept.join(', ') })] : []),
+            ...r.refused.map((x) => t('fieldDay.club.import.refused', { call: x.call, reason: x.reason })),
+          ],
+          alert: false,
+        })
+      },
+      (err: unknown) =>
+        setImportNote({
+          lines: [t('fieldDay.club.import.failed', { msg: typeof err === 'string' ? err : String(err) })],
+          alert: true,
+        }),
+    )
+  }
   // The position a Remove press asks about, by id, until it is answered: asked only while that
   // position is on the board and not removed already.
   const [removing, setRemoving] = useState<{ posid: string; name: string } | null>(null)
@@ -2115,6 +2179,30 @@ export function FdClubSection({
             </button>
           </>
         )}
+        {canImport && (
+          <>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy}
+              onClick={pickImport}
+              title={t('fieldDay.club.import.title')}
+            >
+              {t('fieldDay.club.import.label')}
+            </button>
+            <input
+              ref={importInput}
+              type="file"
+              accept=".adi,.adif"
+              hidden
+              data-club-import=""
+              onChange={(e) => {
+                void readImport(e.target.files?.[0])
+                e.target.value = ''
+              }}
+            />
+          </>
+        )}
         {!detached && !readOnly && (
           <button
             type="button"
@@ -2210,6 +2298,41 @@ export function FdClubSection({
       {removeNote && (
         <div style={removeNote.alert ? CLUB_WARN : CLUB_NOTE} role={removeNote.alert ? 'alert' : 'status'}>
           {removeNote.text}
+        </div>
+      )}
+      {/* Before an import: whose contacts the file holds, read from its name or picked here. */}
+      {canImport && importing && (
+        <div role="group" aria-label={t('fieldDay.club.import.ask.aria')} style={CLUB_CONFIRM}>
+          <div>{t('fieldDay.club.import.ask.head', { file: importing.file })}</div>
+          <select
+            value={importing.posid}
+            onChange={(e) => setImporting({ ...importing, posid: e.target.value })}
+          >
+            {importing.posid === '' && <option value="" />}
+            {importing.fromFile !== '' && !club.board.some((b) => b.posid === importing.fromFile) && (
+              <option value={importing.fromFile}>{t('fieldDay.club.import.ask.fromFile')}</option>
+            )}
+            {club.board.map((b) => (
+              <option key={b.posid} value={b.posid}>
+                {boardName(b)}
+              </option>
+            ))}
+          </select>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" className="export-btn" disabled={!importing.posid} onClick={runImport}>
+              {t('fieldDay.club.import.ask.yes')}
+            </button>
+            <button type="button" className="export-btn" onClick={() => setImporting(null)}>
+              {t('fieldDay.club.import.ask.no')}
+            </button>
+          </div>
+        </div>
+      )}
+      {importNote && (
+        <div style={importNote.alert ? CLUB_WARN : CLUB_NOTE} role={importNote.alert ? 'alert' : 'status'}>
+          {importNote.lines.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
         </div>
       )}
       {/* The host's alone, for the rest of the event: every contact it kept out of the club's
@@ -3857,6 +3980,7 @@ export function ContestView({
           onGivePosition={observed ? undefined : fdClubGivePosition}
           onRemovePosition={observed ? undefined : fdClubRemovePosition}
           onAllowBack={observed ? undefined : fdClubAllowBack}
+          onImport={observed ? undefined : fdClubImport}
           busy={busy !== null}
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}

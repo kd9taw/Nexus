@@ -43,6 +43,7 @@ vi.mock('../api', () => ({
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
   fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubImport: vi.fn(async () => ({})),
 }))
 
 /** 1700Z Sunday 18 October 2026 to 0100Z Monday: the Illinois QSO Party's window. */
