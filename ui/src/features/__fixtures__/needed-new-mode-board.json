@@ -36,5 +36,24 @@
       "NewMode"
     ],
     "zone": 5
+  },
+  {
+    "admittedAt": 1780000000,
+    "band": "20m",
+    "call": "W5FDV",
+    "entity": "United States",
+    "evidence": "heard by K9RX (EN52, {km:0})",
+    "exactMode": "FREEDV",
+    "freqMhz": null,
+    "gridRarity": null,
+    "headline": "New mode — FREEDV United States (any band)",
+    "mode": "Phone",
+    "park": null,
+    "priority": 30,
+    "stateFrom": null,
+    "tags": [
+      "NewMode"
+    ],
+    "zone": 4
   }
 ]
