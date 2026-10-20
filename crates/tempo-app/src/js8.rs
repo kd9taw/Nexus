@@ -509,11 +509,14 @@ impl Engine {
                 false
             };
             // TX off refuses first, and silently for automatic traffic; an operator's own
-            // message it drops is said, as CW, RTTY and PSK say theirs.
+            // message it drops is said, as CW, RTTY and PSK say theirs. A connection that refuses
+            // the section is named, as CW's notice names it, never the licence.
             let why = if !self.tx_enabled() {
                 operator.then_some(JS8_QUEUE_REFUSED_TX_OFF)
             } else if no_locator {
                 dropped.then_some(JS8_NO_LOCATOR)
+            } else if let Some(connection) = self.connection_tx_refusal() {
+                dropped.then_some(connection)
             } else {
                 dropped.then_some(JS8_REFUSED_PRIVILEGES)
             };
