@@ -79,10 +79,63 @@ function srcFile(rel: string): string {
   return readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
 }
 
+/** What `css()` reads: a box's padding, margin, border and type. Only a declaration of one of these families
+ *  can set one of those, or the shorthand `fromRule` falls back to (`all` sets every property). */
+const BOX_PROPS = /^(padding|margin|border|font|line-height|all$)/
+
+/** THE SHEET AS THIS FILE PARSES IT (2026-10-20): each rule with only its BOX_PROPS declarations, in the sheet's
+ *  own words and order, and the `:root` blocks whole for TOKENS. jsdom parsing both whole sheets was this file's
+ *  setup (~0.5 s alone, past its 10 s hook budget in a loaded full run), and two thirds of the declarations it
+ *  parsed were ones no lookup here reads. jsdom parses each declaration on its own, so a kept one reads as it did
+ *  in the same rule, and a rule left with none could only ever answer null: no winner moves. */
+function boxRules(sheet: string): string {
+  // Braces and semicolons are found with comments and strings blanked (a comment here holds a brace); what is kept is
+  // the sheet's own text.
+  const blank = sheet.replace(/\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, (m) => ' '.repeat(m.length))
+  const walk = (from: number, to: number): string => {
+    let out = ''
+    let start = from
+    for (let i = from; i < to; i++) {
+      if (blank[i] === ';' && blank.slice(start, i).trim().startsWith('@')) {
+        out += sheet.slice(start, i + 1) // a statement at-rule, as it is
+        start = i + 1
+      }
+      if (blank[i] !== '{') continue
+      let end = i + 1
+      for (let depth = 1; end < to && depth > 0; end++) depth += blank[end] === '{' ? 1 : blank[end] === '}' ? -1 : 0
+      const head = blank.slice(start, i).trim()
+      if (head.startsWith('@')) {
+        // Walked as a list of rules, as beforeAll's walk descends into one: @media's come back, and @keyframes'
+        // and @font-face's come back empty or as rules that walk never reads.
+        const inner = walk(i + 1, end - 1)
+        if (inner) out += sheet.slice(start, i + 1) + inner + '}'
+      } else if (head === ':root') out += sheet.slice(start, end)
+      else {
+        const kept: string[] = []
+        let depth = 0
+        let decl = i + 1
+        for (let k = i + 1; k < end; k++) {
+          if (blank[k] === '(') depth++
+          else if (blank[k] === ')') depth--
+          else if ((blank[k] === ';' && depth === 0) || k === end - 1) {
+            if (BOX_PROPS.test(blank.slice(decl, k).split(':')[0].trim().toLowerCase())) kept.push(sheet.slice(decl, k))
+            decl = k + 1
+          }
+        }
+        if (kept.length) out += sheet.slice(start, i + 1) + kept.join(';') + '}'
+      }
+      start = end
+      i = end - 1
+    }
+    return out
+  }
+  return walk(0, sheet.length)
+}
+
 beforeAll(() => {
   for (const sheet of ['styles.css', 'cockpit-panes.css']) {
     const style = document.createElement('style')
-    style.textContent = srcFile(sheet)
+    style.textContent = boxRules(srcFile(sheet))
     document.head.appendChild(style)
     const walk = (rules: CSSRuleList) => {
       for (let i = 0; i < rules.length; i++) {
@@ -169,6 +222,8 @@ function fromRule(style: CSSStyleDeclaration, prop: string): string | null {
 /** The winning declaration of `prop` for a RENDERED element: every rule the real selector
  *  engine matches, ordered by importance, then specificity, then source order. */
 function css(el: Element, prop: string): string | null {
+  // The sheet holds only BOX_PROPS (boxRules): any other property would read as declared nowhere.
+  if (!BOX_PROPS.test(prop)) throw new Error(`css('${prop}'): the sheet this file parses holds only ${BOX_PROPS}`)
   let win: { value: string; important: boolean; spec: number; order: number } | null = null
   for (const { rule, order } of FLAT) {
     let matches = false

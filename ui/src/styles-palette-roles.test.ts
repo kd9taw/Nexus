@@ -525,11 +525,19 @@ describe('TX, the critical orange and the need set stay locked', () => {
   it('stores nothing for a locked colour: every palette key in the tree is a role’s key', () => {
     const src = fileURLToPath(new URL('.', import.meta.url))
     const keys = new Set<string>()
+    // Every file is read as bytes and only one holding the key's prefix is decoded (2026-10-20): decoding all ~13 MB
+    // of the tree was most of this case's own work (34-160 ms alone, ~20 ms without it), and the case has run past
+    // its 5 s budget in a loaded full run. A match starts with that ASCII prefix, and UTF-8 spells ASCII as the same
+    // bytes and never inside another character, so a file without them holds no match.
+    const PREFIX = Buffer.from('nexus-palette-')
     const walk = (dir: string) => {
       for (const e of readdirSync(dir)) {
         const p = join(dir, e)
         if (statSync(p).isDirectory()) walk(p)
-        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) for (const m of readFileSync(p, 'utf8').matchAll(/nexus-palette-[\w-]+/g)) keys.add(m[0])
+        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) {
+          const bytes = readFileSync(p)
+          if (bytes.includes(PREFIX)) for (const m of bytes.toString('utf8').matchAll(/nexus-palette-[\w-]+/g)) keys.add(m[0])
+        }
       }
     }
     walk(src)

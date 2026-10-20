@@ -184,6 +184,13 @@ function src(rel: string): string {
 }
 
 const FLAT: { rule: CSSStyleRule; order: number }[] = []
+/** The two properties `overflowY` reads. */
+const OVERFLOW_PROPS = ['overflow', 'overflow-y'] as const
+/** The rules of FLAT that declare one of them, in the same order and numbering: the only rules `overflowY` can
+ *  take a value from, so walking just these is the same answer (2026-10-20). The walk matched every rule of the
+ *  sheet against every element of a pop-out, and `connect`'s case took ~4.7 s alone and ran past its 30 s budget
+ *  in a loaded full run. */
+const OVERFLOW: { rule: CSSStyleRule; order: number }[] = []
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -202,6 +209,7 @@ beforeAll(() => {
     }
   }
   walk(style.sheet!.cssRules)
+  OVERFLOW.push(...FLAT.filter(({ rule }) => OVERFLOW_PROPS.some((prop) => rule.style.getPropertyValue(prop).trim())))
   // The responsive state a pop-out publishes for itself (DetachedPanelBody mirrors App).
   // `md` is the ordinary tear-off; the `[data-viewport]` rules are live either way.
   document.documentElement.setAttribute('data-viewport', 'md')
@@ -250,7 +258,7 @@ function better(a: Cand, b: Cand | null): boolean {
 function overflowY(el: Element): string {
   let win: Cand | null = null
   const consider = (decl: CSSStyleDeclaration, spec: number, order: number) => {
-    for (const prop of ['overflow', 'overflow-y'] as const) {
+    for (const prop of OVERFLOW_PROPS) {
       const value = decl.getPropertyValue(prop).trim()
       if (!value) continue
       const cand: Cand = {
@@ -263,7 +271,7 @@ function overflowY(el: Element): string {
       if (better(cand, win)) win = cand
     }
   }
-  for (const { rule, order } of FLAT) {
+  for (const { rule, order } of OVERFLOW) {
     let hit = false
     try {
       hit = el.matches(rule.selectorText)

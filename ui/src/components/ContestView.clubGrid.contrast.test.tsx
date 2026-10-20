@@ -17,8 +17,10 @@ import { resolve } from 'node:path'
 import {
   MODES,
   chainOf,
+  compoundMatches,
   contrast,
   expandWith,
+  matchesRoot,
   parseRules,
   rgbHex as hex,
   toRgb,
@@ -127,19 +129,49 @@ function once<T>(rules: Rule[], key: string, make: () => T): T {
   if (!memo.has(k)) memo.set(k, make())
   return memo.get(k) as T
 }
+// THE CUTS (2026-10-20). winnerAt and tokensAt test every rule they are handed against the chain, once per mode and
+// chain prefix, and nearly every rule fails at its subject compound: reachesChain's first test, which reads neither
+// the mode nor the ancestors. The first case took ~33 s alone, nearly all of it there, and ran past its 120 s budget
+// in a loaded full run. So the rules are cut once, by what those two read: winnerAt only a rule declaring one of the
+// props, tokensAt only one declaring a custom property, and either only one whose subject compound (split as
+// reachesChain splits it) matches the element, or for tokensAt one rootTokensFrom takes under the mode. Every rule
+// cut away is one they reject, so every winner and token is the same (the sibling guards' idiom,
+// ConnectStateWords.contrast).
+const withProps = (rules: Rule[], props: string[]) =>
+  once(rules, `p|${props.join()}`, () => rules.filter((r) => r.decls.some((d) => props.includes(d.prop))))
+const withTokens = (rules: Rule[]) => once(rules, 'p|--', () => rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--'))))
+const SUBJECT = new WeakMap<Rule[], Map<string, Rule[]>>()
+function subjectCut(rules: Rule[], el: El): Rule[] {
+  let byEl = SUBJECT.get(rules)
+  if (!byEl) SUBJECT.set(rules, (byEl = new Map()))
+  const key = JSON.stringify(el)
+  let out = byEl.get(key)
+  if (!out) {
+    const subject = (r: Rule) => r.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop()
+    byEl.set(key, (out = rules.filter((r) => { const s = subject(r); return s !== undefined && compoundMatches(s, el) })))
+  }
+  return out
+}
+function tokenCut(rules: Rule[], mode: Mode, chain: El[]): Rule[] {
+  const all = withTokens(rules)
+  const root = once(rules, `r|${mode}`, () => all.filter((r) => matchesRoot(r.selector, mode)))
+  const keep = new Set([...root, ...chain.flatMap((el) => subjectCut(all, el))])
+  return all.filter((r) => keep.has(r))
+}
+
 /** The winning declaration of `props` on the element or the nearest ancestor that has one. */
 function nearest(rules: Rule[], mode: Mode, chain: El[], ...props: string[]) {
   return once(rules, `n|${mode}|${chainKey(chain)}|${props.join()}`, () => {
     for (let i = chain.length; i > 0; i--) {
       const at = chain.slice(0, i)
-      const w = winnerAt(rules, mode, at, ...props)
+      const w = winnerAt(subjectCut(withProps(rules, props), at[i - 1]), mode, at, ...props)
       if (w && !/^(inherit|transparent|none)$/.test(w.value.trim())) return { value: w.value, at }
     }
     return null
   })
 }
 const colourOf = (rules: Rule[], mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
-  const tokens = once(rules, `t|${mode}|${chainKey(at)}`, () => tokensAt(rules, mode, at))
+  const tokens = once(rules, `t|${mode}|${chainKey(at)}`, () => tokensAt(tokenCut(rules, mode, at), mode, at))
   const c = toRgb(expandWith(tokens, value), under)
   if (!c) throw new Error(`not a colour: "${value}"`)
   return c
