@@ -54,6 +54,7 @@ import { DE } from './de'
 import { ES } from './es'
 import { FR } from './fr'
 import { JA } from './ja'
+import { RU } from './ru'
 import type { PluralForms } from './types'
 
 /** A `t()` / `<T>` call site with everything written literally enough to check. */
@@ -342,6 +343,7 @@ describe('translated catalogs agree with English', () => {
     ['es', ES as Record<string, unknown>],
     ['fr', FR as Record<string, unknown>],
     ['ja', JA as Record<string, unknown>],
+    ['ru', RU as Record<string, unknown>],
   ]
 
   const holesOf = (v: unknown): Set<string> => {
