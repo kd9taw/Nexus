@@ -2,18 +2,19 @@ import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { ClientInput } from './components/ClientBanner'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
-import { loadDurable, setRemoteStation } from './features/durableStore'
+import { loadDurable } from './features/durableStore'
+import { startMemoryPublisher } from './remote-native/memoryPublisher'
 import { installStreamInput } from './remote-native/stream-input'
 import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
 import { ES } from './i18n/es'
 import { FR } from './i18n/fr'
 import { JA } from './i18n/ja'
+import { RU } from './i18n/ru'
 import { installExternalLinkInterceptor } from './externalLinks'
-import { clientStatus, isTauri, openExternalUrl } from './api'
+import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
 import { t } from './i18n'
 import './styles.css'
@@ -82,8 +83,6 @@ const tree = (
   <StrictMode>
     {panel ? (
       <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
-        {/* Driving a station over the internet, input here answers "Still there?" too. */}
-        <ClientInput />
         {NativeMonitor && panel === 'remoteMonitor' ? (
           <Suspense fallback={null}><NativeMonitor /></Suspense>
         ) : <DetachedPanel panel={panel} />}
@@ -106,19 +105,11 @@ const tree = (
 // falls back to `localStorage` exactly as before. `.finally` rather than `.then` so a future
 // change that does let it throw still renders the app rather than a blank window — the 0.24.6
 // failure mode, and not one to re-create over a preferences file.
-//
-// First, whether this computer drives another station (client mode). There the station's keys of
-// the durable store are that station's, never this computer's own (`setRemoteStation`), and this
-// window is not the station's: it feeds no hosted Remote and takes no streamed input.
-let driving = false
-void (async () => {
-  if (isTauri()) driving = (await clientStatus().catch(() => null)) !== null
-  setRemoteStation(driving)
-  await loadDurable()
-})().finally(() => {
+void loadDurable().finally(() => {
+  if (!panel) startMemoryPublisher()
   // A streamed Remote operator's input, as DOM events in this window and nowhere else. The main
   // window only: the station sends it nowhere else. Inert until a stream is admitted at the shack.
-  if (!panel && !driving) installStreamInput()
+  if (!panel) installStreamInput()
   // Language BEFORE the first render, for the same reason the durable store is: `t()` reads a
   // module-level variable, so a locale applied after mount would leave the first paint in
   // English and switch it under the operator a frame later. Reads the stored choice, else the
@@ -130,6 +121,7 @@ void (async () => {
   installCatalog('es', ES)
   installCatalog('fr', FR)
   installCatalog('ja', JA)
+  installCatalog('ru', RU)
   initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })
