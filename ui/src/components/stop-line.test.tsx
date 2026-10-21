@@ -170,10 +170,26 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
+/** A case's hides — each id singly, then the whole vocabulary at once — in runs of at most SWEEP_RUN, each run
+ *  checked against a baseline mount of its own. Together the runs make exactly the hides and assertions of the
+ *  sweep run whole; the budget below says why it is run in parts. */
+const SWEEP_RUN = 6
+function sweepRuns(c: Case<any>) {
+  const combos: Array<readonly string[]> = [...c.ids.map((id: string) => [id]), [...c.ids]]
+  const runs: Array<readonly [string, string, Case<any>, Array<readonly string[]>]> = []
+  for (let k = 0; k < combos.length; k += SWEEP_RUN) {
+    const last = Math.min(k + SWEEP_RUN, combos.length)
+    runs.push([c.cockpit, last > k + 1 ? `hides ${k + 1}–${last} of ${combos.length}` : `hide ${last} of ${combos.length}`, c, combos.slice(k, last)])
+  }
+  return runs
+}
+
 describe('the stop line, computed against the real cockpits', () => {
-  it.each(CASES.map((c) => [c.cockpit, c] as const))(
-    '%s: no ⊞ panel id gates any control that stops a transmission',
-    async (_name, c) => {
+  // Smallest vocabulary first: whichever test runs first pays the file's first render, and SSTV's one short run
+  // carries it best (Phone's first run took 1.2 s alone when it went first, 0.5 s after SSTV).
+  it.each([...CASES].sort((a, b) => a.ids.length - b.ids.length).flatMap(sweepRuns))(
+    '%s: no ⊞ panel id gates any control that stops a transmission (%s)',
+    async (_name, _which, c, combos) => {
       // "Still there" is not enough — a control gated `disabled={!shown('x')}` is mounted
       // and useless — so record what each stop control looks like with NOTHING hidden and
       // require the hides to leave it alone. (Several of these are legitimately disabled
@@ -198,10 +214,9 @@ describe('the stop line, computed against the real cockpits', () => {
       )
       cleanup()
 
-      // One id at a time, then the whole vocabulary at once. Both matter: a control might
-      // survive every single hide and still vanish when two panes go, because the cockpit
+      // One id at a time, then the whole vocabulary at once (sweepRuns). Both matter: a control
+      // might survive every single hide and still vanish when two panes go, because the cockpit
       // collapses a column that happens to host it.
-      const combos: Array<readonly string[]> = [...c.ids.map((id: string) => [id]), [...c.ids]]
       for (const removed of combos) {
         c.render(panelsWith(removed))
         await settle()
@@ -228,6 +243,13 @@ describe('the stop line, computed against the real cockpits', () => {
     // and 5.9 s at a tenth, past the 5 s default. FT's cases (2026-10-07) are the heaviest:
     // seventeen mounts of the whole FT screen with its boxes and the callsign card, 1.3 s each
     // alone and 11.8 s (Classic) and 9.2 s (Roster) at a tenth of a CPU, so the budget is 30 s.
+    // IN RUNS (2026-10-21). In a loaded full run, with the suite's workers past the box's memory,
+    // CW with a Sub receiver and FT's two cases ran past this budget (30.3, 31.1 and 30.8 s, 21 to
+    // 31 times their time alone). The work is real: per mount, the render is about half and the
+    // accessible-name pass the other half, it grows in step with the CPU share, and nothing is left
+    // behind from one mount to the next. Every mount and pass is part of the claim, so a case's
+    // hides run in runs of at most six, each after its own baseline mount: the same assertions, at
+    // most seven mounts a test, where FT's case held eighteen and CW's twenty-two.
     30_000,
   )
 
