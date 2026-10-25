@@ -74,7 +74,7 @@ The sequencer runs seven states: **Listening → CallingCq → AwaitReport → A
 
 **Return-to-CQ** — when you called CQ (Running mode), a completed QSO automatically restarts the CQ state machine for the next pileup caller. The directed-CQ token (e.g., `CQ DX`, `CQ POTA`) persists across the entire pileup run; you do not need to re-enter it between contacts. S&P double-clicks do **not** auto-resume.
 
-**Disable TX after 73** — default ON. TX is disarmed after the final 73 is sent in an S&P QSO. The flag is consumed only after the over fully plays out; it is never dropped mid-transmission. In an FT8/FT4 contest it applies to a contact started with a double-click on a CQ, or by a reply to one from JTAlert or GridTracker: TX goes off after its last over and you stay in the contest's S&P. A contact the contest's S&P starts by itself keeps TX on.
+**Disable TX after 73** — default ON. TX is disarmed after the final 73 is sent in an S&P QSO. The flag is consumed only after the over fully plays out; it is never dropped mid-transmission. In an FT8/FT4 contest every S&P contact starts with a double-click on a CQ, or a reply to one from JTAlert or GridTracker, because the contest's S&P never calls a station by itself: TX goes off after the contact's last over and you stay in the contest's S&P.
 
 **TX watchdog** — auto-halts TX after 6 minutes of continuous unattended transmit. Re-enable TX manually to clear it. The watchdog applies equally to Running, S&P, and any other keying path.
 

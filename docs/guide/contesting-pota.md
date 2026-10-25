@@ -133,11 +133,13 @@ rather than 290 px of checkboxes between you and the log.
 ### FT8 and FT4 in each contest
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
-answers, and **S&P** answers the first CQ it hears once you turn TX on, in the
-period opposite the CQ's. On the FT cockpit, **Call CQ** is the contest's
-Running and **S&P** the contest's S&P, and a double-click on a CQ, or a reply to
-one from JTAlert or GridTracker, works that station in the contest's S&P; with
-**Disable TX after sending 73** on, TX goes off after that contact. What they
+answers. **S&P** listens and never calls a station by itself, with TX on or off:
+you start each contact with a double-click on a CQ, or a reply to one from a
+logging program, as in WSJT-X. Your answer goes out in the period opposite
+the CQ's, and the contact then runs itself to RR73 and the log. After it, S&P
+listens again until you pick the next CQ. On the FT cockpit, **Call CQ** is the
+contest's Running and **S&P** the contest's S&P; with **Disable TX after sending
+73** on, TX goes off after each S&P contact. What they
 send depends on the contest, and is what WSJT-X sends in it (here K1ABC in FN42
 works W9XYZ in EN37). The last column is the special operation the WSJT-X UDP
 Status message reports, as WSJT-X reports it in that contest:
@@ -152,7 +154,13 @@ Outside Field Day, Running and S&P need your grid in Settings before they
 transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
 FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
 Day's messages, as they always have, and Field Day's runner closes without the
-73. In those three contests the FT cockpit's Call CQ and double-click work
+73. There too S&P calls nobody by itself. In ARRL Field Day and Winter Field
+Day on FT8, FT4, FT2, FT1 and DX1, a double-click on a CQ while you are in the
+contest's S&P, or a reply to one from a logging program, answers it in the
+contest with your class and section. On FST4, Q65, MSK144 and JT65, in the
+Illinois and New York QSO parties, and in other contests on FT2, FT1 and DX1, a
+double-click works the station as a normal QSO outside the contest, as before.
+Outside the contest's S&P, the FT cockpit's Call CQ and double-click work
 outside the contest, as before, and the UDP special operation is 0.
 
 ### An operator and a logger on one radio

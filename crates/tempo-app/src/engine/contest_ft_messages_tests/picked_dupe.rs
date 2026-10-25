@@ -3,7 +3,7 @@
 //! is made, and the other station logs it, so it is logged here too (the operator's rulings of
 //! 2026-10-11): marked a dupe, worth nothing, and everywhere a contact goes — the contest's
 //! journal and files, the Logbook at the Merge, the club. What goes on the air does not change,
-//! and S&P's own pounce still passes the station by.
+//! and S&P answers no CQ by itself, a worked station's included.
 //!
 //! Driven through the verbs the gestures call (`work_station`, with the arguments the cockpit's
 //! double-click and the radio loop's Reply pass), against the scripted WSJT-X partner of the

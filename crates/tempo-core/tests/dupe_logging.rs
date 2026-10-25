@@ -14,8 +14,8 @@
 //! contact either way. ARRL Field Day checks no logs at all (*"Complete station logs are NOT
 //! required for submission, and ARRL does not use the logs."*), and its deliverable is a dupe
 //! sheet plus **raw non-dupe** QSO counts, which still leave the dupe out. No shipped
-//! sponsor's rules say to remove dupes. What is SENT does not change: S&P's own pounce still
-//! passes a worked station by.
+//! sponsor's rules say to remove dupes. What is SENT does not change, and S&P answers no CQ it
+//! hears, a worked station's or a new one's: the operator starts each contact.
 //!
 //! ⚠️ **"Marked" means marked in OUR data model**, for scoring and display. Neither
 //! sponsor asks for a marker, and CQ's worked example logs the dupe as a plain `QSO:`
@@ -475,17 +475,6 @@ fn picked_contact(st: &mut FieldDayStation, event: &str, section: &str, slot: u6
     finished(st, event, section, slot)
 }
 
-/// S&P's own pounce on W9XYZ's CQ, finished as [`picked_contact`] finishes.
-fn pounced_contact(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
-    let cq = match event {
-        "arrlfd" => "CQ FD W9XYZ EN37",
-        "arrlvhf_jan" => "CQ TEST W9XYZ EN37",
-        _ => "CQ W9XYZ EN37",
-    };
-    st.observe(&[dec(cq)], slot);
-    finished(st, event, section, slot + 1)
-}
-
 /// The contact answered, run to its end by W9XYZ as WSJT-X runs it.
 fn finished(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
     let rogered = format!("K1ABC W9XYZ R 1D {section}");
@@ -599,11 +588,11 @@ fn a_picked_dupe_survives_a_restart_still_marked_and_a_second_read_keeps_it_once
         };
         assert_eq!(marks(&st.log), w9xyz(2), "{event}: PREMISE, the dupe");
         let mut own = ft8_sp(event);
-        pounced_contact(&mut own, event, "WI", 1);
+        picked_contact(&mut own, event, "WI", 1);
         assert_eq!(
             row(&st.log.qsos()[1]),
             row(&own.log.qsos()[0]),
-            "{event}: the dupe is the row S&P's own pounce writes for the same contact"
+            "{event}: the dupe is the row the first contact writes for the same contact"
         );
         let journal = st.log.journal_adif();
         let now = st.log.qsos()[0].when_unix;
@@ -640,10 +629,10 @@ fn typed(log: &mut FieldDayLog, event: &str, call: &str) -> bool {
     }
 }
 
-/// The control, which holds before the ruling and after it: what is SENT does not change. S&P's
-/// own pounce passes the CQ of a station already in the log by, and answers a new station's.
+/// The control: what is SENT does not change for a station already in the log. S&P answers no CQ
+/// it hears by itself, a worked station's or a new one's; the operator starts each contact.
 #[test]
-fn sp_still_passes_a_worked_station_by_and_answers_a_new_one() {
+fn sp_answers_no_cq_it_hears_worked_or_new() {
     for event in PICKED {
         let mut st = ft8_sp(event);
         assert!(typed(&mut st.log, event, "W9XYZ"), "{event}: PREMISE");
@@ -654,11 +643,7 @@ fn sp_still_passes_a_worked_station_by_and_answers_a_new_one() {
         st.observe(&[dec(&cq("W9XYZ"))], 1);
         assert_eq!(next(&st), "", "{event}: S&P passes a worked station by");
         st.observe(&[dec(&cq("W9ABC"))], 3);
-        assert!(
-            next(&st).starts_with("W9ABC K1ABC"),
-            "{event}: S&P answers a new station: {}",
-            next(&st)
-        );
+        assert_eq!(next(&st), "", "{event}: nor a new one");
     }
 }
 

@@ -52,9 +52,20 @@ fn to_capture(mut rx: Vec<f32>) -> Vec<f32> {
 /// other's over at the boundary after it (`slot + 1`), as the radio loop hands a period's decodes
 /// in: the period an answer goes out in is taken from that.
 fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engine) -> bool) {
+    run_from(a, b, 0, slots, done);
+}
+
+/// [`run`] from slot `from`; returns the slot after the last one run.
+fn run_from(
+    a: &mut Engine,
+    b: &mut Engine,
+    from: u64,
+    slots: u64,
+    done: impl Fn(&Engine, &Engine) -> bool,
+) -> u64 {
     let mut a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 11);
     let mut b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 22);
-    for slot in 0..slots {
+    for slot in from..from + slots {
         if slot % 2 == 0 {
             for w in a.poll_tx(slot) {
                 let rx = to_capture(a2b.receive(&w, ON_TIME_OFFSET, 15.0));
@@ -67,9 +78,26 @@ fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engin
             }
         }
         if done(a, b) {
-            break;
+            return slot + 1;
         }
     }
+    from + slots
+}
+
+/// The S&P operator's double-click on `runner`'s CQ, once `sp` has decoded it: the contest's S&P
+/// answers no CQ by itself. Returns the slot to run on from.
+fn double_click_the_cq(runner: &mut Engine, sp: &mut Engine, call: &str) -> u64 {
+    let cq = |e: &Engine| {
+        e.last_decodes()
+            .iter()
+            .find(|d| d.message.starts_with("CQ ") && d.message.contains(call))
+            .cloned()
+    };
+    let next = run_from(runner, sp, 0, 10, |_, b| cq(b).is_some());
+    let d = cq(sp).expect("S&P decoded the runner's CQ");
+    sp.work_station(call, None, Some(&d.message), Some(d.snr), None)
+        .expect("the double-click is taken");
+    next
 }
 
 #[test]
@@ -132,9 +160,8 @@ fn field_day_mode_logs_through_the_engine() {
     }
     run_st.set_mode("fieldday-run").unwrap(); // run mode arms TX itself
     sp.set_mode("fieldday-sp").unwrap();
-    // S&P is passive (no auto-CQ), so it doesn't arm TX — and TX is disarmed by default
-    // now (WSJT-X Enable-Tx). Arm the S&P side so it answers the runner in this loopback.
-    sp.set_tx_enabled(true);
+    // S&P is passive (no auto-CQ, no auto-answer): the operator double-clicks the runner's CQ,
+    // which enables TX.
 
     let logged = |e: &Engine| {
         e.snapshot()
@@ -142,7 +169,10 @@ fn field_day_mode_logs_through_the_engine() {
             .map(|f| f.qso_count >= 1)
             .unwrap_or(false)
     };
-    run(&mut run_st, &mut sp, 50, |a, b| logged(a) && logged(b));
+    let from = double_click_the_cq(&mut run_st, &mut sp, "W9XYZ");
+    run_from(&mut run_st, &mut sp, from, 50, |a, b| {
+        logged(a) && logged(b)
+    });
 
     let fr = run_st.snapshot().field_day.expect("run field day status");
     let fs = sp.snapshot().field_day.expect("sp field day status");
@@ -244,7 +274,8 @@ fn the_club_clock_reaches_no_clock_slot_or_stamp_ft_reads() {
                 .unwrap_or(false)
         };
         let lo = now().as_secs();
-        run(&mut r, &mut sp, 50, |a, b| logged(a) && logged(b));
+        let from = double_click_the_cq(&mut r, &mut sp, "W9XYZ");
+        run_from(&mut r, &mut sp, from, 50, |a, b| logged(a) && logged(b));
         assert!(
             r.fd_log_manual("N0XYZ", "1D", "MN", "CW").unwrap(),
             "the hand-logged contact"

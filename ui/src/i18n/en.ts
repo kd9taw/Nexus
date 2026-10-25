@@ -10408,7 +10408,7 @@ export const EN = {
   'operate.strip.callCq.title':
     'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically',
   'operate.strip.sandp.label': 'S&P',
-  'operate.strip.sandp.title': 'Monitor — search & pounce',
+  'operate.strip.sandp.title': 'Search & pounce — listens; double-click a CQ to call that station',
   'operate.strip.txControls.aria': 'Transmit controls',
   'operate.strip.holdTx.label': 'Hold Tx',
   'operate.strip.holdTx.title':

@@ -6217,7 +6217,7 @@ export const DE: PartialCatalog = {
   "operate.strip.callCq.label": "CQ rufen",
   "operate.strip.callCq.title": "Auto-CQ — ununterbrochen CQ rufen, jede antwortende Station im normalen FT8/FT4-Ablauf arbeiten und dann automatisch zurück zu CQ",
   "operate.strip.sandp.label": "S&P",
-  "operate.strip.sandp.title": "Beobachten — Search & Pounce",
+  "operate.strip.sandp.title": "Search & Pounce — hört nur zu; Doppelklick auf ein CQ ruft die Station",
   "operate.strip.txControls.aria": "Sendesteuerung",
   "operate.strip.holdTx.label": "TX halten",
   "operate.strip.holdTx.title": "TX-Frequenz halten: Ihre TX-Ablage bleibt dort, wo Sie sie gesetzt haben, wenn Sie eine Station per Doppelklick arbeiten. Aus wandert Ihr TX auf deren Frequenz (Verhalten von WSJT-X). Ein einfacher Klick im Wasserfall verschiebt TX so oder so nie.",

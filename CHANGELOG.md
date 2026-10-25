@@ -215,6 +215,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **The Tempo 23 cm channel moved from 1296.200 to 1296.185 MHz**, below the 1296.200–1296.400 beacon segment and inside the weak-signal segment of the ARRL band plan. Older Nexus builds still call on 1296.200 and will not hear this one; tune there by hand to reach them.
+- **In a contest, FT8 and FT4 Search & Pounce no longer calls stations by itself.** S&P now only
+  listens, as in WSJT-X: you start each contact with a double-click on a CQ, or a reply to one from
+  a logging program. That contact still runs itself to RR73 and the log, and S&P then waits for
+  your next pick. Leaving TX on never calls anyone, and nothing is queued while TX is off. With
+  **Disable TX after sending 73** on, TX now goes off after every S&P contact. In ARRL Field Day and
+  Winter Field Day on FT8, FT4, FT2, FT1 and DX1, a double-click on a CQ while you are in the
+  contest's S&P answers it with your class and section and logs it in the contest. On FST4, Q65,
+  MSK144 and JT65, and in other contests on FT2, FT1 and DX1, a double-click works the station as a
+  normal QSO, as before. Running is unchanged.
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
   page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
   attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.

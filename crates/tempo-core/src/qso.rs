@@ -26,7 +26,7 @@ pub const MAX_TX_PER_STEP: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    /// Monitoring; will answer the first CQ heard.
+    /// Monitoring; answers nobody until the operator picks a station.
     Listening,
     /// Calling CQ; awaiting a grid reply addressed to me.
     CallingCq,
@@ -192,7 +192,7 @@ impl Station {
         }
     }
 
-    /// A station that listens and answers the first CQ it hears.
+    /// A station that listens and calls nobody until the operator picks a station.
     pub fn monitoring(mycall: &str, mygrid: &str) -> Self {
         let mygrid = &air_grid(mygrid);
         Self {

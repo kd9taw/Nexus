@@ -1146,15 +1146,23 @@ fn a_field_day_run_switches_its_exchange_to_73_when_the_callers_rr73_folds() {
     );
 }
 
-/// S&P in the contest: our exchange is on the air when the runner's rogered exchange folds; the
-/// rest is our RR73 (WSJT-X's Tx4). Then S&P is listening again and picks the next CQ by itself,
-/// but that is a new contact: it never replaces the RR73 on the air.
+/// S&P in the contest: our exchange, to the CQ the operator double-clicked, is on the air when
+/// the runner's rogered exchange folds; the rest is our RR73 (WSJT-X's Tx4). Then S&P is
+/// listening again, and the next CQ it hears starts nothing: the RR73 on the air stays.
 #[test]
 fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
     let mut e = contest("arrlfd");
     e.set_mode("fieldday-sp").expect("S&P starts");
     e.set_tx_enabled(true);
     hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+    e.work_station(
+        "W9XYZ",
+        Some("EN37"),
+        Some("CQ FD W9XYZ EN37"),
+        Some(-12),
+        None,
+    )
+    .expect("premise: the double-click");
     let exch = key(&mut e, 2).expect("premise: our exchange");
     assert_eq!(exch, "W9XYZ K1ABC 2B EMA");
     assert_eq!(key(&mut e, 4).as_deref(), Some(exch.as_str()), "again");
@@ -1164,14 +1172,10 @@ fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
         route.switch(&mut e, 4, at(4, 1_500.0)),
         switched(&exch, "W9XYZ K1ABC RR73")
     );
-    // The next CQ heard in the same over: S&P returns to listening and answers it.
+    // The next CQ heard in the same over: S&P returns to listening and answers nothing.
     hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
     hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
-    assert_eq!(
-        e.ft_next_over(4).as_deref(),
-        Some("K2DEF K1ABC 2B EMA"),
-        "premise: S&P picked the next CQ"
-    );
+    assert_eq!(e.ft_next_over(4), None, "S&P picks no CQ by itself");
     assert_eq!(route.switch(&mut e, 4, at(4, 3_000.0)), None);
 }
 
@@ -1215,36 +1219,33 @@ fn a_contest_never_switches_a_cq_or_switches_to_one() {
 }
 
 /// A contest contact the operator picked (a double-click on the CQ) and closed by the switch: the
-/// RR73 that leaves mid-over arms "Disable Tx after sending 73" as at a key; S&P's own pounce
-/// does not.
+/// RR73 that leaves mid-over arms "Disable Tx after sending 73" as at a key.
 #[test]
 fn a_picked_contest_contact_closed_mid_over_turns_tx_off_once() {
-    for picked in [true, false] {
-        let mut e = contest("arrlfd");
-        e.set_mode("fieldday-sp").expect("S&P starts");
-        e.set_tx_enabled(true);
-        hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
-        if picked {
-            e.work_station(
-                "W9XYZ",
-                Some("EN37"),
-                Some("CQ FD W9XYZ EN37"),
-                Some(-12),
-                None,
-            )
-            .expect("premise: the double-click");
-        }
-        let exch = key(&mut e, 2).expect("premise: our exchange");
-        hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 2);
-        let mut route = Route::new(80_000);
-        assert_eq!(
-            route.switch(&mut e, 2, at(2, 1_500.0)),
-            switched(&exch, "W9XYZ K1ABC RR73"),
-            "picked {picked}"
-        );
-        assert_eq!(e.take_pending_tx_disable(), picked, "picked {picked}");
-        assert!(!e.take_pending_tx_disable(), "picked {picked}: once");
-    }
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-sp").expect("S&P starts");
+    e.set_tx_enabled(true);
+    hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+    e.work_station(
+        "W9XYZ",
+        Some("EN37"),
+        Some("CQ FD W9XYZ EN37"),
+        Some(-12),
+        None,
+    )
+    .expect("premise: the double-click");
+    let exch = key(&mut e, 2).expect("premise: our exchange");
+    hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 2);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 2, at(2, 1_500.0)),
+        switched(&exch, "W9XYZ K1ABC RR73")
+    );
+    assert!(
+        e.take_pending_tx_disable(),
+        "TX off after the picked contact"
+    );
+    assert!(!e.take_pending_tx_disable(), "once");
 }
 
 /// What a logger's WSJT-X Status says is being sent: its Tx Message ([`Engine::wsjtx_tx_status`]).

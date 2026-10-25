@@ -6641,7 +6641,7 @@ export const JA: PartialCatalog = {
   "operate.strip.callCq.label": "CQ 呼出し",
   "operate.strip.callCq.title": "自動 CQ — CQ を出し続け、応答してきた各局と通常の FT8/FT4 シーケンスで交信し、終わると自動的に CQ に戻ります",
   "operate.strip.sandp.label": "S&P",
-  "operate.strip.sandp.title": "ワッチ — サーチ＆パウンス",
+  "operate.strip.sandp.title": "サーチ＆パウンス — 受信のみ。CQをダブルクリックするとその局を呼び出します",
   "operate.strip.txControls.aria": "送信コントロール",
   "operate.strip.holdTx.label": "Tx 保持",
   "operate.strip.holdTx.title": "送信周波数を保持: 局をダブルクリックして呼ぶときも、自分で置いた TX オフセットを動かしません。オフのときは相手の周波数に TX が移ります（WSJT-X と同じ動作）。ウォーターフォールの単純クリックでは、どちらの設定でも TX は動きません。",

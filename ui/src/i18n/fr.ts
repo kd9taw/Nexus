@@ -4282,7 +4282,7 @@ export const FR: PartialCatalog = {
   "operate.strip.roles.aria": "Rôle du séquenceur",
   "operate.strip.rxOnly.why": "Ce mode est en réception seule dans Nexus — il décode mais n'émet pas",
   "operate.strip.sandp.label": "S&P",
-  "operate.strip.sandp.title": "Écoute — search & pounce",
+  "operate.strip.sandp.title": "Search & pounce — écoute seulement ; double-cliquez sur un CQ pour appeler la station",
   "operate.strip.send.label": "Envoyer",
   "operate.strip.send.title": "Envoyer au prochain passage",
   "operate.strip.skipTx1.failed": "Sauter Tx1 n'a pas été modifié",
