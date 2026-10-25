@@ -176,6 +176,9 @@ mod tci;
 mod tci_connection;
 /// Nexus's spots for the SDR program's panadapter, handed from the app shell to the radio loop.
 pub mod tci_spots;
+/// 28.3–28.5 MHz: a Novice or Technician sends only CW and single-sideband voice.
+#[cfg(test)]
+mod ten_meter_ssb_only_tests;
 mod tx_alarms;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
@@ -1898,6 +1901,25 @@ const SSTV_REFUSED_USB_ONLY: &str = "SSTV not sent: 60 m allows only USB phone, 
 /// The licence lock's words when the phone MODE is the whole reason ([`Engine::phone_mode_refused`]):
 /// on 60 m the frequency is fine for USB, and the pick is LSB, AM or FM.
 const PHONE_USB_ONLY: &str = "TX locked — 60 m allows only USB phone. Pick USB or AUTO.";
+/// The licence lock's words when the phone MODE is the whole reason from 28.3 to 28.5 MHz
+/// ([`Engine::phone_ssb_only_refused`]): a Novice's or a Technician's AM or FM pick where either
+/// sideband would key.
+const PHONE_TEN_METER_SSB_ONLY: &str = "TX locked — on 28.3–28.5 MHz a Novice or Technician \
+     license allows only CW and single-sideband voice. Pick USB, LSB or AUTO.";
+/// Why the CAT broker refused a program's key from 28.3 to 28.5 MHz for a Novice or a Technician
+/// ([`Engine::outside_key_allowed`]), in the broker's connection-log line. The TCI server's
+/// `Refusal::VoiceOnly` says the same words.
+pub const OUTSIDE_KEY_VOICE_ONLY: &str = "on 28.3–28.5 MHz a Novice or Technician license allows \
+     only CW and single-sideband voice, so Nexus does not let other programs key the radio there";
+/// What [`Engine::sstv_tx_gate`] answers for a Novice's or a Technician's picture from 28.3 to
+/// 28.5 MHz, where the frequency is fine for voice ([`Engine::sstv_picture_allowed`])…
+const SSTV_REFUSED_TEN_METER: &str = "SSTV not sent: on 28.3–28.5 MHz a Novice or Technician \
+     license allows only CW and single-sideband voice, not pictures.";
+/// …and the SSTV cockpit's warning line when [`Engine::poll_sstv_tx`] drops a waiting picture
+/// for it.
+const SSTV_REFUSED_TEN_METER_DROPPED: &str = "SSTV not sent: on 28.3–28.5 MHz a Novice or \
+     Technician license allows only CW and single-sideband voice, not pictures, so the picture \
+     that was waiting was dropped, not held for later.";
 const SSTV_REFUSED_RADIO_HAS_MIC: &str = "SSTV not sent: the radio has the mic (Flex native DAX \
      audio, Phone at the shack), so the picture that was waiting was dropped, not held for later. \
      Nothing was keyed.";
@@ -10936,15 +10958,20 @@ impl Engine {
     }
 
     /// Set the operator's amateur license class (drives the TX-privilege lockout + the
-    /// licensed-segment band dropdown). Unknown strings fall back to Open (no lockout).
-    pub fn set_license_class(&mut self, class: &str) {
+    /// licensed-segment band dropdown). A word that names no class is refused (`false`) and the
+    /// class stays as it was: falling back to Open would lift the lockout.
+    pub fn set_license_class(&mut self, class: &str) -> bool {
         use crate::settings::LicenseClass;
         self.settings.license_class = match class.to_ascii_lowercase().as_str() {
+            "novice" => LicenseClass::Novice,
             "technician" => LicenseClass::Technician,
             "general" => LicenseClass::General,
+            "advanced" => LicenseClass::Advanced,
             "extra" => LicenseClass::Extra,
-            _ => LicenseClass::Open,
+            "open" => LicenseClass::Open,
+            _ => return false,
         };
+        true
     }
 
     // ----- CW transmit (CAT keyer path) — operator-initiated, gated by Monitor -----
@@ -11848,7 +11875,7 @@ impl Engine {
     /// server is held here as a CAT-broker client's is, masked by its own gates as well
     /// (`engine/tci.rs`).
     pub fn manual_ptt(&self) -> bool {
-        (self.manual_ptt || self.broker_ptt || self.tci_mic_keyed())
+        (self.manual_ptt || (self.broker_ptt && self.outside_key_allowed()) || self.tci_mic_keyed())
             && self.tx_enabled
             && self.tx_allowed()
     }
@@ -11883,6 +11910,7 @@ impl Engine {
             || !self.tx_enabled
             || self.broker_context_hold
             || !self.tx_allowed()
+            || !self.outside_key_allowed()
             || (!re_assert && self.tx_owner().is_some())
             || (!re_assert && self.clock_repair_holds_tx())
             // …nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in
@@ -25097,6 +25125,11 @@ contact yourself."
         if !self.tx_allowed() {
             return Err(self.licence_lock_text().to_string());
         }
+        // A picture is not voice: where the class is held to CW and single-sideband voice, the
+        // frequency a USB voice over keys on refuses it ([`Self::sstv_picture_allowed`]).
+        if !self.sstv_picture_allowed() {
+            return Err(SSTV_REFUSED_TEN_METER.to_string());
+        }
         // Ownership from the ONE arbiter. This gate's field list was the complete
         // one the other gates lacked; `tx_owner()` is that list, generalised.
         if let Some(owner) = self.tx_owner() {
@@ -25161,8 +25194,10 @@ contact yourself."
     /// refused picture or beacon is dropped with a notice, never sent later"). A picture waits
     /// here from [`Self::sstv_send`] until the loop is idle: another over or its PTT tail, a held
     /// mic, a radio handoff. If in that time TX went off, the dial left the licence's Phone
-    /// privileges, or the radio took its own mic ([`Self::observe_flex_radio_has_mic`]: sent over
-    /// DAX, the picture would not go out), the picture is dropped: the log says why once, and the
+    /// privileges or reached a frequency where the class may send no picture
+    /// ([`Self::sstv_picture_allowed`]), or the radio took its own mic
+    /// ([`Self::observe_flex_radio_has_mic`]: sent over DAX, the picture would not go out), the
+    /// picture is dropped: the log says why once, and the
     /// SSTV cockpit's warning line ([`Self::sstv_tx_notice`]) says so. Held, it keyed the moment
     /// TX was allowed again, at a time the operator did not choose. TX Off itself already drops it
     /// (`set_tx_enabled`), so the TX-off arm here is the backstop for a latch lowered any other
@@ -25199,6 +25234,11 @@ contact yourself."
                 } else {
                     SSTV_REFUSED_PRIVILEGES
                 },
+            ))
+        } else if in_section && !self.sstv_picture_allowed() {
+            Some((
+                "a Novice or Technician may send only CW and single-sideband voice there",
+                SSTV_REFUSED_TEN_METER_DROPPED,
             ))
         } else if self.flex_radio_has_mic {
             Some((
@@ -25669,11 +25709,66 @@ contact yourself."
             })
     }
 
+    /// Is the licence lock the phone MODE alone from 28.3 to 28.5 MHz? The Phone section is
+    /// refused, the class is held to CW and single-sideband voice at every transmit frequency
+    /// ([`crate::privileges::cw_and_ssb_voice_only`]: a Novice or a Technician), and a USB pick and
+    /// an LSB pick would each key there. Then the pick (AM or FM) is all that stands in the way,
+    /// and the lock says so, [`PHONE_TEN_METER_SSB_ONLY`]; where either sideband is refused too, the
+    /// frequency is a reason and the lock keeps its frequency sentence.
+    ///
+    /// DISPLAY ONLY, as [`Self::phone_mode_refused`] is: it picks the words for a refusal
+    /// [`Self::tx_allowed`] has already made.
+    fn phone_ssb_only_refused(&self) -> bool {
+        use crate::settings::OperatingMode;
+        let class = self.settings.license_class;
+        self.settings.operating_mode == OperatingMode::Phone
+            && !self.tx_allowed()
+            && self.every_tx_frequency(OperatingMode::Phone, |mhz| {
+                crate::privileges::cw_and_ssb_voice_only(class, mhz)
+                    && self.phone_emission_allowed(mhz, "USB")
+                    && self.phone_emission_allowed(mhz, "LSB")
+            })
+    }
+
+    /// May the operator's class send a PICTURE where this radio transmits? Not where it is held to
+    /// CW and single-sideband voice ([`crate::privileges::cw_and_ssb_voice_only`]: a Novice or a
+    /// Technician from 28.3 to 28.5 MHz), judged at every frequency the next over is emitted on, as
+    /// [`Self::tx_allowed`] judges them. ANDed by both SSTV gates after [`Self::tx_allowed`], so it
+    /// can only ever refuse more.
+    fn sstv_picture_allowed(&self) -> bool {
+        let class = self.settings.license_class;
+        self.every_tx_frequency(crate::settings::OperatingMode::Phone, |mhz| {
+            !crate::privileges::cw_and_ssb_voice_only(class, mhz)
+        })
+    }
+
+    /// May a program outside Nexus key the transmitter here: a CAT broker client, or a program on
+    /// the TCI server keying the radio's microphone or an over of its own audio? Not where the
+    /// class is held to CW and single-sideband voice ([`crate::privileges::cw_and_ssb_voice_only`]:
+    /// a Novice or a Technician from 28.3 to 28.5 MHz, judged at every frequency the next over is
+    /// emitted on, as [`Self::sstv_picture_allowed`] judges a picture), whatever mode the radio is
+    /// in. Nexus cannot hear what such a program sends, and neither the radio's mode nor its
+    /// read-back proves it is voice: plain USB can carry a soundcard picture or data as easily.
+    /// A broker client's key in the CW section is refused there too, though CW is allowed: a PTT
+    /// key carries whatever the program sends, so the rule refuses every outside key on that
+    /// segment. A TCI program's CW text is not such a key: Nexus's own keyer sends it, judged as
+    /// Nexus's own CW, as its PTT, voice keyer and SSTV paths are judged on their own. Every other
+    /// class and frequency is unchanged. ANDed after [`Self::tx_allowed`] on every outside key and
+    /// re-read while one is held, so it can only ever refuse more, and a held key drops when it
+    /// turns false (a retune into the segment, a class change); an un-key is never judged.
+    pub fn outside_key_allowed(&self) -> bool {
+        self.sstv_picture_allowed()
+    }
+
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
-    /// ([`Self::phone_mode_refused`]), else the frequency sentence every transmit path has said.
+    /// on 60 m ([`Self::phone_mode_refused`]), [`PHONE_TEN_METER_SSB_ONLY`] when it is from 28.3 to
+    /// 28.5 MHz ([`Self::phone_ssb_only_refused`]), else the frequency sentence every transmit path
+    /// has said.
     fn licence_lock_text(&self) -> &'static str {
         if self.phone_mode_refused() {
             PHONE_USB_ONLY
+        } else if self.phone_ssb_only_refused() {
+            PHONE_TEN_METER_SSB_ONLY
         } else {
             "TX locked — this frequency is outside your license privileges"
         }
@@ -32657,6 +32752,59 @@ mod tests {
         e.set_rtty_armed(true);
         assert_eq!(e.poll_rtty_one(), None);
         assert!(!e.rtty_state().sending);
+    }
+
+    /// Every class the wizard and Settings offer is parsed as itself. A token this parser did
+    /// not know would fall to `Open`, which lifts the lockout, so the grandfathered classes must
+    /// be named here, and the classes that shipped keep their tokens.
+    #[test]
+    fn set_license_class_parses_every_offered_class() {
+        use crate::settings::LicenseClass;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        for (token, class) in [
+            ("novice", LicenseClass::Novice),
+            ("technician", LicenseClass::Technician),
+            ("general", LicenseClass::General),
+            ("advanced", LicenseClass::Advanced),
+            ("extra", LicenseClass::Extra),
+            ("open", LicenseClass::Open),
+            ("Novice", LicenseClass::Novice),
+            ("ADVANCED", LicenseClass::Advanced),
+        ] {
+            assert!(e.set_license_class(token), "{token}");
+            assert_eq!(e.settings.license_class, class, "{token}");
+        }
+    }
+
+    /// ⛔ A WORD THAT NAMES NO CLASS IS REFUSED AND THE CLASS STAYS AS IT WAS. Falling back to
+    /// `Open` would lift the lockout for a misspelled or future token. From each class, every
+    /// such word leaves that class in force; CONTROL: a real token after them still lands.
+    #[test]
+    fn an_unknown_licence_word_is_refused_and_the_class_kept() {
+        use crate::settings::LicenseClass;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        for class in crate::privileges::US_CLASSES
+            .into_iter()
+            .chain([LicenseClass::Open])
+        {
+            let token = format!("{class:?}").to_ascii_lowercase();
+            assert!(e.set_license_class(&token), "precondition: {token}");
+            for word in [
+                "",
+                " ",
+                "tech_plus",
+                "technician ",
+                "extra2",
+                "none",
+                "us",
+                "0",
+            ] {
+                assert!(!e.set_license_class(word), "{word:?} from {token}");
+                assert_eq!(e.settings.license_class, class, "{word:?} from {token}");
+            }
+        }
+        assert!(e.set_license_class("technician"), "control");
+        assert_eq!(e.settings.license_class, LicenseClass::Technician);
     }
 
     /// ⭐ **OUR OWN OVER APPEARS IN THE TRANSCRIPT, AND ONLY WHAT RADIATED.**
@@ -67896,26 +68044,24 @@ mod tests {
         // licensed and still reads locked until the table carries it, which is
         // the conservative direction for a legal guard.
         use crate::settings::{LicenseClass, OperatingMode};
-        for class in [
-            LicenseClass::Open,
-            LicenseClass::Technician,
-            LicenseClass::General,
-            LicenseClass::Extra,
-        ] {
-            assert!(
+        for class in crate::privileges::US_CLASSES
+            .into_iter()
+            .chain([LicenseClass::Open])
+        {
+            // 97.301(e) gives a Novice nothing above 1295 MHz.
+            let granted = class != LicenseClass::Novice;
+            assert_eq!(
                 crate::privileges::tx_allowed(class, 10_489.550, OperatingMode::Phone),
+                granted,
                 "{class:?} at 10 GHz — 97.301(a) grants 10.0–10.5 to Tech and above"
             );
-            assert!(
+            assert_eq!(
                 crate::privileges::tx_allowed(class, 2_400.150, OperatingMode::Phone),
+                granted,
                 "{class:?} at 2400.15 — the 13 cm upper segment"
             );
         }
-        for class in [
-            LicenseClass::Technician,
-            LicenseClass::General,
-            LicenseClass::Extra,
-        ] {
+        for class in crate::privileges::US_CLASSES {
             assert!(
                 !crate::privileges::tx_allowed(class, 2_350.0, OperatingMode::Phone),
                 "{class:?} in the 2310–2390 gap — not amateur spectrum"
@@ -70450,13 +70596,15 @@ mod phone_pick_licence_tests {
         ("70cm", 450.000),
     ];
 
-    /// One case of a sweep: the gate's verdict, the convention's, which case, and whether the rig
-    /// was commanded FM there.
+    /// One case of a sweep: the gate's verdict, the convention's, which case, whether the rig
+    /// was commanded FM there, and whether 47 CFR 97.307(f)(10) holds the class to CW and
+    /// single-sideband voice there (a Novice or a Technician from 28.3 to 28.5 MHz).
     struct Verdict {
         got: bool,
         want: bool,
         case: String,
         fm: bool,
+        ssb_only: bool,
     }
 
     /// Every edge in [`PHONE_EDGES`] ±6 kHz in 0.5 kHz steps for every US class, with `pick` in
@@ -70464,11 +70612,7 @@ mod phone_pick_licence_tests {
     fn sweep(phone_mode: &str, pick: Option<&str>) -> Vec<Verdict> {
         use crate::settings::LicenseClass;
         let mut out = Vec::new();
-        for class in [
-            LicenseClass::Technician,
-            LicenseClass::General,
-            LicenseClass::Extra,
-        ] {
+        for class in crate::privileges::US_CLASSES {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.settings.license_class = class;
             e.set_operating_mode("phone", false);
@@ -70487,6 +70631,10 @@ mod phone_pick_licence_tests {
                             "{class:?} {band} {dial:.4} {pick:?} phone_mode={phone_mode}"
                         ),
                         fm: e.rig_mode_effective() == "FM",
+                        // Written out, not asked of the gate's own rule, so the sweep cannot
+                        // agree with a broken one.
+                        ssb_only: matches!(class, LicenseClass::Novice | LicenseClass::Technician)
+                            && (28.300..28.500).contains(&dial),
                     });
                 }
             }
@@ -70697,9 +70845,25 @@ mod phone_pick_licence_tests {
     /// it before — never less, and nothing new refused on a width the gate cannot know. An FM
     /// signal's width is set by its deviation, which Nexus does not know (`repeater_tune`
     /// records the same decision). Pinned across every edge in [`PHONE_EDGES`], both ways.
+    ///
+    /// One exception, and it is not a width: from 28.3 to 28.5 MHz a Technician may send only CW
+    /// and single-sideband voice (47 CFR 97.307(f)(10)), so FM is refused there whatever its
+    /// width ([`crate::privileges::cw_and_ssb_voice_only`]). Those cases are held to a refusal
+    /// instead, and there must be some, or the exception would hide nothing it was written for.
     #[test]
     fn an_fm_pick_is_judged_as_the_band_convention_judged_it() {
-        let (wrong, allowed, refused, fm) = against_the_convention(&sweep("ssb", Some("FM")));
+        let verdicts = sweep("ssb", Some("FM"));
+        let (held, judged): (Vec<_>, Vec<_>) = verdicts.into_iter().partition(|v| v.ssb_only);
+        let keyed: Vec<_> = held.iter().filter(|v| v.got).map(|v| &v.case).collect();
+        assert!(
+            keyed.is_empty(),
+            "FM keyed where only CW and SSB voice may: {keyed:#?}"
+        );
+        assert!(
+            held.iter().filter(|v| v.want).count() > 10,
+            "the 28.3–28.5 MHz cases must include ones the convention allows"
+        );
+        let (wrong, allowed, refused, fm) = against_the_convention(&judged);
         assert!(wrong.is_empty(), "an FM pick moved a verdict: {wrong:#?}");
         assert!(
             allowed > 100 && refused > 100 && fm > 100,

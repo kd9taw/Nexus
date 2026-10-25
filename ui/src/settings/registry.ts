@@ -112,7 +112,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     // Units (#248) lives here because it is app-wide: distances, temperature and wind speed.
     keywords: ['callsign', 'call sign', 'grid', 'maidenhead', 'locator', 'license', 'licence',
-      'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call',
+      'class', 'extra', 'general', 'technician', 'novice', 'advanced',
+      'operator name', 'state', 'my call',
       'units', 'miles', 'km', 'kilometres', 'kilometers', 'imperial', 'metric', 'distance',
       'temperature', 'fahrenheit', 'celsius', 'wind speed'],
   },

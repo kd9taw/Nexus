@@ -1679,7 +1679,9 @@ mod tests {
             ("the latch", |g| g.tx_enabled = false, REFUSED_TX_OFF),
             (
                 "the licence",
-                |g| g.set_license_class("technician"),
+                |g| {
+                    g.set_license_class("technician");
+                },
                 REFUSED_PRIVILEGES,
             ),
         ];

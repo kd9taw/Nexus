@@ -2890,7 +2890,7 @@ export async function getVoiceMessages(): Promise<VoiceMessage[]> {
 }
 
 // --- license class + licensed band plan ---
-/** Set the operator's amateur license class (technician/general/extra/open). */
+/** Set the operator's amateur license class (novice/technician/general/advanced/extra/open). */
 export async function setLicenseClass(licenseClass: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_license_class', { class: licenseClass })
 }

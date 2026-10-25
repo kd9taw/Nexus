@@ -828,3 +828,25 @@ describe('the wizard shows no sample value in an empty box', () => {
     expect(placeholderOf(/^Address/)).toBeNull()
   })
 })
+
+describe('SetupWizard licence class', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The grandfathered US classes are offered beside the others, and the pick reaches onApply as
+  // the token the engine parses; an unknown token there would fall to Open and lift the lockout.
+  it.each([
+    [/^Novice/, 'novice'],
+    [/^Advanced/, 'advanced'],
+    [/^Technician/, 'technician'],
+  ])('a pick of %s applies the %s class', (name, token) => {
+    const { onApply } = renderWizard()
+    gotoLogStep()
+    clickNext() // → goals
+    fireEvent.click(screen.getByRole('button', { name }))
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onApply.mock.calls[0][3]).toBe(token)
+  })
+})

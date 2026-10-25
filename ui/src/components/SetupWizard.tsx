@@ -108,6 +108,11 @@ interface Props {
 // Settings ▸ Station, so they resolve from the catalog at the call site.
 const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
   {
+    id: 'novice',
+    labelKey: 'setup.finish.license.novice',
+    blurbKey: 'setup.finish.license.novice.blurb',
+  },
+  {
     id: 'technician',
     labelKey: 'setup.finish.license.technician',
     blurbKey: 'setup.finish.license.technician.blurb',
@@ -116,6 +121,11 @@ const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
     id: 'general',
     labelKey: 'setup.finish.license.general',
     blurbKey: 'setup.finish.license.general.blurb',
+  },
+  {
+    id: 'advanced',
+    labelKey: 'setup.finish.license.advanced',
+    blurbKey: 'setup.finish.license.advanced.blurb',
   },
   {
     id: 'extra',

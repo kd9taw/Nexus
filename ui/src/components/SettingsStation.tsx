@@ -65,8 +65,10 @@ const STATION_FIELDS: StationField[] = [
 
 /** The persisted licence-class VALUES are tokens; only the labels are prose. */
 const LICENSE_CLASSES: { value: string; labelKey: MessageKey }[] = [
+  { value: 'novice', labelKey: 'settings.station.licenseClass.novice' },
   { value: 'technician', labelKey: 'settings.station.licenseClass.technician' },
   { value: 'general', labelKey: 'settings.station.licenseClass.general' },
+  { value: 'advanced', labelKey: 'settings.station.licenseClass.advanced' },
   { value: 'extra', labelKey: 'settings.station.licenseClass.extra' },
   { value: 'open', labelKey: 'settings.station.licenseClass.open' },
 ]

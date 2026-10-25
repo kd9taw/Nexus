@@ -889,7 +889,7 @@ export type RadioMode = 'USB' | 'FM'
 /** The licence-class band edges a scope tints (`get_privilege_spans`): where the station's class may
  *  transmit a section's emission, from the transmit gate's own table. Display only — the gate decides. */
 export interface PrivilegeSpans {
-  /** The class the spans are for ('technician' | 'general' | 'extra' | 'open'). */
+  /** The class the spans are for ('novice' | 'technician' | 'general' | 'advanced' | 'extra' | 'open'). */
   class: string
   /** The section whose emission they judge ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'). */
   mode: string
@@ -4787,7 +4787,7 @@ export interface Settings {
   /** Fill the contest strip's exchange from the imported call history. Default true. Unassisted
    *  mode overrides it. */
   callHistoryEnabled?: boolean
-  /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
+  /** Amateur license class: 'novice' | 'technician' | 'general' | 'advanced' | 'extra' | 'open' (no TX limits). */
   licenseClass: string
   /** Active operating mode ('digital' | 'phone' | 'cw') — set live via the section nav, but
    * declared here so the settings round-trip ({...form}) preserves it on Save. */

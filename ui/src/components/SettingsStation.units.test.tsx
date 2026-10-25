@@ -69,3 +69,17 @@ it('keeps the section id, its legend and Units inside it', () => {
   expect(within(section).getByLabelText('Units')).toBeTruthy()
   expect(within(section).getByDisplayValue('KD9TAW'), 'the station fields stay in the section').toBeTruthy()
 })
+
+// The licence class: the grandfathered Novice and Advanced classes are offered, ladder order, and a
+// pick writes the token the engine parses.
+it('the licence class offers Novice and Advanced and writes their tokens', () => {
+  const { onUpdate } = mount({})
+  const select = document.querySelector('select[data-setting="licenseClass"]') as HTMLSelectElement
+  expect([...select.options].map((o) => o.value)).toEqual(
+    ['novice', 'technician', 'general', 'advanced', 'extra', 'open'],
+  )
+  for (const token of ['novice', 'advanced']) {
+    fireEvent.change(select, { target: { value: token } })
+    expect(onUpdate).toHaveBeenLastCalledWith('licenseClass', token)
+  }
+})

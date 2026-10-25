@@ -14848,7 +14848,9 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
     let (settings, unknown) = {
         let eng = engine_lock(&state);
         (
-            serde_json::to_value(eng.settings()).map_err(|e| e.to_string())?,
+            // As the settings file stores it, so an older build restores Novice and Advanced as
+            // a class it knows rather than refusing the backup (`LicenseClass`).
+            serde_json::to_value(eng.settings().for_storage()).map_err(|e| e.to_string())?,
             eng.settings().unknown.clone(),
         )
     };
@@ -14873,7 +14875,8 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 /// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
 /// default would otherwise switch a restored list of the operator's own to automatic. A backup
 /// from before JS8 heartbeat networking chooses it as an upgraded file does too, or a restored
-/// heartbeat user would lose the HB button.
+/// heartbeat user would lose the HB button. The exact licence class is read back as the settings
+/// file reads it (`Settings::take_exact_license_class`).
 fn settings_from_bundle(
     settings_json: serde_json::Value,
 ) -> Result<tempo_app::settings::Settings, String> {
@@ -14881,6 +14884,7 @@ fn settings_from_bundle(
     let predates_hb_networking = settings_json.get("js8HbNetworking").is_none();
     let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
         .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
+    settings.take_exact_license_class();
     if predates_node_choice {
         settings.choose_cluster_nodes_for_old_settings();
     }
@@ -20382,13 +20386,15 @@ fn get_band_plan(
     Ok(plan)
 }
 
-/// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the
-/// transmit-privilege lockout + the licensed-segment band dropdown. Used by the first-run
-/// wizard and Settings.
+/// Set the operator's amateur license class (Novice/Technician/General/Advanced/Extra/Open) —
+/// drives the transmit-privilege lockout + the licensed-segment band dropdown. Used by the
+/// first-run wizard and Settings. A word that names no class is refused and nothing is saved.
 #[tauri::command(async)]
 fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_license_class(&class);
+    if !eng.set_license_class(&class) {
+        return Err(format!("unknown license class {class:?}"));
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist license class: {e}")
     });
@@ -35606,6 +35612,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         let opted_in = e.settings().cat_broker_ptt;
         let tx_enabled = e.tx_enabled();
         let tx_allowed = e.tx_allowed();
+        let outside_key = e.outside_key_allowed();
         let owner = e.tx_owner();
         let clock_repair = e.clock_repair_holds_tx();
         let held = e.remote_transmit_held();
@@ -35629,6 +35636,8 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         } else if !tx_allowed {
             "transmit is not allowed here (license privileges or band edge on this dial)"
                 .to_string()
+        } else if !outside_key {
+            tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY.to_string()
         } else if let Some(o) = owner {
             o.busy_reason()
         } else if held {
@@ -43000,6 +43009,51 @@ mod tests {
         }
     }
 
+    /// ⛔ A CAT broker client's key from 28.3 to 28.5 MHz for a Technician: refused whatever the
+    /// radio reads back, plain USB too, and the connection log says why in the rule's own words.
+    /// CONTROL: a General's key there in PKTUSB is granted.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_refuses_every_ten_meter_key_for_a_technician_and_says_why() {
+        use tempo_app::settings::{OperatingMode, Settings};
+        use tempo_audio::rigctld_server::RigBackend;
+        let rig_in = |class: &str, read_back: &str| {
+            let mut e = tempo_app::engine::Engine::with_settings(Settings {
+                operating_mode: OperatingMode::Phone,
+                band: "10m".into(),
+                dial_mhz: 28.400,
+                sideband: "USB".into(),
+                cat_broker_ptt: true,
+                ..Settings::default()
+            });
+            assert!(e.set_license_class(class));
+            e.set_tx_enabled(true);
+            e.observe_rig_mode(read_back.into());
+            assert!(e.tx_allowed(), "precondition: USB voice keys at 28.400");
+            super::EngineRig::new(std::sync::Arc::new(std::sync::Mutex::new(e)))
+        };
+        let line = format!(
+            "refused PTT from a client: {}",
+            tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY
+        );
+        for read_back in ["PKTUSB", "USB"] {
+            assert!(
+                !rig_in("technician", read_back).set_ptt(true),
+                "a key in {read_back} is refused"
+            );
+        }
+        assert!(
+            super::get_connection_log()
+                .iter()
+                .any(|e| e.connector == "CAT broker" && e.message == line),
+            "the log names the rule: {line}"
+        );
+        assert!(
+            rig_in("general", "PKTUSB").set_ptt(true),
+            "control: a General keys"
+        );
+    }
+
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
     /// collapsed anything that was not LSB or FM to plain USB and returned true, so VarAC or
     /// FreeDV asking for `PKTUSB`/`DATA-U` was told "done" while the rig sat in voice USB.
@@ -43323,7 +43377,7 @@ mod tests {
     /// returns can see a row that was never built.
     #[test]
     fn the_phone_and_cw_dropdowns_offer_4m_to_a_region_1_operator() {
-        use tempo_app::settings::LicenseClass::{Extra, General, Open, Technician};
+        use tempo_app::settings::LicenseClass::Open;
         use tempo_app::settings::OperatingMode::{Cw, Phone};
         let ch = |class, mode| {
             super::licensed_bands(class, mode)
@@ -43353,7 +43407,7 @@ mod tests {
         // The safety half did NOT change and is asserted here alongside: no US class may
         // KEY 4 m, and `privileges::tx_allowed` is what refuses it. Listing a band is not
         // permission to transmit on it.
-        for class in [Technician, General, Extra] {
+        for class in tempo_app::privileges::US_CLASSES {
             for mode in [Phone, Cw] {
                 let row = ch(class, mode).unwrap_or_else(|| {
                     panic!("{class:?} {mode:?}: 4 m must be listed so it can be listened to")
@@ -43366,10 +43420,11 @@ mod tests {
                     !tempo_app::privileges::tx_allowed(class, row.dial_mhz, mode),
                     "{class:?} {mode:?}: the US has no 4 m allocation — the gate must refuse"
                 );
+                // A Novice holds no 2 m: 1.25 m and 23 cm are its VHF-and-up bands.
                 assert!(
                     super::licensed_bands(class, mode)
                         .iter()
-                        .any(|c| c.band == "2m"),
+                        .any(|c| c.group == "VHF" && c.tx),
                     "control: {class:?} {mode:?} still gets the VHF bands they do hold"
                 );
             }
@@ -49945,6 +50000,40 @@ mod tests {
         assert_eq!(v["schema"], 1);
     }
 
+    /// A backup carries the licence class as the settings file does: an older build restores a
+    /// Novice or an Advanced as a class it knows (Technician, General) instead of refusing the whole
+    /// backup over a token it cannot read, and this build restores the exact class.
+    #[test]
+    fn a_backup_restores_the_exact_licence_class_and_an_older_build_reads_it() {
+        use tempo_app::settings::{LicenseClass, Settings};
+        for (class, older) in [
+            (LicenseClass::Novice, "technician"),
+            (LicenseClass::Advanced, "general"),
+            (LicenseClass::Technician, "technician"),
+            (LicenseClass::General, "general"),
+            (LicenseClass::Extra, "extra"),
+            (LicenseClass::Open, "open"),
+        ] {
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Default::default()
+            };
+            // What `export_settings_bundle` puts under "settings".
+            let v = serde_json::to_value(s.for_storage()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(older),
+                "{class:?} in the backup"
+            );
+            assert_eq!(
+                super::settings_from_bundle(v).unwrap().license_class,
+                class,
+                "{class:?} restored"
+            );
+        }
+    }
+
     /// A backup from before the cluster node choice restores the way an upgraded settings file
     /// loads: a list the operator wrote stays theirs, a list Nexus shipped goes automatic, and a
     /// backup that carries the choice keeps it. A restore runs none of `Settings::load`'s
@@ -55129,7 +55218,9 @@ mod tests {
             ("TX off", |e| e.set_tx_enabled(false), "TX is off"),
             (
                 "outside the licence",
-                |e| e.set_license_class("technician"),
+                |e| {
+                    e.set_license_class("technician");
+                },
                 "TX locked",
             ),
             (

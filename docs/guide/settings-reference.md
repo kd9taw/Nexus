@@ -57,8 +57,8 @@ Your operator identity, license privileges, and default frequency.
   **State or province** under [Your station data](#your-station-data) on the
   Contesting tab, because a contest entry can be somewhere else: a portable or mobile
   entry types where it is operating there, and this one stays as it is.
-- **License Class** — Technician / General / Amateur Extra (US), or **Open** for
-  non-US operators. "Sets your transmit privileges + the licensed-segment band
+- **License Class** — Technician / General / Amateur Extra (US), the grandfathered
+  Novice and Advanced classes, or **Open** for non-US operators. "Sets your transmit privileges + the licensed-segment band
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
   in every Nexus TX path, checked against the Part 97 sub-band table — Nexus
   refuses to key the rig outside your segment.

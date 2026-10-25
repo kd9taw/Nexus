@@ -821,11 +821,7 @@ mod tests {
     fn no_us_license_class_may_key_a_4m_channel() {
         use crate::privileges::{phone_home, segment_start, tx_allowed};
         use crate::settings::{LicenseClass, OperatingMode};
-        let us = [
-            LicenseClass::Technician,
-            LicenseClass::General,
-            LicenseClass::Extra,
-        ];
+        let us = crate::privileges::US_CLASSES;
         // Judge the EMISSION, not the dial: USB data sits ~1.5 kHz above the dial.
         let off = 0.0015;
         for class in us {

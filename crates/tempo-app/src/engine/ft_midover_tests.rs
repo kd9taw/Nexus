@@ -292,7 +292,7 @@ fn an_over_that_would_not_be_planned_now_is_never_rebuilt() {
         ("the TX offset moved", |e| e.set_tx_offset(1700.0)),
         ("the dial moved", |e| e.settings.dial_mhz = 14.0745),
         ("a licence that refuses it", |e| {
-            e.set_license_class("technician")
+            e.set_license_class("technician");
         }),
     ];
     for (what, change) in cases {

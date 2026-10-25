@@ -941,14 +941,46 @@ impl Settings {
 /// operators outside the US — picked via the wizard's "Outside the US" choice). Defaults
 /// to **Open** so an upgrading install is never silently TX-locked; the lockout is
 /// operator-declared (wizard on first run, or Settings).
+///
+/// ⛔ ON DISK, `licenseClass` HOLDS ONLY A CLASS EVERY BUILD KNOWS. Builds before Novice and
+/// Advanced know Technician, General, Extra and Open, and a token they do not know fails the
+/// whole file: it is set aside and the build starts from defaults, the callsign blanked and the
+/// class `Open`, the lockout off. So the file stores Novice as Technician and Advanced as General
+/// ([`Self::as_older_builds_read_it`]) and the exact class beside it under
+/// [`LICENSE_CLASS_EXACT_KEY`] ([`Settings::for_storage`], [`Settings::take_exact_license_class`]).
+/// Everywhere else, the screens included, the class is itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LicenseClass {
+    /// Grandfathered: no new Novice licences are issued, but existing ones renew.
+    Novice,
     Technician,
     General,
+    /// Grandfathered, as Novice is.
+    Advanced,
     Extra,
     #[default]
     Open,
+}
+
+/// The key the settings file and a settings backup carry the exact [`LicenseClass`] under, beside
+/// the older-build class in `licenseClass`. Only this build and newer read it; an older build
+/// carries it untouched in its catch-all ([`Settings::unknown`]) and never sees it.
+pub const LICENSE_CLASS_EXACT_KEY: &str = "licenseClassExact";
+
+impl LicenseClass {
+    /// The class a build from before Novice and Advanced reads in place of this one: the nearest
+    /// class it knows. Advanced as General, which has every privilege General has and less; Novice
+    /// as Technician, the class 47 CFR 97.301(e) gives the same HF rows. ⚠️ An older build then
+    /// holds a Novice to a Technician's privileges, 6 m, 2 m and 70 cm included, because no class
+    /// it knows is narrower — and `Open`, the only other answer, holds them to nothing.
+    pub fn as_older_builds_read_it(self) -> LicenseClass {
+        match self {
+            LicenseClass::Novice => LicenseClass::Technician,
+            LicenseClass::Advanced => LicenseClass::General,
+            other => other,
+        }
+    }
 }
 
 /// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig in
@@ -7135,6 +7167,9 @@ impl Settings {
         for key in RETIRED_KEYS {
             s.unknown.remove(*key);
         }
+        // The exact licence class beside the older-build one ([`LicenseClass`]); before anything
+        // reads the class.
+        s.take_exact_license_class();
         // One-time migration: drop the known-bad free-text "CQ"/"CQ CQ" macro chips that
         // persisted from older defaults. A CQ now goes through the structured Call-CQ
         // button; a free-text "CQ CQ" chip went out as a chunked, gridless "DE <CALL>
@@ -7316,6 +7351,42 @@ impl Settings {
         s
     }
 
+    /// These settings as the settings file and a settings backup store them: `licenseClass` the
+    /// class an older build reads ([`LicenseClass::as_older_builds_read_it`]), and the exact class
+    /// under [`LICENSE_CLASS_EXACT_KEY`] when the two differ. A shipped class writes no second key,
+    /// so its file is what it was.
+    pub fn for_storage(&self) -> Settings {
+        let mut s = self.clone();
+        let older = s.license_class.as_older_builds_read_it();
+        s.unknown.remove(LICENSE_CLASS_EXACT_KEY);
+        if older != s.license_class {
+            s.unknown.insert(
+                LICENSE_CLASS_EXACT_KEY.to_string(),
+                serde_json::to_value(s.license_class).expect("a licence class serializes"),
+            );
+            s.license_class = older;
+        }
+        s
+    }
+
+    /// Read back what [`Self::for_storage`] wrote: the exact class under
+    /// [`LICENSE_CLASS_EXACT_KEY`] replaces `licenseClass` when it is a class this build knows AND
+    /// an older build would read it as the class `licenseClass` holds. Otherwise `licenseClass`
+    /// stands: an older build, which carries the key without seeing it, changed the class since
+    /// it was written (Novice beside `extra`), or the value is not one any build wrote. The key is
+    /// taken out of [`Self::unknown`] either way, so it never reaches a screen, whose form would
+    /// send it back stale beside a class the operator had just changed.
+    pub fn take_exact_license_class(&mut self) {
+        let Some(v) = self.unknown.remove(LICENSE_CLASS_EXACT_KEY) else {
+            return;
+        };
+        if let Ok(exact) = serde_json::from_value::<LicenseClass>(v) {
+            if exact.as_older_builds_read_it() == self.license_class {
+                self.license_class = exact;
+            }
+        }
+    }
+
     /// The scratch path [`save`](Self::save) writes before renaming it onto `path`.
     ///
     /// **Per-PROCESS, never a fixed `settings.json.tmp`** — the [`tempo_core::logbook`] shape.
@@ -7377,7 +7448,7 @@ impl Settings {
         }
         // Persist a copy whose active radio profile reflects any edits made through the flat rig/
         // audio form (the mirror invariant). `self` is left untouched.
-        let mut to_save = self.clone();
+        let mut to_save = self.for_storage();
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = Self::tmp_path(path);
@@ -13580,6 +13651,215 @@ mod tests {
         );
         assert_eq!(Settings::load(&path).mycall, "W9XYZ");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The grandfathered Novice and Advanced classes come back from disk as themselves — never as
+    /// `Open`, which would drop the Part 97 lockout — while the file's `licenseClass` holds only a
+    /// class an older build knows (Novice as Technician, Advanced as General) and the exact class
+    /// rides in `licenseClassExact` beside it.
+    #[test]
+    fn novice_and_advanced_round_trip_through_the_settings_file() {
+        for (class, older, exact) in [
+            (LicenseClass::Novice, "technician", "novice"),
+            (LicenseClass::Advanced, "general", "advanced"),
+        ] {
+            let dir = scratch_dir_ready("licence_round_trip");
+            let path = dir.join("settings.json");
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Settings::default()
+            };
+            s.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                (&v["licenseClass"], &v[LICENSE_CLASS_EXACT_KEY]),
+                (&serde_json::json!(older), &serde_json::json!(exact)),
+                "the stored tokens"
+            );
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{exact}: the file was set aside"
+            );
+            assert_eq!(back.license_class, class, "{exact} came back as itself");
+            // The exact key is the file's business: the settings the screens read carry the exact
+            // class in `licenseClass` and no second key a form could send back stale.
+            let screen = serde_json::to_value(&back).unwrap();
+            assert_eq!(screen["licenseClass"], serde_json::json!(exact));
+            assert!(
+                screen.get(LICENSE_CLASS_EXACT_KEY).is_none(),
+                "{exact}: the exact key reached the screens"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// ⛔ AN OLDER BUILD READS A FILE THIS ONE WROTE. Builds before Novice and Advanced know only
+    /// Technician, General, Extra and Open; a token they did not know failed the whole parse, which
+    /// sets the file aside and starts from defaults — the callsign blanked and the class `Open`,
+    /// the lockout off. Their shape is simulated here: the four-class enum and the catch-all that
+    /// carries every key it has no field for. The file parses, holds the most a Novice or Advanced
+    /// may do that the older build can name (never more than General for an Advanced), and when
+    /// the older build saves it back unchanged, this build still reads the exact class.
+    #[test]
+    fn an_older_build_reads_novice_and_advanced_as_a_class_it_knows() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+        #[serde(rename_all = "lowercase")]
+        enum OlderClass {
+            Technician,
+            General,
+            Extra,
+            #[default]
+            Open,
+        }
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase", default)]
+        #[derive(Default)]
+        struct OlderSettings {
+            mycall: String,
+            license_class: OlderClass,
+            #[serde(flatten)]
+            unknown: serde_json::Map<String, serde_json::Value>,
+        }
+        for (class, older) in [
+            (LicenseClass::Novice, OlderClass::Technician),
+            (LicenseClass::Advanced, OlderClass::General),
+            (LicenseClass::Technician, OlderClass::Technician),
+            (LicenseClass::General, OlderClass::General),
+            (LicenseClass::Extra, OlderClass::Extra),
+            (LicenseClass::Open, OlderClass::Open),
+        ] {
+            let dir = scratch_dir_ready("licence_downgrade");
+            let path = dir.join("settings.json");
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Settings::default()
+            };
+            s.save(&path).expect("saved");
+            let text = std::fs::read_to_string(&path).unwrap();
+            let old: OlderSettings = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{class:?}: an older build could not read it: {e}"));
+            assert_eq!(
+                old.license_class, older,
+                "{class:?} as an older build reads it"
+            );
+            assert_eq!(old.mycall, "W9XYZ", "{class:?}: the callsign");
+            // The older build saves it back, carrying the key it does not know.
+            std::fs::write(&path, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(kept_aside_in(&dir).is_empty(), "{class:?}: set aside");
+            assert_eq!(
+                back.license_class, class,
+                "{class:?} after an older build's save"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The exact class wins only while the older-build class beside it still says what it said
+    /// when it was written. An older build that changed the class (it cannot see the exact key and
+    /// carries it untouched) changed it for real, so its class wins; a value this build cannot
+    /// read is ignored the same way, and neither sets the file aside.
+    #[test]
+    fn a_stale_or_unreadable_exact_class_falls_back_to_the_older_build_class() {
+        for (stored, exact, want) in [
+            // Written as Novice, then changed to Extra in an older build.
+            ("extra", serde_json::json!("novice"), LicenseClass::Extra),
+            // Written as Advanced, then changed to Technician in an older build.
+            (
+                "technician",
+                serde_json::json!("advanced"),
+                LicenseClass::Technician,
+            ),
+            // Written as Advanced, then changed to Open in an older build.
+            ("open", serde_json::json!("advanced"), LicenseClass::Open),
+            // A value no build wrote.
+            (
+                "general",
+                serde_json::json!("wizard"),
+                LicenseClass::General,
+            ),
+            ("technician", serde_json::json!(7), LicenseClass::Technician),
+            // Still as written.
+            (
+                "general",
+                serde_json::json!("advanced"),
+                LicenseClass::Advanced,
+            ),
+            (
+                "technician",
+                serde_json::json!("novice"),
+                LicenseClass::Novice,
+            ),
+        ] {
+            let dir = scratch_dir_ready("licence_stale_exact");
+            let path = dir.join("settings.json");
+            let file = serde_json::json!({
+                "mycall": "W9XYZ",
+                "licenseClass": stored,
+                LICENSE_CLASS_EXACT_KEY: exact,
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{stored} {exact}: set aside"
+            );
+            assert_eq!(back.license_class, want, "{stored} beside {exact}");
+            assert!(
+                !back.unknown.contains_key(LICENSE_CLASS_EXACT_KEY),
+                "{stored} {exact}: the exact key was kept as an unknown one"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// ⛔ AN EXISTING OPERATOR'S CLASS IS UNCHANGED BY THE NEW CLASSES. A file written before
+    /// Novice and Advanced existed, with each class that shipped (and with none at all), loads as
+    /// the class it holds and saves the same token back; no class is renamed or remapped.
+    #[test]
+    fn a_stored_class_from_before_novice_and_advanced_loads_unchanged() {
+        for (token, class) in [
+            (Some("technician"), LicenseClass::Technician),
+            (Some("general"), LicenseClass::General),
+            (Some("extra"), LicenseClass::Extra),
+            (Some("open"), LicenseClass::Open),
+            (None, LicenseClass::Open),
+        ] {
+            let dir = scratch_dir_ready("licence_migration");
+            let path = dir.join("settings.json");
+            let mut file = serde_json::json!({"mycall": "W9XYZ", "dialMhz": 14.074});
+            if let Some(token) = token {
+                file["licenseClass"] = serde_json::json!(token);
+            }
+            std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{token:?}: the file was set aside"
+            );
+            assert_eq!(
+                back.license_class, class,
+                "{token:?} loaded as another class"
+            );
+            assert_eq!(back.mycall, "W9XYZ");
+            back.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(token.unwrap_or("open")),
+                "{token:?}: the token saved back changed"
+            );
+            assert!(
+                v.get(LICENSE_CLASS_EXACT_KEY).is_none(),
+                "{token:?}: a shipped class wrote the exact key"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// A unique scratch directory under the OS temp dir — no external tempfile crate, and

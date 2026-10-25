@@ -110,6 +110,10 @@ pub enum Refusal {
     RadioMic,
     /// Outside the licence: for an audio over, the whole transmit passband (item 5).
     Licence,
+    /// A key where the licence allows only CW and single-sideband voice (a Novice or a
+    /// Technician from 28.3 to 28.5 MHz), whatever the radio's mode (item 5): a program's audio
+    /// may be a picture or data, which Nexus cannot tell from voice.
+    VoiceOnly,
     /// Something else owns the transmitter (item 6).
     Owner,
     /// The clock repair holds transmit (item 7).
@@ -165,6 +169,10 @@ impl Refusal {
             Refusal::Connection => "this radio's connection cannot transmit",
             Refusal::RadioMic => "the radio takes its transmit audio from its own microphone",
             Refusal::Licence => "outside the licence",
+            Refusal::VoiceOnly => {
+                "on 28.3–28.5 MHz a Novice or Technician license allows only CW and \
+                 single-sideband voice, so Nexus does not let other programs key the radio there"
+            }
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",
             Refusal::OnHold => "a device just signed in and holds transmit",

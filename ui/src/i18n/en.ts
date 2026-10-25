@@ -834,8 +834,10 @@ export const EN = {
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
   // These are only what the operator reads. Keep the US class names recognisable.
+  'settings.station.licenseClass.novice': 'Novice (US, grandfathered)',
   'settings.station.licenseClass.technician': 'Technician (US)',
   'settings.station.licenseClass.general': 'General (US)',
+  'settings.station.licenseClass.advanced': 'Advanced (US, grandfathered)',
   'settings.station.licenseClass.extra': 'Amateur Extra (US)',
   'settings.station.licenseClass.open': 'Open — no transmit limits',
   'settings.station.licenseClass.hint':
@@ -7889,10 +7891,14 @@ export const EN = {
   'setup.finish.license.title': 'What’s your license?',
   'setup.finish.license.sub':
     'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+  'setup.finish.license.novice': 'Novice',
+  'setup.finish.license.novice.blurb': 'US, grandfathered — CW on 80/40/15 m, 10 m, 222 MHz, 23 cm',
   'setup.finish.license.technician': 'Technician',
   'setup.finish.license.technician.blurb': 'US — limited HF + full VHF/UHF',
   'setup.finish.license.general': 'General',
   'setup.finish.license.general.blurb': 'US — most HF privileges',
+  'setup.finish.license.advanced': 'Advanced',
+  'setup.finish.license.advanced.blurb': 'US, grandfathered — General plus more HF phone',
   'setup.finish.license.extra': 'Amateur Extra',
   'setup.finish.license.extra.blurb': 'US — full privileges',
   'setup.finish.license.open': 'Outside the US',

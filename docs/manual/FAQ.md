@@ -87,7 +87,7 @@ No. The engine starts passive on every launch regardless of saved settings. For 
 
 ### I am a non-US operator. Does the license lockout block me?
 
-The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments, including the 2026 60 m subband). Non-US operators should leave the class set to Open or select Open in Settings → Station. No other national band plans are currently modelled in the privilege engine.
+The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments and the grandfathered Novice and Advanced ones, including the 2026 60 m subband; transmitter power limits are not checked). Non-US operators should leave the class set to Open or select Open in Settings → Station. No other national band plans are currently modelled in the privilege engine.
 
 ---
 
