@@ -440,13 +440,44 @@ pub fn mark_self_filled(r: &mut QsoRecord, tag: &str) {
 }
 
 /// Take `tag` off the [`SELF_FILLED_FIELD`] list: it is the operator's value now.
-pub fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
+fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
     let tags: Vec<String> = self_filled(r)
         .into_iter()
         .filter(|t| *t != tag)
         .map(str::to_string)
         .collect();
     set_self_filled(r, tags);
+}
+
+/// The own grid typed in the confirm-before-log popup, read as an edit (operator rulings,
+/// 2026-10-27). `held` is the held contact with the typed grid already in `my_grid`, and `filled`
+/// the contact as it was held. A grid that differs from the held one is the operator's: it loses
+/// the [`SELF_FILLED_FIELD`] mark and goes to LoTW, as an edit in the Logbook editor makes it
+/// ([`fields_set`]). One left as it was keeps the mark.
+///
+/// One exception, for a grid NEXUS filled in only (it carries the mark): a typed grid that is
+/// just the start of it, in any case and with any spaces (EN52 over EN52ab), counts as left
+/// alone, and the contact keeps the grid as filled in, so TQSL is never handed a shorter grid
+/// than its Station Location. A held grid without the mark is the operator's own, and a
+/// shortening of it is logged as typed.
+pub fn settle_popup_my_grid(held: &mut QsoRecord, filled: &QsoRecord) {
+    let norm = |g: &Option<String>| {
+        g.as_deref().map(|g| {
+            g.split_whitespace()
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+    };
+    let (typed, was) = (norm(&held.my_grid), norm(&filled.my_grid));
+    let nexus_filled = self_filled(filled).contains(&"MY_GRIDSQUARE");
+    if let (true, Some(typed), Some(was)) = (nexus_filled, &typed, &was) {
+        if !typed.is_empty() && was.starts_with(typed.as_str()) {
+            held.my_grid = filled.my_grid.clone();
+        }
+    }
+    if norm(&held.my_grid) != was {
+        unmark_self_filled(held, "MY_GRIDSQUARE");
+    }
 }
 
 /// The record as the LoTW upload sends it: without the own-station fields Nexus filled in itself

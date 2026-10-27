@@ -18805,29 +18805,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 .to_ascii_uppercase(),
         )
         .filter(|g| !g.is_empty());
-        // A grid changed here is the operator's, as an edit in the Logbook editor makes it
-        // (operator ruling, 2026-10-27): it loses the "Nexus filled this in" mark and goes to
-        // LoTW. One left as the hold filled it keeps the mark, and so does one typed as only the
-        // start of it, in any case and with any spaces (EN52 over EN52ab; operator ruling, the
-        // same day): that counts as unchanged, and the contact logs the grid as filled in, so
-        // TQSL is not handed a shorter grid than its Station Location. The Logbook editor keeps
-        // its own rule (`tempo_core::logbook`), where any difference is an edit.
-        let grid_of = |g: &Option<String>| {
-            g.as_deref().map(|g| {
-                g.split_whitespace()
-                    .collect::<String>()
-                    .to_ascii_uppercase()
-            })
-        };
-        let (typed, filled) = (grid_of(&held.my_grid), grid_of(&was.record.my_grid));
-        if let (Some(typed), Some(filled)) = (&typed, &filled) {
-            if !typed.is_empty() && filled.starts_with(typed.as_str()) {
-                held.my_grid = was.record.my_grid.clone();
-            }
-        }
-        if grid_of(&held.my_grid) != filled {
-            tempo_core::logbook::unmark_self_filled(&mut held, "MY_GRIDSQUARE");
-        }
+        // A grid changed here is the operator's, as an edit in the Logbook editor makes it, and
+        // a shortened grid Nexus filled in counts as unchanged (operator rulings, 2026-10-27).
+        tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
@@ -58866,6 +58846,40 @@ mod tests {
                 lotw.my_grid.as_deref(),
                 to_lotw,
                 "typed {typed:?}: the grid LoTW gets"
+            );
+        }
+    }
+
+    /// The shortened-grid rule above is for a grid NEXUS filled in only. A held grid without the
+    /// "Nexus filled this in" mark is the operator's own, and one they shorten in the popup is
+    /// logged as they typed it, never put back. CONTROL: the marked grid is still put back.
+    #[test]
+    fn a_shortened_grid_is_put_back_only_when_nexus_filled_it_in() {
+        for (marked, logged_as) in [(true, "EN52AB"), (false, "EN52")] {
+            let mut e = Engine::new("K2DEF", "EN52ab", 0);
+            e.settings.prompt_to_log = true;
+            complete_a_contact(&mut e, "W9XYZ", 1);
+            let held = &mut e.pending_logs.front_mut().expect("held").record;
+            assert_eq!(
+                tempo_core::logbook::self_filled(held),
+                ["MY_GRIDSQUARE"],
+                "premise: the hold marks the grid it filled in"
+            );
+            if !marked {
+                held.extra
+                    .retain(|(k, _)| k != tempo_core::logbook::SELF_FILLED_FIELD);
+            }
+            let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+            sent.my_grid = Some("EN52".into());
+            assert!(confirm_held(&mut e, sent.into()));
+            assert_eq!(
+                e.stored_log()[0]
+                    .my_grid
+                    .as_deref()
+                    .map(str::to_ascii_uppercase)
+                    .as_deref(),
+                Some(logged_as),
+                "marked {marked}: logged"
             );
         }
     }
