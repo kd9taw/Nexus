@@ -54424,6 +54424,154 @@ mod tests {
         assert_eq!(park_of("DL1ABC", "CW"), None);
     }
 
+    /// The board as the command reads it, every outside feed empty, with ONE kept needs model
+    /// across reads (`kept`), as the app keeps one for its whole run.
+    fn own_radio_board(
+        engine: &SharedEngine,
+        kept: &crate::Tally<(), propagation::LogNeeds>,
+    ) -> Vec<propagation::NeedAlert> {
+        use std::sync::{Arc, Mutex};
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let spots: crate::SharedSpots =
+            Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
+        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        crate::read_need_alerts(engine_lock(engine), kept, &live, &region, &spots, &ota)
+            .expect("the board reads")
+    }
+
+    fn tags_on(
+        alerts: &[propagation::NeedAlert],
+        call: &str,
+        band: &str,
+    ) -> Vec<propagation::NeedTag> {
+        alerts
+            .iter()
+            .filter(|a| a.call == call && a.band == band)
+            .flat_map(|a| a.tags.clone())
+            .collect()
+    }
+
+    /// Field report (1.21.0): a station heard on 12 m FT8 in FL02 kept its GRID pill after two
+    /// 12 m contacts with it. Logging a contact in that grid on that band must clear it on the
+    /// next read of the board, through the kept needs model the app holds across reads.
+    #[test]
+    fn a_contact_in_the_heard_grid_clears_the_grid_need_on_that_band() {
+        use propagation::NeedTag::NewGrid;
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        let slot = crate::now_unix() as u64 / 15;
+        e.hear_for_test("CQ CO6XX FL02", -5, slot);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        let before = own_radio_board(&engine, &kept);
+        assert!(
+            tags_on(&before, "CO6XX", "12m").contains(&NewGrid),
+            "premise: FL02 is new on 12 m: {before:?}"
+        );
+        let mut rec = pass_qso("CO6XX", "FL02gm", "12m", 24.915);
+        rec.mode = "FT8".into();
+        rec.when_unix = crate::now_unix() as u64;
+        engine_lock(&engine).log_qso(rec);
+        let after = own_radio_board(&engine, &kept);
+        assert!(
+            !tags_on(&after, "CO6XX", "12m").contains(&NewGrid),
+            "FL02 is worked on 12 m now: {after:?}"
+        );
+    }
+
+    /// Every other per-contact need pill on the same path — new one, zone, band, mode — clears
+    /// on the next read once the contact that fills it is logged. Each step logs one contact
+    /// and asserts both what it filled (gone) and what it did not (still there).
+    #[test]
+    fn each_need_pill_clears_on_the_next_read_once_its_contact_is_logged() {
+        use propagation::NeedTag::{NewBand, NewEntity, NewGrid, NewMode, NewZone};
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        e.hear_for_test("CQ CO6XX FL02", -5, crate::now_unix() as u64 / 15);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        let log = |band: &str, mode: &str, grid: &str| {
+            let mut rec = pass_qso("CO6XX", grid, band, 24.915);
+            rec.mode = mode.into();
+            rec.when_unix = crate::now_unix() as u64;
+            engine_lock(&engine).log_qso(rec);
+        };
+        let tags = || tags_on(&own_radio_board(&engine, &kept), "CO6XX", "12m");
+
+        let t = tags();
+        assert!(
+            t.contains(&NewEntity) && t.contains(&NewZone) && t.contains(&NewGrid),
+            "{t:?}"
+        );
+        // Cuba on 10 m FT4, in another grid: the entity is worked, nothing on 12 m is.
+        log("10m", "FT4", "FL20");
+        let t = tags();
+        assert!(!t.contains(&NewEntity), "{t:?}");
+        assert!(
+            t.contains(&NewBand) && t.contains(&NewZone) && t.contains(&NewGrid),
+            "{t:?}"
+        );
+        // 12 m FT4 in FL02: band, zone and grid are worked on 12 m; FT8 is still a new mode.
+        log("12m", "FT4", "FL02");
+        let t = tags();
+        assert!(
+            !t.contains(&NewBand) && !t.contains(&NewZone) && !t.contains(&NewGrid),
+            "{t:?}"
+        );
+        assert!(
+            t.contains(&NewMode),
+            "FT8 has never been worked with Cuba: {t:?}"
+        );
+        // 12 m FT8: the mode clears too.
+        log("12m", "FT8", "FL02");
+        let t = tags();
+        assert!(!t.contains(&NewMode), "{t:?}");
+    }
+
+    /// The same, with the contact made and logged the way the operator makes it: a double-click
+    /// on the CQ, the report back, and Log QSO.
+    #[test]
+    fn a_contact_logged_from_the_sequencer_clears_the_grid_need() {
+        use propagation::NeedTag::NewGrid;
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        let mut s = e.settings().clone();
+        s.prompt_to_log = false;
+        e.apply_settings(s);
+        let slot = crate::now_unix() as u64 / 15;
+        e.hear_for_test("CQ CO6XX FL02", -5, slot);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        assert!(tags_on(&own_radio_board(&engine, &kept), "CO6XX", "12m").contains(&NewGrid));
+        {
+            let mut e = engine_lock(&engine);
+            e.call_station_ctx("CO6XX", Some("FL02"), Some("CQ CO6XX FL02"), Some(-5), None)
+                .expect("called");
+            e.hear_for_test("KD9TAW CO6XX +16", 16, slot + 2);
+            assert!(e.log_current_qso(), "premise: the contact logs");
+        }
+        let log = engine.lock().unwrap().stored_log();
+        let rec = log.iter().find(|r| r.call == "CO6XX").expect("logged");
+        assert_eq!(
+            (rec.band.as_str(), rec.mode.as_str(), rec.grid.as_deref()),
+            ("12m", "FT8", Some("FL02")),
+            "premise: the contact carries the grid the station sent"
+        );
+        let after = own_radio_board(&engine, &kept);
+        assert!(
+            !tags_on(&after, "CO6XX", "12m").contains(&NewGrid),
+            "FL02 is worked on 12 m now: {after:?}"
+        );
+    }
+
     /// ⭐ A LIVE ACTIVATOR IN A STATE THE LOG STILL NEEDS IS A NEW STATE ON BOTH PATHS (operator,
     /// 2026-10-06). An activator the cluster, the skimmers or the radio also hears is that row, and
     /// the feed's own row for the same call, band and mode is then dropped as a duplicate. So the
