@@ -64,6 +64,12 @@ impl GridSource {
 pub(crate) struct HeldQso {
     pub(crate) record: QsoRecord,
     pub(crate) grid_source: GridSource,
+    /// This contact may only be OFFERED, in the popup, whatever the confirm setting says: our
+    /// 73 to a roger the operator clicked, with no report exchanged (`roger_click_73_sent`).
+    /// Nothing logs it but the operator's confirm, not even the queue cap
+    /// ([`Engine::hold_pending_log`]), and the journal keeps the mark, so a restart does not
+    /// lose it (operator ruling, 2026-10-27).
+    pub(crate) confirm_only: bool,
 }
 
 impl HeldQso {
@@ -71,6 +77,7 @@ impl HeldQso {
         Self {
             record,
             grid_source,
+            confirm_only: false,
         }
     }
 }
@@ -98,6 +105,10 @@ struct PendingRecord {
     /// which is the safe answer for a grid whose provenance nobody recorded.
     #[serde(default)]
     grid_source: GridSource,
+    /// [`HeldQso::confirm_only`]. Written only when set, so a journal of ordinary contacts is
+    /// what it was before the mark existed, and one written before reads back unmarked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    confirm_only: bool,
 }
 
 /// The journal's contacts: this build's queue, or the single record older builds wrote.
@@ -113,6 +124,7 @@ fn pending_record(held: &HeldQso) -> PendingRecord {
     PendingRecord {
         record: held.record.clone().into(),
         grid_source: held.grid_source,
+        confirm_only: held.confirm_only,
     }
 }
 
@@ -126,15 +138,22 @@ impl PendingRecord {
         let freq_rx_mhz = self.record.freq_rx_mhz;
         let mut record: QsoRecord = self.record.into();
         record.freq_rx_mhz = freq_rx_mhz;
-        HeldQso::new(record, grid_source)
+        HeldQso {
+            confirm_only: self.confirm_only,
+            ..HeldQso::new(record, grid_source)
+        }
     }
 }
 
 pub(super) fn pending_qso_json(
     record: &QsoRecord,
     grid_source: GridSource,
+    confirm_only: bool,
 ) -> serde_json::Result<String> {
-    serde_json::to_string(&pending_record(&HeldQso::new(record.clone(), grid_source)))
+    serde_json::to_string(&pending_record(&HeldQso {
+        confirm_only,
+        ..HeldQso::new(record.clone(), grid_source)
+    }))
 }
 
 /// The WHOLE confirm-before-log queue, oldest first — what the desktop journals on every hold
@@ -154,6 +173,7 @@ pub struct PendingLogIdentity {
     identity: Arc<()>,
     record: Arc<QsoRecord>,
     grid_source: GridSource,
+    confirm_only: bool,
     path: Option<PathBuf>,
     epoch: u64,
 }
@@ -267,7 +287,11 @@ impl PendingJournalWrite {
     /// Call without holding Engine. No rename or change to the live journal yet.
     pub fn prepare(self) -> io::Result<PreparedPendingJournal> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let text = pending_qso_json(self.pending.record(), self.pending.grid_source)?;
+        let text = pending_qso_json(
+            self.pending.record(),
+            self.pending.grid_source,
+            self.pending.confirm_only,
+        )?;
         let path = self
             .pending
             .path
@@ -361,6 +385,7 @@ impl Engine {
     pub(super) fn reset_qso_log_identity(&mut self) {
         self.qso_logged = false;
         self.qso_log_epoch = next_identity();
+        self.roger_click = None;
     }
 
     pub fn current_qso_log_key(&self) -> Option<String> {
@@ -389,6 +414,7 @@ impl Engine {
             identity: self.pending_log_identity.clone(),
             record: Arc::new(held.record.clone()),
             grid_source: held.grid_source,
+            confirm_only: held.confirm_only,
             path: self.station.pending_qso_path.clone(),
             epoch: self.pending_log_epoch,
         })
@@ -438,7 +464,7 @@ impl Engine {
         let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
-        if self.settings.prompt_to_log {
+        if self.settings.prompt_to_log || held.confirm_only {
             // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
             self.stamp_hold(&mut held.record);
             self.replace_pending_log(Some(held));
@@ -757,7 +783,7 @@ mod tests {
         .pop()
         .expect("one contact");
         assert!(held.contest.is_some(), "premise: a contest contact");
-        let text = pending_qso_json(&held, GridSource::LookedUp).expect("serializes");
+        let text = pending_qso_json(&held, GridSource::LookedUp, false).expect("serializes");
         assert_eq!(text.matches("\"contest\"").count(), 1, "{text}");
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&text);

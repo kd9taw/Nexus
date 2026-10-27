@@ -849,6 +849,7 @@ fn clearing_drops_an_abandoned_contact_with_the_same_station_only() {
             freqs: (14.074, None),
             mode: "FT8".into(),
             end_unix: 0,
+            confirm_only: false,
         });
         e.clear_dx_call();
         assert_eq!(
@@ -857,4 +858,101 @@ fn clearing_drops_an_abandoned_contact_with_the_same_station_only() {
             "abandoned contact with {stalled}"
         );
     }
+}
+
+/// Click the station's RR73 (or RRR) to us, send our 73, then fold the next period.
+fn click_their_roger_and_send_73(e: &mut Engine, theirs: &str) {
+    e.ingest_decodes_for_test(&[dec_snr(theirs, -9)], 21);
+    e.call_station(DX);
+    assert_eq!(
+        key_once(e, 22),
+        "7P8RU KR4FQG 73",
+        "premise: our 73 goes out"
+    );
+    e.ingest_decodes_for_test(&[], 25);
+}
+
+/// Operator ruling, 2026-10-27: after a click on the station's RR73 or RRR, our 73 is offered for
+/// the log, as WSJT-X opens its Log QSO dialog as the 73 starts (mainwindow.cpp:8237-8249). No
+/// report was exchanged in this contact, so it is never logged silently: with auto-log on it goes
+/// to the confirm-before-log popup even with that setting off, and the operator decides.
+#[test]
+fn a_73_sent_from_a_click_on_their_roger_is_offered_for_the_log() {
+    for theirs in ["KR4FQG 7P8RU RR73", "KR4FQG 7P8RU RRR"] {
+        let mut e = ft8();
+        e.settings.auto_log = true;
+        e.settings.prompt_to_log = false;
+        click_their_roger_and_send_73(&mut e, theirs);
+        assert!(
+            e.stored_log().is_empty(),
+            "{theirs:?}: never logged silently"
+        );
+        let shown = e
+            .snapshot()
+            .pending_log
+            .unwrap_or_else(|| panic!("{theirs:?}: offered in the popup"));
+        assert_eq!(shown.call, DX);
+        e.ingest_decodes_for_test(&[], 27);
+        assert_eq!(e.pending_logs.len(), 1, "{theirs:?}: offered once");
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        assert!(e.confirm_pending_log(&key, shown.into()));
+        assert_eq!(e.stored_log().len(), 1, "{theirs:?}: logged once confirmed");
+    }
+}
+
+/// Operator ruling, 2026-10-27: with auto-log off, the Log button on that contact opens the
+/// popup too (WSJT-X's Log QSO button opens its dialog), whatever the confirm setting says.
+#[test]
+fn the_log_button_after_a_click_on_their_roger_opens_the_popup() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    click_their_roger_and_send_73(&mut e, "KR4FQG 7P8RU RR73");
+    assert!(
+        e.snapshot().pending_log.is_none(),
+        "auto-log off: nothing offered by itself"
+    );
+    assert!(e.log_current_qso(), "the Log button takes it");
+    assert!(e.stored_log().is_empty(), "not logged without the confirm");
+    assert_eq!(
+        e.snapshot().pending_log.map(|r| r.call).as_deref(),
+        Some(DX),
+        "offered in the popup"
+    );
+}
+
+/// CONTROL, operator ruling 2026-10-27: the phantom-contact guard stays for every other path. A
+/// logger's UDP Reply on the same RR73 line sends the same 73 and offers nothing, and neither the
+/// fold nor the Log button logs or holds it; nor is a click's contact offered before our 73 has
+/// gone out.
+#[test]
+fn the_phantom_guard_still_holds_off_the_roger_click() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = true;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    e.answer_udp_reply(DX, "KR4FQG 7P8RU RR73", -9, None)
+        .expect("the Reply is taken");
+    assert_eq!(
+        key_once(&mut e, 22),
+        "7P8RU KR4FQG 73",
+        "premise: our 73 goes out"
+    );
+    e.ingest_decodes_for_test(&[], 25);
+    assert!(
+        e.snapshot().pending_log.is_none(),
+        "UDP Reply: nothing offered"
+    );
+    assert!(!e.log_current_qso(), "UDP Reply: the Log button refuses");
+    assert!(e.stored_log().is_empty() && e.pending_logs.is_empty());
+
+    let mut c = ft8();
+    c.settings.auto_log = false;
+    c.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    c.call_station(DX);
+    assert!(
+        !c.log_current_qso(),
+        "before our 73 is on the air: nothing to log"
+    );
+    assert!(c.pending_logs.is_empty());
 }
