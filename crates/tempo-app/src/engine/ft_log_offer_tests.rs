@@ -181,3 +181,76 @@ fn remotes_log_qso_journals_the_offer_only_mark() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(back, [(DX.into(), true)]);
 }
+
+/// An S&P contact with `DX` from their CQ (decoded at `slot`) to our 73: reports both ways.
+fn work_dx_to_73(e: &mut Engine, slot: u64) {
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG30", -12)], slot);
+    e.call_station(DX);
+    key_once(e, slot + 1);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU -15", -9)], slot + 4);
+    assert_eq!(
+        key_once(e, slot + 5),
+        "7P8RU KR4FQG R-09",
+        "premise: our roger"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], slot + 8);
+    assert_eq!(
+        key_once(e, slot + 9),
+        "7P8RU KR4FQG 73",
+        "premise: our 73"
+    );
+    e.ingest_decodes_for_test(&[], slot + 12);
+}
+
+/// (3) WSJT-X offers the contact on the FIRST 73 only. Their RR73 repeated after the offer was
+/// confirmed and logged: a click sends 73 again, and nothing is offered, by the fold or the Log
+/// button.
+#[test]
+fn a_repeated_rr73_clicked_after_the_offer_is_not_offered_again() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_and_send_73(&mut e, 21);
+    let shown = e.snapshot().pending_log.expect("premise: offered");
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.confirm_pending_log(&key, shown.into()));
+    assert_eq!(e.stored_log().len(), 1, "premise: logged once confirmed");
+
+    click_their_rr73_and_send_73(&mut e, 41);
+    assert!(
+        e.snapshot().pending_log.is_none(),
+        "the repeat is not offered again"
+    );
+    assert!(!e.log_current_qso(), "nor by the Log button");
+    assert_eq!(e.stored_log().len(), 1);
+    assert!(e.pending_logs.is_empty());
+}
+
+/// (3) The same after an ordinary contact that logged itself: a click on their repeated RR73
+/// sends 73 again, and no report-less copy is offered.
+#[test]
+fn a_repeated_rr73_clicked_after_a_logged_contact_is_not_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    assert_eq!(calls_logged(&e), [DX], "premise: the contact logged itself");
+    click_their_rr73_and_send_73(&mut e, 41);
+    assert!(e.snapshot().pending_log.is_none(), "nothing offered");
+    assert!(!e.log_current_qso(), "nor by the Log button");
+    assert_eq!(e.stored_log().len(), 1);
+}
+
+/// (3) CONTROL: the first 73 to that station on ANOTHER band is offered: the rule is per contact,
+/// and a contact on another band is another contact.
+#[test]
+fn a_first_73_to_the_same_station_on_another_band_is_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    e.set_frequency(7.074, "40m", "USB");
+    click_their_rr73_and_send_73(&mut e, 41);
+    let shown = e.snapshot().pending_log.expect("offered on 40 m");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "40m"));
+}

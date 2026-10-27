@@ -3631,6 +3631,13 @@ pub struct Engine {
     /// contact is OFFERED for the log, never logged without the confirm
     /// ([`roger_click_73_sent`]). Cleared by every new contact, and by a logger's UDP Reply.
     roger_click: Option<String>,
+    /// The station and band of the FT8/FT4 contact most recently logged, held in the popup or
+    /// offered there ([`Self::observe_modes`], [`Self::on_band_change`], the Log button). A click
+    /// on that station's repeated RR73 or RRR on that band sends our 73 again but is not offered
+    /// again: WSJT-X opens its Log QSO dialog on the FIRST 73 only (`m_sentFirst73`,
+    /// `widgets/mainwindow.cpp` 3.0.2 8105-8108), never on a 73 sent after a 73 (operator ruling,
+    /// 2026-10-27). Replaced by the next such contact.
+    closed_ft_contact: Option<(String, String)>,
     /// The partner the CQ run most recently moved on from, held only long enough to answer
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
@@ -6680,6 +6687,7 @@ impl Engine {
             stalled_qso: None,
             band_change_qso: None,
             roger_click: None,
+            closed_ft_contact: None,
             recent_partner: None,
             cleared_dx_calls: Vec::new(),
             pending_logs: VecDeque::new(),
@@ -18101,8 +18109,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.reset_qso_log_identity();
         self.qso_report_sent = opening_report;
         self.qso_start_unix = None; // mainwindow.cpp:9271
-        self.roger_click = matches!(context, Some((Msg::Rrr { .. } | Msg::Rr73 { .. }, _)))
-            .then(|| dxcall.to_string());
+        // Not when this station's contact on this band was already logged or offered: our 73
+        // then repeats a 73 already sent ([`Self::closed_ft_contact`]).
+        let first_73 = !self
+            .closed_ft_contact
+            .as_ref()
+            .is_some_and(|(call, band)| same_call(call, dxcall) && *band == self.settings.band);
+        self.roger_click = (first_73
+            && matches!(context, Some((Msg::Rrr { .. } | Msg::Rr73 { .. }, _))))
+        .then(|| dxcall.to_string());
         self.follow_tx_selection(None);
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
@@ -18946,6 +18961,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let grid_source = GridSource::of(dxgrid.as_deref());
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
+        self.closed_ft_contact = Some((rec.call.clone(), self.settings.band.clone()));
         self.qso_start_unix = None;
         let mut held = HeldQso::new(rec, grid_source);
         held.confirm_only = !reported;
@@ -20164,6 +20180,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         "band change: the complete contact is logged on its own band",
                     );
                     self.qso_logged = true;
+                    self.closed_ft_contact = Some((dx.clone(), made_on.0.clone()));
                     self.auto_log_complete_contact(dx, dxgrid, rx_report, Some(made_on));
                 } else if rx_report.is_some()
                     || self.qso_report_sent.is_some()
@@ -31332,6 +31349,10 @@ contact yourself."
                     // qso_logged, so a CQ run resumes on the next slot.
                     if self.settings.auto_log {
                         self.qso_logged = true;
+                        self.closed_ft_contact = station
+                            .dxcall
+                            .clone()
+                            .map(|c| (c, self.settings.band.clone()));
                         completed = Some((
                             station.dxcall.clone().unwrap_or_default(),
                             station.dxgrid.clone(),
@@ -31345,6 +31366,10 @@ contact yourself."
                     // Our 73 to a roger the operator clicked: offered, never logged by itself
                     // ([`roger_click_73_sent`]).
                     self.qso_logged = true;
+                    self.closed_ft_contact = station
+                        .dxcall
+                        .clone()
+                        .map(|c| (c, self.settings.band.clone()));
                     offered = Some((
                         station.dxcall.clone().unwrap_or_default(),
                         station.dxgrid.clone(),
