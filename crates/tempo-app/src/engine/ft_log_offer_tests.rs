@@ -251,6 +251,146 @@ fn a_first_73_to_the_same_station_on_another_band_is_offered() {
     assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "40m"));
 }
 
+/// An S&P contact with `call` from their CQ (decoded at `slot`) to our 73: reports both ways.
+fn work_to_73(e: &mut Engine, call: &str, slot: u64) {
+    e.ingest_decodes_for_test(&[dec_snr(&format!("CQ {call} FN31"), -12)], slot);
+    e.call_station(call);
+    key_once(e, slot + 1);
+    e.ingest_decodes_for_test(&[dec_snr(&format!("KR4FQG {call} -15"), -9)], slot + 4);
+    key_once(e, slot + 5);
+    e.ingest_decodes_for_test(&[dec_snr(&format!("KR4FQG {call} RR73"), -9)], slot + 8);
+    assert_eq!(
+        key_once(e, slot + 9),
+        format!("{call} KR4FQG 73"),
+        "premise: our 73"
+    );
+    e.ingest_decodes_for_test(&[], slot + 12);
+}
+
+/// (3) The first-73 rule is WSJT-X's (`m_sentFirst73`, `widgets/mainwindow.cpp` 3.0.2 8105-8108):
+/// our previous over to the station was already a 73, so this 73 is not offered. A contact with
+/// another station completing in between changes nothing: it is not this station's.
+#[test]
+fn a_repeated_rr73_clicked_after_another_contact_is_still_not_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    work_to_73(&mut e, "W2XYZ", 31);
+    assert_eq!(calls_logged(&e), [DX, "W2XYZ"], "premise: both logged");
+    click_their_rr73_and_send_73(&mut e, 51);
+    assert!(
+        e.snapshot().pending_log.is_none(),
+        "the repeat is not offered"
+    );
+    assert!(!e.log_current_qso(), "nor by the Log button");
+    assert_eq!(e.stored_log().len(), 2);
+}
+
+/// (3) …and a 73 whose previous over to the station was NOT a 73 is a first 73, offered, even
+/// with the station's earlier contact logged: here we called them again and they answered our
+/// call with RR73.
+#[test]
+fn a_first_73_after_a_new_call_to_a_logged_station_is_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG30", -12)], 41);
+    e.call_station(DX);
+    assert_eq!(
+        key_once(&mut e, 42),
+        "7P8RU KR4FQG EM85",
+        "premise: a new call to them"
+    );
+    click_their_rr73_and_send_73(&mut e, 45);
+    let shown = e.snapshot().pending_log.expect("a first 73: offered");
+    assert_eq!(shown.call, DX);
+    assert_eq!(e.stored_log().len(), 1, "not logged without the confirm");
+}
+
+/// (3) A first 73 to ANOTHER station right after one to this station is that station's first 73,
+/// and is offered.
+#[test]
+fn a_first_73_to_another_station_right_after_one_is_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    click_their_rr73_and_send_73(&mut e, 21);
+    assert_eq!(e.pending_logs.len(), 1, "premise: offered");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W2XYZ RR73", -9)], 31);
+    e.call_station("W2XYZ");
+    assert_eq!(key_once(&mut e, 32), "W2XYZ KR4FQG 73", "premise: our 73");
+    e.ingest_decodes_for_test(&[], 35);
+    let calls: Vec<_> = e
+        .pending_logs
+        .iter()
+        .map(|h| h.record.call.clone())
+        .collect();
+    assert_eq!(calls, [DX, "W2XYZ"], "both offered");
+}
+
+/// (3) A contact a band change set aside with auto-log and the prompt off, then confirmed from
+/// Log QSO: a click on their repeated RR73 back on that band sends 73 again and offers nothing.
+#[test]
+fn a_repeat_after_a_set_aside_contact_was_logged_is_not_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_send_73_and_change_band(&mut e);
+    assert!(e.log_current_qso(), "premise: Log QSO offers it");
+    let shown = e.snapshot().pending_log.expect("premise: in the popup");
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.confirm_pending_log(&key, shown.into()));
+    assert_eq!(calls_logged(&e), [DX], "premise: logged");
+    e.set_frequency(14.074, "20m", "USB");
+    click_their_rr73_and_send_73(&mut e, 41);
+    assert!(!e.log_current_qso(), "the repeat is not offered");
+    assert!(e.pending_logs.is_empty());
+    assert_eq!(e.stored_log().len(), 1);
+}
+
+/// With auto-log and the prompt off, a contact run to 73 with reports both ways waits for Log
+/// QSO. A click on their repeated RR73 then sends 73 again, and Log QSO still logs the COMPLETE
+/// contact, reports and all: the click no longer swaps it for a report-less copy.
+#[test]
+fn a_reclick_keeps_the_complete_contact_for_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    assert!(e.stored_log().is_empty(), "premise: waits for Log QSO");
+    click_their_rr73_and_send_73(&mut e, 41);
+    assert!(e.log_current_qso(), "Log QSO takes the complete contact");
+    assert!(e.pending_logs.is_empty(), "logged, not offered");
+    let logged = e.stored_log();
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0].call, DX);
+    assert_eq!(
+        (logged[0].rst_sent.as_deref(), logged[0].rst_rcvd.as_deref()),
+        (Some("-09"), Some("-15")),
+        "with the reports exchanged"
+    );
+    assert!(!e.log_current_qso(), "once");
+}
+
+/// …and our 73 to a roger the operator clicked, replaced by a click on another station before Log
+/// QSO was pressed, stays for Log QSO OFFER-ONLY: it opens the popup and is not logged.
+#[test]
+fn a_click_elsewhere_keeps_the_roger_contact_offer_only() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_and_send_73(&mut e, 21);
+    e.ingest_decodes_for_test(&[dec_snr("CQ W2XYZ FN31", -12)], 31);
+    e.call_station("W2XYZ");
+    assert!(e.log_current_qso(), "Log QSO takes it");
+    assert!(e.stored_log().is_empty(), "not logged without the confirm");
+    let shown = e.snapshot().pending_log.expect("offered in the popup");
+    assert_eq!(shown.call, DX);
+    assert!(e.pending_logs[0].confirm_only, "offer-only");
+}
+
 /// Click their RR73 (decoded at 21), send our 73 at 22, and change band to 40 m before the next
 /// fold: the fold that would have offered the contact never comes for it.
 fn click_their_rr73_send_73_and_change_band(e: &mut Engine) {
