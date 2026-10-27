@@ -5947,7 +5947,8 @@ export interface AppSnapshot {
    * retransmissions). Drives the HARQ stats readout. */
   harqRescues: number
   /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
-   * QSO"). Present only with promptToLog on; drives the confirm popup. */
+   * QSO"). Present with promptToLog on, and whatever it says for a contact that may only be
+   * offered (our 73 after a click on the station's RR73 or RRR); drives the confirm popup. */
   pendingLog?: LoggedQso | null
   /** How many contacts have been logged WITHOUT the operator's confirmation since they last
    * answered the popup, because the confirm-before-log queue was full (the cap logs the

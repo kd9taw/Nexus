@@ -8789,10 +8789,10 @@ export const EN = {
   'settings.digital.logging.title': 'Logging Behavior',
   'settings.digital.autoLog.label': 'Auto-log QSOs',
   'settings.digital.autoLog.hint':
-    'Log each completed contact to the ADIF logbook by itself. A contact with no reports exchanged (your 73 after clicking their RR73) is never logged by itself: it waits for your confirm in the popup.',
+    'Log each completed contact to the ADIF logbook by itself. A contact you opened by clicking their RR73 or RRR exchanges no reports and is never logged by itself: it waits for your confirm in the popup.',
   'settings.digital.promptToLog.label': 'Prompt before logging',
   'settings.digital.promptToLog.hint':
-    'Open a popup to check and edit each completed contact, and log it only when you confirm (WSJT-X “Prompt me to log QSO”). It opens by itself with Auto-log on or off. With both off, nothing is logged until you press Log.',
+    'Open a popup to check and edit each completed contact (WSJT-X “Prompt me to log QSO”). It opens by itself with Auto-log on or off and holds each contact until you log or discard it; if 64 are left waiting, the oldest is logged. With both off, nothing is logged until you press Log.',
   // WSJT-X's "dB reports to comments" (Settings ▸ Reporting there), quoted so an operator
   // migrating recognises it; the format is WSJT-X's own, byte for byte.
   'settings.digital.reportsToComments.label': 'dB reports to comments',
