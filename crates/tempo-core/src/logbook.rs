@@ -440,7 +440,7 @@ pub fn mark_self_filled(r: &mut QsoRecord, tag: &str) {
 }
 
 /// Take `tag` off the [`SELF_FILLED_FIELD`] list: it is the operator's value now.
-fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
+pub fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
     let tags: Vec<String> = self_filled(r)
         .into_iter()
         .filter(|t| *t != tag)

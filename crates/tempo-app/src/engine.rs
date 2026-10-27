@@ -18736,6 +18736,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 .to_ascii_uppercase(),
         )
         .filter(|g| !g.is_empty());
+        // A grid changed here is the operator's, as an edit in the Logbook editor makes it
+        // (operator ruling, 2026-10-27): it loses the "Nexus filled this in" mark and goes to
+        // LoTW. One left as the hold filled it keeps the mark.
+        let grid_of = |g: &Option<String>| g.as_deref().map(|g| g.trim().to_ascii_uppercase());
+        if grid_of(&held.my_grid) != grid_of(&was.record.my_grid) {
+            tempo_core::logbook::unmark_self_filled(&mut held, "MY_GRIDSQUARE");
+        }
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
@@ -58592,6 +58599,37 @@ mod tests {
         assert_eq!(logged.tx_power, Some(50.0));
         assert_eq!(logged.operator.as_deref(), Some("N0OP"));
         assert_eq!(logged.my_grid.as_deref(), Some("EN52"));
+    }
+
+    /// Operator ruling, 2026-10-27: the popup's own grid is read as the Logbook editor reads an
+    /// edit. A grid typed there that differs from the one Nexus filled in is the operator's: it
+    /// loses the "Nexus filled this in" mark and goes to LoTW. One left as filled (or differing
+    /// only in case and spaces) keeps the mark and stays out of the LoTW upload.
+    #[test]
+    fn a_grid_changed_in_the_popup_goes_to_lotw_and_one_left_alone_does_not() {
+        for (typed, to_lotw) in [
+            (None, None),
+            (Some(" fn31 "), None),
+            (Some("en52"), Some("EN52")),
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.prompt_to_log = true;
+            complete_a_contact(&mut e, "W9XYZ", 1);
+            let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+            assert_eq!(sent.my_grid.as_deref(), Some("FN31"), "premise: filled in");
+            if let Some(g) = typed {
+                sent.my_grid = Some(g.into());
+            }
+            assert!(confirm_held(&mut e, sent.into()));
+            let logged = &e.stored_log()[0];
+            let lotw = tempo_core::logbook::without_self_filled(logged);
+            assert_eq!(
+                lotw.my_grid.as_deref(),
+                to_lotw,
+                "typed {typed:?}: the grid LoTW gets (logged {:?})",
+                logged.my_grid
+            );
+        }
     }
 
     /// ⭐ **The propagation mode is STICKY**, as WSJT-X's "Retain" keeps it: the next contact held
