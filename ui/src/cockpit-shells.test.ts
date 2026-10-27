@@ -562,7 +562,10 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
       // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
       const v = finalDecl(shell, '--cockpit-fill-min')
       expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+      // An em length, or RTTY's short-cockpit knob over one (`var(--rtty-fill-floor, 10em)`, set in
+      // cockpit-panes.css `.rtty-cockpit`): the stock em value stands wherever nothing sets the knob, as on
+      // PSK and SSTV, which share this rule.
+      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-floor, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
     })
   }
 })

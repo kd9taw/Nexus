@@ -1013,12 +1013,10 @@ export function AwardsView({
           <span className="aw-note">{t('awards.satVucc.note.tagging')}</span>
         </div>
 
-        {/* The ✓ gates on CARD-confirmed groups: the IOTA programme credits QSL cards
-            and Club Log matching — never LoTW — so a LoTW-only confirmation tracks
-            here but cannot earn the award (N9UM audit). */}
-        <div
-          className={`aw-card${(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS ? ' aw-card-elite' : ''}`}
-        >
+        {/* The ✓ gates on groups confirmed by LoTW or card: the IOTA programme credits QSL
+            cards and, since May 2020, LoTW-matched contacts; eQSL never counts. The card-only
+            count stays on the note. */}
+        <div className={`aw-card${aw.iota.confirmed >= IOTA_ISLANDS ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
             <Globe2 size={13} aria-hidden="true" /> {AWARD_NAMES.iota}
           </span>
@@ -1033,7 +1031,7 @@ export function AwardsView({
             />
           </div>
           <span className="aw-note">
-            {(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS
+            {aw.iota.confirmed >= IOTA_ISLANDS
               ? t('awards.iota.note.achieved', { cards: aw.iota.cardConfirmed ?? 0 })
               : t('awards.iota.note.worked', {
                   worked: aw.iota.worked,

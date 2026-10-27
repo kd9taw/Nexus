@@ -2839,9 +2839,9 @@ export const EN = {
   'awards.satVucc.note.tagging':
     'Pass contacts are tagged automatically when logged on the bird’s downlink (ISS excepted — no LoTW designator to derive)',
   'awards.iota.note.achieved':
-    'IOTA ✓ (card-confirmed) · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+    'IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
   'awards.iota.note.worked':
-    '{{worked}} worked · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+    '{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',

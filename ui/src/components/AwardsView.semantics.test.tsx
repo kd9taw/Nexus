@@ -135,11 +135,11 @@ describe('award-tile semantics (N9UM audit)', () => {
     expect(screen.getByText(/1 more confirmed needed — Honor Roll entry at 331/)).toBeTruthy()
   })
 
-  it('the IOTA checkmark gates on card confirmations, and says why', async () => {
+  it('the IOTA note keeps the card count and says which confirmations count', async () => {
     await renderAwards()
-    // 286 log-confirmed but only 41 on cards → no ✓, and the card count is on screen.
-    expect(screen.queryByText(/^IOTA ✓$/)).toBeNull()
-    expect(screen.getByText(/41 on cards — IOTA credits cards \/ Club Log, not\s+LoTW/)).toBeTruthy()
+    // 286 confirmed by LoTW or card, 41 of them on cards: the card count and the rule are on
+    // screen (the ✓ itself: AwardsView.iota.test.tsx).
+    expect(screen.getByText(/41 on cards — IOTA credits LoTW and cards, not\s+eQSL/)).toBeTruthy()
   })
 
   it('5-Band DXCC presents the weakest-band standing with its meaning', async () => {

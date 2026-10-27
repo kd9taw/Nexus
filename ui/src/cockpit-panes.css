@@ -786,6 +786,31 @@
   gap: var(--space-3);
 }
 
+/* RTTY'S FLOORS ON A SHORT COCKPIT (2026-10-27). RTTY is region-less: its decoded text and log strip are
+   bare fill frames under the waterfall strip, so their floors and the strip's are what decide whether the
+   cockpit fits or its deficit valve scrolls the header away. At their stock sizes (10em each, the strip
+   8em) the three need more than RTTY has at 1920×1080 with the UI at 150 %, and the cockpit scrolled 117 px
+   there; until the tuning scope moved beside the waterfall (2026-10-26) the scope's own knobs lowered all
+   three to 6em in RTTY's default layout, which is what made it fit. These two hold that geometry with or
+   without the scope, read in exactly two places in styles.css (the shell rule shared with PSK and SSTV, and
+   the strip rule shared with PSK and JTTY, each falling back to its stock value, so those cockpits are
+   untouched):
+     --rtty-fill-floor   the two frames' floor (`--cockpit-fill-min`): the stock 10em wherever the cockpit
+                         has room for it, yielding with the cockpit's height to 6em where it has not. 30em is
+                         what everything else in the shell stands at once the strip is down to its floor
+                         (header, TX strip, dock, dividers and gaps: 336 px, measured in Chrome at 1920×1080 /
+                         150 %, plus the strip's 6em), so the frames share what is left; every window the
+                         app fits by itself keeps 10em, so the text and the log strip split exactly as before.
+     --rtty-strip-floor  the strip's floor, 6em: a header and a drawable canvas. Its divider still stops at
+                         8em (WATERFALL_SPLIT_MIN); the strip goes lower only when the shell has no other room.
+   Where even the 6em floors do not fit, the shell's deficit valve scrolls, as it did in 1.21.0. No stop
+   control is in a frame or the strip: Stop TX, Tune and the latch are in the sticky TX strip, the Esc/Stop
+   macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it. */
+.rtty-cockpit {
+  --rtty-fill-floor: max(6em, min(10em, calc((100% - 30em) / 2)));
+  --rtty-strip-floor: 6em;
+}
+
 /* THE RTTY TUNING SCOPE (⊞ `tuning`): RIGHT of the waterfall, in the strip its divider sizes (operator,
    2026-10-26: the waterfall keeps the common 25 % height like every other mode, the scope keeps its size, and
    the waterfall gives up that width; RTTY only). The strip is the row `.rtty-wf-row` (styles.css, beside the

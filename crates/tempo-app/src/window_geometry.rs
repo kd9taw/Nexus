@@ -164,6 +164,27 @@ pub fn restore(
     primary: Option<WorkArea>,
     min: (f64, f64),
 ) -> Option<Restored> {
+    restore_in_frame(saved, monitors, primary, min, (0.0, 0.0))
+}
+
+/// [`restore`] for a window whose `frame` — its title bar and borders, outer size less inner, in
+/// logical px — is known: the frame counts against the work area too, so the WHOLE window fits.
+///
+/// Capping the inner size alone left a window a frame wider and taller than the screen: a record
+/// saved maximised holds the maximised inner box (the work area less the frame) at the frame's
+/// negative offset, and reopened un-maximised it ran its borders off both sides and its bottom
+/// edge under the taskbar. And a box whose top-left still landed was replayed however far its
+/// size carried it past the right or bottom edge. So, against the monitor it lands on: the inner
+/// box is capped at the work area less the frame, and a box that would run past the right or
+/// bottom edge is pulled back until its far edge, frame included, is on it (never past the left
+/// or top edge, where a snapped window's few px of overhang are left as they were).
+pub fn restore_in_frame(
+    saved: Option<WindowGeometry>,
+    monitors: &[WorkArea],
+    primary: Option<WorkArea>,
+    min: (f64, f64),
+    frame: (f64, f64),
+) -> Option<Restored> {
     // Plausibility is enforced HERE rather than in `load`, so every path into a
     // restore — file, test, future caller — goes through the same gate as the monitor
     // clamp. "Clamped on load" is one place or it is nowhere.
@@ -177,10 +198,11 @@ pub fn restore(
     // screen must not reopen overhanging a 768-tall laptop. If no monitor resolves at all
     // (headless, API error) leave the size as saved; the shell's `min_inner_size` and the
     // window manager are still downstream of us.
+    let (fx, fy) = (frame.0.max(0.0), frame.1.max(0.0));
     if let Some(m) = hit.or(primary) {
         let (lw, lh) = m.logical_size();
-        w = w.min(lw);
-        h = h.min(lh);
+        w = w.min(lw - fx);
+        h = h.min(lh - fy);
     }
     // Floor LAST, so it always wins: a work area smaller than the window minimum (or a
     // small-but-plausible saved rect) can never produce a window the operator is not
@@ -188,10 +210,28 @@ pub fn restore(
     // and is what `min_inner_size` would do anyway; a sub-minimum window is ours.
     w = w.max(min.0);
     h = h.max(min.1);
+    // Pulled back from the right and bottom edges of the monitor it landed on, in that monitor's
+    // logical px (the unit `lands_on` reads the saved point in). Only ever towards the top-left
+    // and never past that edge, so a box that is simply too big for the screen (the floor above
+    // beat the cap) sits at its top-left corner rather than off the other side.
+    let position = hit.map(|m| {
+        let sf = if m.scale > 0.0 { m.scale } else { 1.0 };
+        let (left, top) = (m.x / sf, m.y / sf);
+        let (lw, lh) = m.logical_size();
+        let pull = |at: f64, edge: f64, room: f64, size: f64| {
+            let furthest = edge + room - size;
+            if at > furthest {
+                furthest.max(edge)
+            } else {
+                at
+            }
+        };
+        (pull(g.x, left, lw, w + fx), pull(g.y, top, lh, h + fy))
+    });
     Some(Restored {
         w,
         h,
-        position: hit.map(|_| (g.x, g.y)),
+        position,
         maximized: g.maximized,
     })
 }
@@ -471,6 +511,73 @@ mod tests {
         assert_eq!(r.position, None, "no monitor landed → centre");
     }
 
+    // ---- restore: the whole box on the monitor ----------------------------------------
+
+    /// A box whose top-left lands but whose size runs it past the right and bottom edges opens
+    /// pulled back onto the monitor, the same size: a window wider or taller than the screen it
+    /// is on, with its controls off the edge, is what the clamp exists to prevent.
+    #[test]
+    fn a_box_that_runs_past_the_right_and_bottom_edges_is_pulled_back_on() {
+        let g = geom(1600.0, 900.0, 1000.0, 400.0);
+        let r = restore(Some(g), &[primary()], Some(primary()), MIN_INNER).unwrap();
+        assert_eq!((r.w, r.h), (1600.0, 900.0));
+        assert_eq!(r.position, Some((320.0, 140.0)));
+    }
+
+    /// The window's frame (its title bar and borders: outer size less inner) is part of the box
+    /// the monitor has to hold. Capping only the INNER size at the work area left a window that
+    /// had been saved maximised (the maximised box, at the frame's negative offset) reopening a
+    /// frame wider and taller than the screen whenever it opened un-maximised.
+    #[test]
+    fn the_frame_counts_against_the_work_area() {
+        let frame = (16.0, 39.0);
+        // Saved maximised on this very screen: the maximised inner box at its outer offset.
+        let g = WindowGeometry {
+            maximized: true,
+            ..geom(1920.0, 1009.0, -8.0, -8.0)
+        };
+        let r = restore_in_frame(Some(g), &[primary()], Some(primary()), MIN_INNER, frame).unwrap();
+        assert_eq!(
+            (r.w, r.h),
+            (1920.0 - 16.0, 1040.0 - 39.0),
+            "inner + frame = the work area"
+        );
+        assert_eq!(
+            r.position,
+            Some((-8.0, -8.0)),
+            "a snapped corner stays where it was"
+        );
+        assert!(r.maximized);
+        // Its far edges are on the monitor: right = x + w + frame, bottom = y + h + frame.
+        let (x, y) = r.position.unwrap();
+        assert!(x + r.w + frame.0 <= 1920.0 && y + r.h + frame.1 <= 1040.0);
+        // Moved right, the same box comes back flush with the right edge, frame and all.
+        let g = geom(1904.0, 1001.0, 200.0, 100.0);
+        let r = restore_in_frame(Some(g), &[primary()], Some(primary()), MIN_INNER, frame).unwrap();
+        assert_eq!(r.position, Some((0.0, 0.0)));
+        // A box centred on the primary (its position dropped) is sized to fit there, frame included.
+        let g = geom(2400.0, 1300.0, 5000.0, 100.0);
+        let r = restore_in_frame(Some(g), &[laptop()], Some(laptop()), MIN_INNER, frame).unwrap();
+        assert_eq!(r.position, None);
+        assert_eq!((r.w, r.h), (1366.0 - 16.0, 728.0 - 39.0));
+    }
+
+    /// In logical px of the monitor it lands on: on a 150 % screen the work area is 2/3 its
+    /// physical size, and the box is pulled back against that.
+    #[test]
+    fn the_pull_back_is_in_the_landing_monitors_logical_px() {
+        let hidpi = WorkArea {
+            x: 0.0,
+            y: 0.0,
+            w: 2880.0,
+            h: 1560.0,
+            scale: 1.5,
+        };
+        let g = geom(1600.0, 900.0, 1000.0, 300.0);
+        let r = restore(Some(g), &[hidpi], Some(hidpi), MIN_INNER).unwrap();
+        assert_eq!(r.position, Some((1920.0 - 1600.0, 1040.0 - 900.0)));
+    }
+
     // ---- restore: the grabbable-sliver boundary -------------------------------------
 
     #[test]
@@ -570,7 +677,9 @@ mod tests {
             )
             .unwrap()
             .position,
-            Some((2800.0, 100.0))
+            // It lands, so it is kept on the secondary, pulled back from that monitor's logical
+            // right edge (2880) by its own width: 2800 + 1400 would run 1320 px off the desktop.
+            Some((2880.0 - 1400.0, 100.0))
         );
         assert_eq!(
             restore(

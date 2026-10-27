@@ -205,6 +205,84 @@ export function CockpitHeader({
   // same rule the wheel-tune gate above already follows.
   const onAir = isOnAir(radio)
 
+  const actionsBox = (
+        <div className="ch-actions">
+          {actions}
+
+          {/* The amplifier's own controls. Rendered from `snap` with no prop of its own, so every
+              cockpit using this header gets it and none can forget to pass it — and it renders
+              NOTHING when no amplifier is configured, which is almost every station.
+              ⛔ Not a stop control: an amplifier in standby does not end a transmission.
+              Its buttons lock on the ON AIR sign's answer, so every over Nexus keys locks them —
+              `transmitting || rigKeyed` left them live through a voice over, CW, RTTY, PSK, SSTV,
+              a tune and Nexus's PTT whenever the amplifier's own flag did not say keyed (an
+              Elecraft has none). Operator, 2026-09-27: it only ever refuses more. */}
+          <AmpStrip
+            amp={snap?.radio?.amp ?? null}
+            radioTransmitting={onAir}
+          />
+
+          {power && (
+            <label
+              className={`cockpit-pwr${power.unit === '%' ? ' ph-power' : ''}`}
+              title={
+                power.title ??
+                t('cockpit.header.power.title', {
+                  label: power.label ?? t('cockpit.header.power.label'),
+                })
+              }
+            >
+              <span>{power.label ?? t('cockpit.header.power.label')}</span>
+              <WheelRange wheelStep={power.wheelStep} disabled={powerValue == null}
+                type="range"
+                min={0}
+                max={power.unit === '%' ? 100 : 1}
+                step={power.unit === '%' ? 1 : 0.01}
+                // Drive-unit sliders (tx_level, 0-1) use a square-law curve between slider
+                // POSITION and the underlying level: position^2 -> level, sqrt(level) ->
+                // position. The real hardware-usable drive range (0 up to just past where ALC
+                // engages) sits in only the bottom ~15-20% of a linear slider, so this spreads
+                // that critical region across most of the travel. The '%' RF-power sliders
+                // (Phone/SSTV) are a different backend value entirely and stay linear. What
+                // tx_level itself means is completely unchanged - only how far the slider
+                // travels to reach a given level. Rounded to the 0.01 step grid: an unrounded
+                // sqrt() rarely lands on a step boundary, and a step-mismatched range input
+                // value fails HTML5 constraint validation.
+                value={
+                  power.unit === 'drive'
+                    ? Math.round(Math.sqrt(powerValue ?? 0) * 100) / 100
+                    : powerValue ?? 0
+                }
+                style={{ visibility: powerValue == null ? 'hidden' : undefined }}
+                onChange={(e) => {
+                  const raw = Number(e.target.value)
+                  power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                }}
+                onPointerDown={() => { power.onPointerDown?.() }}
+                onPointerUp={() => { power.onPointerUp?.() }}
+                aria-label={power.label ?? t('cockpit.header.power.label')}
+              />
+              <span className="cockpit-pwr-val">
+                {powerValue == null ? '—' : power.unit === '%' ? `${Math.round(powerValue)}%` : `${Math.round(powerValue * 100)}%`}
+              </span>
+            </label>
+          )}
+
+          {catStatus ?? (
+            <span
+              className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
+              // `catDetail` is the backend's own report and passes through verbatim.
+              title={
+                radio.catDetail ||
+                (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
+              }
+            >
+              {catOk ? CAT_OK : CAT_BAD}
+            </span>
+          )}
+        </div>
+  )
+
   return (
     <div className="cockpit-header">
       <div className="ch-identity">{modeIndicator}</div>
@@ -249,83 +327,14 @@ export function CockpitHeader({
         <div className="ch-band">{bandControl}</div>
       </div>
 
-      {children != null && <div className="ch-mode-extras">{children}</div>}
-
-      <div className="ch-actions">
-        {actions}
-
-        {/* The amplifier's own controls. Rendered from `snap` with no prop of its own, so every
-            cockpit using this header gets it and none can forget to pass it — and it renders
-            NOTHING when no amplifier is configured, which is almost every station.
-            ⛔ Not a stop control: an amplifier in standby does not end a transmission.
-            Its buttons lock on the ON AIR sign's answer, so every over Nexus keys locks them —
-            `transmitting || rigKeyed` left them live through a voice over, CW, RTTY, PSK, SSTV,
-            a tune and Nexus's PTT whenever the amplifier's own flag did not say keyed (an
-            Elecraft has none). Operator, 2026-09-27: it only ever refuses more. */}
-        <AmpStrip
-          amp={snap?.radio?.amp ?? null}
-          radioTransmitting={onAir}
-        />
-
-        {power && (
-          <label
-            className={`cockpit-pwr${power.unit === '%' ? ' ph-power' : ''}`}
-            title={
-              power.title ??
-              t('cockpit.header.power.title', {
-                label: power.label ?? t('cockpit.header.power.label'),
-              })
-            }
-          >
-            <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <WheelRange wheelStep={power.wheelStep} disabled={powerValue == null}
-              type="range"
-              min={0}
-              max={power.unit === '%' ? 100 : 1}
-              step={power.unit === '%' ? 1 : 0.01}
-              // Drive-unit sliders (tx_level, 0-1) use a square-law curve between slider
-              // POSITION and the underlying level: position^2 -> level, sqrt(level) ->
-              // position. The real hardware-usable drive range (0 up to just past where ALC
-              // engages) sits in only the bottom ~15-20% of a linear slider, so this spreads
-              // that critical region across most of the travel. The '%' RF-power sliders
-              // (Phone/SSTV) are a different backend value entirely and stay linear. What
-              // tx_level itself means is completely unchanged - only how far the slider
-              // travels to reach a given level. Rounded to the 0.01 step grid: an unrounded
-              // sqrt() rarely lands on a step boundary, and a step-mismatched range input
-              // value fails HTML5 constraint validation.
-              value={
-                power.unit === 'drive'
-                  ? Math.round(Math.sqrt(powerValue ?? 0) * 100) / 100
-                  : powerValue ?? 0
-              }
-              style={{ visibility: powerValue == null ? 'hidden' : undefined }}
-              onChange={(e) => {
-                const raw = Number(e.target.value)
-                power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
-              }}
-              onPointerDown={() => { power.onPointerDown?.() }}
-              onPointerUp={() => { power.onPointerUp?.() }}
-              aria-label={power.label ?? t('cockpit.header.power.label')}
-            />
-            <span className="cockpit-pwr-val">
-              {powerValue == null ? '—' : power.unit === '%' ? `${Math.round(powerValue)}%` : `${Math.round(powerValue * 100)}%`}
-            </span>
-          </label>
-        )}
-
-        {catStatus ?? (
-          <span
-            className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
-            // `catDetail` is the backend's own report and passes through verbatim.
-            title={
-              radio.catDetail ||
-              (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
-            }
-          >
-            {catOk ? CAT_OK : CAT_BAD}
-          </span>
-        )}
-      </div>
+      {/* The actions ride at the END of the mode controls' own wrapping row, not as a header item
+          after it. As a header item they were placed by their own width after a cluster that had
+          already taken a whole line, so whenever the cluster wrapped they took a further line of
+          their own (⊞ Panels and CAT alone at the right, a band of empty header above the scope)
+          even when the cluster's last line had room for them. Inside it, `margin-left: auto`
+          keeps them flush right on whichever line they land. With no mode controls passed they
+          stay the header item they always were. */}
+      {children != null ? <div className="ch-mode-extras">{children}{actionsBox}</div> : actionsBox}
 
       {/* The transmitter alarm the CAT status above cannot keep: on screen until the operator
           dismisses it. Its own row, LAST, so the controls above it never move when it comes or

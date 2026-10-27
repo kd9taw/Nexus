@@ -3636,9 +3636,9 @@ export interface CustomAwardsView {
  * (basic IOTA = 100 confirmed). */
 export interface IotaProgress {
   worked: number
-  /** Confirmed in the log sense (LoTW or card). */
+  /** Confirmed by LoTW or card (never eQSL) — what the IOTA programme credits. */
   confirmed: number
-  /** Card-confirmed — the only channel the IOTA program accepts (never LoTW). */
+  /** Confirmed by card alone, shown beside it. */
   cardConfirmed: number
 }
 
