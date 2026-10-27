@@ -20153,7 +20153,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 {
                     // Loggable from the Log QSO button, on the band it was made on, as an
                     // abandoned one is (#153), and not taken away by a log of another contact.
-                    self.band_change_qso = Some(self.set_aside(dx, dxgrid, rx_report, made_on));
+                    // A start time Tx2/Tx3 never set is WSJT-X's estimate, taken now while the
+                    // contact is still the sequencer's (operator ruling, 2026-10-27), as the Log
+                    // button on the live contact would take it ([`Self::start_time_at_log`]).
+                    let mut st = self.set_aside(dx, dxgrid, rx_report, made_on);
+                    st.start_unix = st
+                        .start_unix
+                        .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
+                    self.band_change_qso = Some(st);
                 }
             }
         }
@@ -78893,6 +78900,33 @@ mod band_change_ends_ft_contact_tests {
         assert!(
             off <= set_aside,
             "TIME_OFF {off} is when it was set aside ({set_aside}), not the press"
+        );
+    }
+
+    /// Operator ruling, 2026-10-27: a contact a band change set aside with Tx2 and Tx3 never
+    /// selected (a click on an R-report opens with Tx4) logs WSJT-X's start-time estimate, `now -
+    /// (4-2)*T/R - (now mod T/R)` (`mainwindow_slots.cpp:496-500`), taken as the band changes, as
+    /// the Log button on the live contact would have; not the moment of the band change.
+    #[test]
+    fn a_set_aside_contact_never_on_tx2_or_tx3_logs_wsjtx_start_estimate() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_frequency(14.074, "20m", "USB");
+        e.settings.prompt_to_log = false;
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW K1ABC R-15", -9)], 21);
+        e.call_station("K1ABC");
+        assert_eq!(e.qso_start_unix, None, "premise: Tx4, no start time set");
+        let before = now_unix_secs();
+        e.set_frequency(7.074, "40m", "USB");
+        let after = now_unix_secs();
+        assert!(e.log_current_qso(), "set aside for Log QSO");
+        let rec = e.stored_log().last().cloned().expect("logged");
+        assert_eq!((rec.call.as_str(), rec.band.as_str()), ("K1ABC", "20m"));
+        let window = wsjtx_qso_on(before, 4, 15.0)..=wsjtx_qso_on(after, 4, 15.0);
+        assert!(
+            window.contains(&rec.when_unix),
+            "TIME_ON {} is WSJT-X's estimate {window:?}",
+            rec.when_unix
         );
     }
 
