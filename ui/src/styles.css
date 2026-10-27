@@ -655,11 +655,33 @@ button.nb-chip:hover {
   border-color: var(--accent);
 }
 
+/* THE LANE NEVER MAKES THE TOP BAR TALLER. The bar is one flex-wrap row, and a wrapping row
+   places each item on a line by its max-content width, so a lane sized by its text pushed the
+   last group (FT's Auto / Tx 1st / Tx 2nd) onto a second line, and the whole screen moved down
+   a row while a message was up. So the lane takes no width of its own (`width: 0`, which is also
+   its contribution to the TX/RX group's width, the margin cancelling the group's gap before it),
+   grows into the room left on the line that group is on, and its chips shorten to an ellipsis;
+   the full text is the chip's tooltip, as it always was. The group grows only while a lane is up
+   (`:has`), so nothing moves without one.
+   ⛔ ONE EXCEPTION, AND IT IS SAFETY: the first chip's flag is never cut. A critical lane ("PTT
+   OFF FAILED — TX STOPPED") must be on screen, so the lane keeps at least its flag (the 13 px
+   icon, the chip's padding and border, and the gap the margin cancels); on a line with less room
+   than that the bar takes a line rather than hide the alarm. */
 .status-lane {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  flex: 1 1 0;
+  width: 0;
+  min-width: calc(10px + 13px + 2 * var(--space-2) + 2px);
+  margin-inline-start: -10px;
+  overflow: hidden;
+}
+.status-lane > :first-child {
+  margin-inline-start: 10px;
+}
+.txrx:has(> .status-lane) {
+  flex-grow: 1;
 }
 .status-chip {
   display: inline-flex;
@@ -672,9 +694,16 @@ button.nb-chip:hover {
   white-space: nowrap;
   border: 1px solid var(--border);
   cursor: default;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.status-chip-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .status-chip svg {
   display: block;
+  flex: 0 0 auto;
 }
 .status-chip.tier-critical {
   color: var(--alert-critical);
@@ -19019,7 +19048,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* The elastic member: fills the middle when wide, and (since both base clusters are flex:0 0 auto
    under flex-wrap) drops to its own row first when space is tight — so the mode-specific controls
-   stay in a consistent location and the base row never reflows out from under the operator. */
+   stay in a consistent location and the base row never reflows out from under the operator. It
+   carries the header's actions (`.ch-actions`) at the end of its own row, so they share its last
+   line instead of taking a line of their own; it is therefore never empty, and a passed child that
+   renders nothing (the rotor strip with no rotator: the RTTY, PSK and JS8 headers' only child)
+   leaves it holding just the actions, the header item they were before (guarded by
+   CockpitHeader.emptyExtras.test.tsx). */
 .ch-mode-extras {
   flex: 1 1 auto;
   min-width: 0;
@@ -19027,13 +19061,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
-}
-/* A passed child can render nothing: the rotor strip on a station with no rotator, which is the
-   RTTY, PSK and JS8 headers' only child. Empty, the region would still cost the header's line a
-   gap (and the Remote Quick header a grid row), so it leaves layout until something is in it.
-   Guarded by CockpitHeader.emptyExtras.test.tsx. */
-.ch-mode-extras:empty {
-  display: none;
 }
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
    control on whichever line the pair lands (#287, measured at 1024x768 110-125%). */
@@ -28313,8 +28340,10 @@ button.sat-chip:disabled {
      min-height outranks every selector, which is how the previous spelling
      (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
-     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
-  --cockpit-fill-min: 10em;
+     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn.
+     RTTY lowers it on a short cockpit through its knob (cockpit-panes.css `.rtty-cockpit`,
+     2026-10-27); PSK and SSTV never set the knob and keep the stock 10em. */
+  --cockpit-fill-min: var(--rtty-fill-floor, 10em);
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -28386,8 +28415,10 @@ button.sat-chip:disabled {
      never more than 28% of the effective viewport where there is not. It is still a real
      floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
      is a decoder with no display. Its divider's lower end is exactly this floor
-     (WATERFALL_SPLIT_MIN). */
-  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
+     (WATERFALL_SPLIT_MIN). RTTY's strip may go to 6em on a short cockpit, below its divider's
+     lower end, only when the shell has no other room (cockpit-panes.css `--rtty-strip-floor`,
+     2026-10-27); PSK and JTTY never set it. */
+  min-height: min(var(--rtty-strip-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)));
   /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
      transcript and the log strip below it are what this cockpit is for. */
   max-height: calc(0.45 * var(--vh-eff, 100vh));

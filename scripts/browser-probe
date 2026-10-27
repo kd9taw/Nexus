@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|firstrun
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header|rttyfit|firstrun
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -132,6 +132,24 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Why? opens Settings at the Radios cards, whose routing lines and switch
                         choice are on screen with nothing sideways, with a planted overflow in
                         the notice and in a card that must be caught (ui/probe/radioswitch-probe.mjs)
+  --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
+                        and 125/150 % on a 1080p screen, without and with a status-lane message,
+                        asserting the message changes neither the bar's height nor the line any
+                        group sits on, shows its flag, and nothing runs past the window, with a
+                        control (the lane's old sizing) that must make the bar taller
+                        (ui/probe/topbar-probe.mjs; it builds nothing)
+  --desktop header      the cockpit header with a CW header's controls, 1024 to 2560 wide and
+                        110-175 % on 1920×1080, asserting ⊞ Panels and CAT never take a line of
+                        their own while the mode controls' last line has room for them and
+                        nothing runs past the window, with the header's previous shape as the
+                        control (ui/probe/header-probe.mjs; it builds nothing)
+  --desktop rttyfit     the RTTY screen in the real app at the common full-screen sizes and at
+                        125/150 % on 1920×1080 and 1366×768, with the tuning scope shown and
+                        hidden, asserting the cockpit scrolls no more than 1.21.0's did there
+                        (not at all wherever 1.21.0 fit) and, where it does not scroll, Stop TX,
+                        Tune, the Esc/Stop macro, the TX latch and the scope's nudges are on
+                        screen, with a planted margin that must be caught
+                        (ui/probe/rttyfit-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -154,7 +172,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|firstrun) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch or firstrun" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header|rttyfit|firstrun) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, topbar, header, rttyfit or firstrun" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -183,6 +201,9 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
   [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
+  [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
+  [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
+  [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

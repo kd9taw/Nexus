@@ -292,6 +292,12 @@ const HOSTS: Array<{ file: string; what: string; chain: Array<Set<string>> }> = 
     what: 'Tempo',
     chain: [...ROOT, new Set(['layout', 'has-tempo-header']), new Set(['grid-header']), HEADER],
   },
+  {
+    // `scripts/browser-probe --desktop header`: the real header in a CW shell, for a real browser.
+    file: 'probe/header.tsx',
+    what: 'the header probe (a CW shell)',
+    chain: shellChain('cw-cockpit'),
+  },
 ]
 
 /** Non-test .tsx sources under src/, relative to src/. */

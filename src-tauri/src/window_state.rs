@@ -114,8 +114,13 @@ fn live_geometry(window: &tauri::WebviewWindow) -> Option<WindowGeometry> {
 /// `center()`: centring the default box and *then* resizing would leave it off-centre.)
 fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let (all, primary) = monitors(app);
-    let Some(r) = geom::restore(geom::load(&geometry_path()), &all, primary, geom::MIN_INNER)
-    else {
+    let Some(r) = geom::restore_in_frame(
+        geom::load(&geometry_path()),
+        &all,
+        primary,
+        geom::MIN_INNER,
+        frame_of(window),
+    ) else {
         // First launch, no file, or a corrupt one: leave the window exactly as the shell
         // built it. `tauri.conf.json` already centres it at its default size, and this
         // module deliberately never invents a second default.
@@ -137,6 +142,22 @@ fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         // maximise request once the window is shown. Failing here degrades to the restore
         // rect — the right size, on screen, un-maximised — never to a lost window.
         maximize_hidden(app, window);
+    }
+}
+
+/// The window's frame — title bar and borders, outer size less inner — in logical px, so the
+/// restore can fit the WHOLE window on the monitor rather than only its content. The window is
+/// built (hidden, decorated) by the time [`restore`] runs, so both sizes are its own; `(0, 0)`
+/// where either cannot be read, which fits the content as before.
+fn frame_of(window: &tauri::WebviewWindow) -> (f64, f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    match (window.outer_size(), window.inner_size()) {
+        (Ok(outer), Ok(inner)) => (
+            f64::from(outer.width.saturating_sub(inner.width)) / scale,
+            f64::from(outer.height.saturating_sub(inner.height)) / scale,
+        ),
+        _ => (0.0, 0.0),
     }
 }
 

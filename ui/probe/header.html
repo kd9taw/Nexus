@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- The cockpit header's lines in a real browser: scripts/browser-probe --desktop header serves this page
+     from ui/ with the app's own Vite config. src/probe/header.tsx mounts it. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cockpit header probe</title>
+    <style>
+      html, body, #root { margin: 0; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/probe/header.tsx"></script>
+  </body>
+</html>
