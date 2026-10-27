@@ -24,5 +24,8 @@ describe('the JS8 sound player in App', () => {
     expect(props).toContain('tier={snap?.link.tier}')
     expect(props).toContain('sounds={settings?.js8Sounds ?? []}')
     expect(props).toContain('files={settings?.js8SoundFiles ?? {}}')
+    // The new-message notice's Show opens the JS8 screen and asks it for that station's Inbox.
+    expect(props).toMatch(/onShowMessage=\{\(call\) => \{\s*handleView\('js8'\)\s*setJs8InboxAsk\(/)
+    expect(app).toContain('inboxRequest={js8InboxAsk}')
   })
 })

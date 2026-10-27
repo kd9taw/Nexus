@@ -3,9 +3,10 @@
 // directed to me, a message for my inbox, a new callsign or a callsign I have worked is heard. JS8Call
 // plays a sound file the operator picks for each (`tryNotify`, mainwindow.cpp:5595-5603), and so does
 // Nexus where one is picked (Settings `js8SoundFiles`); where none is, it plays a tone of its own for
-// each, through the same WebAudio beep its other alerts use (alerts.ts), so no two events sound alike.
-// A file that cannot be played plays that tone instead and is named once: JS8Call plays nothing then
-// (NotificationAudio.cpp:72-74).
+// each, so no two events sound alike. A file that cannot be played plays that tone instead and is
+// named once: JS8Call plays nothing then (NotificationAudio.cpp:72-74). Every sound plays in Rust
+// (`src-tauri/src/js8_sounds.rs`) on the output the operator picked (Settings `js8SoundDevice`), and
+// never on a device the station transmits from: a sound there could key a rig on VOX.
 //
 // What is heard is read off polls of the engine (the feed's new frames, the inbox and the heard list;
 // Js8SoundPlayer, from whichever screen is showing), as JS8Call's own triggers read its decodes: `tryNotify("cq")` and ("hb") on a
@@ -17,8 +18,7 @@
 import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from '../types'
 import { addresseeOf } from './js8Lists'
 import { js8BaseCall } from '../js8Vocab'
-import { beep, doubleBeep, ensureCtx } from '../alerts'
-import { readJs8SoundFile } from '../api'
+import { playJs8SoundHere } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 
@@ -100,33 +100,11 @@ export class Js8SoundWatch {
   }
 }
 
-/** Each event's tone (Hz), apart from the other alerts' (alerts.ts BEEP_HZ, the 990 Hz alarm, the
- *  660/880 TX pair): a message for me rings twice. */
-const TONE: Record<Js8SoundEvent, number> = {
-  cq: 587,
-  hb: 466,
-  ack: 1046,
-  directed: 932,
-  inbox: 784,
-  callNew: 698,
-  callOld: 554,
-}
-
-/** One event's built-in tone. */
-function playTone(ev: Js8SoundEvent): void {
-  if (ev === 'inbox' || ev === 'directed') doubleBeep(TONE[ev])
-  else beep(TONE[ev])
-}
-
-/** The sound files read and decoded this session, by path: JS8Call reads each once too
- *  (NotificationAudio's cache, NotificationAudio.cpp:67-70, :105). */
-const clips = new Map<string, AudioBuffer>()
-/** The event and file pairs already named as not playing. */
+/** The event and file pairs already named as not playing, and the outputs named as refused. */
 const told = new Set<string>()
 
-/** For tests: forget the files read and the failures named. */
+/** For tests: forget the failures named. */
 export function __resetJs8SoundsForTest(): void {
-  clips.clear()
   told.clear()
 }
 
@@ -135,53 +113,63 @@ export function js8SoundFileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
 
-/** Why a file did not play, in the operator's words: the station's refusal by name
- *  (`src-tauri/src/js8_sounds.rs`), or a file this computer could not decode. */
+/** Why a file did not play, in the operator's words: Rust's refusal by name
+ *  (`src-tauri/src/js8_sounds.rs` `SoundRefusal`). */
 function whyNot(reason: unknown): string {
   switch (reason) {
     case 'missing':
       return t('js8.sound.file.missing')
-    case 'unreadable':
-      return t('js8.sound.file.unreadable')
+    case 'notAFile':
+      return t('js8.sound.file.notAFile')
     case 'tooLarge':
       return t('js8.sound.file.tooLarge')
     case 'notWav':
       return t('js8.sound.file.notWav')
+    case 'badFormat':
+      return t('js8.sound.file.badFormat')
+    case 'notPicked':
+      return t('js8.sound.file.notPicked')
     default:
-      return t('js8.sound.file.undecodable')
+      return t('js8.sound.file.unreadable')
+  }
+}
+
+/** Why nothing played at all. */
+function nothingPlayed(reason: unknown): string {
+  switch (reason) {
+    case 'txDevice':
+      return t('js8.sound.txDevice')
+    case 'noDevice':
+      return t('js8.sound.noDevice')
+    default:
+      return t('js8.sound.failed')
   }
 }
 
 /**
  * Play one event's sound: its WAV file when one is set (Settings `js8SoundFiles`), else its built-in
- * tone. A file that cannot be played (gone, unreadable, too large, not a WAV, or not decodable here)
- * plays the tone instead and is named once per event and file; `always` names it every time, for
- * Settings' Test. Through the alerts' own audio, never the radio's.
+ * tone, on the operator's sound output. A file that cannot be played plays the tone instead and is
+ * named once per event and file; a sound that cannot play at all (its output is a TX audio device, or
+ * gone) is named once per reason. `always` names either every time, for Settings' Test.
  */
 export async function playJs8Sound(ev: Js8SoundEvent, file?: string | null, always = false): Promise<void> {
-  const path = file?.trim() ?? ''
-  const ctx = path ? ensureCtx() : null
-  if (ctx) {
-    try {
-      let clip = clips.get(path)
-      if (!clip) {
-        clip = await ctx.decodeAudioData(await readJs8SoundFile(path))
-        clips.set(path, clip)
-      }
-      const source = ctx.createBufferSource()
-      source.buffer = clip
-      source.connect(ctx.destination)
-      source.start()
-      return
-    } catch (reason) {
+  const path = file?.trim() || null
+  try {
+    const played = await playJs8SoundHere(ev, path)
+    if (path && played?.fileRefused) {
       const key = `${ev}\n${path}`
       if (always || !told.has(key)) {
         told.add(key)
-        pushToast(t('js8.sound.file.failed', { file: js8SoundFileName(path), reason: whyNot(reason) }), 'error', 12_000)
+        pushToast(t('js8.sound.file.failed', { file: js8SoundFileName(path), reason: whyNot(played.fileRefused) }), 'error', 12_000)
       }
     }
+  } catch (reason) {
+    const key = `\u0000${String(reason)}`
+    if (always || !told.has(key)) {
+      told.add(key)
+      pushToast(nothingPlayed(reason), 'error', 12_000)
+    }
   }
-  playTone(ev)
 }
 
 /** The events of one poll to play, each once, in JS8Call's table order, the enabled ones only. */

@@ -10,8 +10,7 @@ import { Js8ListsSettings, parseJs8Words } from './Js8ListsSettings'
 import type { Settings } from '../types'
 import * as api from '../api'
 
-vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn(), ensureCtx: vi.fn(() => ({ decodeAudioData: vi.fn() })) }))
-vi.mock('../api', () => ({ readJs8SoundFile: vi.fn(async () => Promise.reject('missing')) }))
+vi.mock('../api', () => ({ playJs8SoundHere: vi.fn(async () => ({ fileRefused: null })) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 afterEach(cleanup)
 
@@ -45,14 +44,13 @@ describe('the JS8 lists, marks and sounds in Settings', () => {
   })
 
   it('turns a sound on in JS8Call’s table order, off again, and tests one', async () => {
-    const alerts = await import('../alerts')
     const { setSounds } = mount({ js8Sounds: ['inbox'] })
     fireEvent.click(screen.getByRole('switch', { name: 'A CQ' }))
     expect(setSounds).toHaveBeenLastCalledWith(['cq', 'inbox'])
     fireEvent.click(screen.getByRole('switch', { name: 'A message filed in your Inbox' }))
     expect(setSounds).toHaveBeenLastCalledWith([])
     fireEvent.click(screen.getByRole('button', { name: 'Test the sound for A heartbeat' }))
-    expect(alerts.beep).toHaveBeenCalledTimes(1)
+    expect(api.playJs8SoundHere).toHaveBeenLastCalledWith('hb', null)
   })
 
   // JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Configuration.ui:429-433,
@@ -119,6 +117,31 @@ describe('the JS8 lists, marks and sounds in Settings', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Test the sound for An ACK for you' }))
     })
-    expect(api.readJs8SoundFile).toHaveBeenCalledWith('C:\\Sounds\\ack.wav')
+    expect(api.playJs8SoundHere).toHaveBeenCalledWith('ack', 'C:\\Sounds\\ack.wav')
+  })
+
+  it('picks the sounds’ output: the system default first, the radio’s TX audio devices shown but not choosable', () => {
+    const setSoundDevice = vi.fn()
+    render(
+      <Js8ListsSettings
+        form={{ audioOut: 'USB Audio CODEC', radios: [{ audioOut: 'Rig 2 CODEC' }] } as unknown as Settings}
+        setList={vi.fn()}
+        setMark={vi.fn()}
+        setSounds={vi.fn()}
+        setReset={vi.fn()}
+        outputs={['Speakers', 'usb audio codec', 'Rig 2 CODEC']}
+        setSoundDevice={setSoundDevice}
+      />,
+    )
+    const select = screen.getByLabelText('Play the sounds on') as HTMLSelectElement
+    expect(select.value, 'the system default until one is picked').toBe('')
+    expect([...select.options].map((o) => [o.value, o.textContent, o.disabled])).toEqual([
+      ['', 'System default', false],
+      ['Speakers', 'Speakers', false],
+      ['usb audio codec', 'usb audio codec (radio TX audio, not used for sounds)', true],
+      ['Rig 2 CODEC', 'Rig 2 CODEC (radio TX audio, not used for sounds)', true],
+    ])
+    fireEvent.change(select, { target: { value: 'Speakers' } })
+    expect(setSoundDevice).toHaveBeenLastCalledWith('Speakers')
   })
 })

@@ -721,26 +721,23 @@ describe('the Inbox is JS8Call’s message panel', () => {
   })
 })
 
-describe('a new message announces itself (its sound is Js8SoundPlayer’s, from any screen)', () => {
+// The new-message notice is App's (Js8SoundPlayer), from any screen; its Show asks this screen for the
+// station's Inbox, and the cockpit raises no notice of its own (one owner, never two).
+describe('a new message’s Show opens that station’s Inbox here', () => {
   const newMail = () => ({
     ...js8Fixture(),
     inbox: [...js8Fixture().inbox, { id: 3, from: 'K1HB', to: 'KD9TAW', text: 'HI', path: ['K1HB'], state: 'unread' as const, atMs: T0, freqHz: 600, snrDb: -12 }],
   })
 
-  it('stays up as JS8Call’s box does, 300 s, with a way to the message', async () => {
+  it('opens the Inbox on the asked station, and raises no notice itself', async () => {
     const toast = await import('../toast')
-    await renderCockpit()
+    const r = await renderCockpit()
     await poll()
     state.current = newMail()
     await poll()
-    const call = vi.mocked(toast.pushToast).mock.calls.find(([msg]) => String(msg).startsWith('New message from K1HB'))
-    expect(call, 'no notice').toBeTruthy()
-    expect(call![1]).toBe('info')
-    expect(call![2]).toBe(300_000)
-    expect(call![3]?.actionLabel).toBe('Show')
-    await act(async () => {
-      call![3]!.action!()
-    })
+    expect(vi.mocked(toast.pushToast).mock.calls.filter(([msg]) => String(msg).startsWith('New message from')), 'one owner').toEqual([])
+    r.rerender(<Js8Cockpit snap={snap} panels={fakePanels()} lists={lists()} inboxRequest={{ call: 'K1HB', seq: 1 }} />)
+    await poll()
     expect((document.querySelector('.js8-inbox-filter select') as HTMLSelectElement).value).toBe('K1HB')
   })
 })

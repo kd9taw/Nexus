@@ -1547,8 +1547,11 @@ default, as JS8Call's notifications are. Each plays a short tone of its own, or 
 pick with **Choose…**, as JS8Call plays the file you pick for each; **Reset to built-in** goes
 back to the tone, and **Test** plays it. A file that cannot be played (moved, not a WAV file,
 larger than 10 MB) plays the tone instead, and Nexus says so once. They sound whichever screen
-is showing while JS8 is the mode, as JS8Call's do. The files are this computer's: they travel
-in a profile, and the Remote page neither shows nor changes them.
+is showing while JS8 is the mode, as JS8Call's do. The files are this computer's and travel in a
+profile; only a file chosen here is ever read. **Play the sounds on** picks the output (the system
+default unless you pick one). It is never a device your radio transmits from: a sound there could
+key a rig on VOX, so the radio's TX audio devices are shown but cannot be picked, and every sound
+is checked as it plays, so one is refused even if a TX audio device is changed to it later.
 
 **Colours and fonts**
 

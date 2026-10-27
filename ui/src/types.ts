@@ -4852,6 +4852,9 @@ export interface Settings {
   /** The WAV file each of those plays, by event (JS8Call's notification paths). None, the default,
    *  plays the built-in tone. Paths on this computer: the Remote page never has them. */
   js8SoundFiles?: Record<string, string>
+  /** The output the JS8 sounds play on, by device name; empty or absent is the system default. A
+   *  device the station transmits from is refused at every play (VOX safety). */
+  js8SoundDevice?: string
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean

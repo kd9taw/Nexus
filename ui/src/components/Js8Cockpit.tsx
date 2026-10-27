@@ -127,7 +127,6 @@ import {
   estimateFrames,
   fmtSnr,
   js8ListedStations,
-  utcClock,
 } from '../js8Vocab'
 import { Js8ComposeBox } from './Js8ComposeBox'
 import { Js8ComposeActions } from './Js8ComposeActions'
@@ -187,6 +186,8 @@ interface Props {
   /** JS8Call's colours and fonts for the RX pane, the lists and the compose box (Settings ▸ JS8),
    *  painted for `theme` (features/js8PaneStyle). Absent: every pane follows the theme. */
   paneStyle?: Settings['js8PaneStyle']
+  /** A station whose Inbox to show, asked by the new-message notice's "Show" (a new `seq` each ask). */
+  inboxRequest?: { call: string; seq: number } | null
 }
 
 /** What Settings ▸ JS8 holds for the lists (JS8Call 3.0.3's, at its defaults when absent), and the
@@ -211,10 +212,6 @@ export interface Js8ListSettings {
   /** "Remove" on @ALLCALL and "Add" of @ALLCALL: whether not to take part in it, as it should be. */
   setAvoidAllcall?: (avoid: boolean) => Promise<void>
 }
-
-/** How long the new-message notice stays up: JS8Call's "New Message Received" box closes itself
- *  after 300 seconds (`SelfDestructMessageBox(300, …)`, processCommandActivity.cpp:809-818). */
-const JS8_NEW_MESSAGE_MS = 300_000
 
 /** JS8Call's defaults for the lists, where no settings are handed down. */
 const JS8_LIST_DEFAULTS: Js8ListSettings = {
@@ -282,6 +279,7 @@ export function Js8Cockpit({
   onSavedMessages,
   lists = JS8_LIST_DEFAULTS,
   paneStyle,
+  inboxRequest,
 }: Props) {
   // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
   const [statsCall, setStatsCall] = useState('')
@@ -350,31 +348,12 @@ export function Js8Cockpit({
     if (host && !host.shown('inbox')) panels?.setPanelState('inbox', 'docked')
   }
 
-  // A MSG to me announces itself, as JS8Call's "New Message Received" box does
-  // (processCommandActivity.cpp:806-820): ONCE per message, and it stays up as long as that box
-  // (300 s) unless dismissed, with a way to the message. What the first poll finds is taken as seen,
-  // so mail filed before this view opened (or restored from the journal) does not announce itself.
-  const seenInboxRef = useRef<Set<number> | null>(null)
+  // The "New Message Received" notice is App's (Js8SoundPlayer), from whichever screen shows; its
+  // "Show" opens this screen and asks for that station's Inbox here.
   useEffect(() => {
-    const inbox = js8?.inbox
-    if (!inbox) return
-    const seen = seenInboxRef.current
-    if (seen === null) {
-      seenInboxRef.current = new Set(inbox.map((e) => e.id))
-      return
-    }
-    for (const e of inbox) {
-      if (seen.has(e.id)) continue
-      seen.add(e.id)
-      if (e.state === 'unread') {
-        pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', JS8_NEW_MESSAGE_MS, {
-          action: () => showInbox(e.from),
-          actionLabel: t('js8.inbox.new.open'),
-        })
-      }
-    }
+    if (inboxRequest) showInbox(inboxRequest.call)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.inbox])
+  }, [inboxRequest?.seq])
 
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call

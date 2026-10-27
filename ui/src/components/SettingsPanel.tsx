@@ -10281,6 +10281,9 @@ export function SettingsPanel({
               setReset={(on) => updateBool('js8ResetActivity', on)}
               pickSoundFile={pickJs8SoundFile}
               setSoundFile={setJs8SoundFile}
+              outputs={audio.output}
+              outputLabel={(d) => audioLabel(d, 'output')}
+              setSoundDevice={(d) => update('js8SoundDevice', d)}
             />
             <Js8PaneStyleSettings
               form={form}

@@ -1,6 +1,7 @@
 // JS8Call's notification sounds (features/js8Sounds): which frame says what, the first poll learning
 // what is already there, a new call waiting for the log, and only the enabled sounds, once each; a
-// message filed for me; the operator's WAV file for a sound, and the built-in tone when it cannot play.
+// message filed for me; the operator's WAV file for a sound, the built-in tone when it cannot play, and
+// what is said when nothing plays (the output is a TX audio device).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from '../types'
 import {
@@ -12,12 +13,10 @@ import {
   js8SoundsToPlay,
   playJs8Sound,
 } from './js8Sounds'
-import * as alerts from '../alerts'
 import * as api from '../api'
 import * as toast from '../toast'
 
-vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn(), ensureCtx: vi.fn(() => null) }))
-vi.mock('../api', () => ({ readJs8SoundFile: vi.fn() }))
+vi.mock('../api', () => ({ playJs8SoundHere: vi.fn() }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 
 const row = (text: string, o: Partial<Js8ActivityRow> = {}): Js8ActivityRow => ({
@@ -114,75 +113,34 @@ describe('a message filed for me', () => {
   })
 })
 
-describe('the sound a sound plays: the operator’s WAV file, else the built-in tone', () => {
-  const started: unknown[] = []
-  const clip = (bytes: ArrayBuffer) => ({ fromBytes: new Uint8Array(bytes)[0] })
-  const ctx = {
-    destination: { id: 'speakers' },
-    decodeAudioData: vi.fn(async (bytes: ArrayBuffer) => {
-      if (new Uint8Array(bytes)[0] === 0xff) throw new DOMException('Unable to decode audio data', 'EncodingError')
-      return clip(bytes)
-    }),
-    createBufferSource: () => {
-      const node = {
-        buffer: null as unknown,
-        connected: null as unknown,
-        connect(to: unknown) {
-          node.connected = to
-        },
-        start() {
-          started.push([node.buffer, node.connected])
-        },
-      }
-      return node
-    },
-  }
-  const bytes = (first: number) => new Uint8Array([first, 1, 2, 3]).buffer
-
+describe('the sound a sound plays: the operator’s WAV file, else the built-in tone, on the operator’s output', () => {
+  const play = vi.mocked(api.playJs8SoundHere)
   beforeEach(() => {
     __resetJs8SoundsForTest()
-    started.length = 0
-    vi.mocked(alerts.beep).mockClear()
-    vi.mocked(alerts.doubleBeep).mockClear()
-    vi.mocked(toast.pushToast).mockClear()
-    vi.mocked(api.readJs8SoundFile).mockReset()
-    ctx.decodeAudioData.mockClear()
-    vi.mocked(alerts.ensureCtx).mockReturnValue(ctx as unknown as AudioContext)
+    vi.mocked(toast.pushToast).mockReset()
+    play.mockReset()
+    play.mockResolvedValue({ fileRefused: null })
   })
+  const said = () => vi.mocked(toast.pushToast).mock.calls.map((c) => String(c[0]))
 
-  it('plays the file through the alerts’ audio and no tone; each file is read once', async () => {
-    vi.mocked(api.readJs8SoundFile).mockResolvedValue(bytes(7))
+  it('asks this computer to play the event with its file, or with none for the tone', async () => {
     await playJs8Sound('cq', '/home/op/sounds/cq.wav')
-    expect(api.readJs8SoundFile).toHaveBeenCalledWith('/home/op/sounds/cq.wav')
-    expect(started).toEqual([[{ fromBytes: 7 }, { id: 'speakers' }]])
-    expect(alerts.beep, 'no tone over the file').not.toHaveBeenCalled()
-    await playJs8Sound('cq', '/home/op/sounds/cq.wav')
-    expect(started).toHaveLength(2)
-    expect(api.readJs8SoundFile, 'read once').toHaveBeenCalledTimes(1)
+    await playJs8Sound('inbox', '  ')
+    await playJs8Sound('hb')
+    expect(play.mock.calls).toEqual([
+      ['cq', '/home/op/sounds/cq.wav'],
+      ['inbox', null],
+      ['hb', null],
+    ])
     expect(toast.pushToast).not.toHaveBeenCalled()
   })
 
-  it('no file: the built-in tone, a message for me ringing twice', async () => {
-    await playJs8Sound('cq')
-    await playJs8Sound('inbox', '  ')
-    expect(alerts.beep).toHaveBeenCalledTimes(1)
-    expect(alerts.doubleBeep).toHaveBeenCalledTimes(1)
-    expect(api.readJs8SoundFile).not.toHaveBeenCalled()
-    expect(started).toEqual([])
-  })
-
-  it('a file that cannot play plays the tone instead and says so once, naming the file and why', async () => {
-    vi.mocked(api.readJs8SoundFile).mockRejectedValue('missing')
+  it('a file that fell back to the tone is named once, with why', async () => {
+    play.mockResolvedValue({ fileRefused: 'missing' })
     await playJs8Sound('cq', '/home/op/sounds/cq.wav')
     await playJs8Sound('cq', '/home/op/sounds/cq.wav')
-    expect(alerts.beep, 'the tone each time').toHaveBeenCalledTimes(2)
-    expect(started).toEqual([])
-    expect(toast.pushToast).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(toast.pushToast).mock.calls[0]).toEqual([
-      'cq.wav could not be played (it is not there), so the built-in tone played instead.',
-      'error',
-      12_000,
-    ])
+    expect(said()).toEqual(['cq.wav could not be played (it is not there), so the built-in tone played instead.'])
+    expect(vi.mocked(toast.pushToast).mock.calls[0].slice(1)).toEqual(['error', 12_000])
     // Another sound with the same file is named once too, and Settings' Test names it every time.
     await playJs8Sound('hb', '/home/op/sounds/cq.wav')
     await playJs8Sound('hb', '/home/op/sounds/cq.wav', true)
@@ -190,17 +148,33 @@ describe('the sound a sound plays: the operator’s WAV file, else the built-in 
   })
 
   it('names each reason in the operator’s words', async () => {
-    const said = async (read: () => Promise<ArrayBuffer>) => {
+    const reason = async (fileRefused: string) => {
       vi.mocked(toast.pushToast).mockClear()
-      vi.mocked(api.readJs8SoundFile).mockImplementation(read)
+      play.mockResolvedValue({ fileRefused })
       await playJs8Sound('ack', 'C:\\Sounds\\ack.wav', true)
-      return String(vi.mocked(toast.pushToast).mock.calls[0]?.[0])
+      return said()[0]
     }
-    expect(await said(() => Promise.reject('unreadable'))).toContain('(this computer would not let Nexus read it)')
-    expect(await said(() => Promise.reject('tooLarge'))).toContain('(it is larger than 10 MB)')
-    expect(await said(() => Promise.reject('notWav'))).toContain('(it is not a WAV file)')
-    expect(await said(() => Promise.resolve(bytes(0xff)))).toContain('(this computer could not decode it)')
-    expect(await said(() => Promise.resolve(bytes(0xff)))).toMatch(/^ack\.wav could not be played/)
+    expect(await reason('unreadable')).toContain('(this computer would not let Nexus read it)')
+    expect(await reason('tooLarge')).toContain('(it is larger than 10 MB)')
+    expect(await reason('notWav')).toContain('(it is not a WAV file)')
+    expect(await reason('notAFile')).toContain('(it is not a file)')
+    expect(await reason('badFormat')).toContain('(its format is not one Nexus can play, or it is cut short)')
+    expect(await reason('notPicked')).toContain('(it was not chosen for this sound in Settings)')
+  })
+
+  it('nothing played because the output is a TX audio device: said once, every time from Test, never another output', async () => {
+    play.mockRejectedValue('txDevice')
+    await playJs8Sound('cq')
+    await playJs8Sound('hb', '/home/op/sounds/hb.wav')
+    expect(said()).toEqual([
+      'A JS8 sound did not play: its output is a device your radio transmits from, and a sound there could key the radio on VOX. Choose another output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+    ])
+    expect(play, 'asked once per sound, never again elsewhere').toHaveBeenCalledTimes(2)
+    await playJs8Sound('cq', null, true)
+    expect(toast.pushToast).toHaveBeenCalledTimes(2)
+    play.mockRejectedValue('noDevice')
+    await playJs8Sound('cq')
+    expect(said()[2]).toContain('its output is not on this computer now')
   })
 
   it('names a file by its last part, from either kind of path', () => {

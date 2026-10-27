@@ -24,5 +24,8 @@ pub mod receive_encode;
 pub mod resample;
 /// The wait-free ring a realtime callback shares.
 pub mod ring;
+/// A notification sound's WAV file, read and checked (a regular file, a size cap, a plausible
+/// RIFF/WAVE format) before a sample of it is played. Pure; tested.
+pub mod sound_file;
 pub mod tci_audio;
 pub mod voice;

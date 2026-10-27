@@ -40702,6 +40702,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         street_map::street_map_updates,
         street_map::street_map_info,
         street_map::street_map_install_file,
+        js8_sounds::pick_js8_sound_file,
+        js8_sounds::play_js8_sound,
         set_area,
         qso_resend,
         clear_dx_call,

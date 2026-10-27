@@ -1,58 +1,180 @@
-//! Settings ▸ Digital ▸ JS8 ▸ Sounds: the WAV file a JS8 sound plays, as JS8Call lets each of its
-//! notifications play one (the seven rows, Configuration.cpp:1996-2002; the "Select" button's file
-//! dialog, "Wave Files (*.wav)", :2054-2066).
+//! Settings ▸ Digital ▸ JS8 ▸ Sounds: JS8's notification sounds, each its built-in tone or a WAV
+//! file the operator picked (as JS8Call lets each of its notifications play one: the seven rows,
+//! Configuration.cpp:1996-2002; the "Select" button's "Wave Files (*.wav)" dialog, :2054-2066), on
+//! the output the operator picked (JS8Call's notification audio device, UI_Constructor.cpp:228-233).
 //!
 //! Two commands, each run on the computer the operator sits at:
-//! - `pick_js8_sound_file`: the OS file picker. It only reads a path back; the Settings form holds
-//!   it and Save writes it with every other field.
-//! - `read_js8_sound_file`: a file's bytes, raw, for the window to play through the same audio as
-//!   the built-in tones. Only a RIFF/WAVE file up to [`MAX_SOUND_FILE_BYTES`] is handed over, so a
-//!   page that names any other file gets nothing from it but a refusal; the window then plays the
-//!   built-in tone and says so once.
+//! - `pick_js8_sound_file`: the OS file picker. It reads a path back and remembers it for this run
+//!   so Test can play it before Save; the Settings form holds it and Save writes it.
+//! - `play_js8_sound`: plays one event's sound HERE, in Rust. The window never gets a file's bytes.
+//!
+//! WHAT IS READ. Only a file the operator chose: the one Settings holds for that event, or one the
+//! picker returned in this run. Any other path the window names is refused unread
+//! ([`SoundRefusal::NotPicked`]). What is read is bounded and checked by `tempo_codec::sound_file`
+//! (a regular file, at most 10 MiB, RIFF/WAVE, a plausible format); a file that fails plays the
+//! built-in tone instead, and the window is told why so it can say so once.
+//!
+//! WHERE IT PLAYS. `js8_sound_device` (empty: the system default output), and never a device the
+//! station transmits from: `tempo_audio::notify_sound` checks the device that opens against every
+//! configured TX audio device at each play, with the settings as they are then. A refused device
+//! plays NOTHING, not even the tone: falling back to another output could land on the very device
+//! the check refused.
 //!
 //! Nothing here writes, and nothing here transmits.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::Path;
-use tauri::ipc::Response;
-use tauri::AppHandle;
+use std::sync::Mutex;
+use tauri::{AppHandle, State};
+use tempo_app::settings::Settings;
+use tempo_codec::sound_file::{read_sound_file, SoundClip, SoundFileRefusal};
 
-/// The largest sound file handed over: a notification sound is a second or two, and 10 MiB is a
-/// minute of CD-quality stereo.
-pub const MAX_SOUND_FILE_BYTES: u64 = 10 * 1024 * 1024;
+use crate::SharedEngine;
 
-/// Why a sound file was not handed over. The window names each in the operator's language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// JS8Call's seven notification events, by the names Settings `js8Sounds` holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SoundFileRefusal {
-    /// Nothing at that path.
-    Missing,
-    /// There, but not a file this computer lets Nexus read.
-    Unreadable,
-    /// Larger than [`MAX_SOUND_FILE_BYTES`].
-    TooLarge,
-    /// Not a RIFF/WAVE file.
-    NotWav,
+pub enum Js8SoundEvent {
+    Cq,
+    Hb,
+    Ack,
+    Directed,
+    Inbox,
+    CallNew,
+    CallOld,
 }
 
-/// A WAV file's bytes, or why not. The size is checked before anything is read, and the header
-/// after: "RIFF", a length, "WAVE" (what JS8Call's `BWFFile` opens, NotificationAudio.cpp:72-74).
-pub fn wav_bytes(path: &Path) -> Result<Vec<u8>, SoundFileRefusal> {
-    let refused = |e: std::io::Error| match e.kind() {
-        std::io::ErrorKind::NotFound => SoundFileRefusal::Missing,
-        _ => SoundFileRefusal::Unreadable,
+impl Js8SoundEvent {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Cq => "cq",
+            Self::Hb => "hb",
+            Self::Ack => "ack",
+            Self::Directed => "directed",
+            Self::Inbox => "inbox",
+            Self::CallNew => "callNew",
+            Self::CallOld => "callOld",
+        }
+    }
+
+    /// The built-in tone (Hz, and whether it rings twice): each apart from the window's other
+    /// alerts, and a message for me rings twice.
+    fn tone(self) -> (f32, bool) {
+        match self {
+            Self::Cq => (587.0, false),
+            Self::Hb => (466.0, false),
+            Self::Ack => (1046.0, false),
+            Self::Directed => (932.0, true),
+            Self::Inbox => (784.0, true),
+            Self::CallNew => (698.0, false),
+            Self::CallOld => (554.0, false),
+        }
+    }
+}
+
+/// Why a sound, or its file, did not play. The window names each in the operator's language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SoundRefusal {
+    // A file that did not play; the tone played instead.
+    Missing,
+    NotAFile,
+    Unreadable,
+    TooLarge,
+    NotWav,
+    BadFormat,
+    /// A path the operator did not choose (not in Settings for that event, not picked this run).
+    NotPicked,
+    // Nothing played.
+    /// The output is a device the station transmits from (VOX safety).
+    TxDevice,
+    /// No such output here.
+    NoDevice,
+    /// The output would not open or play.
+    Failed,
+}
+
+impl From<SoundFileRefusal> for SoundRefusal {
+    fn from(r: SoundFileRefusal) -> Self {
+        match r {
+            SoundFileRefusal::Missing => Self::Missing,
+            SoundFileRefusal::NotAFile => Self::NotAFile,
+            SoundFileRefusal::Unreadable => Self::Unreadable,
+            SoundFileRefusal::TooLarge => Self::TooLarge,
+            SoundFileRefusal::NotWav => Self::NotWav,
+            SoundFileRefusal::BadFormat => Self::BadFormat,
+        }
+    }
+}
+
+/// What played: the tone in place of the file, and why, when a file was asked for and did not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundPlayed {
+    pub file_refused: Option<SoundRefusal>,
+}
+
+/// The paths the picker returned this run: Test plays one before Save writes it.
+static PICKED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Whether `path` is one the operator chose for `event`: the file Settings holds for it, or one
+/// the picker returned this run.
+fn chosen(
+    settings: &Settings,
+    event: Js8SoundEvent,
+    path: &str,
+    picked: &BTreeSet<String>,
+) -> bool {
+    settings
+        .js8_sound_files
+        .get(event.key())
+        .map(String::as_str)
+        == Some(path)
+        || picked.contains(path)
+}
+
+/// The sound to play for `event`: the chosen file's samples, else the tone with why the file did
+/// not play. Reads nothing unless the path is one the operator chose.
+fn clip_for(
+    settings: &Settings,
+    event: Js8SoundEvent,
+    file: Option<&str>,
+    picked: &BTreeSet<String>,
+) -> (SoundClip, Option<SoundRefusal>) {
+    let tone = || {
+        let (hz, double) = event.tone();
+        SoundClip {
+            rate: tempo_audio_rate(),
+            samples: tone_samples(hz, double),
+        }
     };
-    let meta = std::fs::metadata(path).map_err(refused)?;
-    if !meta.is_file() {
-        return Err(SoundFileRefusal::Unreadable);
+    let Some(path) = file.map(str::trim).filter(|p| !p.is_empty()) else {
+        return (tone(), None);
+    };
+    if !chosen(settings, event, path, picked) {
+        return (tone(), Some(SoundRefusal::NotPicked));
     }
-    if meta.len() > MAX_SOUND_FILE_BYTES {
-        return Err(SoundFileRefusal::TooLarge);
+    match read_sound_file(Path::new(path)) {
+        Ok(clip) => (clip, None),
+        Err(why) => (tone(), Some(why.into())),
     }
-    let bytes = std::fs::read(path).map_err(refused)?;
-    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err(SoundFileRefusal::NotWav);
-    }
-    Ok(bytes)
+}
+
+#[cfg(feature = "radio")]
+fn tempo_audio_rate() -> u32 {
+    tempo_audio::notify_sound::TONE_RATE
+}
+#[cfg(feature = "radio")]
+fn tone_samples(hz: f32, double: bool) -> Vec<f32> {
+    tempo_audio::notify_sound::tone(hz, double)
+}
+#[cfg(not(feature = "radio"))]
+fn tempo_audio_rate() -> u32 {
+    48_000
+}
+#[cfg(not(feature = "radio"))]
+fn tone_samples(_hz: f32, _double: bool) -> Vec<f32> {
+    Vec::new()
 }
 
 /// The OS file picker for one sound's WAV file. `None` when it is cancelled: never an error, and
@@ -67,17 +189,65 @@ pub async fn pick_js8_sound_file(app: AppHandle) -> Option<String> {
         .pick_file(move |picked| {
             let _ = tx.send(picked);
         });
-    rx.await
+    let path = rx
+        .await
         .ok()
         .flatten()
         .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned())?;
+    PICKED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.clone());
+    Some(path)
 }
 
-/// One sound file's bytes, raw (an ArrayBuffer in the window), or why it was refused.
-#[tauri::command(async)]
-pub fn read_js8_sound_file(path: String) -> Result<Response, SoundFileRefusal> {
-    wav_bytes(Path::new(&path)).map(Response::new)
+/// Play `event`'s sound here: `file` (the form's, so Test plays an unsaved pick) or its tone, on
+/// Settings' `js8SoundDevice`, unless that is a TX device. `Ok` says whether a file fell back to
+/// the tone; `Err` is that nothing played.
+#[tauri::command]
+pub async fn play_js8_sound(
+    state: State<'_, SharedEngine>,
+    event: Js8SoundEvent,
+    file: Option<String>,
+) -> Result<SoundPlayed, SoundRefusal> {
+    let settings = crate::with_engine(&state, |eng| eng.settings().clone())
+        .await
+        .map_err(|_| SoundRefusal::Failed)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = PICKED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let (clip, file_refused) = clip_for(&settings, event, file.as_deref(), &picked);
+        play_on(&settings, clip)?;
+        Ok(SoundPlayed { file_refused })
+    })
+    .await
+    .map_err(|_| SoundRefusal::Failed)?
+}
+
+/// Play `clip` on the operator's output, refused on a TX device (`tempo_audio::notify_sound`).
+#[cfg(feature = "radio")]
+fn play_on(settings: &Settings, clip: SoundClip) -> Result<(), SoundRefusal> {
+    use tempo_audio::notify_sound::{play, tx_audio_devices, PlayRefusal};
+    play(
+        &settings.js8_sound_device,
+        tx_audio_devices(settings),
+        clip.rate,
+        clip.samples,
+    )
+    .map_err(|e| match e {
+        PlayRefusal::TxDevice => SoundRefusal::TxDevice,
+        PlayRefusal::NoDevice => SoundRefusal::NoDevice,
+        PlayRefusal::Failed(why) => {
+            eprintln!("nexus: a JS8 sound did not play: {why}");
+            SoundRefusal::Failed
+        }
+    })
+}
+
+/// A build without the radio has no sound devices.
+#[cfg(not(feature = "radio"))]
+fn play_on(_settings: &Settings, _clip: SoundClip) -> Result<(), SoundRefusal> {
+    Err(SoundRefusal::NoDevice)
 }
 
 #[cfg(test)]
@@ -96,7 +266,7 @@ mod tests {
         dir
     }
 
-    /// A 44-byte PCM WAV header and two silent samples: the smallest file a player opens.
+    /// A 44-byte PCM WAV header and two samples.
     fn tiny_wav() -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(b"RIFF");
@@ -111,78 +281,82 @@ mod tests {
         b.extend_from_slice(&16u16.to_le_bytes());
         b.extend_from_slice(b"data");
         b.extend_from_slice(&4u32.to_le_bytes());
-        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&[0, 0, 0, 0x40]);
         b
     }
 
+    /// THE WINDOW CANNOT READ WHAT THE OPERATOR DID NOT CHOOSE: a path that is neither the event's
+    /// saved file nor one picked this run is refused unread, a real WAV included.
     #[test]
-    fn a_wav_file_is_handed_over_byte_for_byte() {
-        let dir = scratch("wav");
-        let path = dir.join("cq.wav");
-        std::fs::write(&path, tiny_wav()).unwrap();
-        assert_eq!(wav_bytes(&path), Ok(tiny_wav()));
-        // The extension is not what makes it a WAV: the header is.
-        let renamed = dir.join("cq.sound");
-        std::fs::write(&renamed, tiny_wav()).unwrap();
-        assert_eq!(wav_bytes(&renamed), Ok(tiny_wav()));
+    fn only_a_file_the_operator_chose_is_read() {
+        let dir = scratch("chosen");
+        let cq = dir.join("cq.wav");
+        std::fs::write(&cq, tiny_wav()).unwrap();
+        let cq = cq.to_string_lossy().into_owned();
+        let mut settings = Settings::default();
+        let none = BTreeSet::new();
+
+        let (_, why) = clip_for(&settings, Js8SoundEvent::Cq, Some(&cq), &none);
+        assert_eq!(why, Some(SoundRefusal::NotPicked), "never chosen");
+
+        settings.js8_sound_files.insert("cq".into(), cq.clone());
+        let (clip, why) = clip_for(&settings, Js8SoundEvent::Cq, Some(&cq), &none);
+        assert_eq!((clip.rate, why), (12_000, None), "the event's saved file");
+        let (_, why) = clip_for(&settings, Js8SoundEvent::Hb, Some(&cq), &none);
+        assert_eq!(
+            why,
+            Some(SoundRefusal::NotPicked),
+            "another event's file is not this one's"
+        );
+
+        let picked: BTreeSet<String> = [cq.clone()].into();
+        let (clip, why) = clip_for(&Settings::default(), Js8SoundEvent::Ack, Some(&cq), &picked);
+        assert_eq!(
+            (clip.rate, why),
+            (12_000, None),
+            "picked this run, before Save"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn anything_but_a_readable_wav_up_to_the_cap_is_refused_with_its_reason() {
-        let dir = scratch("refused");
-        assert_eq!(
-            wav_bytes(&dir.join("gone.wav")),
-            Err(SoundFileRefusal::Missing)
-        );
+    fn a_chosen_file_that_cannot_play_gives_the_tone_and_says_why() {
+        let dir = scratch("fallback");
+        let gone = dir.join("gone.wav").to_string_lossy().into_owned();
         let text = dir.join("notes.wav");
-        std::fs::write(&text, b"not a sound at all, just some words").unwrap();
-        assert_eq!(wav_bytes(&text), Err(SoundFileRefusal::NotWav));
-        // RIFF but not WAVE (an AVI, say).
-        let avi = dir.join("clip.wav");
-        let mut riff = tiny_wav();
-        riff[8..12].copy_from_slice(b"AVI ");
-        std::fs::write(&avi, riff).unwrap();
-        assert_eq!(wav_bytes(&avi), Err(SoundFileRefusal::NotWav));
-        let short = dir.join("short.wav");
-        std::fs::write(&short, b"RIFF").unwrap();
-        assert_eq!(wav_bytes(&short), Err(SoundFileRefusal::NotWav));
-        assert_eq!(
-            wav_bytes(&dir),
-            Err(SoundFileRefusal::Unreadable),
-            "a folder"
-        );
-        // One byte over the cap, a WAV header and all: refused before it is read (sparse, so the
-        // test writes 44 bytes, not 10 MiB).
-        let big = dir.join("big.wav");
-        std::fs::write(&big, tiny_wav()).unwrap();
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&big)
-            .unwrap()
-            .set_len(MAX_SOUND_FILE_BYTES + 1)
-            .unwrap();
-        assert_eq!(wav_bytes(&big), Err(SoundFileRefusal::TooLarge));
-        // Exactly the cap is handed over.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&big)
-            .unwrap()
-            .set_len(MAX_SOUND_FILE_BYTES)
-            .unwrap();
-        assert_eq!(
-            wav_bytes(&big).map(|b| b.len() as u64),
-            Ok(MAX_SOUND_FILE_BYTES)
-        );
+        std::fs::write(&text, b"just some words").unwrap();
+        let text = text.to_string_lossy().into_owned();
+        let folder = dir.to_string_lossy().into_owned();
+        let picked: BTreeSet<String> = [gone.clone(), text.clone(), folder.clone()].into();
+        let s = Settings::default();
+        for (path, why) in [
+            (&gone, SoundRefusal::Missing),
+            (&text, SoundRefusal::NotWav),
+            (&folder, SoundRefusal::NotAFile),
+        ] {
+            let (clip, got) = clip_for(&s, Js8SoundEvent::Inbox, Some(path), &picked);
+            assert_eq!(got, Some(why), "{path}");
+            assert_eq!(clip.rate, tempo_audio_rate(), "the tone instead");
+        }
+        let (_, got) = clip_for(&s, Js8SoundEvent::Inbox, None, &picked);
+        assert_eq!(got, None, "no file: the tone, nothing to say");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The window reads each refusal by name (`ui/src/features/js8Sounds.ts`).
     #[test]
     fn a_refusal_reaches_the_window_by_name() {
         let names: Vec<String> = [
-            SoundFileRefusal::Missing,
-            SoundFileRefusal::Unreadable,
-            SoundFileRefusal::TooLarge,
-            SoundFileRefusal::NotWav,
+            SoundRefusal::Missing,
+            SoundRefusal::NotAFile,
+            SoundRefusal::Unreadable,
+            SoundRefusal::TooLarge,
+            SoundRefusal::NotWav,
+            SoundRefusal::BadFormat,
+            SoundRefusal::NotPicked,
+            SoundRefusal::TxDevice,
+            SoundRefusal::NoDevice,
+            SoundRefusal::Failed,
         ]
         .iter()
         .map(|r| serde_json::to_string(r).unwrap())
@@ -191,15 +365,24 @@ mod tests {
             names,
             [
                 "\"missing\"",
+                "\"notAFile\"",
                 "\"unreadable\"",
                 "\"tooLarge\"",
-                "\"notWav\""
+                "\"notWav\"",
+                "\"badFormat\"",
+                "\"notPicked\"",
+                "\"txDevice\"",
+                "\"noDevice\"",
+                "\"failed\""
             ]
         );
+        let ev: Js8SoundEvent = serde_json::from_str("\"callNew\"").unwrap();
+        assert_eq!(ev, Js8SoundEvent::CallNew);
+        assert!(serde_json::from_str::<Js8SoundEvent>("\"../etc\"").is_err());
     }
 
-    /// Both commands are registered, once each: a command missing from the handler list fails in
-    /// the window as "command not found" with nothing in any log.
+    /// Both commands are registered, once each, and the old byte-handing command is gone: a
+    /// command missing from the handler list fails in the window as "command not found".
     #[test]
     fn both_sound_commands_are_registered() {
         let src = include_str!("lib.rs");
@@ -208,9 +391,10 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("])"))
             .map(|(list, _)| list)
             .expect("lib.rs has a generate_handler! list");
-        for command in ["pick_js8_sound_file", "read_js8_sound_file"] {
+        for command in ["pick_js8_sound_file", "play_js8_sound"] {
             let named = format!("js8_sounds::{command},");
             assert_eq!(handlers.matches(&named).count(), 1, "{named}");
         }
+        assert!(!src.contains("read_js8_sound_file"));
     }
 }

@@ -88,7 +88,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   `<path> MSG [MESSAGE]` in the compose box, the path the message came by, with `[MESSAGE]`
   picked for you to type over; nothing is sent until you send it, and while a message of yours
   is going out it puts nothing in, as JS8Call adds no text then. A new message to you puts a
-  notice up for five minutes, as JS8Call's box stays, with **Show** to open it. A message held
+  notice up for five minutes, as JS8Call's box stays, whichever screen is showing while JS8 is
+  the mode, with **Show** to open it here. A message held
   for one station stays until you delete it, as in JS8Call. One left for a group
   (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
   QUERY MSGS to the group, once to each, and handed over whenever a station asks for it with
@@ -145,7 +146,11 @@ each of a CQ, a heartbeat, an ACK for you, a message to you, a message in your I
 callsign and one you have worked (all off, as in JS8Call). Each plays a tone of its own or a WAV
 file you choose, as JS8Call plays the file you pick, and it plays whichever screen is showing
 while JS8 is the mode: you hear a CQ from the Logbook or the Map too. A file that cannot be
-played plays the tone instead, and Nexus says so once.
+played plays the tone instead, and Nexus says so once. **Play the sounds on** picks the output
+(the system default unless you pick one), as JS8Call lets you pick its notification device. It is
+never a device your radio transmits from: a sound there could key a rig on VOX, so Nexus checks at
+every sound and plays nothing there, even if the radio's TX audio device is changed to it later,
+and says so.
 
 **JS8 60** is JS8Call 3.0's newest speed, and JS8Call calls it experimental: 4-second
 periods, a signal 250 Hz wide, each frame about 2.6 s on the air, so the band carries a

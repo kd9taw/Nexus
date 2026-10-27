@@ -8,15 +8,13 @@ import { act, cleanup, render } from '@testing-library/react'
 import type { Js8ActivityRow, Js8Heard, Js8InboxEntry, Js8State } from '../types'
 import { Js8SoundPlayer } from './Js8SoundPlayer'
 import { __resetJs8SoundsForTest } from '../features/js8Sounds'
-import * as alerts from '../alerts'
 import * as api from '../api'
 
-vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn(), ensureCtx: vi.fn(() => null) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 vi.mock('../api', () => ({
   getJs8State: vi.fn(),
   askLog: vi.fn(async () => ({})),
-  readJs8SoundFile: vi.fn(),
+  playJs8SoundHere: vi.fn(async () => ({ fileRefused: null })),
 }))
 
 const frame = (from: string, text: string, atMs: number, o: Partial<Js8ActivityRow> = {}): Js8ActivityRow => ({
@@ -39,7 +37,10 @@ const mail = (id: number): Js8InboxEntry => ({ id, from: 'W1AW', to: 'KD9TAW', t
 const engine = (o: Partial<Js8State> = {}): Js8State => ({ activity: [], stations: [], inbox: [], ...o }) as unknown as Js8State
 
 let state: Js8State
-const tones = () => [...vi.mocked(alerts.beep).mock.calls.map((c) => c[0]), ...vi.mocked(alerts.doubleBeep).mock.calls.map((c) => -c[0])]
+/** Each event's tone as the tests name it (Hz; negative rings twice), the one Rust plays for it. */
+const HZ: Record<string, number> = { cq: 587, hb: 466, ack: 1046, directed: -932, inbox: -784, callNew: 698, callOld: 554 }
+/** The sounds asked of this computer, as their tones, file or not. */
+const tones = () => vi.mocked(api.playJs8SoundHere).mock.calls.map((c) => HZ[c[0]])
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -92,20 +93,23 @@ describe('the JS8 sounds, from whichever screen is showing', () => {
     expect(tones()).toEqual([466])
   })
 
-  it('reads nothing while every sound is off (the default) or JS8 is not the mode, and stops when that changes', async () => {
-    const r = await mount({ sounds: [] })
+  it('reads nothing while JS8 is not the mode, and stops when that changes; every sound off plays nothing', async () => {
+    const r = await mount({ tier: 'FT8' })
     await poll()
-    r.rerender(<Js8SoundPlayer tier="FT8" sounds={['cq']} files={{}} myCall="KD9TAW" groups={[]} logTick={0} />)
     await poll()
     expect(api.getJs8State, 'never asked').not.toHaveBeenCalled()
-    r.rerender(<Js8SoundPlayer tier="JS8" sounds={['cq']} files={{}} myCall="KD9TAW" groups={[]} logTick={0} />)
+    r.rerender(<Js8SoundPlayer tier="JS8" sounds={[]} files={{}} myCall="KD9TAW" groups={[]} logTick={0} />)
     await poll()
     const asked = vi.mocked(api.getJs8State).mock.calls.length
-    expect(asked, 'JS8 and a sound on: it reads').toBeGreaterThan(0)
+    expect(asked, 'JS8: it reads (the new-message notice), sounds or not').toBeGreaterThan(0)
+    state = engine({ ...state, activity: [...state.activity, frame('N0CQ', '@ALLCALL CQ CQ CQ EM10 ', 3)], inbox: [mail(1), mail(2)] })
+    await poll()
+    expect(tones(), 'every sound off: none plays').toEqual([])
     r.rerender(<Js8SoundPlayer tier="FT8" sounds={['cq']} files={{}} myCall="KD9TAW" groups={[]} logTick={0} />)
+    const left = vi.mocked(api.getJs8State).mock.calls.length
     await poll()
     await poll()
-    expect(vi.mocked(api.getJs8State).mock.calls.length, 'left JS8: no more reads').toBe(asked)
+    expect(vi.mocked(api.getJs8State).mock.calls.length, 'left JS8: no more reads').toBe(left)
   })
 
   it('a new call sounds once the log has said whether it is worked: new, or worked before', async () => {
@@ -130,13 +134,44 @@ describe('the JS8 sounds, from whichever screen is showing', () => {
     expect(tones()).toEqual([698])
   })
 
-  it('a sound with a WAV file plays the file', async () => {
-    vi.mocked(api.readJs8SoundFile).mockRejectedValue('missing')
+  it('a sound with a WAV file asks for the file', async () => {
     await mount({ sounds: ['cq'], files: { cq: '/home/op/sounds/cq.wav' } })
-    vi.mocked(alerts.ensureCtx).mockReturnValue({} as AudioContext)
     state = engine({ ...state, activity: [...state.activity, frame('N0CQ', '@ALLCALL CQ CQ CQ EM10 ', 3)] })
     await poll()
-    expect(api.readJs8SoundFile).toHaveBeenCalledWith('/home/op/sounds/cq.wav')
-    expect(tones(), 'and the tone when the file cannot play').toEqual([587])
+    expect(vi.mocked(api.playJs8SoundHere).mock.calls).toEqual([['cq', '/home/op/sounds/cq.wav']])
+  })
+})
+
+// JS8Call's "New Message Received" box (processCommandActivity.cpp:806-820), from whichever screen shows.
+describe('a new message announces itself from any screen', () => {
+  const notices = async () => {
+    const toast = await import('../toast')
+    return vi.mocked(toast.pushToast).mock.calls.filter(([msg]) => String(msg).startsWith('New message from'))
+  }
+
+  it('once per message filed unread, 300 s, with a Show that opens that station’s Inbox; not what was there before', async () => {
+    const onShowMessage = vi.fn()
+    await mount({ sounds: [], onShowMessage })
+    await poll()
+    expect(await notices(), 'mail from before the watch started').toEqual([])
+    state = engine({ ...state, inbox: [mail(1), { ...mail(2), from: 'K1HB' }, { ...mail(3), state: 'read' } as Js8InboxEntry] })
+    await poll()
+    await poll()
+    const said = await notices()
+    expect(said, 'once, and only the unread one').toHaveLength(1)
+    expect(String(said[0][0])).toMatch(/^New message from K1HB/)
+    expect(said[0][1]).toBe('info')
+    expect(said[0][2]).toBe(300_000)
+    expect(said[0][3]?.actionLabel).toBe('Show')
+    said[0][3]!.action!()
+    expect(onShowMessage).toHaveBeenCalledWith('K1HB')
+  })
+
+  it('says nothing while JS8 is not the mode', async () => {
+    await mount({ tier: 'FT8', sounds: [] })
+    state = engine({ ...state, inbox: [mail(1), mail(2)] })
+    await poll()
+    await poll()
+    expect(await notices()).toEqual([])
   })
 })

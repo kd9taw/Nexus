@@ -1503,6 +1503,12 @@ pub struct Settings {
     /// Remote settings document does not carry them.
     #[serde(default)]
     pub js8_sound_files: std::collections::BTreeMap<String, String>,
+    /// The output the JS8 sounds play on, by device name, as JS8Call lets its notifications pick one.
+    /// Empty, the default, is the system default output. Never a device the station transmits from:
+    /// every play is refused while this (or the default it stands for) is a TX audio device
+    /// (`tempo_audio::notify_sound`), so a VOX-keyed rig is never keyed by a notification.
+    #[serde(default)]
+    pub js8_sound_device: String,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -5952,6 +5958,7 @@ impl Default for Settings {
             js8_reset_activity: false,
             js8_pane_style: Js8PaneStyle::default(),
             js8_sound_files: std::collections::BTreeMap::new(),
+            js8_sound_device: String::new(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -13254,6 +13261,47 @@ mod tests {
                 family: "DejaVu Sans Mono".into(),
                 size_pt: 11
             })
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8PaneStyle"),
+            "ui/src/types.ts Settings is missing `js8PaneStyle`"
+        );
+        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
+    }
+
+    /// The JS8 sounds' output: the system default (empty) by default, its camelCase wire key, an
+    /// upgrader's file, a round trip, and the TS mirror.
+    #[test]
+    fn js8_sound_device_is_the_system_default_by_default_and_round_trips() {
+        assert_eq!(Settings::default().js8_sound_device, "");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8SoundDevice\":\"\""), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_sound_device, "", "an upgrader plays on the default");
+        let on: Settings =
+            serde_json::from_str(r#"{"js8SoundDevice":"Speakers (Realtek)"}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back.js8_sound_device, "Speakers (Realtek)");
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("  js8SoundDevice?: string"),
+            "ui/src/types.ts Settings mirrors it"
+        );
+    }
+
     /// The JS8 sounds' WAV files: none by default (JS8Call's empty paths, so every sound plays its
     /// built-in tone), the camelCase wire key, an upgrader's file, a round trip of chosen paths
     /// with their slashes and backslashes as written, and the TS mirror.
@@ -13284,15 +13332,6 @@ mod tests {
         let start = ts.find(head).expect("the UI declares Settings") + head.len();
         let body = &ts[start..];
         let body = &body[..body.find("\n}").expect("the interface is closed")];
-        let typed = |key: &str| {
-            body.lines()
-                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
-        };
-        assert!(
-            typed("js8PaneStyle"),
-            "ui/src/types.ts Settings is missing `js8PaneStyle`"
-        );
-        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
         assert!(
             body.lines()
                 .map(str::trim_start)

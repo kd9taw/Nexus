@@ -76,6 +76,9 @@ export function Js8ListsSettings({
   setReset,
   pickSoundFile,
   setSoundFile,
+  outputs = [],
+  outputLabel = (d: string) => d,
+  setSoundDevice,
 }: {
   form: Settings
   setList: (key: ListKey, list: string[]) => void
@@ -87,6 +90,12 @@ export function Js8ListsSettings({
   pickSoundFile?: () => Promise<string | null>
   /** A sound's file as it should be; null is the built-in tone. */
   setSoundFile?: (event: Js8SoundEvent, path: string | null) => void
+  /** This computer's output devices, by name, for the sounds' output picker. */
+  outputs?: readonly string[]
+  /** An output's name as the other device pickers show it. */
+  outputLabel?: (device: string) => string
+  /** The sounds' output as it should be ('' = the system default). Absent: no picker. */
+  setSoundDevice?: (device: string) => void
 }) {
   const lists: [ListKey, string, string][] = [
     ['js8RxBlocklist', t('settings.js8.rxBlocklist.label'), t('settings.js8.rxBlocklist.hint')],
@@ -100,6 +109,14 @@ export function Js8ListsSettings({
   const sounds = form.js8Sounds ?? []
   const reset = form.js8ResetActivity === true
   const files = form.js8SoundFiles ?? {}
+  const device = form.js8SoundDevice ?? ''
+  // The radio's TX audio devices, offered but not choosable: a sound there could key a rig on VOX.
+  // A convenience only: what holds the line is the check at every play (tempo_audio::notify_sound).
+  const txDevices = new Set(
+    [form.audioOut, ...(form.radios ?? []).map((r) => r.audioOut)].filter((d): d is string => !!d?.trim()).map((d) => d.trim().toLowerCase()),
+  )
+  const isTx = (d: string) => txDevices.has(d.trim().toLowerCase())
+  const deviceOptions = device && !outputs.includes(device) ? [device, ...outputs] : [...outputs]
   return (
     <>
       <div className="settings-featgroup">
@@ -146,6 +163,25 @@ export function Js8ListsSettings({
       <div className="settings-featgroup">
         <span className="settings-featgroup-title">{t('settings.js8.sounds.title')}</span>
         <span className="settings-hint">{t('settings.js8.sounds.hint')}</span>
+        {setSoundDevice && (
+          <label className="settings-field">
+            <span className="settings-label">{t('settings.js8.sound.device.label')}</span>
+            <select
+              className="settings-input js8-sound-device"
+              aria-label={t('settings.js8.sound.device.label')}
+              value={device}
+              onChange={(e) => setSoundDevice(e.target.value)}
+            >
+              <option value="">{t('settings.audio.device.systemDefault')}</option>
+              {deviceOptions.map((d) => (
+                <option key={d} value={d} disabled={isTx(d) && d !== device}>
+                  {isTx(d) ? t('settings.js8.sound.device.tx', { device: outputLabel(d) }) : outputLabel(d)}
+                </option>
+              ))}
+            </select>
+            <span className="settings-hint">{t('settings.js8.sound.device.hint')}</span>
+          </label>
+        )}
         {JS8_SOUND_EVENTS.map((ev) => {
           const on = sounds.includes(ev)
           const label = soundLabel(ev)

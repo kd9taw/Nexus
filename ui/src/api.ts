@@ -4432,16 +4432,18 @@ export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
 }
 
-/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file (desktop only).
+/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file.
  *  Null when cancelled. It only reads a path back; Save writes it with the rest of the form. */
 export async function pickJs8SoundFile(): Promise<string | null> {
   return invoke<string | null>('pick_js8_sound_file')
 }
 
-/** A sound's WAV file, raw, to play. Rejects with why it was not handed over: 'missing',
- *  'unreadable', 'tooLarge' or 'notWav' (only a RIFF/WAVE file up to 10 MiB is). Desktop only. */
-export async function readJs8SoundFile(path: string): Promise<ArrayBuffer> {
-  return invoke<ArrayBuffer>('read_js8_sound_file', { path })
+/** Play one JS8 sound on this computer, in Rust (`src-tauri/src/js8_sounds.rs`): `file` (the WAV the
+ *  form holds for it) or its built-in tone, on Settings `js8SoundDevice`. Resolves with why a file fell
+ *  back to the tone, if it did; rejects with why nothing played: 'txDevice' (the output is a device the
+ *  station transmits from, refused for VOX safety), 'noDevice' or 'failed'. */
+export async function playJs8SoundHere(event: string, file: string | null): Promise<{ fileRefused: string | null }> {
+  return invoke<{ fileRefused: string | null }>('play_js8_sound', { event, file })
 }
 
 /** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's

@@ -2573,6 +2573,10 @@ function App() {
   // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
   const [contestReentering, setContestReentering] = useState(false)
 
+  // The JS8 new-message notice's "Show" (Js8SoundPlayer, from any screen): the station whose Inbox the
+  // JS8 screen opens on, a new `seq` for each ask.
+  const [js8InboxAsk, setJs8InboxAsk] = useState<{ call: string; seq: number } | null>(null)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
@@ -4304,6 +4308,7 @@ function App() {
                 onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
                 lists={js8Lists}
                 paneStyle={settings?.js8PaneStyle}
+                inboxRequest={js8InboxAsk}
               />
             </div>
           )}
@@ -4318,6 +4323,10 @@ function App() {
               myCall={snap?.mycall ?? ''}
               groups={settings?.js8Groups ?? []}
               logTick={snap?.logTick}
+              onShowMessage={(call) => {
+                handleView('js8')
+                setJs8InboxAsk((was) => ({ call, seq: (was?.seq ?? 0) + 1 }))
+              }}
             />
           )}
           {workspace}
