@@ -102,7 +102,14 @@ vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn() }))
 vi.mock('./CockpitHeader', () => ({
   CockpitHeader: (p: { modeIndicator?: ReactNode }) => <header className="cockpit-header">{p.modeIndicator}</header>,
 }))
-vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
+/** The waterfall's props at its latest render. */
+const waterfallProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }))
+vi.mock('./Waterfall', () => ({
+  Waterfall: (p: Record<string, unknown>) => {
+    waterfallProps.current = p
+    return <div className="waterfall-wrap" />
+  },
+}))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 // A Remote observer's receiver: allowed to move the receive offset, and nothing else.
 const receiver = vi.hoisted(() => ({ rxAllowed: true, depthAllowed: false, tuneRx: vi.fn(), setDepth: vi.fn() }))
@@ -149,7 +156,6 @@ const lists = (o: Partial<Js8ListSettings> = {}): Js8ListSettings => ({
   highlightSecondary: [],
   eot: '♢',
   mfi: '……',
-  sounds: [],
   groups: ['@FUN'],
   avoidAllcall: false,
   setRxBlocklist: vi.fn(async () => {}),
@@ -715,7 +721,7 @@ describe('the Inbox is JS8Call’s message panel', () => {
   })
 })
 
-describe('a new message announces itself, and the sounds', () => {
+describe('a new message announces itself (its sound is Js8SoundPlayer’s, from any screen)', () => {
   const newMail = () => ({
     ...js8Fixture(),
     inbox: [...js8Fixture().inbox, { id: 3, from: 'K1HB', to: 'KD9TAW', text: 'HI', path: ['K1HB'], state: 'unread' as const, atMs: T0, freqHz: 600, snrDb: -12 }],
@@ -737,30 +743,18 @@ describe('a new message announces itself, and the sounds', () => {
     })
     expect((document.querySelector('.js8-inbox-filter select') as HTMLSelectElement).value).toBe('K1HB')
   })
+})
 
-  it('plays only the sounds switched on, for what is new since the last poll', async () => {
-    const alerts = await import('../alerts')
-    await renderCockpit({ lists: lists({ sounds: ['cq', 'inbox'] }) })
-    await poll()
-    expect(alerts.beep, 'nothing heard yet is new').not.toHaveBeenCalled()
-    state.current = {
-      ...newMail(),
-      activity: [
-        ...js8Fixture().activity,
-        frame({ atMs: Date.now(), freqHz: 1800, from: 'N0CQ', text: 'N0CQ: @ALLCALL CQ CQ CQ EM10 ' }),
-        frame({ atMs: Date.now(), freqHz: 700, from: 'W9HB', text: 'W9HB: @HB HEARTBEAT EM10 ' }),
-      ],
-    }
-    await poll()
-    expect(alerts.beep).toHaveBeenCalledTimes(1)
-    expect(alerts.doubleBeep, 'the inbox rings twice').toHaveBeenCalledTimes(1)
-    cleanup()
-    vi.mocked(alerts.beep).mockClear()
-    state.current = js8Fixture()
+describe('the waterfall darkens what the decode filter leaves out, as JS8Call’s does', () => {
+  it('hands the waterfall the filter’s passband while the filter is on, and nothing while it is off', async () => {
+    const controls = (enabled: boolean) => ({ filter: { enabled, centerHz: 1200, widthHz: 600 }, qsyCenterHz: 1500, hop: null })
+    state.current = { ...js8Fixture(), controls: controls(true) }
     await renderCockpit()
     await poll()
-    state.current = newMail()
+    expect(waterfallProps.current, 'the waterfall is drawn').not.toBeNull()
+    expect(waterfallProps.current?.shade).toEqual({ loHz: 900, hiHz: 1500 })
+    state.current = { ...js8Fixture(), controls: controls(false) }
     await poll()
-    expect(alerts.beep, 'every sound off by default').not.toHaveBeenCalled()
+    expect(waterfallProps.current?.shade).toBeNull()
   })
 })

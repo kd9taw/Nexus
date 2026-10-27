@@ -29606,8 +29606,25 @@ button.sat-chip:disabled {
 }
 .js8-sound {
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+/* A sound's WAV file, on its own line under the switch and Test: the file's name (the whole path on
+   hover) or "Built-in tone", Choose… and Reset to built-in. The row is a row (a settings field is a
+   column), and it wraps rather than widen the panel. */
+.js8-sound-file {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.js8-sound-file-name {
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 .js8-mark-input {
   max-width: 6em;

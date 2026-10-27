@@ -4432,6 +4432,18 @@ export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
 }
 
+/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file (desktop only).
+ *  Null when cancelled. It only reads a path back; Save writes it with the rest of the form. */
+export async function pickJs8SoundFile(): Promise<string | null> {
+  return invoke<string | null>('pick_js8_sound_file')
+}
+
+/** A sound's WAV file, raw, to play. Rejects with why it was not handed over: 'missing',
+ *  'unreadable', 'tooLarge' or 'notWav' (only a RIFF/WAVE file up to 10 MiB is). Desktop only. */
+export async function readJs8SoundFile(path: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>('read_js8_sound_file', { path })
+}
+
 /** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
  *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
  *  with the setting as saved. */

@@ -78,6 +78,9 @@ mod freq_markers;
 /// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
 /// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
 mod js8_api;
+/// Settings ▸ Digital ▸ JS8 ▸ Sounds: the OS picker for a sound's WAV file, and its bytes for the
+/// window to play (only a RIFF/WAVE file). Desktop only.
+mod js8_sounds;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;

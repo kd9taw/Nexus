@@ -398,3 +398,12 @@ describe('a profile saved from a read without the stored keys keeps the station�
     expect(loadProfiles()[0].settings.clublogApiKey).toBe('FAKE-KEY-0002')
   })
 })
+
+describe('mergeProfile — the JS8 sounds’ WAV files travel with a profile', () => {
+  it('a profile’s files replace the current ones, and a profile from before them keeps them', () => {
+    const current = { js8Sounds: ['cq'], js8SoundFiles: { cq: '/home/op/sounds/cq.wav' } } as unknown as Settings
+    const club = { js8Sounds: ['cq', 'inbox'], js8SoundFiles: { inbox: 'D:\\Club\\mail.wav' } } as unknown as Settings
+    expect(mergeProfile(current, club).js8SoundFiles).toEqual({ inbox: 'D:\\Club\\mail.wav' })
+    expect(mergeProfile(current, { band: '40m' } as unknown as Settings).js8SoundFiles).toEqual({ cq: '/home/op/sounds/cq.wav' })
+  })
+})

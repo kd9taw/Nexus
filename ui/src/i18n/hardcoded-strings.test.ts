@@ -732,6 +732,9 @@ const MIGRATED = [
   // Settings ▸ Digital ▸ JS8's colours and fonts (JS8Call's UI tab) — migrated from birth. The samples'
   // calls, offsets and reports are data.
   'components/Js8PaneStyleSettings.tsx',
+  // The JS8 sounds from any screen, and a sound file's notice when it cannot play — migrated from birth.
+  'components/Js8SoundPlayer.tsx',
+  'features/js8Sounds.ts',
 ]
 
 /**

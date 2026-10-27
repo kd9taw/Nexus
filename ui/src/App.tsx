@@ -121,6 +121,7 @@ import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
 import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
 import { JttyCockpit } from './components/JttyCockpit'
+import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
@@ -1858,7 +1859,6 @@ function App() {
         highlightSecondary: settings.js8HighlightSecondary ?? [],
         eot: settings.js8Eot ?? '\u2662',
         mfi: settings.js8Mfi ?? '\u2026\u2026',
-        sounds: settings.js8Sounds ?? [],
         groups: settings.js8Groups ?? [],
         avoidAllcall: settings.js8AvoidAllcall ?? false,
         resetActivity: settings.js8ResetActivity === true,
@@ -4306,6 +4306,19 @@ function App() {
                 paneStyle={settings?.js8PaneStyle}
               />
             </div>
+          )}
+          {/* JS8Call's sounds from whichever screen is showing (Js8SoundPlayer): beside the JS8 host,
+              not inside it, and handed nothing about the view, so the screen shown never decides
+              whether a sound plays. */}
+          {isViewEnabled('js8') && (
+            <Js8SoundPlayer
+              tier={snap?.link.tier}
+              sounds={settings?.js8Sounds ?? []}
+              files={settings?.js8SoundFiles ?? {}}
+              myCall={snap?.mycall ?? ''}
+              groups={settings?.js8Groups ?? []}
+              logTick={snap?.logTick}
+            />
           )}
           {workspace}
         </ErrorBoundary>

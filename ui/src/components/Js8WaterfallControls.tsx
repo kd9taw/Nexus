@@ -54,6 +54,14 @@ export function js8CentreFilterItem(
   }
 }
 
+/** What the waterfall darkens for the decode filter (its `shade`): the passband centre ± width/2,
+ *  only while the filter is on and has a width, as JS8Call draws it (CPlotter.cpp:470, :497-499).
+ *  Null otherwise, and before the station has said. */
+export function js8FilterShade(filter: Js8Filter | null | undefined): { loHz: number; hiHz: number } | null {
+  if (!filter?.enabled || filter.widthHz <= 0) return null
+  return { loHz: filter.centerHz - filter.widthHz / 2, hiHz: filter.centerHz + filter.widthHz / 2 }
+}
+
 interface Props {
   js8: Js8State | null
   rxOffsetHz: number

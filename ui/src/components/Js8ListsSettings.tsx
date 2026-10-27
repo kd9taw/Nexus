@@ -1,9 +1,10 @@
 // Settings ▸ Digital ▸ JS8: what JS8Call 3.0.3 keeps for its lists and sounds, at its defaults —
 // the RX block list ("Hide messages from these callsigns in the RX pane", empty), the primary and
 // secondary highlight lists (words or callsigns, empty), the end-of-transmission and missing-frame
-// marks (♢ and ……), the notification sounds (all off) and JS8Call's startup reset of the lists (off).
-// Rendered inside the JS8 section with the panel's own form and setters, so a Save writes them with
-// every other field. The call list's "Block this station" writes the block list too, on the click.
+// marks (♢ and ……), the notification sounds (all off), each with the WAV file it plays, as JS8Call
+// lets each play one, or the built-in tone, and JS8Call's startup reset of the lists (off). Rendered
+// inside the JS8 section with the panel's own form and setters, so a Save writes them with every other
+// field. The call list's "Block this station" writes the block list too, on the click.
 //
 // Nothing here transmits.
 //
@@ -12,7 +13,7 @@
 import { useState } from 'react'
 import { t } from '../i18n'
 import type { Settings } from '../types'
-import { JS8_SOUND_EVENTS, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
+import { JS8_SOUND_EVENTS, js8SoundFileName, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
 
 type ListKey = 'js8RxBlocklist' | 'js8HighlightPrimary' | 'js8HighlightSecondary'
 type MarkKey = 'js8Eot' | 'js8Mfi'
@@ -73,6 +74,8 @@ export function Js8ListsSettings({
   setMark,
   setSounds,
   setReset,
+  pickSoundFile,
+  setSoundFile,
 }: {
   form: Settings
   setList: (key: ListKey, list: string[]) => void
@@ -80,6 +83,10 @@ export function Js8ListsSettings({
   setSounds: (events: string[]) => void
   /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup". */
   setReset: (on: boolean) => void
+  /** The OS file picker for a sound's WAV file (null when cancelled). Absent: no file controls. */
+  pickSoundFile?: () => Promise<string | null>
+  /** A sound's file as it should be; null is the built-in tone. */
+  setSoundFile?: (event: Js8SoundEvent, path: string | null) => void
 }) {
   const lists: [ListKey, string, string][] = [
     ['js8RxBlocklist', t('settings.js8.rxBlocklist.label'), t('settings.js8.rxBlocklist.hint')],
@@ -92,6 +99,7 @@ export function Js8ListsSettings({
   ]
   const sounds = form.js8Sounds ?? []
   const reset = form.js8ResetActivity === true
+  const files = form.js8SoundFiles ?? {}
   return (
     <>
       <div className="settings-featgroup">
@@ -141,6 +149,7 @@ export function Js8ListsSettings({
         {JS8_SOUND_EVENTS.map((ev) => {
           const on = sounds.includes(ev)
           const label = soundLabel(ev)
+          const file = files[ev] || null
           return (
             <div className="settings-field js8-sound" key={ev}>
               <label className="settings-toggle">
@@ -158,12 +167,42 @@ export function Js8ListsSettings({
               <button
                 type="button"
                 className="settings-refresh js8-sound-test"
-                onClick={() => playJs8Sound(ev)}
+                onClick={() => void playJs8Sound(ev, file, true)}
                 aria-label={t('settings.js8.sound.test.aria', { event: label })}
                 title={t('settings.js8.sound.test.title')}
               >
                 {t('settings.js8.sound.test.label')}
               </button>
+              {pickSoundFile && setSoundFile && (
+                <span className="js8-sound-file">
+                  <span className="js8-sound-file-name" title={file ?? undefined}>
+                    {file ? js8SoundFileName(file) : t('settings.js8.sound.file.builtIn')}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-refresh"
+                    onClick={() =>
+                      void pickSoundFile().then((path) => {
+                        if (path) setSoundFile(ev, path)
+                      })
+                    }
+                    aria-label={t('settings.js8.sound.file.choose.aria', { event: label })}
+                    title={t('settings.js8.sound.file.choose.title')}
+                  >
+                    {t('settings.js8.sound.file.choose.label')}
+                  </button>
+                  {file && (
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => setSoundFile(ev, null)}
+                      aria-label={t('settings.js8.sound.file.reset.aria', { event: label })}
+                    >
+                      {t('settings.js8.sound.file.reset.label')}
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           )
         })}

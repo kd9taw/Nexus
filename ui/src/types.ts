@@ -4849,6 +4849,9 @@ export interface Settings {
     dark: Record<string, string>
     fonts: Record<string, { family: string; sizePt: number }>
   }
+  /** The WAV file each of those plays, by event (JS8Call's notification paths). None, the default,
+   *  plays the built-in tone. Paths on this computer: the Remote page never has them. */
+  js8SoundFiles?: Record<string, string>
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean

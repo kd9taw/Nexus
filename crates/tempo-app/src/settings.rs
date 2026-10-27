@@ -1496,6 +1496,13 @@ pub struct Settings {
     /// ▸ UI, Configuration.ui:3250-4060). Empty by default: every pane then follows the theme.
     #[serde(default)]
     pub js8_pane_style: Js8PaneStyle,
+    /// The WAV file each of those sounds plays, by the same event names: JS8Call's
+    /// `Notifications/<event>/path`, picked with its "Select" button (Configuration.cpp:2054-2066,
+    /// :2462-2478). An event with none, the default, plays Nexus's own tone for it, and so does one
+    /// whose file cannot be played. Paths on this computer: they travel in a profile, and the
+    /// Remote settings document does not carry them.
+    #[serde(default)]
+    pub js8_sound_files: std::collections::BTreeMap<String, String>,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -5944,6 +5951,7 @@ impl Default for Settings {
             js8_sounds: Vec::new(),
             js8_reset_activity: false,
             js8_pane_style: Js8PaneStyle::default(),
+            js8_sound_files: std::collections::BTreeMap::new(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -13246,6 +13254,26 @@ mod tests {
                 family: "DejaVu Sans Mono".into(),
                 size_pt: 11
             })
+    /// The JS8 sounds' WAV files: none by default (JS8Call's empty paths, so every sound plays its
+    /// built-in tone), the camelCase wire key, an upgrader's file, a round trip of chosen paths
+    /// with their slashes and backslashes as written, and the TS mirror.
+    #[test]
+    fn js8_sound_files_are_none_by_default_and_round_trip() {
+        let wire = |s: &Settings| serde_json::to_value(s).unwrap()["js8SoundFiles"].clone();
+        assert_eq!(
+            wire(&Settings::default()),
+            serde_json::json!({}),
+            "no file: every sound its tone"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(wire(&old), serde_json::json!({}), "an upgrader's file");
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8Sounds":["cq","inbox"],"js8SoundFiles":{"cq":"/home/op/sounds/cq.wav","inbox":"C:\\Sounds\\mail.wav"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wire(&chosen),
+            serde_json::json!({"cq": "/home/op/sounds/cq.wav", "inbox": "C:\\Sounds\\mail.wav"})
         );
         let back: Settings =
             serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
@@ -13265,6 +13293,12 @@ mod tests {
             "ui/src/types.ts Settings is missing `js8PaneStyle`"
         );
         assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
+        assert!(
+            body.lines()
+                .map(str::trim_start)
+                .any(|l| { l.starts_with("js8SoundFiles:") || l.starts_with("js8SoundFiles?:") }),
+            "ui/src/types.ts Settings is missing `js8SoundFiles`"
+        );
     }
 
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the

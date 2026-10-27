@@ -1541,10 +1541,14 @@ nothing until you enable TX in the cockpit, every session.
 
 **Sounds**
 
-A short tone of its own for each of: a CQ, a heartbeat, an ACK for you, a message directed to
-you or your group, a message filed in your Inbox, a new callsign, a callsign you have worked.
-All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
-JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
+A sound for each of: a CQ, a heartbeat, an ACK for you, a message directed to you or your
+group, a message filed in your Inbox, a new callsign, a callsign you have worked. All off by
+default, as JS8Call's notifications are. Each plays a short tone of its own, or a WAV file you
+pick with **Choose…**, as JS8Call plays the file you pick for each; **Reset to built-in** goes
+back to the tone, and **Test** plays it. A file that cannot be played (moved, not a WAV file,
+larger than 10 MB) plays the tone instead, and Nexus says so once. They sound whichever screen
+is showing while JS8 is the mode, as JS8Call's do. The files are this computer's: they travel
+in a profile, and the Remote page neither shows nor changes them.
 
 **Colours and fonts**
 

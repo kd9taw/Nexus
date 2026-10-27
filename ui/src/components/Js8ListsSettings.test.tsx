@@ -2,13 +2,17 @@
 //
 // Settings ▸ Digital ▸ JS8's lists, marks and sounds (components/Js8ListsSettings): JS8Call's
 // defaults shown for a form from before them, each list parsed as JS8Call reads it, the marks as
-// typed, each sound on or off in JS8Call's table order with a Test that plays it, and the startup reset.
+// typed, each sound on or off in JS8Call's table order with a Test that plays it and its WAV file chosen,
+// shown and reset to the built-in tone, and the startup reset.
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { render, cleanup, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, fireEvent, screen, act } from '@testing-library/react'
 import { Js8ListsSettings, parseJs8Words } from './Js8ListsSettings'
 import type { Settings } from '../types'
+import * as api from '../api'
 
-vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn() }))
+vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn(), ensureCtx: vi.fn(() => ({ decodeAudioData: vi.fn() })) }))
+vi.mock('../api', () => ({ readJs8SoundFile: vi.fn(async () => Promise.reject('missing')) }))
+vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 afterEach(cleanup)
 
 const mount = (form: Partial<Settings>) => {
@@ -64,5 +68,57 @@ describe('the JS8 lists, marks and sounds in Settings', () => {
     expect(screen.getByRole('switch', { name }).getAttribute('aria-checked')).toBe('true')
     fireEvent.click(screen.getByRole('switch', { name }))
     expect(on.setReset).toHaveBeenLastCalledWith(false)
+  })
+
+  it('names each sound’s WAV file or the built-in tone; Choose… picks one, Reset to built-in clears it', async () => {
+    const pickSoundFile = vi.fn(async () => '/home/op/sounds/hb.wav')
+    const setSoundFile = vi.fn()
+    render(
+      <Js8ListsSettings
+        form={{ js8Sounds: ['cq'], js8SoundFiles: { cq: '/home/op/sounds/cq.wav' } } as unknown as Settings}
+        setList={vi.fn()}
+        setMark={vi.fn()}
+        setSounds={vi.fn()}
+        setReset={vi.fn()}
+        pickSoundFile={pickSoundFile}
+        setSoundFile={setSoundFile}
+      />,
+    )
+    const row = (name: string) => screen.getByRole('switch', { name }).closest('.js8-sound') as HTMLElement
+    const named = (name: string) => row(name).querySelector<HTMLElement>('.js8-sound-file-name')
+    expect(named('A CQ')?.textContent).toBe('cq.wav')
+    expect(named('A CQ')?.title, 'the whole path on hover').toBe('/home/op/sounds/cq.wav')
+    expect(named('A heartbeat')?.textContent).toBe('Built-in tone')
+    expect(screen.queryByRole('button', { name: 'Play the built-in tone for A heartbeat' }), 'nothing to reset').toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose a WAV file for A heartbeat' }))
+    })
+    expect(pickSoundFile).toHaveBeenCalledTimes(1)
+    expect(setSoundFile).toHaveBeenCalledWith('hb', '/home/op/sounds/hb.wav')
+    pickSoundFile.mockResolvedValueOnce(null as unknown as string)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose a WAV file for A heartbeat' }))
+    })
+    expect(setSoundFile, 'a cancelled picker changes nothing').toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Play the built-in tone for A CQ' }))
+    expect(setSoundFile).toHaveBeenLastCalledWith('cq', null)
+  })
+
+  it('Test plays the row’s file, as the form holds it before Save', async () => {
+    render(
+      <Js8ListsSettings
+        form={{ js8SoundFiles: { ack: 'C:\\Sounds\\ack.wav' } } as unknown as Settings}
+        setList={vi.fn()}
+        setMark={vi.fn()}
+        setSounds={vi.fn()}
+        setReset={vi.fn()}
+        pickSoundFile={vi.fn()}
+        setSoundFile={vi.fn()}
+      />,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test the sound for An ACK for you' }))
+    })
+    expect(api.readJs8SoundFile).toHaveBeenCalledWith('C:\\Sounds\\ack.wav')
   })
 })

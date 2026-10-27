@@ -28,7 +28,7 @@ import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
 import { RecentQsosFrame } from './RecentQsosPane'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
-import { Js8WaterfallControls, js8CentreFilterItem } from './Js8WaterfallControls'
+import { Js8WaterfallControls, js8CentreFilterItem, js8FilterShade } from './Js8WaterfallControls'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
@@ -70,7 +70,6 @@ import {
   type Js8ListMarks,
   type Js8ViewPrefs,
 } from '../features/js8View'
-import { Js8SoundWatch, js8SoundsToPlay, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
 import { js8PaneVars } from '../features/js8PaneStyle'
 import {
   atuBypass,
@@ -198,8 +197,6 @@ export interface Js8ListSettings {
   highlightSecondary: readonly string[]
   eot: string
   mfi: string
-  /** The events that play a sound (features/js8Sounds). */
-  sounds: readonly string[]
   /** The joined @GROUPs. */
   groups: readonly string[]
   /** "Do not participate in the @ALLCALL group": the call list leaves @ALLCALL out. */
@@ -226,7 +223,6 @@ const JS8_LIST_DEFAULTS: Js8ListSettings = {
   highlightSecondary: [],
   eot: '\u2662',
   mfi: '\u2026\u2026',
-  sounds: [],
   groups: [],
   avoidAllcall: false,
 }
@@ -354,22 +350,6 @@ export function Js8Cockpit({
     if (host && !host.shown('inbox')) panels?.setPanelState('inbox', 'docked')
   }
 
-  // JS8Call's notification sounds (features/js8Sounds), the enabled events only, each once a poll.
-  // What a poll brings is read against the one before; coming back to this view starts afresh, so
-  // what was heard meanwhile does not sound all at once. The Remote page plays none.
-  const soundWatch = useRef(new Js8SoundWatch())
-  const playSounds = (events: readonly Js8SoundEvent[]) => {
-    for (const ev of js8SoundsToPlay(events, lists.sounds)) playJs8Sound(ev)
-  }
-  useEffect(() => {
-    if (!active) soundWatch.current = new Js8SoundWatch()
-  }, [active])
-  useEffect(() => {
-    if (!js8) return
-    playSounds(soundWatch.current.frames(js8.activity, snapRef.current?.mycall ?? '', lists.groups))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.activity])
-
   // A MSG to me announces itself, as JS8Call's "New Message Received" box does
   // (processCommandActivity.cpp:806-820): ONCE per message, and it stays up as long as that box
   // (300 s) unless dismissed, with a way to the message. What the first poll finds is taken as seen,
@@ -383,19 +363,16 @@ export function Js8Cockpit({
       seenInboxRef.current = new Set(inbox.map((e) => e.id))
       return
     }
-    let filed = false
     for (const e of inbox) {
       if (seen.has(e.id)) continue
       seen.add(e.id)
       if (e.state === 'unread') {
-        filed = true
         pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', JS8_NEW_MESSAGE_MS, {
           action: () => showInbox(e.from),
           actionLabel: t('js8.inbox.new.open'),
         })
       }
     }
-    if (filed) playSounds(['inbox'])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [js8?.inbox])
 
@@ -1089,12 +1066,6 @@ export function Js8Cockpit({
     reading && !answeredCalls.has(call)
       ? unansweredTitle
       : null
-  // A call heard for the first time sounds once the log has said whether it is worked.
-  useEffect(() => {
-    if (!js8) return
-    playSounds(soundWatch.current.newCalls(js8.stations, (call) => (answeredCalls.has(call) ? logDetail.has(call) : null)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.stations, answeredCalls, logDetail])
   // Each listed call's grid: its own, else the log's (JS8Call's fallback), for the distance and
   // azimuth orders.
   const callGrids = new Map(
@@ -1773,6 +1744,8 @@ export function Js8Cockpit({
           keyed={sending || (snap?.radio.tuning ?? false)}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+          // The audio the decode filter leaves out, darkened as JS8Call's waterfall darkens it.
+          shade={js8FilterShade(js8?.controls?.filter)}
           // JS8Call's waterfall controls (the decode filter, QSY to centre), on its waterfall, as
           // JS8Call keeps them: a plate naming the filter opens them (its own file).
           headerExtra={

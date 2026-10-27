@@ -40,7 +40,7 @@ const seenDecodes = new Set<string>()
 let audioCtx: AudioContext | null = null
 
 /** Lazily create / resume the shared AudioContext (needs a user gesture first). */
-function ensureCtx(): AudioContext | null {
+export function ensureCtx(): AudioContext | null {
   try {
     if (!audioCtx) {
       const Ctor =

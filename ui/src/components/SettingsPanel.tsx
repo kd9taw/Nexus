@@ -252,6 +252,7 @@ import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
 import { Js8PaneStyleSettings } from './Js8PaneStyleSettings'
+import { pickJs8SoundFile } from '../api'
 import { resolveTarget } from '../settings/registry'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
@@ -2199,6 +2200,17 @@ export function SettingsPanel({
   const setJs8Sounds = (events: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
+  }
+  // A JS8 sound's WAV file (Js8ListsSettings): null goes back to the built-in tone.
+  const setJs8SoundFile = (event: string, path: string | null) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const files = { ...(prev.js8SoundFiles ?? {}) }
+      if (path) files[event] = path
+      else delete files[event]
+      return { ...prev, js8SoundFiles: files }
+    })
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -10267,6 +10279,8 @@ export function SettingsPanel({
               setMark={setJs8Mark}
               setSounds={setJs8Sounds}
               setReset={(on) => updateBool('js8ResetActivity', on)}
+              pickSoundFile={pickJs8SoundFile}
+              setSoundFile={setJs8SoundFile}
             />
             <Js8PaneStyleSettings
               form={form}

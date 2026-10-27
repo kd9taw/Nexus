@@ -142,7 +142,10 @@ arrive in Band activity (and in RX when they are on your offset or for you), and
 message in Inbox if it was for you. Settings ▸ Digital ▸ JS8 holds JS8Call's lists and marks:
 the callsigns to hide in the RX pane, two highlight lists, the ♢ and …… marks, and a sound for
 each of a CQ, a heartbeat, an ACK for you, a message to you, a message in your Inbox, a new
-callsign and one you have worked (all off, as in JS8Call).
+callsign and one you have worked (all off, as in JS8Call). Each plays a tone of its own or a WAV
+file you choose, as JS8Call plays the file you pick, and it plays whichever screen is showing
+while JS8 is the mode: you hear a CQ from the Logbook or the Map too. A file that cannot be
+played plays the tone instead, and Nexus says so once.
 
 **JS8 60** is JS8Call 3.0's newest speed, and JS8Call calls it experimental: 4-second
 periods, a signal 250 Hz wide, each frame about 2.6 s on the air, so the band carries a
@@ -205,7 +208,8 @@ the frequency you last used in JS8 instead.
 controls. Switch the filter off to decode the whole passband, or set its centre and width;
 **Centre on my RX offset** puts it on the station you are listening to. While it is on, a row's
 **⋯** in Band activity or the call list has **Centre filter at … Hz**, which centres it on that
-row, as JS8Call's row menus do.
+row, as JS8Call's row menus do. While the filter is on, the waterfall darkens the audio outside it
+to half, as JS8Call's does, with a yellow line at each edge, so you can see what is left out.
 
 **QSY to centre**, in the same controls, moves the rig's dial so your TX offset sits on the
 passband centre (1500 Hz unless you change it): for narrow filters, and rigs whose passband
