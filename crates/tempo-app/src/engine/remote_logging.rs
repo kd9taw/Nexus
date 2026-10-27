@@ -64,6 +64,10 @@ impl GridSource {
 pub(crate) struct HeldQso {
     pub(crate) record: QsoRecord,
     pub(crate) grid_source: GridSource,
+    /// The Log QSO button may only OFFER this contact, in the popup, whatever the confirm
+    /// setting says: our 73 to a roger the operator clicked, with no report exchanged
+    /// (`roger_click_73_sent`). Not journalled: a held contact is already in the popup.
+    pub(crate) confirm_only: bool,
 }
 
 impl HeldQso {
@@ -71,6 +75,7 @@ impl HeldQso {
         Self {
             record,
             grid_source,
+            confirm_only: false,
         }
     }
 }
@@ -361,6 +366,7 @@ impl Engine {
     pub(super) fn reset_qso_log_identity(&mut self) {
         self.qso_logged = false;
         self.qso_log_epoch = next_identity();
+        self.roger_click = None;
     }
 
     pub fn current_qso_log_key(&self) -> Option<String> {
@@ -438,7 +444,7 @@ impl Engine {
         let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
-        if self.settings.prompt_to_log {
+        if self.settings.prompt_to_log || held.confirm_only {
             // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
             self.stamp_hold(&mut held.record);
             self.replace_pending_log(Some(held));

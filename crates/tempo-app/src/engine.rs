@@ -3257,6 +3257,20 @@ fn ft_contact_complete(station: &QsoStation, report_sent: Option<i32>) -> bool {
     }
 }
 
+/// Has our 73 gone on the air in a contact the operator opened by clicking the station's RR73
+/// or RRR to us (`clicked`, [`Engine::roger_click`])? No report is exchanged in such a contact,
+/// so the phantom-contact guard keeps it out of the log; WSJT-X opens its Log QSO dialog as that
+/// 73 starts (`mainwindow.cpp:8237-8249`), and the operator ruled (2026-10-27) that Nexus offers
+/// it the same way: in the confirm-before-log popup, never logged silently.
+fn roger_click_73_sent(station: &QsoStation, clicked: Option<&str>) -> bool {
+    station.state == QsoState::Done
+        && station.tx_count >= 1
+        && station.rx_report.is_none()
+        && clicked
+            .zip(station.dxcall.as_deref())
+            .is_some_and(|(c, dx)| same_call(c, dx))
+}
+
 /// A queued voice-memory relay for the radio loop (see `Engine::pending_voice_mem`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoiceMemCmd {
@@ -3609,6 +3623,11 @@ pub struct Engine {
     /// contact: it stays until it is logged, by Log QSO or any other path, or until the next
     /// band change sets another contact aside.
     band_change_qso: Option<StalledQso>,
+    /// The station whose RR73 or RRR the operator clicked to open the current contact
+    /// ([`Self::call_station_ctx`]), which then sends only our 73 and exchanges no report. Such a
+    /// contact is OFFERED for the log, never logged without the confirm
+    /// ([`roger_click_73_sent`]). Cleared by every new contact, and by a logger's UDP Reply.
+    roger_click: Option<String>,
     /// The partner the CQ run most recently moved on from, held only long enough to answer
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
@@ -6657,6 +6676,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             band_change_qso: None,
+            roger_click: None,
             recent_partner: None,
             cleared_dx_calls: Vec::new(),
             pending_logs: VecDeque::new(),
@@ -18069,6 +18089,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.reset_qso_log_identity();
         self.qso_report_sent = opening_report;
         self.qso_start_unix = None; // mainwindow.cpp:9271
+        self.roger_click = matches!(context, Some((Msg::Rrr { .. } | Msg::Rr73 { .. }, _)))
+            .then(|| dxcall.to_string());
         self.follow_tx_selection(None);
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
@@ -18281,6 +18303,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("TX is stopped: turn TX on in Nexus before answering from a logger".into());
         }
         self.work_station(dxcall, None, Some(message), Some(snr), dx_freq)?;
+        // Another program's Reply is not the operator's click: the phantom-contact guard stays
+        // whole for it, so its 73 to a roger is never offered for the log.
+        self.roger_click = None;
         self.set_tx_enabled(true);
         Ok(())
     }
@@ -18826,8 +18851,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Some(held) = self.take_current_qso_record() else {
             return false;
         };
-        // Respect prompt-to-log just like auto-log.
-        if self.settings.prompt_to_log {
+        // Respect prompt-to-log just like auto-log; a contact that may only be offered goes to
+        // the popup whatever it says ([`roger_click_73_sent`]).
+        if self.settings.prompt_to_log || held.confirm_only {
             self.hold_pending_log(held);
         } else {
             self.log_qso(held.record);
@@ -18838,7 +18864,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Shared eligibility, captured fields and write-once transition for the
     /// local Log QSO button and its remote equivalent. No transport policy here.
     fn take_current_qso_record(&mut self) -> Option<HeldQso> {
-        let (dxcall, dxgrid, rx_report, report_impossible) = match &self.mode {
+        let (dxcall, dxgrid, rx_report, report_impossible, roger_click) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
                 // Write-once: if this contact was already logged (manual double-click, or
                 // it auto-logged on completion), don't log it again.
@@ -18848,6 +18874,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     station.dxgrid.clone(),
                     station.rx_report,
                     station.report_impossible_exchange(),
+                    roger_click_73_sent(station, self.roger_click.as_deref()),
                 ),
                 // No CURRENT contact — but there may be an abandoned one that really happened
                 // (#153). A caller who answered, exchanged reports and then went quiet gets
@@ -18889,14 +18916,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // that the partner answered us ON THE AIR, and that WE keyed at least once — so
         // a CQ with nobody on it, and a QSO we have only listened to, stay unloggable
         // exactly as before.
-        if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
+        //
+        // …and one exception more, which is only ever OFFERED: our 73 sent after the operator
+        // clicked the station's RR73 or RRR ([`roger_click_73_sent`]). It goes to the popup for
+        // the operator's confirm, never straight to the log.
+        let reported = rx_report.is_some() || self.qso_report_sent.is_some() || report_impossible;
+        if !reported && !roger_click {
             return None;
         }
         let grid_source = GridSource::of(dxgrid.as_deref());
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None;
-        Some(HeldQso::new(rec, grid_source))
+        let mut held = HeldQso::new(rec, grid_source);
+        held.confirm_only = !reported;
+        Some(held)
     }
 
     /// Set aside a contact that really happened, for Log QSO ([`StalledQso`]): the report we
@@ -31107,6 +31141,8 @@ contact yourself."
         // borrowed and committed after (so building the record doesn't conflict
         // with the mutable borrow of the sequencer).
         let mut completed: Option<(String, Option<String>, Option<i32>)> = None;
+        // A contact that may only be offered for the log ([`roger_click_73_sent`]).
+        let mut offered: Option<(String, Option<String>)> = None;
         // Did the partner advance the sequence this slot? WSJT-X resets the Tx
         // watchdog on genuine QSO progress — on a marginal path where every step
         // needs several repeats, a progressing QSO must not be watchdog-killed
@@ -31276,6 +31312,17 @@ contact yourself."
                             station.rx_report,
                         ));
                     }
+                } else if self.settings.auto_log
+                    && !self.qso_logged
+                    && roger_click_73_sent(station, self.roger_click.as_deref())
+                {
+                    // Our 73 to a roger the operator clicked: offered, never logged by itself
+                    // ([`roger_click_73_sent`]).
+                    self.qso_logged = true;
+                    offered = Some((
+                        station.dxcall.clone().unwrap_or_default(),
+                        station.dxgrid.clone(),
+                    ));
                 }
             }
             Mode::FieldDay { station, running } => {
@@ -31336,6 +31383,12 @@ contact yourself."
         }
         if let Some(hz) = hound_move_tx {
             self.set_tx_offset(hz);
+        }
+        if let Some((dxcall, dxgrid)) = offered {
+            let grid_source = GridSource::of(dxgrid.as_deref());
+            let rec = self.qso_record(dxcall, dxgrid, None);
+            self.hold_pending_log(HeldQso::new(rec, grid_source));
+            self.qso_start_unix = None;
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
             if self.settings.auto_log {
