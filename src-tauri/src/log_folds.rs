@@ -484,8 +484,7 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         &q.mode,
         q.award_confirmed,
         credited,
-        // The paper-card channel alone — IOTA's award gate (the IOTA program accepts cards and
-        // Club Log matching, never LoTW).
+        // The paper-card channel alone, which the IOTA card shows beside its LoTW-or-card count.
         q.qsl_rcvd.card,
         // The state its upload carries (`record_field`), as the WAS needs and custom awards read.
         tempo_core::logbook::record_field(q, "STATE"),
@@ -1329,8 +1328,8 @@ mod tests {
                 &q.mode,
                 q.award_confirmed,
                 credited,
-                // The paper-card channel alone — IOTA's award gate (the IOTA program
-                // accepts cards and Club Log matching, never LoTW).
+                // The paper-card channel alone, which the IOTA card shows beside its
+                // LoTW-or-card count.
                 q.qsl_rcvd.card,
                 q.state.as_deref(),
                 q.grid.as_deref(),
@@ -2585,6 +2584,32 @@ mod tests {
         check(&merged("NJ", "NY"), "NY");
         // The operator's edit, as the Logbook's edit writes it: the field and the exchange.
         check(&merged("PA", "PA"), "PA");
+    }
+
+    /// ★ IOTA credits LoTW-matched contacts and QSL cards, never eQSL: a group confirmed only by
+    /// LoTW counts, one confirmed only by eQSL does not, and a card still does. The card count
+    /// stays beside it.
+    #[test]
+    fn iota_counts_lotw_and_card_confirmations_not_eqsl() {
+        let row = |call: &str, iota: &str, rcvd: &str| {
+            parse_one(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20260101<TIME_ON:6>120000\
+                 <IOTA:6>{iota}{rcvd}<EOR>",
+                call.len()
+            ))
+        };
+        let records = [
+            row("VE1AAA", "NA-010", "<LOTW_QSL_RCVD:1>Y"),
+            row("VE1BBB", "NA-011", "<EQSL_QSL_RCVD:1>Y"),
+            row("VE1CCC", "NA-012", "<QSL_RCVD:1>Y"),
+        ];
+        let s = awards_for_records(&records, "W1AW");
+        assert_eq!(s.iota.worked, 3, "three groups worked");
+        assert_eq!(
+            s.iota.confirmed, 2,
+            "the LoTW and the card groups count; the eQSL one does not"
+        );
+        assert_eq!(s.iota.card_confirmed, 1, "one group on a card");
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.
