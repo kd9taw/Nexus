@@ -93,4 +93,12 @@ describe('the popped-out Operate window', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log' }))
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith('Logged QSO', 'success', 2500))
   })
+
+  it('names the station it logged, which may not be the one shown', async () => {
+    vi.mocked(api.logCurrentQso).mockResolvedValueOnce({ logged: true, call: '7P8RU', snapshot: SNAP as never })
+    render(<DetachedPanel panel="operate" />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith('Logged QSO with 7P8RU', 'success', 2500))
+  })
 })

@@ -22753,6 +22753,9 @@ struct LogQsoOutcome {
     /// must not claim "Logged QSO" over one: the bool was being discarded here, so the
     /// toast said success for a write that never happened.
     logged: bool,
+    /// The station logged or held: not always the one shown, since a press while a new station
+    /// is shown can log the contact set aside behind it, so the toast names it.
+    call: Option<String>,
     snapshot: AppSnapshot,
 }
 
@@ -22760,9 +22763,10 @@ struct LogQsoOutcome {
 #[tauri::command(async)]
 fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, String> {
     let mut eng = engine_lock(&state);
-    let logged = eng.log_current_qso();
+    let call = eng.log_current_qso_call();
     Ok(LogQsoOutcome {
-        logged,
+        logged: call.is_some(),
+        call,
         snapshot: eng.snapshot(),
     })
 }

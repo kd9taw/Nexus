@@ -1136,8 +1136,9 @@ second. Every value shown is one station's.*
   popup."
 - **Prompt before logging** — a WSJT-X-style confirm-and-edit popup. It opens
   by itself with Auto-log on or off and holds each contact until you log or
-  discard it; if 64 are left waiting, the oldest is logged. With both off,
-  nothing is logged until you press Log.
+  discard it; if 64 are left waiting, the oldest is logged, never one you
+  opened by clicking their RR73 or RRR. With both off, nothing is logged until
+  you press Log.
 - **Roger with RRR (not RR73)** — "Acknowledge the final report with a bare RRR
   (partner still owes a 73) instead of the combined RR73. Off = RR73 (modern FT8
   practice)."

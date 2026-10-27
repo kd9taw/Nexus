@@ -2545,7 +2545,7 @@ function App() {
         // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
         // and a green "Logged QSO" over one claimed a write that never happened.
         if (r.logged) {
-          pushToast(t('shell.toast.logged'), 'success', 2500)
+          pushToast(r.call ? t('shell.toast.loggedCall', { call: r.call }) : t('shell.toast.logged'), 'success', 2500)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
