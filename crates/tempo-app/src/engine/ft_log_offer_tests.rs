@@ -237,18 +237,21 @@ fn a_repeated_rr73_clicked_after_a_logged_contact_is_not_offered() {
     assert_eq!(e.stored_log().len(), 1);
 }
 
-/// (3) CONTROL: the first 73 to that station on ANOTHER band is offered: the rule is per contact,
-/// and a contact on another band is another contact.
+/// (3) As WSJT-X, literally: the rule reads the last over we SENT, whatever its band. A click on
+/// the same station's RR73 on another band right after our 73 to them sends a 73 after a 73,
+/// and is not offered.
 #[test]
-fn a_first_73_to_the_same_station_on_another_band_is_offered() {
+fn a_73_to_the_same_station_on_another_band_right_after_our_73_is_not_offered() {
     let mut e = ft8();
     e.settings.auto_log = true;
     e.settings.prompt_to_log = false;
     work_dx_to_73(&mut e, 11);
+    assert_eq!(calls_logged(&e), [DX], "premise: the 20 m contact logged");
     e.set_frequency(7.074, "40m", "USB");
     click_their_rr73_and_send_73(&mut e, 41);
-    let shown = e.snapshot().pending_log.expect("offered on 40 m");
-    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "40m"));
+    assert!(e.snapshot().pending_log.is_none(), "not offered on 40 m");
+    assert!(!e.log_current_qso(), "nor by the Log button");
+    assert_eq!(e.stored_log().len(), 1);
 }
 
 /// An S&P contact with `call` from their CQ (decoded at `slot`) to our 73: reports both ways.
@@ -268,8 +271,7 @@ fn work_to_73(e: &mut Engine, call: &str, slot: u64) {
 }
 
 /// (3) The first-73 rule is WSJT-X's (`m_sentFirst73`, `widgets/mainwindow.cpp` 3.0.2 8105-8108):
-/// our previous over to the station was already a 73, so this 73 is not offered. A contact with
-/// another station completing in between changes nothing: it is not this station's.
+/// the last over we sent was a 73 (here, to another station), so this 73 is not offered.
 #[test]
 fn a_repeated_rr73_clicked_after_another_contact_is_still_not_offered() {
     let mut e = ft8();
@@ -287,9 +289,9 @@ fn a_repeated_rr73_clicked_after_another_contact_is_still_not_offered() {
     assert_eq!(e.stored_log().len(), 2);
 }
 
-/// (3) …and a 73 whose previous over to the station was NOT a 73 is a first 73, offered, even
-/// with the station's earlier contact logged: here we called them again and they answered our
-/// call with RR73.
+/// (3) …and a 73 whose previous over was NOT a 73 is a first 73, offered, even with the
+/// station's earlier contact logged: here we called them again and they answered our call with
+/// RR73.
 #[test]
 fn a_first_73_after_a_new_call_to_a_logged_station_is_offered() {
     let mut e = ft8();
@@ -309,10 +311,10 @@ fn a_first_73_after_a_new_call_to_a_logged_station_is_offered() {
     assert_eq!(e.stored_log().len(), 1, "not logged without the confirm");
 }
 
-/// (3) A first 73 to ANOTHER station right after one to this station is that station's first 73,
-/// and is offered.
+/// (3) As WSJT-X, literally: a click on ANOTHER station's RR73 right after our 73 to this one
+/// sends a 73 after a 73, and is not offered.
 #[test]
-fn a_first_73_to_another_station_right_after_one_is_offered() {
+fn a_73_to_another_station_right_after_one_is_not_offered() {
     let mut e = ft8();
     e.settings.auto_log = false;
     e.settings.prompt_to_log = true;
@@ -327,7 +329,31 @@ fn a_first_73_to_another_station_right_after_one_is_offered() {
         .iter()
         .map(|h| h.record.call.clone())
         .collect();
-    assert_eq!(calls, [DX, "W2XYZ"], "both offered");
+    assert_eq!(calls, [DX], "only the first is offered");
+    assert!(e.stored_log().is_empty(), "nothing logged");
+}
+
+/// (3) …and a repeat click on the same station after another over in between (our CQ) is a first
+/// 73 again, offered, as WSJT-X prompts again.
+#[test]
+fn a_repeat_click_after_a_cq_in_between_is_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_and_send_73(&mut e, 21);
+    let shown = e.snapshot().pending_log.expect("premise: offered");
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.confirm_pending_log(&key, shown.into()));
+    assert_eq!(calls_logged(&e), [DX], "premise: logged once confirmed");
+    e.set_mode("qso-run").expect("premise: the CQ run starts");
+    assert!(
+        key_once(&mut e, 31).starts_with("CQ KR4FQG"),
+        "premise: our CQ goes out"
+    );
+    click_their_rr73_and_send_73(&mut e, 41);
+    let shown = e.snapshot().pending_log.expect("offered again");
+    assert_eq!(shown.call, DX);
+    assert_eq!(e.stored_log().len(), 1, "not logged without the confirm");
 }
 
 /// (3) A contact a band change set aside with auto-log and the prompt off, then confirmed from

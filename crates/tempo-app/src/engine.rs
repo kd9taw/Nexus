@@ -14082,8 +14082,8 @@ impl Engine {
     /// the oldest waiting contact that is not offer-only; while every waiting contact is
     /// offer-only it takes none, and the queue grows past the cap by those contacts alone. Each
     /// of them began with a click on a station's RR73 or RRR to us, in Nexus or as a logger
-    /// program's Reply, and only our first 73 to that station is offered, so a CQ run cannot
-    /// grow it by itself.
+    /// program's Reply, and only a first 73 (the last over we sent was not a 73) is offered, so a
+    /// CQ run cannot grow it by itself.
     pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
@@ -18155,9 +18155,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }
             }
         }
-        // Offered for the log only when our previous over to this station was not already a 73
-        // ([`Self::previous_over_to_was_73`]), read before this click's 73 goes out.
-        let first_73 = !self.previous_over_to_was_73(dxcall);
+        // Offered for the log only when the last over we sent was not already a 73
+        // ([`Self::last_over_was_73`]), read before this click's 73 goes out.
+        let first_73 = !self.last_over_was_73();
         let opening_report = report_in(station.outgoing());
         self.mode = Mode::Qso {
             station: Box::new(station),
@@ -19259,27 +19259,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// Was our previous over to `call` on this band a 73 or RR73? Then a click on their repeated
-    /// RR73 or RRR sends a 73 after a 73, and the contact is not offered for the log again: WSJT-X
-    /// opens its Log QSO dialog on the FIRST 73 only, a 73 whose previous over was not a 73
-    /// (`m_sentFirst73`, `widgets/mainwindow.cpp` 3.0.2 8105-8108; operator ruling, 2026-10-27).
-    /// Read per station, so a 73 to another station in between is not this station's 73, and
-    /// per band, as a contact on another band is another contact.
+    /// Was the last over we sent, to anyone and on any band, a 73 or RR73? Then a click on a
+    /// station's RR73 or RRR sends a 73 after a 73, and the contact is not offered for the log:
+    /// WSJT-X opens its Log QSO dialog on the FIRST 73 only, a 73 whose previous message sent was
+    /// not a 73 (`m_sentFirst73` against `m_lastMessageSent`, `widgets/mainwindow.cpp` 3.0.2
+    /// 8105-8108; operator decision, 2026-10-27, to follow it literally). So a roger clicked right
+    /// after our 73 to another station, or to the same station on another band, is not offered,
+    /// and a repeat click after any other over between (a CQ, say) is.
     ///
-    /// From the overs we have sent ([`Self::own_tx`], the last 30): a station we last sent to
-    /// further back than that is answered as new. The 73 test is WSJT-X's `message_is_73`: a
-    /// `73` or `RR73` word.
-    fn previous_over_to_was_73(&self, call: &str) -> bool {
+    /// From the overs we have sent ([`Self::own_tx`]); with none recorded yet, the 73 is a first.
+    /// The 73 test is WSJT-X's `message_is_73`: a `73` or `RR73` word.
+    fn last_over_was_73(&self) -> bool {
         self.own_tx
-            .iter()
-            .rev()
-            .filter(|o| o.band == self.settings.band)
-            .find_map(|o| {
-                let mut words = o.text.split_whitespace();
-                let to = words.next()?;
-                same_call(to, call).then(|| words.any(|w| w == "73" || w == "RR73"))
-            })
-            .unwrap_or(false)
+            .back()
+            .is_some_and(|o| o.text.split_whitespace().any(|w| w == "73" || w == "RR73"))
     }
 
     /// Send the delivery ACKs we owe: a 1-frame RR73 to each sender whose directed
