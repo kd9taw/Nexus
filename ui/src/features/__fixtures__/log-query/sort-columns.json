@@ -1,5 +1,5 @@
 {
- "about": "Every added Logbook column's order, both ways: the one table the engine (src-tauri log_queries tests) and the reference (ui logQuery.test.ts) are both held to. Each case's rows are whole LoggedQso rows.",
+ "about": "Every Logbook column's order, both ways: the one table the engine (src-tauri log_queries tests) and the reference (ui logQuery.test.ts) are both held to. Each case's rows are whole LoggedQso rows.",
  "cases": [
   {
    "name": "end",
@@ -3134,6 +3134,1371 @@
       "AAA",
       "BBB",
       "CCC",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "country",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "country": "Japan"
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "country": "brazil"
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "country": "Canada"
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "country",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "country",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "sent",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": "579",
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": "559",
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": "569",
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "sent",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "sent",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "rcvd",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": "559",
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": "339",
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": "449",
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "rcvd",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "rcvd",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "park",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "theirProgram": "POTA",
+      "theirRef": "US-4567"
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "theirProgram": "POTA",
+      "theirRef": "K-0001"
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "theirProgram": "POTA",
+      "theirRef": "us-0042"
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "park",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "park",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "grid",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": "FN31",
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "BBB",
+     "grid": "DM79",
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "CCC",
+     "grid": "EM10",
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "grid",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "grid",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "state",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "state": "TX"
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "state": "CA"
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "state": "MA"
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "state",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "state",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "iota",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "iota": "NA-001"
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "iota": "AF-004"
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "ota": {
+      "iota": "EU-005"
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "iota",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "iota",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "contest",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-DX-CW",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "CQ-WW-CW",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "contest",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "contest",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "county",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "extra": [
+      [
+       "CNTY",
+       "WA,King"
+      ]
+     ]
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "extra": [
+      [
+       "CNTY",
+       "CA,Alameda"
+      ]
+     ]
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "extra": [
+      [
+       "CNTY",
+       "MA,Essex"
+      ]
+     ]
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "county",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "county",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "mode: a blank mode is empty, last both ways; EEE is FT8",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "CW",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "  ",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "mode",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "EEE",
+      "AAA",
+      "CCC"
+     ]
+    },
+    {
+     "sort": "mode",
+     "asc": false,
+     "expect": [
+      "EEE",
+      "BBB",
+      "CCC",
+      "AAA"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "sent: a value is read trimmed, a blank one is empty",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": " 599",
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": "  ",
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": "579",
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "sent",
+     "asc": true,
+     "expect": [
+      "CCC",
+      "AAA",
+      "BBB",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "sent",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "EEE",
+      "BBB"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "exchSent: serials by number, 9 before 10 before 100",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "100"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "9"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "10"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "exchSent",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "exchSent",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "exchSent: a leading zero does not count",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "0100"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "009"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "ARRL-SS-CW",
+      "sent": [
+       [
+        "SERIAL",
+        "10"
+       ],
+       [
+        "PREC",
+        "A"
+       ]
+      ],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "exchSent",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "exchSent",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "exchRcvd: a number by value inside text, capitals ignored, a number before the letters",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "ny 12",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "5 MA",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "NY 3",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "exchRcvd",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "exchRcvd",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "exchRcvd: a number, then the text after it",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "KEN 10 b",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "ken 9 c",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "contest": {
+      "contestId": "NAQP-CW",
+      "srxString": "KEN 10 A",
+      "sent": [],
+      "rcvd": []
+     }
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "exchRcvd",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "exchRcvd",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
       "EEE"
      ]
     }

@@ -983,10 +983,11 @@ mod tests {
             ),
             ["K1ABC", "DL1XYZ", "K1ABD/P", "W6[X]"]
         );
-        // County ascending: no county sorts first, the time breaking that tie ascending.
+        // County ascending: no county sorts last, as in every column, the time breaking that
+        // tie ascending.
         assert_eq!(
             order_of(SortKey::County, true, Vec::new()),
-            ["DL1XYZ", "W6[X]", "K1ABC", "K1ABD/P"]
+            ["K1ABC", "K1ABD/P", "DL1XYZ", "W6[X]"]
         );
         // A key past the third is not read.
         let many = vec![
@@ -1232,6 +1233,155 @@ mod tests {
         assert_eq!(
             ordered(&db, &sorted_by(SortKey::QslSentDate, true, Vec::new())),
             ["BBB", "AAA", "CCC", "EEE"]
+        );
+    }
+
+    /// ★ The first sixteen columns put a contact with nothing in them last as well, whichever
+    /// way they are sorted, and read their text trimmed: one rule for every column the Logbook
+    /// shows. (The band, frequency, time and QSL mark always hold a value.)
+    #[test]
+    fn the_first_columns_put_the_empty_last_both_ways() {
+        type Set = Box<dyn Fn(&mut QsoRecord, usize)>;
+        let s = |v: [&'static str; 3], i: usize| Some(v[i].to_string());
+        let cases: Vec<(SortKey, Set)> = vec![
+            (
+                SortKey::Country,
+                Box::new(move |r, i| r.country = s(["Japan", "brazil", "Canada"], i)),
+            ),
+            (
+                SortKey::Sent,
+                Box::new(move |r, i| r.rst_sent = s(["579", "559", "569"], i)),
+            ),
+            (
+                SortKey::Rcvd,
+                Box::new(move |r, i| r.rst_rcvd = s(["559", "339", "449"], i)),
+            ),
+            (
+                SortKey::Park,
+                Box::new(move |r, i| r.ota.their_ref = s(["US-4567", "K-0001", "us-0042"], i)),
+            ),
+            (
+                SortKey::Grid,
+                Box::new(move |r, i| r.grid = s(["FN31", "DM79", "EM10"], i)),
+            ),
+            (
+                SortKey::State,
+                Box::new(move |r, i| r.state = s(["TX", "CA", "MA"], i)),
+            ),
+            (
+                SortKey::Iota,
+                Box::new(move |r, i| r.ota.iota = s(["NA-001", "AF-004", "EU-005"], i)),
+            ),
+            (
+                SortKey::Contest,
+                Box::new(|r, i| {
+                    r.contest = Some(Box::new(ContestFields {
+                        contest_id: ["NAQP-CW", "ARRL-DX-CW", "CQ-WW-CW"][i].into(),
+                        ..Default::default()
+                    }))
+                }),
+            ),
+            (
+                SortKey::County,
+                Box::new(|r, i| {
+                    r.extra.push((
+                        "CNTY".into(),
+                        ["WA,King", "CA,Alameda", "MA,Essex"][i].into(),
+                    ))
+                }),
+            ),
+        ];
+        for (key, set) in &cases {
+            let db = three_and_an_empty(set.as_ref());
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, true, Vec::new())),
+                ["BBB", "CCC", "AAA", "EEE"],
+                "{key:?} ascending"
+            );
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, false, Vec::new())),
+                ["AAA", "CCC", "BBB", "EEE"],
+                "{key:?} descending"
+            );
+        }
+        // Blank is empty however it is blank, a value is read trimmed, and the empties keep the
+        // time order in the first key's direction. EEE's mode is FT8.
+        let db = three_and_an_empty(&|r, i| r.mode = ["", "CW", "  "][i].into());
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Mode, true, Vec::new())),
+            ["BBB", "EEE", "AAA", "CCC"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Mode, false, Vec::new())),
+            ["EEE", "BBB", "CCC", "AAA"]
+        );
+        let db = three_and_an_empty(&|r, i| r.rst_sent = s([" 599", "  ", "579"], i));
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Sent, true, Vec::new())),
+            ["CCC", "AAA", "BBB", "EEE"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Sent, false, Vec::new())),
+            ["AAA", "CCC", "EEE", "BBB"]
+        );
+    }
+
+    /// ★ The exchange columns read their numbers as numbers: serial 9 before 10 before 100, a
+    /// leading zero not counted, and the text around them without regard to case — where plain
+    /// text would put "10" before "9".
+    #[test]
+    fn an_exchange_sorts_its_numbers_as_numbers() {
+        let sent = |v: [&'static str; 3]| {
+            move |r: &mut QsoRecord, i: usize| {
+                r.contest = Some(Box::new(ContestFields {
+                    contest_id: "ARRL-SS-CW".into(),
+                    sent: vec![("SERIAL".into(), v[i].into()), ("PREC".into(), "A".into())],
+                    ..Default::default()
+                }))
+            }
+        };
+        let rcvd = |v: [&'static str; 3]| {
+            move |r: &mut QsoRecord, i: usize| {
+                r.contest = Some(Box::new(ContestFields {
+                    contest_id: "NAQP-CW".into(),
+                    srx_string: Some(v[i].into()),
+                    ..Default::default()
+                }))
+            }
+        };
+        let both_ways = |db: &LogDb, key: SortKey, what: &str| {
+            assert_eq!(
+                ordered(db, &sorted_by(key, true, Vec::new())),
+                ["BBB", "CCC", "AAA", "EEE"],
+                "{what} ascending"
+            );
+            assert_eq!(
+                ordered(db, &sorted_by(key, false, Vec::new())),
+                ["AAA", "CCC", "BBB", "EEE"],
+                "{what} descending"
+            );
+        };
+        both_ways(
+            &three_and_an_empty(&sent(["100", "9", "10"])),
+            SortKey::ExchSent,
+            "serials",
+        );
+        both_ways(
+            &three_and_an_empty(&sent(["0100", "009", "10"])),
+            SortKey::ExchSent,
+            "serials with leading zeros",
+        );
+        // Text first by its letters, a number in it by value, capitals ignored; a number at
+        // the start before the letters, as a digit is.
+        both_ways(
+            &three_and_an_empty(&rcvd(["ny 12", "5 MA", "NY 3"])),
+            SortKey::ExchRcvd,
+            "mixed",
+        );
+        both_ways(
+            &three_and_an_empty(&rcvd(["KEN 10 b", "ken 9 c", "KEN 10 A"])),
+            SortKey::ExchRcvd,
+            "a number, then text",
         );
     }
 

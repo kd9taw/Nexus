@@ -7,6 +7,8 @@
 // fixture log and on thousands of random logs, for every column, both directions, every search.
 // One rule in it has moved since, decided rather than ported: the country column sorts on the
 // country the Logbook shows, the DXCC entity, and the stored text only where the call has none.
+// Two more were decided on 2026-10-27, to match the columns added since: text is read trimmed, and a
+// contact with nothing in the column sorts after the rest in either direction (`decided` below).
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -67,14 +69,22 @@ function ORACLE(log: LoggedQso[], deferredSearch: string, needsConfirmOnly: bool
   }
   const out = log.map((q, i) => ({ q, i })).filter(({ q }) => !control || matchesSearch(q))
   out.sort((a, b) => {
-    const av = sortVal(a.q, sortKey)
-    const bv = sortVal(b.q, sortKey)
+    const av = decided(sortVal(a.q, sortKey))
+    const bv = decided(sortVal(b.q, sortKey))
+    if (av === null || bv === null) {
+      if (av !== bv) return av === null ? 1 : -1
+      return sortAsc ? a.q.whenUnix - b.q.whenUnix : b.q.whenUnix - a.q.whenUnix
+    }
     const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
     return sortAsc ? cmp : -cmp
   })
   return out
 }
 // ---- end of ORACLE ----
+/** The rules decided since the move, not ported: text trimmed, blank text nothing (null). */
+function decided(v: string | number): string | number | null {
+  return typeof v === 'string' ? v.trim() || null : v
+}
 
 const FIXTURE = JSON.parse(
   readFileSync(new URL('./__fixtures__/log-query/log.json', import.meta.url), 'utf8'),
@@ -217,7 +227,7 @@ describe('the search finds a contact by the country the Logbook shows', () => {
   })
 })
 
-describe('every column the Logbook shows sorts (the columns added after the first sixteen)', () => {
+describe('every column the Logbook shows sorts, a contact with nothing in it last both ways', () => {
   // One table both sides are held to: the engine (`src-tauri/src/log_queries/tests.rs`
   // `every_added_column_sorts_as_the_shared_table_says`) reads the same file.
   const SHARED = JSON.parse(
@@ -233,8 +243,10 @@ describe('every column the Logbook shows sorts (the columns added after the firs
     logOrder(log, { sort: 'time', asc: true, search: '', needsConfirmOnly: false, ...query }).map((i) => log[i].call)
 
   it('each as the shared table says: by value, both ways, the empty contact last both ways', () => {
-    const added = new Set(SHARED.cases.flatMap((c) => c.orders.map((o) => o.sort)))
-    expect(added.size).toBe(22)
+    // Every key but the four that always hold a value (band, frequency, time, QSL mark) and the
+    // call, which names the rows here.
+    const keys = new Set(SHARED.cases.flatMap((c) => c.orders.map((o) => o.sort)))
+    expect(keys.size).toBe(32)
     for (const c of SHARED.cases)
       for (const { expect: want, ...query } of c.orders)
         expect(order(c.rows, query), `${c.name}: ${query.sort} ${query.asc ? 'ascending' : 'descending'}`).toEqual(want)
