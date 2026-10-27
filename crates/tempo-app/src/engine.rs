@@ -108,6 +108,9 @@ mod cw_unassisted_tests;
 mod cw_whole_message_tests;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
+/// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
+#[cfg(test)]
+mod ft_log_offer_tests;
 pub mod ft_midover;
 /// …and its tests.
 #[cfg(test)]
@@ -14031,6 +14034,13 @@ impl Engine {
     /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
     /// answer the popup. The one the popup is showing is never the one taken: the operator is
     /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
+    ///
+    /// ⛔ Nor is an OFFER-ONLY contact ([`HeldQso::confirm_only`]: no report was exchanged) ever
+    /// taken (operator ruling, 2026-10-27): it is never logged without the confirm. The cap takes
+    /// the oldest waiting contact that is not offer-only; while every waiting contact is
+    /// offer-only it takes none, and the queue grows past the cap by those contacts alone. Each
+    /// of them began with the operator's own click on a station's RR73 or RRR, so an unattended
+    /// run cannot grow it.
     pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
@@ -14045,7 +14055,9 @@ impl Engine {
             return;
         }
         if self.pending_logs.len() >= PENDING_LOG_QUEUE_CAP {
-            if let Some(overflow) = self.pending_logs.remove(1) {
+            let oldest_loggable =
+                (1..self.pending_logs.len()).find(|&i| !self.pending_logs[i].confirm_only);
+            if let Some(overflow) = oldest_loggable.and_then(|i| self.pending_logs.remove(i)) {
                 tempo_core::applog::warn(
                     "logbook",
                     &format!(
@@ -31401,7 +31413,11 @@ contact yourself."
         if let Some((dxcall, dxgrid)) = offered {
             let grid_source = GridSource::of(dxgrid.as_deref());
             let rec = self.qso_record(dxcall, dxgrid, None);
-            self.hold_pending_log(HeldQso::new(rec, grid_source));
+            // Offer-only, here as on the Log button: not even the queue cap logs it.
+            self.hold_pending_log(HeldQso {
+                confirm_only: true,
+                ..HeldQso::new(rec, grid_source)
+            });
             self.qso_start_unix = None;
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
