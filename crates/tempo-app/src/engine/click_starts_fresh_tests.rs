@@ -921,15 +921,14 @@ fn the_log_button_after_a_click_on_their_roger_opens_the_popup() {
     );
 }
 
-/// CONTROL, operator ruling 2026-10-27: the phantom-contact guard stays for every other path. A
-/// logger's UDP Reply on the same RR73 line sends the same 73 and offers nothing, and neither the
-/// fold nor the Log button logs or holds it; nor is a click's contact offered before our 73 has
-/// gone out.
+/// Operator ruling, 2026-10-27: a logger program's UDP Reply on the station's RR73 or RRR is a
+/// click made there, as WSJT-X treats it (`processMessage`), so our 73 is offered exactly as after
+/// a click in Nexus: in the popup, never logged without the confirm.
 #[test]
-fn the_phantom_guard_still_holds_off_the_roger_click() {
+fn a_logger_reply_on_their_roger_is_offered_like_a_click() {
     let mut e = ft8();
     e.settings.auto_log = true;
-    e.settings.prompt_to_log = true;
+    e.settings.prompt_to_log = false;
     e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
     e.answer_udp_reply(DX, "KR4FQG 7P8RU RR73", -9, None)
         .expect("the Reply is taken");
@@ -939,13 +938,18 @@ fn the_phantom_guard_still_holds_off_the_roger_click() {
         "premise: our 73 goes out"
     );
     e.ingest_decodes_for_test(&[], 25);
-    assert!(
-        e.snapshot().pending_log.is_none(),
-        "UDP Reply: nothing offered"
+    assert!(e.stored_log().is_empty(), "never logged silently");
+    assert_eq!(
+        e.snapshot().pending_log.map(|r| r.call).as_deref(),
+        Some(DX),
+        "offered in the popup"
     );
-    assert!(!e.log_current_qso(), "UDP Reply: the Log button refuses");
-    assert!(e.stored_log().is_empty() && e.pending_logs.is_empty());
+}
 
+/// CONTROL: the phantom-contact guard still holds before our 73 has gone out: a click's contact
+/// is not offered, nor taken by the Log button.
+#[test]
+fn the_phantom_guard_still_holds_off_the_roger_click() {
     let mut c = ft8();
     c.settings.auto_log = false;
     c.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);

@@ -3635,7 +3635,8 @@ pub struct Engine {
     /// The station whose RR73 or RRR the operator clicked to open the current contact
     /// ([`Self::call_station_ctx`]), which then sends only our 73 and exchanges no report. Such a
     /// contact is OFFERED for the log, never logged without the confirm
-    /// ([`roger_click_73_sent`]). Cleared by every new contact, and by a logger's UDP Reply.
+    /// ([`roger_click_73_sent`]). A logger's UDP Reply on that roger is such a click. Cleared by
+    /// every new contact.
     roger_click: Option<String>,
     /// The station and band of the FT8/FT4 contact most recently logged, held in the popup or
     /// offered there ([`Self::observe_modes`], [`Self::on_band_change`], the Log button). A click
@@ -14088,8 +14089,9 @@ impl Engine {
     /// taken (operator ruling, 2026-10-27): it is never logged without the confirm. The cap takes
     /// the oldest waiting contact that is not offer-only; while every waiting contact is
     /// offer-only it takes none, and the queue grows past the cap by those contacts alone. Each
-    /// of them began with the operator's own click on a station's RR73 or RRR, so an unattended
-    /// run cannot grow it.
+    /// of them began with a click on a station's RR73 or RRR to us, in Nexus or as a logger
+    /// program's Reply, and only our first 73 to that station is offered, so a CQ run cannot
+    /// grow it by itself.
     pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
@@ -18371,10 +18373,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tx_stop_hold || self.tx_watchdog {
             return Err("TX is stopped: turn TX on in Nexus before answering from a logger".into());
         }
+        // A Reply on the station's RR73 or RRR is a click made in the logger, as WSJT-X takes it
+        // (`processMessage`): our 73 is offered for the log as after a click here
+        // ([`roger_click_73_sent`]; operator ruling, 2026-10-27).
         self.work_station(dxcall, None, Some(message), Some(snr), dx_freq)?;
-        // Another program's Reply is not the operator's click: the phantom-contact guard stays
-        // whole for it, so its 73 to a roger is never offered for the log.
-        self.roger_click = None;
         self.set_tx_enabled(true);
         Ok(())
     }
