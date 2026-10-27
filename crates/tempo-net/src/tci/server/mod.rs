@@ -1,6 +1,6 @@
 //! Nexus as a TCI server: programs on this computer (WSJT-X, JTDX, MSHV, loggers, amplifier and
 //! tuner controllers) connect to Nexus as they would to an SDR program, and drive the instance's
-//! active radio as TCI receiver 0 (operator ruling 553).
+//! active radio as TCI receiver 0.
 //!
 //! This module is the protocol side: the listener, the handshake gate, the connections and their
 //! bounds, the closed table of what a command does, the state programs are told, and the
@@ -12,11 +12,11 @@
 //! | `listener` | loopback-only listeners (IPv4 and IPv6), the port, the accept loop |
 //! | `handshake` | the gate: no `Origin`, a loopback `Host`, WebSocket 13, the deadline, the client cap |
 //! | `conn` | one program: reader and writer threads, the outbox, keepalive, the rate, transmit audio |
-//! | `dispatch` | what each command does (design §3.5), a closed enum |
-//! | `state` | the [`Snapshot`], what each program was told, the init burst (design §5) |
+//! | `dispatch` | what each command does, a closed enum |
+//! | `state` | the [`Snapshot`], what each program was told, the init burst |
 //! | `backend` | [`TciBackend`] and its types |
 //!
-//! # Security (design §4)
+//! # Security
 //!
 //! - **Loopback only.** `127.0.0.1` and `::1`; never a wildcard, never a LAN address.
 //! - **No web pages.** A browser can open a WebSocket to loopback from any page; it must send
@@ -27,7 +27,7 @@
 //! - **No raw path.** A command reaches the backend only as a typed call from the closed table; an
 //!   unknown command is refused by the codec and counted.
 //!
-//! # Transmit (design §3)
+//! # Transmit
 //!
 //! The server never decides that a program may transmit: [`TciBackend::key`],
 //! [`TciBackend::tune_on`] and [`TciBackend::cw`] are verdicts, every Nexus gate first. No command
@@ -45,9 +45,9 @@
 //! [`Handle::publish`] never calls the backend, so the app may publish under its own engine lock
 //! (and must: [`Snapshot`] says why).
 //!
-//! Each program also has a transmit gate (`conn.rs`), held only around its calls that can transmit
-//! and its spots, and by its end, which tells the backend under it: so nothing the program sends
-//! transmits after its end began, and no spot of its is kept after it. [`Handle::disconnect`] and
+//! Each program also has a transmit gate (`conn.rs`), held only around its calls that can transmit,
+//! its spots and its mode asks, and by its end, which tells the backend under it: so nothing the
+//! program sends transmits after its end began, and no spot or mode ask of its is kept after it. [`Handle::disconnect`] and
 //! [`Server::stop`] take it and call the backend, so the app never calls them under its backend's
 //! lock, nor from inside a backend call.
 
@@ -88,7 +88,7 @@ use state::Out;
 /// The port asked for first: the default of WSJT-X, JTDX, the Go TCI library and MacLoggerDX.
 pub const DEFAULT_PORT: u16 = 40001;
 
-/// The bounds a server puts on programs (design §4.4). [`Limits::default`] is the design's; the
+/// The bounds a server puts on programs. [`Limits::default`] is what ships; the
 /// tests shorten the clocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -124,7 +124,7 @@ pub struct Limits {
     /// How often a program is pinged, and how long it may go unheard.
     pub ping: Duration,
     pub silence: Duration,
-    /// The same while it holds a key (design §3.4: a dead owner unkeys within 3 s).
+    /// The same while it holds a key (a dead owner unkeys within 3 s).
     pub keyed_ping: Duration,
     pub keyed_silence: Duration,
     /// Transmit audio taken at most this many times real time.
@@ -364,7 +364,7 @@ impl Server {
         }
     }
 
-    /// Stop (design §3.4): every program's transmissions end first, then each is told
+    /// Stop: every program's transmissions end first, then each is told
     /// `trx:0,false;`, then the connections close. The port is free when this returns.
     pub fn stop(mut self) {
         self.shutdown();
@@ -471,8 +471,8 @@ impl Handle {
         true
     }
 
-    /// The operator clicked a spot in Nexus: every program is told, in both spellings (design
-    /// §3.7). Tuning is Nexus's; a click never transmits.
+    /// The operator clicked a spot in Nexus: every program is told, in both spellings.
+    /// Tuning is Nexus's; a click never transmits.
     pub fn spot_clicked(&self, call: &Call, hz: Hz) {
         let (Some(trx), Some(channel)) = (Trx::new(0), Channel::new(0)) else {
             return;

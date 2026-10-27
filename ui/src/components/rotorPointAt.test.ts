@@ -27,7 +27,7 @@ beforeEach(() => vi.clearAllMocks())
 
 async function toastFor(result: PointedAt | null, longPath = false): Promise<string> {
   mockedPoint.mockResolvedValue(result as never)
-  rotorPointAt(true)('EC1DD', longPath)
+  rotorPointAt()('EC1DD', longPath)
   await vi.waitFor(() => expect(mockedToast).toHaveBeenCalled())
   return String(mockedToast.mock.calls[0][0])
 }
@@ -49,7 +49,7 @@ describe('the point-at-call toast names what it aimed at', () => {
 
   it('on the long path too', async () => {
     mockedPoint.mockResolvedValue({ ...TO_GRID, bearing: 47.4 } as never)
-    rotorPointAt(true)('EC1DD', true)
+    rotorPointAt()('EC1DD', true)
     await vi.waitFor(() => expect(mockedToast).toHaveBeenCalled())
     expect(mockedPoint).toHaveBeenCalledWith('EC1DD', true)
     expect(String(mockedToast.mock.calls[0][0])).toBe(
@@ -73,14 +73,10 @@ describe('the point-at-call toast names what it aimed at', () => {
 })
 
 describe('a failed point-at-call keeps each path’s own words', () => {
-  it('Remote names station control; the desktop names the rotator and its error', async () => {
+  it('names the rotator and its error', async () => {
     mockedPoint.mockRejectedValue(new Error('no rotator'))
-    rotorPointAt(false)('EC1DD')
-    rotorPointAt(true)('EC1DD')
-    await vi.waitFor(() => expect(mockedToast).toHaveBeenCalledTimes(2))
-    expect(mockedToast.mock.calls.map((call) => call[0]).sort()).toEqual([
-      'Rotator: no rotator',
-      'The command was not confirmed. Check station control permission and the current readings.',
-    ])
+    rotorPointAt()('EC1DD')
+    await vi.waitFor(() => expect(mockedToast).toHaveBeenCalledTimes(1))
+    expect(mockedToast.mock.calls.map((call) => call[0])).toEqual(['Rotator: no rotator'])
   })
 })

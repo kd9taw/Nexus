@@ -75,6 +75,11 @@ const BY_RECORD: AwardSummary = {
 }
 
 vi.mock('../api', () => ({
+  // The Awards view's own panels (AwardsMore) read these; left reading, they change nothing here.
+  getDxccChart: vi.fn(() => new Promise(() => {})),
+  getWhatToQsl: vi.fn(() => new Promise(() => {})),
+  getPotaActivator: vi.fn(() => new Promise(() => {})),
+  getCustomAwards: vi.fn(() => new Promise(() => {})),
   getAwards: vi.fn(),
   getConfirmationDiagnostics: vi.fn(() => Promise.resolve(null)),
   uploadLotwReportByIds: vi.fn(),

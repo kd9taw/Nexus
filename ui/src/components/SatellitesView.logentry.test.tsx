@@ -55,7 +55,7 @@ const api = vi.hoisted(() => ({
   contestLogSatellite: vi.fn(async () => ({})),
   contestWorking: vi.fn(async () => ({})),
   contestEntryReset: vi.fn(async () => ({})),
-  contestZoneHint: vi.fn(async () => ({})),
+  contestPlace: vi.fn(async () => ({})),
   contestIMoved: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
   lookupPark: vi.fn(async () => null),
@@ -715,22 +715,23 @@ describe('Satellites — logging the contact you just made', () => {
     // which is where the band exists; what is pinned HERE is that this strip
     // reaches that path at all, and never the dial-band one.
     render(<SatellitesView focusSat="RS-44" snap={snap({}, { fieldDay: fieldDay() })} />)
-    // ⚠️ THE CALL BOX IS FOUND BY A DIFFERENT PLACEHOLDER HERE, AND THAT IS THE
-    // FIRST EVIDENCE THE SWAP HAPPENED: the contest layout labels it with the
-    // example callsign, not the word "Call". A `findByPlaceholderText('Call')`
-    // that still resolved would mean the strip never went FD-aware.
+    // ⚠️ THE CALL BOX IS FOUND BY ITS CONTEST CAPTION HERE, AND THAT IS THE
+    // FIRST EVIDENCE THE SWAP HAPPENED: the general strip's Call box shows the
+    // word "Call" as its placeholder, the contest one none. A
+    // `findByPlaceholderText('Call')` that still resolved would mean the strip
+    // never went FD-aware.
     expect(screen.queryByPlaceholderText('Call'), 'the strip is still the general one').toBeNull()
-    const strip = await screen.findByPlaceholderText('W1AW')
+    const strip = await screen.findByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
     await act(async () => {
       fireEvent.change(strip, { target: { value: 'W1AW' } })
     })
     // The contest layout, and it is the shared one: Call plus a box per received
     // slot. The exchange has to be complete or `logIt` bails before any command.
     await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText('1D'), { target: { value: '1D' } })
+      fireEvent.change(screen.getByLabelText(/^Class/), { target: { value: '1D' } })
     })
     await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText('WI'), { target: { value: 'IL' } })
+      fireEvent.change(screen.getByLabelText(/^Section/), { target: { value: 'IL' } })
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Log FD' }))
@@ -768,15 +769,15 @@ describe('Satellites — logging the contact you just made', () => {
         snap={snap({ operatingMode: 'digital' }, { fieldDay: fieldDay(), link: { tier: 'Q65' } })}
       />,
     )
-    const strip = await screen.findByPlaceholderText('W1AW')
+    const strip = await screen.findByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
     await act(async () => {
       fireEvent.change(strip, { target: { value: 'W1AW' } })
     })
     await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText('1D'), { target: { value: '1D' } })
+      fireEvent.change(screen.getByLabelText(/^Class/), { target: { value: '1D' } })
     })
     await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText('WI'), { target: { value: 'IL' } })
+      fireEvent.change(screen.getByLabelText(/^Section/), { target: { value: 'IL' } })
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Log FD' }))

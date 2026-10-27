@@ -31,7 +31,7 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
   setLogFormGrid: vi.fn(() => Promise.resolve()),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
 }))
 const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>
 
@@ -93,7 +93,7 @@ const box = (caption: string): HTMLInputElement => {
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
 const qthBox = () => box('County / State')
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 
 afterEach(() => {

@@ -176,7 +176,7 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     rails: { left: 400, right: 400 },
     mapLayers: ['sats'],
   },
-  // FRAME + BAR — THE DEFAULT (the operator's batch 60, 2026-10-01: "A: Frame + bar"; the default since
+  // FRAME + BAR — THE DEFAULT (the operator's pick, 2026-10-01: "A: Frame + bar"; the default since
   // step 5, "Frame + bar (default)" in the picker). The default-view survey's candidate A, as the side-by-side
   // renders measured it: Frame's shape with the boxes an operator reads first — Bands for you over
   // Openings on the left, Chase over Getting Out on the right — in 400 px columns, where the renders

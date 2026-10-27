@@ -51,14 +51,12 @@ import {
   getSettings,
   pointRotator,
   pointRotatorElevation,
-  readRotator,
   readRotatorState,
   rotatorBearingToCall,
   stopRotator,
   stopSatTrack,
 } from '../../api'
 import type { CallBearing, RotatorState, SatTrackStatus } from '../../types'
-import { useStationControl } from '../../stationAccess'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
@@ -121,17 +119,15 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // Is a rotator CONFIGURED at all? Split from "is it reading back", because the two are
   // different stations and only one of them should lose the pane — see the null branch below.
   const [configured, setConfigured] = useState(false)
-  // What the last read found (desktop only). ⚠️ A rotator that reports no position and one that
-  // does not answer at all are different stations: the Hy-Gain DCU-1 has no read-back and still
-  // points; a controller that is switched off answers nothing, and "pointing still works" is
-  // then untrue (a tester read "Error 61" on every command). A browser keeps its own read, and
-  // this stays null there.
+  // What the last read found. ⚠️ A rotator that reports no position and one that does not answer
+  // at all are different stations: the Hy-Gain DCU-1 has no read-back and still points; a
+  // controller that is switched off answers nothing, and "pointing still works" is then untrue
+  // (a tester read "Error 61" on every command).
   const [reading, setReading] = useState<RotatorState['reading'] | null>(null)
-  const local = useStationControl()
   const alive = useRef(true)
   const units = useUnits()
   // LINE 2's call: the desktop's only (see the header).
-  const aimCall = local && entryCall ? entryCall : null
+  const aimCall = entryCall ? entryCall : null
   const [aim, setAim] = useState<EntryAim | null>(null)
   // The pane, for its box's measure (rotorFit): in the dashboard rail it grows into a taller box.
   const pane = useRef<HTMLElement>(null)
@@ -149,23 +145,18 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
     // I/O), so a tick skips while the last read is still out.
     const stop = pollSingleFlight('rotor pane', 2_000, (owns) =>
       Promise.allSettled([
-        (local
-          ? readRotatorState().then((st) => {
-              if (!owns()) return
-              setAz(st?.azDeg ?? null)
-              setReading(st?.reading ?? null)
-              setEl(st?.elDeg ?? null)
-              // Absent: rotctld did not answer what the rotator can do this time, so what was
-              // known stands. No rotator at all is null.
-              if (st == null) setElRange(null)
-              else if (st.elRange !== undefined) setElRange(st.elRange)
-              pendingAz.current = follow(pendingAz.current, st?.azDeg ?? null, true)
-              pendingEl.current = follow(pendingEl.current, st?.elDeg ?? null, false)
-            })
-          : readRotator().then((v) => {
-              if (owns()) setAz(v)
-            })
-        ).catch(() => {
+        readRotatorState().then((st) => {
+          if (!owns()) return
+          setAz(st?.azDeg ?? null)
+          setReading(st?.reading ?? null)
+          setEl(st?.elDeg ?? null)
+          // Absent: rotctld did not answer what the rotator can do this time, so what was
+          // known stands. No rotator at all is null.
+          if (st == null) setElRange(null)
+          else if (st.elRange !== undefined) setElRange(st.elRange)
+          pendingAz.current = follow(pendingAz.current, st?.azDeg ?? null, true)
+          pendingEl.current = follow(pendingEl.current, st?.elDeg ?? null, false)
+        }).catch(() => {
           if (!owns()) return
           setAz(null)
           setReading(null)
@@ -186,7 +177,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
       alive.current = false
       stop()
     }
-  }, [local])
+  }, [])
 
   // Line 2's bearing: asked the moment the entry's call changes and again on every poll, because
   // what the station knows of the call moves under it (the log form's grid lands from the callbook
@@ -227,8 +218,8 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
     const d = ((Math.round(deg) % 360) + 360) % 360
     setTarget(d)
     // An elevation still on its way goes with the bearing; otherwise the backend keeps the
-    // elevation where the rotator reports it. A browser sends the bearing alone, as it always has.
-    const withEl = local ? pendingEl.current?.deg : undefined
+    // elevation where the rotator reports it.
+    const withEl = pendingEl.current?.deg
     pendingAz.current = pending(d)
     // ALWAYS stop the sat track first (no-op when idle): while a track owns the
     // rotor the loop re-commands az/el every 3 s, so a bare pointRotator would be
@@ -297,7 +288,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
     pendingAz.current = pendingEl.current = null
     setTarget(null)
     setTargetEl(null)
-    rotorPointAt(local)(call)
+    rotorPointAt()(call)
   }
 
   return (

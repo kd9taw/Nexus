@@ -9,12 +9,12 @@
 //! - **A clip**: audio a test supplies (a real FT8 over from Nexus's own encoder, say), played
 //!   once into each receive stream from the moment it starts.
 //! - **Loopback**: the transmit audio clients send, heard in every receive stream about one
-//!   frame later, as a receiver listening to its own transmitter would (bench B0's loop).
+//!   frame later, as a receiver listening to its own transmitter would (as on the loop bench).
 //!
 //! In DIGU and DIGL with two channels the spec makes the receive audio complex (§3.4): channel 1
 //! then carries the quadrature of the carriers and tones. A clip and the loopback are real signals
 //! and go on channel 0 only. In every other case with two channels, channel 1 repeats channel 0.
-//! Channel 0 is the audio in both cases (plan §2.4).
+//! Channel 0 is the audio in both cases.
 
 use std::collections::VecDeque;
 use std::f64::consts::TAU;

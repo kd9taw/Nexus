@@ -102,7 +102,7 @@ describe('the contest log numbers every contact', () => {
   })
 
   it('and so do the logger window’s last contacts, newest first', () => {
-    render(<LastContacts fieldDay={ILQP(LOG)} style={{}} boxRef={createRef()} />)
+    render(<LastContacts fieldDay={ILQP(LOG)} style={{}} boxRef={createRef()} onEditDone={() => {}} />)
     const recent = document.querySelector('.contest-logger-recent')!
     expect(texts(recent, '.fd-log-head .fd-col')[0]).toBe('#')
     expect(texts(recent, '.fd-log-row .fd-col.nr')).toEqual(['5', '4', '2', '1'])

@@ -243,7 +243,11 @@ describe('call sites agree with their catalog entries', () => {
     // further, and a generic arrow `<T>(…) =>` in features/appearanceBackup.ts, which this parser
     // reads as a `<T>` element, became a plain function instead. The keys stay checked as literals
     // in `labelKey`/`lineKey` entries.
-    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(97)
+    //
+    // 97 with the contest setup dialog, and the one added was LOOKED AT: `t(k)` in
+    // `ContestSetupWizard.tsx`, the step dots reading the dialog's own `STEPS` table, the registry
+    // shape again (96 on the tree before it). Its keys stay checked as literals in `titleKey` entries.
+    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(98)
   })
 
   it('supplies every value its entry asks for', () => {

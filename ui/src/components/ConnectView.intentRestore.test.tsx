@@ -28,6 +28,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
 vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true }))

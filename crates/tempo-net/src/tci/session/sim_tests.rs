@@ -1,7 +1,7 @@
 //! The session against the simulated SDR program (`tempo-tcisim`), over a real WebSocket on
 //! loopback: each simulated dialect, and every fault the simulator injects that a session guard
-//! exists for (plan §7.1). Each fault is the positive control for its guard: the test is red when
-//! the guard is removed (the mutation table in the T3 report).
+//! exists for. Each fault is the positive control for its guard: the test is red when
+//! the guard is removed.
 //!
 //! Waits are bounded and wait on the session's events or the simulator's log, never a bare sleep,
 //! except where a test must let time pass to show that nothing happens. Where a window decides
@@ -184,9 +184,9 @@ fn every_simulated_dialect_is_spoken_to_by_what_it_does() {
                 })),
                 "{name}"
             );
-            // The 1.x model (plan U13, unverified): a key with no source takes the client's
+            // The 1.x model (unverified): a key with no source takes the client's
             // stream while it runs. The session answers none of its chronos: nothing of Nexus's
-            // goes out on a key it did not make for its audio (§6.1 item 5).
+            // goes out on a key it did not make for its audio.
             conn.key(TxStart::Microphone).expect("admitted");
             expect(&conn, "the echo", |e| {
                 *e == Event::KeyConfirmed(TxStart::Microphone)
@@ -341,7 +341,7 @@ fn no_key_reached(sim: &Simulator) {
 
 #[test]
 fn a_digital_key_is_refused_while_the_server_ignores_audio_start() {
-    // M1's named fault. The server ignores `audio_start`: no acknowledgement and no frames, and a
+    // The server ignores `audio_start`: no acknowledgement and no frames, and a
     // `tci` key there takes the SDR's microphone.
     let s = sim(SimDialect::expert_sdr3(), [Fault::NoAudioAck]);
     let conn = connect(&s, Config::new(trx0()));
@@ -359,7 +359,7 @@ fn a_digital_key_is_refused_while_the_server_ignores_audio_start() {
 
 #[test]
 fn a_digital_key_is_refused_while_frames_flow_unacknowledged() {
-    // M1 alone: receive audio flows, so only the acknowledgement term can refuse the key.
+    // Receive audio flows, so only the acknowledgement term can refuse the key.
     let quiet = SimDialect {
         audio_ack: false,
         ..SimDialect::expert_sdr3()
@@ -400,7 +400,6 @@ fn receive_audio_that_stops_refuses_a_digital_key() {
 
 #[test]
 fn a_digital_key_the_server_never_pulls_is_ended_by_the_chrono_window() {
-    // M2.
     let s = sim(SimDialect::expert_sdr3(), [Fault::NoChrono]);
     let conn = connect(&s, Config::new(trx0()));
     ready(&conn, true);
@@ -469,7 +468,6 @@ fn a_late_first_chrono_inside_the_window_keeps_the_over_and_past_it_ends_it() {
 
 #[test]
 fn a_link_lost_mid_over_keeps_the_belief_and_the_next_session_unkeys_first() {
-    // M4.
     let s = sim(
         SimDialect::expert_sdr3(),
         [Fault::DisconnectMidOver {
@@ -522,7 +520,6 @@ fn a_link_lost_mid_over_keeps_the_belief_and_the_next_session_unkeys_first() {
 
 #[test]
 fn a_band_restore_above_the_ceiling_refuses_the_key_until_the_drive_is_written_again() {
-    // M7.
     let s = sim(
         SimDialect::expert_sdr3(),
         [Fault::BandRestore {
@@ -565,7 +562,6 @@ fn a_band_restore_above_the_ceiling_refuses_the_key_until_the_drive_is_written_a
 
 #[test]
 fn the_sdr_stopping_mid_over_halts_it_and_says_why() {
-    // M12.
     let s = sim(
         SimDialect::expert_sdr3(),
         [Fault::ServerStop {
@@ -588,7 +584,7 @@ fn the_sdr_stopping_mid_over_halts_it_and_says_why() {
 
 #[test]
 fn stops_reach_the_server_in_every_state() {
-    // M13. A server that never says ready: stops still go out.
+    // A server that never says ready: stops still go out.
     let s = sim(SimDialect::expert_sdr3(), [Fault::NoReady]);
     let conn = connect(
         &s,
@@ -630,7 +626,6 @@ fn stops_reach_the_server_in_every_state() {
 
 #[test]
 fn no_key_goes_out_while_the_server_forbids_transmit() {
-    // M14.
     for (fault, refusal) in [
         (
             Fault::TxEnableFalse,
@@ -1063,7 +1058,7 @@ fn length_as_frames_is_read_and_recorded_as_evidence() {
     assert_eq!(
         snap.dialect.chrono_length,
         crate::tci::frame::LengthMeaning::Values,
-        "evidence, never acted on (T1 choice 1A)"
+        "evidence, never acted on"
     );
 }
 

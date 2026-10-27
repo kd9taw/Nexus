@@ -2567,7 +2567,7 @@ mod tests {
         }
     }
 
-    /// Every example in the TCI 2.0 document (and each dialect form named in plan §2.2 and §2.5)
+    /// Every example in the TCI 2.0 document (and each dialect form a known server sends)
     /// reads as the side that sends it reads it, renders back, and is refused by the other side.
     #[test]
     fn every_spec_example_reads_as_its_sender_meant_and_renders_back() {
@@ -3945,7 +3945,7 @@ mod server_tests {
                 "{text}"
             );
         }
-        // T1's client reading is unchanged: as a request they stay unknown.
+        // The client's reading is unchanged: as a request they stay unknown.
         assert_eq!(
             requests("line_out_recorder_break:0;", &EXPERT_SDR3)
                 .next()
@@ -4056,7 +4056,7 @@ mod server_tests {
     proptest! {
         #![proptest_config(ProptestConfig { cases: 2048, ..ProptestConfig::default() })]
 
-        /// The server's reading adds forms; it changes nothing T1's reading already reads. A
+        /// The server's reading adds forms; it changes nothing the client's reading reads. A
         /// command whose name is not an extra's reads exactly as [`requests`] reads it, and one
         /// whose name is either reads as an [`Extra`] or as [`requests`] reads it.
         #[test]

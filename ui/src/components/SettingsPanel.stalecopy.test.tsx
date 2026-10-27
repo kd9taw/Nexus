@@ -317,6 +317,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'rig-advanced', ...field('dataModesPlainSsb', false, false, true), edit: opened('rig-advanced', clickIn('rig-advanced', 'switch', /^Data modes use plain SSB/)) },
     { section: 'audio', ...field('rxGain', 1, 2, 3), edit: setIn('audio', 'slider', 'RX capture gain', '3') },
     { section: 'headphone-monitor', ...field('monitorEnabled', false, false, true), edit: clickIn('headphone-monitor', 'checkbox', 'Play receive audio on this computer') },
+    { section: 'scope-source', ...field('scopeSource', 'radio', 'radio', 'sdrconnect'), edit: setIn('scope-source', 'combobox', /^Draw the scope from/, 'sdrconnect') },
     { section: 'satellite-doppler', ...field('satDopplerOff', false, false, true), edit: clickIn('satellite-doppler', 'checkbox', 'Enable satellite Doppler correction') },
     {
       section: 'rotator',
@@ -355,6 +356,8 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'pounce', ...field('pounceThreshold', 'off', 'atno', 'atnoOrZone'), edit: setIn('pounce', 'combobox', /^Alert me for/, 'atnoOrZone') },
     { section: 'alerts', ...field('alertMyCall', true, true, false), edit: clickIn('alerts', 'switch', /^My call/) },
     { section: 'accessibility', ...field('announceVerbosity', 'needed', 'off', 'all'), edit: setIn('accessibility', 'combobox', /^Announce decodes/, 'all') },
+    { section: 'logbook-history', ...field('historySnapshotDays', 90, 30, 45), edit: setIn('logbook-history', 'spinbutton', /^Keep deleted contacts/, '45') },
+    { section: 'callbook', ...field('callbookCacheDays', 30, 60, 14), edit: setIn('callbook', 'spinbutton', /^Keep answers for/, '14') },
     { section: 'connections-b4', ...field('b4MatchMode', false, false, true), edit: clickIn('connections-b4', 'switch', /^Match mode too/) },
     { section: 'integrations-feeds', ...field('wsjtxUdp', false, false, true), edit: clickIn('integrations-feeds', 'switch', /^WSJT-X UDP API/) },
     { section: 'antenna-gain', ...field('antTxGainDbi', 0, 3, 6), edit: opened('antenna-gain', setIn('antenna-gain', 'spinbutton', 'TX antenna gain (dBi)', '6')) },
@@ -373,9 +376,12 @@ describe('an edit made in any section of Settings is saved', () => {
     {
       section: 'field-day-club',
       ...field('fdEventName', '', 'Club FD', 'Nexus FD'),
-      // No accessible name on this input (its label is a <span> in a <div>): found by its placeholder.
+      // No accessible name on this input (its label is a <span> in a <div>): found by that caption.
       edit: async () => {
-        const input = (await inSection('field-day-club')).getByPlaceholderText('W9ABC Field Day')
+        const input = (await inSection('field-day-club'))
+          .getByText('Event name', { selector: '.settings-label' })
+          .closest('.settings-field')!
+          .querySelector('input') as HTMLInputElement
         fireEvent.change(input, { target: { value: 'Nexus FD' } })
       },
     },
@@ -395,6 +401,7 @@ describe('an edit made in any section of Settings is saved', () => {
     colours: 'display preferences kept on this computer',
     'waterfall-scopes': 'display preferences kept on this computer',
     'map-globe': 'display preferences kept on this computer',
+    'logbook-display': 'the Logbook columns’ one writer, and the station card kept on this computer',
     performance: 'display preferences kept on this computer',
     'app-updates': 'setBetaUpdates, the beta channel’s one writer',
     'start-at-sign-in': 'setLaunchAtLogin, the login entry’s one writer',

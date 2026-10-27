@@ -13,6 +13,8 @@ use tauri::test::MockRuntime;
 mod lock;
 /// The held press against presence as heard here.
 mod reassert;
+/// A cold launch connects again to the station this computer last drove.
+mod reconnect;
 /// The recorder and the held press.
 mod record;
 /// What each call and each hold says of the Stops pressed before it.
@@ -277,6 +279,7 @@ fn expected(cmd: &str, args: &Value) -> Way {
                 | Wired::Tune
                 | Wired::Rtty
                 | Wired::Psk
+                | Wired::Jtty
                 | Wired::Aprs
                 | Wired::Sstv
                 | Wired::Chat,
@@ -845,6 +848,13 @@ const MAY_REACH: &[&str] = &[
     "crate::lan_client::Stations",
     // Where the typed file is: a path beside the default profile's settings. It opens nothing.
     "crate::lan_client::typed_path",
+    // Where the sign-in times are, beside it; and this computer's name. They open nothing.
+    "crate::lan_client::signed_path",
+    "crate::lan_client::computer_name",
+    // Signing in again for the station this launch drives: the system browser, this computer's
+    // own requests to the Remote service and its issuer, and its enrolment on a connection of
+    // its own to the station, which keeps it. It keys nothing and starts nothing of a station.
+    "crate::lan_client::account",
     // The internet road: this computer's own requests to the Remote service (a pipe, its relay, a
     // renewal) and the road's record in this computer's store. It opens a link and starts nothing
     // of a station.
@@ -860,6 +870,9 @@ const MAY_REACH: &[&str] = &[
     "crate::ui_state_read",
     "crate::ui_state_path",
     "crate::settings_path",
+    // Where the last client target is kept, beside the default profile's settings: a path. It
+    // resolves a directory and opens nothing.
+    "crate::config_dir_for",
     "crate::write_json_atomic",
     "crate::active_profile",
     "crate::send_main_window_to_the_app",
@@ -877,6 +890,8 @@ const MAY_REACH: &[&str] = &[
     "crate::capture_all_window_geometry",
     "crate::capture_bandmap_window",
     "crate::show_startup_failure",
+    // The panic hook's flag that the window is up. It sets one flag and starts nothing.
+    "crate::startup_reached_window",
 ];
 
 /// What starts a station, or holds one: none of it may be named in client mode.
@@ -914,6 +929,28 @@ fn client_source() -> String {
         .join("\n")
 }
 
+/// Client mode's window is up once its setup runs, and it says so: the panic hook shows "Nexus could
+/// not start" only while no window has been reached, and only the station's own setup used to say
+/// it, so on a computer driving a station every later panic raised that box over a running app.
+/// CONTROL: the scan finds the setup it reads.
+#[test]
+fn client_mode_marks_its_window_reached() {
+    let source = client_source();
+    let run = &source[source
+        .find("pub(crate) fn run(station: String")
+        .expect("run")..];
+    let setup = &run[run.find(".setup(move |app|").expect("the setup")..];
+    let setup = &setup[..setup.find(".on_window_event(").expect("the setup's end")];
+    assert!(
+        setup.contains("crate::window_state::install"),
+        "the scan reads the setup"
+    );
+    assert!(
+        setup.contains("crate::startup_reached_window()"),
+        "client mode's setup marks the window reached"
+    );
+}
+
 /// ★ No station here, by construction: client mode names nothing that starts or holds a station
 /// (no Engine, no logbook, no radio or daemon, no feed, listener or uploader), and of the crate's
 /// own it reaches only what [`MAY_REACH`] lists, each of which starts none. The app it builds
@@ -947,7 +984,7 @@ fn client_mode_reaches_nothing_of_a_station() {
         );
     }
     let run = &source[source
-        .find("pub(crate) fn run(station: String)")
+        .find("pub(crate) fn run(station: String")
         .expect("run")..];
     let managed: Vec<&str> = run
         .match_indices(".manage(")
@@ -980,7 +1017,7 @@ fn run_branches_off_before_anything_of_the_station_opens() {
     let run = &lib[lib.find("\npub fn run() {").expect("run")..];
     let run = &run[..run.find("\n}\n").expect("the end of run")];
     let branch = run
-        .find("if let Some(station) = client_mode::requested() {")
+        .find("let client = client_mode::requested()")
         .expect("the branch");
     for opens in [
         "converting_elsewhere(",
@@ -999,7 +1036,7 @@ fn run_branches_off_before_anything_of_the_station_opens() {
     }
     assert!(
         run[branch..].starts_with(
-            "if let Some(station) = client_mode::requested() {\n        client_mode::run(station);\n        return;"
+            "let client = client_mode::requested()\n        .map(|station| (station, client_mode::typed_in(std::env::args().skip(1))))\n        .or_else(client_mode::auto_requested);\n    if let Some((station, typed)) = client {\n        client_mode::run(station, typed);\n        return;"
         ),
         "and goes no further into run()"
     );
@@ -1173,12 +1210,22 @@ impl Drop for RoadEnd {
     }
 }
 
+/// A road's tag that no other road in this run has, as the shack names its roads from a random
+/// start. These tests' roads share their key material, and a road outlives its test (the mock app
+/// keeps its client, and an unacknowledged Stop is sent again for five seconds): under one tag for
+/// all, a road an earlier test left running spoke on a later test's road whenever that test's end
+/// was handed the same port. Its datagrams verified there: they drew the end's answers to the
+/// wrong road, and could carry its replay window past the later road's own.
+fn a_tag_of_its_own() -> crate::remote_service::lan::datagram::Tag {
+    crate::remote_service::lan::stop_road::first_tag().to_be_bytes()
+}
+
 /// A shack with a Stop road to an end of the test's own.
 fn shack_with_a_road() -> (Arc<FakeShack>, RoadEnd) {
     use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
     use crate::remote_service::lan::stop_road::Up;
     let exported = [5; EXPORTED];
-    let tag = [2; 8];
+    let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket.set_nonblocking(true).unwrap();
     let road =
@@ -1490,15 +1537,11 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     use crate::remote_service::lan::stop_road::Up;
     let on_air = Arc::new(OnAir::default());
     let exported = [5; EXPORTED];
+    let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket.set_nonblocking(true).unwrap();
-    let road = StopRoad::open(
-        socket.local_addr().unwrap(),
-        [2; 8],
-        &exported,
-        on_air.clone(),
-    )
-    .unwrap();
+    let road =
+        StopRoad::open(socket.local_addr().unwrap(), tag, &exported, on_air.clone()).unwrap();
     let station = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let _audio = AudioRoad::open(
         station.local_addr().unwrap(),
@@ -1511,7 +1554,7 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let shack = FakeShack::new();
     *lock(&shack.road) = Some(road);
     shack.hold();
-    let mut keys = Keys::new(&exported, [2; 8], End::Shack).unwrap();
+    let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
     let dir = scratch("road-stop-audio");
     let client = client_in(&dir, &shack);
     let screens = screens(&client);
@@ -1630,7 +1673,7 @@ fn only_a_stop_press_takes_the_road() {
         .filter(|(_, class)| *class == Class::StopsTx)
         .map(|(cmd, _)| cmd)
         .collect();
-    assert_eq!(stops.len(), 8);
+    assert_eq!(stops.len(), 9);
     for cmd in &stops {
         assert!(ask(&screens.main, cmd, json!({})).is_ok(), "{cmd}");
     }
@@ -1879,5 +1922,85 @@ fn a_gallery_picture_arrives_in_client_mode() {
         refused("shackOnly")
     );
     assert_eq!(shack.sent().len(), 2, "nothing more crossed");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ Operate's launch signs in again for a station added with the account in the last week before
+/// the station stops taking this computer on its network, and not before; never for a station
+/// paired with a code. The banner's status names the day while it is still to be done, and says
+/// while the sign-in waits in the browser. CONTROL: one day earlier, nothing is due.
+#[test]
+fn the_launch_signs_in_again_in_the_last_week_before_the_station_stops_taking_this_computer() {
+    use crate::lan_client::tests::{record, StationStore};
+    use tempo_client::account::{PROOF_MAX_AGE_S, RENEW_BEFORE_S};
+    let dir = scratch("sign-in-again");
+    let stations = crate::lan_client::Stations::new(Arc::new(StationStore::default()))
+        .signed_in(dir.join("lan-account.json"));
+    let coded = "60000000-0000-4000-8000-0000000000c0";
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    stations
+        .keep(&record(coded, &["192.168.1.21:42075"]))
+        .unwrap();
+    let issued_at = 1_800_000_000;
+    stations.keep_signed(STATION, issued_at).unwrap();
+    let until = issued_at + PROOF_MAX_AGE_S;
+    let start = until - RENEW_BEFORE_S;
+    assert_eq!(sign_in_again_by(&stations, STATION, start - 86_400), None);
+    assert_eq!(sign_in_again_by(&stations, STATION, start - 1), None);
+    assert_eq!(sign_in_again_by(&stations, STATION, start), Some(until));
+    assert_eq!(sign_in_again_by(&stations, STATION, until + 1), Some(until));
+    assert_eq!(
+        sign_in_again_by(&stations, coded, until + 1),
+        None,
+        "paired with a code"
+    );
+
+    let client = client_in(&dir, &FakeShack::new());
+    assert_eq!(
+        (client.status().sign_in_by, client.status().signing_again),
+        (None, false)
+    );
+    client.signing_again(Some(until), true);
+    let status = serde_json::to_value(client.status()).unwrap();
+    assert_eq!(
+        (&status["signInBy"], &status["signingAgain"]),
+        (&json!(until), &json!(true))
+    );
+    client.signing_again(None, false);
+    assert_eq!(
+        (client.status().sign_in_by, client.status().signing_again),
+        (None, false)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ The banner's status carries the station's `radio.txHold` beside `pttRefusal`, as the station
+/// sent it, in any section: with its seconds left, without them, and absent when the station says
+/// none (or is a build that does not say).
+#[test]
+fn the_status_carries_the_stations_transmit_hold() {
+    let dir = scratch("tx-hold");
+    let shack = FakeShack::new();
+    let client = client_in(&dir, &shack);
+    let hold = |client: &Client| serde_json::to_value(client.status()).unwrap()["txHold"].clone();
+    shack.feeds("snapshot/1", 1, json!({ "radio": {} }));
+    assert_eq!(hold(&client), Value::Null, "no hold said");
+    shack.feeds(
+        "snapshot/1",
+        2,
+        json!({ "radio": { "txHold": { "ownerNotified": true, "leftSecs": 540 } } }),
+    );
+    assert_eq!(
+        hold(&client),
+        json!({ "ownerNotified": true, "leftSecs": 540 })
+    );
+    shack.feeds(
+        "snapshot/1",
+        3,
+        json!({ "radio": { "txHold": { "ownerNotified": false } } }),
+    );
+    assert_eq!(hold(&client), json!({ "ownerNotified": false }));
     std::fs::remove_dir_all(&dir).unwrap();
 }

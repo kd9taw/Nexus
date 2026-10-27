@@ -208,8 +208,8 @@ cards.
   QSOs reach Stats only if you import that file back into the logbook. See
   [Field Day & POTA/SOTA](contesting-pota.md).
 - **No grid squares.** There is no VUCC or grid-square card here at all — grids
-  are counted in [Awards](awards-journey.md), and the per-band grid counts there
-  cover 160 m through 2 m, so a 70 cm contact has no per-band slot to land in.
+  are counted in [Awards](awards-journey.md), whose per-band grid counts run
+  from 160 m up through the microwave bands.
 - **No POTA/SOTA, satellite, power or distance breakdown.** Those fields are in
   your records and used elsewhere in the app; this dashboard does not slice by
   them.

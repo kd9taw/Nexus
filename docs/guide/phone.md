@@ -123,9 +123,10 @@ and **Tune** are not in the pane region at all, so nothing you do in ⊞ Panels 
 hide them or put them in a pane.
 
 **The left side.** ⊞ Panels ▸ **Arrange** starts with a **Left side**: a column
-from under the header down to the dock, beside the scope, for **Band Activity**,
-**Spots** and **Needed**. **◀** on one of them in Column 1 puts it there, the full
-height of the window, and **▶** takes it back to its column. Drag the divider on
+from under the scope and the transmit strip down to the dock, beside the other
+panes, for **Band Activity**, **Spots** and **Needed**. **◀** on one of them in
+Column 1 puts it there, and **▶** takes it back to its column. The scope keeps
+the full width of the window above it. Drag the divider on
 the left side's right edge to make it wider or narrower; Nexus remembers the width,
 and a double-click on the divider (or **Backspace**) puts the default back. The
 left side shows on a window about 1280 px wide or wider, counted after the UI
@@ -253,6 +254,12 @@ playing.*
    where you are standing when it matters. Recording the rig's RX audio into a
    slot is how a canned call goes on the air with the wrong voice in it.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
+
+**On a FlexRadio through SmartSDR CAT**, turn on DAX for voice in SmartSDR's P/CW
+panel first. In SSB the Flex transmits from its own mic unless DAX is on, so a
+message keys the radio with no RF. Nexus shows a note saying so the first time a
+message plays, until you dismiss it. See
+[Phone (SSB) on a Flex](../rigs/flexradio.md#phone-ssb-on-a-flex).
 
 If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.
 Closing the pane is itself a stop: a message that is playing is aborted rather

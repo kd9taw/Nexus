@@ -1262,16 +1262,21 @@ mod imp {
 
         /// A short budget: these readers hit EOF, and the timeout paths should not cost 400 ms.
         const T: Duration = Duration::from_millis(50);
+        /// For a reader that holds its whole reply, so nothing is ever waited for: the budget
+        /// then bounds only a thread the machine stops between taking the deadline and reading,
+        /// and [`T`] of that is a red on a loaded box ("the amplifier stopped answering", two of
+        /// these at once, every byte there).
+        const WHOLE: Duration = Duration::from_secs(10);
 
         #[test]
         fn a_reply_is_read_up_to_its_semicolon() {
             let mut r = Cursor::new(b"^OS1;".to_vec());
-            assert_eq!(read_framed(&mut r, T).unwrap(), "^OS1;");
+            assert_eq!(read_framed(&mut r, WHOLE).unwrap(), "^OS1;");
 
             // A second reply is left in the stream, not swallowed with the first.
             let mut r = Cursor::new(b"^OS1;^TM042;".to_vec());
-            assert_eq!(read_framed(&mut r, T).unwrap(), "^OS1;");
-            assert_eq!(read_framed(&mut r, T).unwrap(), "^TM042;");
+            assert_eq!(read_framed(&mut r, WHOLE).unwrap(), "^OS1;");
+            assert_eq!(read_framed(&mut r, WHOLE).unwrap(), "^TM042;");
         }
 
         #[test]
@@ -1285,7 +1290,7 @@ mod imp {
 
             // POSITIVE CONTROL: the same reader WITH its terminator succeeds.
             let mut r = Cursor::new(b"^OS1;".to_vec());
-            assert!(read_framed(&mut r, T).is_ok());
+            assert!(read_framed(&mut r, WHOLE).is_ok());
         }
 
         /// ⭐ THE ONE THAT MATTERS. Elecraft documents unsolicited status, so the next reply to
@@ -1294,12 +1299,12 @@ mod imp {
         fn unsolicited_status_is_skipped_rather_than_returned_as_the_answer() {
             // Three unsolicited lines arrive before the ^WS we asked for.
             let mut r = Cursor::new(b"^OS1;^TM042;^BN05;^WS250 015;".to_vec());
-            assert_eq!(read_matching(&mut r, "WS", T).unwrap(), "250 015");
+            assert_eq!(read_matching(&mut r, "WS", WHOLE).unwrap(), "250 015");
 
             // Without the skip, the FIRST line would have been the answer — and a temperature of
             // 042 would have been read as 42 watts. Pin that it is not.
             let mut r = Cursor::new(b"^TM042;^WS250 015;".to_vec());
-            let got = read_matching(&mut r, "WS", T).unwrap();
+            let got = read_matching(&mut r, "WS", WHOLE).unwrap();
             assert_eq!(got, "250 015");
             assert_ne!(got, "042", "a temperature must never answer a power query");
         }
@@ -1345,7 +1350,7 @@ mod imp {
             let mut ok = "^OS1;".repeat(KPA_MAX_SKIPPED - 1);
             ok.push_str("^WS250 015;");
             let mut r = Cursor::new(ok.into_bytes());
-            assert_eq!(read_matching(&mut r, "WS", T).unwrap(), "250 015");
+            assert_eq!(read_matching(&mut r, "WS", WHOLE).unwrap(), "250 015");
         }
     }
 

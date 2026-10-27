@@ -139,6 +139,10 @@ fn normalize(v: &mut Value) {
                     || k == "clockServers"
                     || k == "clockGrossMs"
                     || k == "qsoStartUnix"
+                    // The activation's start and the UTC day its counts are of: the clock at
+                    // the run, like the QSO's start above.
+                    || k == "startedAt"
+                    || k == "utcDay"
                     || k.ends_with("Tick")
                 {
                     *val = Value::Null;

@@ -217,7 +217,7 @@ const PROTECTED = [
   /s&p/i,
   /tx off|tx on/i,
   /^tune$/i,
-  /^atu$/i,
+  /^atu( on)?$/i, // "ATU ON" while the tuner is in line (#344)
   /stop tx/i,
   /hold tx$/i,
   /tx auto/i,
@@ -439,7 +439,7 @@ describe('the merged operating strip is the un-removable TX surface', () => {
 
   it('a rig with no tuner gets NO ATU button (an ATU button on a radio with no ATU is worse than no button)', () => {
     renderCockpit({}, { atu: null })
-    expect(screen.queryByRole('button', { name: /^atu$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^atu( on)?$/i })).toBeNull()
   })
 })
 

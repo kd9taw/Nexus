@@ -37,6 +37,31 @@ pub enum OperatingMode {
     Keyboard,
 }
 
+/// Which modem the Keyboard section runs: PSK (PSK31/QPSK31, picked within its cockpit) or
+/// JTTY, WSJT-X's keyboard mode, with a cockpit of its own. Section state, chosen by entering
+/// the cockpit ("jtty" on the wire of `set_operating_mode`), and it only decides what is the
+/// modem's own: the band plan a section entry or a band pick by name lands on, and the mode the
+/// WSJT-X UDP Status names. Every Keyboard policy (data privileges, the digital power cap,
+/// always-USB PKTUSB) is the section's, so it is the same for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyboardModem {
+    #[default]
+    Psk,
+    Jtty,
+}
+
+/// Which of WSJT-X's two JTTY F-key sets the keys send: its "Message style" box
+/// (`comboBoxJttyStyle`, `Jtty::MessageStyle`, WSJT-X 3.3.0-beta4 `widgets/JttyMessages.hpp`
+/// 235). Contest is its default; each set keeps its own eight templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum JttyMessageStyle {
+    #[default]
+    Contest,
+    Ft8,
+}
+
 /// Which VFO carries the uplink and which the downlink during a satellite pass.
 ///
 /// ⚠️ **A WRONG MAPPING TRANSMITS ON YOUR OWN DOWNLINK.** That is why this is an
@@ -337,6 +362,42 @@ pub fn swr_scale_verified(
     native_civ || icom_lan || flex_vita
 }
 
+/// The CI-V radios whose forward-power meter Nexus's own CI-V daemon turns into watts on the
+/// radio's own scale: Icom's Po percentage (`civ::commands::PO_PERCENT_CAL`) of the rated output
+/// for the model and the band it transmits on (`civ::commands::po_full_scale_watts`), for every
+/// model the daemon serves. Where the daemon has no sourced figure (the IC-905 on 10 GHz, the
+/// IC-9700 transmitting on the other band of a satellite split) it reports no watts at all, so
+/// nothing reaches the log.
+///
+/// ⚠️ An ALLOW-list for the reason [`SWR_VERIFIED_CIV_RIGS`] is one: a model added to the daemon
+/// without a sourced scale must not have its watts logged.
+pub const PO_SCALE_CIV_RIGS: [u32; 7] = [3073, 3078, 3081, 3085, 3090, 3092, 3094];
+
+/// Is the forward power the active radio reports in watts the radio's own figure, so that it may
+/// be written on a contact as the power it was made at (ADIF `TX_PWR`)?
+///
+/// Yes for every path whose watts come from the radio's own scale: Hamlib's
+/// `RFPOWER_METER_WATTS`, the SDR program's TCI sensors, the FlexRadio meter stream. On Nexus's own
+/// CI-V daemon (serial or the Icom network connection) only for [`PO_SCALE_CIV_RIGS`].
+pub fn po_watts_scale_known(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &str,
+    icom_lan_host: &str,
+    icom_native_cat: bool,
+) -> bool {
+    let native_civ = icom_native_cat
+        && !rig_conn_is_network(rig_conn, rig_addr)
+        && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
+        && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
+    if !native_civ && !icom_lan_reachable(rig_model, rig_conn, icom_lan_host) {
+        return true;
+    }
+    PO_SCALE_CIV_RIGS.contains(&rig_model)
+}
+
 /// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
 /// Nexus offers no XIT on them and refuses one aimed at them.
 ///
@@ -376,6 +437,19 @@ pub const NO_XIT_RIGS: [u32; 58] = [
 /// Does this radio have XIT? `false` only for a model in [`NO_XIT_RIGS`].
 pub fn rig_has_xit(rig_model: u32) -> bool {
     !NO_XIT_RIGS.contains(&rig_model)
+}
+
+/// Radios where APRS can be commanded in DATA-FM (`PKTFM`) instead of plain FM — the per-radio
+/// "APRS uses DATA-FM" switch ([`RadioProfile::aprs_data_fm`]) is offered and obeyed only here.
+///
+/// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A takes it from the USB codec in
+/// DATA-FM when menu 077 FM PKT PORT SELECT is USB (its default is DATA, the rear jack), while
+/// plain FM takes 074 FM MIC SELECT. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on model 1035 — the
+/// FT-991 and FT-991A share it. Only the model with that evidence: the FT-891 (1036) has no 2 m,
+/// and the native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`).
+/// Mirrored in the UI as `APRS_DATA_FM_MODELS` (SettingsPanel).
+pub fn aprs_data_fm_available(rig_model: u32) -> bool {
+    rig_model == 1035
 }
 
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
@@ -657,7 +731,101 @@ fn default_tci_server_port() -> u16 {
     TCI_SERVER_DEFAULT_PORT
 }
 
+/// Where the RF scope's picture comes from ([`Settings::scope_source`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSource {
+    /// The radio's own panadapter (Flex, Icom CI-V, the FT-710's, a TCI program's), or the sound
+    /// card's audio where it has none. The default.
+    Radio,
+    /// An SDRplay receiver through SDRplay's SDRconnect program, over its WebSocket API.
+    Sdrconnect,
+}
+
+impl ScopeSource {
+    /// The word [`Settings::scope_source`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            ScopeSource::Radio => "radio",
+            ScopeSource::Sdrconnect => "sdrconnect",
+        }
+    }
+
+    /// A stored [`Settings::scope_source`]. Case and surrounding space do not matter, and any
+    /// other word is the radio's own, so a file from a later build never moves the scope.
+    pub fn from_setting(word: &str) -> ScopeSource {
+        if word.trim().eq_ignore_ascii_case("sdrconnect") {
+            ScopeSource::Sdrconnect
+        } else {
+            ScopeSource::Radio
+        }
+    }
+}
+
+/// How the SDR's centre follows the rig's dial ([`Settings::sdrconnect_follow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdrconnectFollow {
+    /// The centre is retuned to the dial on every change. The default.
+    Centre,
+    /// The centre is retuned to the dial only when the dial leaves the middle of the span.
+    Scroll,
+}
+
+impl SdrconnectFollow {
+    /// The word [`Settings::sdrconnect_follow`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            SdrconnectFollow::Centre => "centre",
+            SdrconnectFollow::Scroll => "scroll",
+        }
+    }
+
+    /// A stored [`Settings::sdrconnect_follow`]: any word but `scroll` is the default.
+    pub fn from_setting(word: &str) -> SdrconnectFollow {
+        if word.trim().eq_ignore_ascii_case("scroll") {
+            SdrconnectFollow::Scroll
+        } else {
+            SdrconnectFollow::Centre
+        }
+    }
+}
+
+/// SDRconnect's WebSocket API port as SDRplay ships it.
+pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
+
+fn default_scope_source() -> String {
+    ScopeSource::Radio.as_setting().to_string()
+}
+
+fn default_sdrconnect_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_sdrconnect_port() -> u16 {
+    SDRCONNECT_DEFAULT_PORT
+}
+
+fn default_sdrconnect_follow() -> String {
+    SdrconnectFollow::Centre.as_setting().to_string()
+}
+
 impl Settings {
+    /// Where the scope's SDRconnect lives, when the operator chose it as the scope source: the host
+    /// (this computer when left blank) and the port (SDRconnect's default when 0). `None` while
+    /// the scope source is the radio.
+    pub fn sdrconnect_target(&self) -> Option<(String, u16)> {
+        if ScopeSource::from_setting(&self.scope_source) != ScopeSource::Sdrconnect {
+            return None;
+        }
+        let host = self.sdrconnect_host.trim();
+        let host = if host.is_empty() { "127.0.0.1" } else { host };
+        let port = if self.sdrconnect_port == 0 {
+            SDRCONNECT_DEFAULT_PORT
+        } else {
+            self.sdrconnect_port
+        };
+        Some((host.to_string(), port))
+    }
+
     /// Is the RECEIVE dial Doppler's to correct?
     ///
     /// The operator's off switch, and the one mapping that claims the dial for
@@ -833,14 +1001,46 @@ impl Settings {
 /// operators outside the US — picked via the wizard's "Outside the US" choice). Defaults
 /// to **Open** so an upgrading install is never silently TX-locked; the lockout is
 /// operator-declared (wizard on first run, or Settings).
+///
+/// ⛔ ON DISK, `licenseClass` HOLDS ONLY A CLASS EVERY BUILD KNOWS. Builds before Novice and
+/// Advanced know Technician, General, Extra and Open, and a token they do not know fails the
+/// whole file: it is set aside and the build starts from defaults, the callsign blanked and the
+/// class `Open`, the lockout off. So the file stores Novice as Technician and Advanced as General
+/// ([`Self::as_older_builds_read_it`]) and the exact class beside it under
+/// [`LICENSE_CLASS_EXACT_KEY`] ([`Settings::for_storage`], [`Settings::take_exact_license_class`]).
+/// Everywhere else, the screens included, the class is itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LicenseClass {
+    /// Grandfathered: no new Novice licences are issued, but existing ones renew.
+    Novice,
     Technician,
     General,
+    /// Grandfathered, as Novice is.
+    Advanced,
     Extra,
     #[default]
     Open,
+}
+
+/// The key the settings file and a settings backup carry the exact [`LicenseClass`] under, beside
+/// the older-build class in `licenseClass`. Only this build and newer read it; an older build
+/// carries it untouched in its catch-all ([`Settings::unknown`]) and never sees it.
+pub const LICENSE_CLASS_EXACT_KEY: &str = "licenseClassExact";
+
+impl LicenseClass {
+    /// The class a build from before Novice and Advanced reads in place of this one: the nearest
+    /// class it knows. Advanced as General, which has every privilege General has and less; Novice
+    /// as Technician, the class 47 CFR 97.301(e) gives the same HF rows. ⚠️ An older build then
+    /// holds a Novice to a Technician's privileges, 6 m, 2 m and 70 cm included, because no class
+    /// it knows is narrower — and `Open`, the only other answer, holds them to nothing.
+    pub fn as_older_builds_read_it(self) -> LicenseClass {
+        match self {
+            LicenseClass::Novice => LicenseClass::Technician,
+            LicenseClass::Advanced => LicenseClass::General,
+            other => other,
+        }
+    }
 }
 
 /// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig in
@@ -1699,6 +1899,32 @@ pub struct Settings {
     /// save for the same stale-snapshot reason as `beta_updates`.
     #[serde(default)]
     pub remote_autostart_offer_answered: bool,
+    /// The Logbook's column choice (`ui/src/features/logColumns.ts`): the default columns turned
+    /// off, the others turned on, and dragged widths. `None` — the key absent — is the default
+    /// table, so a file that never chose columns writes exactly what it did before.
+    ///
+    /// ONE WRITER: `set_logbook_columns`, the moment the operator makes a choice in the Logbook;
+    /// kept live across a form save for the same stale-snapshot reason as `beta_updates`. Only the
+    /// window reads it, and it clamps each width against the window it is shown on, so nothing
+    /// here bounds a width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logbook_columns: Option<LogbookColumns>,
+    /// How many days the Logbook's history keeps a deleted contact whole, so Recently deleted and
+    /// an undo can put it back ([`tempo_core::logbook::history::SNAPSHOT_DAYS`], 90, by default).
+    /// After that the contact's copy is taken out of the history, a step at a time in the
+    /// background at each launch ([`crate::engine::Engine::trim_log_history`]). Every edit's
+    /// fields, old and new, are kept for good whatever this says. 0 keeps deleted contacts for
+    /// good too.
+    #[serde(default = "default_history_snapshot_days")]
+    pub history_snapshot_days: u32,
+    /// The Logbook's named filters (`ui/src/features/logFilter.ts`), in the order the operator
+    /// saved them. Empty — the key absent — is none saved, so a file that never saved one writes
+    /// exactly what it did before.
+    ///
+    /// ONE WRITER: `set_logbook_filters`, the moment one is saved, renamed or deleted; kept live
+    /// across a form save for the same stale-snapshot reason as `logbook_columns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logbook_filters: Vec<SavedLogFilter>,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -1881,6 +2107,11 @@ pub struct Settings {
     /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -1890,6 +2121,9 @@ pub struct Settings {
     /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
     /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
     pub operating_mode: OperatingMode,
+    /// The Keyboard section's modem ([`KeyboardModem`]), written with the section by
+    /// `set_operating_mode` and kept across a Settings save exactly as `operating_mode` is.
+    pub keyboard_modem: KeyboardModem,
     /// Amateur license class — drives the transmit-privilege lockout + the licensed-segment
     /// band dropdown. `Open` (default) = no restrictions (non-US). See [`LicenseClass`].
     #[serde(default)]
@@ -2217,6 +2451,25 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub tci_server_spots: bool,
 
+    /// Where the RF scope's picture comes from ([`ScopeSource`]): `"radio"`, the radio's own
+    /// panadapter as today (the default), or `"sdrconnect"`, an SDRplay receiver through SDRplay's
+    /// SDRconnect program, fed from the rig's RX OUT or a protected splitter. Stored as a word and
+    /// read by [`ScopeSource::from_setting`], so a word this build does not know is the radio's.
+    /// The station's, like the TCI server's: the SDR follows whichever radio is in use.
+    #[serde(default = "default_scope_source")]
+    pub scope_source: String,
+    /// The computer SDRconnect runs on, for its WebSocket API: this one unless the operator says.
+    #[serde(default = "default_sdrconnect_host")]
+    pub sdrconnect_host: String,
+    /// SDRconnect's WebSocket API port ([`SDRCONNECT_DEFAULT_PORT`] unless moved in SDRconnect).
+    #[serde(default = "default_sdrconnect_port")]
+    pub sdrconnect_port: u16,
+    /// How the SDR's centre follows the rig's dial ([`SdrconnectFollow`]): `"centre"`, retuned to
+    /// the dial on every change (the default), or `"scroll"`, retuned only when the dial leaves
+    /// the middle of the span, which moves SDRconnect's own display far less.
+    #[serde(default = "default_sdrconnect_follow")]
+    pub sdrconnect_follow: String,
+
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
     /// points at the *PC's* CAT port, not the radio). Empty = no native Flex scope.
@@ -2331,7 +2584,7 @@ pub struct Settings {
     /// Opt-in: run two radios at the SAME TIME, one per app window. When true AND ≥2 radios are
     /// configured, launching Nexus shows a "which radio?" picker (each window drives one radio,
     /// sharing one logbook). Off by default, so a single-radio station — or one with two radios
-    /// it never runs together — is never bothered with the picker. See [[reference-multiradio-architecture]].
+    /// it never runs together — is never bothered with the picker.
     #[serde(default)]
     pub simultaneous_radios: bool,
     /// Band+mode → radio routing rules, FIRST-MATCH-WINS (see [`RoutingRule`]). Lets a station
@@ -2570,6 +2823,11 @@ pub struct Settings {
     /// + QRP feats. `None` until the operator sets it (those feats stay gated).
     #[serde(default)]
     pub station_power_w: Option<f64>,
+    /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
+    /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
+    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    #[serde(default)]
+    pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
     /// locale — imperial only for US/LR/MM), `"metric"`, or `"imperial"`. Display-only —
     /// every wire/protocol value stays native (APRS transmits °F/mph, RepeaterBook fetches
@@ -2774,7 +3032,7 @@ pub struct Settings {
     /// WSJT-X Settings ▸ Behavior: "Disable Tx after sending 73" (stock default
     /// ON). After OUR final 73 of an S&P contact goes out, Enable-Tx drops —
     /// the next station is a deliberate arm. A CQ run is unaffected (it returns
-    /// to CQ, stock Run behavior).
+    /// to CQ); a contest's Running turns TX off after each contact whatever this says.
     #[serde(default = "default_on")]
     pub disable_tx_after_73: bool,
     /// Play a short audio cue when the dial crosses your TX privileges — a rising
@@ -2978,6 +3236,37 @@ pub struct Settings {
     /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
     #[serde(default = "default_true")]
     pub rtty_rx_auto_arm: bool,
+    /// Whether opening the JTTY view starts its receiver: [`Settings::psk_rx_auto_arm`]'s
+    /// twin for JTTY, the same doctrine and default, gated in
+    /// [`crate::engine::Engine::jtty_auto_arm`].
+    #[serde(default = "default_true")]
+    pub jtty_rx_auto_arm: bool,
+    /// JTTY's F Tol in hertz: how far either side of the Rx frequency the decoder always
+    /// searches. WSJT-X keeps it between sessions (`JTTY_FTol`, 20 Hz when absent) and does not
+    /// keep the Rx frequency, which it sets back to 1500 Hz whenever JTTY is selected; this is
+    /// the same pair. The cockpit's F Tol control is its one writer, so a Settings save keeps
+    /// the live value (see `apply_settings`).
+    #[serde(default = "default_jtty_ftol_hz")]
+    pub jtty_ftol_hz: u32,
+    /// JTTY's contest serial number, what `%E` and `%N` send: WSJT-X keeps it between sessions
+    /// (`SerialNumberJTTY`, 1 when absent) and moves it on after a message starting "TU ". The
+    /// cockpit and the transmitter are its writers, so a Settings save keeps the live value (see
+    /// `apply_settings`), as it does F Tol's.
+    #[serde(default = "default_jtty_serial")]
+    pub jtty_serial: u32,
+    /// JTTY's F1-F8 templates in WSJT-X's Contest style, the operator's own once edited: what
+    /// each key sends, WSJT-X's macros in it (`%M %H %Q %N %E %G %R`). WSJT-X keeps each as
+    /// `JTTY_msg1`..`JTTY_msg8`, its defaults `Jtty::nativeMacroTemplate` (3.3.0-beta4
+    /// `widgets/JttyMessages.hpp` 216-250). An empty template is a key that sends nothing.
+    #[serde(default = "default_jtty_fkeys")]
+    pub jtty_fkeys: Vec<String>,
+    /// The same eight in WSJT-X's FT8 style (`JTTY_FT8_msg1`..`8`, `Jtty::ft8StyleMacroTemplate`),
+    /// kept apart from the Contest set as WSJT-X keeps them.
+    #[serde(default = "default_jtty_ft8_fkeys")]
+    pub jtty_ft8_fkeys: Vec<String>,
+    /// Which of the two sets F1-F8 send (WSJT-X's "Message style").
+    #[serde(default)]
+    pub jtty_message_style: JttyMessageStyle,
     /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
     /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
     /// asked for — the window between two CQs when nobody comes back, and equally the
@@ -3022,6 +3311,12 @@ pub struct Settings {
     /// (`popsUpWhenOff`, ui/src/toast.ts). On by default, and a settings file from before the
     /// field loads it on, so the corner is as it always was until the operator turns it off.
     pub popup_notifications: bool,
+    /// How long, at least, a pop-up stays in the corner before it goes by itself, in seconds
+    /// (#321). 0 (the default, and what a file from before the field loads) leaves each pop-up
+    /// its own time, as it always was; a value only ever lengthens a pop-up, so an error keeps
+    /// its own longer floor and one that stays until dismissed still does (`pushToast`,
+    /// ui/src/toast.ts).
+    pub popup_min_secs: u32,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -3036,6 +3331,16 @@ pub struct Settings {
     /// upgrade would silently turn the tier off for everyone.
     #[serde(default = "default_on")]
     pub alert_confirm_tier: bool,
+    /// Mark Needed-board rows whose station would be a new CQ WPX prefix on that band in that
+    /// mode class (`propagation::mark_award_needs`). OFF by default, and off for a settings file
+    /// from before it (operator ruling, 2026-10-25): almost every station heard is an unworked
+    /// prefix, so a WPX need on every row flooded the board when it was tried. A chip only —
+    /// no headline, tier, sound or pop-up.
+    #[serde(default)]
+    pub show_wpx_needs: bool,
+    /// The same for a new WAE country (DARC's Worked All Europe): off by default, a chip only.
+    #[serde(default)]
+    pub show_wae_needs: bool,
     /// Band scope for new-DXCC alerts: "off" | "hf" | "vhf" | "all". `alert_new`
     /// stays the master gate (backward compat); these scopes refine it per type.
     #[serde(default = "default_alert_scope_all")]
@@ -3063,9 +3368,10 @@ pub struct Settings {
     /// there is no migration and nothing to lose.
     ///
     /// The vocabulary is deliberately the one the Spots "Spotted from" chips and Band Activity's
-    /// hide-by-continent already speak, so the product has ONE way to name a place. The UI-side
-    /// predicate is `ui/src/features/dxccGeo.ts`; a row carries an entity NAME and never a
-    /// continent, so a code here is expanded through `dxcc_entity_continents`.
+    /// hide-by-continent already speak, so the product has ONE way to name a place. A row carries
+    /// an entity NAME and never a continent, so a code here is expanded through the country file's
+    /// continent table (`crate::needed_alert::scoped_entities`, where the station decides the
+    /// alerts).
     #[serde(default)]
     pub alert_continents: Vec<String>,
     /// Geographic scope for decode alerts — cty.dat ENTITY NAMES, the twin of
@@ -3076,7 +3382,8 @@ pub struct Settings {
     /// entity, so requiring both would be unsatisfiable — ticking Europe and Japan would silence
     /// the radio. Empty = no entity scope; both empty = everything alerts.
     ///
-    /// Someone CALLING YOU and a watch-list hit are exempt from both lists — see `alerts.ts`.
+    /// Someone CALLING YOU and a watch-list hit are exempt from both lists — see
+    /// `crate::needed_alert`.
     #[serde(default)]
     pub alert_entities: Vec<String>,
     /// Band scope for the rare/ultra 💎 grid alerts — separate from plain grids
@@ -3107,6 +3414,11 @@ pub struct Settings {
     /// by default.
     #[serde(default)]
     pub sound_decode_tick: bool,
+    /// The CW turn cue's sound: a short rising chirp when it says it is your turn to send. Off
+    /// by default, like every earcon, and off for a settings file from before it; the cockpit
+    /// never plays it while anything is keyed.
+    #[serde(default)]
+    pub sound_cw_turn: bool,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -3240,6 +3552,20 @@ pub struct Settings {
     /// only. Empty = HamQTH lookup not configured.
     #[serde(default)]
     pub hamqth_username: String,
+    /// How many days a callbook answer kept on disk answers a lookup before the callbook is asked
+    /// again (`tempo_core::callbook_cache`). Offline, a kept answer is used at any age. Read
+    /// through [`Self::callbook_cache_max_age_secs`], which clamps it.
+    pub callbook_cache_days: u32,
+    /// The Logbook's "Update from callbook": the least time between two of its network lookups, in
+    /// seconds. Read through [`Self::callbook_update_pace`], which holds it to
+    /// [`CALLBOOK_UPDATE_PACE_SECS_MIN`] … [`CALLBOOK_UPDATE_PACE_SECS_MAX`].
+    pub callbook_update_pace_secs: u32,
+    /// The most network lookups "Update from callbook" makes in 24 hours, across its runs. Read
+    /// through [`Self::callbook_update_daily_cap`].
+    pub callbook_update_daily_cap: u32,
+    /// Ask callook.info, the free US-only licence lookup (no account), when QRZ and HamQTH have
+    /// no answer or are not set up. Only US-shaped calls are sent (`tempo_core::callook`).
+    pub callook_lookup: bool,
     /// Auto-upload each logged QSO to the QRZ.com logbook (push). Needs the QRZ
     /// Logbook **API key** in the keychain (distinct from the lookup password).
     /// Off by default.
@@ -3533,6 +3859,10 @@ fn default_tune_timeout() -> u32 {
     12
 }
 
+fn default_history_snapshot_days() -> u32 {
+    tempo_core::logbook::history::SNAPSHOT_DAYS
+}
+
 /// The shared default for the two #145 CAT declarations: "work it out as before".
 fn default_cat_auto() -> String {
     "auto".to_string()
@@ -3654,6 +3984,22 @@ pub const RTTY_AUTO_LISTEN_SECS_MAX: u32 = 120;
 pub const RTTY_AUTO_REPEATS_MIN: u32 = 1;
 pub const RTTY_AUTO_REPEATS_MAX: u32 = 10;
 
+/// The callbook cache's expiry: 30 days unless the operator sets another, at most ten years.
+pub const CALLBOOK_CACHE_DAYS_DEFAULT: u32 = 30;
+pub const CALLBOOK_CACHE_DAYS_MAX: u32 = 3_650;
+
+/// "Update from callbook"'s pace: a lookup every 2 seconds unless the operator sets another, never
+/// faster than one a second. QRZ publishes no rate; the floor keeps a long run from looking like
+/// a flood (`tempo_app::callbook_update`).
+pub const CALLBOOK_UPDATE_PACE_SECS_DEFAULT: u32 = 2;
+pub const CALLBOOK_UPDATE_PACE_SECS_MIN: u32 = 1;
+pub const CALLBOOK_UPDATE_PACE_SECS_MAX: u32 = 60;
+
+/// "Update from callbook"'s cap on network lookups in 24 hours. QRZ publishes no number, so the
+/// default is a conservative 250 the operator can change.
+pub const CALLBOOK_UPDATE_DAILY_CAP_DEFAULT: u32 = 250;
+pub const CALLBOOK_UPDATE_DAILY_CAP_MAX: u32 = 10_000;
+
 /// ⚠️ **Both of these are the sequencer's own shipped constants, deliberately.** They are
 /// read off [`tempo_core::rtty::SeqConfig::default`] rather than written out again, so the
 /// "unconfigured Nexus behaves exactly as it did" promise cannot drift from the machine it is
@@ -3664,6 +4010,32 @@ fn default_rtty_auto_listen_secs() -> u32 {
 
 fn default_rtty_auto_repeats() -> u32 {
     tempo_core::rtty::SeqConfig::default().max_repeats
+}
+
+/// The engine's own JTTY default, so the setting and the decoder cannot disagree about it.
+fn default_jtty_ftol_hz() -> u32 {
+    crate::engine::jtty_rx::JTTY_FTOL_HZ as u32
+}
+
+/// WSJT-X's first JTTY serial number, the transmitter's own constant.
+fn default_jtty_serial() -> u32 {
+    crate::engine::jtty_tx::JTTY_SERIAL_MIN
+}
+
+/// WSJT-X's JTTY Contest templates, the transmitter's own constant.
+fn default_jtty_fkeys() -> Vec<String> {
+    crate::engine::jtty_tx::FKEY_TEMPLATES
+        .iter()
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// WSJT-X's JTTY FT8-style templates, the transmitter's own constant.
+fn default_jtty_ft8_fkeys() -> Vec<String> {
+    crate::engine::jtty_tx::FT8_FKEY_TEMPLATES
+        .iter()
+        .map(|t| t.to_string())
+        .collect()
 }
 
 /// "auto" = the SSTV screen's band-aware pick, which is what it does today.
@@ -4032,7 +4404,8 @@ pub enum RouteMode {
     Digital,
     /// FM voice and FM packet: repeaters, simplex, APRS. The class the FT-991A owns on 2 m.
     Fm,
-    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig).
+    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig; an SSTV FM
+    /// channel is held in FM, so it routes as `Fm`).
     Ssb,
     Cw,
     Rtty,
@@ -4272,6 +4645,11 @@ pub struct RadioProfile {
     /// rig, and only one of them should be held.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -4437,6 +4815,11 @@ pub struct RadioProfilePatch {
     /// deserializes, as OFF, which is the pre-field behaviour.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -4545,6 +4928,7 @@ impl RadioProfilePatch {
         p.tx_audio_source = self.tx_audio_source;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
+        p.aprs_data_fm = self.aprs_data_fm;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -4689,6 +5073,7 @@ impl Default for RadioProfile {
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -4915,6 +5300,20 @@ pub fn net_rigctl_address_clashes(
         }
     }
     clashes
+}
+
+/// The port Nexus's own CAT broker holds, for every "never talk to ourselves" check (#165):
+/// where the broker reports it is serving (`serving`), else the Sharing port while sharing is on,
+/// else none.
+///
+/// The broker steps aside when another program holds the Sharing port, so a NET rigctl radio
+/// pointed at THAT program's rigctld on the Sharing port's number is not Nexus talking to itself,
+/// and is allowed once the broker serves elsewhere. Until the broker has bound (the radio connects
+/// first at a launch), or while its bind keeps failing, the Sharing port is where it is about to
+/// be, so the check stays on it. A port it is still serving on counts after sharing is switched
+/// off, until it has let go.
+pub fn sharing_self_port(s: &Settings, serving: Option<u16>) -> Option<u16> {
+    serving.or(s.cat_broker.then_some(s.cat_broker_port))
 }
 
 /// The first [`AddressClash`], in words: what the status lane says (`radio_config_warning`) while
@@ -5347,6 +5746,37 @@ fn default_js8_api_udp_port() -> u16 {
     crate::engine::js8_api::DEFAULT_UDP_PORT
 }
 
+/// One of the Logbook's named filters.
+///
+/// ⚠️ **The filter is kept as the JSON it arrived as, never parsed here.** The engine reads a
+/// filter strictly (an unknown field refuses the question), and a settings file outlives the build
+/// that wrote it: a filter saved by a newer Nexus, read by an older one, must not make the whole
+/// file unreadable. The window reads it back through `cleanSavedFilters`, which keeps what it
+/// knows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedLogFilter {
+    pub name: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+/// The Logbook's column choice as `settings.json` keeps it: deltas from the default table, so a
+/// column added to the defaults later still shows for an operator who chose before it existed.
+/// Column ids are the window's (`LOG_COLUMNS`); one it does not know is ignored there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogbookColumns {
+    /// Columns shown that the default table does not show.
+    #[serde(default)]
+    pub shown: Vec<String>,
+    /// Default columns turned off.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    /// Dragged widths, in CSS px, by column id.
+    #[serde(default)]
+    pub widths: std::collections::BTreeMap<String, u32>,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -5505,6 +5935,9 @@ impl Default for Settings {
             beta_updates: false, // stable channel by default; MUST match the serde default (false)
             launch_at_login: false, // nothing starts itself unasked; MUST match the serde default
             remote_autostart_offer_answered: false,
+            logbook_columns: None,       // the default table
+            logbook_filters: Vec::new(), // none saved
+            history_snapshot_days: default_history_snapshot_days(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -5539,10 +5972,12 @@ impl Default for Settings {
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
+            keyboard_modem: KeyboardModem::Psk,
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
-            cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
+            cw_keyer: CwKeyerBackend::Cat,     // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_key_port: String::new(),
             cw_key_line: default_cw_key_line(),
@@ -5611,6 +6046,11 @@ impl Default for Settings {
             tci_server_tx: false,
             tci_server_cw: true,
             tci_server_spots: true,
+            // The radio's own panadapter, as before the choice existed.
+            scope_source: default_scope_source(),
+            sdrconnect_host: default_sdrconnect_host(),
+            sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
+            sdrconnect_follow: default_sdrconnect_follow(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
@@ -5687,6 +6127,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
+            log_space_weather: false,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -5748,10 +6189,18 @@ impl Default for Settings {
             sstv_tx_fsk_id: false,
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
+            jtty_rx_auto_arm: true,
+            jtty_ftol_hz: default_jtty_ftol_hz(),
+            jtty_serial: default_jtty_serial(),
+            jtty_fkeys: default_jtty_fkeys(),
+            jtty_ft8_fkeys: default_jtty_ft8_fkeys(),
+            jtty_message_style: JttyMessageStyle::Contest,
             rtty_auto_listen_secs: default_rtty_auto_listen_secs(),
             rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
             alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
+            show_wpx_needs: false,
+            show_wae_needs: false,
             log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -5764,6 +6213,7 @@ impl Default for Settings {
             alert_new: true,
             pota_new_activation_alert: false,
             popup_notifications: true,
+            popup_min_secs: 0,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             // Empty = every continent and every entity alerts, which is precisely the behaviour
@@ -5776,6 +6226,7 @@ impl Default for Settings {
             announce_verbosity: default_announce_verbosity(),
             sound_tx_state: false,
             sound_decode_tick: false,
+            sound_cw_turn: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_cursor_every_call: false,
@@ -5791,6 +6242,10 @@ impl Default for Settings {
             eqsl_last_sync: String::new(),
             qrz_username: String::new(),
             hamqth_username: String::new(),
+            callbook_cache_days: CALLBOOK_CACHE_DAYS_DEFAULT,
+            callbook_update_pace_secs: CALLBOOK_UPDATE_PACE_SECS_DEFAULT,
+            callbook_update_daily_cap: CALLBOOK_UPDATE_DAILY_CAP_DEFAULT,
+            callook_lookup: true,
             qrz_logbook_upload: false,
             qrz_auto_sync: false,
             qrz_sync_hours: default_qrz_sync_hours(),
@@ -5961,6 +6416,7 @@ impl Settings {
             tx_audio_source: self.tx_audio_source.clone(),
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
+            aprs_data_fm: self.aprs_data_fm,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -6284,6 +6740,45 @@ impl Settings {
         next_id
     }
 
+    /// The ports the CAT broker must never step onto when its own port is taken by another program
+    /// (#165): every radio's rigctld and rotctld port (a daemon of Nexus's own may not be up yet),
+    /// the TCI server's while it serves, and wherever a NET rigctl radio's Network Address points
+    /// on this computer (the operator's own rigctld is there).
+    pub fn ports_the_broker_steps_around(&self) -> Vec<u16> {
+        let mut ports: Vec<u16> = self
+            .radios
+            .iter()
+            .flat_map(|p| [p.rigctld_port, p.rotctld_port])
+            .collect();
+        if self.tci_server {
+            ports.push(self.tci_server_port);
+        }
+        ports.extend(self.radios.iter().filter_map(net_rigctl_port_here));
+        ports
+    }
+
+    /// The ports the operator's own rigctld answers on, so the CAT broker never binds one, not
+    /// even as the sharing port it was asked for (#165): every radio profile's NET rigctl Network
+    /// Address on this computer, by loopback name or by one of its addresses in `here`. Taken
+    /// while that rigctld is not running yet, it could never start there, and the radio pointed at
+    /// it would be talking to Nexus itself.
+    pub fn ports_the_operators_rigctld_holds(&self, here: &[std::net::IpAddr]) -> Vec<u16> {
+        self.radios
+            .iter()
+            .filter(|p| p.rig_model == 2 && rig_conn_is_network(&p.rig_conn, &p.rig_addr))
+            .filter_map(|p| split_host_port(&p.rig_addr))
+            .filter(|(host, _)| {
+                host_is_this_machine(host)
+                    || host
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| here.contains(&ip))
+            })
+            .map(|(_, port)| port)
+            .collect()
+    }
+
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
@@ -6400,6 +6895,7 @@ impl Settings {
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
+        self.aprs_data_fm = p.aprs_data_fm;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -6456,6 +6952,7 @@ impl Settings {
             yaesu_rf_scope,
             data_modes_plain_ssb,
             sstv_hold_data_submode,
+            aprs_data_fm,
             audio_in,
             audio_out,
             tx_level,
@@ -6500,6 +6997,7 @@ impl Settings {
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
+            self.aprs_data_fm,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -6545,6 +7043,7 @@ impl Settings {
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
+            p.aprs_data_fm = aprs_data_fm;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -6857,6 +7356,9 @@ impl Settings {
         for key in RETIRED_KEYS {
             s.unknown.remove(*key);
         }
+        // The exact licence class beside the older-build one ([`LicenseClass`]); before anything
+        // reads the class.
+        s.take_exact_license_class();
         // One-time migration: drop the known-bad free-text "CQ"/"CQ CQ" macro chips that
         // persisted from older defaults. A CQ now goes through the structured Call-CQ
         // button; a free-text "CQ CQ" chip went out as a chunked, gridless "DE <CALL>
@@ -7038,6 +7540,42 @@ impl Settings {
         s
     }
 
+    /// These settings as the settings file and a settings backup store them: `licenseClass` the
+    /// class an older build reads ([`LicenseClass::as_older_builds_read_it`]), and the exact class
+    /// under [`LICENSE_CLASS_EXACT_KEY`] when the two differ. A shipped class writes no second key,
+    /// so its file is what it was.
+    pub fn for_storage(&self) -> Settings {
+        let mut s = self.clone();
+        let older = s.license_class.as_older_builds_read_it();
+        s.unknown.remove(LICENSE_CLASS_EXACT_KEY);
+        if older != s.license_class {
+            s.unknown.insert(
+                LICENSE_CLASS_EXACT_KEY.to_string(),
+                serde_json::to_value(s.license_class).expect("a licence class serializes"),
+            );
+            s.license_class = older;
+        }
+        s
+    }
+
+    /// Read back what [`Self::for_storage`] wrote: the exact class under
+    /// [`LICENSE_CLASS_EXACT_KEY`] replaces `licenseClass` when it is a class this build knows AND
+    /// an older build would read it as the class `licenseClass` holds. Otherwise `licenseClass`
+    /// stands: an older build, which carries the key without seeing it, changed the class since
+    /// it was written (Novice beside `extra`), or the value is not one any build wrote. The key is
+    /// taken out of [`Self::unknown`] either way, so it never reaches a screen, whose form would
+    /// send it back stale beside a class the operator had just changed.
+    pub fn take_exact_license_class(&mut self) {
+        let Some(v) = self.unknown.remove(LICENSE_CLASS_EXACT_KEY) else {
+            return;
+        };
+        if let Ok(exact) = serde_json::from_value::<LicenseClass>(v) {
+            if exact.as_older_builds_read_it() == self.license_class {
+                self.license_class = exact;
+            }
+        }
+    }
+
     /// The scratch path [`save`](Self::save) writes before renaming it onto `path`.
     ///
     /// **Per-PROCESS, never a fixed `settings.json.tmp`** — the [`tempo_core::logbook`] shape.
@@ -7099,7 +7637,7 @@ impl Settings {
         }
         // Persist a copy whose active radio profile reflects any edits made through the flat rig/
         // audio form (the mirror invariant). `self` is left untouched.
-        let mut to_save = self.clone();
+        let mut to_save = self.for_storage();
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = Self::tmp_path(path);
@@ -7186,6 +7724,24 @@ impl Settings {
             }
         };
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
+    }
+
+    /// [`po_watts_scale_known`] over the flat mirror of the active profile.
+    pub fn po_watts_scale_is_known(&self) -> bool {
+        po_watts_scale_known(
+            self.rig_model,
+            &self.rig_conn,
+            &self.rig_addr,
+            &self.icom_lan_host,
+            self.icom_native_cat,
+        )
+    }
+
+    /// Is an amplifier configured on the active radio? Then the radio's forward power is the
+    /// amplifier's drive, not the station's output.
+    pub fn amp_configured(&self) -> bool {
+        self.active_profile()
+            .is_some_and(|p| !p.amp_model.trim().is_empty() && !p.amp_port.trim().is_empty())
     }
 
     /// Is the ACTIVE radio's SWR reading one Nexus can put a number to?
@@ -7303,6 +7859,30 @@ impl Settings {
                 .rtty_auto_repeats
                 .clamp(RTTY_AUTO_REPEATS_MIN, RTTY_AUTO_REPEATS_MAX),
         }
+    }
+
+    /// The callbook cache's expiry in seconds: [`Self::callbook_cache_days`] held to
+    /// 1 … [`CALLBOOK_CACHE_DAYS_MAX`] days, so a hand-edited `0` cannot turn every lookup into a
+    /// network one and a huge value cannot overflow.
+    pub fn callbook_cache_max_age_secs(&self) -> i64 {
+        i64::from(self.callbook_cache_days.clamp(1, CALLBOOK_CACHE_DAYS_MAX)) * 86_400
+    }
+
+    /// "Update from callbook"'s least time between two network lookups:
+    /// [`Self::callbook_update_pace_secs`] held to its bounds, so a hand-edited `0` cannot make it
+    /// a flood.
+    pub fn callbook_update_pace(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(
+            self.callbook_update_pace_secs
+                .clamp(CALLBOOK_UPDATE_PACE_SECS_MIN, CALLBOOK_UPDATE_PACE_SECS_MAX),
+        ))
+    }
+
+    /// "Update from callbook"'s cap on network lookups in 24 hours, held to 1 …
+    /// [`CALLBOOK_UPDATE_DAILY_CAP_MAX`]: a hand-edited `0` or a huge value cannot lift it.
+    pub fn callbook_update_daily_cap(&self) -> usize {
+        self.callbook_update_daily_cap
+            .clamp(1, CALLBOOK_UPDATE_DAILY_CAP_MAX) as usize
     }
 
     pub fn rig_mode(&self) -> String {
@@ -7507,6 +8087,66 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
 
+    /// #165: when another program holds the sharing port, the broker moves, and it must not move
+    /// onto a port this station's own daemons or the operator's NET rigctl address will want.
+    #[test]
+    fn the_broker_steps_around_the_stations_own_ports() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let id = s.add_radio_profile();
+        let r = s.radios.iter().find(|p| p.id == id).unwrap().clone();
+        s.tci_server = true;
+        s.tci_server_port = 40001;
+        let ports = s.ports_the_broker_steps_around();
+        for p in [
+            r.rigctld_port,
+            r.rotctld_port,
+            s.radios[0].rigctld_port,
+            s.radios[0].rotctld_port,
+            40001,
+        ] {
+            assert!(ports.contains(&p), "{p} missing from {ports:?}");
+        }
+        assert!(
+            !ports.contains(&s.cat_broker_port),
+            "the broker's own port is not one it steps around"
+        );
+    }
+
+    /// #165: the ports the operator's own rigctld answers on are every profile's NET rigctl
+    /// address on this computer — by loopback name or by one of its own addresses — and nothing
+    /// else: a rigctld on another computer, or a radio that is not NET rigctl, holds no port here.
+    #[test]
+    fn the_operators_rigctld_holds_every_net_rigctl_port_on_this_computer() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let rows = [
+            (2, "network", "127.0.0.1:4532"),
+            (2, "network", "localhost:4540"),
+            (2, "network", "[::1]:4541"),
+            (2, "network", "192.168.1.5:4542"),
+            (2, "network", "192.168.1.9:4543"),
+            (3073, "network", "127.0.0.1:4544"),
+            (2, "serial", "127.0.0.1:4545"),
+        ];
+        for (model, conn, addr) in rows {
+            let id = s.add_radio_profile();
+            let p = s.radios.iter_mut().find(|p| p.id == id).unwrap();
+            (p.rig_model, p.rig_conn, p.rig_addr) = (model, conn.into(), addr.into());
+            // Not the active radio, and not even enabled: a profile still points there.
+            p.enabled = false;
+        }
+        let here = ["192.168.1.5".parse().unwrap()];
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&here),
+            vec![4532, 4540, 4541, 4542]
+        );
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&[]),
+            vec![4532, 4540, 4541]
+        );
+    }
+
     /// A scratch settings directory no CONCURRENT test process can reach.
     ///
     /// These tests used fixed `$TMPDIR/tempo_settings_<label>` paths and several
@@ -7648,6 +8288,7 @@ mod tests {
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
+            aprs_data_fm: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -8004,6 +8645,7 @@ mod tests {
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -8167,6 +8809,7 @@ mod tests {
             tx_audio_source: "front".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -8503,6 +9146,7 @@ mod tests {
             tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
+            aprs_data_fm: p.aprs_data_fm,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -9238,6 +9882,60 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
+    /// The scope source's settings on a fresh station and in every older file, by their wire
+    /// keys: the radio's own panadapter, and SDRconnect on this computer at its shipped port.
+    #[test]
+    fn the_scope_source_defaults_to_the_radio_in_a_fresh_and_an_older_file() {
+        let want = serde_json::json!({
+            "scopeSource": "radio", "sdrconnectHost": "127.0.0.1", "sdrconnectPort": 5454,
+            "sdrconnectFollow": "centre",
+        });
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            for key in [
+                "scopeSource",
+                "sdrconnectHost",
+                "sdrconnectPort",
+                "sdrconnectFollow",
+            ] {
+                assert_eq!(v[key], want[key], "{what} file, {key}");
+            }
+        }
+        assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The stored words are read leniently, and a word this build does not know leaves the
+    /// scope on the radio; a blank host or a zero port reads as SDRconnect's own default.
+    #[test]
+    fn the_scope_source_words_read_leniently_and_fall_back_to_the_radio() {
+        assert_eq!(
+            ScopeSource::from_setting(" SDRconnect "),
+            ScopeSource::Sdrconnect
+        );
+        assert_eq!(ScopeSource::from_setting("tci"), ScopeSource::Radio);
+        assert_eq!(ScopeSource::from_setting(""), ScopeSource::Radio);
+        assert_eq!(
+            SdrconnectFollow::from_setting("Scroll"),
+            SdrconnectFollow::Scroll
+        );
+        assert_eq!(
+            SdrconnectFollow::from_setting("fixed"),
+            SdrconnectFollow::Centre
+        );
+        let mut s = Settings {
+            scope_source: "sdrconnect".into(),
+            sdrconnect_host: "  ".into(),
+            sdrconnect_port: 0,
+            ..Settings::default()
+        };
+        assert_eq!(s.sdrconnect_target(), Some(("127.0.0.1".into(), 5454)));
+        s.sdrconnect_host = " shack-pc ".into();
+        s.sdrconnect_port = 5455;
+        assert_eq!(s.sdrconnect_target(), Some(("shack-pc".into(), 5455)));
+    }
+
     /// The TCI server's settings by their wire keys.
     const TCI_SERVER_KEYS: [&str; 5] = [
         "tciServer",
@@ -9732,7 +10430,7 @@ mod tests {
     }
 
     /// The preference has to SURVIVE A RESTART, and the seam it crosses is the one
-    /// `reference-settings-plumbing` warns about: a serde default turns a loud failure into a
+    /// where a serde default turns a loud failure into a
     /// silent reset. An operator who ticks this once and finds it off every launch is worse off
     /// than before the setting existed, because now they think they have fixed it.
     ///
@@ -11134,6 +11832,67 @@ mod tests {
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
     }
 
+    /// The Needed board's WPX and WAE chips ship off, on the exact wire keys the UI writes, a
+    /// settings file from before them loads them off, and a choice of on survives a save.
+    #[test]
+    fn the_wpx_and_wae_need_chips_ship_off_on_their_wire_keys_and_round_trip() {
+        let s = Settings::default();
+        assert!(
+            !s.show_wpx_needs && !s.show_wae_needs,
+            "both chips ship off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"showWpxNeeds\":false"),
+            "the wire key the UI writes"
+        );
+        assert!(
+            json.contains("\"showWaeNeeds\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("showWpxNeeds");
+        older.as_object_mut().unwrap().remove("showWaeNeeds");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(
+            !older.show_wpx_needs && !older.show_wae_needs,
+            "a file from before them: off"
+        );
+        let on = Settings {
+            show_wpx_needs: true,
+            show_wae_needs: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(
+            back.show_wpx_needs && back.show_wae_needs,
+            "on survives a save and a load"
+        );
+    }
+
+    /// The CW turn cue's sound ships off, on the exact wire key the UI writes (`soundCwTurn`), a
+    /// settings file from before it loads with it off, and a choice of on survives a save.
+    #[test]
+    fn the_cw_turn_sound_ships_off_on_its_wire_key_and_round_trips() {
+        let s = Settings::default();
+        assert!(!s.sound_cw_turn, "an earcon ships off");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"soundCwTurn\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("soundCwTurn");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(!older.sound_cw_turn, "a file from before it: off");
+        let on = Settings {
+            sound_cw_turn: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sound_cw_turn, "on survives a save and a load");
+    }
+
     /// The SSTV section's four fields, on the exact wire keys the UI hand-writes.
     ///
     /// All three carry an interior two-letter acronym, which is the `decodeFlowHz` /
@@ -11141,6 +11900,36 @@ mod tests {
     /// compiles clean on both sides, never matches, and the control silently does
     /// nothing while the backend keeps the default. Literal strings, therefore, and
     /// `ui/src/types.ts` + `defaultSettings.json` are copy-pasted from here.
+    /// "Update from callbook"'s pace and daily cap: the defaults, the wire keys `ui/src/types.ts`
+    /// carries, and the bounds a hand-edited value is held to.
+    #[test]
+    fn callbook_update_pace_and_cap_defaults_wire_keys_and_bounds() {
+        let mut s = Settings::default();
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(2));
+        assert_eq!(s.callbook_update_daily_cap(), 250);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"callbookUpdatePaceSecs\":2",
+            "\"callbookUpdateDailyCap\":250",
+        ] {
+            assert!(json.contains(key), "missing wire key {key}");
+        }
+        s.callbook_update_pace_secs = 0;
+        s.callbook_update_daily_cap = 0;
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(1));
+        assert_eq!(s.callbook_update_daily_cap(), 1);
+        s.callbook_update_pace_secs = 9_999;
+        s.callbook_update_daily_cap = u32::MAX;
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(60));
+        assert_eq!(s.callbook_update_daily_cap(), 10_000);
+        // A settings file from before these existed takes the defaults.
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            (old.callbook_update_pace_secs, old.callbook_update_daily_cap),
+            (2, 250)
+        );
+    }
+
     #[test]
     fn sstv_settings_defaults_and_wire_keys() {
         let s = Settings::default();
@@ -11217,6 +12006,116 @@ mod tests {
         assert!(old.psk_rx_auto_arm);
         let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
         assert!(!off.psk_rx_auto_arm);
+    }
+
+    /// JTTY's kept settings and the Keyboard section's modem, on the exact wire keys the UI
+    /// writes: the auto-arm opt-out (PSK's twin, on by default), F Tol (WSJT-X's `JTTY_FTol`,
+    /// 20 Hz when a file has none) and the modem (PSK unless JTTY was the last one). A file that
+    /// predates the keys gets the defaults; values that differ from the defaults survive the
+    /// round trip, so a default that ignored the file would not pass.
+    #[test]
+    fn jtty_settings_default_round_trip_and_wire_keys() {
+        let s = Settings::default();
+        assert!(s.jtty_rx_auto_arm);
+        assert_eq!(s.jtty_ftol_hz, 20);
+        assert_eq!(s.jtty_serial, 1);
+        assert_eq!(s.keyboard_modem, KeyboardModem::Psk);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"jttyRxAutoArm\":true",
+            "\"jttyFtolHz\":20",
+            "\"jttySerial\":1",
+            "\"keyboardModem\":\"psk\"",
+        ] {
+            assert!(json.contains(key), "missing {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.jtty_rx_auto_arm,
+                old.jtty_ftol_hz,
+                old.jtty_serial,
+                old.keyboard_modem
+            ),
+            (true, 20, 1, KeyboardModem::Psk)
+        );
+        let set: Settings = serde_json::from_str(
+            r#"{"jttyRxAutoArm":false,"jttyFtolHz":150,"jttySerial":42,"keyboardModem":"jtty"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                set.jtty_rx_auto_arm,
+                set.jtty_ftol_hz,
+                set.jtty_serial,
+                set.keyboard_modem
+            ),
+            (false, 150, 42, KeyboardModem::Jtty)
+        );
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(again, set, "round trip");
+    }
+
+    /// JTTY's two F-key sets and the style that picks between them, on the wire keys the cockpit
+    /// writes: WSJT-X's two default sets (3.3.0-beta4 `widgets/JttyMessages.hpp` 216-250) in a
+    /// file that has none, the Contest style by default, and the operator's own templates and
+    /// style surviving the round trip.
+    #[test]
+    fn jtty_fkey_sets_default_and_round_trip() {
+        let s = Settings::default();
+        assert_eq!(
+            s.jtty_fkeys,
+            [
+                "CQ %M CQ",
+                "%H %E",
+                "%H TU CQ %M CQ",
+                "%M",
+                "%H",
+                "TU NOW %Q %E",
+                "%H AGN?",
+                "%E"
+            ]
+        );
+        assert_eq!(
+            s.jtty_ft8_fkeys,
+            [
+                "%H %M %G",
+                "%H %M %R",
+                "%H %M R%R",
+                "%H %M RRR",
+                "%H %M 73",
+                "CQ %M %G",
+                "",
+                ""
+            ]
+        );
+        assert_eq!(s.jtty_message_style, JttyMessageStyle::Contest);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"jttyFkeys\":[\"CQ %M CQ\"",
+            "\"jttyFt8Fkeys\":[\"%H %M %G\"",
+            "\"jttyMessageStyle\":\"contest\"",
+        ] {
+            assert!(json.contains(key), "missing {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.jtty_fkeys, old.jtty_ft8_fkeys, old.jtty_message_style),
+            (
+                s.jtty_fkeys.clone(),
+                s.jtty_ft8_fkeys.clone(),
+                s.jtty_message_style
+            )
+        );
+        let set: Settings = serde_json::from_str(
+            r#"{"jttyFkeys":["CQ TEST %M","","","","","","",""],"jttyFt8Fkeys":["%H %M %G"],"jttyMessageStyle":"ft8"}"#,
+        )
+        .unwrap();
+        assert_eq!(set.jtty_fkeys[0], "CQ TEST %M");
+        assert_eq!(set.jtty_ft8_fkeys, ["%H %M %G"]);
+        assert_eq!(set.jtty_message_style, JttyMessageStyle::Ft8);
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(again, set, "round trip");
     }
 
     /// RTTY's auto-arm field, added as the exact twin of the PSK one above — same default,
@@ -11639,7 +12538,7 @@ mod tests {
     /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
     /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
     /// cure, because a hand-written key that disagrees compiles clean on both sides and the
-    /// control silently does nothing (reference-settings-plumbing).
+    /// control silently does nothing.
     #[test]
     fn js8_settings_defaults_wire_keys_and_ts_mirror() {
         let s = Settings::default();
@@ -12403,6 +13302,58 @@ mod tests {
         assert!(!declares("popupNotificationss") && !declares("popups"));
     }
 
+    /// #321's pop-up dwell — ships 0 ("as each pop-up sets it", the corner exactly as it was),
+    /// its exact wire key, an upgrader's file loading 0 through the real load path, a chosen
+    /// value surviving a save and a load, and the TS mirror read out of `types.ts` itself.
+    #[test]
+    fn popup_min_secs_ships_zero_wire_key_old_file_round_trip_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.popup_min_secs, 0, "ships 0 — today's dwell");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"popupMinSecs\":0"),
+            "missing wire key in {json}"
+        );
+
+        let dir = scratch_dir("popup-dwell");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_min_secs,
+            0,
+            "an old settings file changed the dwell"
+        );
+        let mut long = Settings::default();
+        long.popup_min_secs = 30;
+        long.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_min_secs,
+            30,
+            "30 s did not survive"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("popupMinSecs"),
+            "ui/src/types.ts Settings is missing `popupMinSecs`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("popupMinSecss") && !declares("popupMin"));
+    }
+
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
     ///
     /// `None` is the whole safety story: an operator who upgrades and never opens the setting
@@ -12659,6 +13610,113 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The Logbook's column choice survives the file round trip under the key the UI sends
+    /// (`logbookColumns`, with `shown`/`hidden`/`widths` inside), and nothing saved is no key at
+    /// all — an upgrade, and every settings file that never chose columns, keep the default table
+    /// and write byte for byte what they wrote before.
+    #[test]
+    fn logbook_filters_round_trip_and_nothing_saved_writes_nothing() {
+        let older: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            older.logbook_filters.is_empty(),
+            "an upgrade has saved none"
+        );
+        let none = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !none.contains("logbookFilters"),
+            "none saved, no key: {none}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tempo_logfilters_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // A filter with a field this build has never heard of: kept, not refused.
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookFilters":[{"name":"DX on 20","filter":{"band":"20m","need":"dxcc","qsl":{"lotw":"notSent"}}},{"name":"Later","filter":{"band":"6m","someFutureField":[1,2]}}]}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.mycall, "KD9TAW",
+            "an unknown filter field cost the whole file"
+        );
+        let names: Vec<&str> = loaded
+            .logbook_filters
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, ["DX on 20", "Later"]);
+        assert_eq!(
+            loaded.logbook_filters[0].filter,
+            serde_json::json!({"band":"20m","need":"dxcc","qsl":{"lotw":"notSent"}})
+        );
+        loaded.save(&path).unwrap();
+        let again = Settings::load(&path);
+        assert_eq!(
+            again.logbook_filters, loaded.logbook_filters,
+            "a save dropped them"
+        );
+        assert_eq!(
+            again.logbook_filters[1].filter["someFutureField"],
+            serde_json::json!([1, 2]),
+            "a save dropped what this build does not know"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn logbook_columns_round_trip_and_nothing_saved_writes_nothing() {
+        let older: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(older.logbook_columns, None, "an upgrade has chosen nothing");
+        let none = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !none.contains("logbookColumns"),
+            "nothing chosen, no key: {none}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tempo_logcols_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookColumns":{"shown":["iota","county"],"hidden":["freq"],"widths":{"country":210,"county":140}}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        let want = LogbookColumns {
+            shown: vec!["iota".into(), "county".into()],
+            hidden: vec!["freq".into()],
+            widths: [("country".to_string(), 210), ("county".to_string(), 140)]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(
+            loaded.logbook_columns.as_ref(),
+            Some(&want),
+            "loaded under the UI's keys"
+        );
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).logbook_columns,
+            Some(want),
+            "an ordinary save dropped it"
+        );
+        // A file written with only part of the choice reads the rest as empty.
+        let partial: Settings =
+            serde_json::from_str(r#"{"logbookColumns":{"hidden":["mode"]}}"#).unwrap();
+        assert_eq!(
+            partial.logbook_columns,
+            Some(LogbookColumns {
+                hidden: vec!["mode".into()],
+                ..LogbookColumns::default()
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⛔ **Start at sign-in and Remote's one-time offer default OFF, survive the file round trip
@@ -12973,6 +14031,215 @@ mod tests {
         );
         assert_eq!(Settings::load(&path).mycall, "W9XYZ");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The grandfathered Novice and Advanced classes come back from disk as themselves — never as
+    /// `Open`, which would drop the Part 97 lockout — while the file's `licenseClass` holds only a
+    /// class an older build knows (Novice as Technician, Advanced as General) and the exact class
+    /// rides in `licenseClassExact` beside it.
+    #[test]
+    fn novice_and_advanced_round_trip_through_the_settings_file() {
+        for (class, older, exact) in [
+            (LicenseClass::Novice, "technician", "novice"),
+            (LicenseClass::Advanced, "general", "advanced"),
+        ] {
+            let dir = scratch_dir_ready("licence_round_trip");
+            let path = dir.join("settings.json");
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Settings::default()
+            };
+            s.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                (&v["licenseClass"], &v[LICENSE_CLASS_EXACT_KEY]),
+                (&serde_json::json!(older), &serde_json::json!(exact)),
+                "the stored tokens"
+            );
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{exact}: the file was set aside"
+            );
+            assert_eq!(back.license_class, class, "{exact} came back as itself");
+            // The exact key is the file's business: the settings the screens read carry the exact
+            // class in `licenseClass` and no second key a form could send back stale.
+            let screen = serde_json::to_value(&back).unwrap();
+            assert_eq!(screen["licenseClass"], serde_json::json!(exact));
+            assert!(
+                screen.get(LICENSE_CLASS_EXACT_KEY).is_none(),
+                "{exact}: the exact key reached the screens"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// ⛔ AN OLDER BUILD READS A FILE THIS ONE WROTE. Builds before Novice and Advanced know only
+    /// Technician, General, Extra and Open; a token they did not know failed the whole parse, which
+    /// sets the file aside and starts from defaults — the callsign blanked and the class `Open`,
+    /// the lockout off. Their shape is simulated here: the four-class enum and the catch-all that
+    /// carries every key it has no field for. The file parses, holds the most a Novice or Advanced
+    /// may do that the older build can name (never more than General for an Advanced), and when
+    /// the older build saves it back unchanged, this build still reads the exact class.
+    #[test]
+    fn an_older_build_reads_novice_and_advanced_as_a_class_it_knows() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+        #[serde(rename_all = "lowercase")]
+        enum OlderClass {
+            Technician,
+            General,
+            Extra,
+            #[default]
+            Open,
+        }
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase", default)]
+        #[derive(Default)]
+        struct OlderSettings {
+            mycall: String,
+            license_class: OlderClass,
+            #[serde(flatten)]
+            unknown: serde_json::Map<String, serde_json::Value>,
+        }
+        for (class, older) in [
+            (LicenseClass::Novice, OlderClass::Technician),
+            (LicenseClass::Advanced, OlderClass::General),
+            (LicenseClass::Technician, OlderClass::Technician),
+            (LicenseClass::General, OlderClass::General),
+            (LicenseClass::Extra, OlderClass::Extra),
+            (LicenseClass::Open, OlderClass::Open),
+        ] {
+            let dir = scratch_dir_ready("licence_downgrade");
+            let path = dir.join("settings.json");
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Settings::default()
+            };
+            s.save(&path).expect("saved");
+            let text = std::fs::read_to_string(&path).unwrap();
+            let old: OlderSettings = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{class:?}: an older build could not read it: {e}"));
+            assert_eq!(
+                old.license_class, older,
+                "{class:?} as an older build reads it"
+            );
+            assert_eq!(old.mycall, "W9XYZ", "{class:?}: the callsign");
+            // The older build saves it back, carrying the key it does not know.
+            std::fs::write(&path, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(kept_aside_in(&dir).is_empty(), "{class:?}: set aside");
+            assert_eq!(
+                back.license_class, class,
+                "{class:?} after an older build's save"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The exact class wins only while the older-build class beside it still says what it said
+    /// when it was written. An older build that changed the class (it cannot see the exact key and
+    /// carries it untouched) changed it for real, so its class wins; a value this build cannot
+    /// read is ignored the same way, and neither sets the file aside.
+    #[test]
+    fn a_stale_or_unreadable_exact_class_falls_back_to_the_older_build_class() {
+        for (stored, exact, want) in [
+            // Written as Novice, then changed to Extra in an older build.
+            ("extra", serde_json::json!("novice"), LicenseClass::Extra),
+            // Written as Advanced, then changed to Technician in an older build.
+            (
+                "technician",
+                serde_json::json!("advanced"),
+                LicenseClass::Technician,
+            ),
+            // Written as Advanced, then changed to Open in an older build.
+            ("open", serde_json::json!("advanced"), LicenseClass::Open),
+            // A value no build wrote.
+            (
+                "general",
+                serde_json::json!("wizard"),
+                LicenseClass::General,
+            ),
+            ("technician", serde_json::json!(7), LicenseClass::Technician),
+            // Still as written.
+            (
+                "general",
+                serde_json::json!("advanced"),
+                LicenseClass::Advanced,
+            ),
+            (
+                "technician",
+                serde_json::json!("novice"),
+                LicenseClass::Novice,
+            ),
+        ] {
+            let dir = scratch_dir_ready("licence_stale_exact");
+            let path = dir.join("settings.json");
+            let file = serde_json::json!({
+                "mycall": "W9XYZ",
+                "licenseClass": stored,
+                LICENSE_CLASS_EXACT_KEY: exact,
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{stored} {exact}: set aside"
+            );
+            assert_eq!(back.license_class, want, "{stored} beside {exact}");
+            assert!(
+                !back.unknown.contains_key(LICENSE_CLASS_EXACT_KEY),
+                "{stored} {exact}: the exact key was kept as an unknown one"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// ⛔ AN EXISTING OPERATOR'S CLASS IS UNCHANGED BY THE NEW CLASSES. A file written before
+    /// Novice and Advanced existed, with each class that shipped (and with none at all), loads as
+    /// the class it holds and saves the same token back; no class is renamed or remapped.
+    #[test]
+    fn a_stored_class_from_before_novice_and_advanced_loads_unchanged() {
+        for (token, class) in [
+            (Some("technician"), LicenseClass::Technician),
+            (Some("general"), LicenseClass::General),
+            (Some("extra"), LicenseClass::Extra),
+            (Some("open"), LicenseClass::Open),
+            (None, LicenseClass::Open),
+        ] {
+            let dir = scratch_dir_ready("licence_migration");
+            let path = dir.join("settings.json");
+            let mut file = serde_json::json!({"mycall": "W9XYZ", "dialMhz": 14.074});
+            if let Some(token) = token {
+                file["licenseClass"] = serde_json::json!(token);
+            }
+            std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{token:?}: the file was set aside"
+            );
+            assert_eq!(
+                back.license_class, class,
+                "{token:?} loaded as another class"
+            );
+            assert_eq!(back.mycall, "W9XYZ");
+            back.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(token.unwrap_or("open")),
+                "{token:?}: the token saved back changed"
+            );
+            assert!(
+                v.get(LICENSE_CLASS_EXACT_KEY).is_none(),
+                "{token:?}: a shipped class wrote the exact key"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// A unique scratch directory under the OS temp dir — no external tempfile crate, and

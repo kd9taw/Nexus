@@ -1,6 +1,6 @@
 //! The connect sequence: Nexus registering as a GUI client, in the order the radio expects.
 //!
-//! After the prologue (`V`, then `H`), the session sends (port plan §4.5):
+//! After the prologue (`V`, then `H`), the session sends:
 //!
 //! 1. [`opening`]: `client program Nexus`, optionally `client low_bw_connect` (only between
 //!    `program` and `gui`), then `client gui [<stored id>]`. FlexLib sends `program` first, and
@@ -17,7 +17,7 @@
 //!
 //! The UDP registration's one-byte datagram, from the socket `client udpport` registers to the
 //! radio's port 4992, goes in step 3, after `mic list` and just before `client udpport`: where
-//! upstream sends it (port plan §4.5, step 7). The radio learns the client's UDP endpoint from
+//! upstream sends it. The radio learns the client's UDP endpoint from
 //! the datagram's source, which firmware that answers `client udpport` with [`NOT_SUPPORTED`]
 //! needs, and by then the client it comes from is registered. Sent before the session connected,
 //! it reached a radio that had no client of ours yet. The session has no I/O of its own, so the

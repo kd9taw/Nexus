@@ -78,12 +78,12 @@ pub struct Insight {
 }
 
 /// The band ladder used for "which band is the MUF at / next" — HF plus 6 m (the
-/// F2-reachable top), but not 4 m / 2 m (Es/MS, not MUF-driven).
+/// F2-reachable top), but not 4 m / 2 m (Es/MS, not MUF-driven) or the UHF bands.
 fn ladder() -> impl Iterator<Item = Band> {
     Band::ALL
         .iter()
         .copied()
-        .filter(|b| !matches!(b, Band::B4 | Band::B2))
+        .filter(|b| !b.is_vhf() || *b == Band::B6)
 }
 
 /// Highest ladder band whose center frequency is at or below the MUF (the band

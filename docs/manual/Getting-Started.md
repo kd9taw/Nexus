@@ -132,7 +132,7 @@ See [Operate: FT8 / FT4](Operate-FT8-FT4.md) for the full click model, return-to
 | What | Location |
 |---|---|
 | All radio/station settings | `%APPDATA%\tempo\settings.json` on Windows; `~/.config/tempo/settings.json` on macOS, Linux and the Pi (JSON, camelCase keys, partial files merge with defaults) |
-| Logbook | `%APPDATA%\tempo\log.adi` on Windows; `~/.config/tempo/log.adi` on macOS, Linux and the Pi (ADIF v3.1.4) |
+| Logbook | `%APPDATA%\tempo\log.adi` on Windows; `~/.config/tempo/log.adi` on macOS, Linux and the Pi (ADIF v3.1.8) |
 | UI theme | localStorage key `tempo-theme` |
 | UI scale | localStorage key `tempo-ui-scale` |
 | Wizard seen flag | localStorage key `nexus.features.wizardSeen` |

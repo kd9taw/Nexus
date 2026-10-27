@@ -701,10 +701,12 @@ describe('the element', () => {
   })
 })
 
-describe('a STRIP divider whose parent has no box, or whose share is of another box (2026-10-03)', () => {
-  // Phone's scope stands in a stage that has NO box (display: contents) until the left side shows,
-  // and its stored height is a share of the SHELL in both states. So the divider writes its variable
-  // on the strip's parent, measures the box the strip is laid out in, and stores a share of `shareOf`.
+describe('a STRIP divider whose parent has no box, or whose DEFAULT is a share of another box', () => {
+  // A strip may stand in a wrapper with NO box (display: contents), so the divider writes its variable on
+  // the strip's parent and measures the box the strip is laid out in. And a strip's DEFAULT may be a share
+  // of another box (`defaultOf`, 2026-10-26: FT's waterfall stands in its body but starts at 25 % of the
+  // shell, as every cockpit's does), while a height the operator stored keeps meaning a share of the
+  // container — an upgrade must never move a height somebody dragged.
   function nest(opts: { contents?: boolean; shell: number; stage: number; stored?: string }) {
     if (opts.stored != null) localStorage.setItem('nexus.split.test.h', opts.stored)
     const shell = document.createElement('main')
@@ -721,8 +723,8 @@ describe('a STRIP divider whose parent has no box, or whose share is of another 
   // One ref object per strip, as a cockpit's useRef gives: a new `strip` object is a new strip.
   const refs = new Map<HTMLElement, { current: HTMLElement }>()
   const refOf = (el: HTMLElement) => refs.get(el) ?? refs.set(el, { current: el }).get(el)!
-  const seam = (strip: HTMLElement, shareOf?: () => HTMLElement | null) => (
-    <PaneSeam axis="y" varName="--h" strip={refOf(strip)} storageKey="nexus.split.test.h" min={100} max={420} defaultPct={22} label="test height" shareOf={shareOf} />
+  const seam = (strip: HTMLElement, defaultOf?: () => HTMLElement | null) => (
+    <PaneSeam axis="y" varName="--h" strip={refOf(strip)} storageKey="nexus.split.test.h" min={100} max={420} defaultPct={22} label="test height" defaultOf={defaultOf} />
   )
 
   it('past a box-less parent it measures the nearest box, and still writes on the parent', () => {
@@ -733,17 +735,40 @@ describe('a STRIP divider whose parent has no box, or whose share is of another 
     expect(shell.style.getPropertyValue('--h'), 'the variable must inherit to the strip from its parent').toBe('')
   })
 
-  it('a share of ANOTHER box: the same height in a shorter container, painted as the container’s own share', () => {
-    const { shell, stage, strip } = nest({ shell: 1000, stage: 800, stored: '22' })
+  it('the DEFAULT is a share of ANOTHER box: the shell’s height in a shorter container, painted as the container’s own share', () => {
+    const { shell, stage, strip } = nest({ shell: 1000, stage: 800 })
     const view = render(seam(strip, () => shell))
     const sep = view.getByRole('separator')
     expect(sep.getAttribute('aria-valuenow'), '22 % of the shell, not of the stage').toBe('220')
     expect(parseFloat(stage.style.getPropertyValue('--h'))).toBeCloseTo(27.5, 6)
+    expect(localStorage.getItem('nexus.split.test.h'), 'an untouched default writes nothing').toBeNull()
     fireEvent.keyDown(sep, { key: 'ArrowDown' })
-    expect(Number(localStorage.getItem('nexus.split.test.h')), 'stored as a share of the shell').toBeCloseTo(23.6, 6)
+    // 236 px moved to: stored as a share of the CONTAINER (the stage), the meaning a stored height always had.
+    expect(Number(localStorage.getItem('nexus.split.test.h')), 'stored as a share of the container').toBeCloseTo(29.5, 6)
   })
 
-  it('a NEW shareOf function on every render does not rebuild its observer (a kept-alive cockpit re-renders all the time)', () => {
+  it('a STORED height keeps its meaning — a share of the container — and wins over the default (control: the same value read against the shell would be 220)', () => {
+    const { shell, stage, strip } = nest({ shell: 1000, stage: 800, stored: '22' })
+    const view = render(seam(strip, () => shell))
+    expect(view.getByRole('separator').getAttribute('aria-valuenow'), '22 % of the stage it stands in').toBe('176')
+    expect(stage.style.getPropertyValue('--h')).toBe('22%')
+    expect(localStorage.getItem('nexus.split.test.h'), 'loading never rewrites a stored height').toBe('22')
+  })
+
+  it('a reset CLEARS the stored height, so the next load measures the default against the other box again', () => {
+    const { shell, strip } = nest({ shell: 1000, stage: 800, stored: '40' })
+    const first = render(seam(strip, () => shell))
+    const sep = first.getByRole('separator')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(sep.getAttribute('aria-valuenow'), 'the default, 22 % of the shell').toBe('220')
+    // Stored as '22' it would read back as 22 % of the stage (176 px) — a different height after a reload.
+    expect(localStorage.getItem('nexus.split.test.h'), 'the reset stored a value that means something else on reload').toBe('')
+    first.unmount()
+    const again = render(seam(strip, () => shell))
+    expect(again.getByRole('separator').getAttribute('aria-valuenow')).toBe('220')
+  })
+
+  it('a NEW defaultOf function on every render does not rebuild its observer (a kept-alive cockpit re-renders all the time)', () => {
     const { shell, strip } = nest({ shell: 1000, stage: 800 })
     const view = render(seam(strip, () => shell))
     const built = observers.length

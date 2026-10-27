@@ -134,6 +134,14 @@ client* below).
 Plain SSB needs nothing special: set the band, pick Phone, and the mic on your
 Flex works the way it always does.
 
+**The voice keyer through SmartSDR CAT needs DAX on for voice.** Flex radios
+transmit from their own mic in SSB unless DAX is on for voice. In SmartSDR's
+**P/CW** panel, turn on **DAX** so Nexus's voice messages go out; without it a
+message keys the radio (TX lights) with no RF. Nexus shows a note saying so the
+first time a message plays, until you dismiss it. Turn DAX back off afterwards if
+you want the mic for live SSB. The Flex native client below switches this for
+each message itself.
+
 **With Flex native DAX audio on** (the Beta toggle below, through the Flex
 native client), where the radio takes its transmit audio from follows the
 transmit slice's mode. In Phone the radio keeps its own mic, so the mic works as

@@ -16,7 +16,7 @@ The record also carries per-source upload state for each outbound connector (LoT
 
 ## ADIF Import and Export
 
-Nexus implements ADIF v3.1.4 as a lossless round-trip. The fields Nexus models (including
+Nexus implements ADIF v3.1.8 as a lossless round-trip. The fields Nexus models (including
 the numeric DXCC entity, PROP_MODE/SAT_NAME for satellite credit, OPERATOR and
 STATION_CALLSIGN) serialize with correct ADIF tag names, length prefixes, and
 TIME_ON/TIME_OFF/QSO_DATE encoding — ADIF's 4-digit HHMM time form is accepted on import,

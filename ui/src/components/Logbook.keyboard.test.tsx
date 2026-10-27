@@ -4,7 +4,7 @@
 //
 // The list is a grid with ONE Tab stop — a row — and the keys move it, grid-local (no global
 // shortcuts): ↑/↓ a row, Page Up/Down a visible page, Home/End the first/last contact (scrolled in,
-// its page fetched, then focused); Enter edits the contact, Delete asks the existing delete question,
+// its page fetched, then focused); Enter opens its contact card, Delete asks the existing delete question,
 // Escape closes the form (the question closes itself). A key on a row's own control (its QSL menu,
 // its buttons) stays that control's. The row that has the stop is held by id, so a contact logged
 // above it does not move the operator's place.
@@ -166,15 +166,17 @@ describe('the Logbook is a keyboard grid', () => {
     await waitFor(() => expect(focusedIndex()).toBe(0))
   })
 
-  it('Enter edits the contact, in the form; Escape there closes it and gives the row back', async () => {
+  it('Enter opens the contact card, as a double-click does; Escape closes it and gives the row back', async () => {
     await openAt(3)
     press('Enter')
-    await waitFor(() => expect(document.querySelector('.logbook-form')).not.toBeNull())
-    const form = document.querySelector('.logbook-form') as HTMLElement
-    expect((form.querySelector('input') as HTMLInputElement).value).toBe(callAt(3))
-    expect(form.contains(document.activeElement), 'the keyboard is in the form').toBe(true)
+    await waitFor(() => expect(document.querySelector('.contact-card-dialog')).not.toBeNull())
+    const card = document.querySelector('.contact-card-dialog') as HTMLElement
+    expect(card.textContent).toContain(callAt(3))
+    expect((card.querySelector('.logbook-field input') as HTMLInputElement).value, 'the card is on the row Enter was pressed on').toBe(callAt(3))
+    expect(document.querySelector('.logbook-form'), 'not the edit form: its pencil opens that').toBeNull()
+    await waitFor(() => expect(card.contains(document.activeElement), 'the keyboard is in the card').toBe(true))
     press('Escape')
-    await waitFor(() => expect(document.querySelector('.logbook-form')).toBeNull())
+    await waitFor(() => expect(document.querySelector('.contact-card-dialog')).toBeNull())
     await waitFor(() => expect(focusedIndex()).toBe(3))
   })
 
@@ -228,6 +230,17 @@ describe('the Logbook is a keyboard grid', () => {
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(focusedIndex()).toBe(3))
+  })
+
+  it('the row’s pencil puts the keyboard in the edit form, and its close gives the row back', async () => {
+    await openAt(2)
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: callAt(2) }) }))
+    await waitFor(() => expect(document.querySelector('.logbook-form')).not.toBeNull())
+    const form = document.querySelector('.logbook-form') as HTMLElement
+    await waitFor(() => expect(form.contains(document.activeElement), 'the keyboard is in the form').toBe(true))
+    press('Escape')
+    await waitFor(() => expect(document.querySelector('.logbook-form')).toBeNull())
+    await waitFor(() => expect(focusedIndex()).toBe(2))
   })
 
   it('Escape on the grid closes the edit form', async () => {

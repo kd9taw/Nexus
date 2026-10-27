@@ -1,5 +1,5 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
-import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, deviceNonce, digest,
+import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceAddedNotice, deviceCookie, deviceKeys, deviceNonce, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
   lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
@@ -35,6 +35,14 @@ const ENROLMENTS_PER_DAY = 5
 const INVITES_PER_DAY = 20
 /** The people a station may have invited at once. */
 const INVITES_PER_STATION = 20
+/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider. */
+const BILLING_PER_MINUTE = 10
+/** Account deletions and copies an account may ask for in ten minutes. */
+const ACCOUNT_DATA_PER_TEN_MINUTES = 5
+/** A subscription in these states has ended and can charge nothing more; any other can. */
+const SUBSCRIPTION_ENDED = ['canceled', 'incomplete_expired']
+/** The billing Worker's refusals the page can name. Anything else it answers is `serviceUnavailable`. */
+const BILLING_REFUSALS = new Set(['invalidRequest', 'accountNotFound', 'accessDenied', 'alreadySubscribed', 'noSubscription', 'serviceUnavailable'])
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   const result = new Response(JSON.stringify(value), { status, headers })
@@ -43,6 +51,15 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   result.headers.set('x-content-type-options', 'nosniff')
   result.headers.set('referrer-policy', 'no-referrer')
   return result
+}
+/** The billing Worker's answer as the page gets it: a page on the provider's own domain to go to, or a
+ *  refusal by a name the page knows. Never a URL anywhere else, and never anything the Worker said besides. */
+function billingAnswer(answer: unknown, page: string): Response {
+  const value = answer as { url?: unknown; error?: unknown; status?: unknown } | null
+  if (typeof value?.url === 'string' && value.url.startsWith(page)) return json({ url: value.url })
+  const named = typeof value?.error === 'string' && BILLING_REFUSALS.has(value.error)
+    && typeof value.status === 'number' && Number.isInteger(value.status) && value.status >= 400 && value.status <= 599
+  throw named ? new Refusal(value.error as string, value.status as number) : new Refusal('serviceUnavailable', 503)
 }
 async function room(env: RemoteEnv, stationId: string, path: string, value?: unknown): Promise<Response> {
   // Construct fresh internal headers. Public requests cannot supply an admission.
@@ -80,6 +97,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     audioVersion: 1,
     // The stream's signalling lane. A page that cannot see this number never offers a stream.
     streamVersion: 1,
+    // Subscribe and Manage: true only where the billing Worker is bound. The page shows neither button
+    // otherwise, and an older service never says so.
+    billing: env.BILLING !== undefined,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   // The native client's routes (Nexus on another computer), on its own token and its device key's
@@ -322,7 +342,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // it was added, its proof and a computer's LAN key: the proof's nonce covers both of its keys.
       const key = (deviceKeys(request) ? ',public_key AS publicKey' : '') +
         (kinds ? ",COALESCE(kind,'browser') AS kind,platform,CASE WHEN approved=1 AND expires_at>=? THEN 1 ELSE 0 END AS untilRemoved" : '') +
-        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey" : '')
+        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey,EXISTS(SELECT 1 FROM notices n WHERE n.device_id=devices.id AND n.sent_at IS NOT NULL) AS notified" : '')
       const forever = kinds ? [UNTIL_REMOVED] : []
       const only = kinds ? '' : ' AND kind IS NULL'
       const devices = lifetime(request)
@@ -390,8 +410,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // into relay socket state, and the provider subject has no business travelling with it.
   // `verified` is destructured off for the same reason `subject` is: `identity` is spread into
   // the browser identity and on into relay socket state, and how this account was identified is
-  // not something the wire needs to carry.
-  const { subject, verified, ...identity } = await account(request, env, now)
+  // not something the wire needs to carry. `email` likewise — it is kept nowhere (only its hashes
+  // are), and is read here only transiently to notify the owner when a device is added by sign-in.
+  const { subject, verified, email, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await readEntitlement(env, identity.accountId, now)
   // The only privileged write in the service. It exists because every trial in a closed beta is
@@ -464,8 +485,37 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // is false whenever the token carried no verified address - which is exactly the state in which
     // that check silently protects nothing. Without it there is no way to tell the two apart from
     // outside, and a provider that never sends the claim looks identical to one that does.
+    // `beta`: Remote is free during the beta (authority.ts `REMOTE_BETA_FREE`), so the page says that
+    // instead of counting a trial's days.
     return json({ accountId: identity.accountId, entitlement, stations, pending,
-      identityVerified: verified, serverNow: now })
+      identityVerified: verified, serverNow: now, beta: env.REMOTE_BETA_FREE === '1' })
+  }
+  // SUBSCRIBE AND MANAGE, through the private billing Worker, which holds the payment keys. Above the
+  // entitlement, as `session` is: an account whose trial has ended is exactly the one that subscribes, and
+  // what it buys reaches it only as the webhook writes it and `readEntitlement` reads it, the one access
+  // check. Only the signed-in account's id goes over. Until the billing Worker is bound these say so.
+  if (path === 'billing/checkout' || path === 'billing/portal') {
+    requireValue(env.BILLING, 'billingNotAvailable', 503)
+    const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan'] : [])
+    requireValue(!checkout || input.plan === 'monthly' || input.plan === 'annual', 'invalidRequest', 400)
+    await rate(env, `billing:${identity.accountId}`, now, BILLING_PER_MINUTE)
+    return checkout
+      ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual'), 'https://checkout.stripe.com/')
+      : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
+  }
+  // THE ACCOUNT ITSELF: a copy of what the service holds about it, and deleting it. Above the entitlement,
+  // as `session` is: an account whose access has ended, or been switched off, may still take its copy and go.
+  // Deleting needs the word the page has the operator type, so no stray request deletes anything.
+  if (path === 'account/export' || path === 'account/delete') {
+    const input = await body(request, path === 'account/delete' ? ['confirm'] : [])
+    requireValue(path === 'account/export' || input.confirm === 'DELETE', 'invalidRequest', 400)
+    await rate(env, `${path}:${identity.accountId}`, now, ACCOUNT_DATA_PER_TEN_MINUTES, 600000)
+    if (path === 'account/export') return json(await accountCopy(env, identity.accountId, now))
+    const left = await deleteAccount(env, identity.accountId, now)
+    // This browser's credential for each station it held one at goes with them.
+    const headers = new Headers()
+    for (const stationId of left) headers.append('set-cookie', cookie(stationId, '', 0))
+    return json({ ok: true }, 200, headers)
   }
   // THE ACCOUNT'S DEVICES, on the page: every device of every station the account owns, and its own
   // devices at stations it was invited to, each removable here. Above the entitlement, as `revoke` is:
@@ -606,6 +656,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // One still waiting is approved in place by a sign-in for its key.
       if (approveAs && current.approved !== 1) {
         await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, null, identity.accountId, now)
+        // The 2026-10-23 sign-in decision: notify the STATION OWNER that a device was added by
+        // sign-in. The notice goes to the owner's own address, which we have only when the caller IS
+        // the owner (`role === 'owner'`); a guest's sign-in carries the guest's address, not the
+        // owner's, so it sends nothing and the device stays held. A no-op too without the provider
+        // secret. Once: this branch runs only on the waiting→approved transition.
+        await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId: current.id,
+          toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
         return json({ deviceId: current.id, approved: true })
       }
       return json({ deviceId: current.id, approved: current.approved === 1 })
@@ -617,7 +674,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       .bind(deviceId, row.id, identity.accountId, name, await digest(credential), approveAs ? UNTIL_REMOVED : now + 600000, key,
         approveAs ? 1 : 0, approveAs ? now : null, approveAs, approveAs ? 'account' : null, approveAs ? input.proof : null, row.id, now).first()
     requireValue(inserted, 'deviceLimit', 409)
-    if (approveAs) await bumpPolicy(env, row.id, now)
+    if (approveAs) {
+      await bumpPolicy(env, row.id, now)
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
+      await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId,
+        toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+    }
     return json({ deviceId, approved: approveAs !== null }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   // What the station's use runs on: the owner's own entitlement, which a guest uses too
@@ -679,6 +743,97 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
     env.DB.prepare('DELETE FROM tickets WHERE station_id=?').bind(stationId),
   ])
   await sync(env, await station(env, stationId), now)
+}
+
+/** What the service holds about an account, for the account to keep: its trial, its plan and the checkouts
+ *  and refused payment events of it, whether trial markers were spent by it and when, its stations, every
+ *  device of its stations and its own devices elsewhere, and the invitations it made and holds. Names,
+ *  labels, roles and dates only: never a credential, proof, key, address fingerprint or marker value. */
+async function accountCopy(env: RemoteEnv, accountId: string, now: number): Promise<unknown> {
+  const all = async (sql: string, ...values: unknown[]) => (await env.DB.prepare(sql).bind(...values).all()).results
+  const trial = await env.DB.prepare(`SELECT enabled=1 AS enabled, started_at AS startedAt, expires_at AS expiresAt, source
+    FROM trials WHERE account_id=?`).bind(accountId).first<{ enabled: number }>()
+  const subscription = await env.DB.prepare(`SELECT status, plan, period_end AS periodEnd, cancel_at_period_end=1 AS cancelAtPeriodEnd,
+    first_refund_at AS firstRefundAt, customer_id AS customerId, subscription_id AS subscriptionId FROM subscriptions WHERE account_id=?`)
+    .bind(accountId).first<{ cancelAtPeriodEnd: number }>()
+  const stations = await all('SELECT id, name, enabled=1 AS enabled FROM stations WHERE account_id=? ORDER BY id', accountId)
+  const devices = await all(`SELECT d.id, d.station_id AS stationId, d.name, COALESCE(d.kind,'browser') AS kind, d.platform,
+    COALESCE(d.role,'operate') AS role, COALESCE(d.added_by,'shack') AS addedBy, d.approved=1 AS approved, d.approved_at AS approvedAt,
+    d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
+    FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
+  const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  return {
+    exportedAt: now, accountId,
+    trial: trial && truth(trial, 'enabled'),
+    subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
+    checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
+    refusedPaymentEvents: await all('SELECT event_id AS eventId, type, reason, at FROM billing_refusals WHERE account_id=? ORDER BY at', accountId),
+    markers: (await all(`SELECT kind, proven=1 AS proven, method, created_at AS createdAt, first_refund_at AS firstRefundAt
+      FROM trial_markers WHERE account_id=? ORDER BY kind, created_at`, accountId)).map(row => truth(row, 'proven')),
+    stations: stations.map(row => truth(row, 'enabled')),
+    devices: devices.map(row => truth(row, 'approved', 'yours')),
+    invitationsMade: await all(`SELECT i.id, i.station_id AS stationId, i.role, i.created_at AS createdAt, i.removed_at AS removedAt
+      FROM invites i JOIN stations s ON s.id=i.station_id WHERE s.account_id=? ORDER BY i.created_at`, accountId),
+    invitationsReceived: await all(`SELECT i.station_id AS stationId, i.role, i.created_at AS createdAt, i.removed_at AS removedAt
+      FROM invites i JOIN accounts a ON a.mailbox_hash=i.mailbox_hash JOIN stations s ON s.id=i.station_id
+      WHERE a.id=? AND s.account_id<>a.id ORDER BY i.created_at`, accountId),
+  }
+}
+
+/** Delete an account. Returns every station this account held a device or station at, whose browser
+ *  credential the caller may clear.
+ *
+ *  ⚠️ THE ORDER IS THE PROPERTY: nothing that can still charge may outlive the account. So the live
+ *  subscription is ended FIRST, through the billing Worker, and nothing is touched unless it answers that
+ *  the payment provider shows nothing left to charge (`{ cancelled }`). Any other answer, a throw, or, with
+ *  billing off, a subscription that has not ended (nobody here can end it) refuses `subscriptionNotCancelled`
+ *  with the account exactly as it was. Never move the cancel below the first write.
+ *
+ *  Then every session is cut while the rows that name it still exist: each station the account owns is
+ *  revoked and its room told, and its own devices at other people's stations are removed and those rooms
+ *  told. Then, in one batch, its stations go with everything of them (devices, anyone's tickets there, the
+ *  invitations made there, notices), and its own devices, tickets, challenges, pairing requests and notices.
+ *  A person invited to its stations loses that access; the invitations other people made to it are theirs
+ *  and stay, though no sign-in reaches this account again.
+ *
+ *  What is kept is what stops a second free trial, and the billing record: an account that ever held a trial,
+ *  a plan, a checkout or a trial marker keeps its row, with its two address fingerprints, under a subject no
+ *  sign-in can present (`deleted:<id>`) and with no notice address; its trial row, ended now; its trial
+ *  markers; and its subscription, checkouts and refused events. Signing in again makes a new, empty account,
+ *  which the same address cannot start a second trial on. An account that held none of those goes entirely.
+ *  Deleting again finds nothing of the old account and changes nothing kept. */
+async function deleteAccount(env: RemoteEnv, accountId: string, now: number): Promise<string[]> {
+  const subscription = await env.DB.prepare('SELECT status FROM subscriptions WHERE account_id=?').bind(accountId).first<{ status: string }>()
+  if (env.BILLING) {
+    const answer = await env.BILLING.cancel(accountId).catch(() => null) as { cancelled?: unknown } | null
+    requireValue(typeof answer?.cancelled === 'boolean', 'subscriptionNotCancelled', 503)
+  } else {
+    requireValue(!subscription || SUBSCRIPTION_ENDED.includes(subscription.status), 'subscriptionNotCancelled', 503)
+  }
+  const owned = (await env.DB.prepare('SELECT id FROM stations WHERE account_id=?').bind(accountId).all<{ id: string }>()).results.map(row => row.id)
+  for (const stationId of owned) await revokeStation(env, stationId, now)
+  const elsewhere = await env.DB.prepare(`UPDATE devices SET approved=0,generation=generation+1,expires_at=?,proof=NULL
+    WHERE account_id=? AND station_id NOT IN (SELECT id FROM stations WHERE account_id=?) RETURNING station_id`)
+    .bind(now, accountId, accountId).all<{ station_id: string }>()
+  const guestAt = [...new Set(elsewhere.results.map(row => row.station_id))]
+  for (const stationId of guestAt) await bumpPolicy(env, stationId, now)
+  const mine = 'SELECT id FROM stations WHERE account_id=?'
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM tickets WHERE account_id=? OR station_id IN (${mine}) OR device_id IN (SELECT id FROM devices WHERE account_id=?)`)
+      .bind(accountId, accountId, accountId),
+    env.DB.prepare('DELETE FROM challenges WHERE account_id=?').bind(accountId),
+    env.DB.prepare(`DELETE FROM notices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
+    env.DB.prepare(`DELETE FROM invites WHERE station_id IN (${mine})`).bind(accountId),
+    env.DB.prepare(`DELETE FROM devices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
+    env.DB.prepare('DELETE FROM enrollments WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM stations WHERE account_id=?').bind(accountId),
+    env.DB.prepare('UPDATE trials SET expires_at=MIN(expires_at, ?) WHERE account_id=?').bind(now, accountId),
+    env.DB.prepare(`DELETE FROM accounts WHERE id=? AND NOT EXISTS(SELECT 1 FROM trials WHERE account_id=?)
+      AND NOT EXISTS(SELECT 1 FROM subscriptions WHERE account_id=?) AND NOT EXISTS(SELECT 1 FROM checkout_sessions WHERE account_id=?)
+      AND NOT EXISTS(SELECT 1 FROM trial_markers WHERE account_id=?)`).bind(accountId, accountId, accountId, accountId, accountId),
+    env.DB.prepare("UPDATE accounts SET subject='deleted:' || id, notice_address=NULL WHERE id=?").bind(accountId),
+  ])
+  return [...owned, ...guestAt]
 }
 
 /** A station's devices changed: its policy version moves, and its room hears of it. */
@@ -956,6 +1111,11 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // One still waiting is approved in place by a sign-in for its keys.
     if (current && approveAs && current.approved !== 1) {
       await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, lanKey, caller.accountId, now)
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
+      await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId: current.id,
+        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
       return json({ deviceId: current.id, approved: true, expiresAt: UNTIL_REMOVED, renewsUntil: null })
     }
     if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: null })
@@ -970,7 +1130,14 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       .bind(deviceId, row.id, caller.accountId, name, await digest(secret()), expiresAt, key, kind, platform, lanKey,
         approveAs ? 1 : 0, approveAs ? now : null, approveAs, approveAs ? 'account' : null, approveAs ? input.proof : null, row.id, now).first()
     requireValue(inserted, 'deviceLimit', 409)
-    if (approveAs) await bumpPolicy(env, row.id, now)
+    if (approveAs) {
+      await bumpPolicy(env, row.id, now)
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
+      await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId,
+        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
+    }
     return json({ deviceId, approved: approveAs !== null, expiresAt, renewsUntil: null })
   }
   await internet(verb === 'turn')
@@ -1005,7 +1172,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
 // thirty a minute an IPv4 address or IPv6 /64, sixty an IPv6 /48, then a hundred and twenty for the
 // device. One network can so spend at most half of a device's minute; taking all of it needs two /48s
 // or four IPv4 addresses at once, which is a distributed attacker and a job for an edge rule.
-async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
   requireValue(nativeClientId(env), 'serviceNotConfigured', 503)
   requireValue(match, 'signInRequired', 401)
@@ -1021,7 +1188,9 @@ async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray
     WHERE id=? AND station_id=? AND kind IS NOT NULL AND expires_at>?`).bind(id(deviceId), row.id, now)
     .first<{ account_id: string; approved: number; expires_at: number; public_key: string | null }>()
   requireValue(current?.public_key && current.approved === 1, 'signInRequired', 401)
-  return { accountId: current.account_id, expiresAt: Math.min(current.expires_at, now + 3600000), subject: '', verified: false }
+  // A reopening request carries no fresh sign-in, so no verified address: the owner notice never
+  // fires on it (it only ever fires when a device is first added by a sign-in).
+  return { accountId: current.account_id, expiresAt: Math.min(current.expires_at, now + 3600000), subject: '', verified: false, email: null }
 }
 
 // The Native application's client id, or null while the service has none: unset, or the page's own.

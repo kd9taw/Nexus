@@ -20,7 +20,6 @@ import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
 
 const startCq = vi.fn(async () => null)
 const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
@@ -241,6 +240,16 @@ describe('#254 — a malformed directed CQ is refused, never quietly replaced', 
     expect(startCq).toHaveBeenCalledWith(null)
     expect(pushToast).not.toHaveBeenCalled()
   })
+
+  // A CQ the station refuses says why, as the contest's run four lines above it always did: the
+  // press used to drop it, so CQ from a computer driving a station did nothing and said nothing.
+  it('a refused CQ shows the refusal', async () => {
+    startCq.mockImplementationOnce(() => Promise.reject('Not connected to the station.'))
+    renderCockpit()
+    callCq(`CQ ${MYCALL} EN61`)
+
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith('Not connected to the station.', 'error'))
+  })
 })
 
 // THE STRIP'S CALL CQ IS THE CONTEST'S RUNNING WHILE A CONTEST RUNS. The engine decides that
@@ -329,15 +338,6 @@ describe('the Tx6 row while a contest runs', () => {
     fireEvent.click(cqButton())
     await waitFor(() => expect(startCq).toHaveBeenCalledWith('POTA'))
     expect(startRunning).not.toHaveBeenCalled()
-  })
-
-  it('on the Remote page the row keeps its own CQ', () => {
-    render(
-      <StationControlContext.Provider value={false}>{cockpit(inContest())}</StationControlContext.Provider>,
-    )
-    expect(tx6Box().value).toBe(`CQ ${MYCALL} EN61`)
-    expect(tx6Box().readOnly).toBe(false)
-    expect(tx6Box().getAttribute('aria-label')).toBe('Tx6 Call CQ (edit for a directed CQ)')
   })
 })
 

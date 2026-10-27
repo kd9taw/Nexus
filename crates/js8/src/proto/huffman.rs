@@ -12,7 +12,7 @@
 //! `[1][compressed?][70]` data frame and picks Huffman over JSC whenever Huffman packs more
 //! characters (varicode.cpp:1855-1870). A receiver that dropped this table would show every
 //! such frame as garbage; a sender that never chose it would still interoperate, but "match the
-//! deprecated form" is the parity ruling (judge.md risks). Case: the table is UPPERCASE only;
+//! deprecated form" is the parity ruling. Case: the table is UPPERCASE only;
 //! upstream validates `toUpper()` but encodes case-sensitively, so a lowercase letter passes
 //! validation and is then silently dropped. `compose` uppercases before it gets here, and
 //! `encode`/`pack` return `None` on any char outside the table so the bug cannot be

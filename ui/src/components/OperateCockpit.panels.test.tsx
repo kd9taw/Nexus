@@ -357,33 +357,40 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('the waterfall height: focusable, announces its value in CSS px, and steps, jumps and resets', () => {
-    layOut({ '.cockpit-body': { height: 600 } })
+    // The strip stands in the body, under the cockpit's own rows, but its DEFAULT is 25 % of the SHELL, as
+    // every cockpit's waterfall is (2026-10-26: "width and height to be consistent").
+    layOut({ 'main.operate-cockpit': { height: 800 }, '.cockpit-body': { height: 600 } })
     renderCockpit({})
     const sep = screen.getByRole('separator', { name: 'waterfall height' })
     expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
-    // 22 % of a 600 px body, inside the declared 88–420 px.
-    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['132', '88', '420'])
+    // 25 % of an 800 px shell = 200 px, inside the declared 88–420 px, painted as the body's own share.
+    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['200', '88', '420'])
+    expect(parseFloat(body().style.getPropertyValue('--cockpit-wf-h'))).toBeCloseTo((200 / 600) * 100, 6)
+    expect(localStorage.getItem('nexus.split.operate.waterfall'), 'an untouched default writes nothing').toBeNull()
     key(sep, 'ArrowDown')
-    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe(`${(148 / 600) * 100}%`)
-    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe(String((148 / 600) * 100))
-    expect(sep.getAttribute('aria-valuenow')).toBe('148')
+    // A moved divider stores a share of the BODY, the meaning a stored FT height has always had.
+    expect(parseFloat(body().style.getPropertyValue('--cockpit-wf-h'))).toBeCloseTo(36, 6)
+    expect(Number(localStorage.getItem('nexus.split.operate.waterfall'))).toBeCloseTo(36, 6)
+    expect(sep.getAttribute('aria-valuenow')).toBe('216')
     key(sep, 'ArrowUp', true)
-    expect(sep.getAttribute('aria-valuenow')).toBe('88') // 148 − 64 = 84, floored at 88
+    expect(sep.getAttribute('aria-valuenow')).toBe('152') // 216 − 64
     key(sep, 'End')
     expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('70%') // 420 of 600
     key(sep, 'Home')
     expect(sep.getAttribute('aria-valuenow')).toBe('88')
     key(sep, 'Backspace')
-    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('22%')
-    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe('22')
+    expect(sep.getAttribute('aria-valuenow')).toBe('200')
+    // Cleared, not '25': stored, 25 would read back as 25 % of the BODY.
+    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe('')
     key(sep, 'End')
     fireEvent.doubleClick(sep)
-    expect(body().style.getPropertyValue('--cockpit-wf-h'), 'a double-click puts the default back').toBe('22%')
+    expect(sep.getAttribute('aria-valuenow'), 'a double-click puts the default back').toBe('200')
   })
 
   it('a waterfall height stored by an earlier build opens where it was left — clamped, and the stored value kept', () => {
     localStorage.setItem('nexus.split.operate.waterfall', '30')
-    layOut({ '.cockpit-body': { height: 600 } })
+    // The shell is measured too, so a stored height read against the default's box would show (240, not 180).
+    layOut({ 'main.operate-cockpit': { height: 800 }, '.cockpit-body': { height: 600 } })
     const first = renderCockpit({})
     expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('30%')
     expect(screen.getByRole('separator', { name: 'waterfall height' }).getAttribute('aria-valuenow')).toBe('180')

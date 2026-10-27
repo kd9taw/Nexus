@@ -173,6 +173,10 @@ tempo-flexsim = { path = "../tempo-flexsim" }
 # In-workspace and test-scoped (its one dependency, tungstenite, is already tempo-net's), so the
 # shipped dependency graph is unchanged.
 tempo-tcisim = { path = "../tempo-tcisim" }
+# TEST-ONLY: the fake SDRconnect the SDRconnect scope's tests (`src/sdrconnect/fake.rs`) run
+# against is a WebSocket server. Not new code: tungstenite is already tempo-net's and
+# tempo-tcisim's, at this exact version with this one feature, so nothing new enters the lock.
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 # TEST-ONLY: the simulated network Icom the Icom network daemon's tests (`src/icomlan/tests.rs`,
 # `tests/icomlan_leak.rs`) run against: tempo-net's `icom-sim` feature, which only test builds turn
 # on. Not a new dependency: tempo-net is already one, behind `device`. And `flex-unbenched`, the

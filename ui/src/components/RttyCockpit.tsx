@@ -16,8 +16,8 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -32,6 +32,7 @@ import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { RttyTuningScope } from './RttyTuningScope'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getRttyState,
@@ -89,7 +90,7 @@ import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
-import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { useEscStop } from '../useEscStop'
 
 interface Props {
@@ -180,6 +181,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
  * field hang it fixed) lives with the function. */
 export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
 import { authoredRuns } from '../transcript'
+import { upperTyped } from '../typedInput'
 
 /** The character under a point, as an offset into `box.textContent` — or null when nothing
  *  under it is in `box`. The browser's caret hit-test first (`caretPositionFromPoint`, or the
@@ -336,15 +338,12 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * operator is on another section.
  */
 export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings, esmSetting }: Props) {
-  const frequencyControl = useStationCapability('frequency')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
-  const dataAvailable = useStationData()
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: withRecent(withStats(RTTY_PANEL_IDS)), side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -361,20 +360,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ⊞-removable), and a divider's pair always sums to 2, so the log's share is the rest.
   const streamFrameRef = useRef<HTMLElement>(null)
   const logFrameRef = useRef<HTMLElement>(null)
-  // The waterfall strip, for the divider under it (its height).
+  // The waterfall strip (the row holding the waterfall and the tuning scope), for the divider under it.
   const wfRef = useRef<HTMLDivElement>(null)
   const streamLogPair = panels != null && snap != null && shown('stream')
   const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
-  const [observedState, setRtty] = useState<RttyState | null>(null)
-  const rtty = control || (dataAvailable && active) ? observedState : null
+  const [rtty, setRtty] = useState<RttyState | null>(null)
   useEffect(() => {
-    if (!active || (!control && !dataAvailable)) {
-      if (!control) setRtty(null)
-      return
-    }
+    if (!active) return
     // Single-flight (#335): `get_rtty_state` takes the engine mutex, so a tick skips while the last
     // read is still out instead of stacking another waiter behind a CAT stall.
     return pollSingleFlight('rtty state', 500, (owns) =>
@@ -382,9 +377,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         .then((s) => {
           if (owns()) setRtty(s)
         })
-        .catch(() => { if (owns() && !control) setRtty(null) }),
+        .catch(() => {}),
     )
-  }, [active, control, dataAvailable])
+  }, [active])
 
   // Arm the decoder on ENTERING the view. RTTY was the ONLY decode mode without this — PSK,
   // APRS and SSTV all auto-arm — and its decoder could be started in exactly one place, the
@@ -403,7 +398,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // rejects and the `.catch` below swallows it, leaving RTTY armed by hand exactly as today.
   const autoArmed = useRef(false)
   useEffect(() => {
-    if (!control || !active) {
+    if (!active) {
       autoArmed.current = false
       return
     }
@@ -412,21 +407,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     void rttyAutoArm()
       .then((s) => setRtty(s))
       .catch(() => {})
-  }, [active, control])
+  }, [active])
 
   // CALLSIGN TAGS: who was heard at which audio frequency, tracked off each read of the decoder's
   // state. `features/rttyCallTags` states the attribution rule; nothing here guesses past it.
   const [tagTracker, setTagTracker] = useState(NO_TAGS)
   const mycall = snap?.mycall ?? ''
   useEffect(() => {
-    if (observedState) setTagTracker((tr) => trackTags(tr, observedState, Date.now(), mycall))
-  }, [observedState, mycall])
+    if (rtty) setTagTracker((tr) => trackTags(tr, rtty, Date.now(), mycall))
+  }, [rtty, mycall])
   // The waterfall's speed (ms per row), kept per surface.
   const [wfSpeed, setWfSpeed] = useState<RttyWaterfallSpeed>(() => coerceRttySpeed(surfaceGet(RTTY_WF_SPEED_KEY)))
 
   const armed = rtty?.armed === true
   const toggleArm = () => {
-    if (!receiverControl) return
     void rttyArm(!armed)
       .then(setRtty)
       .catch(() => pushToast(t('rtty.arm.failed'), 'error'))
@@ -441,7 +435,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const peerExchange = rtty?.peerExchange ?? []
   const heardCq = rtty?.heardCq ?? null
   const toggleAuto = () => {
-    if (!control) return
     // `withErrorToast`, not a bare catch: the engine REFUSES to arm in any contest but the two
     // Field Day events, and it refuses with a sentence that says what to do instead (send the
     // exchange with the macros, log each contact yourself). A catch that toasted only this
@@ -451,31 +444,31 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     })
   }
   const autoCq = () => {
-    if (!control) return
     void withErrorToast(() => rttyAutoCq(), t('rtty.autoCq.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
   const autoAnswer = () => {
-    if (!control) return
     if (!heardCq) return
     void withErrorToast(() => rttyAutoAnswer(heardCq), t('rtty.autoAnswer.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
   const autoAbort = () => {
-    if (!control) return
     void rttyAutoAbort()
       .then(setRtty)
       .catch(() => {})
   }
 
   // Licensed RTTY watering holes (built-in band plan, WSJT-X-style) — same
-  // source the CW/Phone BandPicker uses, filtered to digital privileges.
+  // source the CW/Phone BandPicker uses, filtered to digital privileges. Each row
+  // comes at the dial this station's keying backend tunes for it (AFSK sits a mark
+  // tone above the plan), so the list is fetched again when the backend changes.
   const [plan, setPlan] = useState<BandChannel[]>([])
+  const rttyBackend = rtty?.backend
   useEffect(() => {
-    if (control) void getLicensedBandPlan('rtty').then(setPlan).catch(() => {})
-  }, [control])
+    void getLicensedBandPlan('rtty').then(setPlan).catch(() => {})
+  }, [rttyBackend])
 
   // RF POWER. RTTY is a 100%-duty-cycle mode — the carrier is on for the whole over
   // with no let-up — so most rigs want it run well below their SSB rating or the finals
@@ -495,7 +488,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Commit a typed dial from the shared header readout (same path as the
   // band-plan QSY); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -555,7 +547,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     if (e.detail <= 1) grabFocus.current = document.activeElement
   }
   const onStreamDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!control || !text_rx) return
+    if (!text_rx) return
     const box = e.currentTarget
     const offset = caretOffsetIn(box, e.clientX, e.clientY)
     const hit =
@@ -622,7 +614,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // It answers whether the line went to `rtty_send` (true) or was refused here (false), for the
   // editor's Send once, which keeps the operator's draft open when the send was refused.
   const send = (line: string, macro = false): boolean => {
-    if (!control) return false
     if (!line.trim()) return false
     const ready = prepare(line, macro, hisCall)
     if ('refusal' in ready) {
@@ -635,12 +626,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     return true
   }
   const sendTyped = () => {
-    if (!control) return
     send(text)
     setText('')
   }
   const stop = () => {
-    if (!control) return
     // Stop RTTY (abort the over + drop the queue + unkey) AND drop any tune
     // carrier / stray PTT — a true stop-everything, like the CW cockpit's Esc.
     void rttyStop()
@@ -652,10 +641,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   }
 
   const sending = rtty?.sending === true
-  const backend = (rtty?.backend ?? (control ? 'afsk' : '—')).toUpperCase()
+  const backend = (rtty?.backend ?? 'afsk').toUpperCase()
   // The badge's figures — invariant tokens, assembled here rather than in the JSX so the
   // i18n guard reads them as the measurements they are.
-  const tones = rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : control ? DEFAULT_TONES : '—'
+  const tones = rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : DEFAULT_TONES
 
   // --- CONTINUOUS TX (the "TX" latch) -----------------------------------------
   // Stay keyed and type into a live transmission (the air carries LTRS diddle
@@ -666,17 +655,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const latched = rtty?.latched === true
   // The tuning scope (⊞ `tuning`). `keyed` is the waterfall's own: our over, a latched stream or a
   // tune. Its nudges net through `rtty_net`, which moves the AFSK transmit tone as well as the
-  // decoder, so they are off while keyed (RttyTuningScope.tsx) and here without decoder control.
+  // decoder, so they are off while keyed (RttyTuningScope.tsx).
   const tuningScope = (close?: { onRemove?: () => void; hideNote?: string }) => (
     <RttyTuningScope
       active={active}
       armed={armed}
       keyed={sending || latched || (snap?.radio.tuning ?? false)}
-      control={receiverControl}
       markHz={rtty?.markHz ?? 0}
       spaceHz={rtty?.spaceHz ?? 0}
       onNet={(hz) => {
-        if (receiverControl) void rttyNet(hz).then(setRtty).catch(() => {})
+        void rttyNet(hz).then(setRtty).catch(() => {})
       }}
       closeProps={close}
     />
@@ -750,7 +738,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     }
   }
   const toggleLatch = () => {
-    if (!control) return
     void withErrorToast(() => rttySetLatched(!latched), t('rtty.latch.failed')).then((s) => {
       if (s) setRtty(s)
     })
@@ -767,7 +754,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const composeRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
     const el = composeRef.current
-    if (!control || !el || !latched) return
+    if (!el || !latched) return
     const onBeforeInput = (e: Event) => {
       const ev = e as InputEvent
       if (!latchedRef.current) return
@@ -788,7 +775,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     // carry a reliable `inputType`, and `inputType` is the whole discrimination.
     el.addEventListener('beforeinput', onBeforeInput)
     return () => el.removeEventListener('beforeinput', onBeforeInput)
-  }, [latched, control])
+  }, [latched])
   // --- THE F1–F8 MACROS ------------------------------------------------------------------
   // Two built-in sets, Everyday and Contest, with the operator's saved keys folded over them
   // (`features/rttyMacros.ts`). The saved sets are App's settings mirror; a save goes through
@@ -810,7 +797,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // (decision 9): Enter then logs as it does with ESM off.
   const esm = useEsmHost({
     cockpit: 'rtty',
-    on: !!esmSetting?.on && !!snap?.fieldDay && control,
+    on: !!esmSetting?.on && !!snap?.fieldDay,
     callOnce: !!esmSetting?.callOnce,
     roles: esmRoles(RTTY_SET_ROLES[macroSet], macros?.rttyEsmRoles?.[macroSet]),
     slots,
@@ -841,7 +828,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const [savingMacros, setSavingMacros] = useState(false)
   const dockRef = useRef<HTMLDivElement | null>(null)
   const openEditor = (key: RttyMacroKey, focus: MacroEditorFocus = 'title') => {
-    if (!control) return
     // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
     // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"]`)
@@ -862,7 +848,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
-    if (!control) return false
     setSavingMacros(true)
     const saved = await withErrorToast(
       () => setRttyMacros(profiles, activeSet),
@@ -896,7 +881,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     void saveMacroSets(withRttySetReset(macroSets.profiles, macroSet), macroSets.active)
   }
   const sendMacro = (slot: RttyMacroSlot): boolean => {
-    if (!control || isEmptyRttySlot(slot)) return false
+    if (isEmptyRttySlot(slot)) return false
     const sent = send(slot.text, true)
     esm.noteKey(slot.key)
     return sent
@@ -952,13 +937,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
   // the key's default, as it always did.
-  useEscStop(control && active, () => {
+  useEscStop(active, () => {
     const k = keys.current
     if (k.editorOpen && !k.live) k.closeEditor()
     else stop()
   })
   useEffect(() => {
-    if (!control || !active) return
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
       const k = keys.current
       if (e.key === 'Escape') {
@@ -980,14 +965,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, control])
-  // An editor is operator state for THIS station: a lost control hand closes it.
-  useEffect(() => {
-    if (!control) {
-      setEditing(null)
-      setConfirmSetReset(false)
-    }
-  }, [control])
+  }, [active])
 
   const text_rx = rtty?.text ?? ''
   // Only re-walk the ring when the transcript itself changed. App re-renders
@@ -1008,18 +986,22 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const streamPin = usePinnedScroll<HTMLDivElement>()
 
   return (
-    <main className={`layout single rtty-cockpit${shown('tuning') ? ' rtty-tuning-on' : ''}`}>
+    <main className="layout single rtty-cockpit">
       {snap && (
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
           power={{
-            value: control ? power : dataAvailable && snap.radio.rfPower != null ? Math.round(snap.radio.rfPower * 100) : null,
+            value: power,
             unit: '%',
             onChange: (pct: number) => {
-              if (!control) return
               setPower(pct)
-              void setRfPower(pct / 100)
+              // A refused level goes back to what the rig reports (Phone's slider says why).
+              void setRfPower(pct / 100).catch((e) => {
+                const rb = snap.radio.rfPower
+                if (rb != null) setPower(Math.round(rb * 100))
+                showWhenDriving(e)
+              })
             },
             label: t('rtty.header.power.label'),
             title: t('rtty.header.power.title'),
@@ -1038,7 +1020,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               <span
                 className="rtty-backend-pill"
                 title={
-                  !control && !rtty ? t('remote.keyboardUnavailable') : backend === 'FSK'
+                  backend === 'FSK'
                     ? t('rtty.header.backend.fsk.title')
                     : t('rtty.header.backend.afsk.title')
                 }
@@ -1049,14 +1031,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 // ⚠️ NOT MIGRATED, and it is the transmit-path deferral, not an oversight:
                 // this tooltip states what Stop TX does to an over in flight. It moves with
                 // the stop controls, in the transmit-path batch, with the sweeps re-run.
-                <span className="rtty-tx-pill" title={control ? "RTTY transmission on the air (Stop TX aborts)" : t('remote.keyboardTxReported')}>
+                <span className="rtty-tx-pill" title="RTTY transmission on the air (Stop TX aborts)">
                   {TX_PLATE}
                 </span>
               )}
             </>
           }
           bandControl={
-            control && onSetFrequency ? (
+            onSetFrequency ? (
               <FrequencyControl
                 channels={plan}
                 dialMhz={snap.radio.dialMhz}
@@ -1073,8 +1055,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               </span>
             )
           }
-          remoteFrequency
-          onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
+          onCommitDial={onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={
@@ -1093,12 +1074,12 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               the ROTATOR, never a transmission, so it is on no stop-line census. `active`, because
               this cockpit stays mounted behind every other screen and a hidden strip must not poll
               the rotator. → CALL points at the dock's Call box, settled: the log strip's call. */}
-          {control || rotatorControl ? <RotorStrip
+          <RotorStrip
             active={active}
             onOpenSettings={onOpenSettings}
             targetCall={settledHisCall || null}
-            onPointAt={rotorPointAt(control)}
-          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+            onPointAt={rotorPointAt()}
+          />
         </CockpitHeader>
       )}
 
@@ -1113,11 +1094,18 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           the decoder AND the AFSK transmit tone (the transmitter follows the netted centre since
           1.9.0), but never the rig's key. Stop TX and the TX-enable latch are in
           the TX strip below it, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
-          With this and `stream` both unticked the cockpit still holds all four. */}
-      {rtty && shown('scope') && (
+          With this and `stream` both unticked the cockpit still holds all four.
+
+          THE STRIP IS A ROW (operator, 2026-10-26): the waterfall, then the tuning scope (⊞ `tuning`) RIGHT
+          of it, so the waterfall keeps the common height and the scope its size; the waterfall gives up the
+          width. The divider sizes the row. The row stands while either is shown, so ticking `tuning` adds or
+          removes a sibling after the waterfall and never re-parents or remounts it; with the scope hidden the
+          waterfall takes the row's width, and with the waterfall hidden the scope holds the strip alone. */}
+      {((rtty && shown('scope')) || shown('tuning')) && (
         <>
+        <div className="rtty-wf-row" ref={wfRef}>
+        {rtty && shown('scope') && (
         <Waterfall
-          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={rttyPanelLabels().scope}
           theme={theme}
@@ -1130,7 +1118,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           contrastCurve={traceContrast}
           tags={wfTags}
           // A tag nets exactly as a click on the picture does, refused while keyed.
-          onTag={receiverControl ? (hz) => void netUnlessKeyed(hz).catch(() => {}) : undefined}
+          onTag={(hz) => void netUnlessKeyed(hz).catch(() => {})}
           // NO `txBlanks` — deliberately, do not add it. An RTTY over has no fixed length and
           // a latched one runs to the 10-minute ceiling; the FT surfaces' dark band would
           // scroll solid black for all of it, which field reports (2026-08-17) read as a dead
@@ -1152,27 +1140,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // Where the decoder listens: the netted tones moved by the AFC (the cursors stay on
           // the netted pair, the TX tones). Tinted while we are keyed.
           toneBand={{ loHz: rtty.markHz + rtty.afcHz, hiHz: rtty.spaceHz + rtty.afcHz }}
-          hint={
-            receiverControl
-              ? rttyKeyed
-                ? t('rtty.waterfall.hint.keyed')
-                : t('rtty.waterfall.hint')
-              : t('remote.keyboardFollowsStation')
-          }
+          hint={rttyKeyed ? t('rtty.waterfall.hint.keyed') : t('rtty.waterfall.hint')}
           headerExtra={
             <>
-              {receiverControl && (
-                <button
-                  type="button"
-                  className="wf-popout rtty-autotune"
-                  disabled={rttyKeyed || autoTuning}
-                  aria-busy={autoTuning}
-                  onClick={() => void autoTune()}
-                  title={rttyKeyed ? t('rtty.autoTune.keyed.title') : t('rtty.autoTune.title')}
-                >
-                  {t('rtty.autoTune.label')}
-                </button>
-              )}
+              <button
+                type="button"
+                className="wf-popout rtty-autotune"
+                disabled={rttyKeyed || autoTuning}
+                aria-busy={autoTuning}
+                onClick={() => void autoTune()}
+                title={rttyKeyed ? t('rtty.autoTune.keyed.title') : t('rtty.autoTune.title')}
+              >
+                {t('rtty.autoTune.label')}
+              </button>
               <div className="wf-seg" role="group" aria-label={t('rtty.wf.speed.aria')}>
                 {RTTY_WATERFALL_SPEEDS.map((sp) => (
                   <button
@@ -1192,8 +1172,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               </div>
             </>
           }
-          onTune={receiverControl ? (hz) => void netUnlessKeyed(hz).catch(() => {}) : undefined}
+          onTune={(hz) => void netUnlessKeyed(hz).catch(() => {})}
         />
+        )}
+        {shown('tuning') && tuningScope(closeProps('tuning'))}
+        </div>
         <PaneSeam
           axis="y"
           varName="--rtty-wf-h"
@@ -1216,12 +1199,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {snap && (
         <CockpitTxStrip
           radio={snap.radio}
-          onSnap={onSnap}
           onStopTx={stop}
-          onSetTxEnabled={control ? onSetTxEnabled : undefined}
-          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
+          onSetTxEnabled={onSetTxEnabled}
+          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
-            control && void atuTune()
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
@@ -1262,7 +1249,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dock, none of them with a ⊞ id. A pane's own stop is a convenience; those four are
           what hold the guarantee up — and while an over is actually keying outside an auto
           sequence, THREE of the four are live: Stop TX (never disabled), the Esc/Stop macro
-          (disabled={!control || !(sending || latched)}, so enabled exactly then — and, since continuous TX
+          (disabled={!(sending || latched)}, so enabled exactly then — and, since continuous TX
           landed, from the instant the TX latch goes up rather than from the first keyed chunk)
           and the latch (a button, because
           radio.transmitting is the slot-TX indicator and is false here). The sequencer's Abort
@@ -1272,21 +1259,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           no ⊞ note, and it is not a sender: Arm RX is RX-only and Auto ON never keys by
           itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
           would demand this cockpit's only ⊞ entry be unhideable. */}
-      {/* THE TUNING SCOPE WITHOUT THE TEXT: its home is the column left of the decoded text (inside
-          `stream`, below), so with `stream` hidden it stands in its own content-height frame at the
-          same place rather than vanishing with a pane the operator did not hide. */}
-      {!shown('stream') && shown('tuning') && (
-        <CockpitPaneFrame title={t('rtty.tuning.title')} paneId="tuning" fit="content" {...closeProps('tuning')}>
-          {tuningScope()}
-        </CockpitPaneFrame>
-      )}
-
       {shown('stream') && (
       <CockpitPaneFrame
         title={t('rtty.pane.stream.title')}
-        // THE GUARANTEE (cockpit-panes.css): while Tuning is shown the shell sets this floor at the
-        // tuning column's height, so the text pane gives way, never the scope.
-        floor="--rtty-stream-floor"
         paneId="stream"
         split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
         share={streamShare != null ? streamShare * STREAM_LOG_SPLIT : undefined}
@@ -1297,7 +1272,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <div className="cw-decode-head">
           <span className="cw-decode-label">{RX_PLATE}</span>
           <button
-            disabled={!receiverControl}
             type="button"
             className={`rtty-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
@@ -1312,7 +1286,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               why no sweep lists it), and this batch moves no control that stops a
               transmission. Its label and both tooltips move with the rest of them. */}
           <button
-            disabled={!control}
             type="button"
             className={`rtty-arm${auto ? ' on' : ''}`}
             aria-pressed={auto}
@@ -1336,11 +1309,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           )}
           {armed && (
             <button
-              disabled={!receiverControl}
               type="button"
               className="rtty-arm"
               onClick={() => {
-                if (!receiverControl) return
                 void rttyAfcReset()
                   .then(setRtty)
                   .catch(() => {})
@@ -1351,10 +1322,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </button>
           )}
           <button
-            disabled={!receiverControl}
             className="cw-decode-clear"
             onClick={() => {
-              if (!receiverControl) return
               void rttyClear()
                 .then(setRtty)
                 .catch(() => {})
@@ -1367,13 +1336,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             {t('rtty.clear.label')}
           </button>
         </div>
-        {!control && (!rtty || !armed) && <p className="cw-decode-idle" role="status">
-          {rtty ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
-        </p>}
-        {/* THE RX ROW: the tuning scope's square column, then the text, which shrinks to fit. The row is
-            always there, so ticking `tuning` never remounts the transcript or loses its scroll pin. */}
-        <div className="rtty-rx-row">
-        {shown('tuning') && tuningScope(closeProps('tuning'))}
         <div
           className="cw-decode-text"
           ref={streamPin.ref}
@@ -1397,10 +1359,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             ))
           ) : (
             <span className="cw-decode-idle">
-              {armed ? t('rtty.stream.listening') : control ? t('rtty.stream.idle') : null}
+              {armed ? t('rtty.stream.listening') : t('rtty.stream.idle')}
             </span>
           )}
-        </div>
         </div>
       </div>
       </CockpitPaneFrame>
@@ -1467,7 +1428,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
           paneRef={logFrameRef}
         >
-          {!control ? null : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {
@@ -1497,11 +1457,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             fdSubmode={RTTY}
             esm={esm.host}
           />
-          )}
           {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
               last few contacts, a row a click into the Logbook's editor. It takes only the room the form
               leaves. No stop control, nothing sent. */}
-          {shown('recent') && statsHere() && (
+          {shown('recent') && (
             <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
           )}
         </CockpitPaneFrame>
@@ -1512,7 +1471,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           it ships hidden here, where the two are already short of room at the supported floor
           (PskCockpit's measured table, which this shell shares), one tick away in ⊞ Panels. No
           stop control, nothing sent. */}
-      {snap && shown('stats') && statsHere() && (
+      {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={RTTY} logTick={snap.logTick} />
       )}
 
@@ -1532,7 +1491,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           stop-line.test.tsx's RTTY stopControls. Clicking it off stops ACCEPTING characters
           and lets what was already typed finish keying — a mode toggle, deliberately not an
           immediate cut. The immediate cuts are unchanged and each of them also drops the
-          latch: Stop TX, the Esc/Stop macro (now `disabled={!control || !(sending || latched)}` so it is
+          latch: Stop TX, the Esc/Stop macro (now `disabled={!(sending || latched)}` so it is
           live from the instant the latch goes up, not from the first keyed chunk), the
           TX-enable latch, and Esc — which this cockpit now actually binds (it had no keyboard
           handler at all; the "Esc" glyph on the Stop macro was decoration). Esc is
@@ -1541,13 +1500,12 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           over: the engine's per-tick gate re-check, which unkeys within one tick on a section
           change, a QSY out of privileges, a tune, or a radio handoff — none of which is a
           control the operator pressed. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`} ref={dockRef}>
+      <div className="cockpit-txdock" ref={dockRef}>
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label={t('rtty.seq.aria')}>
           {seqState === 'idle' ? (
             <>
               <button
-                disabled={!control}
                 type="button"
                 className="cw-macro rtty-auto-cq"
                 onClick={autoCq}
@@ -1560,7 +1518,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 type="button"
                 className="cw-macro rtty-auto-answer"
                 onClick={autoAnswer}
-                disabled={!control || !heardCq}
+                disabled={!heardCq}
                 title={
                   heardCq
                     ? t('rtty.autoAnswer.title', { call: heardCq })
@@ -1585,7 +1543,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               {/* ⚠️ NOT MIGRATED — the sequencer's Abort is on RTTY's stop-line census
                   (features/panelState.ts). It moves in the transmit-path batch. */}
               <button
-                disabled={!control}
                 type="button"
                 className="cw-macro rtty-auto-stop"
                 onClick={autoAbort}
@@ -1611,7 +1568,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <RttyMacroButton
             key={slot.key}
             slot={slot}
-            control={control}
             editing={editing === slot.key}
             lit={esmLit.includes(slot.key)}
             title={macroTitle(slot.text)}
@@ -1625,10 +1581,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
       <div className="rtty-dock-row">
         <input
-          disabled={!control}
           className="settings-input rtty-hiscall"
           value={hisCall}
-          onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+          onChange={(e) => setHisCall(upperTyped(e.target))}
           placeholder={t('rtty.hisCall.placeholder')}
           aria-label={t('rtty.hisCall.aria')}
           autoComplete="off"
@@ -1636,7 +1591,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
         <RttyMacroSetSwitch
           set={macroSet}
-          control={control}
           customized={slots.some((s) => s.custom)}
           confirming={confirmSetReset}
           onConfirming={setConfirmSetReset}
@@ -1644,7 +1598,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onReset={resetMacroSet}
         />
         {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs. */}
-        {esmSetting && snap?.fieldDay && control && (
+        {esmSetting && snap?.fieldDay && (
           <EsmPlate
             on={esmSetting.on}
             onSwitch={esmSetting.onSwitch}
@@ -1657,19 +1611,18 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             tooltip is the wording that states what clicking it off does NOT do (it lets
             what was typed finish keying). Label and tooltips move with the stop line. */}
         <button
-          disabled={!control}
           type="button"
           className={`cw-macro rtty-tx-latch${latched ? ' on' : ''}`}
           aria-pressed={latched}
           onClick={toggleLatch}
           title={
-            !control ? t('remote.applicationObserver') : latched
+            latched
               ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
               : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
           }
         >
           <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? control ? 'On air' : t('remote.keyboardLatched') : 'Continuous'}</span>
+          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
         </button>
         {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
             by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
@@ -1684,7 +1637,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // false for good if the FSK keyline never opens. This control is on
           // RTTY's stop-line census; a census stop control that is mounted and
           // disabled is the same loss as one that is gone.
-          disabled={!control || !(sending || latched)}
+          disabled={!(sending || latched)}
           title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
         >
           <span className="cw-macro-key">Esc</span>
@@ -1696,7 +1649,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
           moves and covers no control in the dock; non-modal, so Stop TX in the TX strip stays one
           click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
-      {control && editing && (
+      {editing && (
         <RttyMacroEditor
           key={editing}
           slot={slots.find((s) => s.key === editing)!}
@@ -1717,7 +1670,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             in the compose row, so the dock gains no height. Display only; see RttyTxLine. */}
         <RttyTxLine rtty={rtty} />
         <input
-          disabled={!control}
           ref={composeRef}
           className="settings-input cw-type"
           value={text}
@@ -1729,7 +1681,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             if (!latched) setText(e.target.value)
           }}
           onKeyDown={(e) => {
-            if (!control || e.key !== 'Enter') return
+            if (e.key !== 'Enter') return
             e.preventDefault()
             if (latched) {
               // Latched, Enter is a NEW LINE on the air (CR LF — both live in
@@ -1755,7 +1707,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onClick={sendTyped}
           // Latched, there is nothing to "send": characters go out as they are
           // typed and the macros type into the live transmission too.
-          disabled={!control || latched || !text.trim()}
+          disabled={latched || !text.trim()}
         >
           {t('rtty.compose.send.label')}
         </button>

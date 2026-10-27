@@ -1,11 +1,11 @@
-import { lazy, StrictMode, Suspense } from 'react'
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ClientInput } from './components/ClientBanner'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
-import { loadDurable } from './features/durableStore'
-import { startMemoryPublisher } from './remote-native/memoryPublisher'
+import { loadDurable, setRemoteStation } from './features/durableStore'
 import { installStreamInput } from './remote-native/stream-input'
 import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
@@ -14,7 +14,7 @@ import { FR } from './i18n/fr'
 import { JA } from './i18n/ja'
 import { RU } from './i18n/ru'
 import { installExternalLinkInterceptor } from './externalLinks'
-import { isTauri, openExternalUrl } from './api'
+import { clientStatus, isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
 import { t } from './i18n'
 import './styles.css'
@@ -27,8 +27,6 @@ import './cockpit-panes.css'
 // A torn-off window (created by open_panel_window) loads the app at `?panel=<name>`
 // and renders just that panel for multi-monitor use.
 const panel = new URLSearchParams(window.location.search).get('panel')
-// Development-only observer window. The existing main window continues to operate.
-const NativeMonitor = import.meta.env.DEV ? lazy(() => import('./remote-monitor/native')) : null
 
 // Tag the document so per-panel CSS can target one torn-off window. No rule uses it
 // today (the Needed window's font bump was removed when pop-outs stopped being pinned to
@@ -76,16 +74,16 @@ if (isTauri()) {
 const reload = { label: t('crash.reload'), onClick: () => window.location.reload() }
 
 // The product name, not prose: it is the same six characters in every language, and a catalog
-// entry for it is an invitation to "localise" a brand. Same escape hatch as STATION_EXAMPLES.
+// entry for it is an invitation to "localise" a brand. Same escape hatch as GUIDE_EXAMPLES.
 const APP_NAME = 'Nexus'
 
 const tree = (
   <StrictMode>
     {panel ? (
       <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
-        {NativeMonitor && panel === 'remoteMonitor' ? (
-          <Suspense fallback={null}><NativeMonitor /></Suspense>
-        ) : <DetachedPanel panel={panel} />}
+        {/* Driving a station over the internet, input here answers "Still there?" too. */}
+        <ClientInput />
+        <DetachedPanel panel={panel} />
       </ErrorBoundary>
     ) : (
       <ErrorBoundary label={APP_NAME} action={reload}>
@@ -105,11 +103,19 @@ const tree = (
 // falls back to `localStorage` exactly as before. `.finally` rather than `.then` so a future
 // change that does let it throw still renders the app rather than a blank window — the 0.24.6
 // failure mode, and not one to re-create over a preferences file.
-void loadDurable().finally(() => {
-  if (!panel) startMemoryPublisher()
+//
+// First, whether this computer drives another station (client mode). There the station's keys of
+// the durable store are that station's, never this computer's own (`setRemoteStation`), and this
+// window is not the station's: it feeds no hosted Remote and takes no streamed input.
+let driving = false
+void (async () => {
+  if (isTauri()) driving = (await clientStatus().catch(() => null)) !== null
+  setRemoteStation(driving)
+  await loadDurable()
+})().finally(() => {
   // A streamed Remote operator's input, as DOM events in this window and nowhere else. The main
   // window only: the station sends it nowhere else. Inert until a stream is admitted at the shack.
-  if (!panel) installStreamInput()
+  if (!panel && !driving) installStreamInput()
   // Language BEFORE the first render, for the same reason the durable store is: `t()` reads a
   // module-level variable, so a locale applied after mount would leave the first paint in
   // English and switch it under the operator a frame later. Reads the stored choice, else the

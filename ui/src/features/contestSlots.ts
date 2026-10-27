@@ -38,26 +38,22 @@ export function slotCaption(key: string): string {
   return m ? t(m.labelKey) : key
 }
 
-/** ⭐ A county list, by rules-file domain id: the state whose party it is, and the example an empty
- *  box shows (the state's most populous county, the one most likely worked). LISTED rather than
+/** ⭐ A county list, by rules-file domain id: the state whose party it is. LISTED rather than
  *  read off the id's spelling, as `COUNTY_LINE_MAX` is: a list missing here leaves its box
  *  captioned by slot id, which `LogEntry.exchangeLabels.test.tsx` refuses for every seeded
  *  contest. */
-const COUNTY_LISTS: Record<string, { state: string; example: string }> = {
-  ca_counties: { state: 'CA', example: 'LANG' },
-  il_counties: { state: 'IL', example: 'COOK' },
-  ny_counties: { state: 'NY', example: 'KIN' },
-  oh_counties: { state: 'OH', example: 'FRAN' },
-  tn_counties: { state: 'TN', example: 'SHEL' },
-  tx_counties: { state: 'TX', example: 'HARR' },
+const COUNTY_LISTS: Record<string, { state: string }> = {
+  ca_counties: { state: 'CA' },
+  il_counties: { state: 'IL' },
+  ny_counties: { state: 'NY' },
+  oh_counties: { state: 'OH' },
+  tn_counties: { state: 'TN' },
+  tx_counties: { state: 'TX' },
 }
 
 /** The lists of US states and Canadian provinces, and the ARRL/RAC section lists. */
-const STATE_LISTS: ReadonlySet<string> = new Set(['cqp_states', 'cqww_rtty_qth', 'il_mults', 'ny_mults', 'oh_mults'])
+const STATE_LISTS: ReadonlySet<string> = new Set(['arrl_rtty_qth', 'cqp_states', 'cqww_rtty_qth', 'il_mults', 'ny_mults', 'oh_mults'])
 const SECTION_LISTS: ReadonlySet<string> = new Set(['arrl_sections', 'fd_sections', 'ss_sections'])
-
-/** The example an empty state or section box shows: a code in both lists, and Field Day's own. */
-const STATE_OR_SECTION_EXAMPLE = 'WI'
 
 /** The roles of a station OUTSIDE the state whose QSO party it works (`contestRoleWords`' ids).
  *  It works only that state's stations, so a county box holds that state's counties alone. */
@@ -92,17 +88,6 @@ export function receivedCaption(spec: ContestFieldSpec, role: string | undefined
   if (spec.kind === 'grid') return t('logEntry.fd.grid.label')
   if (spec.kind === 'call') return t('logEntry.fd.call.label')
   return spec.key
-}
-
-/** The example an EMPTY received box shows: a code from the list it draws on. An INVARIANT
- *  TOKEN, never a catalog string (the strip's `LOG_EXAMPLES` rule). `undefined` for a box with
- *  no list, whose caption says what goes there — the zone box among them, whose placeholder is
- *  the country file's hint for the call typed. */
-export function slotExample(spec: ContestFieldSpec): string | undefined {
-  const county = countyList(spec)
-  if (county) return COUNTY_LISTS[county].example
-  if (spec.domains?.some((d) => STATE_LISTS.has(d) || SECTION_LISTS.has(d))) return STATE_OR_SECTION_EXAMPLE
-  return undefined
 }
 
 /** The tooltip for a slot's box, when the catalog has one. */

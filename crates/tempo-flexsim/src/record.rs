@@ -13,8 +13,8 @@
 //!   recorder against the simulator and checks every command that reached the wire.
 //!
 //! It never registers as a GUI client (`client gui`), so the radio gives it no slices or pans and
-//! other clients are not disturbed. Its UDP socket sends one byte, the registration datagram
-//! (port plan §4.2), and otherwise only receives.
+//! other clients are not disturbed. Its UDP socket sends one byte, the registration datagram,
+//! and otherwise only receives.
 //!
 //! **Nothing identifying is written.** Every line passes through [`Scrubber`] before it reaches the
 //! writer: IP and MAC addresses, serial numbers, client ids, host and station names and GPS
@@ -43,7 +43,7 @@ use crate::session::{hex_string, FORMAT_LINE};
 use crate::vita;
 
 /// The radio's TCP API port, which is also the UDP port its registration datagram goes to (D,
-/// SmartSDR-TCPIP-API; port plan §4.2).
+/// SmartSDR-TCPIP-API).
 pub const API_PORT: u16 = 4992;
 
 /// Every command head the recorder can put on the wire. A command is admitted only when its text
@@ -623,7 +623,7 @@ mod tests {
         shapes
     }
 
-    /// Commands that can transmit or change the radio's state (port plan §3.2 and §4.2), and
+    /// Commands that can transmit or change the radio's state, and
     /// more besides. The recorder must be unable to send any of them.
     const FORBIDDEN: &[&str] = &[
         "xmit 1",

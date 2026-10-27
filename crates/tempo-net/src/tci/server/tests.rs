@@ -455,7 +455,7 @@ fn refused(mock: &Mock, f: impl Fn(&HandshakeRefusal) -> bool) -> bool {
 
 // ── Where it listens ─────────────────────────────────────────────────────────────────────────
 
-/// S-M3: never a wildcard, never a LAN address.
+/// Never a wildcard, never a LAN address.
 #[test]
 fn the_listeners_are_loopback_only_on_one_port() {
     let b = Bench::new();
@@ -492,7 +492,7 @@ fn a_program_reaches_the_server_over_ipv6_loopback() {
 }
 
 /// A port below the ephemeral range, free on both loopback addresses, with the one after it
-/// free too (reference-test-port-races: never one an ephemeral bind can be handed).
+/// free too (never one an ephemeral bind can be handed).
 fn two_free_ports() -> u16 {
     let v6 = TcpListener::bind(("::1", 0)).is_ok();
     for p in (20_000u16..30_000).step_by(37) {
@@ -557,7 +557,7 @@ fn http_status(e: &tungstenite::Error) -> Option<u16> {
     }
 }
 
-/// S-M1: a web page's handshake (it must send `Origin`) is refused, 403, and logged once.
+/// A web page's handshake (it must send `Origin`) is refused, 403, and logged once.
 #[test]
 fn a_handshake_carrying_origin_is_refused_403() {
     let b = Bench::new();
@@ -587,7 +587,7 @@ fn a_handshake_carrying_origin_is_refused_403() {
     assert!(!b.mock.calls().iter().any(|c| matches!(c, Call::Key(..))));
 }
 
-/// S-M2: DNS rebinding. `Host` must name this computer's loopback and the port, once.
+/// DNS rebinding. `Host` must name this computer's loopback and the port, once.
 #[test]
 fn a_handshake_whose_host_is_not_loopback_is_refused_403() {
     let b = Bench::new();
@@ -669,7 +669,7 @@ fn a_request_that_is_not_a_websocket_handshake_is_answered_400() {
     assert!(Client::connect(b.port).is_ok(), "the server still serves");
 }
 
-/// S-M32: the whole handshake must arrive within the deadline, however it trickles in.
+/// The whole handshake must arrive within the deadline, however it trickles in.
 #[test]
 fn a_silent_connection_is_closed_at_the_handshake_deadline() {
     let b = Bench::with(quick());
@@ -716,7 +716,7 @@ fn a_trickled_handshake_is_closed_at_the_deadline() {
     assert!(Client::connect(b.port).is_ok());
 }
 
-/// S-M5: eight programs at once; the ninth is told to come back later.
+/// Eight programs at once; the ninth is told to come back later.
 #[test]
 fn a_ninth_program_is_refused_503() {
     let b = Bench::new();
@@ -738,7 +738,7 @@ fn a_ninth_program_is_refused_503() {
 
 // ── Message bounds ───────────────────────────────────────────────────────────────────────────
 
-/// S-M6: a text message over 16 KiB, and any message over tungstenite's cap, close with 1009.
+/// A text message over 16 KiB, and any message over tungstenite's cap, close with 1009.
 #[test]
 fn a_text_message_over_the_cap_closes_with_1009() {
     let b = Bench::new();
@@ -798,7 +798,7 @@ fn slow(rate: u32, burst: u32) -> Limits {
     }
 }
 
-/// S-M33: commands past the bucket are dropped and counted.
+/// Commands past the bucket are dropped and counted.
 #[test]
 fn commands_over_the_rate_are_dropped_and_counted() {
     let b = Bench::with(slow(20, 10));
@@ -939,6 +939,226 @@ fn a_program_holding_a_key_is_ended_sooner_when_it_goes_silent() {
     );
 }
 
+/// The writer's side: a program that takes what the server sends a few bytes at a time, and the
+/// control, one that takes it at once through the same buffers. Linux only: they make the server's
+/// send buffer small through the kernel's own sizing of it ([`SMALL_MSS`]), which other systems do
+/// their own way.
+#[cfg(target_os = "linux")]
+mod slow_readers {
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    use super::*;
+    use crate::tci::server::conn::WRITE_STALL;
+
+    /// The MSS a program with small buffers announces. Linux sizes the server's send buffer for
+    /// that connection from it, 25,600 bytes on this box where loopback's own MSS gives megabytes,
+    /// so one write of the writer's (up to 64 KiB of frames) fills the buffers between the server
+    /// and a program that does not read it.
+    const SMALL_MSS: libc::c_int = 384;
+
+    /// How much of what the server sends a slow program reads at a time, every [`SLOW_GAP`]: in a
+    /// whole [`WRITE_STALL`], about a sixth of one write of the writer's, yet something every time,
+    /// so each write of the socket goes on a little before a timeout on it would end it.
+    const SLOW_READ: usize = 200;
+
+    /// The gap between a slow program's reads.
+    const SLOW_GAP: Duration = Duration::from_millis(100);
+
+    /// How late the farewell may come after the stall: the reader's wake and a margin for a loaded
+    /// box. With a timeout on each write of the socket alone, it never came while the program read
+    /// on.
+    const PAST_THE_STALL: Duration = Duration::from_secs(1);
+
+    /// Receive audio as large as one write of the writer's, in one frame: eight of the largest
+    /// frames a program may stream ([`rx_frame`]) make such a write, but the writer gathers them as
+    /// they come, so its first writes of them can be one frame each. One frame of the same size is
+    /// the first write, from the moment it is sent, and more than the buffers hold.
+    fn one_whole_write() -> Vec<u8> {
+        let mut f = tx_frame(16 * 1024, 16 * 1024);
+        f[24] = 1;
+        f
+    }
+
+    /// The control's receive audio: [`BURST`] frames at a time, one write of the writer's and more
+    /// than the buffers hold, every [`BURST_GAP`].
+    const BURST: usize = 8;
+    const BURST_GAP: Duration = Duration::from_millis(200);
+
+    /// A program's socket with small buffers, connected to the server on `port`: it announces
+    /// [`SMALL_MSS`], and its receive buffer is the smallest the kernel allows.
+    fn small_buffers(port: u16) -> TcpStream {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+            .expect("a socket");
+        socket
+            .set_recv_buffer_size(2048)
+            .expect("a small receive buffer");
+        let mss = SMALL_MSS;
+        // SAFETY: the option's value is a c_int that outlives the call, and its length is given.
+        let set = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::IPPROTO_TCP,
+                libc::TCP_MAXSEG,
+                (&mss as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "TCP_MAXSEG: {}", std::io::Error::last_os_error());
+        socket
+            .connect(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)).into())
+            .expect("connected");
+        socket.into()
+    }
+
+    /// A program over [`small_buffers`] through its init burst, its receive audio started and its
+    /// `tci` key admitted, as WSJT-X's is for an over.
+    fn keyed_through_small_buffers(b: &Bench) -> Client {
+        let mut c = Client::over(small_buffers(b.port), request(b.port))
+            .expect("a handshake the gate takes");
+        c.burst();
+        c.ask("audio_start:0;", "audio_start:0;");
+        c.ask("trx:0,true,tci;", "trx:0,true;");
+        c
+    }
+
+    impl Client {
+        /// The rest of the connection as a program that reads slowly: at most [`SLOW_READ`] bytes
+        /// of what the server sends every [`SLOW_GAP`], below the WebSocket (no frame is whole at
+        /// this pace), counted in `read`, with a command of its own each time so it is never
+        /// silent; until the server ends the connection or `limit` passes.
+        fn read_slowly(mut self, limit: Duration, read: &AtomicUsize) {
+            let mut tcp = self.ws.get_ref().try_clone().expect("a second handle");
+            let mut buf = [0u8; SLOW_READ];
+            let until = Instant::now() + limit;
+            while Instant::now() < until && self.ws.send(Message::text("trx:0;")).is_ok() {
+                let _ = tcp.set_read_timeout(Some(SLOW_GAP));
+                match tcp.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        read.fetch_add(n, Ordering::Relaxed);
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => return,
+                }
+                thread::sleep(SLOW_GAP);
+            }
+        }
+    }
+
+    /// ⭐ A PROGRAM THAT READS SLOWLY CANNOT HOLD OFF ITS FAREWELL: a program holding a `tci` key,
+    /// through small buffers, is sent one write of receive audio, more than the buffers hold, then
+    /// reads [`SLOW_READ`] bytes of it every [`SLOW_GAP`], with a command of its own each time so it
+    /// is never silent. Each write of the socket goes on a little before a timeout on it would end
+    /// it, so with a timeout on each write alone the writer's write lasted as long as the slow read
+    /// went on, and the farewell that ends the program's transmissions never came meanwhile. Each
+    /// write of the writer's has [`WRITE_STALL`] in all: past it the program is taken for gone, its
+    /// transmissions end, and it is closed as lost, as one that stopped reading is.
+    #[test]
+    fn a_program_that_reads_slowly_cannot_hold_off_its_farewell() {
+        let b = Bench::new();
+        let c = keyed_through_small_buffers(&b);
+        let id = b.id(1);
+        let sent = Instant::now();
+        assert!(
+            b.handle.send_rx_audio(id, one_whole_write()),
+            "its audio is started"
+        );
+        let read = Arc::new(AtomicUsize::new(0));
+        let reader = {
+            let read = Arc::clone(&read);
+            thread::spawn(move || c.read_slowly(WRITE_STALL * 3, &read))
+        };
+        let farewell = b.mock.wait_call(WRITE_STALL + PAST_THE_STALL, |call| {
+            *call == Call::Disconnected(id)
+        });
+        let took = sent.elapsed();
+        assert!(
+            farewell.is_some(),
+            "no farewell {took:?} after the audio was sent, the program reading on ({} bytes \
+             read); still served: {:?}",
+            read.load(Ordering::Relaxed),
+            b.handle
+                .programs()
+                .iter()
+                .map(|p| (p.id, p.key))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            took >= WRITE_STALL,
+            "taken for gone after {took:?}, inside the stall"
+        );
+        assert!(
+            b.mock
+                .wait_event(WAIT, |e| *e
+                    == Event::Closed {
+                        client: id,
+                        why: Closed::Lost
+                    })
+                .is_some(),
+            "closed as lost: {:?}",
+            b.mock.events()
+        );
+        wait_gone(&b);
+        assert_eq!(transmit_after_end(&b, id), [], "transmitting after its end");
+        reader.join().expect("the program's reads");
+    }
+
+    /// The control: a program with the same small buffers that reads what it is sent at once
+    /// takes every frame of receive audio sent to it, [`BURST`] at a time every [`BURST_GAP`] for
+    /// longer than [`WRITE_STALL`], and stays. The stall is each write's own, so a program whose
+    /// writes go out is never taken for gone.
+    #[test]
+    fn a_program_that_keeps_up_takes_all_its_audio_and_stays() {
+        let b = Bench::new();
+        let mut c = keyed_through_small_buffers(&b);
+        let id = b.id(1);
+        let sender = {
+            let handle = b.handle.clone();
+            thread::spawn(move || {
+                let started = Instant::now();
+                let mut sent = 0;
+                while started.elapsed() < WRITE_STALL + BURST_GAP * 5 {
+                    for _ in 0..BURST {
+                        sent += usize::from(handle.send_rx_audio(id, rx_frame()));
+                    }
+                    thread::sleep(BURST_GAP);
+                }
+                (sent, started.elapsed())
+            })
+        };
+        let audio = |c: &mut Client| {
+            usize::from(matches!(
+                c.next(Duration::from_millis(100)),
+                Some(Message::Binary(_))
+            ))
+        };
+        let mut got = 0;
+        while !sender.is_finished() {
+            got += audio(&mut c);
+        }
+        let (sent, took) = sender.join().expect("the audio was sent");
+        let until = Instant::now() + WAIT;
+        while got < sent && Instant::now() < until {
+            got += audio(&mut c);
+        }
+        assert!(took > WRITE_STALL, "the audio ran only {took:?}");
+        assert!(
+            !b.mock.calls().contains(&Call::Disconnected(id)),
+            "taken for gone while it kept up: {:?}",
+            b.mock.events()
+        );
+        assert_eq!(got, sent, "every frame reached the program");
+        assert!(c.alive(), "the program is still served");
+        let _ = c.ws.close(None);
+    }
+}
+
 // ── The init burst ───────────────────────────────────────────────────────────────────────────
 
 const BURST: [&str; 31] = [
@@ -975,10 +1195,10 @@ const BURST: [&str; 31] = [
     "start;",
 ];
 
-/// S-M27: design §5, line for line, each line its own WebSocket message, each one the strict
+/// The init burst, line for line, each line its own WebSocket message, each one the strict
 /// validator (eesdr-tci's rules) takes.
 #[test]
-fn the_init_burst_is_design_5_one_command_a_message() {
+fn the_init_burst_is_one_command_a_message() {
     let b = Bench::new();
     let mut c = Client::connect(b.port).expect("handshake");
     let mut got = Vec::new();
@@ -1068,7 +1288,7 @@ fn the_sender_always_gets_its_echo_and_the_others_only_a_change() {
     assert!(b.mock.calls().contains(&Call::SetDial(b.id(1), 14_075_000)));
 }
 
-/// S-M28 at the server: every power and SWR value has a decimal point, even a whole one.
+/// At the server: every power and SWR value has a decimal point, even a whole one.
 #[test]
 fn power_and_swr_carry_a_decimal_point() {
     let b = Bench::new();
@@ -1154,6 +1374,20 @@ fn a_refused_key_answers_trx_false_and_logs_its_gate_once() {
         .calls()
         .contains(&Call::Key(b.id(1), KeyKind::Tci, false)));
     assert_eq!(b.handle.programs()[0].key, None);
+}
+
+/// What "Last refused" and the connection log say when a program's own audio comes before it asked
+/// a voice mode, as the app's hint and the guide say it: the advice whole, and that WSJT-X and
+/// JTDX ask for a mode only when it differs from Nexus's (set to USB on a station already in USB,
+/// they ask for nothing and are refused).
+#[test]
+fn the_voice_mode_refusal_says_some_programs_ask_only_when_the_mode_differs() {
+    assert_eq!(
+        Refusal::VoiceMode.text(),
+        "a program may transmit its own audio only after it asks for a voice mode (USB, LSB, AM or \
+         FM): set the program's Radio mode, or use Nexus for FT8; some programs, WSJT-X and JTDX \
+         among them, ask for their mode only when it differs from Nexus's"
+    );
 }
 
 /// The forms MSHV writes on its first `vfo` (`network.cpp:2482-2491`): none of them arms.
@@ -1250,7 +1484,7 @@ fn keyed(b: &Bench) -> Client {
     c
 }
 
-/// S-M26: a short frame is refused and counted; nothing reaches the backend; the program goes on.
+/// A short frame is refused and counted; nothing reaches the backend; the program goes on.
 #[test]
 fn a_short_binary_frame_is_refused_counted_and_harmless() {
     let b = Bench::new();
@@ -1273,7 +1507,7 @@ fn a_short_binary_frame_is_refused_counted_and_harmless() {
         .is_some());
 }
 
-/// Design §3.1 item 8: transmit audio only from the key holder; others' dropped, never queued.
+/// Transmit audio only from the key holder; others' dropped, never queued.
 #[test]
 fn transmit_audio_from_a_program_without_the_key_is_dropped() {
     let b = Bench::new();
@@ -1381,7 +1615,7 @@ fn chrono() -> Chrono {
     }
 }
 
-/// S-M34 at the server: TX_CHRONO only to the program holding an admitted `tci` key.
+/// At the server: TX_CHRONO only to the program holding an admitted `tci` key.
 #[test]
 fn a_chrono_goes_only_to_the_tci_key_holder() {
     let b = Bench::new();
@@ -1463,7 +1697,7 @@ fn a_program_that_does_not_read_loses_audio_first_and_never_blocks_the_publisher
 
 // ── Ending ───────────────────────────────────────────────────────────────────────────────────
 
-/// Design §3.4: a lost socket ends the program's transmissions, first.
+/// A lost socket ends the program's transmissions, first.
 #[test]
 fn a_lost_socket_ends_the_programs_transmissions() {
     let b = Bench::new();
@@ -1493,7 +1727,7 @@ fn a_lost_socket_ends_the_programs_transmissions() {
     assert!(b.handle.programs().is_empty());
 }
 
-/// Design §3.4: stopping ends every key first, then `trx:0,false;`, then the close. The order is
+/// Stopping ends every key first, then `trx:0,false;`, then the close. The order is
 /// read where it shows: when a program hears `trx:0,false;`, its transmissions have already ended.
 #[test]
 fn stopping_ends_keys_then_tells_trx_false_then_closes() {
@@ -1581,7 +1815,7 @@ fn transmit_after_end(b: &Bench, client: ClientId) -> Vec<Call> {
 
 /// The operator's Disconnect while one of the program's messages is still running: nothing later
 /// in that message reaches the backend, so nothing it sends can transmit once its end began
-/// (security review finding 1).
+/// (found in a security review).
 #[test]
 fn nothing_after_the_operators_disconnect_can_transmit() {
     let b = Bench::new();
@@ -1697,6 +1931,58 @@ fn a_disconnect_waits_for_a_spot_in_flight_and_no_spot_comes_after_it() {
     );
 }
 
+/// A mode ask the backend is taking when the program's end begins: the end waits for the call, then
+/// the backend forgets the ask with the program. The backend keys a program's own audio only after
+/// that program asked a voice mode, and each server numbers its programs from 1 again: an ask kept
+/// past its program's end would stand for the next server's program with that number, which asked
+/// nothing.
+#[test]
+fn a_disconnect_waits_for_a_mode_ask_in_flight_and_then_forgets_it() {
+    let mut b = Bench::new();
+    let mut c = b.client();
+    b.mock.pause_at("set_mode");
+    c.send("modulation:0,usb;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::SetMode(..)))
+        .is_some());
+    let handle = b.handle.clone();
+    let id = b.id(1);
+    let ender = std::thread::spawn(move || handle.disconnect(id));
+    let early = b.mock.wait_call(Duration::from_millis(500), |call| {
+        *call == Call::Disconnected(id)
+    });
+    b.mock.release();
+    ender.join().expect("disconnected");
+    wait_gone(&b);
+    let kept = b.mock.asked(id);
+    // The next server, on the same backend: its first program is program 1 again.
+    b.server.take().expect("running").stop();
+    let next = Server::start(
+        Config {
+            port: 0,
+            limits: Limits::default(),
+        },
+        Arc::clone(&b.mock) as Arc<dyn TciBackend>,
+        snapshot(),
+    )
+    .expect("a loopback port");
+    let mut newcomer = Client::connect(next.port()).expect("a handshake the gate takes");
+    newcomer.burst();
+    let numbered: Vec<ClientId> = next.handle().programs().iter().map(|p| p.id).collect();
+    assert_eq!(numbered, [id], "the next server numbers from 1 again");
+    assert_eq!(
+        (kept, b.mock.asked(id)),
+        (None, None),
+        "the ask kept after its program's end, and for the next program 1, which asked nothing"
+    );
+    assert_eq!(early, None, "ended while its mode ask was in flight");
+    let calls = b.mock.calls();
+    let ask = calls.iter().position(|c| matches!(c, Call::SetMode(..)));
+    let ended = calls.iter().position(|c| *c == Call::Disconnected(id));
+    assert!(ask < ended && ended.is_some(), "{calls:?}");
+}
+
 /// Transmit audio the backend is taking when the program's end begins: the same.
 #[test]
 fn a_disconnect_waits_for_transmit_audio_in_flight() {
@@ -1743,8 +2029,9 @@ fn an_ended_programs_transmit_audio_never_reaches_the_backend() {
     assert_eq!(transmit_after_end(&b, id), []);
 }
 
-/// And the table's half of it: once a program's end has begun, a key, a Tune or CW asks the backend
-/// nothing and is answered nothing.
+/// And the table's half of it: once a program's end has begun, a key, a Tune, CW or a mode ask (the
+/// backend keys a program's own audio only after it asked a voice mode) asks the backend nothing
+/// and is answered nothing.
 #[test]
 fn an_ended_program_asks_the_backend_nothing_that_transmits() {
     for text in [
@@ -1752,6 +2039,7 @@ fn an_ended_program_asks_the_backend_nothing_that_transmits() {
         "trx:0,true;",
         "tune:0,true;",
         "cw_macros:0,CQ;",
+        "modulation:0,usb;",
     ] {
         let mock = Mock::default();
         let model = Mutex::new(snapshot());
@@ -1779,6 +2067,9 @@ fn an_ended_program_asks_the_backend_nothing_that_transmits() {
     let mock = Mock::default();
     let (_, calls, _) = run_one("trx:0,true,tci;", &mock);
     assert_eq!(calls, ["Key(Tci)"]);
+    let mock = Mock::default();
+    let (_, calls, _) = run_one("modulation:0,usb;", &mock);
+    assert_eq!(calls, ["SetMode(usb)"]);
 }
 
 // ── Transmit audio: what a frame claims against what it carries ─────────────────────────────
@@ -1791,7 +2082,7 @@ fn claimed(length: u32, payload: usize) -> Vec<u8> {
     f
 }
 
-/// Security review finding 2: a frame whose `length` and payload disagree is refused, counted, and
+/// Found in a security review: a frame whose `length` and payload disagree is refused, counted, and
 /// never reaches the backend. A claim of 0 (or one too small for its payload) used to pay nothing.
 #[test]
 fn a_transmit_frame_whose_length_and_payload_disagree_is_refused() {
@@ -1867,7 +2158,7 @@ fn the_backend_gets_only_the_values_that_were_paid_for() {
     assert_eq!(got, Some(Call::TxAudio(b.id(1), HEADER_LEN + 2048 * 4)));
 }
 
-// ── S-M23, S-M24: refused outright ──────────────────────────────────────────────────────────
+// ── Refused outright ─────────────────────────────────────────────────────────────────────────
 
 /// A unique directory under the system's temporary one, removed at the end.
 struct TempDir(std::path::PathBuf);
@@ -2011,7 +2302,7 @@ const ARMS: [&str; 23] = [
     "Ignore",
 ];
 
-/// One command per row: what it is (design §3.5), what the backend is asked, and what the program
+/// One command per row: what it is, what the backend is asked, and what the program
 /// that sent it is told. Every arm of the table, each by a command a real client sends.
 struct Row {
     text: &'static str,
@@ -2629,7 +2920,7 @@ fn run_one(text: &str, mock: &Mock) -> (Action, Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn every_arm_of_the_table_does_what_design_3_5_says() {
+fn every_arm_of_the_table_does_what_the_table_says() {
     let mut covered = std::collections::BTreeSet::new();
     for row in ROWS {
         let mock = Mock::default();
@@ -2654,7 +2945,7 @@ fn every_arm_of_the_table_does_what_design_3_5_says() {
 }
 
 /// A refusal from the backend reaches the program as the command's own answer, with the value in
-/// force (design §3.5), and the log names the gate.
+/// force, and the log names the gate.
 #[test]
 fn a_backend_refusal_is_answered_with_the_value_in_force() {
     for (text, set, want) in [

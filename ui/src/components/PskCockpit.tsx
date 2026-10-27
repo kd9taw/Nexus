@@ -17,14 +17,15 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getPskState,
@@ -51,7 +52,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
-import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { useEscStop } from '../useEscStop'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
 import type { MacroEditorFocus } from './MacroEditor'
@@ -66,6 +67,7 @@ import {
   type PskMacroSlot,
   type PskSetId,
 } from '../features/pskMacros'
+import { upperTyped } from '../typedInput'
 
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
@@ -148,7 +150,7 @@ function fmtAfc(hz: number): string {
  *
  * THE STOP LINE census here (all outside every ⊞-removable pane, mirrored in
  * stop-line.test.tsx's PSK case): Stop TX (header, never disabled), the dock's
- * Esc/Stop macro (`disabled={!control || !(sending || latched)}` — live from the instant
+ * Esc/Stop macro (`disabled={!(sending || latched)}` — live from the instant
  * the latch goes up), the TX-enable latch (header arm; `set_tx_enabled(false)`
  * arms `psk_abort` in the engine, so it is a real stop here exactly as in
  * RTTY/SSTV), and Esc (keyboard-only, census-only — bound while this is the
@@ -159,11 +161,8 @@ function fmtAfc(hz: number): string {
  * accumulating while the operator is on another section.
  */
 export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
-  const frequencyControl = useStationCapability('frequency')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
-  const dataAvailable = useStationData()
   const host = panels
-    ? panelHost(panels, { menu: withRecent(withStats(PSK_PANEL_IDS)), side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -185,13 +184,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
-  const [observedState, setPsk] = useState<PskState | null>(null)
-  const psk = control || (dataAvailable && active) ? observedState : null
+  const [psk, setPsk] = useState<PskState | null>(null)
   useEffect(() => {
-    if (!active || (!control && !dataAvailable)) {
-      if (!control) setPsk(null)
-      return
-    }
+    if (!active) return
     // Single-flight (#335): `get_psk_state` takes the engine mutex, so a tick skips while the last
     // read is still out instead of stacking another waiter behind a CAT stall.
     return pollSingleFlight('psk state', 500, (owns) =>
@@ -199,9 +194,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         .then((s) => {
           if (owns()) setPsk(s)
         })
-        .catch(() => { if (owns() && !control) setPsk(null) }),
+        .catch(() => {}),
     )
-  }, [active, control, dataAvailable])
+  }, [active])
 
   // Arm the decoder on ENTERING the view (operator ruling 2026-08-17), so PSK
   // does not open on a dead screen the operator has to notice and fix. Rising
@@ -214,7 +209,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // send behind the engine's gate.
   const autoArmed = useRef(false)
   useEffect(() => {
-    if (!control || !active) {
+    if (!active) {
       autoArmed.current = false
       return
     }
@@ -223,11 +218,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     void pskAutoArm()
       .then((s) => setPsk(s))
       .catch(() => {})
-  }, [active, control])
+  }, [active])
 
   const armed = psk?.armed === true
   const toggleArm = () => {
-    if (!receiverControl) return
     void pskArm(!armed)
       .then(setPsk)
       .catch(() => pushToast(t('psk.arm.failed'), 'error'))
@@ -242,7 +236,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const reverse = psk?.reverse === true
   const mode = PSK_MODE_BY_SLUG[modeSlug] ?? PSK_MODES[0]
   const setMode = (slug: string, rev: boolean) => {
-    if (!receiverControl) return
     void withErrorToast(() => pskSetMode(slug, rev), t('psk.mode.failed')).then((s) => {
       if (s) setPsk(s)
     })
@@ -252,8 +245,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // source the RTTY cockpit uses, filtered to data privileges.
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    if (control) void getLicensedBandPlan('psk').then(setPlan).catch(() => {})
-  }, [control])
+    void getLicensedBandPlan('psk').then(setPlan).catch(() => {})
+  }, [])
 
   // RF POWER, and in PSK31 it is not a convenience control — it is the mode's one
   // operating hazard. A BPSK31 signal is a constant-envelope carrier only while it is
@@ -276,7 +269,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // Commit a typed dial from the shared header readout. An EMPTY band label is
   // not a refusal: listening off the ham bands is first-class (the RTTY rule).
   const commitDial = (mhz: number) => {
-    if (!frequencyControl) return
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
@@ -294,7 +286,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // It answers whether the line went to `psk_send` (true) or was refused here (false), for the
   // editor's Send once, which keeps the operator's draft open when the send was refused.
   const send = (line: string): boolean => {
-    if (!control) return false
     if (!line.trim()) return false
     const mycall = snapRef.current?.mycall?.trim() ?? ''
     if (line.includes('{MYCALL}') && !mycall) {
@@ -318,12 +309,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     return true
   }
   const sendTyped = () => {
-    if (!control) return
     send(text)
     setText('')
   }
   const stop = () => {
-    if (!control) return
     // Stop PSK (abort the over + drop the queue + unkey) AND drop any tune
     // carrier / stray PTT — a true stop-everything, like RTTY's.
     void pskStop()
@@ -379,7 +368,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const latchedRef = useRef(latched)
   latchedRef.current = latched
   const toggleLatch = () => {
-    if (!control) return
     void withErrorToast(() => pskSetLatched(!latched), t('psk.latch.failed')).then((s) => {
       if (s) setPsk(s)
     })
@@ -393,7 +381,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const composeRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
     const el = composeRef.current
-    if (!control || !el || !latched) return
+    if (!el || !latched) return
     const onBeforeInput = (e: Event) => {
       const ev = e as InputEvent
       if (!latchedRef.current) return
@@ -412,7 +400,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     }
     el.addEventListener('beforeinput', onBeforeInput)
     return () => el.removeEventListener('beforeinput', onBeforeInput)
-  }, [latched, control])
+  }, [latched])
 
   // --- THE F1–F8 MACROS (#316) ------------------------------------------------------------
   // Two built-in sets, Everyday and Contest, with the operator's saved keys folded over them
@@ -437,7 +425,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const [savingMacros, setSavingMacros] = useState(false)
   const dockRef = useRef<HTMLDivElement | null>(null)
   const openEditor = (key: PskMacroKey, focus: MacroEditorFocus = 'title') => {
-    if (!control) return
     // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
     // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-psk-macro="${key}"]`)
@@ -458,7 +445,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
-    if (!control) return false
     setSavingMacros(true)
     const saved = await withErrorToast(
       () => setPskMacros(profiles, activeSet),
@@ -497,7 +483,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // in the compose bar has always gone on the air exactly as typed, braces and all, and it still
   // does. Only a macro is token-checked, because only a macro's braces were meant as tokens.
   const sendMacro = (slot: PskMacroSlot): boolean => {
-    if (!control || isEmptyPskSlot(slot)) return false
+    if (isEmptyPskSlot(slot)) return false
     // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
     // two Settings fields. Empty outside a contest, so an empty one is "there is none": refused
     // like a missing {CALL}, rather than sent as a message with a hole where the exchange goes.
@@ -570,13 +556,13 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
   // the key's default, as it always did.
-  useEscStop(control && active, () => {
+  useEscStop(active, () => {
     const k = keys.current
     if (k.editorOpen && !k.live) k.closeEditor()
     else stop()
   })
   useEffect(() => {
-    if (!control || !active) return
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
       const k = keys.current
       if (e.key === 'Escape') {
@@ -598,14 +584,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, control])
-  // An editor is operator state for THIS station: a lost control hand closes it.
-  useEffect(() => {
-    if (!control) {
-      setEditing(null)
-      setConfirmSetReset(false)
-    }
-  }, [control])
+  }, [active])
 
   const centerHz = psk?.centerHz ?? 1000
   const text_rx = psk?.text ?? ''
@@ -621,12 +600,16 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           snap={snap}
           onSnap={onSnap}
           power={{
-            value: control ? power : dataAvailable && snap.radio.rfPower != null ? Math.round(snap.radio.rfPower * 100) : null,
+            value: power,
             unit: '%',
             onChange: (pct: number) => {
-              if (!control) return
               setPower(pct)
-              void setRfPower(pct / 100)
+              // A refused level goes back to what the rig reports (Phone's slider says why).
+              void setRfPower(pct / 100).catch((e) => {
+                const rb = snap.radio.rfPower
+                if (rb != null) setPower(Math.round(rb * 100))
+                showWhenDriving(e)
+              })
             },
             label: t('psk.header.power.label'),
             title: t('psk.header.power.title'),
@@ -643,19 +626,17 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   with that module; here they are values. */}
               <span
                 className="cw-mode-badge"
-                title={control || psk ? `${mode.name} — ${mode.hint}` : t('remote.keyboardUnavailable')}
+                title={`${mode.name} — ${mode.hint}`}
               >
-                {control || psk ? `${mode.name} · ${mode.baud} ${BAUD_SYMBOL}` : '—'}
+                {`${mode.name} · ${mode.baud} ${BAUD_SYMBOL}`}
               </span>
               {PSK_MODES.length > 1 ? (
                 <select
-                  disabled={!receiverControl}
                   className="settings-input psk-mode-select"
-                  value={!receiverControl && !psk ? '' : modeSlug}
+                  value={modeSlug}
                   onChange={(e) => setMode(e.target.value, reverse)}
                   aria-label={t('psk.header.mode.aria')}
                 >
-                  {!control && !psk && <option value="">—</option>}
                   {PSK_MODES.map((m) => (
                     <option key={m.slug} value={m.slug} title={m.hint}>
                       {m.name}
@@ -669,7 +650,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   sense. Normal = USB, the Keyboard section's convention. */}
               {modeSlug === 'qpsk31' && (
                 <button
-                  disabled={!receiverControl}
                   type="button"
                   className={`rtty-arm psk-rev${reverse ? ' on' : ''}`}
                   aria-pressed={reverse}
@@ -683,14 +663,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 // ⚠️ NOT MIGRATED, and it is the transmit-path deferral, not an oversight:
                 // this tooltip states what Stop TX does to an over in flight. It moves with
                 // the stop controls, in the transmit-path batch, with the sweeps re-run.
-                <span className="rtty-tx-pill" title={control ? "PSK transmission on the air (Stop TX aborts)" : t('remote.keyboardTxReported')}>
+                <span className="rtty-tx-pill" title="PSK transmission on the air (Stop TX aborts)">
                   {TX_PLATE}
                 </span>
               )}
             </>
           }
           bandControl={
-            control && onSetFrequency ? (
+            onSetFrequency ? (
               <FrequencyControl
                 channels={plan}
                 dialMhz={snap.radio.dialMhz}
@@ -707,8 +687,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               </span>
             )
           }
-          remoteFrequency
-          onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
+          onCommitDial={onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={
@@ -726,12 +705,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           {/* THE ROTOR STRIP, RTTY's placement and wiring (see there): the header's own control
               cluster, `active` because this cockpit stays mounted while hidden, and → CALL at the
               dock's Call box, settled. Its ■ stops the rotator, never a transmission. */}
-          {control || rotatorControl ? <RotorStrip
+          <RotorStrip
             active={active}
             onOpenSettings={onOpenSettings}
             targetCall={settledHisCall || null}
-            onPointAt={rotorPointAt(control)}
-          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+            onPointAt={rotorPointAt()}
+          />
         </CockpitHeader>
       )}
 
@@ -760,8 +739,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           rxOffsetHz={centerHz}
           txOffsetHz={0}
           cursors={[{ hz: centerHz, color: 'var(--rx)', label: 'RX' }]}
-          hint={receiverControl ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
-          onTune={receiverControl ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
+          hint={t('psk.waterfall.hint')}
+          onTune={(hz) => void pskNet(hz).then(setPsk).catch(() => {})}
         />
         {/* `--rtty-wf-h`: PSK's strip rides RTTY's rule (styles.css), and the variable is this
             shell's own, so the one name serves both. */}
@@ -789,12 +768,16 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {snap && (
         <CockpitTxStrip
           radio={snap.radio}
-          onSnap={onSnap}
           onStopTx={stop}
-          onSetTxEnabled={control ? onSetTxEnabled : undefined}
-          onTune={(on) => { if (control) void setTune(on).then((s) => onSnap?.(s)) }}
+          onSetTxEnabled={onSetTxEnabled}
+          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
-            control && void atuTune()
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
@@ -838,7 +821,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             <div className="cw-decode-head">
               <span className="cw-decode-label">{RX_PLATE}</span>
               <button
-                disabled={!receiverControl}
                 type="button"
                 className={`rtty-arm${armed ? ' on' : ''}`}
                 aria-pressed={armed}
@@ -858,11 +840,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               )}
               {armed && (
                 <button
-                  disabled={!receiverControl}
                   type="button"
                   className="rtty-arm"
                   onClick={() => {
-                    if (!receiverControl) return
                     void pskAfcReset()
                       .then(setPsk)
                       .catch(() => {})
@@ -873,10 +853,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 </button>
               )}
               <button
-                disabled={!receiverControl}
                 className="cw-decode-clear"
                 onClick={() => {
-                  if (!receiverControl) return
                   void pskClear()
                     .then(setPsk)
                     .catch(() => {})
@@ -889,9 +867,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 {t('psk.clear.label')}
               </button>
             </div>
-            {!control && (!psk || !armed) && <p className="cw-decode-idle" role="status">
-              {psk ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
-            </p>}
             <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
               {text_rx ? (
                 runs.map((run, i) => (
@@ -901,7 +876,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ))
               ) : (
                 <span className="cw-decode-idle">
-                  {armed ? t('psk.stream.listening') : control ? t('psk.stream.idle') : null}
+                  {armed ? t('psk.stream.listening') : t('psk.stream.idle')}
                 </span>
               )}
             </div>
@@ -968,7 +943,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
           paneRef={logFrameRef}
         >
-          {!control ? null : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {
@@ -980,6 +954,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             // record says which waveform was actually on the air rather than folding QPSK
             // into its BPSK sibling — and a sub-mode added to `pskModes.ts` logs itself.
             mode={mode.name}
+            // The dial plus the centre the decoder is netted on, which is where PSK transmits
+            // (every sub-mode) and what the engine adds for a contest row, so both logs agree.
+            // A station that has not sent its PSK state yet logs the dial.
+            logOffsetHz={psk?.centerHz}
             defaultRst="599"
             // A PSK operator hunts parks like any other HF operator — the park/summit row is
             // part of this exchange (the satellite exchange is the only one it is not).
@@ -1015,11 +993,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             fdMode="DIG"
             fdSubmode={mode.name}
           />
-          )}
           {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
               last few contacts, a row a click into the Logbook's editor. It takes only the room the form
               leaves. No stop control, nothing sent. */}
-          {shown('recent') && statsHere() && (
+          {shown('recent') && (
             <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
           )}
         </CockpitPaneFrame>
@@ -1029,7 +1006,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           there. A third frame, content-height, so it takes from the two above only what it shows;
           it ships hidden here, where the two are already short of room at the supported floor
           (the measured table above), one tick away in ⊞ Panels. No stop control, nothing sent. */}
-      {snap && shown('stats') && statsHere() && (
+      {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={mode.name} logTick={snap.logTick} />
       )}
 
@@ -1042,12 +1019,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
 
           THE CONTINUOUS-TX (TX) BUTTON IS A SENDER, NOT A STOP — RTTY's ruling verbatim:
           clicking it off lets what was typed finish keying. The immediate cuts each also
-          drop the latch: Stop TX, the Esc/Stop macro (disabled={!control || !(sending || latched)},
+          drop the latch: Stop TX, the Esc/Stop macro (disabled={!(sending || latched)},
           live from the instant the latch goes up), the TX-enable latch, and Esc
           (keyboard-only, census-only). A FIFTH stop reaches a latched over with no
           control pressed: the engine's per-tick gate re-check, which unkeys within one
           tick on a section change, a QSY out of privileges, a tune, or a radio handoff. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`} ref={dockRef}>
+      <div className="cockpit-txdock" ref={dockRef}>
       {/* THE KEYS AND THE FIXED ROW, which share one line where the dock is wide enough for
           both and fold into two where it is not. RTTY's `.rtty-dock-keys` structure and its
           class names verbatim — the eight-key row was measured in a real browser there, and
@@ -1062,7 +1039,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           <PskMacroButton
             key={slot.key}
             slot={slot}
-            control={control}
             editing={editing === slot.key}
             title={macroTitle(slot.text)}
             onSend={() => sendMacro(slot)}
@@ -1075,10 +1051,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
       <div className="rtty-dock-row psk-dock-row">
         <input
-          disabled={!control}
           className="settings-input rtty-hiscall"
           value={hisCall}
-          onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+          onChange={(e) => setHisCall(upperTyped(e.target))}
           placeholder={t('psk.hisCall.placeholder')}
           aria-label={t('psk.hisCall.aria')}
           autoComplete="off"
@@ -1086,7 +1061,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         />
         <PskMacroSetSwitch
           set={macroSet}
-          control={control}
           customized={slots.some((s) => s.custom)}
           confirming={confirmSetReset}
           onConfirming={setConfirmSetReset}
@@ -1097,19 +1071,18 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             tooltip is the wording that states what clicking it off does NOT do (it lets
             what was typed finish keying). Label and tooltips move with the stop line. */}
         <button
-          disabled={!control}
           type="button"
           className={`cw-macro rtty-tx-latch psk-tx-latch${latched ? ' on' : ''}`}
           aria-pressed={latched}
           onClick={toggleLatch}
           title={
-            !control ? t('remote.applicationObserver') : latched
+            latched
               ? 'Continuous TX ON — the transmitter stays keyed and idles on PSK reversals; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
               : 'Continuous TX — key up and stay keyed, then type into the live transmission (the classic PSK31 ragchew flow), instead of pressing Enter for every line'
           }
         >
           <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? control ? 'On air' : t('remote.keyboardLatched') : 'Continuous'}</span>
+          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
         </button>
         {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
             ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
@@ -1121,7 +1094,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
           // the PSK stop-line census, and it must be live from the instant the
           // latch goes up, before the first chunk is keyed.
-          disabled={!control || !(sending || latched)}
+          disabled={!(sending || latched)}
           title="Stop PSK — abort the transmission in progress, drop anything queued, unkey"
         >
           <span className="cw-macro-key">Esc</span>
@@ -1133,7 +1106,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
           moves and covers no control in the dock; non-modal, so Stop TX in the TX strip stays one
           click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
-      {control && editing && (
+      {editing && (
         <PskMacroEditor
           key={editing}
           slot={slots.find((s) => s.key === editing)!}
@@ -1151,7 +1124,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
 
       <div className="cw-send">
         <input
-          disabled={!control}
           ref={composeRef}
           className="settings-input cw-type"
           value={text}
@@ -1159,7 +1131,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             if (!latched) setText(e.target.value)
           }}
           onKeyDown={(e) => {
-            if (!control || e.key !== 'Enter') return
+            if (e.key !== 'Enter') return
             e.preventDefault()
             if (latched) {
               // Latched, Enter is a NEW LINE on the air (CR LF — both are in
@@ -1183,7 +1155,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           type="button"
           className="cw-send-btn"
           onClick={sendTyped}
-          disabled={!control || latched || !text.trim()}
+          disabled={latched || !text.trim()}
         >
           {t('psk.compose.send.label')}
         </button>

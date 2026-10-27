@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import type { LoggedQso } from '../types'
 import { modeKey } from './callHistory'
-import { defaultAsc, logOrder, matchesLogQuery, type LogQuery, type LogSortKey } from './logQuery'
+import { defaultAsc, logOrder, matchesLogQuery, type LogQuery } from './logQuery'
 
 // ---- ORACLE: Logbook.tsx at d5be14ea, verbatim (hooks unwrapped to plain functions) ----
 function fmtUtc(whenUnix: number): string {
@@ -79,10 +79,11 @@ function ORACLE(log: LoggedQso[], deferredSearch: string, needsConfirmOnly: bool
 const FIXTURE = JSON.parse(
   readFileSync(new URL('./__fixtures__/log-query/log.json', import.meta.url), 'utf8'),
 ) as LoggedQso[]
-const SORTS: LogSortKey[] = ['call', 'country', 'band', 'freq', 'mode', 'sent', 'rcvd', 'time', 'park', 'qsl']
+// The columns the oracle knows; the keys added since have no pre-move code to agree with.
+const SORTS: SortKey[] = ['call', 'country', 'band', 'freq', 'mode', 'sent', 'rcvd', 'time', 'park', 'qsl']
 const SEARCHES = ['', 'k1a', 'dl', 'jo31', '2024-05', 'z', 'ssb', 'usb', '09-19', '14:2', '20m', ' W1 ', 'åland', 'ß', 'ſ', 'I', 'ı']
 
-function agree(log: LoggedQso[], query: LogQuery): void {
+function agree(log: LoggedQso[], query: LogQuery & { sort: SortKey }): void {
   const want = ORACLE(log, query.search, query.needsConfirmOnly, query.sort, query.asc).map(({ i }) => i)
   expect(logOrder(log, query), JSON.stringify(query)).toEqual(want)
 }
@@ -133,7 +134,7 @@ describe('logOrder is the Logbook’s own order, moved', () => {
     for (let seed = 1; seed <= 400; seed++) {
       const log = randomLog(seed, 1 + (seed % 60))
       const r = rng(seed * 7)
-      const query: LogQuery = {
+      const query: LogQuery & { sort: SortKey } = {
         sort: SORTS[Math.floor(r() * SORTS.length)],
         asc: r() < 0.5,
         search: SEARCHES[Math.floor(r() * SEARCHES.length)],

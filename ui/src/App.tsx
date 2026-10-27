@@ -17,6 +17,7 @@ import {
   getBandPlan,
   getFdRuleset,
   getSettings,
+  setLogbookColumns,
   logOperators,
   getSnapshot,
   type FdRulesetDto,
@@ -42,6 +43,7 @@ import {
   setActiveRadio as apiSetActiveRadio,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
+  atuBypass as apiAtuBypass,
   atuTune as apiAtuTune,
   haltTx as apiHaltTx,
   setTxEven as apiSetTxEven,
@@ -52,12 +54,14 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
+import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { flexVoiceNeedsDax } from './features/flexDaxNote'
+import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
-import { doubleBeep, processDecodes, txEarcon } from './alerts'
+import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
 import { Announcer } from './components/Announcer'
@@ -84,8 +88,7 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
-import { useAlertGeoScope } from './features/alertGeoScope'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
@@ -96,6 +99,7 @@ import type { BoxSource, RailLink } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from './features/paneSeam'
 import { TopBar } from './components/TopBar'
 import { StationList, type StationFilter } from './components/StationList'
 import { Conversation } from './components/Conversation'
@@ -116,6 +120,7 @@ import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
 import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
+import { JttyCockpit } from './components/JttyCockpit'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
@@ -135,6 +140,7 @@ import {
   clickTciSpot,
   getSatSchedule,
   getSatTrackStatus,
+  getSatTransponder,
   getIssPass,
   getTleStatus,
   sstvArm,
@@ -160,7 +166,6 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
-  getOtaMapSpots,
   focusWindow,
 } from './api'
 import {
@@ -174,7 +179,6 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
-import { processPotaAlert } from './features/potaAlert'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -191,6 +195,8 @@ import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
+import { heldLine, txOnHeldLane } from './features/txOnHeld'
+import { drivesAnotherStation } from './features/durableStore'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
 import { useTciSpots } from './features/tciSpots'
@@ -202,6 +208,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
+import { CONTEST_SETUP_SAVED_EVENT } from './components/ContestSetupWizard'
 import { ContestLargeEntry } from './components/ContestLogger'
 import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
@@ -222,11 +229,13 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
+import { useStationAlerts } from './useStationAlerts'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
+import { CallCardHost } from './components/CallCard'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -297,8 +306,19 @@ const OPERATE_TIERS: Tier[] = [
 /** The screens whose Esc App binds to the top bar's halt while one is on show (see the listener in
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
- *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
-const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats', 'connect'])
+ *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
+const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
+/** The screen of each section the station reports (`radio.operatingMode`), for a computer driving
+ *  it to follow. 'keyboard' is PSK's screen, the section's own landing; 'jtty' is the Keyboard
+ *  section while the station names JTTY as its modem (`radio.keyboardMode`). */
+const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
+  digital: 'operate',
+  phone: 'phone',
+  cw: 'cw',
+  rtty: 'rtty',
+  keyboard: 'psk',
+  jtty: 'jtty',
+}
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
   // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
@@ -341,9 +361,11 @@ function App() {
   useAchievements(features.isOn('gamification'))
   useJourneyUnlocks(features.isOn('gamification'))
   const reveal = useReveals(features)
-  // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
+  // First-run setup wizard (goal-driven). Only on a genuinely fresh install, and never by itself on a
+  // computer driving another station: it sets up a station, and there every setting it edits is the
+  // station's, while "fresh" is read from this computer's own storage. Settings still offers it.
   const [showWizard, setShowWizard] = useState<boolean>(
-    () => features.firstRun && storageWritable() && !wizardSeen(),
+    () => !drivesAnotherStation() && features.firstRun && storageWritable() && !wizardSeen(),
   )
   // Getting started guide — Help ▸ Getting started, and the wizard's optional
   // walkthrough offer. Pure documentation: it writes nothing and is never
@@ -455,8 +477,9 @@ function App() {
   // whole reasoning; do not merge these back together.
   const lastOpModeRef = useRef<RigMode>('digital')
   const lastHomedModeRef = useRef<RigMode>('digital')
-  // The cockpit a Work from afar opened, named by the work-hint follow below for the rig-mode effect
-  // alone. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
+  // A screen entered without asserting its section, named for the rig-mode effect alone: the screen
+  // a computer driving a station follows it to, or goes back to when the station refuses a section
+  // change (both below), and the cockpit a Work from afar opened, named by the work-hint follow below. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
   // arming Enable TX, and the effect's re-assert, from this screen, would arm the latch for Phone,
   // CW, RTTY and PSK: the authority the Work withheld. Read and cleared on every run, so it holds
   // back only the one entry it names.
@@ -510,6 +533,8 @@ function App() {
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
     // re-arms an immediate retune, so re-asserting is cheap.
+    const prevOp = lastOpModeRef.current
+    const prevHomed = lastHomedModeRef.current
     const { mode, followFreq, keepDial, nextHomed } = rigModeTransition(view, lastHomedModeRef.current, from)
     lastHomedModeRef.current = nextHomed
     if (!mode) return
@@ -519,7 +544,18 @@ function App() {
     if (fromAfar) return
     void setOperatingMode(mode, followFreq, keepDial)
       .then((s) => s && setSnap(s))
-      .catch(() => {})
+      .catch((why) => {
+        // At the station a refusal stays quiet, as it always has. A computer driving a station
+        // says why, and goes back to the screen it came from, which is still the station's
+        // section; the way back sends nothing (`afarEntryRef`).
+        if (!drivesAnotherStation()) return
+        pushToast(String(why), 'error')
+        if (viewRef.current !== view) return
+        lastOpModeRef.current = prevOp
+        lastHomedModeRef.current = prevHomed
+        afarEntryRef.current = from
+        setView(from)
+      })
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
@@ -572,16 +608,20 @@ function App() {
   const rttyPanels = usePanelLayout(RTTY_PANELS)
   const pskPanels = usePanelLayout(PSK_PANELS)
   const js8Panels = usePanelLayout(JS8_PANELS)
+  const jttyPanels = usePanelLayout(JTTY_PANELS)
 
   // Operate MODE: 'dx' (FT8/FT4 structured cockpit) or 'msg' (Tempo two-way
   // calling). The FT8/FT4 ⇄ Tempo switch binds the radio tier+mode and swaps only
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
+  // Tempo's full-width waterfall strip (2026-10-26), the box its height divider sizes.
+  const tempoWfRef = useRef<HTMLDivElement>(null)
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
       // FT8/FT4 (Connect is now a global view).
-      return coerceArea(localStorage.getItem('nexus.workspace'))
+      // …and opens a remembered Tempo mode on FT while Tempo is switched off (#402).
+      return coerceArea(localStorage.getItem('nexus.workspace'), features.enabled.chat !== false)
     } catch {
       return 'dx' /* unreadable storage */
     }
@@ -598,6 +638,23 @@ function App() {
       area === 'msg' && v === 'operate' ? 'chat' : area === 'dx' && v === 'chat' ? 'operate' : v,
     )
   }, [snap, area])
+
+  // #402: Tempo switched off in Settings ▸ Features while it is the mode takes the station to FT8/FT4
+  // (as on the next start), without moving the operator off the screen they are on: its rail item is
+  // gone, so a Tempo mode would have no way back. The screen itself falls back by `effectiveView`.
+  const tempoOn = features.enabled.chat !== false
+  useEffect(() => {
+    if (tempoOn || area !== 'msg') return
+    setArea('dx')
+    try {
+      localStorage.setItem('nexus.workspace', 'dx')
+    } catch {
+      /* ignore */
+    }
+    void withErrorToast(() => apiSetArea('dx'), t('shell.error.switchMode')).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [tempoOn, area])
 
   // Pop the Needed board out into its own window at launch — but honor the
   // operator's persisted choice (the board previously force-opened EVERY start
@@ -767,6 +824,15 @@ function App() {
     setStatus('clockRepairHold', clockRepairHoldLane(snap?.radio.clockRepairTxHeld))
   }, [snap?.radio.clockRepairTxHeld])
 
+  // A TX On refused because a newly signed-in device that is not yet approved controls the station:
+  // the latch stays dark, so the lane says why while the hold stands — where to approve it at the
+  // shack, that this device must be approved on a computer driving the station. Rebuilt as the
+  // remote PC's words for the hold change too (the minutes left, the owner told), not every second.
+  const txHoldLine = heldLine(snap?.radio.txHold)
+  useEffect(() => {
+    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation(), snap?.radio.txHold))
+  }, [snap?.radio.txOnHeld, txHoldLine])
+
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —
   // the operator SEES every upload land (or fail) regardless of which path
@@ -811,6 +877,10 @@ function App() {
       pushToast(keptFileMessage(file), 'error', 0)
     }
   }, [snap?.keptFiles])
+
+  // The activation said where the operator is, not on the POTA/SOTA view alone: one taken up at
+  // launch, and the 0000Z rollover.
+  useActivationNotices(snap?.activation)
 
   // The logbook database refused a change (C10b). The station keeps it in memory — sending it
   // again while the refusal can pass, holding it for the quit when it cannot — and the screen
@@ -914,8 +984,10 @@ function App() {
               (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
             )
           if (settingsRef.current?.issSstvAutoArm === true) {
-            getIssPass()
-              .then((issPass) =>
+            // A satellite pass holding the dial (a transponder held) has the radio as another
+            // screen has it: the tick only announces the ISS. A failed read is no hold, as before.
+            Promise.all([getIssPass(), getSatTransponder().catch(() => null)])
+              .then(([issPass, held]) =>
                 tickIssAutoArm(
                   issPass,
                   snapRef.current?.radio,
@@ -924,6 +996,7 @@ function App() {
                   Date.now() / 1000,
                   viewRef.current,
                   soleRadio(),
+                  held != null,
                 ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
@@ -1136,9 +1209,10 @@ function App() {
   const cwEnabled = features.isOn('cw')
   const phoneEnabled = features.isOn('phone')
   const rttyEnabled = features.isOn('rtty')
-  // A Needed row heard in JS8 or a PSK mode opens that screen only while it is on (`ownScreen`).
+  // A Needed row heard in JS8, JTTY or a PSK mode opens that screen only while it is on (`ownScreen`).
   const pskEnabled = features.isOn('psk')
   const js8Enabled = features.isOn('js8')
+  const jttyEnabled = features.isOn('jtty')
   // Work-a-spot navigation: whenever a spot is worked — from THIS window's
   // boards or a pop-out (which can't navigate the main window itself) — follow
   // to the matching cockpit (the operator's report: "if I click a contact, it
@@ -1165,6 +1239,7 @@ function App() {
       (target === 'phone' && !phoneEnabled) ||
       (target === 'rtty' && !rttyEnabled) ||
       (target === 'psk' && !pskEnabled) ||
+      (target === 'jtty' && !jttyEnabled) ||
       (target === 'js8' && !js8Enabled)
     )
       return
@@ -1188,7 +1263,34 @@ function App() {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled])
+  // A COMPUTER DRIVING A STATION SHOWS THE STATION'S SECTION. The screen restored at launch is this
+  // computer's last, and the station may be in another section: Phone drawn over a station in FT8
+  // sent its band picks as phone bands to the digital section, and the rig came up in DATA. So on
+  // an operating screen the view follows the section the station reports, READ-ONLY: nothing is
+  // sent, on connect or after, and a station running FT8 is never moved by a computer connecting.
+  // Keyed on the station's value alone, so the operator's own pick (sent by the rig-mode effect)
+  // is never pulled back by a snapshot taken before the station answered it. A screen with no
+  // section of its own (Map, Logbook…) stays put, as does a section whose screen is switched off.
+  // PSK and JTTY are one section, so in it the screen is the modem the station names on the air
+  // (`keyboardMode`). A station too old to name it reports the section alone, where either keyboard
+  // screen is the station's and a screen from elsewhere lands on PSK's, as before.
+  const stationSection = snap?.radio.operatingMode
+  const stationModem = stationSection === 'keyboard' ? snap?.radio.keyboardMode : undefined
+  const stationScreen = stationModem === 'JTTY' ? 'jtty' : stationSection
+  useEffect(() => {
+    if (!drivesAnotherStation() || !stationScreen) return
+    const own = RIG_MODE_BY_VIEW[viewRef.current]
+    if (!own) return
+    if (own === stationScreen || (!stationModem && own === 'jtty' && stationScreen === 'keyboard')) return
+    const target = SCREEN_BY_SECTION[stationScreen]
+    if (!target || !features.isOn(target)) return
+    lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
+    lastHomedModeRef.current = lastOpModeRef.current
+    afarEntryRef.current = target
+    setView(target)
+    // The station's section alone: a re-run on the screen changing would pull the operator's pick back.
+  }, [stationScreen])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -1197,6 +1299,10 @@ function App() {
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
+  // #321: and how long they stay, at least. Absent is 0, each pop-up's own time.
+  useEffect(() => {
+    setPopupMinSeconds(settings?.popupMinSecs ?? 0)
+  }, [settings?.popupMinSecs])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —
@@ -1228,7 +1334,6 @@ function App() {
   )
   // The operator's GEOGRAPHIC alert scope (#174), resolved to cty.dat entity names. Null until
   // they tick something, and the decode alerter treats null as "alert on everything".
-  const alertGeoScope = useAlertGeoScope(settings?.alertContinents, settings?.alertEntities)
   // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
   const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
@@ -1288,29 +1393,9 @@ function App() {
   }, [settings?.operatingMode])
   // Ding/dong when the dial crosses your TX privileges (default on).
   useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
-  // Audible new-POTA-activation alert (opt-in, potaAlert.ts owns the dedup/priming): a poll of
-  // its own so the alert reaches the operator whether or not the map's pop-out is open — today
-  // MapView is the ONLY caller of get_ota_map_spots, and that poll dies with the pop-out.
-  // Gated on the setting itself (not just the alert inside it): an operator with this off pays
-  // no interval and no IPC, same politeness rule the map's own Parks layer follows — the backend
-  // serves both from one 120 s cache (OTA_MAP_TTL_SECS), so this poll costs nothing extra to run
-  // alongside the map or the POTA/SOTA board.
-  useEffect(() => {
-    if (!settings?.potaNewActivationAlert) return
-    let live = true
-    const load = () =>
-      getOtaMapSpots()
-        .then((spots) => live && processPotaAlert(spots))
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 120_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [settings?.potaNewActivationAlert])
-  // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
-  // edits it (it dispatches `nexus:watchlist-changed`), so alerts pick up changes live.
+  // User watch list (localStorage) — sent to the station, whose alerts and Needed board read it.
+  // Re-synced when the manager edits it (it dispatches `nexus:watchlist-changed`), so the station
+  // picks up changes live.
   const [watchlist, setWatchlist] = useState<WatchFilter[]>(() => loadWatchlist())
   useEffect(() => {
     const resync = () => setWatchlist(loadWatchlist())
@@ -1323,13 +1408,13 @@ function App() {
     void foldRetiredWantedList()
   }, [])
   // The station puts the watch list's stations first on the Needed board (operator, 2026-09-24:
-  // "watched counts as needed") — so it is sent the list on
-  // launch and after every edit, and the board is read again. One send at a time, in order: the
-  // station keeps whichever list reaches it last, so an earlier send finishing late would restore
-  // an entry the operator has just removed.
+  // "watched counts as needed") and raises its alerts, gates and label with them — so it is sent
+  // the list on launch and after every edit, and the board is read again. One send at a time, in
+  // order: the station keeps whichever list reaches it last, so an earlier send finishing late
+  // would restore an entry the operator has just removed.
   const watchSent = useRef<Promise<unknown>>(Promise.resolve())
   useEffect(() => {
-    const entries = watchlist.map(({ kind, value }) => ({ kind, value }))
+    const entries = watchlist.map(({ id, kind, value, cqOnly, minSnr, label }) => ({ id, kind, value, cqOnly, minSnr, label }))
     watchSent.current = watchSent.current.then(() => setWatchList(entries)).then(refreshNeeds, () => {})
   }, [watchlist, refreshNeeds])
   const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
@@ -1550,41 +1635,31 @@ function App() {
   // it is why Work started the QSO but left the markers behind while the other two panes
   // moved them: one gesture, three behaviours in one cockpit (#183, against 1.7.0–1.9.0).
   // An adapter is what made the drop possible, so the fix is to not have one.
-  // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
-  // user's alert settings. processDecodes dedups internally. The third arg makes each
-  // alert toast click-to-work — working the station is what you almost always want next
-  // (someone calling you, a new DXCC/grid, a CQ). Placed AFTER handleCall so it's in scope.
-  // The QSO context keeps popups quiet while actively working someone / running CQ.
-  useEffect(() => {
-    if (!snap || !settings) return
-    const dxcall = snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null
-    // Keep the chase-alert suppression in sync (the prop poller reads the ref).
-    qsoPartnerRef.current = dxcall
-    // Latest tier for the rail's Digital button (preserve FT4 across nav).
-    tierRef.current = snap.link.tier
-    processDecodes(
-      snap.recentDecodes,
-      settings,
-      (d) => {
+  // The station's decode alerts (someone calling you, a new DXCC/grid, a watch-list station, a CQ,
+  // a park on the air): the station decides them and raises each once; this window shows them. The
+  // toast's button works the station — what you almost always want next — exactly as double-
+  // clicking its decode row does. Placed AFTER handleCall so it's in scope.
+  useStationAlerts(
+    useCallback(
+      (a: NeededAlert) => {
         // Pass the decode's TIER — without it an FT1/Tempo decode alert ran the FT8
         // call sequence (the "Work on FT1 wrongly switches to FT8" bug); handleCall
         // routes chat tiers to the Tempo conversation instead.
-        if (d.from) handleCall(d.from, undefined, d.message, d.snr, d.freqHz, d.tier)
+        if (a.call && a.work) handleCall(a.call, undefined, a.work.message, a.work.snr, a.work.freqHz, a.work.tier)
       },
-      // Field Day runs its own sequencer (snap.qso is null there) — its state
-      // strings (CallingCq/AwaitExchange/AwaitConfirm/Done) gate identically.
-      {
-        state: snap.fieldDay?.state ?? snap.qso?.state ?? null,
-        dxcall,
-      },
-      watchlist,
-      // Current dial for the per-alert band scopes (grid alerts default to VHF+ only).
-      snap.radio.dialMhz > 0 ? snap.radio.dialMhz : undefined,
-      // The operator's geographic scope (#174) — null while nothing is ticked, which is the
-      // shipped default and leaves every alert exactly as it was.
-      alertGeoScope,
-    )
-  }, [snap, settings, handleCall, watchlist, alertGeoScope])
+      [handleCall],
+    ),
+  )
+  // The eyes-free cues of each new look at the decode window (the decode tick, the spoken batch
+  // summary), and the refs the rest of the app reads off the snapshot.
+  useEffect(() => {
+    if (!snap || !settings) return
+    // Keep the chase-alert suppression in sync (the prop poller reads the ref).
+    qsoPartnerRef.current = snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null
+    // Latest tier for the rail's Digital button (preserve FT4 across nav).
+    tierRef.current = snap.link.tier
+    processDecodes(snap.recentDecodes, settings)
+  }, [snap, settings])
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).
@@ -1863,6 +1938,12 @@ function App() {
       .then((s) => setSnap(s))
       .catch((e) => pushToast(String(e), 'error'))
   }, [])
+  // The click on ATU ON (#344): the tuner out of line. Keys nothing; refused on the air.
+  const handleAtuBypass = useCallback(() => {
+    void apiAtuBypass()
+      .then((s) => setSnap(s))
+      .catch((e) => pushToast(String(e), 'error'))
+  }, [])
 
   // Prove-TX-path: key the tune carrier for ~2.5 s then auto-drop — a BOUNDED transmit that lets the
   // operator verify CAT→PTT→RF (forward power registers). Always invoked from behind a confirm
@@ -1901,7 +1982,7 @@ function App() {
   // WSJT-X Tx-slot click (Tx1–Tx5 buttons / Alt+N): force the row's text as the
   // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
   // applying the returned snapshot makes the Tx panel's "next" dot land at once.
-  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => {
+  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
@@ -1910,7 +1991,7 @@ function App() {
       return
     }
     void withErrorToast(
-      () => apiOverrideNextTx(call, grid, text, expectedQso),
+      () => apiOverrideNextTx(call, grid, text),
       t('shell.overrideTx.failed', { call }),
     ).then((s) => {
       if (s) setSnap(s)
@@ -1918,24 +1999,24 @@ function App() {
   }, [])
 
   const handleSetTxEven = useCallback((even: boolean) => {
-    void withErrorToast(() => apiSetTxEven(even, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.txPeriod.failed')).then((s) => {
+    void withErrorToast(() => apiSetTxEven(even), t('shell.txPeriod.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [snap])
+  }, [])
 
   const handleSetTxCycleAuto = useCallback((auto: boolean) => {
-    void withErrorToast(() => apiSetTxCycleAuto(auto, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.cycleMode.failed')).then(
+    void withErrorToast(() => apiSetTxCycleAuto(auto), t('shell.cycleMode.failed')).then(
       (s) => {
         if (s) setSnap(s)
       },
     )
-  }, [snap])
+  }, [])
 
   const handleSetHoldTxFreq = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetHoldTxFreq(on, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.holdTx.failed')).then((s) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on), t('shell.holdTx.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [snap])
+  }, [])
 
   // Waterfall click: left-click sets RX only; shift/right-click sets TX;
   // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
@@ -2161,11 +2242,11 @@ function App() {
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     async (alert: NeedAlert) => {
-      // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+      // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it is
       // switched on, at the row's own frequency or that screen's channel for the band.
       const screen = ownScreen(alert)
       let own: OwnScreen | null = null
-      if (screen && (screen === 'js8' ? js8Enabled : pskEnabled)) {
+      if (screen && (screen === 'js8' ? js8Enabled : screen === 'jtty' ? jttyEnabled : pskEnabled)) {
         const plan = await withErrorToast(
           () => getLicensedBandPlan(screen),
           t('shell.work.failed.cat', { call: alert.call }),
@@ -2192,9 +2273,8 @@ function App() {
       // hours (HUNT_TTL_SECS), and only that view could end it. A row with no log line to fill
       // (FT8/FT4 logs from the engine, RTTY's cockpit takes no handoff, a switched-off cockpit is
       // never opened) still tags the hunt before the QSY, the map's setHuntTarget-then-QSY order:
-      // that is the only way its park reaches the contact. Native only: a browser's hunt is a
-      // station change under the logging grant (RemoteOta's own path), not this command, and a
-      // browser's Work never carried a park.
+      // that is the only way its park reaches the contact. Native only: a browser's Work never
+      // carried a park.
       //
       // AFTER that bail-out, never before it. `workTarget` is null only when the row has no
       // frequency of its own, no mode default AND no band-plan channel — and `handleQsy` reads
@@ -2288,7 +2368,7 @@ function App() {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -2434,8 +2514,8 @@ function App() {
       .catch(() => {})
   }, [])
 
-  const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
-    return withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
+  const handleSetMode = useCallback((mode: ModeRequest) => {
+    return withErrorToast(() => apiSetMode(mode), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
       // A contest that starts about to send the DX exchange from a US or Canadian call says so,
       // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
@@ -2444,21 +2524,20 @@ function App() {
     })
   }, [])
 
-  const handleQsoResend = useCallback((expectedQso?: import('./types').QsoStatus | null) => {
-    void withErrorToast(() => apiQsoResend(expectedQso), t('shell.resend.qso.failed')).then((s) => {
+  const handleQsoResend = useCallback(() => {
+    void withErrorToast(() => apiQsoResend(), t('shell.resend.qso.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoFreetext = useCallback((text: string, expectedQso?: import('./types').QsoStatus | null) => {
-    return withErrorToast(() => apiQsoFreetext(text, expectedQso), t('shell.freetext.failed')).then((s) => {
+  const handleQsoFreetext = useCallback((text: string) => {
+    void withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
-      return !!s
     })
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso({ expectedKey: snap?.currentQsoLogKey, expectedTier: snap?.link.tier, expectedQso: snap?.qso }), t('shell.log.failed')).then((r) => {
+    void withErrorToast(() => apiLogCurrentQso(), t('shell.log.failed')).then((r) => {
       if (r) {
         setSnap(r.snapshot)
         // The engine's verdict, not the call returning (#100): every false is a deliberate
@@ -2474,7 +2553,7 @@ function App() {
         }
       }
     })
-  }, [refreshNeeds, snap?.currentQsoLogKey, snap?.link.tier, snap?.qso])
+  }, [refreshNeeds])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI
@@ -2600,6 +2679,13 @@ function App() {
         setView(m)
         return
       }
+      if (m === 'jtty') {
+        // Navigate; the [view] rig-mode effect asserts the Keyboard section with JTTY as its modem
+        // ('jtty', rigModeForView) and re-homes to the band's JTTY frequency on a genuine change —
+        // PSK ⇄ JTTY included. The cockpit auto-arms its RX decoder on entry. Nothing keys.
+        setView(m)
+        return
+      }
       if (m === 'js8') {
         // Navigate; the [view] rig-mode effect asserts DATA and re-homes (rigModeForView), and
         // the cockpit's rising `active` edge calls `js8_enter` — set_tier(JS8) + the JS8
@@ -2670,6 +2756,13 @@ function App() {
     reloadSettings()
     setSettingsSaves((n) => n + 1)
   }, [reloadSettings])
+
+  // The contest setup saves from wherever it is opened (the Contests pane has no line to App of its
+  // own), and says so on this window: read the settings and the snapshot again, as after a Save.
+  useEffect(() => {
+    window.addEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
+    return () => window.removeEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
+  }, [handleSettingsSaved])
 
   const handleDismissOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARD_KEY, '1')
@@ -2833,7 +2926,9 @@ function App() {
   // one of them is on show, on the shared listener the cockpits' own Esc rides too (useEscStop:
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
   // still closes, Satellites still closes the bird detail, and the voice keyer still stops itself.
-  // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
+  // JTTY TOO: its TX strip's Stop TX is the plain halt, which also drops JTTY's queue and cuts what
+  // is on the air, so App binds its Esc here, as Phone's and SSTV's.
+  // CONNECT TOO (the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
   // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
@@ -2976,16 +3071,6 @@ function App() {
 
   const waterfallRail = (
     <aside className="right-rail panel">
-      <Waterfall
-        transmitting={snap.radio.transmitting}
-        rxOffsetHz={snap.radio.rxOffsetHz}
-        txOffsetHz={snap.radio.txOffsetHz}
-        theme={theme}
-        onTune={handleTune}
-        paletteScope={FT_PALETTE_SCOPE}
-        markerWidthHz={ftMarkerWidthHz}
-        txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
-      />
       <OperateDecodes
         decodes={snap.recentDecodes}
         late={snap.lateDecodes}
@@ -2993,6 +3078,7 @@ function App() {
         rxOffsetHz={snap.radio.rxOffsetHz}
         band={snap.radio.band}
         tier={snap.link.tier}
+        periodSecs={snap.link.periodSecs}
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
@@ -3005,13 +3091,38 @@ function App() {
     </aside>
   )
 
-  // Three-pane workspace: stations | center | waterfall, with drag splitters
-  // between each. The waterfall lives in the right rail at every width; the rail
-  // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
-  // top-strip alternative — there was no writer and no CSS behind it.)
+  // Three-pane workspace: a full-width waterfall strip under the header, then stations | center |
+  // the rail (Band Activity and the link pill), with drag splitters between each. THE WATERFALL
+  // STRIP (2026-10-26, "width and height to be consistent"): every mode's waterfall starts at the
+  // same full width and 25 % of the shell, so Tempo's left the right rail (where it was 299 px wide
+  // at 1366×768) for a strip across the top, sized by its own divider as FT's is. The strip is
+  // the workspace grid's own row (styles.css `.layout[data-three-pane]`, `--tempo-wf-h`) and stays
+  // in the same parent at every width, so it never remounts; on the sm/xs collapse it stacks first.
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
     <main className={`layout${header ? ' has-tempo-header' : ''}`} data-three-pane>
       {header && <div className="grid-header">{header}</div>}
+      <Waterfall
+        stripRef={tempoWfRef}
+        transmitting={snap.radio.transmitting}
+        rxOffsetHz={snap.radio.rxOffsetHz}
+        txOffsetHz={snap.radio.txOffsetHz}
+        theme={theme}
+        onTune={handleTune}
+        paletteScope={FT_PALETTE_SCOPE}
+        markerWidthHz={ftMarkerWidthHz}
+        txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
+      />
+      <PaneSeam
+        axis="y"
+        varName="--tempo-wf-h"
+        strip={tempoWfRef}
+        className="tempo-wf-seam"
+        storageKey="nexus.split.tempo.waterfall"
+        min={WATERFALL_SPLIT_MIN}
+        max={WATERFALL_SPLIT_MAX}
+        defaultPct={25}
+        label={t('shell.waterfall.splitter.label')}
+      />
       <div className="grid-stations">{stationsPanel}</div>
       <PaneSeam
         axis="x"
@@ -3026,7 +3137,7 @@ function App() {
         onReset={resetLeft}
       />
       <div className="grid-center">{center}</div>
-      {/* This divider is the waterfall rail's LEFT edge: moving it left widens the rail. */}
+      {/* This divider is the right rail's LEFT edge: moving it left widens the rail. */}
       <PaneSeam
         axis="x"
         className="right"
@@ -3058,7 +3169,7 @@ function App() {
     // and mode it is spotted on? If so, Hide worked leaves it alone.
     needAlerts: boardAlerts,
     // The Spot me in the board's head (SpotsSpotMe): the station's mode, which its comment names.
-    spotMe: { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier },
+    spotMe: { section: snap.radio.operatingMode, keyboardMode: snap.radio.keyboardMode, sideband: snap.radio.sideband, tier },
   }
   const neededBoard = {
     // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
@@ -3084,6 +3195,11 @@ function App() {
           spotsSeen: feedHealth.phoneSpotsSeen,
         }
       : null,
+    // During a contest the needs-gate hides everyone the operator wants to work, so the
+    // board offers one click to the un-gated Spots view. `fieldDay.running` is the one
+    // contest-active signal (the same one the contest spot marks and ESM plate read).
+    contestActive: snap.fieldDay?.running ?? false,
+    onShowAllSpots: () => setView('spots'),
   }
   // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
   // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
@@ -3101,6 +3217,7 @@ function App() {
     amp: snap.radio.amp ?? null,
     rigBand: snap.radio.band ?? null,
     fieldDay: snap.fieldDay ?? null,
+    activation: { act: snap.activation ?? null, logTick: snap.logTick },
     onWorkSpot: handleWorkMapSpot,
     onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
     spotsFeed: { rows: allSpots, board: spotsBoard },
@@ -3219,10 +3336,13 @@ function App() {
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
       speedMatch={cwSpeedMatch}
+      turnSound={settings?.soundCwTurn === true}
+      announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
+      onPitch={(cwPitchHz) => setSettings((prev) => (prev ? { ...prev, cwPitchHz } : prev))}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       snap={snap}
       theme={theme}
@@ -3248,6 +3368,7 @@ function App() {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
+      flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
@@ -3367,6 +3488,7 @@ function App() {
                 fdRuleset={fdRuleset}
                 tier={tier}
                 section={snap.radio.operatingMode}
+                keyboardMode={snap.radio.keyboardMode}
                 onOpenSettings={openSettingsAt}
                 onSettingsSaved={handleSettingsSaved}
                 contestSwitch={contestSwitch}
@@ -3389,6 +3511,14 @@ function App() {
             focusCall={logFocus}
             onConsumeFocusCall={() => setLogFocus(null)}
             logTick={snap.logTick}
+            activation={snap.activation ?? null}
+            // The column choice lives in settings.json, saved through its one writer: a settings
+            // save from an older copy keeps the live one (`set_logbook_columns`).
+            columns={settings?.logbookColumns}
+            onColumnsChange={(logbookColumns) => {
+              setSettings((prev) => (prev ? { ...prev, logbookColumns } : prev))
+              void withErrorToast(() => setLogbookColumns(logbookColumns), t('logbook.columns.saveFailed'))
+            }}
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             // Seed manual entries from the mode the operator was ACTUALLY running —
@@ -3412,7 +3542,9 @@ function App() {
                     ? 'RTTY'
                     : lastOpModeRef.current === 'keyboard'
                       ? 'PSK31'
-                      : snap.link.tier
+                      : lastOpModeRef.current === 'jtty'
+                        ? 'JTTY'
+                        : snap.link.tier
             }
           />
         </main>
@@ -3515,10 +3647,11 @@ function App() {
       break
     case 'rtty':
     case 'psk':
+    case 'jtty':
     case 'sstv':
     case 'aprs':
     case 'js8':
-      // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
+      // Same keep-alive pattern as Operate: RTTY's, PSK's and JTTY's decoded streams,
       // SSTV's always-armed VIS receiver, APRS's decode list and JS8's four-speed
       // activity stream must survive navigation, so all five live in persistent hosts
       // below. Nothing in the slot.
@@ -3550,11 +3683,12 @@ function App() {
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
+          activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}
           // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
           // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
           // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A
-          // browser's POTA/SOTA board is RemoteOta, a different surface, so a browser's box gets no
-          // hunt wiring (its one line); and the Needed box is the desktop's for now (2026-10-07).
+          // browser's box gets no hunt wiring (its one line); and the Needed box is the desktop's
+          // for now (2026-10-07).
           spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
           neededBoard={neededBoard}
@@ -3649,6 +3783,10 @@ function App() {
                       // toast and the phone USB/LSB override branch. So this labels the
                       // memory honestly and commands nothing new.
                       'PSK31'
+                    : lastOpModeRef.current === 'jtty'
+                    ? // The JTTY cockpit's rig mode, labelled as the mode it is. A memory planRecall
+                      // routes digital (DIGITAL_MODES), as it does PSK31's: it commands nothing new.
+                      'JTTY'
                     : // The tier's own name, not a guess. This was
                       // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
                       // saved on Q65/WSPR/JT65 as FT8.
@@ -3675,7 +3813,7 @@ function App() {
       // policy entry needed — global sections leave the VFO alone).
       workspace = (
         <main className="layout single">
-          <RadioProgView myGrid={settings?.mygrid ?? ''} catOk={snap.radio.catOk === true} />
+          <RadioProgView myGrid={settings?.mygrid ?? ''} catOk={snap.radio.catOk === true} onOpenSettings={openSettingsAt} />
         </main>
       )
       break
@@ -3726,6 +3864,7 @@ function App() {
               onSetTxEnabled={handleSetTxEnabled}
               onSetTune={handleSetTune}
               onAtuTune={handleAtuTune}
+              onAtuBypass={handleAtuBypass}
               onHaltTx={handleHaltTx}
               onSetHoldTxFreq={handleSetHoldTxFreq}
             />,
@@ -3761,6 +3900,8 @@ function App() {
   return (
     <div className="app">
       <ClientBanner />
+      {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
+      <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
           then "remove all radio control from connect, reclaim that space". So the whole bar goes on
@@ -3795,6 +3936,7 @@ function App() {
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
+          effectiveView === 'jtty' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'js8' ||
@@ -3821,6 +3963,7 @@ function App() {
           // TX, so the TopBar's cluster is hidden here exactly as for the others).
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
+          effectiveView === 'jtty' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'js8' ||
@@ -3859,7 +4002,7 @@ function App() {
           defers a retune while a slot is actively transmitting (rigs reject VFO/mode changes
           mid-TX), so a click during our own over is applied at the next safe moment rather than
           keying across it. This removes a UI refusal, not a TX-path guard.
-          Still notify-never-act ([[feedback-alerts-notify-never-act]]): Nexus does not move the
+          Still notify-never-act: Nexus does not move the
           radio on its own here — this is a button the operator presses. */}
       <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} myGrid={snap.mygrid} />
 
@@ -4053,6 +4196,24 @@ function App() {
               />
             </div>
           )}
+          {/* JTTY keep-alive host — the .psk-host contract: the engine keeps decoding while the
+              operator is elsewhere, `active` gates the display poll and fires the auto-arm on the
+              rising edge. */}
+          {isViewEnabled('jtty') && (
+            <div className="jtty-host" hidden={effectiveView !== 'jtty'}>
+              <JttyCockpit
+                onOpenLogbook={openLogbookFor}
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'jtty'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={jttyPanels}
+              />
+            </div>
+          )}
           {isViewEnabled('sstv') && (
             <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
               <SstvView
@@ -4089,10 +4250,10 @@ function App() {
                 txStrip={
                   <CockpitTxStrip
                     radio={snap.radio}
-                    onSnap={setSnap}
                     onSetTxEnabled={handleSetTxEnabled}
                     onTune={snap.radio.atu != null ? handleSetTune : undefined}
                     onAtuTune={handleAtuTune}
+                    onAtuBypass={handleAtuBypass}
                     onStopTx={handleHaltTx}
                   />
                 }

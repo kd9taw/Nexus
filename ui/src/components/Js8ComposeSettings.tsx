@@ -14,17 +14,16 @@ import { t } from '../i18n'
 import type { Settings } from '../types'
 import { JS8_CQS } from '../js8Vocab'
 import { JS8_DEFAULT_CQ, JS8_DEFAULT_REPLY, JS8_DEFAULT_SAVED, JS8_MACRO_TOKENS, JS8_MYGRID4 } from '../js8Macros'
+import { upperTyped } from '../typedInput'
 
 type Key = 'js8CqText' | 'js8ReplyText' | 'js8SavedMessages' | 'js8SendAtOnce' | 'js8Pills' | 'js8WordSuggestions'
 export type Js8ComposePatch = Partial<Pick<Settings, Key>>
 
 export function Js8ComposeSettings({
   form,
-  disabled,
   onChange,
 }: {
   form: Settings
-  disabled: boolean
   onChange: (patch: Js8ComposePatch) => void
 }) {
   const saved = form.js8SavedMessages ?? JS8_DEFAULT_SAVED
@@ -56,11 +55,10 @@ export function Js8ComposeSettings({
       <label className="settings-field">
         <span className="settings-label">{t('settings.js8.cqText.label')}</span>
         <input
-          disabled={disabled}
           className="settings-input"
           list="js8-cq-forms"
           value={form.js8CqText ?? JS8_DEFAULT_CQ}
-          onChange={(e) => onChange({ js8CqText: e.target.value.toUpperCase() })}
+          onChange={(e) => onChange({ js8CqText: upperTyped(e.target) })}
           autoComplete="off"
           spellCheck={false}
         />
@@ -75,10 +73,9 @@ export function Js8ComposeSettings({
       <label className="settings-field">
         <span className="settings-label">{t('settings.js8.replyText.label')}</span>
         <input
-          disabled={disabled}
           className="settings-input"
           value={form.js8ReplyText ?? JS8_DEFAULT_REPLY}
-          onChange={(e) => onChange({ js8ReplyText: e.target.value.toUpperCase() })}
+          onChange={(e) => onChange({ js8ReplyText: upperTyped(e.target) })}
           autoComplete="off"
           spellCheck={false}
         />
@@ -93,10 +90,9 @@ export function Js8ComposeSettings({
             {saved.map((m, i) => (
               <li key={i} className="js8-saved-row">
                 <input
-                  disabled={disabled}
                   className="settings-input"
                   value={m}
-                  onChange={(e) => setSaved(saved.map((x, k) => (k === i ? e.target.value.toUpperCase() : x)))}
+                  onChange={(e) => setSaved(saved.map((x, k) => (k === i ? upperTyped(e.target) : x)))}
                   aria-label={t('settings.js8.saved.row.aria', { n: i + 1 })}
                   autoComplete="off"
                   spellCheck={false}
@@ -104,7 +100,7 @@ export function Js8ComposeSettings({
                 <button
                   type="button"
                   className="cw-macro"
-                  disabled={disabled || i === 0}
+                  disabled={i === 0}
                   onClick={() => move(i, -1)}
                   aria-label={t('settings.js8.saved.up.aria', { n: i + 1 })}
                   title={t('settings.js8.saved.up.aria', { n: i + 1 })}
@@ -114,7 +110,7 @@ export function Js8ComposeSettings({
                 <button
                   type="button"
                   className="cw-macro"
-                  disabled={disabled || i + 1 === saved.length}
+                  disabled={i + 1 === saved.length}
                   onClick={() => move(i, 1)}
                   aria-label={t('settings.js8.saved.down.aria', { n: i + 1 })}
                   title={t('settings.js8.saved.down.aria', { n: i + 1 })}
@@ -124,7 +120,6 @@ export function Js8ComposeSettings({
                 <button
                   type="button"
                   className="cw-macro"
-                  disabled={disabled}
                   onClick={() => setSaved(saved.filter((_, k) => k !== i))}
                   aria-label={t('settings.js8.saved.remove.aria', { n: i + 1 })}
                   title={t('settings.js8.saved.remove.aria', { n: i + 1 })}
@@ -137,10 +132,9 @@ export function Js8ComposeSettings({
         )}
         <div className="js8-saved-add">
           <input
-            disabled={disabled}
             className="settings-input"
             value={adding}
-            onChange={(e) => setAdding(e.target.value.toUpperCase())}
+            onChange={(e) => setAdding(upperTyped(e.target))}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               e.preventDefault()
@@ -151,7 +145,7 @@ export function Js8ComposeSettings({
             autoComplete="off"
             spellCheck={false}
           />
-          <button type="button" className="cw-macro" disabled={disabled || adding.trim() === ''} onClick={add}>
+          <button type="button" className="cw-macro" disabled={adding.trim() === ''} onClick={add}>
             {t('settings.js8.saved.add')}
           </button>
         </div>
@@ -165,7 +159,6 @@ export function Js8ComposeSettings({
           <label className="settings-toggle">
             <span className="settings-label">{label}</span>
             <button
-              disabled={disabled}
               type="button"
               role="switch"
               aria-checked={on}

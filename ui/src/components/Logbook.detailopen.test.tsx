@@ -28,7 +28,7 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn((run: () => Promise<unknown>) => run()),
 }))
 
-// HOW A CONTACT IS OPENED (#313). The detail view exists; this is the affordance that
+// HOW A CONTACT IS OPENED (#313). The contact card exists; this is the affordance that
 // reaches it, and it is INVISIBLE — so it needs pinning harder than a button would.
 //
 // ⛔ It is a double-click, and that is a MEASURED decision rather than a preference. A tenth
@@ -70,10 +70,10 @@ async function row() {
   return container.querySelector('.logbook-row:not(.head)') as HTMLElement
 }
 
-const open = () => document.body.textContent?.includes('JO31AB') ?? false
+const open = () => document.querySelector('.contact-card-dialog') !== null
 
 describe('opening a contact from the log', () => {
-  it('opens the detail view on a DOUBLE click', async () => {
+  it('opens the contact card on a DOUBLE click', async () => {
     const r = await row()
     expect(open(), 'precondition: nothing is open before the gesture').toBe(false)
     fireEvent.doubleClick(r)
@@ -97,6 +97,6 @@ describe('opening a contact from the log', () => {
     const cluster = r.querySelector('.log-rowactions')
     expect(cluster, 'precondition: there is a cluster to count').not.toBeNull()
     const labels = [...cluster!.querySelectorAll('.log-rowbtn')].map((e) => e.textContent ?? '')
-    expect(labels, 'the detail view must not have grown the cluster').not.toContain('🔍')
+    expect(labels, 'the contact card must not have grown the cluster').not.toContain('🔍')
   })
 })

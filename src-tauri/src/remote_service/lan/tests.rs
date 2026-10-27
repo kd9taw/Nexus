@@ -18,8 +18,14 @@ mod client;
 mod commands;
 mod computer;
 mod drops;
+/// A computer enrolling by its own sign-in to the station's account.
+mod enrol;
 mod hostile;
+/// The station's key for the internet road, said by the station on this network's road.
+mod identity;
 mod link;
+/// A computer signing in with the station's account (`crate::lan_client::account`).
+mod signing;
 mod stop_road;
 mod tunnel;
 
@@ -189,6 +195,8 @@ struct Shack {
     public_key: String,
     /// The credential store the station's book is kept in.
     store: LanStore,
+    /// The switch attached to it, if one is (`switch_with`).
+    switch: Arc<std::sync::OnceLock<std::sync::Weak<State>>>,
 }
 
 fn shack(network: Network) -> Shack {
@@ -202,6 +210,9 @@ fn shack(network: Network) -> Shack {
 /// fresh authority and engine, and the book read from `store`, as Nexus starting again reads it.
 fn shack_with(network: Network, station_key: String, computer: Computer, store: LanStore) -> Shack {
     let authority = Arc::new(Authority::default());
+    // Normal operating state: the account's device list has been heard and names no sign-in device,
+    // so an ordinary controller is free (the sign-in transmit hold keys on that recorded list).
+    authority.set_signin_devices(std::collections::BTreeSet::new());
     let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
     let mut settings = engine.settings().clone();
@@ -211,6 +222,18 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
     let identity = tls::Identity::new(&station_key, STATION.into()).unwrap();
     let public_key = identity.public_key().to_string();
     let book = book_on(&store);
+    // The book's computers, as the LAN road tells the authority them at its start (`Lan::start`):
+    // the recorded provenance that never holds them from transmit. Its book while a switch attached
+    // later (`switch_with`) is on, as that switch would tell it; with none, this listener's book.
+    let switch = Arc::new(std::sync::OnceLock::<std::sync::Weak<State>>::new());
+    let (listed, switched) = (book.clone(), switch.clone());
+    authority.hold_lan_devices(Box::new(move || match switched.get() {
+        Some(state) => state
+            .upgrade()
+            .filter(|state| state.on.load(Ordering::SeqCst))
+            .map_or_else(Vec::new, |state| state.book.ids()),
+        None => listed.ids(),
+    }));
     let (paired, pairing) = book.verifier();
     let dispatcher =
         crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
@@ -227,7 +250,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         },
         tls: tls::server(&identity, paired, pairing).unwrap(),
         roster: channel::Roster::lan(&book),
-        desk: Some(super::pairing::Desk::new(book, &identity).unwrap()),
+        desk: Some(super::pairing::Desk::new(book, &identity, Arc::default()).unwrap()),
         identity: Arc::new(identity),
         network: Some(network),
         port: DEFAULT_PORT,
@@ -241,6 +264,8 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         #[cfg(feature = "radio")]
         audio_road: None,
         internet: None,
+        // No pairing with the service: its `opened` names no key.
+        station_key: Arc::new(|| None),
     };
     Shack {
         shared,
@@ -249,6 +274,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         station_key,
         public_key,
         store,
+        switch,
     }
 }
 
@@ -480,23 +506,60 @@ fn source(n: usize) -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(10, 0, (n / 256) as u8, (n % 256) as u8))
 }
 
-/// ★ At most two connections from one address and four in all. CONTROL: a connection that
+/// A handshake from `n` that has finished, holding a session's place.
+fn session(gate: &Arc<Gate>, n: usize, now: Instant) -> super::gate::Ticket {
+    let mut ticket = gate.admit(source(n), now).unwrap();
+    ticket.opened().unwrap();
+    ticket
+}
+
+/// ★ At most two connections from one address and four sessions in all. CONTROL: a session that
 /// ends gives its place back.
 #[test]
 fn the_gate_holds_the_open_connection_caps() {
     let gate = Arc::new(Gate::default());
     let now = Instant::now();
-    let _a1 = gate.admit(source(1), now).unwrap();
-    let a2 = gate.admit(source(1), now).unwrap();
+    let _a1 = session(&gate, 1, now);
+    let a2 = session(&gate, 1, now);
     assert_eq!(gate.admit(source(1), now).err(), Some(Refused::SourceFull));
-    let _b1 = gate.admit(source(2), now).unwrap();
-    let _b2 = gate.admit(source(2), now).unwrap();
-    assert_eq!(gate.admit(source(3), now).err(), Some(Refused::Full));
+    let _b1 = session(&gate, 2, now);
+    let _b2 = session(&gate, 2, now);
+    let mut fifth = gate.admit(source(3), now).unwrap();
+    assert_eq!(fifth.opened(), Err(Refused::Full));
+    drop(fifth);
     drop(a2);
     assert!(
-        gate.admit(source(3), now).is_ok(),
-        "an ended connection kept its place"
+        gate.admit(source(3), now).unwrap().opened().is_ok(),
+        "an ended session kept its place"
     );
+}
+
+/// ★ Handshakes never hold a session's place, and never all the handshakes' places: with four
+/// sessions open, eight handshakes are still admitted, each from its own address, and a ninth cuts
+/// the oldest of them and no other; a session is never cut, however many arrive after it. CONTROL:
+/// before the ninth arrived, nothing was cut.
+#[test]
+fn a_new_handshake_cuts_the_oldest_and_never_a_session() {
+    use super::gate::{HANDSHAKES, MAX_OPEN};
+    use futures_util::FutureExt;
+    let gate = Arc::new(Gate::default());
+    let now = Instant::now();
+    let sessions: Vec<_> = (0..MAX_OPEN).map(|n| session(&gate, n, now)).collect();
+    let cut = |ticket: &super::gate::Ticket| ticket.cut().now_or_never().is_some();
+    let handshakes: Vec<_> = (0..HANDSHAKES)
+        .map(|n| gate.admit(source(100 + n), now).unwrap())
+        .collect();
+    assert!(!handshakes.iter().any(cut), "CONTROL: cut before the ninth");
+    let newest = gate.admit(source(200), now).unwrap();
+    let was_cut: Vec<bool> = handshakes.iter().map(cut).collect();
+    assert!(was_cut[0], "the oldest stands");
+    assert!(!was_cut[1..].iter().any(|&c| c), "{was_cut:?}");
+    assert!(!cut(&newest));
+    let more: Vec<_> = (0..3 * HANDSHAKES)
+        .map(|n| gate.admit(source(300 + n), now).unwrap())
+        .collect();
+    assert!(!sessions.iter().any(cut), "a session was cut");
+    assert!(cut(&newest) && !cut(more.last().unwrap()));
 }
 
 /// ★ Ten new connections a minute from one address; the eleventh is refused, a refused one
@@ -987,6 +1050,137 @@ async fn a_source_off_the_subnet_is_dropped_before_tls() {
     );
 }
 
+/// Slow handshakes, one from each of `count` addresses on the subnet from `192.168.1.{first}`: each
+/// connection held open with nothing sent. The connections' tasks, and the computers' ends.
+async fn slow_handshakes(
+    s: &Shack,
+    first: usize,
+    count: usize,
+    stop: &watch::Receiver<bool>,
+) -> Vec<(tokio::task::JoinHandle<()>, tokio::net::TcpStream)> {
+    let mut held = Vec::new();
+    for n in first..first + count {
+        let (station, computer) = pair().await;
+        let task = tokio::spawn(channel::connection(
+            station,
+            format!("192.168.1.{n}:50000").parse().unwrap(),
+            s.shared.clone(),
+            stop.clone(),
+        ));
+        held.push((task, computer));
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while (first..first + count).any(|n| {
+        s.shared
+            .gate
+            .arrivals(format!("192.168.1.{n}").parse().unwrap())
+            == 0
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the flood never reached the gate"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    held
+}
+
+/// ★ Slow handshakes from many addresses never keep a paired computer out. Twenty-four
+/// connections, one from each of twenty-four addresses on the subnet, each holding its TCP open and
+/// sending nothing; then the paired computer connects and is welcomed, while every one of them is
+/// still inside its deadline; then twenty-four more arrive, and its session goes on answering.
+/// CONTROL: each address reached the gate, the flood's handshakes were cut (their tasks ended long
+/// before their deadline), and no cut was counted against its address.
+#[tokio::test]
+async fn slow_handshakes_from_many_addresses_never_keep_a_paired_computer_out() {
+    use super::gate::HANDSHAKES;
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let flooded = Instant::now();
+    let flood = slow_handshakes(&s, 100, 24, &stop).await;
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop.clone()).await;
+    let mut socket = socket.expect("the paired computer kept out by the flood");
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+    assert!(
+        flooded.elapsed() < channel::HANDSHAKE,
+        "welcomed only once the flood's deadline had passed"
+    );
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let cut = loop {
+        let cut = flood.iter().filter(|(task, _)| task.is_finished()).count();
+        if cut > 24 - HANDSHAKES || Instant::now() >= deadline {
+            break cut;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(
+        cut > 24 - HANDSHAKES,
+        "CONTROL: {cut} of the flood's handshakes cut"
+    );
+    assert!(
+        s.shared
+            .gate
+            .failures(Ipv4Addr::new(192, 168, 1, 100).into())
+            == 0,
+        "a handshake cut to make room was counted against its address"
+    );
+
+    let _more = slow_handshakes(&s, 150, 24, &stop).await;
+    socket.send(Message::Ping(Vec::new().into())).await.unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Pong(_))) => return true,
+                Some(Ok(_)) => {}
+                _ => return false,
+            }
+        }
+    })
+    .await;
+    assert_eq!(answered, Ok(true), "the open session stopped answering");
+}
+
+/// ⛔ A handshake cut to make room is never held against its address: from the paired computer's
+/// own address, a connection still in its handshake is cut by a flood from other addresses, again
+/// and again, more times than the failures that get an address ignored; once the flood ends, the
+/// paired computer connects from that address and is welcomed. CONTROL: each of its handshakes
+/// was cut (its task ended inside the deadline), and none was counted.
+#[tokio::test]
+async fn a_handshake_cut_by_a_flood_never_locks_its_address_out() {
+    use super::gate::HANDSHAKES;
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let peer: IpAddr = PEER.parse::<std::net::SocketAddr>().unwrap().ip();
+    for round in 0..FAILURES_BEFORE_IGNORED + 1 {
+        let (station, computer) = pair().await;
+        let mine = tokio::spawn(channel::connection(
+            station,
+            PEER.parse().unwrap(),
+            s.shared.clone(),
+            stop.clone(),
+        ));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.shared.gate.arrivals(peer) <= round {
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: never reached the gate"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let flood = slow_handshakes(&s, 100 + round * HANDSHAKES, HANDSHAKES, &stop).await;
+        tokio::time::timeout(Duration::from_secs(2), mine)
+            .await
+            .unwrap_or_else(|_| panic!("CONTROL, round {round}: not cut"))
+            .unwrap();
+        drop(computer);
+        drop(flood);
+    }
+    assert_eq!(s.shared.gate.failures(peer), 0, "a cut counted against it");
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.expect("the paired computer locked out by cuts");
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+}
+
 /// ★ Versions, as ruled on 2026-10-04: the hello must carry the station's own versions. A computer
 /// that speaks newer is told to update the station, an older one to update itself, and either is
 /// closed; it is a paired computer, so its address does not pay. CONTROL: the station's own
@@ -1303,7 +1497,7 @@ fn stop_on_the_lan_channel_stops_the_station_without_waiting() {
 // ----- The listener, on this box's own private address -----
 
 /// This box's own private IPv4 address, the one its route to the internet leaves by, or `None`.
-fn own_private_address() -> Option<Ipv4Addr> {
+pub(crate) fn own_private_address() -> Option<Ipv4Addr> {
     let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     match probe.local_addr().ok()?.ip() {
@@ -1351,20 +1545,24 @@ fn switch_with(
     advertise: Advertise,
     firewall: FirewallSays,
 ) -> Lan {
-    Lan::start(
+    let lan = Lan::start(
         scratch.path(),
         Deps {
             authority: s.shared.authority.clone(),
             engine: s.shared.engine.clone(),
             feeds: s.shared.feeds.clone(),
             book,
+            enrolment: Arc::default(),
             resolve,
             advertise,
             firewall,
             dispatcher: s.shared.dispatcher.clone(),
             commands: s.shared.commands.clone(),
+            station_key: s.shared.station_key.clone(),
         },
-    )
+    );
+    let _ = s.switch.set(Arc::downgrade(&lan.state));
+    lan
 }
 
 /// A look at a computer whose one network, if it has one, is `network`.
@@ -1400,6 +1598,20 @@ async fn eventually(lan: &Lan, what: &str, done: impl Fn(&LanStatus) -> bool) ->
             return status;
         }
         assert!(Instant::now() < deadline, "{what}: {status:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The switch kept on disk once `done` holds, within five seconds. A decision is said at once and
+/// kept on disk after, so a status read on another thread can come before the file is written.
+async fn kept_once(path: &std::path::Path, what: &str, done: impl Fn(&Switch) -> bool) -> Switch {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let switch = Switch::load(path);
+        if done(&switch) {
+            return switch;
+        }
+        assert!(Instant::now() < deadline, "{what}: {switch:?}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -1531,7 +1743,11 @@ async fn it_turns_itself_off_without_a_key_and_waits_for_a_network_or_its_addres
     })
     .await;
     assert_eq!(status.reason, Some("noKey"));
-    assert_eq!(Switch::load(&scratch.path()).off, Some(Off::NoKey));
+    let kept = kept_once(&scratch.path(), "the off was not kept", |sw| {
+        sw.off.is_some()
+    })
+    .await;
+    assert_eq!(kept.off, Some(Off::NoKey));
 
     let scratch = Scratch::new();
     let lan = switch_for(
@@ -1851,8 +2067,10 @@ async fn a_picked_address_that_goes_and_comes_back_is_listened_at_again() {
 
 /// ★ Off never waits behind Windows' firewall: turned off while the firewall is being read (here a
 /// read that does not come back), after the station has looked at its network again more than
-/// once, the port closes at once and the status says off. CONTROL: the port was open while the
-/// read was under way.
+/// once, the port closes at once and the status says off. The press is made on a thread of its
+/// own, as the shack's command makes it: it answers once the switch is kept, which takes as long as
+/// the disk does, and the port closes before that. CONTROL: the port was open while the read was
+/// under way.
 #[tokio::test]
 async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
     let Some(address) = own_private_address() else {
@@ -1874,14 +2092,14 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
             .recv_timeout(Duration::from_secs(30));
         Some("public")
     });
-    let lan = switch_with(
+    let lan = Arc::new(switch_with(
         &s,
         &scratch,
         Arc::new(move |_| only(Ok(network))),
         book_of(&s),
         advertise(),
         firewall,
-    );
+    ));
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
     tokio::time::timeout(Duration::from_secs(5), read.recv())
@@ -1893,7 +2111,10 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         "the control: not listening while the firewall was read"
     );
     let started = Instant::now();
-    lan.turn_off();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
     // Closed: a connection is no longer taken. Windows retries a refused connection to this
     // computer's own address for about two seconds before it says so, so a connection not taken
     // within a moment is what is asked, on every platform.
@@ -1916,5 +2137,147 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         started.elapsed()
     );
     assert!(!lan.status().on);
+    off.join().unwrap();
     let _ = answer.send(());
+}
+
+/// ★ Off never waits for the disk either: turned off while the switch's own save cannot finish
+/// (its file is a FIFO here, which opening for writing waits on until something reads it), the
+/// port closes, the paired computer's control of the station and its over end, and the status
+/// says off, all before the save is through; the save then keeps the switch as off. CONTROL: the
+/// port was open and the computer in control and on the air before the press, and the press was
+/// still saving when all of that had gone.
+#[cfg(unix)]
+#[tokio::test]
+async fn off_closes_the_port_while_its_own_save_is_held() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book_of(&s)));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    assert!(
+        tokio::net::TcpStream::connect(at).await.is_ok(),
+        "the control: not listening before the press"
+    );
+    let (socket, _, _) = keyed_at(&s, at).await;
+    let partial = scratch.path().with_extension("json.partial");
+    let made = tempo_core::process::command("mkfifo")
+        .arg(&partial)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "premise: a FIFO to hold the save on");
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    // Closed: a connection is refused, while the press saves. On Linux and macOS this computer
+    // refuses one to its own address at once; a connection that only waits is not counted, since
+    // a listener that has stopped accepting fills its queue and leaves the next one waiting.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut closed = false;
+    while !closed && !off.is_finished() && Instant::now() < deadline {
+        let taken = tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(at),
+        )
+        .await;
+        closed = matches!(taken, Ok(Err(_)));
+        if !closed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    // And the computer's control of the station and its over gone, while the press saves.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut revoked = false;
+    while !revoked && !off.is_finished() && Instant::now() < deadline {
+        revoked = halted(&s) && s.shared.authority.local_status()["controller"].is_null();
+        if !revoked {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    // The status, read on a thread of its own: a read that waited for the save would wait there.
+    let (told, status) = std::sync::mpsc::channel();
+    let reading = lan.clone();
+    std::thread::spawn(move || {
+        let _ = told.send(reading.status().on);
+    });
+    let said = status.recv_timeout(Duration::from_secs(2)).ok();
+    let saving = !off.is_finished();
+    // Let the save through: what it writes is read off the FIFO.
+    let saved = tokio::task::spawn_blocking(move || std::fs::read(&partial))
+        .await
+        .unwrap()
+        .unwrap();
+    off.join().unwrap();
+    drop(socket);
+    assert!(
+        closed && saving,
+        "the port at {at} stayed open while the switch's save was held"
+    );
+    assert!(
+        revoked,
+        "the computer kept control of the station, or its over, while the save was held"
+    );
+    assert_eq!(said, Some(false), "the status while the save was held");
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved["on"], false, "the switch kept as off: {saved}");
+}
+
+/// ★ Presses in a row leave the newest on disk. An Off is held up after it has taken effect (at
+/// the pairing book, as it reads which computers to revoke) while an On is pressed and kept; let
+/// go, the Off keeps the switch as it stands then, on, and never the off it was pressed as, which
+/// after a restart would undo the newest press. CONTROL: the Off had taken effect and was still
+/// held up when the On was pressed.
+#[tokio::test]
+async fn presses_in_a_row_leave_the_newest_on_disk() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let book = book_of(&s);
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book.clone()));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    let held = book.held();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lan.state.switch().on {
+        assert!(Instant::now() < deadline, "the Off never took effect");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !off.is_finished(),
+        "premise: the Off is held up at the book"
+    );
+    lan.turn_on(None, Some(port)).unwrap();
+    drop(held);
+    off.join().unwrap();
+    let kept = Switch::load(&scratch.path());
+    assert!(
+        kept.on,
+        "the switch kept on disk is not the newest press's: {kept:?}"
+    );
+    assert!(
+        lan.state.switch().on,
+        "the switch is on, as the newest press left it"
+    );
 }

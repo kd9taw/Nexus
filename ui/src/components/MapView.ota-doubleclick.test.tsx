@@ -41,6 +41,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   // The transmit-capable surface — spied so the test can PROVE the gesture never reaches
   // it, rather than merely omitting it from the mock (which would prove nothing).
   callStation: vi.fn(async () => ({})),

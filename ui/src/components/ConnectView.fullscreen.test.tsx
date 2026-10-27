@@ -32,6 +32,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 import { ConnectView } from './ConnectView'
 import { pastTheSwitch } from './ConnectView.testkit'

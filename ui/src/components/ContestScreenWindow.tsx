@@ -101,6 +101,7 @@ export function ContestScreenWindow({
         fdRuleset={fdRuleset}
         tier={snap.link.tier}
         section={snap.radio.operatingMode}
+        keyboardMode={snap.radio.keyboardMode}
         onSettingsSaved={settingsSaved}
         contestSwitch={contestSwitch}
         operatorBoxAbove={fd != null}

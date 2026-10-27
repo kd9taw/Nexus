@@ -2,7 +2,7 @@
 //! it opens on, the calls it admits and refuses, the journal across a reconnect, Stop ahead of
 //! everything, calls and answers in pieces, the feeds and their numbers, and the events. The app's
 //! handler is a stand-in that records every call it runs, so "nothing ran" is read off it.
-use super::super::commands::{Commands, PENDING};
+use super::super::commands::{Commands, InTurn, PENDING, STARTED, STOP_RUNS};
 use super::super::wire::{self, Assembly, Inflate, Whole};
 use super::*;
 use crate::command_classes::{class_of, Class};
@@ -89,7 +89,8 @@ impl Drop for LetGo {
 /// A shack whose calls run on `app`.
 pub(super) fn running(app: &App) -> Shack {
     let mut s = shack(home());
-    s.shared.commands = Commands::new(app.runner());
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(app.runner(), voided);
     s
 }
 
@@ -210,8 +211,9 @@ fn refused(id: u64, code: &str) -> Value {
 /// ★ The same build at both ends (ruled 2026-10-05): the welcome names the shack's build, and the
 /// lane opens only for that app and contract. A newer app is told to update the station, an older
 /// one the computer, another build of the same version is `otherBuild`, and a kind of client this
-/// build does not serve (a phone) is told to update the station. A call sent straight behind a
-/// refused open never runs, and the connection closes. CONTROL: this build opens.
+/// build does not serve (a phone, known by name, or a kind it does not know) is told to update the
+/// station. A call sent straight behind a refused open never runs, and the connection closes.
+/// CONTROL: this build opens.
 #[tokio::test]
 async fn the_lane_opens_only_on_the_same_build_and_says_which_side_to_update() {
     let app = App::new();
@@ -223,6 +225,7 @@ async fn the_lane_opens_only_on_the_same_build_and_says_which_side_to_update() {
         ("desktop", "0.0.1", wire::contract(), "updateComputer"),
         ("desktop", wire::APP, another.as_str(), "otherBuild"),
         ("mobile", wire::APP, wire::contract(), "updateStation"),
+        ("tablet", wire::APP, wire::contract(), "updateStation"),
     ] {
         let (task, socket) = dial(&s, &s.computer.key, PEER, stop.clone()).await;
         let mut socket = socket.unwrap();
@@ -662,6 +665,273 @@ async fn a_stop_is_admitted_and_run_at_once_whatever_else_is_waiting() {
     }
 }
 
+/// ★ A flood of Stops on the link: however many come, each Stop command has one blocking
+/// task at work, never one per Stop, and every Stop is answered. The first Stop runs at once; a
+/// different Stop runs at once beside it, never behind it; Stops of the same command that land
+/// while it runs are run once more after it, on the same task, so none is lost. CONTROL: a Stop
+/// sent once the burst is done runs again.
+#[tokio::test]
+async fn a_burst_of_stops_starts_one_task_per_stop_command_and_none_is_lost() {
+    const BURST: u64 = 64;
+    let gate = Arc::new((Mutex::new(true), Condvar::new()));
+    let ran: Arc<Mutex<Vec<String>>> = Default::default();
+    let (at_work, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let runner: Runner = {
+        let (gate, ran, at_work, most) = (gate.clone(), ran.clone(), at_work.clone(), most.clone());
+        Arc::new(move |cmd: String, _args: Value, answer: Answer| {
+            if cmd == "halt_tx" || cmd == "set_ptt" {
+                most.fetch_max(at_work.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                ran.lock().unwrap().push(cmd.clone());
+                let (held, let_go) = &*gate;
+                let mut held = held.lock().unwrap();
+                while *held {
+                    held = let_go.wait(held).unwrap();
+                }
+                at_work.fetch_sub(1, Ordering::SeqCst);
+            }
+            answer(Ok(json!({ "ran": cmd })))
+        })
+    };
+    struct Open(Arc<(Mutex<bool>, Condvar)>);
+    impl Drop for Open {
+        fn drop(&mut self) {
+            *self.0 .0.lock().unwrap() = false;
+            self.0 .1.notify_all();
+        }
+    }
+    let open = Open(gate.clone());
+    let mut s = shack(home());
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(runner, voided);
+    let (_stop, stop) = watch::channel(false);
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.unwrap();
+    opened(&s, &mut socket, 1).await;
+    let mut pieces = Assembly::new(wire::ANSWER_BYTES);
+    let ran_within = |count: usize| {
+        let ran = ran.clone();
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while ran.lock().unwrap().len() < count && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            ran.lock().unwrap().clone()
+        }
+    };
+    let started = STARTED.with(|started| started.get());
+    // The first Stop halts at once.
+    send_call(&mut socket, 1, "halt_tx", json!({})).await;
+    assert_eq!(ran_within(1).await, ["halt_tx"]);
+    // The burst, while it runs, and a different Stop among it.
+    for id in 2..=BURST {
+        send_call(&mut socket, id, "halt_tx", json!({})).await;
+    }
+    send_call(&mut socket, BURST + 1, "set_ptt", json!({"on": false})).await;
+    // Read as far as here: a call after them is answered only once the reading task has read them.
+    let read = call(
+        &mut socket,
+        &mut pieces,
+        BURST + 2,
+        "get_settings",
+        json!({}),
+    )
+    .await;
+    assert!(read.get("value").is_some(), "{read}");
+    assert_eq!(
+        STARTED.with(|now| now.get()) - started,
+        2,
+        "blocking tasks started for {BURST} halt_tx and one set_ptt"
+    );
+    // The different Stop did not wait behind the first.
+    assert_eq!(ran_within(2).await, ["halt_tx", "set_ptt"]);
+    drop(open);
+    let answered = answers(&mut socket, &mut pieces, 1..=BURST + 1).await;
+    for (id, answer) in &answered {
+        assert!(answer.get("value").is_some(), "Stop {id}: {answer}");
+    }
+    let mut ran_all = ran.lock().unwrap().clone();
+    ran_all.sort();
+    assert_eq!(
+        ran_all,
+        ["halt_tx", "halt_tx", "set_ptt"],
+        "the first, and once more for the Stops that landed while it ran"
+    );
+    assert_eq!(most.load(Ordering::SeqCst), 2, "at work at once");
+    let again = call(&mut socket, &mut pieces, BURST + 3, "halt_tx", json!({})).await;
+    assert!(again.get("value").is_some(), "{again}");
+    assert_eq!(ran.lock().unwrap().len(), 4);
+}
+
+/// ⛔ A flood of Stops of one command, each with arguments of its own: the radio is halted by the
+/// first, and what waits behind it is at most [`STOP_RUNS`] runs, never one per Stop, so neither
+/// what the shack holds nor what it runs grows with the flood. A Stop past them is answered
+/// `busy`, so no Stop is left unanswered. CONTROL: a Stop once the flood is done runs again.
+#[tokio::test]
+async fn stops_of_one_command_with_arguments_of_their_own_wait_as_a_few_runs() {
+    const FLOOD: u64 = 64;
+    let gate = Arc::new((Mutex::new(true), Condvar::new()));
+    let ran: Arc<Mutex<Vec<Value>>> = Default::default();
+    let runner: Runner = {
+        let (gate, ran) = (gate.clone(), ran.clone());
+        Arc::new(move |cmd: String, args: Value, answer: Answer| {
+            if cmd == "halt_tx" {
+                ran.lock().unwrap().push(args);
+                let (held, let_go) = &*gate;
+                let mut held = held.lock().unwrap();
+                while *held {
+                    held = let_go.wait(held).unwrap();
+                }
+            }
+            answer(Ok(json!({ "ran": cmd })))
+        })
+    };
+    struct Open(Arc<(Mutex<bool>, Condvar)>);
+    impl Drop for Open {
+        fn drop(&mut self) {
+            *self.0 .0.lock().unwrap() = false;
+            self.0 .1.notify_all();
+        }
+    }
+    let open = Open(gate.clone());
+    let mut s = shack(home());
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(runner, voided);
+    let (_stop, stop) = watch::channel(false);
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.unwrap();
+    opened(&s, &mut socket, 1).await;
+    let mut pieces = Assembly::new(wire::ANSWER_BYTES);
+    // The first Stop halts at once.
+    send_call(&mut socket, 1, "halt_tx", json!({})).await;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ran.lock().unwrap().is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(*ran.lock().unwrap(), [json!({})], "halted by the first");
+    for id in 2..=FLOOD + 1 {
+        send_call(&mut socket, id, "halt_tx", json!({ "junk": id })).await;
+    }
+    send_call(&mut socket, FLOOD + 2, "get_settings", json!({})).await;
+    // The Stops past the runs waiting are answered while the first still runs, never left waiting.
+    let past = (2 + STOP_RUNS as u64)..=FLOOD + 1;
+    let early = answers(&mut socket, &mut pieces, past.clone().chain([FLOOD + 2])).await;
+    for id in past {
+        assert_eq!(early[&id], refused(id, "busy"));
+    }
+    assert!(early[&(FLOOD + 2)].get("value").is_some(), "{early:?}");
+    drop(open);
+    let answered = answers(&mut socket, &mut pieces, 1..2 + STOP_RUNS as u64).await;
+    for (id, answer) in &answered {
+        assert!(answer.get("value").is_some(), "Stop {id}: {answer}");
+    }
+    assert_eq!(
+        ran.lock().unwrap().len(),
+        1 + STOP_RUNS,
+        "the first, then the runs that waited behind it"
+    );
+    let again = call(
+        &mut socket,
+        &mut pieces,
+        FLOOD + 3,
+        "halt_tx",
+        json!({"junk": 0}),
+    )
+    .await;
+    assert!(again.get("value").is_some(), "{again}");
+    assert_eq!(ran.lock().unwrap().len(), 2 + STOP_RUNS);
+}
+
+/// ⛔ A task at work that panics leaves no work behind it unstarted: the next work, a Stop on the
+/// link, starts a task of its own. CONTROL: work after work that did not panic runs as well.
+#[tokio::test]
+async fn work_after_a_task_that_panicked_still_runs() {
+    let turns: Arc<InTurn<u64>> = Default::default();
+    let (done, ran) = std::sync::mpsc::channel();
+    for n in 1..=3u64 {
+        let done = done.clone();
+        turns.start(
+            |waiting| waiting.push(n),
+            move |waiting| {
+                for n in waiting {
+                    assert_ne!(n, 2, "the work's own panic");
+                    done.send(n).unwrap();
+                }
+            },
+        );
+        if n == 2 {
+            // Its task has ended by panicking before the next is added.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+    let got: Vec<u64> = (0..2)
+        .map(|_| {
+            ran.recv_timeout(Duration::from_secs(2))
+                .expect("work after it ran")
+        })
+        .collect();
+    assert_eq!(got, [1, 3]);
+}
+
+/// ★ A flood of `outcomes` questions: one blocking task answers them in turn, never one
+/// per question, and every one is answered. The journals are held meanwhile, as a burst of calls
+/// being admitted holds them. CONTROL: a question once they are let go is answered too.
+#[tokio::test]
+async fn a_burst_of_outcomes_questions_starts_one_task_and_each_is_answered() {
+    const BURST: usize = 32;
+    let app = App::new();
+    let s = running(&app);
+    let (_stop, stop) = watch::channel(false);
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.unwrap();
+    opened(&s, &mut socket, 1).await;
+    let mut pieces = Assembly::new(wire::ANSWER_BYTES);
+    let held = s.shared.dispatcher.hold_journals();
+    let started = STARTED.with(|started| started.get());
+    for n in 0..BURST as u64 {
+        send(&mut socket, json!({"type":"outcomes","ids":[1000 + n]})).await;
+    }
+    // Answered on the reading task: once it is, every question before it has been read.
+    send(&mut socket, json!({"type":"watch","feeds":[]})).await;
+    loop {
+        match got(&mut socket, &mut pieces).await {
+            Got::Text(value) if value["type"] == "watching" => break,
+            Got::Text(value) if value["type"] == "outcomes" => {
+                panic!("answered while held: {value}")
+            }
+            Got::Text(_) | Got::Feed(_) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(
+        STARTED.with(|now| now.get()) - started,
+        1,
+        "blocking tasks started for {BURST} questions"
+    );
+    drop(held);
+    let mut asked: std::collections::BTreeSet<u64> = (0..BURST as u64).map(|n| 1000 + n).collect();
+    while !asked.is_empty() {
+        match got(&mut socket, &mut pieces).await {
+            Got::Text(value) if value["type"] == "outcomes" => {
+                assert_eq!(value["outcomes"], json!([{"outcome":"unknown"}]), "{value}");
+                assert!(asked.remove(&value["ids"][0].as_u64().unwrap()), "{value}");
+            }
+            Got::Text(_) | Got::Feed(_) => {}
+            other => panic!("unanswered {asked:?}: {other:?}"),
+        }
+    }
+    send(&mut socket, json!({"type":"outcomes","ids":[7]})).await;
+    loop {
+        match got(&mut socket, &mut pieces).await {
+            Got::Text(value) if value["type"] == "outcomes" => {
+                assert_eq!(value["ids"], json!([7]));
+                break;
+            }
+            Got::Text(_) | Got::Feed(_) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
 /// ★ Pieces: a call bigger than a frame crosses in pieces and runs with exactly its arguments, and
 /// its answer, bigger than a frame, comes back whole; a Stop sent between a big call's pieces is
 /// answered before the rest of them is sent; and a 200 KB answer comes back whole. CONTROL: a binary frame that is
@@ -708,6 +978,45 @@ async fn big_calls_and_answers_cross_in_pieces_and_a_stop_goes_between_them() {
         .send(Message::Binary(vec![9, 0, 0, 0, 0, 1, 1].into()))
         .await
         .unwrap();
+    assert!(matches!(got(&mut socket, &mut pieces).await, Got::Closed));
+    task.await.unwrap();
+}
+
+/// ★ Calls left half-sent: a computer that starts call after call and never finishes
+/// one is cut off once what the shack holds of them passes two calls of the largest size, where
+/// before each of its 16 streams could hold 16 MiB. CONTROL: two calls of the largest size, both
+/// half-sent at once, are held, and a Stop between them is still answered.
+#[tokio::test]
+async fn calls_left_half_sent_are_cut_off_at_the_connections_budget() {
+    let app = App::new();
+    let s = running(&app);
+    let (_stop, stop) = watch::channel(false);
+    let (task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.unwrap();
+    opened(&s, &mut socket, 1).await;
+    let size = wire::FRAME - 6;
+    let piece = |stream: u32, bytes: usize| {
+        let mut frame = vec![1];
+        frame.extend_from_slice(&stream.to_le_bytes());
+        frame.push(0);
+        frame.resize(6 + bytes, b'x');
+        Message::Binary(frame.into())
+    };
+    for stream in [1, 2] {
+        let mut left = wire::CALL_BYTES;
+        while left > 0 {
+            let bytes = left.min(size);
+            socket.send(piece(stream, bytes)).await.unwrap();
+            left -= bytes;
+        }
+    }
+    let mut pieces = Assembly::new(wire::ANSWER_BYTES);
+    let stopped = call(&mut socket, &mut pieces, 1, "halt_tx", json!({})).await;
+    assert!(
+        stopped.get("value").is_some(),
+        "held two, still open: {stopped}"
+    );
+    socket.send(piece(3, 1)).await.unwrap();
     assert!(matches!(got(&mut socket, &mut pieces).await, Got::Closed));
     task.await.unwrap();
 }

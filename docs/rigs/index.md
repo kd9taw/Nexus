@@ -89,8 +89,8 @@ with no Rig Model, no rigctld and no virtual COM port. You set the **SDR
 program address** (`127.0.0.1` when it runs on this computer) and the **TCI
 port**, and **Find TCI server** looks for it there. It is **Beta**: Nexus
 sets the dial and mode, transmits through the program, takes its receive
-audio and can draw its panadapter. Spots on the program's panadapter are not
-ready yet. See [TCI: connect to an SDR program's TCI server](tci.md).
+audio, can draw its panadapter and can mark the stations you need on it. See
+[TCI: connect to an SDR program's TCI server](tci.md).
 
 The other way round, Nexus can be the TCI server for programs on this
 computer, such as WSJT-X, JTDX, MSHV and Log4OM, whatever radio Nexus runs.

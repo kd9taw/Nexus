@@ -7,8 +7,8 @@
 //!
 //! **What the session does.**
 //! - *Line assembly* ([`LineAssembler`]): bytes are held until a `\n` arrives; only whole lines
-//!   are parsed, so a line split across reads is never a value (spec §10.5, "A partial reply is
-//!   never a reading"). The terminator and one CR are stripped; blank lines are dropped; a run of
+//!   are parsed, so a line split across reads is never a value.
+//!   The terminator and one CR are stripped; blank lines are dropped; a run of
 //!   [`MAX_LINE`] bytes with no terminator ends the session.
 //! - *The prologue*: `V` then `H`. Only a TCP API version reviewed for transmit (1.4, any build;
 //!   [`supports_protocol`]) on a first, well-formed prologue lets this session transmit. A late,
@@ -36,7 +36,7 @@
 //! readback proves the end; a reply to a stop is not that proof. Every stop that ends the open
 //! operation arms the escalation clock: if the proof does not come within the deadline after the
 //! first one, the session sends the kind's stops again (`xmit 0`; for a tune `transmit tune 0` and
-//! `xmit 0`), reports [`Event::UnkeyUnconfirmed`] and closes (spec §10.5). A radio-ended start (a
+//! `xmit 0`), reports [`Event::UnkeyUnconfirmed`] and closes. A radio-ended start (a
 //! CWX word, an ATU cycle) whose window fails is escalated at once. An ATU start the radio refuses
 //! in its reply, with nothing keyed before it, is not a failed window: nothing is on the air and
 //! nothing is to be ended, so it ends there, with no stop and no alarm, and the session reports

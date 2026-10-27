@@ -60,7 +60,7 @@ export class LanConnection {
    *  will not take it. */
   constructor(private readonly send: (text: string) => void, readonly road: LanRoad, env: StreamEnvironment = lanStream()) {
     const ids = { stationId: road.stationId, deviceId: road.deviceId, sessionId: road.sessionId }
-    this.operations = new OperationClient(message => this.carry(message), true, () => performance.now(), undefined, LAN_OPERATION_VERSION)
+    this.operations = new OperationClient(message => this.carry(message), true, () => performance.now(), LAN_OPERATION_VERSION)
     this.stream = new StreamLink((payload, leaseId) => this.carry(JSON.stringify({ type: 'streamSignal', leaseId, payload })), {
       ...env,
       relayServers: undefined,

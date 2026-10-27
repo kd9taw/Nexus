@@ -58,12 +58,10 @@ export function js8HbAckRateBlockedNote(presence: Js8Presence | undefined): stri
  *  disables its menu item there; it keeps its state for when the speed comes back. */
 export function Js8HbNetChip({
   presence,
-  canControl,
   speed,
   onToggle,
 }: {
   presence: Js8Presence
-  canControl: boolean
   speed: string
   onToggle: (on: boolean) => void
 }) {
@@ -78,7 +76,7 @@ export function Js8HbNetChip({
       type="button"
       className={`cw-macro rtty-arm js8-arm js8-hbnet${on ? ' on' : ''}`}
       aria-pressed={on}
-      disabled={!canControl || !presence.hbSpeed}
+      disabled={!presence.hbSpeed}
       onClick={() => onToggle(on)}
       title={title}
     >

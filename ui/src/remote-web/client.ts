@@ -1,5 +1,3 @@
-import { pendingLogStorage } from './operation-storage'
-import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from './operation-protocol'
 import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
@@ -22,10 +20,16 @@ export type AccountSession = {
     state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null
     /** What the account may do now: 'lan' is Remote on the shack's own network only, free once internet
      *  use has ended. Absent from an older service. */
-    access?: 'internet' | 'lan' | 'none' }
+    access?: 'internet' | 'lan' | 'none'
+    /** What the access runs on: the app's trial, a grant by hand, or a subscription with the provider's
+     *  status. Absent from an older service. */
+    plan?: { kind: 'trial' | 'manual' | 'subscription' | null; status: string | null; periodEnd: number | null; renews: boolean } }
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
+  /** True while Remote is free during the beta: no trial runs out, so the page counts no days and
+   *  promises no trial. Absent from an older service. */
+  beta?: boolean
   /** `expires_at` is when this browser's approval ends; `untilRemoved` is true for an approval that lasts
    *  until it is removed at the shack (every approval since 2026-10-10), whose `expires_at` is no date to
    *  show. `renewsUntil` is the end that use cannot move under the older rule, or null. */
@@ -134,16 +138,18 @@ async function boundedJson<T>(path: string, options: RequestInit): Promise<T> {
 }
 export class BrowserClient {
   constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0,
-    readonly signInRefusal: SignInRefusal | null = null, readonly streamVersion = 0) {}
+    readonly signInRefusal: SignInRefusal | null = null, readonly streamVersion = 0, readonly billing = false) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number; operationPushVersion?: number; streamVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number; operationPushVersion?: number; streamVersion?: number; billing?: boolean }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
     if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.search || issuer.hash) throw new RemoteError(503)
+    // The sign-in asks who signed in and the address the service verified, which is how a station
+    // knows a person it invited; never the profile, so no name, nickname or picture.
     const auth = new Auth0Client({ domain: issuer.host, clientId: config.clientId,
       cacheLocation: 'memory', useRefreshTokens: false, httpTimeoutInSeconds: 10,
-      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
+      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid email' } })
     const query = new URLSearchParams(window.location.search)
     let signInRefusal: SignInRefusal | null = null
     if (query.has('code') || query.has('error')) {
@@ -163,7 +169,9 @@ export class BrowserClient {
     }
     return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion, config.operationPushVersion), signInRefusal,
       // A service rolled back past the stream lane reports nothing here, and the page then offers no stream.
-      config.streamVersion === 1 ? 1 : 0)
+      config.streamVersion === 1 ? 1 : 0,
+      // Subscribe and Manage, only where the service says its billing is on; an older service never does.
+      config.billing === true)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   // `createAccount` sends Auth0 straight to its sign-up screen. Without it a first-time operator
@@ -175,6 +183,14 @@ export class BrowserClient {
   signOut(): Promise<void> { return this.auth.logout({ logoutParams: { returnTo: window.location.origin } }) }
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     return (await this.request<T>(path, body, signal)).body
+  }
+  /** The payment provider's page for Subscribe (`checkout`, with the plan) or Manage (`portal`), which the
+   *  page then goes to. Only a page on the provider's own checkout or billing domain is ever returned. */
+  async billingPage(kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}): Promise<string> {
+    const { url } = await this.post<{ url?: unknown }>(`billing/${kind}`, body)
+    const page = kind === 'checkout' ? 'https://checkout.stripe.com/' : 'https://billing.stripe.com/'
+    if (typeof url !== 'string' || !url.startsWith(page)) throw new RemoteError(503, 'serviceUnavailable')
+    return url
   }
   /** `lan`: a LAN-only session, the one an account whose internet use has ended may have. */
   observationTicket(stationId: string, signal: AbortSignal, lan = false): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
@@ -270,7 +286,7 @@ export class HostedConnection {
       const lane = this.device && !(value.request?.type === 'stopTransmit' || value.request?.type === 'state') ? OPERATION_LANE : null
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length+(lane?LANE_PROOF_BYTES:0)>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.lane(this.socket, message, value, lane)
-    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),parseOperationVersion(client.operationVersion)??1)
     this.audio = new AudioLink(message => {
       const text = JSON.stringify(message)
       // Its own budget, deliberately small: a listen request is ~130 bytes and this is
@@ -520,8 +536,9 @@ export class HostedConnection {
           // the stream, never the session - and the lease the session holds.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('stream')) { this.stream.receive(message); return }
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
-          // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
-          if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
+          // Operation v5's pushed outcome of a settled control. This page sends no control, so the
+          // station has nothing to push to it: a protocol error, as it always was below v5.
+          if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; throw new Error('unexpectedOperationEvent') }
           // This page never asks for the application lane, so anything from it is unrequested.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             reason = 'invalidApplication'; throw new Error('unexpectedApplicationResult')

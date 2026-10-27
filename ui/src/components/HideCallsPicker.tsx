@@ -3,17 +3,13 @@
 // inline popover in the narrow rail) — with one text field. The list itself lives in
 // features/hideCalls.ts; every pane subscribes, so a pane and its control never disagree.
 //
-// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The prefixes the
-// placeholder offers are technical tokens and live below as HIDE_EXAMPLES; the ones quoted
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The prefixes quoted
 // inside the note stay in the sentence, as `ADIF OPERATOR` does in the Station hint.
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { useEffect, useState } from 'react'
 import { useHideCalls } from '../features/hideCalls'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
-
-/** Example entries — a callsign and two prefix wildcards. Syntax, not words. */
-const HIDE_EXAMPLES = 'VP8* R0* K1ABC'
 
 export function HideCallsPicker() {
   const { entries, setEntries } = useHideCalls()
@@ -43,7 +39,6 @@ export function HideCallsPicker() {
                 className="settings-input"
                 type="text"
                 value={text}
-                placeholder={t('hideCalls.placeholder', { examples: HIDE_EXAMPLES })}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => setText(e.target.value)}

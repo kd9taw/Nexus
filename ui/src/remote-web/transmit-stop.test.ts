@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
-import { pendingControlStorage } from './control-storage'
 import { operationRequest, operationValue, type OperationState } from './operation-protocol'
 
 const id = () => crypto.randomUUID()
@@ -63,15 +62,15 @@ it.each([1, 2, 3])('refuses Stop through an older peer and projects v4 owner tok
 
 function client() {
   vi.useFakeTimers()
-  const sent: any[] = [], storage = { read: () => { throw Error('unavailable') }, write: vi.fn(() => { throw Error('unavailable') }) }
-  const c = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => Date.now(), storage, 4)
+  const sent: any[] = []
+  const c = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => Date.now(), 4)
   c.open()
   const s = state()
   c.receive({ type: 'operationResponse', requestId: sent[0].request.requestId, value: s })
-  return { c, sent, s, storage }
+  return { c, sent, s }
 }
 
-it('sends Stop while a heartbeat is outstanding despite unavailable receipt storage', async () => {
+it('sends Stop while a heartbeat is outstanding', async () => {
   const h = client()
   await vi.advanceTimersByTimeAsync(1000)
   expect(h.sent[h.sent.length - 1].request.type).toBe('heartbeat')
@@ -84,7 +83,6 @@ it('sends Stop while a heartbeat is outstanding despite unavailable receipt stor
   expect(await stopped).toEqual({ stop: 'accepted' })
   expect(h.c.getSnapshot().busy).toBe(true)
   expect(h.c.getSnapshot().state).toEqual(h.s)
-  expect(h.storage.write).not.toHaveBeenCalled()
   h.c.receive({ type: 'operationResponse', requestId: heartbeat, value: { ...h.s, transmitEpoch: '000000000000002b' } })
   expect(h.c.getSnapshot().busy).toBe(false)
   h.c.disconnected()
@@ -205,13 +203,11 @@ it.each(['timeout', 'disconnect', 'refused'])('does not retry or claim RF stoppe
   await expect(h.c.stopTransmit()).rejects.toThrow('stationUnavailable')
 })
 
-it('sends Stop while a heartbeat is in flight and the shown state is stale, where a control is refused unsent', async () => {
+it('sends Stop while a heartbeat is in flight and the shown state is stale', async () => {
   vi.useFakeTimers()
   let now = 1000
-  const sent: any[] = [], values = new Map<string, string>()
-  const data = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
-  const c = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined, 4,
-    pendingControlStorage(() => data, 'station', async (_key, run) => run()))
+  const sent: any[] = []
+  const c = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, 4)
   c.open()
   c.receive({ type: 'operationResponse', requestId: sent[0].request.requestId, value: state() })
   now += 1000
@@ -220,19 +216,10 @@ it('sends Stop while a heartbeat is in flight and the shown state is stale, wher
   now += 300
   await vi.advanceTimersByTimeAsync(250)
   expect(c.getSnapshot().fresh).toBe(false)
-  // The same moment holds an ordinary control: it waits for current control and sends nothing meanwhile...
-  const control = c.control({ action: 'decoder.clear', receiver: 'cw' }).catch(e => e)
-  await vi.advanceTimersByTimeAsync(0)
-  expect(sent.some(w => w.request.type === 'stationControl')).toBe(false)
-  // ...while Stop leaves immediately, even with that control still waiting: it checks no freshness
-  // window and waits for no heartbeat.
+  // Stop leaves immediately: it checks no freshness window and waits for no heartbeat.
   const stopping = c.stopTransmit()
   expect(sent[sent.length - 1].request.type).toBe('stopTransmit')
   c.receive({ type: 'operationResponse', requestId: sent[sent.length - 1].request.requestId, value: { stop: 'accepted' } })
   await expect(stopping).resolves.toEqual({ stop: 'accepted' })
-  // Control never became current: the control is refused unsent, and nothing reached the station.
-  await vi.advanceTimersByTimeAsync(1500)
-  expect(await control).toMatchObject({ message: 'notController', sent: false })
-  expect(sent.some(w => w.request.type === 'stationControl')).toBe(false)
   c.disconnected()
 })

@@ -6,7 +6,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, LateDecodes, NeedAlert, Tier } from '../types'
@@ -21,11 +20,12 @@ import {
   passesFilter,
   periodStartMs,
   renderWindow,
+  rowTimeMs,
   type DecodeEntry,
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { DECODE_HIDE_B4_EVENT, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
+import { DECODE_HIDE_B4_EVENT, DECODE_HIDE_B4_SCOPE_EVENT, type DecodeHideB4Scope, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideB4Scope, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideB4Scope, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
@@ -35,8 +35,7 @@ import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 
 /**
  * The pane's invariant vocabulary — never translated, never locale-formatted.
@@ -91,6 +90,10 @@ interface Props {
   /** Active mode/tier — sets the T/R period for separator UTC times; a tier
    * change wipes the pane like a band change. */
   tier: Tier
+  /** The live T/R period in seconds (`snap.link.periodSecs`): MSK144, FST4, Q65 and JS8 make it a
+   *  setting, so the tier alone cannot date a row. Absent or 0 (a station that sends none), the
+   *  tier's usual period stands in. */
+  periodSecs?: number
   /** The period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`): shown after the wipe, as WSJT-X shows it, under the band and mode it was
    * heard on, and never worked from. */
@@ -175,9 +178,10 @@ interface Props {
    */
   onErase?: () => void
   /**
-   * Bumped by an inbound UDP Clear (snap.clearTick). When the value CHANGES
-   * (skipping mount), the pane wipes its history — same as Erase, but does NOT
-   * invoke onErase (avoids echoing back to the logger).
+   * Bumped by an inbound UDP Clear of this pane (snap.clearTick for Band Activity,
+   * snap.rxFreqClearTick for Rx Frequency). When the value CHANGES (skipping mount),
+   * the pane wipes its history — same as Erase, but does NOT invoke onErase (avoids
+   * echoing back to the logger).
    */
   clearTick?: number
   /** Externally-owned rolling history. The cockpit passes one per pane role so the
@@ -239,6 +243,7 @@ export function OperateDecodes({
   rxOffsetHz,
   band,
   tier,
+  periodSecs,
   late = null,
   harqRescues,
   onCall,
@@ -268,11 +273,6 @@ export function OperateDecodes({
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
-  const control = useStationControl()
-  const callControl = useStationCapability('ftCall')
-  const rxControl = useStationCapability('receiverSettings')
-  const available = useStationData()
-  const selectControl = control || available
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
   if (history == null && localHistRef.current == null) {
@@ -321,6 +321,31 @@ export function OperateDecodes({
     window.addEventListener(DECODE_HIDE_B4_EVENT, onChange)
     return () => window.removeEventListener(DECODE_HIDE_B4_EVENT, onChange)
   }, [])
+  // #409: which worked stations −B4 hides — any band (as it always was) or this band only. Shared
+  // by every mounted pane the same way −B4 itself is.
+  const [hideB4Scope, setHideB4Scope] = useState<DecodeHideB4Scope>(loadDecodeHideB4Scope)
+  useEffect(() => {
+    const onChange = (e: Event) =>
+      setHideB4Scope((e as CustomEvent<DecodeHideB4Scope>).detail === 'band' ? 'band' : 'any')
+    window.addEventListener(DECODE_HIDE_B4_SCOPE_EVENT, onChange)
+    return () => window.removeEventListener(DECODE_HIDE_B4_SCOPE_EVENT, onChange)
+  }, [])
+  // Beside the chip, as the Spots pane's Hide-worked window sits beside its chip. Idle while the
+  // B4 chip is lit, exactly like −B4.
+  const hideB4ScopeSelect = (
+    <select
+      className="od-b4-scope"
+      value={hideB4Scope}
+      disabled={filter === 'b4'}
+      onChange={(e) => saveDecodeHideB4Scope(e.target.value === 'band' ? 'band' : 'any')}
+      aria-label={t('operate.decodes.hideB4Scope.aria')}
+      title={t('operate.decodes.hideB4Scope.title')}
+    >
+      {/* The <option> VALUES are the persisted scope; only the labels are prose. */}
+      <option value="any">{t('operate.decodes.hideB4Scope.any')}</option>
+      <option value="band">{t('operate.decodes.hideB4Scope.band')}</option>
+    </select>
+  )
   const hideB4Chip = (
     <button
       type="button"
@@ -328,10 +353,13 @@ export function OperateDecodes({
       aria-pressed={hideB4}
       disabled={filter === 'b4'}
       onClick={() => pickHideB4(!hideB4)}
+      // The tooltip names the band scope, which the Rx Frequency pane applies with no menu of its own.
       title={
         filter === 'b4'
           ? t('operate.decodes.hideB4.title.idle')
-          : t('operate.decodes.hideB4.title')
+          : hideB4Scope === 'band'
+            ? t('operate.decodes.hideB4.title.band')
+            : t('operate.decodes.hideB4.title')
       }
     >
       −{DECODE_TOKENS.b4}
@@ -435,7 +463,7 @@ export function OperateDecodes({
           !(
             hideB4 &&
             filter !== 'b4' &&
-            d.worked &&
+            (hideB4Scope === 'band' ? d.workedBand === true : d.worked) &&
             !d.mine &&
             !d.directedToMe &&
             (partnerCall == null || d.from !== partnerCall)
@@ -507,6 +535,8 @@ export function OperateDecodes({
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = newestTop ? [...shown].reverse() : shown
+  // The period the separators and the time column date rows by (see the `periodSecs` prop).
+  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -514,7 +544,7 @@ export function OperateDecodes({
     histRef.current.erase()
     repin()
     setTick((t) => t + 1)
-    if (control) onErase?.()
+    onErase?.()
   }
 
   const selectedUp = selectedCall?.trim().toUpperCase() || null
@@ -526,15 +556,15 @@ export function OperateDecodes({
     // QSO on the band or mode it was not heard on.
     if (!d.from || d.heard) return
     if (e.altKey) {
-      if (control) onToggleIgnore?.(d.from)
+      onToggleIgnore?.(d.from)
       return
     }
     if (e.ctrlKey || e.metaKey) {
-      if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
-      if (rxControl) onSetRx?.(d.freqHz)
+      onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+      onSetRx?.(d.freqHz)
       return
     }
-    if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    onCall(d.from, undefined, d.message, d.snr, d.freqHz)
   }
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
@@ -542,9 +572,9 @@ export function OperateDecodes({
   const roving = useRovingList(drawn.length, (i, mods) => {
     const d = drawn[i]
     if (!d?.from || d.heard) return
-    if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
-    else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
-    else if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+    if (mods.alt) onToggleIgnore?.(d.from)
+    else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
   const eraseBtn = (
@@ -617,6 +647,7 @@ export function OperateDecodes({
               {t('operate.decodes.hideConfirmed.label')}
             </button>
             {hideB4Chip}
+            {hideB4ScopeSelect}
             <button
               type="button"
               className={`od-chip od-newest${newestTop ? ' active' : ''}`}
@@ -751,10 +782,10 @@ export function OperateDecodes({
                   className="od-period-sep"
                   role="separator"
                   aria-label={t('operate.decodes.period.aria', {
-                    time: fmtUtc(periodStartMs(d.slot - 1, tier)),
+                    time: fmtUtc(periodStartMs(d.slot - 1, tier, periodS)),
                   })}
                 >
-                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
+                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier, periodS))}</span>
                   <span className="od-sep-band">{band}</span>
                 </div>
               )}
@@ -812,14 +843,14 @@ export function OperateDecodes({
                 style={hlStyle}
                 onClick={() => {
                   roving.setActive(i)
-                  if (selectControl && d.from && !d.heard)
+                  if (d.from && !d.heard)
                     onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
                   d.heard
                     ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
-                    : !callControl ? d.message : ignoredRow
+                    : ignoredRow
                     ? t('operate.row.ignored.title')
                     : d.from
                       ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })
@@ -832,7 +863,18 @@ export function OperateDecodes({
                 >
                   {d.tier}
                 </span>
-                <span className="decode-utc" title={t('operate.decodes.utc.title')}>{fmtUtc(d.at)}</span>
+                {/* The period it was heard in, as WSJT-X and ALL.TXT stamp it; when it reached
+                    this list goes in the tooltip. */}
+                <span
+                  className="decode-utc"
+                  title={
+                    d.mine
+                      ? t('operate.decodes.utc.title')
+                      : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+                  }
+                >
+                  {fmtUtc(rowTimeMs(d, tier, periodS))}
+                </span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
                 {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
                     column "T"), so it is legitimately 0..period and the FT8 clock-skew
@@ -944,11 +986,12 @@ export function OperateDecodes({
                   // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no
                   // per-row Work button, so each decode stays a single tight line. QRZ opens the
                   // callsign's page.
+                  // The station's card, where its QRZ button opens the page this one used to.
                   <button
                     type="button"
                     className="qrz-link-call decode-qrz"
-                    onClick={(e) => { e.stopPropagation(); const c = d.from as string; void withErrorToast(() => openQrzPage(c), t('callbook.qrzPage.failed', { call: c })) }}
-                    title={t('callbook.qrzPage.title', { call: d.from })}
+                    {...callCardTrigger(d.from, qrzPageOf(d.from), true)}
+                    onDoubleClick={(e) => e.stopPropagation()}
                   >
                     {DECODE_TOKENS.qrz}
                   </button>

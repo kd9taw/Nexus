@@ -1,4 +1,4 @@
-//! ⭐ **CQ WW DX and CQ WPX, end to end** — the proof batch 10 exists for.
+//! ⭐ **CQ WW DX and CQ WPX, end to end**.
 //!
 //! These are the first two contests whose multipliers and QSO points are functions of the
 //! CALLSIGN rather than of the exchange, so they exercise machinery nothing before them

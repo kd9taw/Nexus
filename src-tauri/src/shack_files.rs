@@ -167,39 +167,125 @@ pub(crate) fn gallery_image_in(dir: &Path, path: &str) -> Result<String, String>
         .map_err(|e| format!("Could not read the picture: {e}"))
 }
 
-/// Writes one piece of a fetched file into `dir` (this computer's Downloads folder) under the bare
-/// `filename`: the piece at offset 0 starts the file afresh, and each later piece must start where
-/// the file now ends, so a piece sent twice or out of order is refused rather than written twice.
+/// Where a saved piece went: the file's name in this computer's Downloads folder, which the later
+/// pieces of the same save name, and its full path, which the operator is shown.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Saved {
+    pub name: String,
+    pub path: String,
+}
+
+/// The most names a save tries before it gives up: `name`, then `name (1)` up to this.
+const FREE_NAMES: u32 = 1000;
+
+/// A new file in `dir`, never one that is there already: `name` itself when it is free, else
+/// `stem (1).ext`, `stem (2).ext` and on, as a browser names a download whose name is taken.
+/// `create_new` makes "not there" and "now this save's" one step, so a file that appears
+/// meanwhile is skipped, never opened over.
+fn create_unused(dir: &Path, name: &str) -> Result<(String, std::fs::File), String> {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    };
+    for n in 0..=FREE_NAMES {
+        let candidate = match (n, ext) {
+            (0, _) => name.to_string(),
+            (_, Some(ext)) => format!("{stem} ({n}).{ext}"),
+            (_, None) => format!("{stem} ({n})"),
+        };
+        let path = dir.join(&candidate);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            // Taken: a file, or a folder of that name (which Windows refuses as access denied).
+            Err(_) if path.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(format!("Could not write {}: {e}", path.display())),
+        }
+    }
+    Err(format!(
+        "Could not save {name}: {} already holds it and {FREE_NAMES} numbered copies",
+        dir.display()
+    ))
+}
+
+/// Whether a save writes a file of this name: only the kinds the station shares (a recording, an
+/// SSTV picture, ALL.TXT), under the station's own name or the numbered one [`create_unused`]
+/// gave it here (`ALL (1).TXT`), which the later pieces of that save name.
+fn saves(name: &str) -> bool {
+    let shared = |name: &str| {
+        [Folder::Recordings, Folder::AllTxt, Folder::Sstv]
+            .into_iter()
+            .any(|folder| folder.admits(name))
+    };
+    shared(name) || unnumbered(name).is_some_and(|own| shared(&own))
+}
+
+/// The name [`create_unused`] numbered into `name` (`ALL.TXT` for `ALL (1).TXT`), or None when
+/// `name` carries no number. The extension splits off as it does there.
+fn unnumbered(name: &str) -> Option<String> {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    };
+    let (own, n) = stem.strip_suffix(')')?.rsplit_once(" (")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(ext.map_or_else(|| own.to_string(), |ext| format!("{own}.{ext}")))
+}
+
+/// Writes one piece of a fetched file into `dir` (this computer's Downloads folder). The piece at
+/// offset 0 starts a new file under the bare `filename`, or under the next free name when a file
+/// of that name is there already, which is never written over. Each later piece names the file
+/// the first one started ([`Saved::name`]) and must start where that file now ends, so a piece
+/// sent twice or out of order is refused rather than written twice. A name of a kind the station
+/// does not share ([`saves`]) is refused before anything is written.
 pub(crate) fn save_piece_in(
     dir: &Path,
     filename: &str,
     base64: &str,
     offset: u64,
-) -> Result<String, String> {
+) -> Result<Saved, String> {
     use std::io::Write;
     let name = bare(filename)
         .ok()
         .and_then(Path::to_str)
         .filter(|n| !n.is_empty())
         .ok_or("Invalid file name")?;
+    if !saves(name) {
+        return Err(format!(
+            "{name} is not a recording, an SSTV picture or ALL.TXT"
+        ));
+    }
     let bytes = crate::b64_decode(base64)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(name);
-    let mut file = if offset == 0 {
-        std::fs::File::create(&path)
+    let (name, mut file) = if offset == 0 {
+        create_unused(dir, name)?
     } else {
+        let path = dir.join(name);
         let held = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if held != offset {
             return Err(format!(
                 "The save of {name} lost its place: it holds {held} bytes, not {offset}"
             ));
         }
-        std::fs::OpenOptions::new().append(true).open(&path)
-    }
-    .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        (name.to_string(), file)
+    };
+    let path = dir.join(&name);
     file.write_all(&bytes)
         .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
-    Ok(path.display().to_string())
+    Ok(Saved {
+        name,
+        path: path.display().to_string(),
+    })
 }
 
 /// The files in one of the three folders, newest first.
@@ -227,7 +313,7 @@ pub(crate) fn shack_file_save(
     filename: String,
     base64: String,
     offset: u64,
-) -> Result<String, String> {
+) -> Result<Saved, String> {
     use tauri::Manager;
     let dir = app
         .path()

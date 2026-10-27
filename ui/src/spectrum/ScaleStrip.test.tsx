@@ -19,7 +19,6 @@ describe('the scope’s ⚙ strip', () => {
         settings={{ ...scaleDefaults('phone'), window: 'sharp', detector: 'average', averageMs: 1000 }}
         onChange={onChange}
         windowControl
-        control
       />,
     )
     const windows = within(resolution()!).getAllByRole('button')
@@ -39,23 +38,15 @@ describe('the scope’s ⚙ strip', () => {
     expect(onChange.mock.calls).toEqual([[{ window: 'fast' }], [{ averageMs: 0 }], [{ detector: 'peak' }]])
   })
 
-  it('offers no window where the row’s window is fixed, and disables it where this window does not drive the station', () => {
-    const { rerender } = render(<ScaleStrip settings={scaleDefaults('operate')} onChange={() => {}} windowControl={false} control />)
+  it('offers no window where the row’s window is fixed', () => {
+    render(<ScaleStrip settings={scaleDefaults('operate')} onChange={() => {}} windowControl={false} />)
     expect(resolution()).toBeNull()
-    rerender(<ScaleStrip settings={scaleDefaults('phone')} onChange={() => {}} windowControl control={false} />)
-    for (const b of within(resolution()!).getAllByRole('button')) {
-      expect(b).toHaveProperty('disabled', true)
-      expect(b.getAttribute('title')).toMatch(/follows Nexus at the shack/)
-    }
-    // The drawing is this window's own: never disabled.
-    expect(averaging().disabled).toBe(false)
-    for (const b of within(detector()).getAllByRole('button')) expect(b).toHaveProperty('disabled', false)
   })
 
   it('bound to a cockpit’s record, persists what the operator picks', () => {
     function Host({ cockpit }: { cockpit: ScopeCockpit }) {
       const [s, update] = useScaleSettings(cockpit)
-      return <ScaleStrip settings={s} onChange={update} windowControl control />
+      return <ScaleStrip settings={s} onChange={update} windowControl />
     }
     render(<Host cockpit="cw" />)
     expect(averaging().value).toBe('0')

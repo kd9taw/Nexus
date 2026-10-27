@@ -1343,7 +1343,7 @@ fn a_monitor_never_takes_nexuss_own_cat_broker_for_a_radio() {
     s.ensure_radio_profiles();
     s.radios
         .push(net_rigctl_profile(1, &broker.addr, free_port()));
-    let (_, want) = monitor_want(&s);
+    let (_, want) = monitor_want(&s, None);
     let t = &want.iter().find(|(id, _)| *id == 1).unwrap().1;
     let (mut rig, daemon, ok) = open_monitor(t);
     let seen = (
@@ -1403,7 +1403,7 @@ fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
         )
     };
     let monitor = |id: u32| {
-        let (_, want) = monitor_want(engine.lock().unwrap().settings());
+        let (_, want) = monitor_want(engine.lock().unwrap().settings(), None);
         let t = match want.iter().find(|(i, _)| *i == id) {
             Some((_, t)) => t.clone(),
             // The operated radio is not in the monitor's set; open it as the monitor would.
@@ -1723,7 +1723,7 @@ fn a_clash_an_older_build_stored_is_never_read_by_a_monitor_or_a_remote_selectio
     let engine = Arc::new(Mutex::new(Engine::with_settings(stored.settings.clone())));
     // The pill: the monitor pool opens the IC-9700 as it always does, then polls it.
     let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
-    let (active, mut want) = monitor_want(engine.lock().unwrap().settings());
+    let (active, mut want) = monitor_want(engine.lock().unwrap().settings(), None);
     want.retain(|(id, _)| *id == 0);
     reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
     poll_monitors(
@@ -1911,7 +1911,7 @@ fn launched(s: &Settings) -> (bool, Option<bool>, String, Option<u64>, [bool; 2]
         broker_self_port: s.cat_broker.then_some(s.cat_broker_port),
         ..RadioConfig::default()
     };
-    let (mut rig, daemon, probe) = open_rig(&launch_transport(&cfg, s), true);
+    let (mut rig, daemon, probe) = open_rig(&launch_transport(&cfg, s, None), true);
     let keys = [rig.ptt(true).is_ok(), rig.ptt(false).is_ok()];
     let seen = (
         daemon.is_some(),
@@ -2037,6 +2037,203 @@ fn test_cat_on_a_refused_address_says_why_again() {
     assert_eq!(
         (opens, said, heard_at(&broker)),
         (1, held_by_the_broker(broker.port(), "IC-9700"), (0, 0))
+    );
+}
+
+/// ⭐ #165: THE OPERATOR'S OWN RIGCTLD ON THE SHARING PORT'S NUMBER IS THEIR RADIO, NOT NEXUS. They
+/// run rigctld on 127.0.0.1:P before Nexus and point a NET rigctl radio at it, with Share this
+/// radio on P too. Sharing steps aside to another port, and the radio was still refused as "Nexus
+/// itself", because the check read the Sharing port and not where the broker serves. Through the
+/// loop, as the launch meets it: refused while the broker has not bound (it may yet take P), then
+/// shared directly once the broker reports serving elsewhere; refused again, by name, once the
+/// broker reports serving on P itself (the rigctld here stands in for it). Each value is (the CAT
+/// status, what the port had heard by then).
+#[test]
+fn a_radio_on_the_operators_rigctld_at_the_sharing_ports_number_connects_once_sharing_moved() {
+    let wf = FakeWfview::start(true);
+    let (engine, _) = station(&wf.addr, free_port());
+    let port = wf.port();
+    let settings = {
+        let mut e = engine.lock().unwrap();
+        e.rename_radio(0, "IC-9700");
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = port;
+        e.apply_settings(s);
+        e.settings().clone()
+    };
+    let cfg = RadioConfig {
+        ptt_method: settings.ptt_method.clone(),
+        rig_model: settings.rig_model,
+        rig_conn: settings.rig_conn.clone(),
+        rig_addr: settings.rig_addr.clone(),
+        rigctld_port: settings.rigctld_port,
+        radio_id: settings.active_radio,
+        ..RadioConfig::default()
+    };
+    let launch = launch_transport(&cfg, &settings, engine.lock().unwrap().cat_share_port());
+    let (mut rig, daemon, probe) = open_rig(&Transport::from_settings(&settings), true);
+    let launched = (probe.detail.clone(), heard_at(&wf));
+    assert!(launch.address_refusal.0.is_some());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let mut state = RadioLoop::new(Transport::from_settings(&settings), daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    let mut now = 1_000.0;
+    let mut step = |state: &mut RadioLoop, rig: &mut Rig| {
+        now += 1_000.0;
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                rig,
+                &no_sinks(),
+                now,
+                &mut mock_reopen_audio(),
+                &mut |t: &Transport, coexist: bool| open_rig(t, coexist),
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+        (said, heard_at(&wf))
+    };
+    // Another program held P: the broker serves on the next free port.
+    engine.lock().unwrap().set_cat_share_port(Some(free_port()));
+    let moved = step(&mut state, &mut rig);
+    // The broker serves on P itself.
+    engine.lock().unwrap().set_cat_share_port(Some(port));
+    let own = step(&mut state, &mut rig);
+    assert_eq!(
+        (
+            launched,
+            moved.0,
+            moved.1 .0 > 0,
+            own.0,
+            // No new connection reached the port once the broker was there.
+            own.1 .0 == moved.1 .0,
+        ),
+        (
+            (held_by_the_broker(port, "IC-9700"), (0, 0)),
+            format!("Sharing the rigctld at 127.0.0.1:{port} — Connected — 14.074 MHz"),
+            true,
+            held_by_the_broker(port, "IC-9700"),
+            true,
+        )
+    );
+}
+
+/// ⭐ #165: STARTED BEFORE THE OPERATOR'S OWN RIGCTLD, AT THE SHARING PORT'S NUMBER. A NET rigctl
+/// radio on 127.0.0.1:P, Share this radio on P, and nothing listening on P when Nexus starts. The
+/// station counts P as the operator's rigctld port, so sharing moves (the broker's bind is the
+/// app's; here it reports the port it took). The launch is refused while sharing has not bound;
+/// once it serves elsewhere the radio waits for its rigctld, and when the operator starts it on P
+/// the radio shares it. Each value is (CAT ok, what the status says).
+#[test]
+fn started_before_the_operators_rigctld_on_the_sharing_port_the_radio_connects_once_it_starts() {
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let (engine, _) = station(&addr, free_port());
+    let settings = {
+        let mut e = engine.lock().unwrap();
+        e.rename_radio(0, "IC-9700");
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = port;
+        e.apply_settings(s);
+        e.settings().clone()
+    };
+    // What sharing must never bind: P, the operator's rigctld port.
+    let reserved = settings.ports_the_operators_rigctld_holds(&[]);
+    let (mut rig, daemon, probe) = open_rig(&Transport::from_settings(&settings), true);
+    let launched = (probe.ok, probe.detail.clone());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(Transport::from_settings(&settings), daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    // Sharing bound the next free port instead of P.
+    engine.lock().unwrap().set_cat_share_port(Some(free_port()));
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    run(&mut state, &mut rig, 4, &|_| false);
+    let waiting = (state.cat_ok, said());
+    // The operator starts their rigctld on P: the port is free, so it binds.
+    let _rigctld = FakeWfview::at(&addr, true);
+    run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
+    let shared = (state.cat_ok, said());
+    assert_eq!(
+        (reserved, launched, waiting, shared),
+        (
+            vec![port],
+            (Some(false), held_by_the_broker(port, "IC-9700")),
+            (Some(false), nothing_answering_at(&addr)),
+            (
+                Some(true),
+                format!("Sharing the rigctld at {addr} — Connected — 14.074 MHz")
+            ),
+        )
+    );
+}
+
+/// #165, for a radio the monitor reads: the FT-991A's address is the Sharing port's number. The
+/// monitor refuses it while the broker may be there (not yet bound, or serving there) and opens it
+/// once the broker reports serving on another port. The values are the refusal, per broker report.
+#[test]
+fn a_monitored_radio_follows_the_port_sharing_really_serves_on() {
+    let broker = free_port();
+    let stored = Stored::on(free_port(), broker);
+    let mut s = stored.settings.clone();
+    let ft991a = s
+        .radios
+        .iter()
+        .find(|p| p.name == "FT-991A")
+        .map(|p| p.id)
+        .unwrap();
+    s.active_radio = s.radios.iter().find(|p| p.id != ft991a).unwrap().id;
+    s.sync_flat_from_active();
+    let refused = |serving: Option<u16>| {
+        let (_, want) = monitor_want(&s, serving);
+        want.iter()
+            .find(|(id, _)| *id == ft991a)
+            .map(|(_, t)| t.address_refusal.0.is_some())
+    };
+    assert_eq!(
+        [
+            refused(None),
+            refused(Some(broker)),
+            refused(Some(free_port()))
+        ],
+        [Some(true), Some(true), Some(false)]
     );
 }
 

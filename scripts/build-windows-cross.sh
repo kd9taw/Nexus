@@ -63,9 +63,23 @@ ok "mingw gcc/g++/gfortran, cmake ($GEN), Rust target $TARGET"
 
 # 2 — FFTW3f for MinGW (built once, cached) ----------------------------------
 bold "2/5  FFTW3f (single precision) for MinGW"
-if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ]; then
+# SSE2/AVX/AVX2 codelets: WSJT-X's own Windows FFTW has SIMD (the DLL WSJT-X 2.7.0 installs
+# reports fftw-3.3.10-sse2-avx). Built without them, FFTW 3.3.10 has 226 codelets and none SIMD;
+# with them, 978 of which 752 are SIMD. Measured on one Windows PC, the plain build took 20-57 %
+# longer over the early FT8 pass and 1-26 % longer over the full pass, for the same decodes. FFTW
+# chooses codelets by CPUID at run time, so a CPU without AVX runs the SSE2 or plain ones.
+# --with-our-malloc is FFTW's own aligned allocator: Windows' malloc gives 16 bytes of alignment,
+# and AVX wants 32.
+#
+# The stamp records the version and these flags, so a cached build made with other flags (every
+# CI cache and worktree from before SIMD) is rebuilt rather than linked.
+fftw_cfg=(--host=x86_64-w64-mingw32 --enable-float --enable-static --disable-shared
+  --enable-sse2 --enable-avx --enable-avx2 --with-our-malloc)
+fftw_stamp="$FFTW_MINGW_PREFIX/.nexus-fftw"
+if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && [ "$(cat "$fftw_stamp" 2>/dev/null)" = "$FFTW_VER ${fftw_cfg[*]}" ]; then
   ok "cached at $FFTW_MINGW_PREFIX"
 else
+  rm -rf "$FFTW_MINGW_PREFIX"
   tmp="$(mktemp -d)"
   ( cd "$tmp"
     # ⚠️ HTTPS AND A PINNED HASH, because of WHAT this becomes. The `make` two lines below
@@ -90,11 +104,12 @@ else
     echo "$fftw_sha256  fftw.tgz" | sha256sum -c - \
       || die "FFTW checksum mismatch — refusing to build. Someone changed the bytes at $url."
     tar xf fftw.tgz && cd "fftw-${FFTW_VER}"
-    ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-      --disable-shared --prefix="$FFTW_MINGW_PREFIX" >/dev/null
+    ./configure "${fftw_cfg[@]}" --prefix="$FFTW_MINGW_PREFIX" >/dev/null
     make -j"$(nproc)" >/dev/null && make install >/dev/null )
   rm -rf "$tmp"
-  [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && ok "built → $FFTW_MINGW_PREFIX" || die "FFTW cross-build failed"
+  [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] || die "FFTW cross-build failed"
+  echo "$FFTW_VER ${fftw_cfg[*]}" > "$fftw_stamp"
+  ok "built → $FFTW_MINGW_PREFIX"
 fi
 
 # 2b — libvpx (the VP8 encoder of Remote as a stream) for MinGW (built once, cached) --

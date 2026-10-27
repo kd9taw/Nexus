@@ -15,7 +15,7 @@ const mount = (form: Partial<Settings>) => {
   const setList = vi.fn()
   const setMark = vi.fn()
   const setSounds = vi.fn()
-  render(<Js8ListsSettings form={form as Settings} disabled={false} setList={setList} setMark={setMark} setSounds={setSounds} />)
+  render(<Js8ListsSettings form={form as Settings} setList={setList} setMark={setMark} setSounds={setSounds} />)
   return { setList, setMark, setSounds }
 }
 

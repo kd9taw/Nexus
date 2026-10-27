@@ -102,6 +102,63 @@ impl StationVault for StationStore {
             .remove(&format!("lan-internet-{id}"));
         Ok(())
     }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
+        self.get("lan-account-staged")
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        self.put(
+            "lan-account-staged".into(),
+            serde_json::to_string(keys).unwrap(),
+        )
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.entries.lock().unwrap().remove("lan-account-staged");
+        Ok(())
+    }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
+        self.get(&format!("lan-away-{id}"))
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        self.put(
+            format!("lan-away-{}", station.station_id),
+            serde_json::to_string(station).unwrap(),
+        )
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.entries
+            .lock()
+            .unwrap()
+            .remove(&format!("lan-away-{id}"));
+        Ok(())
+    }
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str> {
+        self.get("lan-held-roads")
+    }
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
+        self.put(
+            "lan-held-roads".into(),
+            serde_json::to_string(held).unwrap(),
+        )
+    }
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str> {
+        self.get("lan-code-paired")
+    }
+    fn save_code_paired(&self, paired: &CodePaired) -> Result<(), &'static str> {
+        self.put(
+            "lan-code-paired".into(),
+            serde_json::to_string(paired).unwrap(),
+        )
+    }
 }
 
 fn id(n: u8) -> String {
@@ -230,8 +287,11 @@ fn every_record_fits_the_credential_store() {
         "192.168.100.202:65535",
         "192.168.100.203:65535",
     ];
-    for n in 0..MAX_STATIONS as u8 {
-        stations.keep(&record(&id(n), &widest)).unwrap();
+    let kept: Vec<PairedStation> = (0..MAX_STATIONS as u8)
+        .map(|n| record(&id(n), &widest))
+        .collect();
+    for record in &kept {
+        stations.keep(record).unwrap();
     }
     for n in 0..MAX_STATIONS as u8 {
         let text = store.raw(&format!("lan-station-{}", id(n))).unwrap();
@@ -248,8 +308,14 @@ fn every_record_fits_the_credential_store() {
         writes,
         "a write for the ninth"
     );
-    // The same station paired again replaces its record, with room or without.
-    stations.keep(&record(&id(3), &["10.0.0.3"])).unwrap();
+    // The same station paired again (its id and its key) replaces its record, with room or
+    // without.
+    stations
+        .keep(&PairedStation {
+            addresses: vec!["10.0.0.3".into()],
+            ..copy_of(&kept[3])
+        })
+        .unwrap();
     assert_eq!(stations.list().unwrap().len(), MAX_STATIONS);
     assert_eq!(
         stations.get(&id(3)).unwrap().unwrap().addresses,
@@ -320,6 +386,443 @@ fn forgetting_a_station_removes_its_key() {
         [id(2)]
     );
     assert!(store.raw(&format!("lan-station-{}", id(2))).is_some());
+}
+
+/// The service's id for a station signed in to from elsewhere.
+const AWAY: &str = "20000000-0000-4000-8000-0000000000a1";
+
+/// A sound record for a station kept by the service's id `station`, named `name`, with keys made for
+/// this run and never written down.
+pub(crate) fn away_record(station: &str, name: &str) -> AwayStation {
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    AwayStation {
+        station_id: station.into(),
+        name: name.into(),
+        station_key: lan_key.public_key().to_string(),
+        pkcs8,
+    }
+}
+
+/// A sound internet road to the station the service knows as `station`.
+pub(crate) fn road_to(station: &str) -> InternetRoad {
+    let (station_key, _) = ComputerKey::generate().unwrap();
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    InternetRoad {
+        station_id: station.into(),
+        device_id: "30000000-0000-4000-8000-000000000007".into(),
+        station_key: station_key.public_key().to_string(),
+        pkcs8,
+    }
+}
+
+/// ★ A station signed in to from elsewhere is kept by the service's id for it: its record (the
+/// station's LAN key as pinned, this computer's key for that network) and its internet road under
+/// that id, and the id on the list with the rest, the eight a computer keeps counting it. It is no
+/// station on this network: `get` and `list` never return it, so nothing tries this network's road
+/// for it, and the page sees its name and its LAN key's fingerprint, never this computer's key. A
+/// road to another station, or a record this module could not have written, is refused; one that
+/// reads wrong reads as none. CONTROL: the same record, sound, reads back.
+#[test]
+fn a_station_signed_in_from_elsewhere_is_kept_by_its_service_id() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    let kept = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    assert_eq!(
+        stations.keep_away(&kept, &road_to(&id(9))),
+        Err("notStation"),
+        "a road to another station"
+    );
+    stations.keep_away(&kept, &road).unwrap();
+    let read = stations.away(AWAY).unwrap().expect("kept");
+    assert_eq!(
+        (read.name.as_str(), &read.station_key, &read.pkcs8),
+        ("Shack", &kept.station_key, &kept.pkcs8)
+    );
+    let kept_road = stations.internet(AWAY).unwrap().expect("its road");
+    assert_eq!(
+        (&kept_road.device_id, &kept_road.pkcs8),
+        (&road.device_id, &road.pkcs8)
+    );
+    assert!(
+        stations.get(AWAY).unwrap().is_none(),
+        "a station on this network"
+    );
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1)]);
+    let shown = stations.list_away().unwrap();
+    let spki = protocol::hex_bytes(&kept.station_key).unwrap();
+    assert_eq!(
+        shown,
+        [AwayView {
+            id: AWAY.into(),
+            name: "Shack".into(),
+            key: hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref()),
+        }]
+    );
+    let page = serde_json::to_string(&shown).unwrap();
+    assert!(
+        !page.contains(&kept.pkcs8),
+        "the page was shown this computer's key"
+    );
+    // Eight on this computer, this one among them: a ninth of either kind is refused.
+    for n in 2..=7 {
+        stations
+            .keep(&record(&id(n), &[&format!("10.0.0.{n}")]))
+            .unwrap();
+    }
+    assert_eq!(
+        stations.keep(&record(&id(8), &["10.0.0.8"])),
+        Err("stationsFull")
+    );
+    let other = "20000000-0000-4000-8000-0000000000a2";
+    assert_eq!(
+        stations.keep_away(&away_record(other, "Club"), &road_to(other)),
+        Err("stationsFull")
+    );
+    // A record that reads wrong is none.
+    let name = format!("lan-away-{AWAY}");
+    let sound: Value = serde_json::from_str(&store.raw(&name).unwrap()).unwrap();
+    for (field, bad) in [
+        ("stationId", json!(id(1))),
+        ("stationKey", json!("04ab")),
+        ("pkcs8", json!("00")),
+        ("name", json!("N".repeat(AWAY_NAME_CHARS + 1))),
+    ] {
+        let mut tampered = sound.clone();
+        tampered[field] = bad;
+        store
+            .entries
+            .lock()
+            .unwrap()
+            .insert(name.clone(), tampered.to_string());
+        assert!(stations.away(AWAY).unwrap().is_none(), "{field}");
+        assert!(stations.list_away().unwrap().is_empty(), "{field}");
+    }
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert(name, sound.to_string());
+    assert!(stations.away(AWAY).unwrap().is_some(), "the control");
+}
+
+/// ★ First reached on its network, a station kept by its service id is kept as any other, in its
+/// place on the list: its record by the id its network gave, the same internet road (the same
+/// device at the service) under that id, and the time this computer signed in for it, from which
+/// the station counts its thirty days on that network; the away record and the road under the
+/// service's id go. CONTROL: a station not kept away is not folded, and nothing is written.
+#[test]
+fn reached_on_its_network_a_station_kept_away_is_kept_in_its_place() {
+    let (dir, _) = typed_file("fold");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.keep_away(&away, &road).unwrap();
+    stations.keep(&record(&id(2), &["10.0.0.2"])).unwrap();
+    // The id the station's network gives it: not one this computer holds.
+    let lan = id(0x0a);
+    let reached = PairedStation {
+        station_id: lan.clone(),
+        device_id: DEVICE.into(),
+        station_key: away.station_key.clone(),
+        pkcs8: away.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    let writes = store.writes.load(Ordering::SeqCst);
+    assert_eq!(
+        stations.fold(&id(9), &reached, 1_800_000_000),
+        Err("unknownStation")
+    );
+    assert_eq!(store.writes.load(Ordering::SeqCst), writes, "written");
+    stations.fold(AWAY, &reached, 1_800_000_000).unwrap();
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1), lan.clone(), id(2)], "in its place");
+    let now = stations.get(&lan).unwrap().expect("kept");
+    assert_eq!(
+        (&now.station_key, &now.pkcs8, &now.addresses),
+        (&away.station_key, &away.pkcs8, &reached.addresses)
+    );
+    let now_road = stations.internet(&lan).unwrap().expect("its road");
+    assert_eq!(
+        (&now_road.station_id, &now_road.device_id, &now_road.pkcs8),
+        (&road.station_id, &road.device_id, &road.pkcs8),
+        "the same device at the service"
+    );
+    assert_eq!(stations.signed(&lan), Some(1_800_000_000));
+    assert!(stations.away(AWAY).unwrap().is_none());
+    assert!(stations.internet(AWAY).unwrap().is_none());
+    assert!(store.raw(&format!("lan-away-{AWAY}")).is_none());
+    assert!(stations.list_away().unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same record, as the store would read it back: a copy (records have no `Clone`).
+fn copy_of(record: &PairedStation) -> PairedStation {
+    PairedStation {
+        station_id: record.station_id.clone(),
+        device_id: record.device_id.clone(),
+        station_key: record.station_key.clone(),
+        pkcs8: record.pkcs8.clone(),
+        addresses: record.addresses.clone(),
+    }
+}
+
+/// ★ No stored station is ever replaced by another (security review, 2026-10-20): a record with
+/// another station key never takes the place of one stored under the same id, whoever names the
+/// id: the station (the id it says while pairing or enrolling: [`Stations::keep`], and at first
+/// contact for one kept away: [`Stations::fold`]) or the service (the id it lists a station by:
+/// [`Stations::keep_away`]). Each is refused, and nothing stored changes, not a record, a key, a
+/// road or the list. A station kept away is folded only as the station whose LAN key was pinned
+/// when it was kept (`notThisStation`), and never over a record on this network, its own included
+/// (`alreadyHere`: it is on this computer already). CONTROL: the same station again, with the same
+/// keys, is kept as before.
+#[test]
+fn no_stored_station_is_replaced_by_one_with_another_key() {
+    let (dir, _) = typed_file("replaced");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    // B on this network with its road; A kept by its service id; C on this network with A's key
+    // (paired with a code as well).
+    let b = record(&id(1), &["10.0.0.1"]);
+    stations.keep(&b).unwrap();
+    let b_road = road_to("20000000-0000-4000-8000-0000000000b0");
+    stations.keep_internet(&id(1), &b_road).unwrap();
+    let a = away_record(AWAY, "Shack");
+    let a_road = road_to(AWAY);
+    stations.keep_away(&a, &a_road).unwrap();
+    let c = PairedStation {
+        station_key: a.station_key.clone(),
+        ..record(&id(3), &["10.0.0.3"])
+    };
+    stations.keep(&c).unwrap();
+    let before = store.entries.lock().unwrap().clone();
+    let reached = |station: &str, key: &str| PairedStation {
+        station_id: station.into(),
+        device_id: DEVICE.into(),
+        station_key: key.into(),
+        pkcs8: a.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    // The station names B's id with another key, or A's service id.
+    let impostor = record(&id(1), &["10.0.0.9"]);
+    assert_eq!(stations.keep(&impostor), Err("notStation"), "B's id");
+    assert_eq!(
+        stations.keep(&record(AWAY, &["10.0.0.9"])),
+        Err("notStation"),
+        "A's id"
+    );
+    // At first contact for A: B's id; A's own service id; a key other than the one pinned for A;
+    // and C's id, which holds A's own key.
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(1), &a.station_key), 1),
+        Err("notStation"),
+        "fold into B"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(AWAY, &a.station_key), 1),
+        Err("notStation"),
+        "fold into its own service id"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(4), &impostor.station_key), 1),
+        Err("notThisStation"),
+        "another key than A's"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(3), &a.station_key), 1),
+        Err("alreadyHere"),
+        "fold over C"
+    );
+    assert_eq!(
+        *store.entries.lock().unwrap(),
+        before,
+        "a stored station changed (the station's word)"
+    );
+    // A road left under an id with no station kept by it (one a crash left behind).
+    let left = road_to(&id(5));
+    StationVault::save_internet_road(&store, &id(5), &left).unwrap();
+    let before = store.entries.lock().unwrap().clone();
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(5), &a.station_key), 1),
+        Err("notStation"),
+        "fold over another station's road"
+    );
+    // The service lists a station by B's id (another key), by C's id (C's own key), or by A's
+    // id (another station, or A's station with another road).
+    let listed_as = |station: &str, key: &str| AwayStation {
+        station_id: station.into(),
+        name: "Listed".into(),
+        station_key: key.into(),
+        pkcs8: a.pkcs8.clone(),
+    };
+    assert_eq!(
+        stations.keep_away(&listed_as(&id(1), &a.station_key), &road_to(&id(1))),
+        Err("notStation"),
+        "B's id"
+    );
+    assert_eq!(
+        stations.keep_away(&listed_as(&id(3), &a.station_key), &road_to(&id(3))),
+        Err("alreadyHere"),
+        "C's id, C's key"
+    );
+    assert_eq!(
+        stations.keep_away(&away_record(AWAY, "Club"), &road_to(AWAY)),
+        Err("notStation"),
+        "A's id, another station"
+    );
+    assert_eq!(
+        stations.keep_away(&listed_as(AWAY, &a.station_key), &road_to(AWAY)),
+        Err("notStation"),
+        "A's id, another road"
+    );
+    let a_road_again = || InternetRoad {
+        station_id: AWAY.into(),
+        device_id: a_road.device_id.clone(),
+        station_key: a_road.station_key.clone(),
+        pkcs8: a_road.pkcs8.clone(),
+    };
+    assert_eq!(
+        stations.keep_away(&listed_as(AWAY, &impostor.station_key), &a_road_again()),
+        Err("notStation"),
+        "A's id, A's road, another LAN key"
+    );
+    assert_eq!(
+        *store.entries.lock().unwrap(),
+        before,
+        "a stored station changed"
+    );
+    // CONTROL: the same stations again, with the same keys.
+    stations
+        .keep(&PairedStation {
+            addresses: vec!["10.0.0.5".into()],
+            ..copy_of(&b)
+        })
+        .unwrap();
+    stations
+        .keep_away(&listed_as(AWAY, &a.station_key), &a_road_again())
+        .unwrap();
+    assert_eq!(
+        stations.get(&id(1)).unwrap().unwrap().addresses,
+        ["10.0.0.5"]
+    );
+    // Made only by a fold that went through, which none here may.
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// ★ Forgetting a station kept by its service id removes its record, its road and its place on the
+/// list. CONTROL: a station on this network stays.
+#[test]
+fn forgetting_a_station_kept_away_removes_its_keys() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    stations
+        .keep_away(&away_record(AWAY, "Shack"), &road_to(AWAY))
+        .unwrap();
+    stations.forget(AWAY).unwrap();
+    assert!(store.raw(&format!("lan-away-{AWAY}")).is_none());
+    assert!(store.raw(&format!("lan-internet-{AWAY}")).is_none());
+    assert!(stations.list_away().unwrap().is_empty());
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1)]);
+    let list: PairedStations = serde_json::from_str(&store.raw("lan-stations").unwrap()).unwrap();
+    assert_eq!(list.stations, [id(1)]);
+}
+
+/// ★ The keys for the next station signed in to are made once and kept: asked again, the same
+/// two come back, and they go only when dropped (a station kept with them). Keys that are not keys
+/// read as none, and new ones are made. CONTROL: dropped, the next ask makes new ones.
+#[test]
+fn the_keys_for_the_next_sign_in_are_kept_until_a_station_is_kept_with_them() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let first = stations.staged().unwrap();
+    let again = stations.staged().unwrap();
+    assert_eq!((&again.road, &again.lan), (&first.road, &first.lan));
+    assert_ne!(first.road, first.lan, "one key for each road");
+    assert!(store.raw("lan-account-staged").is_some());
+    stations.drop_staged().unwrap();
+    assert!(store.raw("lan-account-staged").is_none());
+    let fresh = stations.staged().unwrap();
+    assert_ne!(fresh.road, first.road);
+    store
+        .put(
+            "lan-account-staged".into(),
+            json!({"road":"00","lan":"00"}).to_string(),
+        )
+        .unwrap();
+    assert!(ComputerKey::restore(&stations.staged().unwrap().road).is_some());
+}
+
+/// ★ When this computer signed in for each station is kept in a file of its own, outside the
+/// credential store, read back by a Stations started again, and gone with the station's Forget. A
+/// station not paired here keeps no time. CONTROL: another station's line survives the forget.
+#[test]
+fn when_this_computer_signed_in_is_kept_beside_the_stations_and_forgotten_with_them() {
+    let (dir, file) = typed_file("signed");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    stations.keep(&record(&id(2), &["10.0.0.2"])).unwrap();
+    let writes = store.writes.load(Ordering::SeqCst);
+    stations.keep_signed(&id(1), 1_799_999_900).unwrap();
+    stations.keep_signed(&id(2), 1_700_000_000).unwrap();
+    assert_eq!(stations.keep_signed(&id(9), 1), Err("unknownStation"));
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        writes,
+        "a credential entry written"
+    );
+    let again = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    assert_eq!(again.signed(&id(1)), Some(1_799_999_900));
+    stations.forget(&id(1)).unwrap();
+    assert_eq!(again.signed(&id(1)), None);
+    assert_eq!(again.signed(&id(2)), Some(1_700_000_000));
+    assert!(!file.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ★ The window is told, for each station added with the account, until when it admits this
+/// computer on its network, and whether to sign in again now: in the last week, and not before.
+/// A station paired with a code is not named.
+#[tokio::test]
+async fn the_window_is_told_until_when_each_station_admits_this_computer() {
+    let (dir, _) = typed_file("listed");
+    let store = StationStore::default();
+    let stations =
+        Arc::new(Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")));
+    for n in 1..=3 {
+        stations
+            .keep(&record(&id(n), &[&format!("10.0.0.{n}")]))
+            .unwrap();
+    }
+    let now = 1_800_000_000;
+    let age = tempo_client::account::PROOF_MAX_AGE_S;
+    let renew = tempo_client::account::RENEW_BEFORE_S;
+    stations.keep_signed(&id(1), now - age + renew + 1).unwrap();
+    stations.keep_signed(&id(2), now - age + renew).unwrap();
+    let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
+        stations,
+        ..reach(StationStore::default())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(
+        told["account"],
+        json!([
+            {"stationId": id(1), "until": now + renew + 1, "renew": false},
+            {"stationId": id(2), "until": now + renew, "renew": true},
+        ])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// ★ A record this module could not have written reads as no pairing, and the page sees only the
@@ -521,8 +1024,9 @@ fn reach(store: StationStore) -> Reach {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
+        now_s: || 1_800_000_000,
     }
 }
 
@@ -1231,21 +1735,119 @@ async fn the_page_is_shown_this_computers_key_for_each_internet_road_never_a_pri
     );
 }
 
-/// ★ Adding the internet road for an account with two stations: the page is offered each one
-/// (`chooseStation`), and the one the operator picks goes back to the add, which then says it was
-/// added, with this computer's key for the road as the station shows it. CONTROL: cancelled (no
-/// station), the add is told none was picked.
+/// ★ The window and a station kept by its service id: a sign-in that keeps one says so (`signedIn`
+/// with `away`), `stations` lists it apart (`away`: its id, its name and its LAN key's fingerprint,
+/// never this computer's key), Operate from this computer starts Nexus driving it by that id, and
+/// Forget ends its internet road at the service with the road's own key and then forgets it here.
+/// CONTROL: a station on this network is listed as before.
 #[tokio::test]
-async fn the_page_picks_the_station_while_the_internet_road_is_added() {
+async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.keep_away(&away, &road).unwrap();
+    let key = super::internet::shown_key(&road).unwrap();
+    let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let forgot: Arc<Mutex<Vec<String>>> = Arc::default();
+    let origin = Origin::start(Reach {
+        operate: {
+            let started = started.clone();
+            Arc::new(move |station, typed| started.lock().unwrap().push((station, typed)))
+        },
+        forget_internet: {
+            let forgot = forgot.clone();
+            Arc::new(move |road: InternetRoad| {
+                forgot.lock().unwrap().push(road.pkcs8);
+                Box::pin(async { Ok(()) })
+            })
+        },
+        sign_in: {
+            let key = key.clone();
+            Arc::new(move |_, _, _| {
+                let key = key.clone();
+                Box::pin(async move {
+                    Ok(super::account::Signed {
+                        station: AWAY.into(),
+                        waiting: false,
+                        away: true,
+                        key,
+                    })
+                })
+            })
+        },
+        ..reach(store.clone())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    assert_eq!(
+        said(&mut socket, json!({"type":"signIn","stationId":null})).await,
+        json!({"type":"signingIn"})
+    );
+    assert_eq!(
+        heard_from(&mut socket).await,
+        json!({"type":"signedIn","stationId":AWAY,"waiting":false,"away":true,"key":key})
+    );
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(told["stations"][0]["id"], STATION, "{told}");
+    assert_eq!(told["stations"].as_array().unwrap().len(), 1, "{told}");
+    let spki = protocol::hex_bytes(&away.station_key).unwrap();
+    assert_eq!(
+        told["away"],
+        json!([{"id": AWAY, "name": "Shack",
+            "key": hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref())}])
+    );
+    assert!(!told.to_string().contains(&away.pkcs8));
+    assert_eq!(
+        said(&mut socket, json!({"type":"operate","stationId":AWAY})).await,
+        json!({"type":"operating"})
+    );
+    assert_eq!(*started.lock().unwrap(), vec![(AWAY.to_string(), None)]);
+    let told = said(&mut socket, json!({"type":"forget","stationId":AWAY})).await;
+    assert_eq!(told["away"], json!([]), "{told}");
+    assert_eq!(told["stations"][0]["id"], STATION, "{told}");
+    assert_eq!(*forgot.lock().unwrap(), vec![road.pkcs8.clone()]);
+    assert!(stations.away(AWAY).unwrap().is_none());
+    assert!(stations.internet(AWAY).unwrap().is_none());
+}
+
+/// The page's socket's next word, as JSON.
+async fn heard_from(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Value {
+    let Ok(Some(Ok(Message::Text(text)))) =
+        tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+    else {
+        panic!("no answer")
+    };
+    serde_json::from_str(&text).unwrap()
+}
+
+/// ★ Signing in with the account's two stations: the page is offered each one (`chooseStation`),
+/// the one the operator picks goes back to the sign-in; asked where that station is
+/// (`stationAddress`, with why the last address did not take this computer), the address the
+/// operator types goes back too; and the sign-in's end is said (`signedIn`, with this computer's
+/// key for the road as the station shows it). CONTROL: cancelled at the pick, the sign-in is told
+/// none was picked and says so (`signInRefused`); a second sign-in while one waits is refused
+/// (`signInUnderWay`).
+#[tokio::test]
+async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
     use super::internet::Choice;
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
     const ROAD_KEY: &str = "9f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a3928";
     for pick in [Some(STATION), None] {
-        let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
-        let kept = picked.clone();
+        // What each sign-in was asked for, and what the operator picked and typed.
+        type Told = Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>>;
+        let told: Told = Arc::default();
+        let kept = told.clone();
         let origin = Origin::start(Reach {
             lookup: Arc::new(tempo_stream::lan::lookup),
-            add_internet: Arc::new(move |_, choose| {
+            sign_in: Arc::new(move |here, choose, ask| {
                 let kept = kept.clone();
                 Box::pin(async move {
                     let offered = vec![
@@ -1258,39 +1860,38 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
                             name: "Shack".into(),
                         },
                     ];
-                    let answer = choose(offered).await;
-                    kept.lock().unwrap().push(answer.clone());
-                    answer
-                        .map(|_| (true, ROAD_KEY.to_string()))
-                        .ok_or("stationNotChosen")
+                    let picked = choose(offered).await;
+                    let Some(picked) = picked else {
+                        kept.lock().unwrap().push((here, None, None));
+                        return Err("stationNotChosen");
+                    };
+                    let at = ask("Shack".into(), Some("noAnswer")).await;
+                    kept.lock().unwrap().push((here, Some(picked), at));
+                    Ok(super::account::Signed {
+                        station: STATION.into(),
+                        waiting: false,
+                        away: false,
+                        key: ROAD_KEY.into(),
+                    })
                 })
             }),
             ..reach(StationStore::default())
         })
         .unwrap();
         let mut socket = page_socket(&origin).await;
-        let mut heard = Vec::new();
-        socket
-            .send(Message::Text(
-                json!({"type":"addInternet","stationId":STATION})
-                    .to_string()
-                    .into(),
-            ))
-            .await
-            .unwrap();
-        for _ in 0..2 {
-            let Ok(Some(Ok(Message::Text(text)))) =
-                tokio::time::timeout(Duration::from_secs(5), socket.next()).await
-            else {
-                panic!("no answer after {heard:?}")
-            };
-            heard.push(serde_json::from_str::<Value>(&text).unwrap());
-        }
-        assert_eq!(heard[0], json!({"type":"signingIn"}));
+        // Signing in for the station on this computer it names, or for a new one with none.
         assert_eq!(
-            heard[1],
+            said(&mut socket, json!({"type":"signIn","stationId":pick})).await,
+            json!({"type":"signingIn"})
+        );
+        assert_eq!(
+            heard_from(&mut socket).await,
             json!({"type":"chooseStation","stations":[{"id":CLUB,"name":"Club station"},
                 {"id":STATION,"name":"Shack"}]})
+        );
+        assert_eq!(
+            said(&mut socket, json!({"type":"signIn","stationId":null})).await,
+            json!({"type":"signInRefused","reason":"signInUnderWay"})
         );
         socket
             .send(Message::Text(
@@ -1300,22 +1901,41 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
             ))
             .await
             .unwrap();
-        let Ok(Some(Ok(Message::Text(text)))) =
-            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
-        else {
-            panic!("no answer after the pick")
-        };
-        let told: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(*picked.lock().unwrap(), vec![pick.map(str::to_string)]);
         match pick {
-            Some(_) => assert_eq!(
-                told,
-                json!({"type":"internetAdded","stationId":STATION,"waiting":true,"key":ROAD_KEY})
-            ),
-            None => assert_eq!(
-                told,
-                json!({"type":"internetRefused","reason":"stationNotChosen"})
-            ),
+            Some(_) => {
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"stationAddress","name":"Shack","reason":"noAnswer"})
+                );
+                socket
+                    .send(Message::Text(
+                        json!({"type":"stationAddress","address":"192.168.1.20"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"signedIn","stationId":STATION,"waiting":false,
+                        "away":false,"key":ROAD_KEY})
+                );
+                assert_eq!(
+                    *told.lock().unwrap(),
+                    vec![(
+                        Some(STATION.to_string()),
+                        Some(STATION.to_string()),
+                        Some("192.168.1.20".to_string())
+                    )]
+                );
+            }
+            None => {
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"signInRefused","reason":"stationNotChosen"})
+                );
+                assert_eq!(*told.lock().unwrap(), vec![(None, None, None)]);
+            }
         }
     }
 }
@@ -1529,4 +2149,614 @@ async fn a_road_opened_while_the_link_is_blocked_reaches_nothing() {
             "CONTROL ({under:?}): the port is reached"
         );
     }
+}
+
+// ----- The station's key for the internet road, held until it is checked -----
+
+/// ★ A road held until the operator checks the station's key is held in an entry of its own, so it
+/// survives a restart (a new `Stations` over the same store), while the road's own entry keeps the
+/// exact shape a 1.20.0 Nexus reads, which knows nothing of holds. The hold carries the key's
+/// fingerprint, never a key. It is bound to the station key it was written for: a road added again
+/// with another key is not held by it. One the station disowned stays held past It matches. A store
+/// that will not answer holds the road (it is never read as free). CONTROL, the downgrade shape: an
+/// entry that does not read (a newer build's, or damaged) holds nothing.
+#[test]
+fn a_held_road_survives_restart_and_reads_as_not_held_when_its_entry_is_unknown() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let road = road_to(AWAY);
+    stations.hold_road(STATION, &road.station_key).unwrap();
+    stations.keep_internet(STATION, &road).unwrap();
+    assert_eq!(
+        stations.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed"))
+    );
+    let restarted = Stations::new(Arc::new(store.clone()));
+    assert_eq!(
+        restarted.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed")),
+        "lost on a restart"
+    );
+    let kept = store.raw(&format!("lan-internet-{STATION}")).unwrap();
+    serde_json::from_str::<InternetRoad>(&kept).expect("the road as 1.20.0 reads it");
+    let held = store.raw("lan-held-roads").unwrap();
+    assert!(
+        !held.contains(&road.station_key) && !held.contains(&road.pkcs8),
+        "a key in the hold: {held}"
+    );
+    store.locked.store(true, Ordering::SeqCst);
+    assert_eq!(restarted.road_held(STATION), Err("storeUnavailable"));
+    store.locked.store(false, Ordering::SeqCst);
+    // It matches: free, after a restart too.
+    restarted.confirm_road(STATION).unwrap();
+    assert_eq!(
+        Stations::new(Arc::new(store.clone())).road_held(STATION),
+        Ok(None)
+    );
+    // Held again, then the entry in a shape this build does not read, or not JSON at all.
+    for unknown in [r#"{"held":[{"s":"x"}]}"#, "not json"] {
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        store
+            .entries
+            .lock()
+            .unwrap()
+            .insert("lan-held-roads".into(), unknown.into());
+        assert_eq!(stations.road_held(STATION), Ok(None), "{unknown}");
+    }
+    // A hold for another station key holds nothing; nor does one for a road added again since.
+    let other = road_to(AWAY);
+    stations.hold_road(STATION, &other.station_key).unwrap();
+    assert_eq!(stations.road_held(STATION), Ok(None));
+    stations.hold_road(STATION, &road.station_key).unwrap();
+    stations.keep_internet(STATION, &other).unwrap();
+    assert_eq!(stations.road_held(STATION), Ok(None), "a road added again");
+    // Disowned by the station: held for good, It matches or not.
+    assert_eq!(stations.disown_road(STATION, &road.station_key), Ok(true));
+    assert_eq!(stations.road_held(STATION), Ok(Some("stationKeyDisagrees")));
+    assert_eq!(stations.confirm_road(STATION), Err("stationKeyDisagrees"));
+    assert_eq!(
+        Stations::new(Arc::new(store.clone())).road_held(STATION),
+        Ok(Some("stationKeyDisagrees"))
+    );
+    // Forgotten: nothing held is left behind.
+    stations.forget(STATION).unwrap();
+    assert!(!store
+        .raw("lan-held-roads")
+        .is_some_and(|held| held.contains(STATION)));
+}
+
+/// The stand-in service's end of Forget, as the app's: `internet::Service::forget` at `origin`.
+fn forgetting_at(origin: &str) -> internet::ForgetInternet {
+    let service = internet::Service::new(origin).unwrap();
+    Arc::new(move |road: InternetRoad| {
+        let service = service.clone();
+        Box::pin(async move { service.forget(&road).await })
+    })
+}
+
+/// Signed in, from elsewhere, to the station the stand-in service lists with `role`: the
+/// computer's stations after it, and the stand-in.
+async fn signed_in_away(
+    role: &str,
+) -> (
+    crate::lan_client::account::tests::Cloud,
+    crate::lan_client::account::tests::Scratch,
+    StationStore,
+    Arc<Stations>,
+) {
+    use crate::lan_client::account::tests::{
+        answering, env, finding, fixture_key, no_pick, row, signing_in, stations, trusting, Cloud,
+        Scratch,
+    };
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    // A proof the issuer signed, for keys only the service vouches for.
+    cloud.lists(json!([row(
+        &fixture_key("station"),
+        lan_key.public_key(),
+        Some("p"),
+        role
+    )]));
+    let kept = stations(&store, &scratch.0);
+    let env = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert!(signed.as_ref().is_ok_and(|s| s.away), "{role}: {signed:?}");
+    (cloud, scratch, store, kept)
+}
+
+/// ★ An invited station (the account's proof is someone else's, so nothing here binds the station's
+/// key to anyone this computer knows), found nowhere on this network: its road is kept HELD. Client
+/// mode opens nothing for it (`stationKeyUnconfirmed`, which asking again does not change), so not
+/// one request reaches the service, let alone a pipe. The page shows the station's key in the
+/// station's own form and the hold. It doesn't match (Forget): the road is ended at the service and
+/// nothing is kept. CONTROL: It matches frees the road, and client mode then asks the service.
+#[tokio::test]
+async fn an_invited_station_away_is_held_and_nothing_crosses_the_pipe_until_confirmed() {
+    use crate::client_mode::Afar;
+    use crate::lan_client::account::tests::{device_at, fixture_key, SERVICE_STATION};
+    for matches in [false, true] {
+        let (cloud, _scratch, store, kept) = signed_in_away("operate").await;
+        assert_eq!(
+            kept.road_held(SERVICE_STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        let roads = internet::Roads::at(kept.clone(), &cloud.at).unwrap();
+        let before = cloud.seen.lock().unwrap().requests.len();
+        let opened = roads.open(SERVICE_STATION.into(), None).await;
+        assert_eq!(opened.err(), Some("stationKeyUnconfirmed"));
+        assert!(internet::lasting("stationKeyUnconfirmed"));
+        assert_eq!(
+            cloud.seen.lock().unwrap().requests.len(),
+            before,
+            "the service asked for a held road"
+        );
+        let origin = Origin::start(Reach {
+            stations: kept.clone(),
+            forget_internet: forgetting_at(&cloud.at),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let told = said(&mut socket, json!({"type":"stations"})).await;
+        let shown = crate::remote_service::fingerprint(&fixture_key("station")).unwrap();
+        assert_eq!(
+            told["stationKeys"],
+            json!([{"id":SERVICE_STATION,"key":shown,"held":"stationKeyUnconfirmed"}]),
+            "{told}"
+        );
+        if matches {
+            let told = said(
+                &mut socket,
+                json!({"type":"keyMatches","stationId":SERVICE_STATION}),
+            )
+            .await;
+            assert_eq!(
+                told["stationKeys"],
+                json!([{"id":SERVICE_STATION,"key":shown}]),
+                "{told}"
+            );
+            assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+            let opened = roads.open(SERVICE_STATION.into(), None).await;
+            assert_ne!(opened.err(), Some("stationKeyUnconfirmed"));
+            assert!(cloud.seen.lock().unwrap().requests.len() > before);
+        } else {
+            let told = said(
+                &mut socket,
+                json!({"type":"forget","stationId":SERVICE_STATION}),
+            )
+            .await;
+            assert_eq!(told["away"], json!([]), "{told}");
+            assert_eq!(cloud.seen.lock().unwrap().forgotten, vec![device_at(0)]);
+            assert!(kept.away(SERVICE_STATION).unwrap().is_none());
+            assert!(kept.internet(SERVICE_STATION).unwrap().is_none());
+            assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+            assert!(!store
+                .raw("lan-held-roads")
+                .is_some_and(|held| held.contains(SERVICE_STATION)));
+        }
+    }
+}
+
+/// ★ Positive control for the hold: a station whose proof is the account's own sign-in (the owner,
+/// checked against this sign-in's subject) is bound to the person signing in, so its road is never
+/// held, and client mode goes straight to the service for it.
+#[tokio::test]
+async fn an_owner_proven_station_is_never_held() {
+    use crate::client_mode::Afar;
+    use crate::lan_client::account::tests::SERVICE_STATION;
+    let (cloud, _scratch, _store, kept) = signed_in_away("owner").await;
+    assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+    let roads = internet::Roads::at(kept.clone(), &cloud.at).unwrap();
+    let before = cloud.seen.lock().unwrap().requests.len();
+    let opened = roads.open(SERVICE_STATION.into(), None).await;
+    assert_ne!(opened.err(), Some("stationKeyUnconfirmed"));
+    assert!(cloud.seen.lock().unwrap().requests.len() > before);
+}
+
+/// ★ A station kept by its service id whose road is held, first reached on its network, is kept in
+/// its place by the id its network gave it: the hold goes with the road, never left behind under the
+/// old id with the road free under the new one.
+#[test]
+fn a_hold_moves_with_a_station_first_reached_on_its_network() {
+    let (dir, _) = typed_file("fold-held");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.hold_road(AWAY, &road.station_key).unwrap();
+    stations.keep_away(&away, &road).unwrap();
+    assert_eq!(stations.road_held(AWAY), Ok(Some("stationKeyUnconfirmed")));
+    let mut here = record(STATION, &["192.168.1.20:42075"]);
+    here.station_key = away.station_key.clone();
+    stations.fold(AWAY, &here, 1_800_000_000).unwrap();
+    assert_eq!(
+        stations.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed")),
+        "the road went free with the move"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// ★ It doesn't match, for a held road: on a station paired here with a code, only the internet road
+/// goes (ended at the service with its own key, then dropped here with its hold). The pairing on the
+/// station's network stays, so Operate there still works and the road can be added again later. On
+/// a station added with the account as a guest (there is no code pairing to keep: its network's key
+/// came from the same listing), the station is forgotten, as Forget does.
+#[tokio::test]
+async fn it_doesnt_match_drops_only_the_internet_road_of_a_code_paired_station() {
+    for code_paired in [true, false] {
+        let (dir, _) = typed_file("key-differs");
+        let store = StationStore::default();
+        let stations = Arc::new(
+            Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
+        );
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if code_paired {
+            stations.keep_coded(&kept).unwrap();
+        } else {
+            stations.keep(&kept).unwrap();
+        }
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if !code_paired {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let told = asked.clone();
+        let origin = Origin::start(Reach {
+            stations: stations.clone(),
+            forget_internet: Arc::new(move |road: InternetRoad| {
+                told.lock().unwrap().push(road.device_id);
+                Box::pin(async { Ok(()) })
+            }),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let answer = said(
+            &mut socket,
+            json!({"type":"keyDiffers","stationId":STATION}),
+        )
+        .await;
+        assert_eq!(answer["type"], "stations", "{answer}");
+        assert_eq!(
+            asked.lock().unwrap().clone(),
+            vec![road.device_id.clone()],
+            "{code_paired}: the road not ended at the service"
+        );
+        assert!(
+            stations.internet(STATION).unwrap().is_none(),
+            "{code_paired}"
+        );
+        assert_eq!(stations.road_held(STATION), Ok(None), "{code_paired}");
+        assert!(
+            !store
+                .raw("lan-held-roads")
+                .is_some_and(|held| held.contains(STATION)),
+            "{code_paired}: a hold left behind"
+        );
+        assert_eq!(answer["internet"], json!([]), "{answer}");
+        assert_eq!(answer["stationKeys"], json!([]), "{answer}");
+        if code_paired {
+            assert_eq!(
+                answer["stations"][0]["id"],
+                json!(STATION),
+                "the pairing went: {answer}"
+            );
+            assert!(stations.get(STATION).unwrap().is_some(), "the pairing went");
+        } else {
+            assert_eq!(answer["stations"], json!([]), "{answer}");
+            assert!(stations.get(STATION).unwrap().is_none());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// ★ A road held until its key is checked, for a station paired here with a code, is freed when the
+/// station names that same key on this network's road, which the code pinned: the station said it
+/// itself. Through the same comparison that turns a road off (`Afar::heard_key`, on each Operate
+/// connection here). CONTROLS: another key there still turns it off; a road turned off stays off
+/// when the station later names its pinned key (only forget and add again bring it back); and a
+/// guest's held road (its network's key came from the same listing as the station key, not from a
+/// code) is not freed by it.
+#[test]
+fn a_held_road_is_freed_when_the_code_paired_station_names_the_same_key() {
+    use crate::client_mode::Afar;
+    for case in ["same", "other", "disowned", "guest"] {
+        let (dir, _) = typed_file("heard-same");
+        let store = StationStore::default();
+        let stations = Arc::new(
+            Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
+        );
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if case == "guest" {
+            stations.keep(&kept).unwrap();
+        } else {
+            stations.keep_coded(&kept).unwrap();
+        }
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if case == "guest" {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        let roads = internet::Roads::new(stations.clone()).unwrap();
+        if case == "disowned" {
+            roads.heard_key(STATION, &road_to(STATION).station_key);
+            assert_eq!(stations.road_held(STATION), Ok(Some("stationKeyDisagrees")));
+        }
+        let said = if case == "other" {
+            road_to(STATION).station_key
+        } else {
+            road.station_key.clone()
+        };
+        roads.heard_key(STATION, &said);
+        let held = match case {
+            "same" => None,
+            "other" | "disowned" => Some("stationKeyDisagrees"),
+            _ => Some("stationKeyUnconfirmed"),
+        };
+        assert_eq!(stations.road_held(STATION), Ok(held), "{case}");
+        // Freed for good: a restart reads it free too.
+        assert_eq!(
+            Stations::new(Arc::new(store.clone())).road_held(STATION),
+            Ok(held),
+            "{case}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// ★ Whether a station is paired here with a code is read from the credential store alone, never
+/// from the sign-in file beside it, which is a plain file: a guest whose sign-in line is lost (the
+/// file deleted or damaged), a station linked to the account and then losing its line the same way,
+/// and a pairing kept before the store recorded code pairings are NOT read as paired with a code.
+/// Each one's held road stays held when the station names the same key on its network, the page is
+/// not told to offer the road-only removal, and It doesn't match forgets it, as Forget does.
+/// CONTROL: a real code pairing still frees its road on the same key, and It doesn't match keeps
+/// its pairing, saying so when Nexus Remote could not be told.
+#[tokio::test]
+async fn code_pairing_is_read_from_the_store_and_a_lost_sign_in_file_fails_closed() {
+    use crate::client_mode::Afar;
+    for case in [
+        "coded",
+        "guest-deleted",
+        "guest-damaged",
+        "linked-deleted",
+        "unmarked",
+    ] {
+        let (dir, _) = typed_file("coded-mark");
+        let signed = dir.join("lan-account.json");
+        let store = StationStore::default();
+        let stations = Arc::new(Stations::new(Arc::new(store.clone())).signed_in(signed.clone()));
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if case == "coded" || case == "linked-deleted" {
+            stations.keep_coded(&kept).unwrap();
+        } else {
+            stations.keep(&kept).unwrap();
+        }
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if case != "coded" && case != "unmarked" {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        match case {
+            "guest-deleted" | "linked-deleted" => std::fs::remove_file(&signed).unwrap(),
+            "guest-damaged" => std::fs::write(&signed, "{not json").unwrap(),
+            _ => {}
+        }
+        let coded = case == "coded";
+        assert_eq!(stations.code_paired(STATION), Ok(coded), "{case}");
+        let origin = Origin::start(Reach {
+            stations: stations.clone(),
+            forget_internet: Arc::new(|_| Box::pin(async { Err("serviceUnavailable") })),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let listed = said(&mut socket, json!({"type":"stations"})).await;
+        assert_eq!(
+            listed["stationKeys"][0]["codePaired"],
+            if coded { json!(true) } else { Value::Null },
+            "{case}: {listed}"
+        );
+        let roads = internet::Roads::new(stations.clone()).unwrap();
+        roads.heard_key(STATION, &road.station_key);
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok((!coded).then_some("stationKeyUnconfirmed")),
+            "{case}: the hold"
+        );
+        let answer = said(
+            &mut socket,
+            json!({"type":"keyDiffers","stationId":STATION}),
+        )
+        .await;
+        assert!(stations.internet(STATION).unwrap().is_none(), "{case}");
+        if coded {
+            assert!(stations.get(STATION).unwrap().is_some(), "the pairing went");
+            assert_eq!(answer["dropUnreached"], "serviceUnavailable", "{answer}");
+            assert_eq!(answer["forgetUnreached"], Value::Null, "{answer}");
+        } else {
+            assert!(
+                stations.get(STATION).unwrap().is_none(),
+                "{case}: kept as if paired with a code"
+            );
+            assert_eq!(answer["stations"], json!([]), "{case}: {answer}");
+            assert_eq!(answer["forgetUnreached"], "serviceUnavailable", "{answer}");
+            assert_eq!(answer["dropUnreached"], Value::Null, "{answer}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The credential store's entry that says a station was paired here with a code: it names the
+/// station's id and its LAN key's fingerprint, and no key. It counts only for the key it names, and
+/// only while no sign-in line says otherwise; it goes when the station is linked to the account or
+/// forgotten. CONTROL: a code pairing whose entry the store would not take is kept all the same, and
+/// reads as not paired with a code (its held road stays held).
+#[test]
+fn the_code_pairing_entry_counts_only_for_its_key_and_goes_with_a_sign_in_or_forget() {
+    let (dir, _) = typed_file("coded-entry");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    let kept = record(STATION, &["192.168.1.20:42075"]);
+    stations.keep_coded(&kept).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    let raw = store.raw("lan-code-paired").unwrap();
+    assert!(raw.contains(STATION), "{raw}");
+    assert!(!raw.contains(&kept.station_key) && !raw.contains(&kept.pkcs8));
+    // A sign-in line beside the entry: not paired with a code.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&signed, format!("{{\"{STATION}\":1800000000}}")).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(false), "a sign-in line");
+    std::fs::remove_file(&signed).unwrap();
+    // An entry for another key under the same id counts for nothing.
+    let entry = store.raw("lan-code-paired").unwrap();
+    let other =
+        crate::remote_service::fingerprint(&record(STATION, &["10.0.0.1"]).station_key).unwrap();
+    let pinned = crate::remote_service::fingerprint(&kept.station_key).unwrap();
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert("lan-code-paired".into(), entry.replace(&pinned, &other));
+    assert_eq!(stations.code_paired(STATION), Ok(false), "another key");
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert("lan-code-paired".into(), entry);
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    // Linked to the account: the entry goes with the sign-in line's write.
+    stations.keep_signed(STATION, 1_800_000_000).unwrap();
+    assert!(!store.raw("lan-code-paired").unwrap().contains(STATION));
+    std::fs::remove_file(&signed).unwrap();
+    assert_eq!(
+        stations.code_paired(STATION),
+        Ok(false),
+        "linked, line lost"
+    );
+    // Paired with the code again, then forgotten: the entry goes too.
+    stations.keep_coded(&kept).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    stations.forget(STATION).unwrap();
+    assert!(!store.raw("lan-code-paired").unwrap().contains(STATION));
+    // A store that refuses the entry: the pairing is kept, not as paired with a code.
+    let full = Stations::new(Arc::new(RefusesCoded(store.clone())));
+    full.keep_coded(&kept).unwrap();
+    assert!(full.get(STATION).unwrap().is_some());
+    assert_eq!(full.code_paired(STATION), Ok(false), "no entry kept");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The in-memory store, refusing the code pairing entry alone.
+struct RefusesCoded(StationStore);
+
+impl StationVault for RefusesCoded {
+    fn paired_stations(&self) -> Result<Option<PairedStations>, &'static str> {
+        self.0.paired_stations()
+    }
+    fn save_paired_stations(&self, list: &PairedStations) -> Result<(), &'static str> {
+        self.0.save_paired_stations(list)
+    }
+    fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str> {
+        self.0.paired_station(id)
+    }
+    fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str> {
+        self.0.save_paired_station(station)
+    }
+    fn remove_paired_station(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_paired_station(id)
+    }
+    fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        self.0.internet_road(id)
+    }
+    fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
+        self.0.save_internet_road(id, road)
+    }
+    fn remove_internet_road(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_internet_road(id)
+    }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        self.0.staged_keys()
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        self.0.save_staged_keys(keys)
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        self.0.remove_staged_keys()
+    }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        self.0.away_station(id)
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        self.0.save_away_station(station)
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_away_station(id)
+    }
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str> {
+        self.0.held_roads()
+    }
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
+        self.0.save_held_roads(held)
+    }
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str> {
+        self.0.code_paired()
+    }
+    fn save_code_paired(&self, _: &CodePaired) -> Result<(), &'static str> {
+        Err("credentialStoreUnavailable")
+    }
+}
+
+/// A station first reached on its network after a sign-in from elsewhere is kept on that sign-in,
+/// never as one paired with a code: an entry left behind under the id its network gave it (a
+/// forget whose write the store refused) goes with the fold, so losing the sign-in file later does
+/// not make it read as paired with a code.
+#[test]
+fn a_station_folded_in_is_never_read_as_paired_with_a_code() {
+    let (dir, _) = typed_file("fold-coded");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    let away = away_record(AWAY, "Shack");
+    stations.keep_away(&away, &road_to(AWAY)).unwrap();
+    let lan = id(0x0a);
+    let pinned = crate::remote_service::fingerprint(&away.station_key).unwrap();
+    store.entries.lock().unwrap().insert(
+        "lan-code-paired".into(),
+        json!({"stations":[{"s":lan,"k":pinned}]}).to_string(),
+    );
+    let reached = PairedStation {
+        station_id: lan.clone(),
+        device_id: DEVICE.into(),
+        station_key: away.station_key.clone(),
+        pkcs8: away.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    stations.fold(AWAY, &reached, 1_800_000_000).unwrap();
+    std::fs::remove_file(&signed).unwrap();
+    assert!(stations.get(&lan).unwrap().is_some(), "the control: kept");
+    assert_eq!(stations.code_paired(&lan), Ok(false));
+    assert!(!store.raw("lan-code-paired").unwrap().contains(&lan));
+    let _ = std::fs::remove_dir_all(dir);
 }

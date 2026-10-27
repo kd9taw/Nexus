@@ -509,8 +509,8 @@ test('a secret moved back to job scope is reported', () => {
 test('a secret written straight into a build command is reported', () => {
   const planted = plant(
     TEXT,
-    '        run: bash scripts/build-linux.sh\n',
-    '        run: bash scripts/build-linux.sh "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"\n',
+    '          bash scripts/build-linux.sh\n',
+    '          bash scripts/build-linux.sh "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"\n',
   );
   reported(planted, 'job linux-x86, step "Build .deb + AppImage": a platform build script (native libraries, npm, crates.io, the bundler) runs in a step that is handed TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
 });
@@ -527,8 +527,8 @@ test('the key handed to a Verify step, instead of whether it exists, is reported
 test('a secret used in an expression the test cannot classify is reported', () => {
   const planted = plant(
     TEXT,
-    '        run: bash scripts/build-linux.sh\n',
-    '          EVERYTHING: ${{ toJSON(secrets) }}\n        run: bash scripts/build-linux.sh\n',
+    '        run: |\n          git config --global --add safe.directory "$GITHUB_WORKSPACE"\n',
+    '          EVERYTHING: ${{ toJSON(secrets) }}\n        run: |\n          git config --global --add safe.directory "$GITHUB_WORKSPACE"\n',
   );
   reported(planted, 'uses a secret in a way this test cannot classify');
 });
@@ -661,7 +661,10 @@ function unpinnedInWorkflow(wf, file) {
       }
       const code = (s.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
       const input = !NOT_BUILD_INPUTS.some(([f, jid, name]) => f === file && jid === j.id && name === s.name);
-      if (input && FETCH.test(code) && !CHECKSUM.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": downloads with no checksum check in the same step`);
+      // An apt install's package list names curl and wget without running them (the container jobs
+      // install both). apt floats the version and checks what it fetches, as said above.
+      const fetches = code.replace(/\\\n/g, ' ').replace(/\bapt(?:-get)?\s+install\b[^\n]*/g, '');
+      if (input && FETCH.test(fetches) && !CHECKSUM.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": downloads with no checksum check in the same step`);
       if (/\bpip3?\s+install\b/.test(code) && !/--require-hashes\b/.test(code)) v.push(`${file}: job ${j.id}, step "${s.label}": pip installs without --require-hashes`);
       for (const m of code.matchAll(/\bcargo\s+install\b[^\n]*/g)) {
         if (!/--version\s+"=[0-9.]+"/.test(m[0]) || !/--locked\b/.test(m[0])) v.push(`${file}: job ${j.id}, step "${s.label}": \`${m[0].trim()}\` is not an exact, --locked version`);
@@ -833,6 +836,8 @@ test('an unpinned download planted in the workflow or build-linux.sh is reported
     [TEXT, plant(SCRIPT, 'linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/', 'linuxdeploy-plugin-gstreamer/master/'), 'linuxdeploy-plugin-gstreamer.sh is fetched from a moving ref'],
     [TEXT, plant(SCRIPT, '  export LDAI_RUNTIME_FILE="$tauri_tools/runtime-x86_64"\n', ''), 'the pinned runtime is not handed to the appimage plugin'],
     [plant(TEXT, `"$HOME/.cache/tauri/runtime-x86_64" <<'PY'`, `"$HOME/.cache/tauri/runtime" <<'PY'`), SCRIPT, 'does not check that the shipped AppImage carries the pinned runtime'],
+    // The apt package list is set aside, not the step: a real download after it is still seen.
+    [plant(TEXT, '            gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils\n', '            gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils\n          curl -fsSLo /tmp/x https://example.invalid/x\n'), SCRIPT, 'job linux-x86, step "Install build dependencies": downloads with no checksum check'],
   ];
   for (const [text, script, needle] of cases) {
     const v = unpinnedDownloads(readWorkflow(text), script);

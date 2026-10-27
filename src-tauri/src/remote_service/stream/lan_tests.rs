@@ -31,6 +31,8 @@ struct Lan {
 /// radio, its lease taken on its own LAN connection, its key pinned.
 fn lan(now: Instant) -> Lan {
     let authority = Arc::new(Authority::default());
+    // Normal operating state: the account's device list has been heard and names no sign-in device.
+    authority.set_signin_devices(std::collections::BTreeSet::new());
     let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
     let ptt = PttHold::default();

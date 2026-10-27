@@ -6,6 +6,10 @@
 // the entry class, the power category and Unassisted — each shown as it is now and as it was
 // before the contest.
 //
+// It also offers the Summary export, names the Cabrillo lines the sponsor requires that the log leaves
+// out (with a box for each one Settings fills at export time, saved just before the export), and SHOWS
+// where the sponsor takes the log, to copy: Nexus never opens that address or sends a log anywhere.
+//
 // Every item is a tick the operator makes; none is ticked to begin with. "Not now" (and Esc)
 // leaves everything as it is, Contest mode included. "Turn off" does what is ticked and then turns
 // the mode off.
@@ -18,8 +22,8 @@
 // mode holds, and the engine refuses both once it has gone. So both hosts — the Contest screen's
 // switch and a Settings save that turns it off — hold their save until this answers.
 //
-// ⚠️ THE ORDER IS LOAD-BEARING: merge, export, Unassisted, then ONE save that turns the mode off
-// with the other put-backs in it.
+// ⚠️ THE ORDER IS LOAD-BEARING: merge, the missing lines typed in, export, Summary, Unassisted, then
+// ONE save that turns the mode off with the other put-backs in it.
 //   • The export comes before any put-back: a Cabrillo log is the contest's, written under the
 //     contest's call and categories.
 //   • Unassisted goes back through its own switch (which journals the change) while the mode is
@@ -36,10 +40,13 @@ import { useEffect, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
 import type { FdMergeReport, Settings } from '../types'
+import type { FdRulesetDto } from '../api'
 import { exportLog, fdMergeToGeneral, saveTextToDownloads, setUnassistedMode } from '../api'
-import { contestFileStem } from '../fdEvent'
+import { CONTESTS, contestFileStem, contestName } from '../fdEvent'
+import { cabrilloLineWords, READ_AS_THE_SESSION_STARTS } from '../features/contestStart'
 import { isStreamInput } from '../remote-native/stream-input'
 import { pushToast } from '../toast'
+import { patchSettings } from '../settings/patch'
 
 /** The settings the checklist can put back, in the order it lists them. */
 const PUT_BACK = [
@@ -97,6 +104,26 @@ export interface ContestOverOffer {
   /** This laptop's contacts the club's log does not have yet: the club chip's count
    *  (`FdClubStatus.queued`), 0 without club sync. */
   clubQueued: number
+  /** The Cabrillo lines the sponsor requires that the running log leaves out
+   *  (`FieldDayStatus.cabrilloMissing`). */
+  cabrilloMissing?: string[]
+  /** The sponsor's own values for the lines that take a list (the preview's). */
+  choices?: Pick<FdRulesetDto, 'entryClasses' | 'bandCategories' | 'transmitterCategories'>
+}
+
+/** The Cabrillo lines a box here can fill, each with the setting it writes. Read at export time, so
+ *  a value saved just before the export reaches the file. */
+const FIXABLE: Record<string, { key: keyof Settings; list?: keyof NonNullable<ContestOverOffer['choices']> }> = {
+  EMAIL: { key: 'contestEmail' },
+  OPERATORS: { key: 'contestOperators' },
+  'ENTRY-CLASS': { key: 'contestEntryClass', list: 'entryClasses' },
+  'CATEGORY-BAND': { key: 'contestCategoryBand', list: 'bandCategories' },
+  'CATEGORY-TRANSMITTER': { key: 'contestCategoryTransmitter', list: 'transmitterCategories' },
+}
+
+/** Where the sponsor takes the log, if the menu knows: a page or an address, shown to copy. */
+export function contestSubmitAddress(event: string | undefined): string | null {
+  return CONTESTS.find((c) => c.id === (event || 'arrlfd'))?.submit ?? null
 }
 
 /** What to offer, from the settings the station holds now and the engine's note in them, and the
@@ -106,6 +133,7 @@ export function contestOverOffer(
   contacts: number,
   event: string | undefined,
   clubQueued = 0,
+  cabrillo: { missing?: string[]; choices?: ContestOverOffer['choices'] | null } = {},
 ): ContestOverOffer {
   const note = now.contestBefore
   const putBack: PutBackRow[] = []
@@ -118,7 +146,12 @@ export function contestOverOffer(
       putBack.push({ key, now: is, before })
     }
   }
-  return { contacts, event, putBack, clubQueued }
+  const choices = {
+    entryClasses: cabrillo.choices?.entryClasses,
+    bandCategories: cabrillo.choices?.bandCategories,
+    transmitterCategories: cabrillo.choices?.transmitterCategories,
+  }
+  return { contacts, event, putBack, clubQueued, cabrilloMissing: cabrillo.missing ?? [], choices }
 }
 
 /** Is there anything to offer, or to say? With nothing, the mode simply goes off, as it always did. */
@@ -143,29 +176,41 @@ function mergeReportText(r: FdMergeReport): string {
   return parts.join(SEP)
 }
 
-type Tick = 'merge' | 'export' | PutBackKey
+type Tick = 'merge' | 'export' | 'summary' | PutBackKey
 
 export function ContestOverDialog({
   offer,
   onNotNow,
   onTurnOff,
+  onStats,
+  summaryText,
 }: {
   /** What to offer; `null` is closed. */
   offer: ContestOverOffer | null
+  /** The Summary export's text, as the Contest screen's Summary button writes it, read when the
+   *  export runs. Absent, the checklist offers no Summary. */
+  summaryText?: () => string | Promise<string>
   /** Nothing is done: the dialog closes and Contest mode stays on. */
   onNotNow: () => void
   /** Turn Contest mode off, in ONE save, with these settings put back. Rejects with the reason. */
   onTurnOff: (putBack: Partial<Settings>) => Promise<void>
+  /** Show the contest's Stats tab instead, Contest mode still on. Not offered when absent. */
+  onStats?: () => void
 }) {
   const [ticked, setTicked] = useState<Set<Tick>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [fixes, setFixes] = useState<Partial<Record<keyof Settings, string>>>({})
+  const [copied, setCopied] = useState(false)
   // Every opening starts with nothing ticked: a tick from an earlier offer is not this one's.
   useEffect(() => {
     setTicked(new Set())
     setError(null)
+    setFixes({})
+    setCopied(false)
   }, [offer])
   if (!offer) return null
+  const submit = contestSubmitAddress(offer.event)
 
   const tick = (k: Tick) =>
     setTicked((prev) => {
@@ -178,7 +223,7 @@ export function ContestOverDialog({
   const turnOff = async () => {
     // Only at the station: a press through the Remote stream writes no file and merges no contact,
     // as the Contest screen's own buttons refuse. Read before anything awaits, inside the dispatch.
-    if (isStreamInput() && (ticked.has('merge') || ticked.has('export'))) {
+    if (isStreamInput() && (ticked.has('merge') || ticked.has('export') || ticked.has('summary'))) {
       setError(ticked.has('merge') ? t('fieldDay.merge.remote') : t('fieldDay.export.remote'))
       return
     }
@@ -188,11 +233,23 @@ export function ContestOverDialog({
       if (ticked.has('merge')) {
         pushToast(mergeReportText(await fdMergeToGeneral()), 'success')
       }
+      const stamp = new Date().toISOString().slice(0, 10)
       if (ticked.has('export')) {
+        // The lines typed in here first, saved over the live settings, so the export writes them.
+        const typed = Object.fromEntries(
+          Object.entries(fixes)
+            .map(([k, v]) => [k, (v ?? '').trim()])
+            .filter(([, v]) => v !== ''),
+        ) as Partial<Settings>
+        if (Object.keys(typed).length > 0) await patchSettings(() => typed)
         // The Contest screen's own export: the same command and the same file name.
         const text = await exportLog('cabrillo')
-        const stamp = new Date().toISOString().slice(0, 10)
         const path = await saveTextToDownloads(`${contestFileStem(offer.event)}-log-${stamp}.cbr`, text)
+        pushToast(t('fieldDay.export.done', { path }), 'success')
+      }
+      if (ticked.has('summary') && summaryText) {
+        // The Contest screen's own Summary: the same text and the same file name.
+        const path = await saveTextToDownloads(`${contestFileStem(offer.event)}-summary-${stamp}.txt`, await summaryText())
         pushToast(t('fieldDay.export.done', { path }), 'success')
       }
       const back: Partial<Settings> = {}
@@ -233,6 +290,72 @@ export function ContestOverDialog({
               <input type="checkbox" checked={ticked.has('export')} onChange={() => tick('export')} disabled={busy} />
               <span>{t('contestOver.export')}</span>
             </label>
+            {(offer.cabrilloMissing?.length ?? 0) > 0 && (
+              <fieldset className="contest-over-missing">
+                <legend>{t('contestOver.missing.legend', { contest: contestName(offer.event || 'arrlfd') })}</legend>
+                <p className="contest-over-note">{t('contestOver.missing.note')}</p>
+                {(offer.cabrilloMissing ?? []).map((line) => {
+                  const fix = FIXABLE[line]
+                  const list = fix?.list ? offer.choices?.[fix.list] : undefined
+                  return (
+                    <div className="contest-over-line" key={line} data-line={line}>
+                      <span className="contest-over-setting">{cabrilloLineWords(line)}</span>
+                      {fix && list?.length ? (
+                        <select
+                          aria-label={cabrilloLineWords(line)}
+                          value={fixes[fix.key] ?? ''}
+                          disabled={busy}
+                          onChange={(e) => setFixes((f) => ({ ...f, [fix.key]: e.target.value }))}
+                        >
+                          <option value="">{t('contestSetup.entry.unset')}</option>
+                          {list.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      ) : fix && !fix.list ? (
+                        <input
+                          type={line === 'EMAIL' ? 'email' : 'text'}
+                          aria-label={cabrilloLineWords(line)}
+                          value={fixes[fix.key] ?? ''}
+                          disabled={busy}
+                          onChange={(e) => setFixes((f) => ({ ...f, [fix.key]: e.target.value }))}
+                          autoComplete="off"
+                        />
+                      ) : READ_AS_THE_SESSION_STARTS.includes(line) ? (
+                        <span className="contest-over-note">{t('contestOver.missing.readAtStart')}</span>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </fieldset>
+            )}
+            {summaryText && (
+              <label className="contest-over-item">
+                <input type="checkbox" checked={ticked.has('summary')} onChange={() => tick('summary')} disabled={busy} />
+                <span>{t('contestOver.summary')}</span>
+              </label>
+            )}
+            {submit && (
+              <div className="contest-over-submit" data-submit>
+                <span>{t('contestOver.submit.label', { contest: contestName(offer.event || 'arrlfd') })}</span>{' '}
+                <code className="contest-over-address">{submit}</code>{' '}
+                <button
+                  type="button"
+                  className="settings-linkbtn"
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(submit)
+                      .then(() => setCopied(true))
+                      .catch(() => {})
+                  }}
+                >
+                  {copied ? t('contestOver.submit.copied') : t('contestOver.submit.copy')}
+                </button>{' '}
+                <span className="contest-over-note">{t('contestOver.submit.note')}</span>
+              </div>
+            )}
           </>
         )}
         {offer.putBack.length > 0 && (
@@ -272,6 +395,11 @@ export function ContestOverDialog({
               </label>
             ))}
           </fieldset>
+        )}
+        {onStats && offer.contacts > 0 && (
+          <button type="button" className="settings-refresh contest-over-stats" onClick={onStats} disabled={busy} title={t('contestOver.stats.title')}>
+            {t('contestOver.stats')}
+          </button>
         )}
         {error && (
           <p className="contest-over-error" role="alert">

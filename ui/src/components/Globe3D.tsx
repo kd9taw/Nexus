@@ -6,8 +6,8 @@
 // night (features/globeBasemap.ts), crossing at a subsolar day/night terminator, band-colored spots,
 // selected/heard-me great-circle arcs, a QTH ping, a starfield, and bloom. Phase A of the
 // 3-D plan (look + foundation).
-// On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
-// design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
+// On a tracked satellite pass it ALSO becomes the "this pass" view:
+// the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
 // ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
 //
 // Its WebGL context is handed back when the globe goes (Flat picked, Connect closed), and a loss

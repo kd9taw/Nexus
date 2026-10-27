@@ -91,6 +91,30 @@ module ft8_cabi
      real(c_float)          :: qual         ! decode quality metric [0,1]
   end type ft8_decode_t
 
+  ! What WSJT-X's decoder keeps of each early decode so the full pass can start from audio with it
+  ! subtracted (ft8_decode.f90:67-69 itone_save/f1_save/xdt_save, :55 lsubtracted; saved at
+  ! :229-231). Layout MUST match ft8_sub_t in libtempo.h: 79 int tones, float f1, float xdt0,
+  ! int ok, int done = 332 bytes.
+  type, bind(C) :: ft8_sub_t
+     integer(c_int) :: itone(79)    ! the decode's 79 channel tones (ft8b's itone)
+     real(c_float)  :: f1           ! carrier, Hz, as the decode reported it
+     real(c_float)  :: xdt0         ! ft8b's start time, s: the record's dt + 0.5 (xdt_save, :230)
+     integer(c_int) :: ok           ! 1 = a direct decode, tones known; 0 = not subtractable (a7)
+     integer(c_int) :: done         ! 1 = already subtracted from the residual (lsubtracted)
+  end type ft8_sub_t
+
+  ! The caller's callback for ft8_decode_frame_cb (tempo_decode_cb in libtempo.h). `rec` points
+  ! at a decode the pass has just accepted, or is NULL after each sync candidate is tried; a
+  ! nonzero answer to a NULL `rec` stops the pass there.
+  abstract interface
+     function ft8_decode_cb(user, rec) bind(C) result(istop)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: user
+       type(c_ptr), value :: rec
+       integer(c_int)     :: istop
+     end function ft8_decode_cb
+  end interface
+
   !-------------------------------------------------------------------------
   ! PER-CHAIN DECODER CONTEXT
   !
@@ -411,9 +435,10 @@ contains
   !                   that cannot overrun the slot: an early decode still running
   !                   at the boundary makes the WHOLE period get dropped.
   !                   Anything other than 41 is treated as 50. Upstream's third
-  !                   value, 47, is its residual-carry pass (ft8_decode.f90:
-  !                   125-158) which this wrapper deliberately does not
-  !                   implement — see the `dd` assignment below.
+  !                   value, 47, is its residual-carry step (ft8_decode.f90:
+  !                   124-150): ft8_subtract_early below, whose residual
+  !                   ft8_decode_frame_dp's full pass starts from. This entry
+  !                   never starts from one.
   !   nutc          : slot key = slot UTC seconds-of-day (0..86399; slot*15 for
   !                   FT8). Keys the a7 cross-cycle table: parity = mod(nutc/5,2)
   !                   and a nutc change rolls the per-parity table over. A nutc
@@ -454,58 +479,181 @@ contains
     type(ft8_decode_t),     intent(out) :: out(*)
     integer(c_int)                      :: ndec
 
+    ndec = ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+         nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+         lft8apon_in, lapcqonly_in, out, max_out, c_null_funptr, c_null_ptr)
+  end function ft8_decode_frame
+
+  !-------------------------------------------------------------------------
+  ! ft8_decode_frame_cb : ft8_decode_frame, handing each decode to `cb` the moment the pass
+  !                       accepts it, as WSJT-X's decoder hands each one to its callback
+  !                       (ft8_decode.f90:233-238), which jt9 writes and flushes at once
+  !                       (decoder.f90 ft8_decoded, flush(6)) for the GUI's auto-sequencer to read
+  !                       line by line (mainwindow.cpp readFromStdout). The decodes come in the
+  !                       pass's own order: the sync candidates within 10 Hz of nfqso first
+  !                       (sync8.f90:155-163), then by sync; the a7 replay's after the passes.
+  !
+  !   cb      : tempo_decode_cb, or NULL for no callback (exactly ft8_decode_frame). Called with
+  !             a pointer to a copy of the record just written to `out`, and with NULL after every
+  !             sync candidate of the direct passes, where WSJT-X asks its early pass's give-up
+  !             (ft8_decode.f90:240-242). A nonzero answer to the NULL call ends the pass there:
+  !             no further candidate, pass or a7 replay, and `out` holds what was found. The
+  !             answer to a decode is ignored.
+  !   cb_user : handed back to `cb` untouched.
+  !
+  ! Everything else, and the decodes themselves, are ft8_decode_frame's. Not reentrant: `cb` must
+  ! not call back into the modem. ft8_decode_frame_dp with no carry.
+  !-------------------------------------------------------------------------
+  function ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+       nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+       lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user) result(ndec) &
+       bind(C, name="ft8_decode_frame_cb")
+    integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
+    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
+    integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
+    integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    character(kind=c_char), intent(in)  :: mycall(*)
+    character(kind=c_char), intent(in)  :: hiscall(*)
+    type(ft8_decode_t),     intent(out) :: out(*)
+    type(c_funptr), value,  intent(in)  :: cb
+    type(c_ptr),    value,  intent(in)  :: cb_user
+    integer(c_int)                      :: ndec
+
+    ndec = ft8_decode_frame_dp(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+         nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+         lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user, &
+         c_null_ptr, 0, c_null_ptr, c_null_ptr, c_null_ptr)
+  end function ft8_decode_frame_cb
+
+  !-------------------------------------------------------------------------
+  ! ft8_decode_frame_dp : ft8_decode_frame_cb, plus WSJT-X's carry between the passes of one
+  !                       period: the full pass starts from audio with the early pass's decodes
+  !                       already subtracted, and never searches for or reports them again
+  !                       (ft8_decode.f90:121 ndecodes=ndec_early, :152-162). The one decode body;
+  !                       every other entry above delegates here.
+  !
+  !   subs       : NULL, or ft8_sub_t(max_out): for each record written to `out`, what the full
+  !                pass needs to subtract it (ok=1 for a direct decode: its tones, f1 and ft8b's
+  !                xdt, as WSJT-X saves them at :229-231; ok=0 for an a7 decode, whose tones are not
+  !                known here; the carried early decodes' own records, below).
+  !   nearly     : how many early decodes the caller carries (0 = none). With 1..F8_MAXDEC, all
+  !                three pointers below non-NULL, nzhsym 50 and ndepth >= 2 (WSJT-X runs no early
+  !                pass at depth 1, :102-105), this pass starts from the residual:
+  !                  dd(1:47*3456)  = resid(1:47*3456), dd(47*3456+1:) = iwave (:153-155);
+  !                  each early decode not yet subtracted is subtracted with DT refinement
+  !                  (:157-160);
+  !                  the early decodes open `out` and allmessages, in their order, so the search
+  !                  dedupes against them and never hands one to `cb` again (:121, :219-222);
+  !                  on the authoritative pass they enter the a7 table first, as WSJT-X entered
+  !                  them during its early pass (:237).
+  !                Anything else decodes the raw audio, exactly as ft8_decode_frame_cb.
+  !   la7final 2 : Nexus's rescue pass, run after the full pass from the residual: the raw audio
+  !                again, as the full pass decoded it before the carry (the 47 step's subtraction
+  !                damages a few decodes the raw search finds). `early` then holds the
+  !                1..F8_MAXDEC (and <= max_out) records the period's passes have already reported,
+  !                and `early_subs` and `resid` are NULL. Those records open `out` and
+  !                allmessages, so the search dedupes against them, never hands one to `cb` again
+  !                and never saves one into the a7 table a second time: the first time the search
+  !                finds one again, its entry takes this raw-audio dt and frequency instead, as the
+  !                raw full pass saved them (the early pass's are rougher), and each a7 decode among
+  !                them is tried again on this audio, its entry taking this audio's values. A new
+  !                decode is saved once, and the a7 replay runs as on the authoritative pass (a pair
+  !                already decoded this period is marked and skipped). Without such records, 2 is 1.
+  !   early      : ft8_decode_t(nearly), the early pass's records, as it returned them.
+  !   early_subs : ft8_sub_t(nearly), their ft8_sub_t from the early pass, `done` set by
+  !                ft8_subtract_early for each the residual already has subtracted.
+  !   resid      : real(F8_NMAX), ft8_subtract_early's residual.
+  !
+  ! The caller owns the carry and decides it belongs to this audio: this routine keeps NOTHING
+  ! between calls (no SAVE state is added; the per-chain context below is untouched). Nexus's
+  ! caller hands it over only when the first 47*3456 samples of `iwave` are the very samples the
+  ! residual was made from, so a carry from another period, band, mode or radio chain can never be
+  ! spliced onto this audio (crates/ft8, Carry).
+  !-------------------------------------------------------------------------
+  function ft8_decode_frame_dp(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+       nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+       lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user, &
+       subs, nearly, early, early_subs, resid) result(ndec) &
+       bind(C, name="ft8_decode_frame_dp")
+    integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
+    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
+    integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
+    integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    character(kind=c_char), intent(in)  :: mycall(*)
+    character(kind=c_char), intent(in)  :: hiscall(*)
+    type(ft8_decode_t),     intent(out) :: out(*)
+    type(c_funptr), value,  intent(in)  :: cb
+    type(c_ptr),    value,  intent(in)  :: cb_user
+    type(c_ptr),    value,  intent(in)  :: subs, early, early_subs, resid
+    integer(c_int), value,  intent(in)  :: nearly
+    integer(c_int)                      :: ndec
+
+    ! Not initialized in the declaration: that would make it SAVEd module state.
+    procedure(ft8_decode_cb), pointer :: fcb
+    type(ft8_sub_t),    pointer :: psubs(:), pesub(:)
+    type(ft8_decode_t), pointer :: pearly(:)
+    real(c_float),      pointer :: presid(:)
+    type(ft8_decode_t), target :: rec
+    logical :: streaming, stopped, want_subs, from_resid, rescue
+    integer(c_int) :: istop
     real              :: dd(F8_NMAX)
     real              :: candidate(3, F8_MAXCAND)
     real              :: sbase(F8_NH1)
     integer           :: apsym(58), aph10(10)
-    integer           :: itone(F8_NN)
+    integer           :: itone(F8_NN), itone_e(F8_NN)
     character(len=37) :: allmessages(F8_MAXDEC)
-    character(len=37) :: msg37
+    ! What this call's own search has found, the reported records it re-finds included: the
+    ! rescue pass's pass control counts these, as the raw full pass counts its decodes.
+    character(len=37) :: ownmessages(F8_MAXDEC)
+    character(len=37) :: msg37, msg
     character(len=12) :: mycall12, hiscall12
     character(len=12) :: call_1, call_2
     character(len=4)  :: grid4
     integer :: ncontest, nfqso, nftx, nzhsym, ndepth_l, ndeep, npass, ipass
-    integer :: maxc, ncand, icand, id, n, j, ib
+    integer :: maxc, ncand, icand, id, n, j, ib, n47
     integer :: iaptype, nharderrors, nbadcrc, iappass
-    integer :: nsnr, ndecodes, n2, napwid
+    integer :: nsnr, ndecodes, n2, napwid, nown, ncount
     integer :: i, i1, i2, iz, ndelta
-    real    :: sync, f1, xdt, xbase, dmin, xsnr, syncmin
-    logical :: newdat, lsubtract, ldupe, lft8apon, lapcqonly, nagain
+    real    :: sync, f1, xdt, xbase, dmin, xsnr, syncmin, f1_e, xdt_e
+    logical :: newdat, lsubtract, ldupe, lft8apon, lapcqonly, nagain, lownnew
     logical :: is_new_slot, is_stale
 
     ndec = 0
     if (max_out <= 0) return
+    fcb => null()
+    streaming = c_associated(cb)
+    if (streaming) call c_f_procpointer(cb, fcb)
+    stopped = .false.
+    want_subs = c_associated(subs)
+    if (want_subs) call c_f_pointer(subs, psubs, [max_out])
 
-    ! DELIBERATE DIVERGENCE, DOCUMENTED NOT CLOSED — the final-pass subtraction.
-    ! Upstream's boundary pass does NOT start from raw audio: ft8_decode.f90:
-    ! 148-158 splices the saved residual `dd1` (the early decodes already
-    ! subtracted, with refined DT — lrefinedt=.true. at :128) over the first
-    ! 47*3456 samples, keeps only the last 0.864 s fresh, carries ndecodes =
-    ! ndec_early (:117) and so never re-searches or re-reports what the early
-    ! pass already found. Every call here is an independent full re-decode from
-    ! raw audio (ndecodes/allmessages are reset below); duplicate suppression
-    ! happens a layer up, at ingest.
-    !
-    ! Kept on purpose. The trade cuts both ways: upstream's boundary pass starts
-    ! one DT-REFINED subtraction level deeper (ft8b's inline one is not —
-    ! ft8b.f90:475, `subtractft8(dd0,itone,f1,xdt,.false.)`), so a weak signal
-    ! under a strong one surfaces on their pass 1 where ours needs pass 2; but
-    ! an early FALSE decode is subtracted from upstream's boundary audio and the
-    ! real signal beneath it is then unrecoverable, where we always re-decode
-    ! from raw. Adopting upstream's scheme would need persistent cross-call
-    ! dd1/ndec_early/lsubtracted/itone_save state, which would have to join
-    ! tempo_ctx_t or become exactly the cross-chain contamination vector that
-    ! type exists to prevent — a large change to the most safety-critical file
-    ! in the modem, buying a sensitivity gain nobody has yet measured. Do not
-    ! "close" this for symmetry. If it is ever revisited, the cheap 80% is
-    ! making ft8b's inline subtraction DT-refined (one literal, ft8b.f90:475),
-    ! which is a decode-behaviour change on its own and needs its own numbers.
+    ! The full pass on the early pass's residual, as WSJT-X's (header above). Every condition is
+    ! checked before any pointer is followed; failing one is the raw full re-decode.
+    ndepth_l = ndepth
+    if (ndepth_l <= 0) ndepth_l = 3
+    from_resid = nearly >= 1 .and. nearly <= F8_MAXDEC .and. nearly <= max_out .and. &
+         nzhsym_in /= 41 .and. ndepth_l >= 2 .and. c_associated(early) .and. &
+         c_associated(early_subs) .and. c_associated(resid)
+    if (from_resid) then
+       call c_f_pointer(early, pearly, [nearly])
+       call c_f_pointer(early_subs, pesub, [nearly])
+       call c_f_pointer(resid, presid, [F8_NMAX])
+    end if
+    ! The rescue pass (header above): raw audio, the records already reported carried in `early`.
+    rescue = la7final == 2 .and. .not. from_resid .and. nearly >= 1 .and. &
+         nearly <= F8_MAXDEC .and. nearly <= max_out .and. nzhsym_in /= 41 .and. &
+         c_associated(early) .and. .not. c_associated(early_subs) .and. &
+         .not. c_associated(resid)
+    if (rescue) call c_f_pointer(early, pearly, [nearly])
+
+    ! Raw audio, unless the caller carries the residual (spliced in below, after the a7
+    ! bookkeeping, once ndecodes is known).
     dd(1:F8_NMAX) = real(iwave(1:F8_NMAX))
     call c_to_fstr12(mycall,  mycall12)
     call c_to_fstr12(hiscall, hiscall12)
 
-    ndepth_l = ndepth
-    if (ndepth_l <= 0) ndepth_l = 3
     ! DELIBERATE DIVERGENCE, DOCUMENTED NOT CLOSED. Upstream derives ncontest
     ! from the operator's Special Operating Activity — decoder.f90:103,
     ! `ncontest=iand(params%nexp_decode,7)`, built at mainwindow.cpp:3796-3802
@@ -614,8 +762,58 @@ contains
     if (.not. is_stale) a7_jseq = mod(nutc/5, 2)
 
     ndecodes = 0
+    nown = 0
     allmessages = ' '
     n2 = 0
+
+    ! --- The early pass's carry (ft8_decode.f90:121, :152-162) --------------
+    ! The residual from ft8_subtract_early over the first 47*3456 samples, fresh audio after; then
+    ! the early decodes the 47 step did not reach, subtracted with DT refinement as WSJT-X's 50
+    ! pass does. The early decodes then stand first in allmessages and `out`, so a candidate that
+    ! is one of them again is a dupe, never re-reported, and none is handed to `cb`: the early pass
+    ! already did. On the authoritative pass they enter the a7 table first (WSJT-X's early pass
+    ! entered them at :237); that also marks their pairs as decoded for the replay below
+    ! (ft8_a7_save's -98 flag), exactly as the raw full pass's re-decode of them did.
+    if (from_resid) then
+       n47 = 47 * 3456
+       dd(1:n47) = presid(1:n47)
+       dd(n47+1:F8_NMAX) = real(iwave(n47+1:F8_NMAX))
+       do i = 1, nearly
+          if (pesub(i)%done /= 0 .or. pesub(i)%ok == 0) cycle
+          itone_e(1:F8_NN) = pesub(i)%itone(1:F8_NN)
+          f1_e  = pesub(i)%f1
+          xdt_e = pesub(i)%xdt0
+          call subtractft8(dd, itone_e, f1_e, xdt_e, .true.)
+       end do
+    end if
+    ! The rescue pass's records open `out` and allmessages the same way, on the raw audio. They
+    ! are in the a7 table already (the full pass saved them): not saved again.
+    if (from_resid .or. rescue) then
+       do i = 1, nearly
+          msg37 = ' '
+          do j = 1, 37
+             if (pearly(i)%message(j) == c_null_char) exit
+             msg37(j:j) = pearly(i)%message(j)
+          end do
+          ndecodes = ndecodes + 1
+          allmessages(ndecodes) = msg37
+          out(ndecodes) = pearly(i)
+          if (want_subs) then
+             if (from_resid) then
+                psubs(ndecodes) = pesub(i)
+             else
+                psubs(ndecodes)%itone(1:F8_NN) = 0
+                psubs(ndecodes)%f1   = pearly(i)%freq
+                psubs(ndecodes)%xdt0 = pearly(i)%dt + 0.5
+                psubs(ndecodes)%ok   = 0
+                psubs(ndecodes)%done = 0
+             end if
+          end if
+          if (from_resid .and. la7final /= 0 .and. .not. is_stale) then
+             call ft8_a7_save(nutc, pearly(i)%dt, pearly(i)%freq, msg37)
+          end if
+       end do
+    end if
 
     ! Mirror ft8_decode::decode pass logic. ft8b subtracts decoded signals from
     ! dd internally when lsubtract is set, so later passes find weaker stations.
@@ -634,12 +832,18 @@ contains
           ndeep = ndepth_l
           if (ndepth_l == 3) ndeep = 2
        else if (ipass == 2) then
-          n2 = ndecodes
-          if (ndecodes == 0) cycle
+          ! The rescue pass runs its passes as the raw full pass would: counting what its own
+          ! search found, not the reported records it was handed (they are never new here).
+          ncount = ndecodes
+          if (rescue) ncount = nown
+          n2 = ncount
+          if (ncount == 0) cycle
           lsubtract = .true.
           ndeep = ndepth_l
        else
-          if ((ndecodes - n2) == 0) cycle
+          ncount = ndecodes
+          if (rescue) ncount = nown
+          if ((ncount - n2) == 0) cycle
           lsubtract = .true.
           ndeep = ndepth_l
        end if
@@ -663,9 +867,24 @@ contains
           xdt  = xdt - 0.5
           if (nbadcrc == 0) then
              ldupe = .false.
+             do id = 1, nown
+                if (msg37 == ownmessages(id)) ldupe = .true.
+             end do
+             lownnew = .not. ldupe
+             if (.not. ldupe .and. nown < F8_MAXDEC) then
+                nown = nown + 1
+                ownmessages(nown) = msg37
+             end if
+             ldupe = .false.
              do id = 1, ndecodes
                 if (msg37 == allmessages(id)) ldupe = .true.
              end do
+             ! The rescue's first find of a station the period already reported: the a7 table
+             ! takes this raw-audio decode's dt and frequency for it, as the raw full pass saved
+             ! them, in place of the early pass's (no second entry).
+             if (ldupe .and. lownnew .and. rescue .and. .not. is_stale) then
+                call a7_save_refined(nutc, xdt, f1, msg37)
+             end if
              if (.not. ldupe) then
                 if (ndecodes >= F8_MAXDEC) cycle
                 ndecodes = ndecodes + 1
@@ -684,20 +903,83 @@ contains
                    do j = 1, n
                       out(ndecodes)%message(j) = msg37(j:j)
                    end do
+                   ! What the full pass needs to subtract this decode, as WSJT-X keeps it
+                   ! (ft8_decode.f90:229-231; xdt_save is the reported dt + 0.5).
+                   if (want_subs) then
+                      psubs(ndecodes)%itone(1:F8_NN) = itone(1:F8_NN)
+                      psubs(ndecodes)%f1   = f1
+                      psubs(ndecodes)%xdt0 = xdt + 0.5
+                      psubs(ndecodes)%ok   = 1
+                      psubs(ndecodes)%done = 0
+                   end if
+                   if (streaming) then
+                      rec = out(ndecodes)
+                      istop = fcb(cb_user, c_loc(rec))
+                   end if
                 end if
                 ! Seed the a7 table for the NEXT same-parity slot. Only on the
                 ! authoritative pass: the early pass would double-save the same
                 ! stations (the wrapper resets allmessages per call, unlike
                 ! stock's carried ndec_early), and the boundary pass's full-
-                ! audio decode set is a superset of the early one. xdt here is
-                ! already xdt-0.5, matching ft8_decode.f90 line 232.
+                ! audio decode set is a superset of the early one (re-decoded
+                ! from raw audio, or carried from the early pass and saved
+                ! above). xdt here is already xdt-0.5, matching
+                ! ft8_decode.f90 line 232.
                 if (la7final /= 0 .and. .not. is_stale) then
                    call ft8_a7_save(nutc, xdt, f1, msg37)
                 end if
              end if
           end if
+          ! WSJT-X asks its early pass's give-up here, after every candidate
+          ! (ft8_decode.f90:240-242); the caller decides when that is.
+          if (streaming) then
+             if (fcb(cb_user, c_null_ptr) /= 0) then
+                stopped = .true.
+                exit
+             end if
+          end if
        end do
+       if (stopped) exit
     end do
+
+    ! --- The rescue: the a7 table's entries for the period's a7 decodes --------
+    ! The full pass's a7 replay ran over the residual, and ft8_a7d refines the dt and frequency it
+    ! saves on the audio it searches. The raw full pass's replay refined them on this audio, and the
+    ! next same-parity slot's replay starts from them: each a7 decode the period reported is tried
+    ! once more here, from where it was found, and its entry takes this audio's values (one entry
+    ! still). Its pair is marked as decoded, so the replay below skips it, as before.
+    if (rescue .and. .not. is_stale .and. lft8apon .and. .not. stopped) then
+       newdat = .true.
+       do i = 1, nearly
+          if (pearly(i)%nap /= 7) cycle
+          msg37 = ' '
+          do j = 1, 37
+             if (pearly(i)%message(j) == c_null_char) exit
+             msg37(j:j) = pearly(i)%message(j)
+          end do
+          if (index(msg37, '<') >= 1) cycle
+          i1 = index(msg37, ' ')
+          i2 = index(msg37(i1+1:), ' ') + i1
+          if (i1 < 2 .or. i2 <= i1 + 1) cycle
+          call_1 = msg37(1:i1-1)
+          call_2 = msg37(i1+1:i2-1)
+          grid4 = msg37(i2+1:i2+4)
+          ! As the replay below reads it from what ft8_a7_save kept: the grid only when the
+          ! third word is one, and never RR73 (which has a grid's form).
+          if (len_trim(msg37(i2+1:)) /= 4 .or. grid4 == 'RR73' .or. &
+               verify(grid4(1:2), 'ABCDEFGHIJKLMNOPQR') /= 0 .or. &
+               verify(grid4(3:4), '0123456789') /= 0) grid4 = '    '
+          xdt = pearly(i)%dt
+          f1 = pearly(i)%freq
+          ib = max(1, nint(f1 / 3.125))
+          if (ib > F8_NH1) ib = F8_NH1
+          xbase = 10.0 ** (0.1 * (sbase(ib) - 40.0))
+          msg = ' '
+          call ft8_a7d(dd, newdat, call_1, call_2, grid4, xdt, f1, xbase, &
+               nharderrors, dmin, msg, xsnr)
+          if (nharderrors >= 0 .and. msg == msg37) call a7_save_refined(nutc, xdt, f1, msg37)
+       end do
+    end if
 
     ! --- a7 cross-cycle replay (mirrors ft8_decode.f90 245-278) -------------
     ! Authoritative pass only: replay each call pair remembered from the
@@ -710,7 +992,7 @@ contains
     ! safe superset of stock (which relies on downstream GUI dedup) keeping
     ! this wrapper's existing no-duplicate-rows contract.
     if (la7final /= 0 .and. .not. is_stale .and. lft8apon .and. &
-         a7_ndec(a7_jseq, 0) >= 1) then
+         .not. stopped .and. a7_ndec(a7_jseq, 0) >= 1) then
        newdat = .true.
        do i = 1, a7_ndec(a7_jseq, 0)
           if (a7_f0(i, a7_jseq, 0) == -99.0) exit
@@ -754,6 +1036,18 @@ contains
                    do j = 1, n
                       out(ndecodes)%message(j) = msg37(j:j)
                    end do
+                   ! ft8_a7d returns no tones: an a7 decode cannot be subtracted.
+                   if (want_subs) then
+                      psubs(ndecodes)%itone(1:F8_NN) = 0
+                      psubs(ndecodes)%f1   = f1
+                      psubs(ndecodes)%xdt0 = xdt + 0.5
+                      psubs(ndecodes)%ok   = 0
+                      psubs(ndecodes)%done = 0
+                   end if
+                   if (streaming) then
+                      rec = out(ndecodes)
+                      istop = fcb(cb_user, c_loc(rec))
+                   end if
                 end if
                 call ft8_a7_save(nutc, xdt, f1, msg37)
              end if
@@ -764,7 +1058,76 @@ contains
     ! ndec == max_out here means the cap was hit and the weakest decodes were
     ! dropped: raise F8_MAXDEC and the Rust MAX_DECODES (crates/ft8) together.
     ndec = min(ndecodes, max_out)
-  end function ft8_decode_frame
+  end function ft8_decode_frame_dp
+
+  !-------------------------------------------------------------------------
+  ! ft8_subtract_early : WSJT-X's 47 step (ft8_decode.f90:111-113, :124-149). From the period's
+  !                      first 47*3456 samples (13.536 s; the rest of the frame is taken as zero,
+  !                      as jt9 hands it over, jt9.f90:430-433), subtract each early decode that
+  !                      ends inside them (dt < 0.396 s, :135) with DT refinement (none at depth
+  !                      2 or less, :131-132), and return the residual the full pass starts from
+  !                      (ft8_decode_frame_dp).
+  !
+  !   iwave      : F8_NMAX int16 samples; only the first 47*3456 are read.
+  !   ndepth     : 1..3 (<= 0 means 3).
+  !   nearly     : 1..F8_MAXDEC early decodes in early_subs.
+  !   early_subs : ft8_sub_t(nearly) as the early pass wrote them. `done` is set for each this
+  !                step reached and tried, subtracted or not (lsubtracted, :138): the full pass
+  !                subtracts the rest.
+  !   resid      : real(F8_NMAX) out, the residual (dd1, :148).
+  !   cb         : NULL, or called with a NULL record after each early decode, where WSJT-X reads
+  !                the clock for its 14.3 s bail-out (:140-145); a nonzero answer stops there and
+  !                the residual is what was done so far, as WSJT-X's.
+  !
+  ! Returns how many decodes were reached (>= 0), or -1 (nearly out of range: nothing written,
+  ! so the caller has no residual). Keeps nothing between calls. Not reentrant.
+  !-------------------------------------------------------------------------
+  function ft8_subtract_early(iwave, ndepth, nearly, early_subs, resid, cb, cb_user) &
+       result(nreached) bind(C, name="ft8_subtract_early")
+    integer(c_int16_t),     intent(in)    :: iwave(F8_NMAX)
+    integer(c_int), value,  intent(in)    :: ndepth, nearly
+    type(ft8_sub_t),        intent(inout) :: early_subs(*)
+    real(c_float),          intent(out)   :: resid(F8_NMAX)
+    type(c_funptr), value,  intent(in)    :: cb
+    type(c_ptr),    value,  intent(in)    :: cb_user
+    integer(c_int)                        :: nreached
+
+    ! Not initialized in the declaration: that would make it SAVEd module state.
+    procedure(ft8_decode_cb), pointer :: fcb
+    real    :: dd(F8_NMAX)
+    integer :: itone_e(F8_NN), i, n47, ndepth_l
+    real    :: f1_e, xdt_e
+    logical :: lrefinedt
+
+    nreached = -1
+    if (nearly < 1 .or. nearly > F8_MAXDEC) return
+    fcb => null()
+    if (c_associated(cb)) call c_f_procpointer(cb, fcb)
+    ndepth_l = ndepth
+    if (ndepth_l <= 0) ndepth_l = 3
+    lrefinedt = .true.
+    if (ndepth_l <= 2) lrefinedt = .false.
+
+    n47 = 47 * 3456
+    dd(1:n47) = real(iwave(1:n47))
+    dd(n47+1:F8_NMAX) = 0.
+    nreached = 0
+    do i = 1, nearly
+       if (early_subs(i)%ok /= 0 .and. early_subs(i)%done == 0 .and. &
+            early_subs(i)%xdt0 - 0.5 < 0.396) then
+          itone_e(1:F8_NN) = early_subs(i)%itone(1:F8_NN)
+          f1_e  = early_subs(i)%f1
+          xdt_e = early_subs(i)%xdt0
+          call subtractft8(dd, itone_e, f1_e, xdt_e, lrefinedt)
+          early_subs(i)%done = 1
+       end if
+       nreached = i
+       if (associated(fcb)) then
+          if (fcb(cb_user, c_null_ptr) /= 0) exit
+       end if
+    end do
+    resid(1:F8_NMAX) = dd(1:F8_NMAX)
+  end function ft8_subtract_early
 
   !-------------------------------------------------------------------------
   ! ft8_a7_reset : clear the a7 cross-cycle decode table + slot tracker.
@@ -780,6 +1143,45 @@ contains
     a7_msg0 = ' '
     nutc0_a7 = -1
   end subroutine ft8_a7_reset
+
+  !-------------------------------------------------------------------------
+  ! a7_save_refined : ft8_a7_save for a station this slot may have saved already: an entry of
+  !                   this slot with the same saved form takes this dt and f in place (the table
+  !                   keeps one entry per station); else it is saved as new. The saved form is
+  !                   ft8_a7_save's own (it is called, and its new entry taken back when it
+  !                   matches an earlier one), so the two can never disagree about a match.
+  !-------------------------------------------------------------------------
+  subroutine a7_save_refined(nutc, dt, f, msg)
+    integer, intent(in) :: nutc
+    real, intent(in) :: dt, f
+    character(len=37), intent(in) :: msg
+    integer :: j, n0, n1, i
+    j = mod(nutc/5, 2)
+    n0 = a7_ndec(j, 1)
+    call ft8_a7_save(nutc, dt, f, msg)
+    n1 = a7_ndec(j, 1)
+    if (n1 == n0 .or. n1 > size(a7_dt0, 1)) return
+    do i = 1, n0
+       if (a7_msg0(i, j, 1) == a7_msg0(n1, j, 1)) then
+          a7_dt0(i, j, 1) = a7_dt0(n1, j, 1)
+          a7_f0(i, j, 1)  = a7_f0(n1, j, 1)
+          a7_dt0(n1, j, 1) = 0.
+          a7_f0(n1, j, 1)  = 0.
+          a7_msg0(n1, j, 1) = ' '
+          a7_ndec(j, 1) = n0
+          return
+       end if
+    end do
+  end subroutine a7_save_refined
+
+  !-------------------------------------------------------------------------
+  ! ft8_a7_saved : how many decodes the slot decoded last has saved into the a7 table (its
+  !                parity's current entries, ft8_a7_save's ndec(jseq,1)). Read only.
+  !-------------------------------------------------------------------------
+  function ft8_a7_saved() result(n) bind(C, name="ft8_a7_saved")
+    integer(c_int) :: n
+    n = a7_ndec(a7_jseq, 1)
+  end function ft8_a7_saved
 
   !=========================================================================
   ! PER-CHAIN DECODER CONTEXT - C entry points

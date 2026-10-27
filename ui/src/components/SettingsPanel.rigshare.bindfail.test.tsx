@@ -194,3 +194,31 @@ describe('the share block when the sharing port is already taken', () => {
     expect(row.querySelector('.rig-share-addr')?.textContent).toBe('127.0.0.1:4532')
   })
 })
+
+// #165, the step aside: sharing stays on and moves to the next free port when another program
+// holds the one in Settings. The block prints where sharing REALLY is, the Copy button hands over
+// that address, and a note says why it is not the port in Settings.
+describe('the share block when sharing stepped aside to another port', () => {
+  it('prints and copies the port sharing really uses, and says why', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const { container } = renderPanel({ catSharePort: 4536 } as Partial<RadioStatus>)
+    const row = await openShareBlock(container)
+    expect(row.querySelector('.rig-share-addr')?.textContent).toBe('127.0.0.1:4536')
+    fireEvent.click(screen.getByRole('button', { name: EN['settings.transmit.share.copy.action'] }))
+    expect(writeText).toHaveBeenCalledWith('127.0.0.1:4536')
+    const note = container.querySelector('.rig-share-moved')
+    expect(note?.textContent).toContain('4532')
+    expect(note?.textContent).toContain('4536')
+    // Either cause: another program on the port, or the radio's own rigctld address (#165).
+    expect(note?.textContent).toContain('another program')
+    expect(note?.textContent).toContain('rigctld')
+  })
+
+  it('serving on the port in Settings, it says nothing about a move', async () => {
+    const { container } = renderPanel({ catSharePort: 4532 } as Partial<RadioStatus>)
+    const row = await openShareBlock(container)
+    expect(row.querySelector('.rig-share-addr')?.textContent).toBe('127.0.0.1:4532')
+    expect(container.querySelector('.rig-share-moved')).toBeNull()
+  })
+})

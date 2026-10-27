@@ -12,8 +12,9 @@
 //!   then the log's, else the call through cty.dat, a WAE area as its parent);
 //! - the zone is [`counted_zone`]'s (the record's CQZ, else the call's);
 //! - a state counts only for the United States, Alaska and Hawaii;
-//! - no DXCC slot for a satellite contact, for a deleted entity, or on 60 m and 4 m, which earn
-//!   no DXCC credit ([`Slot::NoCredit`]).
+//! - no DXCC slot for a satellite contact, for a deleted entity, on 60 m and 4 m, which earn
+//!   no DXCC credit, or on 70 cm, 33 cm and 23 cm, which keep no DXCC band award
+//!   ([`Slot::NoCredit`]).
 //!
 //! "Confirmed" is what each award credits: DXCC and WAS a LoTW or paper QSL, WAZ also an eQSL from
 //! an Authenticity-Guaranteed member ([`QslChannels::eqsl_ag_confirmed`]).
@@ -29,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::awards::{counted_entity, counted_zone, earns_dxcc_credit, valid_state};
+use crate::awards::{counted_entity, counted_zone, fills_dxcc_band_slot, valid_state};
 use crate::awards::{QslChannels, RecordFields};
 use crate::dxcc;
 use crate::model::{exact_mode, mode_key, Band, ModeClass};
@@ -54,7 +55,7 @@ pub enum Slot {
     Worked,
     /// Confirmed by a channel the award credits.
     Confirmed,
-    /// The award gives no credit on this band: DXCC on 60 m and 4 m.
+    /// The award keeps no slot on this band: DXCC on 60 m, 4 m, 70 cm, 33 cm and 23 cm.
     NoCredit,
 }
 
@@ -174,7 +175,7 @@ impl CallStatsIndex {
         let new_one = entity.is_some() && modes.is_none();
         let new_band = modes.is_some()
             && on_band.is_some_and(|b| {
-                earns_dxcc_credit(b)
+                fills_dxcc_band_slot(b)
                     && dxcc_grid
                         .is_none_or(|g| g.iter().all(|row| row[band_at(b)] == Slot::Unworked))
             });
@@ -212,7 +213,7 @@ impl CallStatsIndex {
     }
 }
 
-/// A grid's rows as the pane draws them: DXCC's 60 m and 4 m columns are no slot at all.
+/// A grid's rows as the pane draws them: DXCC's 60 m, 4 m and UHF columns are no slot at all.
 fn rows(grid: Option<&Grid>, dxcc: bool) -> Vec<Vec<Slot>> {
     let empty = Grid::default();
     let grid = grid.unwrap_or(&empty);
@@ -221,7 +222,7 @@ fn rows(grid: Option<&Grid>, dxcc: bool) -> Vec<Vec<Slot>> {
             Band::ALL
                 .iter()
                 .map(|b| {
-                    if dxcc && !earns_dxcc_credit(*b) {
+                    if dxcc && !fills_dxcc_band_slot(*b) {
                         Slot::NoCredit
                     } else {
                         row[band_at(*b)]

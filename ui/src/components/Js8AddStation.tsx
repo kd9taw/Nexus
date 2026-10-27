@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { t } from '../i18n'
 import { Dialog } from './ui/Dialog'
 import { ALLCALL } from '../js8Vocab'
+import { upperTyped } from '../typedInput'
 
 /** What a name typed into the dialog is (JS8Call's checks, upper-cased and trimmed). A callsign is
  *  JS8Call's shape: letters and digits with at least one of each, any '/' parts, 3 to 12 long. */
@@ -67,7 +68,7 @@ export function Js8AddStation({
             className="settings-input"
             value={text}
             onChange={(e) => {
-              setText(e.target.value.toUpperCase())
+              setText(upperTyped(e.target))
               setError(null)
             }}
             autoComplete="off"

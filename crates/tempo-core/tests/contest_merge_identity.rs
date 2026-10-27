@@ -376,3 +376,25 @@ fn the_copies_already_merged_keep_their_names_in_every_export() {
         );
     }
 }
+
+/// A merged contest contact carries the continent its row resolved at log time (ADIF
+/// `CONT`), through the Logbook's own file and back.
+#[test]
+fn a_merged_contact_carries_its_rows_continent() {
+    resolver();
+    let mut log = FieldDayLog::new(
+        "W9XYZ",
+        ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+        "20m",
+    );
+    assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+    let mut lb = Logbook::new();
+    assert_eq!(merge_into_general(&log, POS, &mut lb).added(), 1);
+    let text: String = lb
+        .records()
+        .iter()
+        .map(|r| tempo_core::logbook::adif_record_own_log(r))
+        .collect();
+    let back = &tempo_core::logbook::parse_adif(&text)[0];
+    assert_eq!(tempo_core::logbook::extra_field(back, "CONT"), Some("NA"));
+}

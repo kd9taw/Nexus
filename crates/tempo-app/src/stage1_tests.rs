@@ -118,10 +118,33 @@ impl Stage1 {
 
     /// `StationCore::update_qso`.
     pub(crate) fn update_qso(&mut self, id: RecordId, mut rec: QsoRecord) -> bool {
-        // Keep country populated on edits (the edit form doesn't carry it).
-        if rec.country.is_none() {
-            if let Some(resolve) = &self.dxcc_resolve {
-                rec.country = resolve(&rec.call);
+        // A corrected call takes its own country, whatever the edit carries; with the call left
+        // alone, a country sent back as stored (or not sent) is filled only where the contact
+        // holds none, as the edit form's is — this station names no number's entity, so no
+        // stored country is contradicted here — and one the client changed is the client's.
+        let Some(stored) = self
+            .logbook
+            .records()
+            .iter()
+            .find(|r| r.id == Some(id))
+            .cloned()
+        else {
+            return false;
+        };
+        if !rec.call.trim().eq_ignore_ascii_case(stored.call.trim()) {
+            rec.country = self
+                .dxcc_resolve
+                .as_ref()
+                .and_then(|resolve| resolve(&rec.call));
+        } else if rec.country.is_none() || rec.country == stored.country {
+            let no_country = stored
+                .country
+                .as_deref()
+                .is_none_or(|c| c.trim().is_empty());
+            if no_country {
+                if let Some(resolve) = &self.dxcc_resolve {
+                    rec.country = resolve(&rec.call).or(rec.country);
+                }
             }
         }
         !self
@@ -148,9 +171,23 @@ impl Stage1 {
         let sent = edit.qsl_sent_change(&stored)?;
         let card = edit.qsl_card_change(&stored);
         let mut rec = edit.record(&stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it.
-        if let Some(resolve) = &self.dxcc_resolve {
-            rec.country = resolve(&rec.call);
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it. Only
+        // where the stored one cannot stand — a corrected call, or a contact that holds none; else
+        // the edit policy writes the stored one back exactly.
+        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
+        let no_country = stored
+            .country
+            .as_deref()
+            .is_none_or(|c| c.trim().is_empty());
+        if call_changed {
+            rec.country = self
+                .dxcc_resolve
+                .as_ref()
+                .and_then(|resolve| resolve(&rec.call));
+        } else if no_country {
+            if let Some(resolve) = &self.dxcc_resolve {
+                rec.country = resolve(&rec.call);
+            }
         }
         self.logbook.apply(LogOp::Edit {
             id,
@@ -672,15 +709,15 @@ mod lockstep {
                 );
                 match rng.below(3) {
                     0 => assert_eq!(
-                        sc.stamp_qrz_upload(&pushed, outcome, when, None),
+                        sc.stamp_qrz_upload(&pushed, None, outcome, when, None),
                         s1.stamp_qrz_upload(&pushed, outcome, when, None)
                     ),
                     1 => assert_eq!(
-                        sc.stamp_clublog_upload(&pushed, outcome, when, None),
+                        sc.stamp_clublog_upload(&pushed, None, outcome, when, None),
                         s1.stamp_clublog_upload(&pushed, outcome, when, None)
                     ),
                     _ => assert_eq!(
-                        sc.stamp_eqsl_upload(&pushed, outcome, when, None),
+                        sc.stamp_eqsl_upload(&pushed, None, outcome, when, None),
                         s1.stamp_eqsl_upload(&pushed, outcome, when, None)
                     ),
                 };

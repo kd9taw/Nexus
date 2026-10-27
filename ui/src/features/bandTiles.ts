@@ -11,7 +11,7 @@
 //   · ★ the advisor's best band right now: the first band of its ranking that is not closed (the
 //     Band Advisor's own one-line summary picks the same one, paneFormat `bandAdvisorLine`);
 //   · a ring on the band the radio is on;
-//   · on 6 m, 4 m and 2 m, the mode of an opening the detector sees there (Es, Tropo, Aurora, F2, MS).
+//   · on 6 m, 4 m, 2 m and the UHF bands, the mode of an opening the detector sees there (Es, Tropo, Aurora, F2, MS).
 // UNKNOWN IS NEVER GREEN: no snapshot, an offline one, or one older than the band menu's staleness bound
 // gives hollow neutral tiles for the standard bands — the band menu's own rule, from its own store.
 import type { BandReport, OpeningView, PropagationSnapshot } from '../types'
@@ -19,11 +19,14 @@ import { BAND_CONDITIONS_STALE_S } from '../bandConditions'
 import { bandConditionCell, modeledVar } from '../propViz'
 
 /** The rig's band stack, low to high. The advisor reports HF and 6 m; 4 m and 2 m appear when it
- *  reports them or the opening detector sees one there. */
-export const TILE_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'] as const
+ *  reports them or the opening detector sees one there. The UHF bands appear only while the
+ *  detector sees an opening there or the radio is on one: the advisor reports them closed until
+ *  heard, and three always-closed tiles would only crowd the box. */
+export const TILE_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '33cm', '23cm'] as const
 /** The standard set a box shows with no data: the bands the advisor normally reports. */
 const STANDARD_BANDS = TILE_BANDS.slice(0, 11)
-const VHF = new Set(['6m', '4m', '2m'])
+const VHF = new Set(['6m', '4m', '2m', '70cm', '33cm', '23cm'])
+const UHF = new Set(['70cm', '33cm', '23cm'])
 
 /** The opening detector's mode label → the short token on a tile. Mode names are technical tokens,
  *  the same in every language. Unknown shows nothing. */
@@ -73,7 +76,9 @@ export function bandTiles(prop: PropagationSnapshot | null, rigBand: string | nu
   const ranked = usable ? (prop!.advisory?.bands ?? []) : []
   const best = ranked.find((b) => bandConditionCell(b).word !== 'Closed')?.band ?? null
   const bands = usable
-    ? TILE_BANDS.filter((b) => reports.has(b) || modeOn(b, openings) != null)
+    ? TILE_BANDS.filter((b) =>
+        UHF.has(b) ? modeOn(b, openings) != null || rigBand === b : reports.has(b) || modeOn(b, openings) != null,
+      )
     : STANDARD_BANDS
   return bands.map((band): BandTile => {
     const report = reports.get(band) ?? null

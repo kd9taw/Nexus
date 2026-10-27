@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import {
   LOG_CAPABILITIES,
@@ -7,8 +6,7 @@ import {
   logChangeCapabilities,
   operationRequest,
   operationValue,
-  type LogChange,
-  type OperationState
+  type LogChange
 } from './operation-protocol'
 import {
   SETTINGS_KEYS,
@@ -21,10 +19,6 @@ const id = () => crypto.randomUUID()
 const revision = 'b'.repeat(64)
 const envelope = (change: unknown) => ({ type: 'logChange', requestId: id(), stationBootId: id(), leaseId: id(),
   expectedRevision: 1, commandWindowId: id(), clientSequence: 1, change })
-const state = (capabilities: string[]): OperationState => ({ stationBootId: id(), allowed: true, phase: 'controlling', leaseId: id(),
-  revision: 1, commandWindowId: id(), nextSequence: 1, leaseRemainingMs: 5000, actions: ['log.manual'], txArmed: false,
-  transmitEpoch: null,
-  controls: { context: { radioId: 1, radioConnection: null, ampConnection: null, ampReadSequence: null }, capabilities } as OperationState['controls'] })
 const logging: LogChange = { kind: 'settings', revision, values: { autoLog: true } }
 const control: LogChange = { kind: 'settings', revision, values: { contestCheck: '73' } }
 const mixed: LogChange = { kind: 'settings', revision, values: { autoLog: true, contestCheck: '73' } }
@@ -85,43 +79,6 @@ it('keeps the browser allow-list inside the exposed settings and off anything th
     'js8Groups', 'js8RxBlocklist', 'js8AvoidAllcall',
     'wantedCalls', 'blockedCalls', 'pounceThreshold', 'satDopplerOff', 'rotatorPort', 'unassistedMode', 'openingRegional'])
     expect(writable, key).not.toContain(key)
-})
-
-function open(capabilities: string[]) {
-  vi.useFakeTimers()
-  const sent: Record<string, any>[] = []
-  const client = new OperationClient(s => sent.push(JSON.parse(s)), true, () => 1000, { read: () => null, write: () => {} }, 4)
-  client.open()
-  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, value })
-  reply(state(capabilities))
-  return { client, reply, changes: () => sent.filter(m => m.request.type === 'logChange').map(m => m.request) }
-}
-
-it('sends a settings change only when the station offers every grant it needs, so an older desktop is never sent one', async () => {
-  const cases: [string[], LogChange[], LogChange[]][] = [
-    [['settingsLogging'], [logging], [control, mixed]],
-    [['settingsControl'], [control], [logging, mixed]],
-    [['settingsLogging', 'settingsControl'], [logging, control, mixed], []],
-    // A desktop from before this change offers neither.
-    [['qsoLogging', 'logEdit', 'qslMarks', 'otaHunt', 'otaActivation'], [], [logging, control, mixed]]
-  ]
-  for (const [capabilities, allowed, refused] of cases) {
-    for (const change of refused) {
-      const { client, changes } = open(capabilities)
-      await expect(client.change(change)).rejects.toMatchObject({ message: 'notController', sent: false })
-      expect(changes()).toEqual([])
-      client.disconnected()
-    }
-    for (const change of allowed) {
-      const { client, reply, changes } = open(capabilities)
-      const result = client.change(change)
-      const [request] = changes()
-      expect(request).toMatchObject({ type: 'logChange', change })
-      reply({ operation: 'logChange', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' })
-      expect(await result).toMatchObject({ outcome: 'applied', evidence: 'settingsSaved' })
-      client.disconnected()
-    }
-  }
 })
 
 it('an older hosted page tolerates the settings hints, which are bounded tokens it drops', () => {

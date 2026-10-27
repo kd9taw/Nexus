@@ -9,14 +9,14 @@
 //!
 //! **What.** WebView2's own switch for exactly those shortcuts,
 //! `ICoreWebView2Settings3::AreBrowserAcceleratorKeysEnabled`, is set to false in every webview the
-//! app makes, as the Remote stations window already had it. The shortcuts then reach the page
+//! app makes. The shortcuts then reach the page
 //! as ordinary keys instead of acting on the window: every F-key reaches the page's own handlers
 //! (CW's and Phone's among them), and a key no page handles does nothing. The editing keys are not
 //! browser shortcuts and are not affected (Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+Z).
 //!
 //! **Where.** One plugin, [`init`], registered in the app's builder. Tauri hands its
 //! `on_webview_ready` hook every webview it makes: the windows `tauri.conf.json` declares (the main
-//! window and the splash), every pop-out, the Remote stations and Stations on this network windows,
+//! window and the splash), every pop-out, the Stations on this network window,
 //! and any window added later, however it is built (tauri 2.11.2: `attach_webview` in
 //! `manager/webview.rs` runs every plugin's hook, and `Builder::build` initializes the plugins
 //! before `App::run` makes the configured windows). So no window has to remember to ask for it, and
@@ -397,8 +397,8 @@ mod tests {
     /// ⛔ WEBVIEW2'S BROWSER KEYS ARE OFF IN EVERY WINDOW NEXUS MAKES. A census of every way a
     /// window comes into being here ([`census`]), read from the crate's source, the configuration
     /// and the access list this build compiles in. CONTROLS: the census finds the main window,
-    /// from the configuration, and the Remote stations window, from a builder outside `lib.rs`;
-    /// and it sees the keys off in the Remote stations window, which has always turned them off.
+    /// from the configuration, and the Stations on this network window, from a builder outside
+    /// `lib.rs`; and it sees the keys off in the Stations on this network window.
     ///
     /// What it reads is what the code is written to do. Whether WebView2 then acts on the setting
     /// (F5 does not reload, the F-keys and the editing keys still work) only a Windows run shows.
@@ -407,12 +407,12 @@ mod tests {
         let windows = census(&sources());
         let found = |what: &str| windows.iter().find(|w| w.what.starts_with(what));
         assert!(
-            found("main (").is_some() && found("open_remote_stations_window (").is_some(),
-            "the census finds the main window and the Remote stations window: {windows:#?}"
+            found("main (").is_some() && found("open_lan_stations_window (").is_some(),
+            "the census finds the main window and the Stations on this network window: {windows:#?}"
         );
         assert!(
-            found("open_remote_stations_window (").is_some_and(|w| w.keys_off),
-            "the census sees the keys off in the Remote stations window: {windows:#?}"
+            found("open_lan_stations_window (").is_some_and(|w| w.keys_off),
+            "the census sees the keys off in the Stations on this network window: {windows:#?}"
         );
         let (off, on): (Vec<&Window>, Vec<&Window>) = windows.iter().partition(|w| w.keys_off);
         assert!(

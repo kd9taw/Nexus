@@ -120,7 +120,33 @@ async function settle() {
   })
 }
 
+/** The updater plugin's own `Update` (tauri-plugin-updater 2.10.1, guest-js/index.ts): its methods
+ *  are class methods that read `this.rid`, so one called detached from the object throws "Cannot
+ *  read properties of undefined (reading 'rid')". The plain-function fakes above cannot see that. */
+class PluginShapedUpdate {
+  available = true
+  rid = 7
+  downloadedBytes?: { rid: number }
+  constructor(public version: string) {}
+  async download(): Promise<void> {
+    this.downloadedBytes = { rid: this.rid + 1 }
+  }
+  async install(): Promise<void> {
+    if (!this.downloadedBytes) throw new Error('Update.install called before Update.download')
+  }
+}
+
 describe('self-update dismissal', () => {
+  it('downloads through the plugin-shaped Update, its methods called on the object', async () => {
+    const up = new PluginShapedUpdate('9.9.9')
+    nextCheck = () => Promise.resolve(up as unknown as Handle)
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.error).toBeNull()
+    expect(result.current.phase).toBe('ready')
+    expect(up.downloadedBytes).toEqual({ rid: 8 })
+  })
+
   it('downloads an offered update and reaches ready (control)', async () => {
     nextCheck = offering('9.9.9')
     const { result } = renderHook(() => useSelfUpdate(false))

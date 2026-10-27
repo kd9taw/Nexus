@@ -60,7 +60,7 @@
 //! # Sanitising
 //!
 //! Every sample this module hands on, either way, is finite and within ±1.0: a value that is not
-//! finite is silence, and the rest is clamped to full scale (server design §3.1 item 9). It is done
+//! finite is silence, and the rest is clamped to full scale. It is done
 //! before a filter, where one NaN would spoil every output whose window holds it, and again after
 //! it, since a filter overshoots full scale on clipped audio. The operator's TX level applies
 //! later, as on Nexus's own overs.
@@ -108,7 +108,7 @@ pub const MAX_VALUES: usize = MAX_PAYLOAD / 2;
 /// a sixth of a second of 48 kHz stereo. Every server read asks for 2048 or fewer.
 pub const MAX_ANSWER_VALUES: usize = MAX_PAYLOAD / 4;
 
-/// A program's transmit audio is taken at most this many times real time (server design §4.4).
+/// A program's transmit audio is taken at most this many times real time.
 pub const TX_SPEED: f64 = 2.0;
 
 /// How many seconds of a program's transmit audio may arrive at once.
@@ -560,7 +560,7 @@ pub enum AskRefused {
 }
 
 impl ChronoAsk {
-    /// `length` counted in values, frames times channels: every server read (T1's reading).
+    /// `length` counted in values, frames times channels: every server read.
     pub fn in_values(length: u32, channels: u32) -> Result<ChronoAsk, AskRefused> {
         ChronoAsk::checked(length, channels, false)
     }
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(read(Format::Float32, &0.25f32.to_le_bytes()), [0.25]);
     }
 
-    /// S-M25: a sample that is not finite is silence, and one past full scale is clamped, before
+    /// A sample that is not finite is silence, and one past full scale is clamped, before
     /// it reaches a transmitter.
     #[test]
     fn samples_that_are_not_finite_are_silence_and_out_of_range_ones_are_clamped() {
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(peak, 1.0, "clamped after the filter");
     }
 
-    /// S-M26: a frame that carries less than it claims is refused, counted, and never read past
+    /// A frame that carries less than it claims is refused, counted, and never read past
     /// its end; so is one that carries more, except WSJT-X's twice.
     #[test]
     fn a_short_frame_is_refused_counted_and_never_panics() {

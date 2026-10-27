@@ -186,6 +186,9 @@ impl Engine {
             || self.cw_sending()
             || !self.tx_allowed()
             || self.clock_repair_holds_tx()
+            // ⛔ Nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in
+            // decision): the over is not rebuilt while the hold stands ([`Engine::remote_transmit_held`]).
+            || self.remote_transmit_held()
             || self.structured_tx_ready(true).is_err()
             || slot % 2 != self.tx_parity
         {

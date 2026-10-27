@@ -16,14 +16,14 @@
 // a `<select>` chosen (its native list is a separate window the stream never shows, so a small
 // in-page list stands in for it). Handlers written for pointer capture get it too, for the
 // synthetic pointer only. What it does not reproduce is named in the WB report and measured on the
-// bench (plan §1.4, gesture coverage): HTML drag-and-drop, text selection by dragging, IME
+// bench (gesture coverage): HTML drag-and-drop, text selection by dragging, IME
 // composition, and the browser's own shortcuts.
 //
 // ⚠️ WHAT GOES DOWN COMES UP. A key or button held here when a stream ends would stay held: Space is
 // the Phone cockpit's push-to-talk key. `reset` - which the station sends when a stream ends or its
 // transmit presence lapses - releases everything this module is holding.
 //
-// ⛔ AND IT COMES UP WITHIN 200 MS OF THE PAGE GOING QUIET (the lead's dead-man ruling). A key or a
+// ⛔ AND IT COMES UP WITHIN 200 MS OF THE PAGE GOING QUIET (the dead-man rule). A key or a
 // button held over the stream is a STATE the page re-asserts every 100 ms (`held`, on the stream's
 // unreliable `ptt` channel), never a down/up pair trusted to complete: whatever is held here and
 // not re-asserted for STREAM_HELD_GAP_MS comes up, with its key-up or pointer-up and no click, as
@@ -216,8 +216,13 @@ export class StreamInputDispatcher {
   }
 
   /** The browser's defaults for a primary press: focus moves to what was pressed (or away, if it
-   *  cannot take focus); a list opens for a `<select>`; a range slider jumps to the press. */
+   *  cannot take focus); a list opens for a `<select>`; a range slider jumps to the press. The
+   *  focus and blur events it causes are the stream's, so they run inside the mark as well. */
   private pressDefault(target: Element, clientX: number): void {
+    dispatching++
+    try { this.pressDefaultMarked(target, clientX) } finally { dispatching-- }
+  }
+  private pressDefaultMarked(target: Element, clientX: number): void {
     const focusable = target.closest(FOCUSABLE) as HTMLElement | null
     if (focusable && !(focusable as HTMLInputElement).disabled) focusable.focus({ preventScroll: true })
     else if (this.doc.activeElement instanceof this.win.HTMLElement && this.doc.activeElement !== this.doc.body) this.doc.activeElement.blur()
@@ -296,7 +301,8 @@ export class StreamInputDispatcher {
       if (k.key === 'ArrowLeft' || k.key === 'ArrowRight' || k.key === 'Home' || k.key === 'End') { moveCaret(target, k.key); return }
       if (k.key === 'Enter') {
         if (target instanceof this.win.HTMLTextAreaElement) this.insert(target, '\n', 'insertLineBreak')
-        else target.form?.requestSubmit()
+        // The form's submit is this Enter's own: its handlers run inside the mark, as a click's do.
+        else { dispatching++; try { target.form?.requestSubmit() } finally { dispatching-- } }
       }
       return
     }

@@ -29,7 +29,7 @@ vi.mock('../api', () => ({
   contestWorking: vi.fn(() => Promise.resolve(true)),
   contestEntryReset: vi.fn(() => Promise.resolve(true)),
   contestIMoved: vi.fn(() => Promise.resolve({})),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -100,7 +100,7 @@ const box = (cap: string) =>
   [...document.querySelectorAll('.le-fd-big .le-fd-field')]
     .find((l) => l.querySelector('.le-fd-cap')?.textContent === cap)!
     .querySelector('input') as HTMLInputElement
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 
 afterEach(() => {
   cleanup()
@@ -266,15 +266,15 @@ describe('5 — the fill API: one slot, refilled on every new ts, focus left alo
 
 describe('6 — the country file’s zone is a hint, and a W/VE contact with no QTH is flagged', () => {
   it('shows the cty.dat zone as the placeholder and never as a value', async () => {
-    api.contestZoneHint.mockImplementation(() => Promise.resolve(5))
+    api.contestPlace.mockImplementation(() => Promise.resolve({ entity: 'United States', cqZone: 5 }))
     render(strip(cqwwRtty()))
     await act(async () => {
       fireEvent.change(callBox(), { target: { value: 'W1AW' } })
     })
-    expect(api.contestZoneHint).toHaveBeenCalledWith('W1AW')
+    expect(api.contestPlace).toHaveBeenCalledWith('W1AW', 'cqww_rtty')
     expect(box('Zone').placeholder).toBe('5')
     expect(box('Zone').value).toBe('')
-    api.contestZoneHint.mockImplementation(() => Promise.resolve(null))
+    api.contestPlace.mockImplementation(() => Promise.resolve(null))
   })
 
   it('warns — never refuses — when a USA or Canada station has no QTH', async () => {

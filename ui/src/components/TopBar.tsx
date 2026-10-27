@@ -1,4 +1,3 @@
-import { useStationControl, useStationTierControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
 // deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
 // FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
@@ -24,6 +23,7 @@ import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { UtcClock } from './UtcClock'
+import { drivesAnotherStation } from '../features/durableStore'
 
 /** The bar's own plates: the product name, the two directions of the TX/RX indicator, the
  *  operator prefix and the recording badge. Tokens, named so the catalog guard reads them as the
@@ -295,8 +295,11 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
   )
 }
 
-/** What a refused Repair clock press says. The backend's codes, each its own sentence. */
+/** What a refused Repair clock press says. The backend's codes, each its own sentence. On a
+ *  computer driving a station the repair is the station's, and the refusal comes in words
+ *  (`api.ts`): those are said as they came. */
 function clockRepairRefused(code: unknown): string {
+  if (drivesAnotherStation()) return code instanceof Error ? code.message : String(code)
   if (code === 'onAir') return t('topbar.clock.repair.onAir')
   if (code === 'midMessage') return t('topbar.clock.repair.midMessage')
   if (code === 'repairRunning') return t('topbar.clock.repair.running')
@@ -384,10 +387,6 @@ export function TopBar({
   ftScreen = false,
   showLocalClock = false,
 }: Props) {
-  const control = useStationControl()
-  const ftSettings = useStationCapability('ftSettings')
-  const preferenceControl = control || ((tier === 'FT8' || tier === 'FT4') && ftSettings)
-  const tierControl = useStationTierControl(radio)
   const currentPill = TIER_PILLS.find((p) => p.tier === tier)
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   const [version, setVersion] = useState('')
@@ -412,7 +411,7 @@ export function TopBar({
   // batch-18 ruling; the Operate strip states the same fact under `operate.strip.rxOnly.why`).
   const NO_TX_WHY = t('topbar.rxOnly.why')
   const modeButton = (
-    <button disabled={!tierControl}
+    <button
       type="button"
       className={`tier-btn active tier-menu-btn${currentPill?.rxOnly ? ' rx-only' : ''}`}
       title={t('topbar.tier.aria')}
@@ -444,7 +443,7 @@ export function TopBar({
         {(fdActive || (operator && operator.trim() !== '')) && (
           <Menu
             trigger={
-              <button disabled={!control}
+              <button
                 type="button"
                 className="theme-chip op-chip"
                 title={
@@ -528,7 +527,7 @@ export function TopBar({
 
       {!hideFrequencyControl && (
         <div className="topbar-group radio-readout">
-          <FrequencyControl remoteFrequency
+          <FrequencyControl
             channels={bandPlan}
             dialMhz={radio.dialMhz}
             band={radio.band}
@@ -564,7 +563,7 @@ export function TopBar({
         </div>
 
         {radio.qsoRecording && (
-          <button disabled={!control}
+          <button
             type="button"
             className="topbar-rec"
             onClick={() => onStopRecording?.()}
@@ -584,7 +583,7 @@ export function TopBar({
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
             onClick={() => onSetTxEnabled(!radio.txEnabled)}
-            disabled={!control || (noTx)}
+            disabled={noTx}
             title={
               noTx
                 ? NO_TX_WHY
@@ -600,12 +599,12 @@ export function TopBar({
             className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onSetTune(!radio.tuning)}
-            disabled={!control || (noTx)}
+            disabled={noTx}
             title={noTx ? NO_TX_WHY : 'Key a tune carrier'}
           >
             Tune
           </button>
-          <button disabled={!control}
+          <button
             type="button"
             className="op-btn stop"
             onClick={onHaltTx}
@@ -613,7 +612,7 @@ export function TopBar({
           >
             Stop TX
           </button>
-          <button disabled={!preferenceControl}
+          <button
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
@@ -642,7 +641,7 @@ export function TopBar({
         {showLocalClock && <UtcClock local />}
         {!hideDigitalChrome && (
           <>
-            {control && radio.clockRepairAvailable ? (
+            {radio.clockRepairAvailable ? (
               <span className="clock-stack">
                 <ClockChip radio={radio} />
                 <ClockRepair radio={radio} keyed={onAir || radio.tuning} />
@@ -664,7 +663,7 @@ export function TopBar({
       <>
       <div className="topbar-group tier-toggle" role="group" aria-label={t('topbar.tier.aria')}>
         {TIER_PILLS.map((p) => (
-          <button disabled={!tierControl}
+          <button
             key={p.tier}
             type="button"
             className={`tier-btn${tier === p.tier ? ' active' : ''}${
@@ -680,10 +679,8 @@ export function TopBar({
         ))}
         {/* The FT screens' one mode button at the small size (2026-10-01): the mode in use,
             opening all eleven with their tags. Not drawn above sm (CSS), where the pills are.
-            The group's LAST child, so every pill keeps its place among its siblings. Without
-            tier control it is a plain disabled button, as the pills are: the menu's trigger
-            reads only its own disabled prop, and opened on a press of the disabled button. */}
-        {ftScreen && (tierControl ? (
+            The group's LAST child, so every pill keeps its place among its siblings. */}
+        {ftScreen && (
           <Menu
             trigger={modeButton}
             items={TIER_PILLS.map((p) => ({
@@ -692,7 +689,7 @@ export function TopBar({
               onSelect: () => onTierChange(p.tier),
             }))}
           />
-        ) : modeButton)}
+        )}
       </div>
 
       {/* Option 1 (operator, 2026-08-10): the Help/OP/Field cluster sits between the mode
@@ -707,7 +704,7 @@ export function TopBar({
       >
         {/* THREE WHOLE labels, never a stem plus a period token: the <small> is supplied by
             this call site as a marker, so the catalog carries one label per state. */}
-        <button disabled={!preferenceControl}
+        <button
           type="button"
           className={`tier-btn${radio.txCycleAuto ? ' active' : ''}`}
           aria-pressed={radio.txCycleAuto ?? false}
@@ -729,7 +726,7 @@ export function TopBar({
             correct flip read as a no-op and got reported as one). Distinct from `active`
             on purpose: active is the operator's LOCK, derived is the sequencer's current
             answer, and dressing one as the other would misreport who chose it. */}
-        <button disabled={!preferenceControl}
+        <button
           type="button"
           className={`tier-btn${!radio.txCycleAuto && radio.txEven ? ' active' : ''}${radio.txCycleAuto && radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && radio.txEven}
@@ -738,7 +735,7 @@ export function TopBar({
         >
           <T k="topbar.txCycle.first.label" tags={{ s: <small /> }} />
         </button>
-        <button disabled={!preferenceControl}
+        <button
           type="button"
           className={`tier-btn${!radio.txCycleAuto && !radio.txEven ? ' active' : ''}${radio.txCycleAuto && !radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && !radio.txEven}

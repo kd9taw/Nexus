@@ -15,7 +15,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { RotorPane } from './RotorPane'
-import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import type { RotatorState } from '../../types'
 
@@ -134,17 +133,5 @@ describe('a controller that is switched off (a tester read "Error 61" on every c
     render(<RotorPane />)
     await waitFor(() => expect(screen.queryByText(t('rotor.pane.hint.noPosition'))).not.toBeNull())
     expect(screen.queryByText(t('rotor.pane.notAnswering'))).toBeNull()
-  })
-})
-
-describe('a browser on Nexus Remote', () => {
-  it('keeps the read it always had', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RotorPane />
-      </StationControlContext.Provider>,
-    )
-    await waitFor(() => expect(api.readRotator).toHaveBeenCalled())
-    expect(api.readRotatorState).not.toHaveBeenCalled()
   })
 })

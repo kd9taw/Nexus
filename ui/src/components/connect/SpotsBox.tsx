@@ -18,8 +18,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import { SpotsPanel } from '../SpotsPanel'
 import type { SpotsFeed } from './paneContext'
-import { useStationControl } from '../../stationAccess'
-import { t } from '../../i18n'
 
 /** The box's filter copy — `nexus.spots.<key>.connect` (SpotsPane `scope`). */
 const CONNECT_SPOTS_SCOPE = 'connect'
@@ -80,14 +78,9 @@ function useBoxFit<T extends HTMLElement>(): React.RefObject<T> {
 
 export function SpotsBox({ feed }: { feed: SpotsFeed }) {
   const ref = useBoxFit<HTMLDivElement>()
-  const control = useStationControl()
   return (
     <div className="cn-spots" ref={ref}>
-      {control ? (
-        <SpotsPanel {...feed.board} spots={feed.rows} pane={{ scope: CONNECT_SPOTS_SCOPE }} />
-      ) : (
-        <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>
-      )}
+      <SpotsPanel {...feed.board} spots={feed.rows} pane={{ scope: CONNECT_SPOTS_SCOPE }} />
     </div>
   )
 }

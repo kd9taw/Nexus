@@ -94,6 +94,8 @@ fn edit_of(stored: &QsoRecord, draft: &Draft) -> QsoEdit {
             their_program: program(draft.their, &stored.ota.their_program),
             my_ref: Some(draft.my.into()),
             my_program: program(draft.my, &stored.ota.my_program),
+            // The IOTA box left as it opened: a blank one leaves the stored reference.
+            iota: None,
         }
     };
     edit
@@ -473,6 +475,19 @@ fn a_change_to_a_gone_or_changed_contact_is_refused_and_changes_nothing() {
     odd.qsl_sent_via = Some("X".into());
     assert!(e.edit_qso(id, &key, &odd).is_err());
     assert_eq!(e.stored_log(), before);
+    // …nor an IOTA box holding something that is not a reference: refused, never stored as junk.
+    let mut junk = QsoEdit::project(&e.logged_row(id).expect("held"));
+    junk.ota.iota = Some("EU5".into());
+    assert!(e.edit_qso(id, &key, &junk).is_err());
+    assert_eq!(e.stored_log(), before);
+    // The positive control: the same edit with a reference in the box lands.
+    junk.ota.iota = Some("eu-005".into());
+    assert!(matches!(e.edit_qso(id, &key, &junk), Ok(Ok(_))));
+    assert_eq!(
+        e.logged_row(id).expect("held").ota.iota.as_deref(),
+        Some("EU-005")
+    );
+    let key = QsoEdit::project(&e.logged_row(id).expect("held")).key();
 
     // Gone: deleted, and never in this log.
     assert!(e.delete_qso(id));
@@ -573,5 +588,97 @@ fn the_lotw_verbs_by_id_touch_exactly_the_contacts_they_name() {
             ("W5EEE".into(), None),
             ("W6FFF".into(), a),
         ]
+    );
+}
+
+/// A contest contact through the Logbook's DTO and back. Out, the DTO carries what the Logbook's
+/// columns show: the contest block (which it never carried before), the IOTA reference and every
+/// passthrough tag. Back in, as the window echoes a row with a change, nothing is lost: the
+/// reverse conversion still sends no contest block (the window cannot edit one) and the edit
+/// policy keeps the stored one, so the stored contact writes the same ADIF, byte for byte.
+#[test]
+fn a_contest_contact_round_trips_through_the_logbook_dto_losing_nothing() {
+    let mut contest = contact(9, "DL1ABC");
+    let field = |tag: &str, value: &str| format!("<{tag}:{}>{value}", value.len());
+    let mut lb = tempo_core::logbook::Logbook::new();
+    lb.import_adif(
+        &([
+            tempo_core::logbook::adif_record(&contest)
+                .trim_end_matches("<EOR>\n")
+                .trim_end_matches("<EOR>")
+                .to_string(),
+            field("CONTEST_ID", "CQ-WW-CW"),
+            field("STX", "12"),
+            field("SRX", "345"),
+            field("SRX_STRING", "14"),
+            field("IOTA", "EU-005"),
+            field("CNTY", "MA,MIDDLESEX"),
+            field("CQZ", "14"),
+            field("ITUZ", "28"),
+            field("CONT", "EU"),
+            field("DISTANCE", "6512.4"),
+            field("LOTW_QSLRDATE", "20250203"),
+        ]
+        .concat()
+            + "<EOR>"),
+    );
+    let parsed = QsoRecord::clone(&lb.records()[0]);
+    assert!(
+        parsed.contest.is_some(),
+        "premise: the import holds a contest block"
+    );
+    contest.contest = parsed.contest.clone();
+    contest.ota = parsed.ota.clone();
+    contest.extra = parsed.extra.clone();
+    let mut e = engine_holding(std::slice::from_ref(&contest));
+    let id = contest.id.expect("an id");
+    let held = QsoRecord::clone(&e.logged_row(id).expect("held"));
+    let before = tempo_core::logbook::adif_record(&held);
+
+    // Out: everything the columns show is on the wire.
+    let dto = LoggedQso::from(held.clone());
+    let wire = serde_json::to_value(&dto).expect("serializes");
+    assert_eq!(wire["contest"]["contestId"], "CQ-WW-CW");
+    assert_eq!(wire["contest"]["stx"], 12);
+    assert_eq!(wire["contest"]["srx"], 345);
+    assert_eq!(wire["contest"]["srxString"], "14");
+    assert_eq!(wire["ota"]["iota"], "EU-005");
+    for tag in ["CNTY", "CQZ", "ITUZ", "CONT", "DISTANCE", "LOTW_QSLRDATE"] {
+        assert!(
+            dto.extra.iter().any(|(k, _)| k == tag),
+            "{tag} is not on the row the Logbook reads"
+        );
+    }
+
+    // …and an ordinary contact carries no `contest` key at all, so every other row (and every
+    // golden of one) is byte for byte what it was.
+    let plain = serde_json::to_value(LoggedQso::from(contact(1, "W1AAA"))).expect("serializes");
+    assert!(plain.get("contest").is_none(), "{plain}");
+
+    // Back: the window's echo of the row, with a change of name.
+    let mut echoed: LoggedQso = serde_json::from_value(wire).expect("the window's echo reads back");
+    assert_eq!(echoed, dto, "the DTO round-trips through JSON");
+    echoed.name = Some("Hans".into());
+    let rec: QsoRecord = echoed.into();
+    assert!(
+        rec.contest.is_none(),
+        "the reverse conversion still sends no contest block"
+    );
+    assert!(e.update_qso(id, rec));
+    let after = QsoRecord::clone(&e.logged_row(id).expect("held"));
+    assert_eq!(after.contest, held.contest, "the contest block was lost");
+    assert_eq!(after.ota, held.ota);
+    assert_eq!(after.extra, held.extra);
+    let mut expected = held.clone();
+    expected.name = Some("Hans".into());
+    assert_eq!(
+        tempo_core::logbook::adif_record(&after),
+        tempo_core::logbook::adif_record(&expected),
+        "the edit changed more than the name"
+    );
+    assert_ne!(
+        tempo_core::logbook::adif_record(&after),
+        before,
+        "premise: the name did change"
     );
 }

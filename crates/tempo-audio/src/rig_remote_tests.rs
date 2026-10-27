@@ -420,7 +420,7 @@ fn a_mode_power_ceiling_is_confirmed_after_retune_and_never_raises_an_existing_l
             .unwrap();
         let read = rig.remote_retune(target, &permit).unwrap();
         assert_eq!(read.power(), Some(before.min(0.4)));
-        let mut expected = vec!["M PKTUSB 3000", "F 14080000"];
+        let mut expected = vec!["M PKTUSB -1", "F 14080000"];
         if before > 0.4 {
             expected.push("L RFPOWER 0.400");
         }
@@ -471,7 +471,7 @@ fn refused_or_unconfirmed_power_keeps_a_mode_transaction_unknown() {
         assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
         assert_eq!(
             writes(&peer),
-            ["M PKTUSB 3000", "F 14080000", "L RFPOWER 0.400"]
+            ["M PKTUSB -1", "F 14080000", "L RFPOWER 0.400"]
         );
     }
 }
@@ -500,7 +500,7 @@ fn authority_lost_during_the_last_power_read_prevents_the_power_write() {
         rig.remote_retune(target, &permit),
         Err(Reason::AuthorityExpired)
     ));
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 14080000"]);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 14080000"]);
     assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
 }
 
@@ -561,7 +561,7 @@ fn remote_retune_uses_native_filter_policy_and_corrects_band_stacking_once() {
         (14_090_000, vec!["M PKTUSB -1", "F 14090000"]),
         (
             21_074_000,
-            vec!["M PKTUSB 3000", "F 21074000", "M PKTUSB 3000", "F 21074000"],
+            vec!["M PKTUSB -1", "F 21074000", "M PKTUSB -1", "F 21074000"],
         ),
     ] {
         let peer = retuning_peer(14_074_000, "PKTUSB", |_, state| {
@@ -746,9 +746,9 @@ fn bad_band_cross_readback_cannot_trigger_blind_or_repeated_corrections() {
         assert_eq!(
             writes(&peer),
             if failure == "noise" {
-                vec!["M PKTUSB 3000", "F 21074000"]
+                vec!["M PKTUSB -1", "F 21074000"]
             } else {
-                vec!["M PKTUSB 3000", "F 21074000", "M PKTUSB 3000"]
+                vec!["M PKTUSB -1", "F 21074000", "M PKTUSB -1"]
             }
         );
         assert!(matches!(completion.outcome(), Outcome::Unknown { .. }));

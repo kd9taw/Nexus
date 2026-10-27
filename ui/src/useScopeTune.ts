@@ -3,6 +3,7 @@ import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
 import { bandLabelForMhz } from './band'
 import { clampPassband, type PassbandLimits } from './spectrum/markers'
+import { showWhenDriving } from './features/drivingRefusal'
 
 /** Trailing-flush window while dragging: at most one CAT write per this many ms
  * (the same cadence as useWheelTune's coalescer). */
@@ -68,7 +69,7 @@ export function useScopeTune(opts: ScopeTuneOpts): (t: ScopeTuneRequest) => void
       // of doing nothing at all. The engine routes a bandless dial.
       void setFrequency(mhz, bandLabelForMhz(mhz), sideband || 'USB')
         .then((s) => s && onSnap?.(s))
-        .catch(() => {})
+        .catch(showWhenDriving)
     }
     const drag = coalescer(send)
     cbRef.current = (t: ScopeTuneRequest) => {

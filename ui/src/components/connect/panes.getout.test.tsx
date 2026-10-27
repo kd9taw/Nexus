@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// GETTING OUT LISTS EVERY RECEIVER (plan piece H8): the box's full list of who is hearing you.
+// GETTING OUT LISTS EVERY RECEIVER: the box's full list of who is hearing you.
 //
 // The backend (`propagation::getting_out`) keeps the latest report per receiver over its window
 // and sorts them most-distant first; the box used to print the first six and drop the rest. The

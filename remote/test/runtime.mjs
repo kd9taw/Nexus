@@ -33,19 +33,35 @@ async function freePortOutsideEphemeralRange() {
  *  through the fake its test passes as `relay`; nothing in a test ever reaches the real one. */
 export const RELAY_API = 'https://rtc.live.cloudflare.com/'
 
+/** Where the stand-in billing Worker sends each call, for the test's `billing` function to answer. */
+const BILLING_STUB = 'https://billing-stub.test.invalid/'
+/** The stand-in for the private billing Worker: its `BillingService` entrypoint with the same RPC methods,
+ *  each handing its call to the test (through its outbound fetch) and answering what the test answers. */
+const BILLING_WORKER = `import { WorkerEntrypoint } from 'cloudflare:workers'
+const ask = (method, args) => fetch('${BILLING_STUB}', { method: 'POST', body: JSON.stringify({ method, args }) }).then(r => r.json())
+export class BillingService extends WorkerEntrypoint {
+  checkout(...args) { return ask('checkout', args) }
+  portal(...args) { return ask('portal', args) }
+  cancel(...args) { return ask('cancel', args) }
+}
+export default { fetch() { return new Response('not found', { status: 404 }) } }`
+
+// `billing(method, args)` binds a stand-in billing Worker as BILLING, as a deploy does once that Worker is
+// deployed; without it the relay has no BILLING binding, as every deploy has until then.
 // `origin` stands the service up on another public origin - an https:// one is the hosted service.
 // Every helper but `open()` still works there, because dispatchFetch delivers any URL to workerd;
 // `open()` is a real TCP socket and needs the local http:// origin.
-export async function runtime({ bindings = {}, port: requestedPort, origin: publicOrigin, relay } = {}) {
+export async function runtime({ bindings = {}, port: requestedPort, origin: publicOrigin, relay, billing, outbound } = {}) {
   const port = requestedPort ?? await freePortOutsideEphemeralRange()
   const origin = publicOrigin ?? `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true })
   const publicJwk = { ...await exportJWK(publicKey), kid: crypto.randomUUID(), alg: 'RS256', use: 'sig' }
   let jwksReads = 0
-  const mf = new Miniflare(convertV4MiniflareOptions({
+  const shared = { host: '127.0.0.1', port, cf: false, telemetry: { enabled: false } }
+  const worker = {
     name: 'remote-runtime-test', modules: true, scriptPath: new URL('../dist/index.js', import.meta.url).pathname,
-    compatibilityDate: '2026-07-30', host: '127.0.0.1', port, cf: false,
-    telemetry: { enabled: false },
+    compatibilityDate: '2026-07-30',
+    ...(billing ? { serviceBindings: { BILLING: { name: 'billing-stub', entrypoint: 'BillingService' } } } : {}),
     durableObjects: { STATIONS: { className: 'StationRoom', useSQLite: true } }, d1Databases: ['DB'],
     bindings: { PUBLIC_REMOTE_ORIGIN: origin, AUTH0_ISSUER: issuer, AUTH0_AUDIENCE: 'remote-test-api', AUTH0_CLIENT_ID: 'remote-test-client', ...bindings },
     assets: {
@@ -56,11 +72,22 @@ export async function runtime({ bindings = {}, port: requestedPort, origin: publ
     },
     outboundService: async request => {
       if (relay && request.url.startsWith(RELAY_API)) return relay(request)
+      // A test may capture other outbound requests (the owner-device email notice); without a
+      // capturer the JWKS endpoint is still the only outbound call any Worker path may make.
+      if (outbound && request.url !== `${issuer}.well-known/jwks.json`) return outbound(request)
       assert.equal(request.url, `${issuer}.well-known/jwks.json`, 'only the pinned JWKS endpoint may be fetched')
       jwksReads++
       return Response.json({ keys: [publicJwk] })
     },
-  }))
+  }
+  const mf = new Miniflare(convertV4MiniflareOptions(billing
+    ? { ...shared, workers: [worker, { name: 'billing-stub', modules: true, script: BILLING_WORKER, compatibilityDate: '2026-07-30',
+      outboundService: async request => {
+        assert.equal(request.url, BILLING_STUB, 'the stand-in billing Worker calls nothing else')
+        const { method, args } = await request.json()
+        return Response.json(await billing(method, args))
+      } }] }
+    : { ...shared, ...worker }))
   // Until this function returns, no caller holds `mf` and nobody else can dispose it. A failed
   // start used to leave Miniflare's loopback server and dispatchers open, which kept node --test
   // alive after the last case (55 minutes in staging run 34769726458, then the job timeout).

@@ -352,7 +352,7 @@ describe('a park typed before any call belongs to the first call typed after it'
     expect(logged().call).toBe('KE7G')
     // The box equals the pending hunt, so the engine's own callsign-matched tag supplies US-3216.
     expect(logged().ota?.theirRef, 'KE7G was logged at the park typed for no one').toBeUndefined()
-    // …and the strip that follows is empty, and stays so when the spent hunt goes (the N13 fix).
+    // …and the strip that follows is empty, and stays so when the spent hunt goes.
     expect(callBox().value).toBe('')
     view.rerender(strip(null, { call: 'KE7G', ts: 1 }))
     await settle()

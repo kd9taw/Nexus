@@ -266,7 +266,7 @@ fn with_the_transmit_switch_at_its_default_every_transmit_a_program_asks_for_is_
     )));
 }
 
-/// A program's `trx:0,false` stops what is on the air, as WSJT-X's Halt Tx does (design Q8 A): the
+/// A program's `trx:0,false` stops what is on the air, as WSJT-X's Halt Tx does: the
 /// over is cut at the loop's next tick (the abort armed, the slot flag down), transmit disarms, and
 /// the stop HOLDS, so entering a section does not re-arm. CONTROL: with nothing on the air it
 /// changes nothing at all.
@@ -305,7 +305,7 @@ fn a_program_s_trx_false_stops_what_is_on_the_air_and_the_stop_holds() {
     }
 }
 
-/// The dial is the operator's while anything is on the air (design Q9 A): a program's write is
+/// The dial is the operator's while anything is on the air: a program's write is
 /// refused and the program told the dial in force. Off the air it retunes through the CAT broker's
 /// own rule, band and all. CONTROL: the same write lands once the over ends.
 #[test]
@@ -383,7 +383,7 @@ fn a_program_s_dial_waits_out_200_ms_after_the_operator_moves_it() {
     );
 }
 
-/// Power only down (design Q10 A), through the one chokepoint, so the operator's ceiling holds. A
+/// Power only down, through the one chokepoint, so the operator's ceiling holds. A
 /// level Nexus does not know cannot be shown lower and is refused. Tune power: never up; down is
 /// not offered.
 #[test]
@@ -457,8 +457,8 @@ fn a_program_s_mode_follows_the_cat_broker_s_rule() {
     assert_eq!(engine_lock(&engine).rig_mode_effective(), "PKTLSB");
 }
 
-/// `tune:0,false` ends Tune whoever started it, and `cw_macros_stop` ends CW from any origin
-/// (design §3.5). CONTROL: `cw_macros_stop` with an FT over on the air and no CW leaves the over
+/// `tune:0,false` ends Tune whoever started it, and `cw_macros_stop` ends CW from any origin.
+/// CONTROL: `cw_macros_stop` with an FT over on the air and no CW leaves the over
 /// alone (`stop_cw` would also cut it).
 #[test]
 fn a_program_s_tune_and_cw_stops_end_only_what_they_name() {
@@ -706,7 +706,7 @@ fn chronos(client: &mut Client, within: Duration) -> Vec<RawHeader> {
         .collect()
 }
 
-/// S-M34: TX_CHRONO goes only to the program whose over the engine says is armed, and only while it
+/// TX_CHRONO goes only to the program whose over the engine says is armed, and only while it
 /// holds a `tci` key: none with no armed over, none for an over armed for someone who holds no key.
 /// CONTROL: armed for the key holder, the requests come, in its stream.
 #[test]
@@ -1015,7 +1015,7 @@ fn serving_with_audio(engine: &SharedEngine) -> (Manager, Arc<ReceiveAudioFeed>)
 }
 
 /// A program connected and greeted, its audio started as WSJT-X starts it: a `tci` key needs its
-/// stream (design §3.2 item 9).
+/// stream (the verdict's item 9).
 fn listening(h: &Handle, port: u16) -> (Client, ClientId) {
     let (mut client, id, _) = program(h, port);
     client.send("audio_start:0;");
@@ -1049,8 +1049,8 @@ fn tx_frame(frames: usize, level: f32) -> Vec<u8> {
         .expect("a transmit frame")
 }
 
-/// The radio loop's tick for programs' overs, as task S5's block will make it: what the loop is
-/// told to do. The transmit route never changes here.
+/// The radio loop's tick for programs' overs, as the loop's own TCI block makes it: what the loop
+/// is told to do. The transmit route never changes here.
 fn loop_tick(engine: &SharedEngine) -> MicTick {
     engine_lock(engine).poll_tci(Instant::now(), 40.0, 1)
 }
@@ -1188,7 +1188,7 @@ fn a_programs_key_is_the_engines_verdict_and_its_over_is_its_own() {
 }
 
 /// ⛔ NOTHING A PROGRAM SENDS ARMS TRANSMIT, LETS GO OF THE OPERATOR'S STOP OR A WATCHDOG TRIP,
-/// RAISES THE POWER, OR KEYS OUTSIDE THE LICENCE (design §3.1 items 1, 2 and 6), through the backend
+/// RAISES THE POWER, OR KEYS OUTSIDE THE LICENCE, through the backend
 /// the server calls: every call a program's commands make, in a row, from every station state a
 /// program can find, each checked against the one before. CONTROL: from the open station a key is
 /// admitted and the power goes down, so the sweep is not vacuous.
@@ -1362,7 +1362,7 @@ fn nothing_a_program_sends_arms_lets_go_of_a_stop_or_trip_raises_power_or_keys_o
     assert!(lowered > 0, "control: no program ever lowered the power");
 }
 
-/// ⛔ STOP IN NEXUS ALWAYS WINS (design §3.1 item 3). Stop TX, TX Off and the switch going off
+/// ⛔ STOP IN NEXUS ALWAYS WINS. Stop TX, TX Off and the switch going off
 /// each end a program's keyed over at once (the abort armed, so the loop flushes and unkeys); at
 /// the manager's next publish the server lets go of its key, tells it `trx:0,false;`, takes no more
 /// of its audio and asks for none; its next key is refused, as TCI tells a key that did not take,
@@ -1454,8 +1454,8 @@ fn every_stop_in_nexus_ends_a_programs_over_and_the_server_takes_no_more_of_its_
     }
 }
 
-/// ⛔ A PROGRAM'S LOST CONNECTION ENDS WHAT IT HELD BEFORE THE RADIO LOOP'S NEXT TICK (design §3.1
-/// item 4): its keyed over is gone with the abort armed by the server's own report of the loss,
+/// ⛔ A PROGRAM'S LOST CONNECTION ENDS WHAT IT HELD BEFORE THE RADIO LOOP'S NEXT TICK:
+/// its keyed over is gone with the abort armed by the server's own report of the loss,
 /// so that tick flushes and unkeys; a lost program's microphone key is down at once. CONTROL:
 /// another program's loss leaves the over on the air.
 #[test]

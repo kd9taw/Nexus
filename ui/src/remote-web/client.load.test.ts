@@ -2,8 +2,8 @@
 import {afterEach,expect,it,vi} from 'vitest'
 import {BrowserClient,RemoteError} from './client'
 import {APPLICATION_VERSIONS} from './application-capabilities'
-const auth0=vi.hoisted(()=>({redirect:vi.fn(async()=>{}),login:vi.fn(async(_options?:unknown)=>{}),logout:vi.fn(async(_options?:unknown)=>{})}))
-vi.mock('@auth0/auth0-spa-js',()=>({Auth0Client:class {async checkSession(){} handleRedirectCallback(){return auth0.redirect()} loginWithRedirect(options?:unknown){return auth0.login(options)} logout(options?:unknown){return auth0.logout(options)}}}))
+const auth0=vi.hoisted(()=>({created:vi.fn((_options:unknown)=>{}),redirect:vi.fn(async()=>{}),login:vi.fn(async(_options?:unknown)=>{}),logout:vi.fn(async(_options?:unknown)=>{})}))
+vi.mock('@auth0/auth0-spa-js',()=>({Auth0Client:class {constructor(options:unknown){auth0.created(options)} async checkSession(){} handleRedirectCallback(){return auth0.redirect()} loginWithRedirect(options?:unknown){return auth0.login(options)} logout(options?:unknown){return auth0.logout(options)}}}))
 afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();window.history.replaceState({},'','/')})
 const config=()=>vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({issuer:'https://identity.remote-test.invalid/',audience:'nexus',clientId:'synthetic',ready:true}),{status:200})))
 // The live post-login Action's deny text, as Auth0 logs it.
@@ -15,6 +15,16 @@ async function callback(error:string,description:string|undefined){
   window.history.replaceState({},'','/?error='+encodeURIComponent(error)+(description===undefined?'':'&error_description='+encodeURIComponent(description))+'&state=synthetic')
   return BrowserClient.load()
 }
+// Rulings 547 and 548: the page's sign-in asks the account service who signed in and the address it
+// verified (how a station knows a person it invited), and never for the profile: no name, nickname
+// or picture. spa-js puts this scope in every authorize request, adding only `openid` to it.
+it('asks the sign-in for who signed in and their verified address, and nothing of their profile',async()=>{
+  config()
+  await BrowserClient.load()
+  expect(auth0.created).toHaveBeenCalledTimes(1)
+  const [options]=auth0.created.mock.calls[0] as [{authorizationParams:{scope:string}}]
+  expect(options.authorizationParams.scope).toBe('openid email')
+})
 it('uses every supported advertised service version at real browser startup and falls back for unknown versions',async()=>{
   for(const version of [...APPLICATION_VERSIONS,undefined,0,17,1.5]){
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({issuer:'https://identity.remote-test.invalid/',audience:'nexus',clientId:'synthetic',ready:true,applicationVersion:version}),{status:200})))
@@ -60,4 +70,12 @@ it('keeps any other deny a plain refusal, and any other callback failure a failu
   expect(other).not.toBeInstanceOf(BrowserClient)
   expect(other instanceof RemoteError&&['signInRefused','emailUnverified'].includes(other.code)).toBe(false)
   expect(window.location.search).toBe('')
+})
+// Subscribe and Manage show only where the service says its billing is on, by exactly `true`: an older
+// service never says, and anything else is not on.
+it('turns billing on only for a service that says billing: true',async()=>{
+  for(const [billing,on] of [[true,true],[false,false],[undefined,false],[1,false],['true',false]] as const){
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({issuer:'https://identity.remote-test.invalid/',audience:'nexus',clientId:'synthetic',ready:true,billing}),{status:200})))
+    expect((await BrowserClient.load())?.billing).toBe(on)
+  }
 })

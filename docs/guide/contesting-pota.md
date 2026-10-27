@@ -130,14 +130,46 @@ board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
 
+### Stats
+
+**Stats**, the tab beside **Scoreboard** above the score, shows how the contest is going while you
+operate; the log stays below it. It reads your contest log and nothing else:
+
+- **Totals**: contacts, on time and breaks, the overall rate over your on time, your best 60
+  minutes, the current rate (over your last ten contacts), the time since your last contact, and
+  today's contacts (UTC). A break between two contacts is off time when it reaches the contest's
+  own minimum: 60 minutes in CQ WW and CQ WPX, 30 in Sweepstakes. A contest with no minimum on
+  record uses 30 minutes, and the tab says it is a default. The scoreboard's On time and Off time
+  and the Score Summary count the same way.
+- **Contacts per hour**: a bar for each UTC hour of the contest window. Contacts logged outside the
+  window (test contacts before the start) are counted under the chart, not drawn.
+- **Distance**: your longest contact, with its call and country, and the average. Each is measured
+  from your grid (Settings) to the grid the station sent, where the exchange carries one, otherwise
+  to the centre of its country.
+- **Bands**, **Modes** and **Countries**, busiest first, with **Show all** past ten countries, the
+  number of DX contacts, and the grids worked where the contest exchanges a grid.
+- **Score** and **Multipliers**: the score's arithmetic, and the contest's own multiplier board,
+  worked and still needed.
+
+Dupes and contacts in a banned mode are left out, as the score leaves them out. **Share stats** saves
+a picture of the stats to your Downloads folder for you to share where you like; nothing is posted.
+The checklist that opens when you turn Contest mode off offers **See the contest stats**, which opens
+the tab and leaves Contest mode on.
+
 ### FT8 and FT4 in each contest
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
-answers, and **S&P** answers the first CQ it hears once you turn TX on, in the
-period opposite the CQ's. On the FT cockpit, **Call CQ** is the contest's
-Running and **S&P** the contest's S&P, and a double-click on a CQ, or a reply to
-one from JTAlert or GridTracker, works that station in the contest's S&P; with
-**Disable TX after sending 73** on, TX goes off after that contact. What they
+answers. After each contact, once it is logged and your last over has gone out,
+TX goes off and Running stops calling CQ, as WSJT-X does. While TX is off it
+takes no caller: a station that answers your earlier CQ is not answered or
+logged. Press **Call CQ**, **Running** or **TX On** to call CQ again; each
+sends the CQ. **S&P** listens and never calls a station by itself, with TX on or off:
+you start each contact with a double-click on a CQ, or a reply to one from a
+logging program, as in WSJT-X. Your answer goes out in the period opposite
+the CQ's, and the contact then runs itself to RR73 and the log. After it, S&P
+listens again until you pick the next CQ. On the FT cockpit, **Call CQ** is the
+contest's Running and **S&P** the contest's S&P; with **Disable TX after sending
+73** on, TX goes off after each S&P contact. What they
 send depends on the contest, and is what WSJT-X sends in it (here K1ABC in FN42
 works W9XYZ in EN37). The last column is the special operation the WSJT-X UDP
 Status message reports, as WSJT-X reports it in that contest:
@@ -152,7 +184,13 @@ Outside Field Day, Running and S&P need your grid in Settings before they
 transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
 FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
 Day's messages, as they always have, and Field Day's runner closes without the
-73. In those three contests the FT cockpit's Call CQ and double-click work
+73. There too S&P calls nobody by itself. In ARRL Field Day and Winter Field
+Day on FT8, FT4, FT2, FT1 and DX1, a double-click on a CQ while you are in the
+contest's S&P, or a reply to one from a logging program, answers it in the
+contest with your class and section. On FST4, Q65, MSK144 and JT65, in the
+Illinois and New York QSO parties, and in other contests on FT2, FT1 and DX1, a
+double-click works the station as a normal QSO outside the contest, as before.
+Outside the contest's S&P, the FT cockpit's Call CQ and double-click work
 outside the contest, as before, and the UDP special operation is 0.
 
 ### An operator and a logger on one radio
@@ -517,6 +555,34 @@ puts the call and the park in that cockpit's log line, which tags the contact
 when you log it, and **Clear** on the log line clears both. An FT8, FT4 or RTTY
 activator clicked there still sets a hunt, because the hunt is how its park
 reaches the contact.
+
+### The Activation pane
+
+While you activate (**I'm activating** on POTA / SOTA), the **Activation** box shows:
+
+- each park's contacts today, as the strip counts them: `US-1234 7 of 10`, then **3 to go** or
+  **valid**, and the park-to-park count. A two-fer has a line per park;
+- how long the activation has run, and how long until 0000Z, when the counts start again at 0;
+- the rate over your last ten contacts and the contacts in the last hour, read as the contest rate
+  meter reads them;
+- the activation's contacts, newest first.
+
+Add it to a cockpit's box, the dashboard rail or Conditions like any other box, or press
+**Activation window** on the POTA / SOTA strip to open it in a window of its own beside the
+cockpit. It sends nothing and has no buttons.
+
+The Logbook's **This activation** button (shown while one runs) lists the same contacts: your
+park, on every UTC day the activation has run — so a run past 0000Z shows both days, and a
+contact from the same park earlier that UTC day is in it too, as it is in POTA's file for that
+day. **Filters ▸ Save** keeps the view under a name, and **Filters ▸ My park / summit** finds
+any activation of yours later: your own reference, matched whole.
+
+**Stop** opens the *Activation over?* checklist. Tick **Export the ADIF files for POTA** to write
+one file per park per UTC day (`CALL@US-1234-20261026.adi`, the Logbook's own per-activation
+export), and **Post QRT** (once you have spotted) to spot QRT after its usual confirm. Below them
+it reminds you of a `K-` reference, contacts that carried no grid, a state line with no state
+picked, and that the files are yours to upload at pota.app. Nothing is ticked to begin with;
+**Keep activating** changes nothing.
 
 ## Honest limits
 

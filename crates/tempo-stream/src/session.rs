@@ -16,7 +16,7 @@
 //!   [`Session::accept`] refuses [`Refusal::Unavailable`] before it reaches str0m's builder, which
 //!   would panic for want of a provider.
 //! - **VP8 out, Opus in, and nothing else.** The codec list is cleared to VP8 (the station's
-//!   picture) and Opus (the page's microphone, plan S6: an audio line the page sends and the
+//!   picture) and Opus (the page's microphone: an audio line the page sends and the
 //!   station receives). The microphone's packets are handed on as they arrived
 //!   ([`SessionEvent::Mic`]), undecoded and unjudged: what may reach a transmitter, and when, is
 //!   `tempo_app::mic`'s to decide, and the session keys nothing.

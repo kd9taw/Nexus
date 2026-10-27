@@ -37,87 +37,41 @@ it('renders local pairing and device approval through only the isolated Remote c
   await screen.findByText(accountId)
   fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
   await screen.findByText(deviceId.slice(-6))
-  fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
   await waitFor(() => expect((screen.getByRole('button', { name: 'Turn on Remote' }) as HTMLButtonElement).disabled).toBe(false))
   fireEvent.click(screen.getByRole('button', { name: 'Turn on Remote' }))
   await screen.findByRole('button', { name: 'Turn off Remote' })
   fireEvent.click(screen.getByRole('button', { name: 'Turn off Remote' }))
   await screen.findByRole('button', { name: 'Turn on Remote' })
-  expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId, transmit: false })
-  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true, transmit: false, kind: 'browser' })
+  expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId })
+  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true, kind: 'browser' })
   expect(actions).toContainEqual({ type: 'disable' })
   expect([...document.querySelectorAll('button')].every(button => button.type === 'button')).toBe(true)
 })
 
-it('keeps logging approval local, per browser, and provides immediate local takeover',async()=>{
+it('keeps station control permission local, per browser, and offers no logging permission; takeover clears it',async()=>{
  const deviceId=crypto.randomUUID(),actions:RemoteStationAction[]=[]
- let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,loggingPermissions:[],loggingController:null}
- window.__TAURI_INTERNALS__={invoke:(async(command:string,input:unknown)=>{
-  if(command==='get_remote_station_status')return status
-  if(command!=='remote_station_action')throw Error('unexpectedCommand')
-  const action=(input as {action:RemoteStationAction}).action;actions.push(action)
-  if(action.type==='loggingPermission')status={...status,loggingPermissions:action.allow?[deviceId]:[]}
-  if(action.type==='takeOverLogging')status={...status,loggingPermissions:[],loggingController:null}
-  return status
- }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
- render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow remote logging'}))
- await screen.findByRole('button',{name:'Revoke logging permission'})
- fireEvent.click(screen.getByRole('button',{name:'End remote logging: everyone off until Remote is turned on again'}))
- await screen.findByRole('button',{name:'Allow remote logging'})
- expect(actions).toEqual([{type:'loggingPermission',deviceId,allow:true},{type:'takeOverLogging'}])
-})
-
-it('keeps station control permission separate from logging and clears both on takeover',async()=>{
- const deviceId=crypto.randomUUID(),actions:RemoteStationAction[]=[]
- let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,loggingPermissions:[],stationPermissions:[],loggingController:null}
+ let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,stationPermissions:[],controller:null}
  window.__TAURI_INTERNALS__={invoke:(async(command:string,input:unknown)=>{
   if(command==='get_remote_station_status')return status
   if(command!=='remote_station_action')throw Error('unexpectedCommand')
   const action=(input as {action:RemoteStationAction}).action;actions.push(action)
   if(action.type==='stationPermission')status={...status,stationPermissions:action.allow?[deviceId]:[]}
-  if(action.type==='takeOverLogging')status={...status,stationPermissions:[],loggingPermissions:[],loggingController:null}
+  if(action.type==='takeOverLogging')status={...status,stationPermissions:[],controller:null}
   return status
  }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
  render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow station controls'}))
  await screen.findByRole('button',{name:'Revoke station controls'})
- expect(screen.getByRole('button',{name:'Allow remote logging'})).toBeTruthy()
+ expect(screen.queryAllByRole('button').filter(button=>/logging/i.test(button.textContent??''))).toEqual([])
  fireEvent.click(screen.getByRole('button',{name:'End remote control: everyone off until Remote is turned on again'}))
  await screen.findByRole('button',{name:'Allow station controls'})
  expect(actions).toEqual([{type:'stationPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
 
-it('keeps transmit revocation available during a pending refresh and discards its older grant display', async () => {
- const deviceId = crypto.randomUUID()
- const original:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'FT browser',approved:1,expiresAt:Date.now()+600000}],error:null,stationPermissions:[deviceId],transmitPermissions:[deviceId]}
- let status = original, release!:()=>void
- const delayed = new Promise<RemoteStationStatus>(resolve => { release = () => resolve(original) })
- const actions:RemoteStationAction[]=[]
- const invoke = async (command:string,input?:unknown) => {
-  if(command==='get_remote_station_status')return status
-  if(command!=='remote_station_action')throw Error('unexpectedCommand')
-  const action=(input as {action:RemoteStationAction}).action;actions.push(action)
-  if(action.type==='refresh')return delayed
-  if(action.type==='transmitPermission')status={...status,transmitPermissions:action.allow?[deviceId]:[]}
-  return status
- }
- window.__TAURI_INTERNALS__={invoke:invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
- render(<RemoteStation />)
- const revoke=await screen.findByRole('button',{name:'Revoke FT8/FT4 transmission from the Remote page'})
- fireEvent.click(screen.getByRole('button',{name:'Refresh browser requests'}))
- expect((revoke as HTMLButtonElement).disabled).toBe(false)
- fireEvent.click(revoke)
- await screen.findByRole('button',{name:'Allow FT8/FT4 transmission from the Remote page'})
- release()
- await waitFor(()=>expect(actions).toContainEqual({type:'transmitPermission',deviceId,allow:false}))
- await new Promise(resolve=>setTimeout(resolve,0))
- expect(screen.queryByRole('button',{name:'Revoke FT8/FT4 transmission from the Remote page'})).toBeNull()
- expect(screen.getByRole('button',{name:'Allow FT8/FT4 transmission from the Remote page'})).toBeTruthy()
-})
-
 // One approval (operator decisions 2026-09-13 and 2026-09-14): approving the pairing turns Remote on
-// and approves the browser that paired; approving any browser grants station controls and logging,
-// and FT8/FT4 transmit only when its box is ticked.
-it('approves the pairing and each browser in one step, with the transmit tick on the approval', async () => {
+// and approves the browser that paired; approving any browser grants station controls.
+// No approval offers the old Remote page's FT8/FT4 transmit any more: there is no tick to give it.
+it('approves the pairing and each browser in one step, with no transmit tick', async () => {
   const accountId = crypto.randomUUID(), pairingId = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID()
   let status: RemoteStationStatus = { phase: 'approval', origin: 'https://remote-staging.hamradiotools.io',
     stationId: null, accountId, pairingId, pairingCode: crypto.randomUUID().replace(/-/g,'').slice(0,16),
@@ -136,35 +90,32 @@ it('approves the pairing and each browser in one step, with the transmit tick on
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  fireEvent.click(await screen.findByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Approve this account pairing' }))
   await screen.findByText(second.slice(-6))
-  expect(actions).toEqual([{ type: 'approve', accountId, enrollmentId: pairingId, transmit: true }])
+  expect(actions).toEqual([{ type: 'approve', accountId, enrollmentId: pairingId }])
   // The approval turned Remote on, which is when start at sign-in is offered.
   await screen.findByRole('button', { name: 'Start Nexus when I sign in' })
-  // One Approve per browser, each with its own transmit tick, off unless ticked.
-  const ticks = screen.getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' })
-  expect(ticks).toHaveLength(2)
-  fireEvent.click(ticks[1])
-  fireEvent.click(screen.getAllByRole('button', { name: 'Approve browser' })[1])
-  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve browser' })).toHaveLength(1))
-  fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve browser' })).toBeNull())
+  // One Approve per browser, and no transmit tick beside any of them.
+  expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
+  fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[1])
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve' })).toHaveLength(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull())
   expect(actions.slice(1)).toEqual([
-    { type: 'device', deviceId: second, approve: true, transmit: true, kind: 'browser' },
-    { type: 'device', deviceId: first, approve: true, transmit: false, kind: 'browser' },
+    { type: 'device', deviceId: second, approve: true, kind: 'browser' },
+    { type: 'device', deviceId: first, approve: true, kind: 'browser' },
   ])
-  expect(screen.getAllByRole('button', { name: 'Revoke browser approval' })).toHaveLength(2)
+  expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
 })
 
-// Remote remembers being on, and approved browsers keep what the operator allowed, transmit included.
-// A restart still never arms the transmitter, and the shack has to say both.
-it('tells the operator approved browsers keep their access across a restart and transmit stays off until the browser turns it on', async () => {
+// Remote remembers being on, and approved browsers keep what the operator allowed. The hint no longer
+// speaks of the old Remote page's FT8/FT4 transmit, which no browser can be given now.
+it('tells the operator approved browsers keep their access across a restart', async () => {
   const deviceId = crypto.randomUUID()
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
     devices: [{ id: deviceId, name: 'FT browser', approved: 1, expiresAt: Date.now() + 600000 }], error: null,
-    loggingPermissions: [], stationPermissions: [deviceId], transmitPermissions: [] }
+    stationPermissions: [deviceId] }
   const invoke = async (command: string) => {
     if (command === 'get_remote_station_status') return status
     throw new Error('unexpectedCommand')
@@ -172,25 +123,23 @@ it('tells the operator approved browsers keep their access across a restart and 
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
   await screen.findByRole('button', { name: 'Turn off Remote' })
-  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/FT8\/FT4 transmit included/)
-  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/always off after a restart until the browser turns it on again/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/Approved browsers keep what you allowed/)
+  expect(screen.getByText(/stays on when Nexus restarts/).textContent).not.toMatch(/FT8\/FT4/)
   expect(screen.getByText(/stays on when Nexus restarts/).textContent).toMatch(/Turn off Remote only disconnects/)
-  // Beside the transmit permission itself, not only in the general hint.
-  expect(screen.getByText(/FT8\/FT4 transmit from the Remote page also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
   expect(screen.getByText(/Approving a browser gives it station controls/).textContent).toMatch(/To limit a browser, revoke them here/)
   expect(screen.queryByText(/turns off whenever Nexus restarts|not kept|grant it again after every restart|resets whenever/)).toBeNull()
 })
 
 // The operator, 2026-10-03: "an approved, streaming browser is you at the shack and may change everything. I fix only the
 // wording in Settings that says otherwise." A stream needs station controls alone, so the card says what that browser can
-// do, transmit included, and names the FT8/FT4 permission for what it covers: the Remote page's own controls.
-it('says a streaming browser uses Nexus as you would here, transmit included, and names the FT8/FT4 permission for the Remote page', async () => {
+// do, transmit included. The old Remote page's own FT8/FT4 permission is gone, so nothing offers or shows it.
+it('says a streaming browser uses Nexus as you would here, transmit included, and offers no Remote page FT8/FT4 permission', async () => {
   const deviceId = crypto.randomUUID()
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
     devices: [{ id: deviceId, name: 'Streaming browser', approved: 1, expiresAt: Date.now() + 30 * 86400000 },
       { id: crypto.randomUUID(), name: 'Waiting browser', approved: 0, expiresAt: Date.now() + 600000 }], error: null,
-    loggingPermissions: [], stationPermissions: [deviceId], transmitPermissions: [] }
+    stationPermissions: [deviceId] }
   const invoke = async (command: string) => {
     if (command === 'get_remote_station_status') return status
     throw new Error('unexpectedCommand')
@@ -201,36 +150,26 @@ it('says a streaming browser uses Nexus as you would here, transmit included, an
   const control = screen.getByText(/Approving a browser gives it station controls/).textContent
   expect(control).toMatch(/With streaming on, they also let it stream this window and use Nexus as you would here, transmit included/)
   expect(control).toMatch(/revoke them here, which also ends its stream/)
-  const transmit = screen.getByText(/FT8\/FT4 transmit from the Remote page also needs station controls/).textContent
-  expect(transmit).toMatch(/A streaming browser doesn’t need it: through the stream it transmits as you would here/)
-  expect(transmit).toMatch(/Nothing transmits from the page until the browser presses TX On/)
   // The old words read as a limit that a stream does not have; no line of the card says them now.
   const card = document.querySelector('.remote-native')!.textContent
   expect(card).not.toMatch(/Starting a transmission needs its own permission/)
   expect(card).not.toMatch(/Nothing transmits until the browser presses TX On/)
-  expect(screen.getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Allow FT8/FT4 transmission from the Remote page' })).toBeTruthy()
+  expect(card).not.toMatch(/FT8\/FT4/)
+  expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
 })
 
 // The same words in every language. A translation that kept the old limit would tell its operator the opposite of the
 // English, and an English-only maintainer would never see it.
-it('in every language the FT8/FT4 permission names the Remote page, and the switch, the card and the question say transmit included', () => {
+it('in every language the switch, the card and the question say transmit included', () => {
   type Locale = 'en' | 'de' | 'es' | 'fr' | 'ja'
-  const PAGE: Record<Locale, string> = { en: 'Remote page', de: 'Remote-Seite', es: 'página de Remote', fr: 'page Remote', ja: 'Remote のページ' }
   const INCLUDED: Record<Locale, string> = { en: 'transmit included', de: 'Senden eingeschlossen', es: 'incluida la transmisión', fr: 'émission comprise', ja: '送信を含む' }
-  const STREAMED: Record<Locale, string> = { en: 'streamed to this browser', de: 'als Stream in diesem Browser', es: 'en directo en este navegador',
-    fr: 'en direct dans ce navigateur', ja: 'このブラウザーへのライブ' }
   const OLD_LIMIT: Record<Locale, string> = { en: 'Starting a transmission needs its own permission', de: 'Eine Aussendung zu starten erfordert eine eigene Berechtigung',
     es: 'Iniciar una transmisión requiere un permiso independiente', fr: 'Lancer une émission nécessite une autorisation distincte', ja: '送信を始めるには別の許可が必要です' }
   const catalogs = { en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<Locale, Record<string, unknown>>
   for (const loc of Object.keys(catalogs) as Locale[]) {
     const say = (key: string) => String(catalogs[loc][key])
-    for (const key of ['remote.approveTransmit', 'remote.transmitAllow', 'remote.transmitRevoke', 'remote.transmitLocalHint'])
-      expect(say(key), `${loc} ${key}`).toContain(PAGE[loc])
     for (const key of ['settings.remoteStream.hint', 'remote.controlLocalHint', 'remote.approval.body', 'remote.approval.bodyAgain'])
       expect(say(key), `${loc} ${key}`).toContain(INCLUDED[loc])
-    for (const key of ['remote.configurationLocal'])
-      expect(say(key), `${loc} ${key}`).toContain(STREAMED[loc])
     expect(say('remote.controlLocalHint'), `${loc} still says a transmission needs its own permission`).not.toContain(OLD_LIMIT[loc])
   }
 })
@@ -254,19 +193,38 @@ it('shows an approval that lasts until removed as such, with no date and no warn
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   expect((await card(kept)).textContent).toContain('Approved until you remove it.')
   expect((await card(kept)).textContent).not.toContain('9999')
   expect((await card(kept)).textContent).not.toContain('approval ends')
   expect(within(await card(kept)).queryByRole('button', { name: 'Approve again' })).toBeNull()
   expect((await card(dated)).textContent, 'control').toContain('This approval ends')
   expect(document.body.textContent).not.toContain('9999')
-  expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBeGreaterThanOrEqual(3)
+  expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBe(2)
+})
+
+// Remove at the shack ends every road the station can link the device to. When the other list may
+// still hold it under a link the station could not prove, the card says to look there too.
+it('says to check the other list when a removal could not be linked to it', async () => {
+  const computer = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [{ id: computer, name: 'Den PC', approved: 1, expiresAt: Date.UTC(9999, 11, 31), generation: 2, untilRemoved: 1, kind: 'computer', platform: 'windows' }] }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    if (command === 'remote_station_action') throw 'removeElsewhere'
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const row = (await screen.findByText('Den PC')).closest('li')!
+  fireEvent.click(within(row).getByRole('button', { name: 'Remove' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Removed. Nexus could not confirm whether this computer also shows as another row under Devices. Check the list, and remove it there too if it does.')
 })
 
 // Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its
 // approval ends. In the last seven days before the end that use cannot move, the shack warns and
-// offers to approve it again, with the transmit tick off unless ticked.
+// offers to approve it again.
 it('shows each browser approval expiry, and warns and offers approval again in its last seven days', async () => {
   const day = 86400000, now = Date.now(), date = (ms: number) => new Date(ms).toISOString().slice(0, 10)
   const renewing = crypto.randomUUID(), capped = crypto.randomUUID(), older = crypto.randomUUID(), idle = crypto.randomUUID()
@@ -289,7 +247,7 @@ it('shows each browser approval expiry, and warns and offers approval again in i
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   expect((await card(renewing)).textContent).toContain(`Approved until ${date(now + 30 * day)} UTC`)
   expect((await card(renewing)).textContent).toContain(`up to ${date(now + 60 * day)} UTC`)
   expect((await card(older)).textContent).toContain(`Approved until ${date(now + 6 * day)} UTC.`)
@@ -302,11 +260,10 @@ it('shows each browser approval expiry, and warns and offers approval again in i
     expect(within(await card(id)).getByRole('button', { name: 'Approve again' })).toBeTruthy()
   }
   const phone = await card(capped)
-  fireEvent.click(within(phone).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(within(phone).getByRole('button', { name: 'Approve again' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, transmit: true, kind: 'browser' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, kind: 'browser' }))
   // Ending it is still one click away, beside the warning.
-  expect(within(phone).getByRole('button', { name: 'Revoke browser approval' })).toBeTruthy()
+  expect(within(phone).getByRole('button', { name: 'Remove' })).toBeTruthy()
 })
 
 // A5: the operator compares the browser's key with the one the browser shows, and approving pins the
@@ -337,7 +294,7 @@ it('shows each browser key beside its name, approves with the key shown, and ask
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   for (const id of [waiting, unpinned, pinned]) expect((await card(id)).textContent).toContain(`Key ${short(keys[id])}`)
   expect((await card(keyless)).textContent).not.toContain('Key ')
   const notice = 'can’t stream until you approve it again here'
@@ -346,10 +303,11 @@ it('shows each browser key beside its name, approves with the key shown, and ask
     expect((await card(id)).textContent).not.toContain(notice)
     expect(within(await card(id)).queryByRole('button', { name: 'Approve again' })).toBeNull()
   }
-  fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve browser' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: keys[waiting], kind: 'browser' }))
-  fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve again' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, transmit: false, key: keys[unpinned], kind: 'browser' }))
+  fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, key: keys[waiting], kind: 'browser' }))
+  // A key not pinned here is asked as a new device is: Approve, on its row, beside the key it pins.
+  fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, key: keys[unpinned], kind: 'browser' }))
 })
 
 function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {
@@ -391,11 +349,12 @@ it('offers start at sign-in once, only when the operator turns Remote on, and re
   expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
   expect(settings.launchAtLogin).toBe(false)
   expect(calls).not.toContain('set_launch_at_login')
-  // Answered once: off and on again does not ask again.
+  // Answered once: off and on again does not ask again. Three get_settings in all: one on mount
+  // (the station-name prefill reads the callsign) and one per enable; the re-enable adds no more.
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off Remote' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Turn on Remote' }))
   await screen.findByRole('button', { name: 'Turn off Remote' })
-  await waitFor(() => expect(calls.filter(c => c === 'get_settings').length).toBe(2))
+  await waitFor(() => expect(calls.filter(c => c === 'get_settings').length).toBe(3))
   expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
 })
 
@@ -467,14 +426,14 @@ it.each([
   expect(alert.textContent).not.toMatch(/stopped connecting/i)
 })
 
-it('a computer running Nexus is listed apart from the browsers, by its name, its platform and its key in eight groups, with no transmit tick or switch, and Approve pins its key with transmit off', async () => {
+it('a computer running Nexus is listed apart from the browsers, by its name, its platform and its key in eight groups, with no tick or switch, and Approve pins its key', async () => {
   const browserId = crypto.randomUUID(), computerId = crypto.randomUUID(), actions: RemoteStationAction[] = []
   const key = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
   let status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io', stationId: crypto.randomUUID(),
     accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
     devices: [{ id: browserId, name: 'Chrome on Windows', approved: 1, expiresAt: Date.now() + 86400000, kind: 'browser', platform: null },
       { id: computerId, name: 'Shack laptop', approved: 0, expiresAt: Date.now() + 600000, key, kind: 'computer', platform: 'windows' }],
-    loggingPermissions: [browserId], stationPermissions: [browserId], transmitPermissions: [], pinnedDevices: [] }
+    stationPermissions: [browserId], pinnedDevices: [] }
   window.__TAURI_INTERNALS__ = { invoke: (async (command: string, input: unknown) => {
     if (command === 'get_remote_station_status') return status
     if (command !== 'remote_station_action') throw Error('unexpectedCommand')
@@ -485,21 +444,20 @@ it('a computer running Nexus is listed apart from the browsers, by its name, its
     return status
   }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<form><RemoteStation /></form>)
-  const heading = await screen.findByRole('heading', { name: 'Your computers' })
-  const list = heading.nextElementSibling as HTMLElement
-  const row = within(list).getByText('Shack laptop').closest('li')!
+  const row = (await screen.findByText('Shack laptop')).closest('li')!
   within(row).getByText('Nexus on Windows')
-  within(row).getByText('Key A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90')
+  // On the row while Approve would pin it, and in its details.
+  expect(within(row).getAllByText('Key A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90').length).toBe(2)
   within(row).getByText('Asks to operate this station over the internet.')
-  expect(within(row).queryByRole('checkbox'), 'no transmit tick').toBeNull()
-  // Not among the browsers, and nowhere under Advanced, where the switches and the transmit tick are.
-  const browsers = screen.getByRole('heading', { name: 'Your browsers' }).nextElementSibling as HTMLElement
-  expect(within(browsers).queryByText('Shack laptop')).toBeNull()
-  within(browsers).getByText('Chrome on Windows')
-  expect(screen.queryByText(computerId.slice(-6)), 'not under Advanced').toBeNull()
-  screen.getByText(browserId.slice(-6))
+  expect(within(row).queryByRole('checkbox'), 'no tick').toBeNull()
+  // Told apart from the browser by how it connects; no station controls switch for it, as there was none under Advanced.
+  expect([...row.querySelectorAll('.remote-device-road')].map(b => b.textContent)).toEqual(['Internet'])
+  const browser = screen.getByText('Chrome on Windows').closest('li')!
+  expect([...browser.querySelectorAll('.remote-device-road')].map(b => b.textContent)).toEqual(['Browser'])
+  expect(within(row).queryByRole('button', { name: /station controls/ })).toBeNull()
+  within(browser).getByRole('button', { name: 'Revoke station controls' })
   fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
   await within(row).findByText('Approved until 2026-11-09 UTC.')
-  expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, transmit: false, key, kind: 'computer' }])
+  expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, key, kind: 'computer' }])
   within(row).getByRole('button', { name: 'Remove' })
 })

@@ -84,6 +84,7 @@ export async function verifyArtifact(root, expectedRevision, row = target()) {
   const expected = bundledConfig(template, { issuer: config.vars?.AUTH0_ISSUER, clientId: config.vars?.AUTH0_CLIENT_ID,
     audience: config.vars?.AUTH0_AUDIENCE, nativeClientId: config.vars?.AUTH0_NATIVE_CLIENT_ID,
     trialIdentityRequired: config.vars?.TRIAL_IDENTITY_REQUIRED, movedTo: config.vars?.REMOTE_MOVED_TO, moveStage: config.vars?.REMOTE_MOVE_STAGE,
+    betaFree: config.vars?.REMOTE_BETA_FREE,
     secrets: (config.secrets?.required ?? []).filter(name => !(template.secrets?.required ?? []).includes(name)),
     databaseId: config.d1_databases?.[0]?.database_id, revision: expectedRevision }, row)
   requireValue(JSON.stringify(config) === JSON.stringify(expected), 'Artifact configuration exceeds the staging scope')

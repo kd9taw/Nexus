@@ -202,6 +202,21 @@ vi.mock('./api', async (importOriginal) => {
     // …and what its Contesting tab reads (the assistance record is a list).
     getAssistanceJournal: vi.fn(async () => []),
     getFdRulesStatus: vi.fn(async () => null),
+    // The contest setup's reads: the preview of its unsaved answers (the saved pick's, here) and the
+    // contests' windows (the snapshot it checks the station against is `getSnapshot` above).
+    previewFdRuleset: vi.fn(async () => ({
+      event: String(station.current.fdEvent || 'arrlfd'),
+      rulesYear: 2026,
+      bannedModes: [],
+      spottingAllowed: true,
+      clusterAllowed: true,
+      enforcement: 'warn',
+      role: '',
+      exchange: [String(station.current.fdClass), String(station.current.fdSection)],
+      problem: '',
+      sentSettings: ['fd_class', 'fd_section'],
+    })),
+    contestWindows: vi.fn(async () => []),
   }
 })
 vi.mock('./toast', async (importOriginal) => ({
@@ -285,7 +300,8 @@ async function openSettingsContesting() {
   return waitFor(() => {
     const section = document.querySelector('#settings-contest-pick') as HTMLElement | null
     expect(section).not.toBeNull()
-    return within(section!).getByRole('switch', { name: /^(Enable|Disable) Contest mode: ARRL Field Day$/ })
+    // Start contest… with the mode off, Stop contest… with it on: the form saves the mode no more.
+    return within(section!).getByRole('button', { name: /^(Start|Stop) contest…$/ })
   }, WAIT)
 }
 
@@ -386,7 +402,7 @@ describe('Settings and the screen agree, both ways, and across a restart', () =>
     // App re-read the settings: the rail now shows what the mode reveals.
     await waitFor(() => expect(clubBoard()).not.toBeNull(), WAIT)
     const inSettings = await openSettingsContesting()
-    expect(inSettings.getAttribute('aria-checked')).toBe('true')
+    expect(inSettings.textContent).toBe('Stop contest…')
     // A restart: a new App reads the backend's settings, the file a launch reads.
     cleanup()
     window.location.hash = '#operate'
@@ -395,16 +411,26 @@ describe('Settings and the screen agree, both ways, and across a restart', () =>
     await waitFor(() => expect(screenSwitch().getAttribute('aria-checked')).toBe('true'), WAIT)
   })
 
-  it('on in Settings (and Save): the screen shows it on', async () => {
+  it('Start contest… in Settings: the setup starts it, and the screen shows it on', async () => {
     render(<App />)
     const inSettings = await openSettingsContesting()
-    expect(inSettings.getAttribute('aria-checked')).toBe('false')
+    expect(inSettings.textContent).toBe('Start contest…')
     fireEvent.click(inSettings)
-    const save = screen.getAllByRole('button', { name: 'Save' })[0]
+    await screen.findByRole('dialog', { name: 'Set up a contest' }, WAIT)
+    for (let i = 0; i < 4; i++) {
+      const next = screen.getByRole('button', { name: 'Next' })
+      await waitFor(() => expect(next).toHaveProperty('disabled', false), WAIT)
+      fireEvent.click(next)
+    }
     await act(async () => {
-      fireEvent.click(save)
+      fireEvent.click(screen.getByRole('button', { name: 'Start ARRL Field Day' }))
     })
-    await waitFor(() => expect(station.current.fdActive).toBe(true), WAIT)
+    await screen.findByText('ARRL Field Day is on · S&P', undefined, WAIT)
+    expect(station.current.fdActive).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    // Settings follows at once, without its Save.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), WAIT)
+    expect(within(document.querySelector('#settings-contest-pick') as HTMLElement).getByRole('button', { name: 'Stop contest…' })).toBeTruthy()
     await openContest()
     await waitFor(() => expect(screenSwitch().getAttribute('aria-checked')).toBe('true'), WAIT)
     // …and off again at the screen is off in Settings.
@@ -413,7 +439,7 @@ describe('Settings and the screen agree, both ways, and across a restart', () =>
     })
     await waitFor(() => expect(station.current.fdActive).toBe(false), WAIT)
     const again = await openSettingsContesting()
-    expect(again.getAttribute('aria-checked')).toBe('false')
+    expect(again.textContent).toBe('Start contest…')
   })
 })
 

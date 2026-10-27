@@ -75,6 +75,14 @@ pub const OUTCOMES: usize = 64;
 pub const ANSWER_TOO_LARGE: &str = "answerTooLarge";
 /// Messages one end may be putting together at once.
 const STREAMS: usize = 16;
+/// How many messages of the largest size ([`Assembly`]'s limit) one end may hold half-sent at once,
+/// all of its streams together, as a sender of this protocol interleaves its big messages a frame
+/// a turn (`crate::outbox`). At the shack: the calls that reach [`CALL_BYTES`] are two, an ADIF
+/// import and a voice message's `.wav`, each as big as the operator's file; every other call is far
+/// smaller (an SSTV picture, PD-290's 800 x 616 as base64, is 1,971,200 bytes). So two of the
+/// largest, not [`STREAMS`] of them: 16 streams of 16 MiB each let one paired computer hold 256 MiB
+/// at the shack. At the computer, the same for answers: two whole logbooks.
+const AT_ONCE: usize = 2;
 /// The most one feed's value may be once inflated.
 pub const FEED_BYTES: usize = 4 * 1024 * 1024;
 
@@ -174,11 +182,14 @@ pub fn fits(whole: &Whole) -> bool {
 }
 
 /// The pieces one end is putting back together. Anything a sender of this protocol never sends
-/// (a piece of no kind, a message over the limit, too many at once, a message whose pieces
-/// disagree on its kind, text that is not UTF-8) is refused, and the connection ends.
+/// (a piece of no kind, a message over the limit, too many at once, more than [`AT_ONCE`] messages
+/// of the limit held in all, a message whose pieces disagree on its kind, text that is not UTF-8)
+/// is refused, and the connection ends.
 pub struct Assembly {
     open: std::collections::HashMap<u32, (bool, Vec<u8>)>,
     limit: usize,
+    /// The bytes held in messages not yet whole, every stream's together.
+    held: usize,
 }
 
 impl Assembly {
@@ -187,7 +198,14 @@ impl Assembly {
         Self {
             open: Default::default(),
             limit,
+            held: 0,
         }
+    }
+
+    /// The bytes held in messages not yet whole.
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.held
     }
 
     /// One piece frame, its kind byte included: the whole message when this was its last piece.
@@ -206,14 +224,16 @@ impl Assembly {
         }
         let (kind, bytes) = self.open.entry(stream).or_insert((binary, Vec::new()));
         let held: usize = bytes.len() + part.len();
-        if *kind != binary || held > self.limit {
+        if *kind != binary || held > self.limit || self.held + part.len() > AT_ONCE * self.limit {
             return Err(());
         }
         bytes.extend_from_slice(part);
+        self.held += part.len();
         if flags & LAST == 0 {
             return Ok(None);
         }
         let (binary, bytes) = self.open.remove(&stream).ok_or(())?;
+        self.held -= bytes.len();
         if binary {
             Ok(Some(Whole::Binary(bytes)))
         } else {
@@ -326,32 +346,36 @@ pub fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
 // --- The build ------------------------------------------------------------------------------------
 
 /// This build's contract: SHA-256, lowercase hex, of this protocol's number, every command's class,
-/// the dispatcher's tables, the feeds, and the datagrams of Stop's second road and the audio road.
-/// Two builds with the same contract route, admit and push every command alike, and read each
-/// other's roads.
+/// the dispatcher's tables, the feeds, and the datagrams of the audio road. Two builds with the same
+/// contract route, admit and push every command alike, and read each other's audio road. Stop's
+/// second road is not in it: its format is frozen across builds (`crate::stop_road::wire`).
 pub fn contract() -> &'static str {
     static CONTRACT: OnceLock<String> = OnceLock::new();
     CONTRACT.get_or_init(|| {
-        let mut text = format!("nexus command link\nprotocol {}\n", PROTOCOL_VERSION);
-        text.push_str(&crate::dispatch::contract_text());
-        for feed in FEEDS {
-            text.push_str(&format!(
-                "feed {} {} {} {}\n",
-                feed.name,
-                feed.command,
-                feed.every.as_millis(),
-                feed.always
-            ));
-        }
-        text.push_str(&crate::stop_road::wire::contract_text());
-        text.push_str(&crate::audio_road::wire::contract_text());
-        text.push_str(&crate::ice::contract_text());
-        digest(&SHA256, text.as_bytes())
+        digest(&SHA256, contract_text().as_bytes())
             .as_ref()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
     })
+}
+
+/// What [`contract`] digests.
+fn contract_text() -> String {
+    let mut text = format!("nexus command link\nprotocol {}\n", PROTOCOL_VERSION);
+    text.push_str(&crate::dispatch::contract_text());
+    for feed in FEEDS {
+        text.push_str(&format!(
+            "feed {} {} {} {}\n",
+            feed.name,
+            feed.command,
+            feed.every.as_millis(),
+            feed.always
+        ));
+    }
+    text.push_str(&crate::audio_road::wire::contract_text());
+    text.push_str(&crate::ice::contract_text());
+    text
 }
 
 /// Who is speaking: the end deciding which side should update.
@@ -528,6 +552,50 @@ mod tests {
         );
     }
 
+    /// ★ What one end holds in messages not yet whole is bounded across all of them: a
+    /// sender that leaves message after message unfinished is refused once the bytes held pass
+    /// [`AT_ONCE`] messages of the limit, and the connection ends, where before every stream could
+    /// hold the limit. A finished message gives its room back. CONTROL: [`AT_ONCE`] messages of the
+    /// limit each, half-sent at once, are taken, as a real sender's interleaved big calls are.
+    #[test]
+    fn messages_not_yet_whole_hold_at_most_the_budget_together() {
+        let piece = |stream: u32, flags: u8, bytes: &[u8]| {
+            let mut frame = vec![KIND_PIECE];
+            frame.extend_from_slice(&stream.to_le_bytes());
+            frame.push(flags);
+            frame.extend_from_slice(bytes);
+            frame
+        };
+        // The flood: every stream filled to the limit, none finished.
+        let mut pieces = Assembly::new(10);
+        let taken = (0..STREAMS as u32)
+            .take_while(|stream| pieces.piece(&piece(*stream, 0, &[b'x'; 10])).is_ok())
+            .count();
+        assert_eq!(taken, AT_ONCE, "streams taken at the limit each");
+        assert_eq!(pieces.held(), AT_ONCE * 10);
+        // One byte past the budget, on a stream already open, is refused too.
+        let mut pieces = Assembly::new(10);
+        assert_eq!(pieces.piece(&piece(1, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.piece(&piece(2, 0, &[b'x'; 9])), Ok(None));
+        assert_eq!(
+            pieces.piece(&piece(2, 0, b"x")),
+            Ok(None),
+            "exactly the budget"
+        );
+        assert_eq!(pieces.piece(&piece(3, 0, b"x")), Err(()), "a byte past it");
+        // A finished message gives its room back.
+        let mut pieces = Assembly::new(10);
+        assert_eq!(pieces.piece(&piece(1, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.piece(&piece(2, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(
+            pieces.piece(&piece(1, LAST, b"")),
+            Ok(Some(Whole::Text("x".repeat(10))))
+        );
+        assert_eq!(pieces.held(), 10);
+        assert_eq!(pieces.piece(&piece(3, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.held(), 20);
+    }
+
     /// ★ A feed's deflate stream: each value comes back exactly, in order, through one inflate
     /// stream, and a value much like the one before it costs a small fraction of the first.
     /// CONTROL: the same values each compressed alone cost several times as much.
@@ -649,9 +717,31 @@ mod tests {
             );
         }
         assert!(text.contains("event alert\n") && text.contains("profile desktop\n"));
-        assert!(crate::stop_road::wire::contract_text().starts_with("stop road 1 "));
         assert!(crate::audio_road::wire::contract_text()
             .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
+        // Stop's second road is frozen, outside the build's check: a build that reads its bytes
+        // as this one does is not refused for its format. CONTROL: the audio road is in it.
+        let whole = contract_text();
+        assert!(whole.contains("audio road 1 EXPORTER-nexus-audio-road "));
+        assert!(!whole.contains("stop road") && !whole.contains("EXPORTER-nexus-stop-road"));
+    }
+
+    /// ★ A phone's profile is known by name and refused, and the contract names the served
+    /// profiles alone: the desktop's line, once, as a 1.20.0 desktop's contract has it, so knowing a
+    /// phone moves no digest two desktops compare. CONTROL: the desktop is served and named.
+    #[test]
+    fn a_phone_is_known_by_name_and_left_out_of_the_contract() {
+        use crate::dispatch::Profile;
+        for profile in [Profile::Desktop, Profile::Mobile] {
+            assert_eq!(Profile::named(profile.name()), Some(profile));
+        }
+        assert_eq!(Profile::Mobile.name(), "mobile");
+        assert_eq!(Profile::named("tablet"), None);
+        assert!(Profile::Desktop.served() && !Profile::Mobile.served());
+        let text = crate::dispatch::contract_text();
+        let profiles: Vec<&str> = text.lines().filter(|l| l.starts_with("profile ")).collect();
+        assert_eq!(profiles, ["profile desktop"]);
+        assert!(!text.contains("mobile"), "{text}");
     }
 
     /// ★ A waterfall row crosses the link lossless, on this network and through the room alike

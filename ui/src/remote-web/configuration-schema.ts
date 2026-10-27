@@ -93,6 +93,7 @@ export const SETTINGS_KEYS = [
   'icomDataMode',
   'dataModesPlainSsb',
   'sstvHoldDataSubmode',
+  'aprsDataFm',
   'setRigMode',
   'operatingMode',
   'licenseClass',
@@ -252,6 +253,8 @@ export const SETTINGS_KEYS = [
   'potaNewActivationAlert',
   'logReportsToComments',
   'alertConfirmTier',
+  'showWpxNeeds',
+  'showWaeNeeds',
   'alertDxccBands',
   'alertGridBands',
   'b4MatchMode',
@@ -262,6 +265,7 @@ export const SETTINGS_KEYS = [
   'announceVerbosity',
   'soundTxState',
   'soundDecodeTick',
+  'soundCwTurn',
   'bestCaller',
   'bestCallerMinSnr',
   'blockedCalls',
@@ -376,15 +380,19 @@ export const NEWER_SETTINGS = {
   tciServerTx: false,
   tciServerCw: false,
   tciServerSpots: false,
+  // A station that predates the CW turn cue's sound plays none: that setting's default.
+  soundCwTurn: false,
+  // A station that predates the Needed board's WPX and WAE chips shows neither: both settings off.
+  showWpxNeeds: false,
+  showWaeNeeds: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
  *  browser can refuse a document that carries one anyway. CI pins it to the Rust list. */
 export const WITHHELD_RADIO_KEYS: string[] = []
-/** Settings a Remote browser may CHANGE: Rust WRITABLE_CONTROL_KEYS (station control) and
- *  WRITABLE_LOGGING_KEYS (the logging grant) in query/configuration.rs, where each key's reason is
- *  written. The station is the authority and denies every other setting; these lists only decide
- *  which fields this page enables. CI pins them to the Rust lists. */
+/** Settings an older station let a Remote browser CHANGE, in the two lists it kept: station
+ *  control's and the since-retired logging permission's. This station takes no settings change from
+ *  a browser at all; the lists remain because the relay still checks a change against them. */
 export const WRITABLE_CONTROL_SETTINGS_KEYS = [
   'units',
   'journeyStreakEnabled',
@@ -512,6 +520,7 @@ export const SETTINGS_SHAPES = {
   "icomDataMode": "number",
   "dataModesPlainSsb": "boolean",
   "sstvHoldDataSubmode": "boolean",
+  "aprsDataFm": "boolean",
   "setRigMode": "boolean",
   "operatingMode": "string",
   "licenseClass": "string",
@@ -671,6 +680,8 @@ export const SETTINGS_SHAPES = {
   "potaNewActivationAlert": "boolean",
   "logReportsToComments": "boolean",
   "alertConfirmTier": "boolean",
+  "showWpxNeeds": "boolean",
+  "showWaeNeeds": "boolean",
   "alertDxccBands": "string",
   "alertGridBands": "string",
   "b4MatchMode": "boolean",
@@ -681,6 +692,7 @@ export const SETTINGS_SHAPES = {
   "announceVerbosity": "string",
   "soundTxState": "boolean",
   "soundDecodeTick": "boolean",
+  "soundCwTurn": "boolean",
   "bestCaller": "string",
   "bestCallerMinSnr": "nullable-number",
   "blockedCalls": "array",

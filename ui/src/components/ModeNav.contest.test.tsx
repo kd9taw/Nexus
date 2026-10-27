@@ -135,6 +135,7 @@ describe('the mode badge above Settings', () => {
       arrlvhf_jan: 'JAN VHF',
       arrlvhf_jun: 'JUN VHF',
       arrlvhf_sep: 'SEP VHF',
+      arrlrtty: 'RTTY RU',
       cqww_cw: 'CQ WW CW',
       cqww_ssb: 'CQ WW SSB',
       cqww_rtty: 'CQ WW RTTY',

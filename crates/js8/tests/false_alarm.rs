@@ -9,7 +9,7 @@
 //! air. Any nonzero count fails the gate, regardless of yield elsewhere
 //! (the parity lab's revert rule).
 //!
-//! Positive control (feedback-negative-results-need-a-positive-control): the
+//! Positive control: the
 //! same harness with a −10 dB frame injected MUST decode, otherwise "zero
 //! decodes" only proves the decoder is dead.
 

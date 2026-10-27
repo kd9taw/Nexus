@@ -6,7 +6,7 @@
 //! and any reply to the latest ping clears the count. [`MISS_LIMIT`] misses end the session
 //! ([`MISS_LIMIT_POOR_LINK`] on a link the caller has marked poor). One miss is survivable, and
 //! the session reports it ([`Tick::Missed`]) so a transmission in progress can be unkeyed at once:
-//! a missed ping during an over unkeys locally before anything else (spec §6.3).
+//! a missed ping during an over unkeys locally before anything else.
 //!
 //! **Grace while another GUI client connects.** The radio replays its status to a connecting GUI
 //! client, and ping replies can stall meanwhile. When the limit is reached within

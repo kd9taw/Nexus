@@ -32,6 +32,9 @@
 //!    keyed under the internet roads' own labels. This computer's credentials and candidates go in
 //!    its `open`, the station's come back in its `opened`, and each end's later candidates follow
 //!    on the link as they are found, never on any relay lane.
+//! 9. **The station's key for the internet road** ([`Link::station_key`]), when its `opened` names
+//!    one: said on a link pinned to the station, so it can be checked against the key the Remote
+//!    service lists for that station.
 //!
 //! Anything the station sends that no station of this build sends ends the link: it fails closed.
 use std::collections::{HashMap, VecDeque};
@@ -235,6 +238,9 @@ pub struct Link {
     shared: Arc<Shared>,
     tasks: Vec<tokio::task::AbortHandle>,
     pub ids: Ids,
+    /// The station's key for the internet road, as its `opened` named it on this link (SPKI,
+    /// lowercase hex): `None` from a station with no pairing with the Remote service.
+    pub station_key: Option<String>,
 }
 
 impl Link {
@@ -388,6 +394,17 @@ impl Link {
             }
             _ => return Err("notStation"),
         }
+        // The station's key for the internet road, when it has one: a P-256 key, or no station's
+        // answer.
+        let station_key = match said.as_ref().and_then(|said| said.get("stationKey")) {
+            None => None,
+            Some(key) => Some(
+                key.as_str()
+                    .filter(|key| protocol::device_key(key))
+                    .ok_or("notStation")?
+                    .to_string(),
+            ),
+        };
         let export = |label: &[u8]| {
             socket
                 .get_ref()
@@ -457,6 +474,7 @@ impl Link {
             shared,
             tasks,
             ids,
+            station_key,
         })
     }
 
@@ -925,6 +943,7 @@ mod tests {
                 device: String::new(),
                 session: String::new(),
             },
+            station_key: None,
         };
         (Arc::new(link), theirs)
     }

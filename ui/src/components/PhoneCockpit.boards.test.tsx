@@ -39,6 +39,8 @@ vi.setConfig({ testTimeout: 15_000 })
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn(async () => ({})),
+  // The Spots view sends its Spotted-from chips to Pounce (#174).
+  setPounceSpotterFilter: vi.fn(async () => {}),
   setPtt: vi.fn(async () => {}),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),

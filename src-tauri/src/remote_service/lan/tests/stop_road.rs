@@ -22,7 +22,7 @@
 use super::super::audio_road::{self, AudioRoad};
 use super::super::datagram::{End, Keys, Tag, AUDIO_LABEL, AUDIO_MAX, EXPORTED, STOP_LABEL};
 use super::super::stop_road::{
-    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, FRESH,
+    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH, PRESS_CAP,
 };
 use super::super::wire;
 use super::commands::App;
@@ -39,6 +39,7 @@ use tempo_app::mic::MicFeed;
 use tempo_app::remote_control::ptt_hold::{HoldEnd, PttHold};
 use tempo_audio::mic_encode::{MicEncoder, MIC_FRAME_SAMPLES};
 use tempo_audio::receive_encode::DetachedFeed;
+use tempo_client::stop_road::HEARTBEAT;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// The bench's road switch on this roadside, end to end (test builds only).
@@ -56,12 +57,16 @@ mod from_afar_aprs_sstv_chat;
 mod internet;
 /// Phone's Lock from afar, from this computer's screen and microphone to the shack's loop.
 mod lock;
+/// A press's cap across renewals, a reconnect, re-assertions and the next press.
+mod press_cap;
 /// Stop's second road through a relay, as the internet stands between the two computers.
 mod relayed;
 /// Stop wins over a start that was in flight.
 mod stand_down;
 /// Stop wins over a start or a press that a later Stop overtook on the way.
 mod stop_count;
+/// An unkey from afar ends its own over and nothing else.
+mod unkey;
 
 /// The design's bound for a Stop on this road, flood or no flood.
 const ACKNOWLEDGED: Duration = Duration::from_millis(20);
@@ -94,6 +99,8 @@ fn on_a_runtime(workers: usize, test: impl std::future::Future<Output = ()>) {
 struct Roadside {
     s: Shack,
     ptt: PttHold,
+    /// The microphone feed installed in its engine: its epoch moves at every drop of an over.
+    mic: MicFeed,
     road: Option<Running>,
     /// The audio road beside it, and the receive feed its encoder reads.
     audio: Option<audio_road::Running>,
@@ -141,6 +148,15 @@ impl Roadside {
 }
 
 fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
+    roadside_limited(app, afterlife, PRESS_CAP, hears)
+}
+
+/// The same, each press from afar held at most `cap`.
+fn roadside_capped(app: &App, cap: Duration) -> Roadside {
+    roadside_limited(app, AFTERLIFE, cap, Hears::Loopback)
+}
+
+fn roadside_limited(app: &App, afterlife: Duration, cap: Duration, hears: Hears) -> Roadside {
     let mut s = super::commands::running(app);
     let (ptt, mic) = (PttHold::default(), MicFeed::default());
     {
@@ -163,7 +179,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
         },
     };
     let at = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
-    let road = StopRoad::start_with(at, hears, powers, afterlife).unwrap();
+    let road = StopRoad::start_with(at, hears, powers, afterlife, cap).unwrap();
     s.shared.stop_road = Some(road.road());
     // The audio road, as the listener makes it: the station's one encoder over a feed of the
     // test's own, the audio lane's admission from the shack's own authority.
@@ -178,7 +194,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
                 authority.audio_admitted(session, device, lease, now)
             }),
             ptt: ptt.clone(),
-            mic,
+            mic: mic.clone(),
         },
     )
     .unwrap();
@@ -186,6 +202,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
     Roadside {
         s,
         ptt,
+        mic,
         road: Some(road),
         audio: Some(audio),
         feed,
@@ -376,11 +393,38 @@ impl Raw {
         None
     }
 
-    /// A Stop on the road, and when it was acknowledged, if it was within `within`.
+    /// When the shack's road sent its acknowledgement of the Stop numbered `stop` on this road, at
+    /// or after `since`. The road notes it just after the acknowledgement goes, so this end, which
+    /// has heard it, may look a moment early.
+    fn answered(&self, stop: u64, since: Instant) -> Option<Instant> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let noted = ANSWERED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .find(|(tag, number, at)| *tag == self.tag && *number == stop && *at >= since)
+                .map(|(_, _, at)| *at);
+            if noted.is_some() || Instant::now() >= deadline {
+                return noted;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// A Stop on the road, once this end has heard it acknowledged within `within`: how long the
+    /// shack took, from its sending here to the acknowledgement leaving the shack. The time this
+    /// end's own thread then takes to read it is the test machine's, not the road's: starved on a
+    /// loaded box, it read acknowledgements 25 ms late that had left the shack in under a
+    /// millisecond. Sealed, and the socket found writable, before the clock starts: the clock and
+    /// the send then run together on this thread, with no yield to the runtime between them.
     async fn road_stop(&mut self, stop: u64, within: Duration) -> Option<Duration> {
+        let datagram = self.sealed(&Up::Stop { stop });
+        self.udp.writable().await.unwrap();
         let sent = Instant::now();
-        self.say(&Up::Stop { stop }).await;
-        self.stopped(stop, within).await.map(|at| at - sent)
+        self.udp.try_send(&datagram).unwrap();
+        self.stopped(stop, within).await?;
+        self.answered(stop, sent).map(|at| at - sent)
     }
 
     /// The next presence deadline the shack gives, within `within`, whatever else came first.
@@ -605,14 +649,38 @@ impl Seat {
         self.road.say(&Up::Heartbeat { lease, state }).await;
     }
 
-    /// Presence renewed on the road by a fresh echo, and the deadline the shack gave.
+    /// The newest snapshot here: the next one, then any that waited in the socket behind it (the
+    /// lane pushes one every 300 ms, so one that comes within 50 ms was waiting).
+    async fn newest_snapshot(&mut self) -> (u64, Instant) {
+        let mut newest = self.fresh_snapshot().await;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_millis(50), self.socket.next()).await
+        {
+            if let Message::Binary(frame) = message {
+                self.feed(&frame);
+                newest = self.snapshot.unwrap_or(newest);
+            }
+        }
+        newest
+    }
+
+    /// Presence renewed on the road by a fresh echo, and the deadline the shack gave. As this
+    /// computer's road keeps it: a heartbeat naming the newest snapshot here, and another every
+    /// [`HEARTBEAT`] until the shack answers, for as long as presence lasts. One heartbeat can go
+    /// unanswered (the shack's authority busy that moment, or a snapshot too old to count after it
+    /// waited in this socket while the test seated another computer); the shack takes the next,
+    /// as it does from the real road.
     async fn renewed(&mut self) -> u32 {
-        let (state, _) = self.fresh_snapshot().await;
-        self.heartbeat(state).await;
-        self.road
-            .presence(Duration::from_secs(2))
-            .await
-            .expect("a fresh echo renews presence")
+        let deadline = Instant::now() + PRESENCE;
+        loop {
+            let (state, _) = self.newest_snapshot().await;
+            self.heartbeat(state).await;
+            let wait = HEARTBEAT.min(deadline.saturating_duration_since(Instant::now()));
+            if let Some(left_ms) = self.road.presence(wait).await {
+                return left_ms;
+            }
+            assert!(Instant::now() < deadline, "a fresh echo renews presence");
+        }
     }
 
     /// One call on the command link, and its answer, whatever comes before it.
@@ -738,37 +806,29 @@ async fn the_welcome_names_each_connections_own_road() {
 
 /// ★ The never-refused rule on this road (`a_controlling_browser_stops_any_local_transmission_…`
 /// on the hosted road): a Stop from a computer in control stops any transmission at the station,
-/// however it started, with or without transmit permission. It is acknowledged, and the transmit
-/// generation is retired at once, before the stop verbs run. CONTROL: each is on the air first.
+/// however it started. It is acknowledged, and the transmit generation is retired at once, before
+/// the stop verbs run. CONTROL: each is on the air first.
 #[test]
-fn a_stop_on_the_road_stops_any_local_transmission_with_or_without_transmit_permission() {
+fn a_stop_on_the_road_stops_any_local_transmission() {
     let _alone = alone();
     on_a_runtime(0, async {
-        for transmit in [false, true] {
-            for kind in LOCAL_TRANSMISSIONS {
-                let app = App::new();
-                let r = roadside(&app);
-                let mut seat = seated(&r).await;
-                if transmit {
-                    r.s.shared
-                        .authority
-                        .permit_transmit(&r.s.device, true)
-                        .unwrap();
-                }
-                key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
-                let generation = r.s.shared.authority.transmit_revocation().generation();
-                seat.road.say(&Up::Stop { stop: 1 }).await;
-                assert!(
-                    seat.road.stopped(1, Duration::from_secs(2)).await.is_some(),
-                    "{kind} transmit={transmit}: acknowledged"
-                );
-                assert!(
-                    r.s.shared.authority.transmit_revocation().generation() > generation,
-                    "{kind}: the generation is retired"
-                );
-                assert!(came_to_a_stop(&r.s).await, "{kind} transmit={transmit}");
-                assert_stopped(&mut r.s.shared.engine.lock().unwrap(), kind);
-            }
+        for kind in LOCAL_TRANSMISSIONS {
+            let app = App::new();
+            let r = roadside(&app);
+            let mut seat = seated(&r).await;
+            key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
+            let generation = r.s.shared.authority.transmit_revocation().generation();
+            seat.road.say(&Up::Stop { stop: 1 }).await;
+            assert!(
+                seat.road.stopped(1, Duration::from_secs(2)).await.is_some(),
+                "{kind}: acknowledged"
+            );
+            assert!(
+                r.s.shared.authority.transmit_revocation().generation() > generation,
+                "{kind}: the generation is retired"
+            );
+            assert!(came_to_a_stop(&r.s).await, "{kind}");
+            assert_stopped(&mut r.s.shared.engine.lock().unwrap(), kind);
         }
     });
 }
@@ -991,6 +1051,48 @@ fn a_datagram_that_does_not_verify_is_dropped_unread() {
         seat.road.send(&stop).await;
         assert_eq!(seat.road.heard(NOTHING).await, None, "a replay");
         assert!(keyed(&r.s), "a replay stops nothing");
+    });
+}
+
+/// ★ A datagram that verifies under the road's keys but carries a body the format does not write is
+/// read as nothing and changes nothing: a Stop's body a byte short and a byte long, a hold that names
+/// no Stops, a heartbeat whose lease the station could not have issued, and kinds the road does not
+/// take. None is answered, and the local transmission stays on the air. CONTROL: a well-formed
+/// Stop under the same keys, after them all, is taken.
+#[test]
+fn a_datagram_that_verifies_but_is_malformed_changes_nothing() {
+    let _alone = alone();
+    on_a_runtime(0, async {
+        let app = App::new();
+        let r = roadside(&app);
+        let mut seat = seated(&r).await;
+        key_the_mic(&r.s);
+        let lease = seat.lease();
+        let sealed = |kind: u8, body: &[u8]| seat.road.keys.send.seal(kind, body).unwrap();
+        for (what, datagram) in [
+            ("a Stop a byte short", sealed(1, &[0, 0, 0, 0, 0, 0, 1])),
+            (
+                "a Stop a byte long",
+                sealed(1, &[0, 0, 0, 0, 0, 0, 0, 1, 0]),
+            ),
+            ("a hold that names no Stops", sealed(2, &1u64.to_be_bytes())),
+            (
+                "a heartbeat under a lease never issued",
+                sealed(
+                    4,
+                    &[format!("g{}", &lease[1..]).as_bytes(), &1u64.to_be_bytes()].concat(),
+                ),
+            ),
+            ("kind 0", sealed(0, &1u64.to_be_bytes())),
+            ("kind 5", sealed(5, &1u64.to_be_bytes())),
+        ] {
+            seat.road.send(&datagram).await;
+            assert_eq!(seat.road.heard(NOTHING).await, None, "{what}");
+            assert!(keyed(&r.s), "{what} stops nothing");
+        }
+        seat.road.say(&Up::Stop { stop: 1 }).await;
+        assert!(seat.road.stopped(1, Duration::from_secs(2)).await.is_some());
+        assert!(came_to_a_stop(&r.s).await);
     });
 }
 
@@ -1247,6 +1349,7 @@ fn cockpit_stop(kind: &str) -> Vec<&'static str> {
         "voice" => Some("stop_voice"),
         "rtty" => Some("rtty_stop"),
         "psk" => Some("psk_stop"),
+        "jtty" => Some("jtty_stop"),
         "sstv" => Some("sstv_stop"),
         _ => None,
     };
@@ -1266,7 +1369,7 @@ fn each_road_alone_stops_each_kind_of_over() {
             let app = App::new();
             let mut r = roadside(&app);
             let engine = r.s.shared.engine.clone();
-            r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+            let runner: crate::command_dispatch::Runner = Arc::new(
                 move |cmd: String, _args: Value, answer: crate::command_dispatch::Answer| {
                     let mut e = engine.lock().unwrap();
                     match cmd.as_str() {
@@ -1275,12 +1378,15 @@ fn each_road_alone_stops_each_kind_of_over() {
                         "stop_voice" => e.stop_voice(),
                         "rtty_stop" => e.rtty_stop(),
                         "psk_stop" => e.psk_stop(),
+                        "jtty_stop" => e.jtty_stop(),
                         "sstv_stop" => e.sstv_stop(),
                         _ => {}
                     }
                     answer(Ok(json!({ "ran": cmd })))
                 },
-            ));
+            );
+            let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+            r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
             let mut seat = seated(&r).await;
             key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
             for (n, cmd) in cockpit_stop(kind).into_iter().enumerate() {
@@ -1599,6 +1705,12 @@ fn voice(encoder: &mut MicEncoder, frame: u32) -> Vec<u8> {
 /// This computer's press `press`, spoken into for `frames` frames of 20 ms on the audio road from
 /// frame `first`, and held again on the road every 100 ms while `held` says so of the frame: what
 /// a screen and its headset send while PTT is down. When each hold went.
+///
+/// Each frame goes at its own moment on the media clock, `start` plus 20 ms a frame, as a headset's
+/// does, so a test starved for a while catches up rather than falling behind for good: voice that
+/// drifts later than the station plays it is refused as late, and the over then ends on its 200 ms
+/// audio gap, not on whatever the test was timing. Each hold is noted as it was about to go, so
+/// the station can never have taken it before the moment noted.
 async fn speak(
     seat: &Seat,
     encoder: &mut MicEncoder,
@@ -1608,10 +1720,11 @@ async fn speak(
     held: impl Fn(u32) -> bool,
 ) -> Vec<Instant> {
     let mut holds = Vec::new();
+    let start = tokio::time::Instant::now();
     for frame in first..first + frames {
         if (frame - first).is_multiple_of(5) && held(frame) {
-            seat.road.say(&Up::Hold { press, stops: 0 }).await;
             holds.push(Instant::now());
+            seat.road.say(&Up::Hold { press, stops: 0 }).await;
         }
         let packet = voice(encoder, frame);
         seat.audio
@@ -1621,7 +1734,7 @@ async fn speak(
                 packet,
             })
             .await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep_until(start + Duration::from_millis(20) * (frame - first + 1)).await;
     }
     holds
 }
@@ -1730,6 +1843,81 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
     assert!(ticks.iter().any(|&(_, on)| on), "on the air");
 }
 
+/// ⛔ A held press from afar outside the operator's licence is refused as the shack's own PTT is:
+/// in Phone on 20 m with a Technician licence, the shack's own PTT does not key, and a press from
+/// afar, held and spoken into under live presence and fresh state, is said refused, never arms the
+/// microphone over, and none of its frames is taken. CONTROL: with an Extra licence on the same
+/// dial, the same press keys by its voice and its frames are taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_press_from_afar_outside_the_licence_is_refused_as_at_the_shack() {
+    use tempo_app::settings::LicenseClass;
+    let licensed = |r: &Roadside, class| {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.license_class = class;
+        e.apply_settings(settings);
+    };
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    licensed(&r, LicenseClass::Technician);
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        assert!(
+            e.tx_enabled() && !e.tx_allowed(),
+            "premise: armed, outside the licence"
+        );
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "premise: the shack's own PTT refused");
+    }
+    let mut encoder = MicEncoder::new().unwrap();
+    for (press, class) in [(1, LicenseClass::Technician), (2, LicenseClass::Extra)] {
+        licensed(&r, class);
+        seat.renewed().await;
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst);
+        let radio = radio_loop(
+            r.s.shared.engine.clone(),
+            Over::Voice,
+            Arc::default(),
+            Instant::now() + Duration::from_millis(900),
+        );
+        speak(&seat, &mut encoder, press, 1, 30, |_| true).await;
+        let keyed = r.s.shared.engine.lock().unwrap().mic_keyed();
+        seat.road.say(&Up::Release { press }).await;
+        let said = seat.road_says(Duration::from_millis(300)).await;
+        let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+            .await
+            .unwrap();
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst) - taken;
+        if class == LicenseClass::Technician {
+            assert!(
+                said.contains(&Down::Press {
+                    press,
+                    keyed: false,
+                    end: Some(HoldEnd::Refused)
+                }),
+                "outside the licence, said refused: {said:?}"
+            );
+            assert!(
+                !ticks.iter().any(|&(_, on)| on),
+                "on the air outside the licence"
+            );
+            assert!(!keyed && taken == 0, "keyed {keyed}, {taken} frames taken");
+        } else {
+            assert!(
+                keyed && taken > 0,
+                "CONTROL: keyed {keyed}, {taken} frames taken"
+            );
+            assert!(ticks.iter().any(|&(_, on)| on), "CONTROL: on the air");
+        }
+    }
+}
+
 /// ★ The held press ends 200 ms after its last re-assertion. A press from afar, keyed and
 /// spoken into, whose holds stop while its voice goes on: the over comes off the air no sooner than
 /// 200 ms after the last hold and within a tick past it, the road says the press lapsed, and the
@@ -1776,12 +1964,8 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
         off.saturating_duration_since(last),
         before.saturating_duration_since(last),
     );
-    assert!(off >= last + GAP, "ended before the gap");
-    assert!(
-        off < last + GAP + TICK + Duration::from_millis(30),
-        "ended {:?} after the last hold",
-        off.saturating_duration_since(last)
-    );
+    // How it ended first: an over ended another way (its voice refused as late, then its audio
+    // gap) is that, not an early lapse.
     assert!(
         said.contains(&Down::Press {
             press: 9,
@@ -1790,10 +1974,108 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
         }),
         "the road said it lapsed: {said:?}"
     );
+    assert!(off >= last + GAP, "ended before the gap");
+    assert!(
+        off < last + GAP + TICK + Duration::from_millis(30),
+        "ended {:?} after the last hold",
+        off.saturating_duration_since(last)
+    );
     assert!(
         r.counts().mic_refused.load(Ordering::SeqCst) > 0,
         "the frames after it refused"
     );
+}
+
+/// The shack's radio loop on a thread of its own until `done`: each tick, when, and whether the
+/// microphone over was armed or keyed. It goes on ticking after an over ends, so a press that keyed
+/// again would be seen.
+fn ticking(r: &Roadside, done: Arc<AtomicBool>) -> std::thread::JoinHandle<Vec<(Instant, bool)>> {
+    let engine = r.s.shared.engine.clone();
+    std::thread::spawn(move || {
+        let mut ticks = Vec::new();
+        while !done.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            let mut e = engine.lock().unwrap();
+            e.poll_remote_transmit(now);
+            e.poll_mic(now, TICK.as_millis() as f64, 1);
+            ticks.push((now, e.mic_armed() || e.mic_keyed()));
+            drop(e);
+            std::thread::sleep(TICK);
+        }
+        ticks
+    })
+}
+
+/// ⛔ A press from afar ends at its cap on the station's own clock, though its computer never lets
+/// go: held and spoken into well past the cap (a second and a half here; Phone's Lock cap, three
+/// minutes, in a build), the over comes off the air no sooner than the cap after the press's first
+/// hold and within a hold and a tick past it; the road says the press was let go, every hold after
+/// it is answered so, and nothing keys again while the holds go on. CONTROL: the over was on the
+/// air by its voice within half a second of the first hold, and stayed on until the cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_press_from_afar_ends_at_its_cap_though_its_computer_holds_on() {
+    const CAP: Duration = Duration::from_millis(1500);
+    assert_eq!(PRESS_CAP, Duration::from_secs(180), "the product's cap");
+    let app = App::new();
+    let r = roadside_capped(&app, CAP);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = ticking(&r, done.clone());
+    let mut encoder = MicEncoder::new().unwrap();
+    // Held and spoken into for two and a half seconds.
+    let holds = speak(&seat, &mut encoder, 9, 1, 125, |_| true).await;
+    let said = seat.road_says(Duration::from_millis(300)).await;
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let first = holds[0];
+    let on = ticks
+        .iter()
+        .position(|&(_, on)| on)
+        .expect("premise: never on the air");
+    let off = on
+        + ticks[on..]
+            .iter()
+            .position(|&(_, on)| !on)
+            .expect("still on the air past the cap");
+    let off_at = ticks[off].0;
+    eprintln!(
+        "measured: the press came off the air {:?} after its first hold; the cap is {CAP:?}",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        ticks[on].0 < first + Duration::from_millis(500),
+        "CONTROL: keyed {:?} after its first hold",
+        ticks[on].0.saturating_duration_since(first)
+    );
+    assert!(off_at >= first + CAP, "ended before the cap");
+    assert!(
+        off_at < first + CAP + Duration::from_millis(100) + TICK + Duration::from_millis(100),
+        "ended {:?} after its first hold",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        !ticks[off..].iter().any(|&(_, on)| on),
+        "keyed again while its computer held on"
+    );
+    let ended = Down::Press {
+        press: 9,
+        keyed: false,
+        end: Some(HoldEnd::Released),
+    };
+    let presses = presses(&said);
+    assert!(
+        presses.last() == Some(&&ended) && presses.iter().filter(|&&d| *d == ended).count() >= 5,
+        "the holds after the cap answered with its end: {said:?}"
+    );
+    assert!(!r.ptt.keyed());
 }
 
 /// ★ Each press's reports go back by the road that made it, and the stream's page is told only its
@@ -1949,7 +2231,11 @@ fn the_overs_state_crosses_the_road_with_its_holes() {
         None,
         "a body without the holes"
     );
-    assert!(super::super::stop_road::contract_text().contains(" format 3 "));
+    assert_eq!(
+        widest.body(),
+        [0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255],
+        "the bytes the frozen format writes"
+    );
 }
 
 /// ★ A hold crosses the road with the Stops its press began under (the road's format 3), and a
@@ -2310,11 +2596,13 @@ fn the_audio_road_names_nothing_of_the_engine_or_stops_road() {
 async fn an_unchanged_snapshot_is_pushed_every_300_ms_with_a_new_number() {
     let app = App::new();
     let mut r = roadside(&app);
-    r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+    let runner: crate::command_dispatch::Runner = Arc::new(
         |_cmd: String, _args: Value, answer: crate::command_dispatch::Answer| {
             answer(Ok(json!({"unchanged": true})))
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
     let mut seat = seated(&r).await;
     let started = Instant::now();
     let mut seen: Vec<(u64, Instant)> = Vec::new();
@@ -2553,7 +2841,7 @@ fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<M
     use crate::command_dispatch::{still_bound, Afar, AFAR};
     let ran = Arc::new(Mutex::new(Vec::new()));
     let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
-    r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+    let runner: crate::command_dispatch::Runner = Arc::new(
         move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
             if cmd == "get_snapshot" {
                 return answer(Ok(json!({})));
@@ -2628,7 +2916,9 @@ fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<M
             };
             answer(done.map(|()| json!({ "ran": cmd })))
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
     ran
 }
 

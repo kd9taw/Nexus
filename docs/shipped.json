@@ -48,6 +48,10 @@
       "label": "JS8"
     },
     {
+      "id": "jtty",
+      "label": "JTTY"
+    },
+    {
       "id": "logbook",
       "label": "Logbook"
     },
@@ -57,7 +61,7 @@
     },
     {
       "id": "chat",
-      "label": "Chat"
+      "label": "Tempo"
     },
     {
       "id": "fieldDay",

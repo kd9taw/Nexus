@@ -356,7 +356,7 @@ fn the_gate_never_allows_a_frame_it_refused_before_and_allows_every_frame_inside
     .collect();
     let mut parted: std::collections::BTreeMap<String, usize> = Default::default();
     let mut cases = 0usize;
-    for class in ["technician", "general", "extra"] {
+    for class in crate::privileges::US_CLASSES {
         for &(tier, speed, width) in &tiers {
             let label = format!("{tier:?} {speed:?}");
             let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -367,9 +367,8 @@ fn the_gate_never_allows_a_frame_it_refused_before_and_allows_every_frame_inside
                 }
                 None => e.set_tier(tier),
             }
-            e.set_license_class(class);
-            let lic = e.settings.license_class;
-            let spans = crate::privileges::allowed_spans(lic, OperatingMode::Digital)
+            e.settings.license_class = class;
+            let spans = crate::privileges::allowed_spans(class, OperatingMode::Digital)
                 .expect("a US class has data ranges");
             // The top of the frame crosses an edge 3500 Hz from the dial (offsets from a width below
             // it to just past it), and the lowest tone crosses one 300 Hz from it.
@@ -401,7 +400,7 @@ fn the_gate_never_allows_a_frame_it_refused_before_and_allows_every_frame_inside
                         } else {
                             dial + hz / 1e6
                         };
-                        crate::privileges::tx_allowed(lic, f, OperatingMode::Digital)
+                        crate::privileges::tx_allowed(class, f, OperatingMode::Digital)
                     };
                     for &off in offsets.iter() {
                         e.set_tx_offset(off);
@@ -412,7 +411,7 @@ fn the_gate_never_allows_a_frame_it_refused_before_and_allows_every_frame_inside
                             .all(|k| point(off + 10.0 * f64::from(k)))
                             && point(off + width);
                         let now = e.tx_allowed();
-                        let what = format!("{class} {label} {sb} dial {dial} offset {off}");
+                        let what = format!("{class:?} {label} {sb} dial {dial} offset {off}");
                         assert!(
                             !now || before,
                             "{what}: allowed where the lowest tone was refused"

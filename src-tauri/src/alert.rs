@@ -3,7 +3,8 @@
 //! the shack hears the same event on its command link (`command_dispatch::FORWARDED_EVENTS`), with
 //! the same id, so every screen, and whatever reads an alert later, names the same one.
 //!
-//! The shape is versioned ([`VERSION`]): `v`, `id`, `kind` (what raised it: `pounce` today),
+//! The shape is versioned ([`VERSION`]): `v`, `id`, `kind` (what raised it: `pounce`, `needed` for
+//! a heard station worth interrupting for, `parks` for parks newly on the air),
 //! `atMs` (when, by the shack's clock) and `alert` (that kind's own payload, unchanged). A reader
 //! takes the kinds and the version it knows, and leaves the rest.
 use std::sync::atomic::{AtomicU64, Ordering};

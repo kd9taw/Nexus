@@ -29,11 +29,10 @@ export const parseJs8Words = (raw: string): string[] =>
     .filter(Boolean)
 
 /** One list as one text field: what is typed stays as typed while the field has the focus. */
-function WordsInput({ value, onChange, disabled, label }: { value: readonly string[]; onChange: (list: string[]) => void; disabled: boolean; label: string }) {
+function WordsInput({ value, onChange, label }: { value: readonly string[]; onChange: (list: string[]) => void; label: string }) {
   const [draft, setDraft] = useState<string | null>(null)
   return (
     <input
-      disabled={disabled}
       className="settings-input"
       aria-label={label}
       value={draft ?? value.join(', ')}
@@ -70,13 +69,11 @@ function soundLabel(ev: Js8SoundEvent): string {
 
 export function Js8ListsSettings({
   form,
-  disabled,
   setList,
   setMark,
   setSounds,
 }: {
   form: Settings
-  disabled: boolean
   setList: (key: ListKey, list: string[]) => void
   setMark: (key: MarkKey, value: string) => void
   setSounds: (events: string[]) => void
@@ -98,7 +95,7 @@ export function Js8ListsSettings({
         {lists.map(([key, label, hint]) => (
           <label className="settings-field" key={key}>
             <span className="settings-label">{label}</span>
-            <WordsInput value={form[key] ?? []} onChange={(list) => setList(key, list)} disabled={disabled} label={label} />
+            <WordsInput value={form[key] ?? []} onChange={(list) => setList(key, list)} label={label} />
             <span className="settings-hint">{hint}</span>
           </label>
         ))}
@@ -106,7 +103,6 @@ export function Js8ListsSettings({
           <label className="settings-field" key={key}>
             <span className="settings-label">{label}</span>
             <input
-              disabled={disabled}
               className="settings-input js8-mark-input"
               aria-label={label}
               value={value}
@@ -130,7 +126,6 @@ export function Js8ListsSettings({
               <label className="settings-toggle">
                 <span className="settings-label">{label}</span>
                 <button
-                  disabled={disabled}
                   type="button"
                   role="switch"
                   aria-checked={on}

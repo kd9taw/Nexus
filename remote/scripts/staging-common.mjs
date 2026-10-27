@@ -7,9 +7,11 @@
 // variables (REMOTE_AUTH0_ISSUER, REMOTE_AUTH0_CLIENT_ID). What the row pins is the RULE an issuer
 // must satisfy and the exact API audience.
 //
-// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding.
-// The binding is written only once `deployed` is true, a reviewed one-line change made after that
-// Worker exists: until then the relay's deploys carry no binding and verify that none is present.
+// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding to
+// its `BillingService` entrypoint (the RPC methods checkout and portal; its public route is the webhook
+// alone). The binding is written only once `deployed` is true, a reviewed one-line change made after that
+// Worker exists: until then the relay's deploys carry no binding and verify that none is present, its
+// billing routes answer `billingNotAvailable`, and the page shows no Subscribe or Manage button.
 export const TARGETS = Object.freeze({
   staging: Object.freeze({
     target: 'staging',
@@ -78,8 +80,9 @@ export function deployable(row) {
   return row
 }
 
+export const BILLING_ENTRYPOINT = 'BillingService'
 export function billingServices(row) {
-  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service }] : []
+  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service, entrypoint: BILLING_ENTRYPOINT }] : []
 }
 
 export function databaseId(value) {
@@ -129,6 +132,13 @@ export function optionalVars(values, row = target()) {
     requireValue(values.trialIdentityRequired === '1', 'REMOTE_TRIAL_IDENTITY_REQUIRED must be 1 or unset')
     vars.TRIAL_IDENTITY_REQUIRED = '1'
   }
+  // Free during the beta: the trial's end taken away (authority.ts). Staging's alone, so production can
+  // only ever have it through a reviewed change to this line, never by a variable set in its environment.
+  if (given(values.betaFree)) {
+    requireValue(row === STAGING, 'REMOTE_BETA_FREE is for staging only')
+    requireValue(values.betaFree === '1', 'REMOTE_BETA_FREE must be 1 or unset')
+    vars.REMOTE_BETA_FREE = '1'
+  }
   // The overlap after a move: where this service went, and how far its retirement has got.
   requireValue(given(values.movedTo) === given(values.moveStage), 'REMOTE_MOVED_TO and REMOTE_MOVE_STAGE are set together or not at all')
   if (given(values.movedTo)) {
@@ -145,7 +155,9 @@ export function optionalVars(values, row = target()) {
 // joins the artifact's `secrets.required`, so the deploy treats it exactly like the required ones: the
 // preflight demands it, the upload applies it through --secrets-file, and the post-upload check counts
 // it and demands it encrypted. TRIAL_KEY can never be rotated (STAGING.md), so it is never generated here.
-export const OPTIONAL_SECRETS = Object.freeze(['TRIAL_KEY'])
+// OWNER_NOTICE_API_KEY and OWNER_NOTICE_FROM are the email provider's key and the verified sender the
+// new-device notice goes out with (authority.ts `deviceAddedNotice`); with either unset it sends nothing.
+export const OPTIONAL_SECRETS = Object.freeze(['TRIAL_KEY', 'OWNER_NOTICE_API_KEY', 'OWNER_NOTICE_FROM'])
 export function optionalSecrets(names = []) {
   requireValue(Array.isArray(names) && names.every(name => OPTIONAL_SECRETS.includes(name)), 'Unknown optional Worker secret')
   return OPTIONAL_SECRETS.filter(name => names.includes(name))
@@ -161,6 +173,7 @@ export function identityFromEnv(env = process.env, row = target(env)) {
 export function settingsFromEnv(env = process.env, row = target(env)) {
   return { ...identityFromEnv(env, row),
     trialIdentityRequired: env.REMOTE_TRIAL_IDENTITY_REQUIRED, movedTo: env.REMOTE_MOVED_TO, moveStage: env.REMOTE_MOVE_STAGE,
+    betaFree: env.REMOTE_BETA_FREE,
     secrets: OPTIONAL_SECRETS.filter(name => secretSupplied(env, name)) }
 }
 

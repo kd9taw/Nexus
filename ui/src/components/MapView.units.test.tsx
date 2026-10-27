@@ -23,6 +23,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => feeds.sats),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 
 import { MapView } from './MapView'

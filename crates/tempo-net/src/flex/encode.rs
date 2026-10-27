@@ -209,7 +209,7 @@ impl CwxText {
 /// A command that cannot key the transmitter.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    // ── Registration and session (port plan §4.5) ──
+    // ── Registration and session ──
     /// `client program <name>`.
     ClientProgram(Station),
     /// `client low_bw_connect`: only between `program` and `gui`.
@@ -896,7 +896,7 @@ pub(super) mod tests {
         all
     }
 
-    /// The command words that key a Flex (port plan §3.2), as an independent oracle for tests.
+    /// The command words that key a Flex, as an independent oracle for tests.
     /// Used only to check output; nothing in Nexus decides anything by matching text.
     pub(in crate::flex) fn is_keying_text(text: &str) -> bool {
         text == "xmit 1"

@@ -8,15 +8,14 @@
 //     "only alert when SNR ≥"). A station stays on the watch list when it answers somebody or
 //     fades a few dB, and a cluster spot carries neither a CQ flag nor an SNR — gated, a roster
 //     row would blink its tile off every time the station stopped calling CQ, and Spots could
-//     never agree with the roster about the same call. The alert keeps its gates: that half is
-//     pinned too, so the shared identity check cannot have loosened `matchWatchlist`.
+//     never agree with the roster about the same call. The alert keeps its gates, at the station
+//     (crates/tempo-app/src/needed_alert.rs, held to the shared needed-alerts table).
 //
 //   • THE MEMO IS KEYED ON THE WHOLE ROW. The same callsign with and without a resolved entity
 //     (or a grid) is two different answers; a memo keyed on the call alone would hand the
 //     second row the first row's verdict.
 import { describe, it, expect } from 'vitest'
-import type { DecodeRow } from './types'
-import { matchWatchlist, watchedEntry, watchMatcher, type WatchFilter } from './watchlist'
+import { watchedEntry, watchMatcher, type WatchFilter } from './watchlist'
 
 const VP8: WatchFilter = { id: 'c1', kind: 'call', value: 'VP8*' }
 const EXACT: WatchFilter = { id: 'c2', kind: 'call', value: 'K1ABC' }
@@ -67,20 +66,6 @@ describe('watchedEntry — which entry puts a station on the watch list', () => 
     const loud: WatchFilter = { id: 's', kind: 'call', value: 'VP8*', minSnr: 0 }
     expect(watchedEntry({ call: 'VP8PJ' }, [cqOnly])).toBe(cqOnly)
     expect(watchedEntry({ call: 'VP8PJ' }, [loud])).toBe(loud)
-  })
-
-  it('leaves the ALERT gated exactly as before (the shared identity check did not loosen it)', () => {
-    const decode = (over: Partial<DecodeRow>): DecodeRow =>
-      ({ from: 'VP8PJ', snr: -20, dtSec: 0, freqHz: 1000, message: '', isCq: false, ...over }) as DecodeRow
-    const cqOnly: WatchFilter = { id: 'q', kind: 'call', value: 'VP8*', cqOnly: true }
-    const loud: WatchFilter = { id: 's', kind: 'call', value: 'VP8*', minSnr: 0 }
-    expect(matchWatchlist(decode({ isCq: false }), [cqOnly])).toBeNull()
-    expect(matchWatchlist(decode({ isCq: true }), [cqOnly])).toBe(cqOnly)
-    expect(matchWatchlist(decode({ snr: -20 }), [loud])).toBeNull()
-    expect(matchWatchlist(decode({ snr: 3 }), [loud])).toBe(loud)
-    // …and the identity half is the same one the lists use.
-    expect(matchWatchlist(decode({ from: '3Y0J', country: 'Bouvet' }), ALL)).toBe(BOUVET)
-    expect(matchWatchlist(decode({ from: 'W1AW', grid: 'FN31' }), ALL)).toBe(FIELD)
   })
 })
 

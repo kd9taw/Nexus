@@ -10,7 +10,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, fireEvent, act, screen } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
-import { StationControlContext } from '../stationAccess'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
@@ -69,7 +68,7 @@ vi.mock('../api', () => ({
   contestLogManualRows: vi.fn(async () => []),
   contestWorking: vi.fn(async () => ({})),
   contestEntryReset: vi.fn(async () => ({})),
-  contestZoneHint: vi.fn(async () => null),
+  contestPlace: vi.fn(async () => null),
   logQso: vi.fn(async () => ({})),
   lookupPark: vi.fn(async () => null),
   lookupParkLive: vi.fn(async () => null),
@@ -153,20 +152,18 @@ async function flush() {
   })
 }
 /** The Phone cockpit as App gives it: in the ILQP contest with Enter Sends Message on, or out of a
- *  contest; with station control, as on the desktop, or without it, as on the hosted page. */
-async function renderCockpit({ contest = true, control = true } = {}) {
+ *  contest. */
+async function renderCockpit({ contest = true } = {}) {
   render(
-    <StationControlContext.Provider value={control}>
-      <PhoneCockpit
-        snap={makeSnap()}
-        theme="dark"
-        onWorkSpot={() => {}}
-        spots={[]}
-        panels={fakePanels()}
-        fieldDay={contest ? ILQP : null}
-        esmSetting={contest ? { on: true, callOnce: false, onSwitch: () => {} } : undefined}
-      />
-    </StationControlContext.Provider>,
+    <PhoneCockpit
+      snap={makeSnap()}
+      theme="dark"
+      onWorkSpot={() => {}}
+      spots={[]}
+      panels={fakePanels()}
+      fieldDay={contest ? ILQP : null}
+      esmSetting={contest ? { on: true, callOnce: false, onSwitch: () => {} } : undefined}
+    />,
   )
   await flush()
   await flush()
@@ -335,15 +332,5 @@ describe('the voice keyer’s F-keys from the log line', () => {
     expect(outside[1]).toMatchObject({ played: [1], line: 'Say his call and your exchange.', logged: [] })
     expect(outside[2]).toMatchObject({ played: [1, 3], logged: ['K9AAA'] })
     expect(await contact(stripCall)).toEqual(outside)
-  })
-
-  it('without station control, as on the hosted page, there is no keyer: nothing plays and F1–F12 are the browser’s', async () => {
-    await renderCockpit({ control: false })
-    const where = stripCall() ?? document.body
-    for (const key of F1_TO_F12) {
-      expect(await pressIn(where, key), `${key} was held`).toBe(true)
-    }
-    expect(played()).toEqual([])
-    expect(document.querySelector('.vk'), 'the keyer rendered without station control').toBeNull()
   })
 })

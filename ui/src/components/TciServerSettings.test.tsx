@@ -226,6 +226,14 @@ describe('Share by TCI', () => {
     }
   })
 
+  it("calls nothing not ready: a program's own audio, its spots and a Flex's DAX audio all work", () => {
+    const { container } = setup({ tciServer: true }, serving())
+    const section = container.querySelector('[data-tci-server]') as HTMLElement
+    expect(section.textContent).not.toMatch(/not ready/i)
+    // CONTROL: what is still refused is still said, beside the transmit switch.
+    expect(section.textContent).toContain(EN['settings.transmit.tciServer.tx.slotTimed'])
+  })
+
   it('lists the programs connected, what each is doing and its last refusal, and disconnects the one asked for', () => {
     const { onDisconnect } = setup({ tciServer: true }, serving({ programs: [WSJTX, LOGGER] }))
     const [first, second] = programRows()

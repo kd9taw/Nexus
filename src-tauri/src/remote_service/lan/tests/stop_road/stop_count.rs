@@ -257,27 +257,12 @@ async fn a_press_made_before_a_stop_the_shack_took_never_keys_on_a_runtime() {
             "{by}: premise: armed again"
         );
         seat.renewed().await;
-        for _ in 0..3 {
-            seat.road.say(&Up::Hold { press: 7, stops: 0 }).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        let late = seat.road_says(Duration::from_millis(200)).await;
-        let late: Vec<Down> = presses(&late).into_iter().cloned().collect();
+        let late = answers_to_holds(&mut seat, 7, 0, 3).await;
         let mic_after_late = r.s.shared.engine.lock().unwrap().mic_armed();
         seat.renewed().await;
-        for _ in 0..3 {
-            seat.road.say(&Up::Hold { press: 8, stops: 1 }).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        let then = seat.road_says(Duration::from_millis(200)).await;
-        seat.road.say(&Up::Release { press: 8 }).await;
+        let keyed = a_press_keys(&mut seat, 8, 1).await;
         done.store(true, Ordering::SeqCst);
         let _ = tokio::task::spawn_blocking(move || radio.join().unwrap()).await;
-        let keyed = then.contains(&Down::Press {
-            press: 8,
-            keyed: true,
-            end: None,
-        });
         cases.push((by, late, mic_after_late, keyed));
     }
     let refused = Down::Press {
@@ -293,6 +278,70 @@ async fn a_press_made_before_a_stop_the_shack_took_never_keys_on_a_runtime() {
         "(the Stop's road, what each late hold was answered, the microphone armed after them, \
          the press begun after the Stop keyed)"
     );
+}
+
+/// What the road answered the first `answers` holds of press `press`, made when its computer had
+/// pressed `stops` Stops: held every 100 ms, as the computer's road holds it, until that many have
+/// been answered or ten seconds pass. Each hold is waited on, not a window of time, so an answer
+/// the shack sent late still counts as that hold's; a hold the shack could not judge that moment
+/// is answered at the next.
+async fn answers_to_holds(seat: &mut Seat, press: u64, stops: u64, answers: usize) -> Vec<Down> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut answered = Vec::new();
+    while answered.len() < answers && Instant::now() < deadline {
+        seat.road.say(&Up::Hold { press, stops }).await;
+        let held = Instant::now();
+        while answered.len() < answers {
+            let wait = Duration::from_millis(100).saturating_sub(held.elapsed());
+            let Some(down) = seat.road.heard(wait).await else {
+                break;
+            };
+            if matches!(down, Down::Press { press: p, .. } if p == press) {
+                answered.push(down);
+            }
+        }
+    }
+    answered
+}
+
+/// Whether a press begun when its computer had pressed `stops` Stops keys: held every 100 ms until
+/// the road says it keyed, or how it ended, then let go. A press the shack let lapse before its
+/// radio loop keyed it (the station heard no hold for the gap, as when this process stalls) ends
+/// `Lapsed`, as it must, and a new press from `first` on is tried, up to five; any other end, or
+/// none within ten seconds, is the answer: not keyed.
+async fn a_press_keys(seat: &mut Seat, first: u64, stops: u64) -> bool {
+    for press in first..first + 5 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut ended = None;
+        while ended.is_none() && Instant::now() < deadline {
+            seat.road.say(&Up::Hold { press, stops }).await;
+            let held = Instant::now();
+            loop {
+                let wait = Duration::from_millis(100).saturating_sub(held.elapsed());
+                match seat.road.heard(wait).await {
+                    None => break,
+                    Some(Down::Press {
+                        press: p,
+                        keyed: true,
+                        end: None,
+                    }) if p == press => {
+                        seat.road.say(&Up::Release { press }).await;
+                        return true;
+                    }
+                    Some(Down::Press { press: p, end, .. }) if p == press && end.is_some() => {
+                        ended = end;
+                        break;
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        seat.road.say(&Up::Release { press }).await;
+        if ended != Some(HoldEnd::Lapsed) {
+            return false;
+        }
+    }
+    false
 }
 
 /// ⛔ A Stop is taken whatever number it carries: its number refuses only a start or a press made

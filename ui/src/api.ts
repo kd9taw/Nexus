@@ -5,12 +5,13 @@
 // restricted transport. An absent transport throws; there is no mock/demo fallback.
 
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
-import { remoteApplicationTransport } from './applicationTransport'
 import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
-import type { SelfSpotReport } from './selfSpot'
+import { noteCallbookAnswer } from './features/callbookAnswers'
+import type { ActivationSpotReport } from './selfSpot'
+import type { ImportDone, ImportPreview } from './features/logImport'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -50,6 +51,9 @@ import type {
   Js8Filter,
   Js8Freq,
   Js8State,
+  JttyLogPromptAnswer,
+  JttySent,
+  JttyState,
   Js8Typeahead,
   Js8InboxState,
   Js8Switch,
@@ -78,9 +82,13 @@ import type {
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
+import type { TxHold } from './types'
 import type { SliceIntent } from './types'
 import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import type { LogColumnsSaved } from './features/logColumns'
+import type { SavedLogFilter } from './features/logFilter'
+import type { LogQuery } from './features/logQuery'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -91,7 +99,7 @@ import type {
   StreetUnfinished,
   StreetUpdate,
 } from './features/streetMaps'
-import type { WatchKind } from './watchlist'
+import type { WatchFilter } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -210,14 +218,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   // words its caller shows. Read before anything awaits, while the stream's dispatch is running.
   if (storesACredential(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
-  const remote = remoteApplicationTransport()
   const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)
-    : remote ? await remote.invoke<T>(cmd, args).catch(error => {
-      if (error instanceof Error && error.message === 'applicationUnsupported') {
-        throw new Error(t('remote.applicationObserver'))
-      }
-      throw error
-    })
     : tv ? await httpInvoke<T>(tv, cmd, args)
     : ((await bridge()(cmd, args)) as T) // throws with the bridge's own message
   if (mutatesCredentials(cmd) && typeof window !== 'undefined') {
@@ -241,15 +242,15 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
   return invoke('get_credentials_status')
 }
 
-/** Restricted observer read. Runtime validation lives at the monitoring boundary. */
-export async function getRemoteMonitorFrame(): Promise<unknown> {
-  return invoke<unknown>('get_remote_monitor_frame')
-}
-
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
 /** Whether a stream watches this station's screen now; `remote-stream-watched` tells each change. */
 export function getStreamWatched(): Promise<boolean> { return invoke('get_stream_watched') }
-export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
+/** A press on the shack's Remote settings, stamped with where it came from: the station takes nothing but a
+ *  read through a stream. Read here, before anything awaits, while the stream's dispatch is the one running;
+ *  every press reaches the station through this one function. */
+export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> {
+  return invoke('remote_station_action', { action, origin: isStreamInput() ? 'stream' : 'shack' })
+}
 
 export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
@@ -503,7 +504,7 @@ export interface FdRulesetDto {
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |
-   * 'cqww_cw' | 'cqww_ssb' | 'cqww_rtty' | 'cqwpx_cw' | 'cqwpx_ssb'.
+   * 'cqww_cw' | 'cqww_ssb' | 'cqww_rtty' | 'cqwpx_cw' | 'cqwpx_ssb' | 'arrlrtty'.
    */
   event: string
   rulesYear: number
@@ -549,6 +550,34 @@ export interface FdRulesetDto {
    *  session exists. Filled by the preview only; absent from the Remote capture. */
   eventStartUnix?: number
   eventEndUnix?: number
+  /** ⭐ The settings this contest's exchange sends from, by their Rust names (`fd_class`,
+   *  `contest_qth_county`…), so the contest setup asks for this contest's and no other's. Filled by
+   *  the preview only. */
+  sentSettings?: string[]
+  /** The optional Cabrillo header lines the sponsor's template writes (`CATEGORY-POWER`, `EMAIL`,
+   *  `CLUB`…), so the contest setup asks only for what this contest's log declares. Preview only. */
+  cabrilloHeaders?: string[]
+  /** The only `CATEGORY-POWER` values the sponsor takes, when it names some (Winter Field Day's
+   *  `QRP` and `LOW`). Preview only. */
+  powerCategories?: string[]
+}
+
+/** The same preview for settings not saved yet: the saved settings with `patch`'s fields over them.
+ *  Read-only — what the contest setup shows while the operator answers its steps. */
+export async function previewFdRuleset(patch: Partial<import('./types').Settings>): Promise<FdRulesetDto> {
+  return invoke<FdRulesetDto>('preview_fd_ruleset', { patch })
+}
+
+/** One contest's running-or-next window (Unix UTC), from the rules data. */
+export interface ContestWindow {
+  id: string
+  startUnix: number
+  endUnix: number
+}
+
+/** When every contest the rules data holds runs: each one's running-or-next window. */
+export async function contestWindows(): Promise<ContestWindow[]> {
+  return invoke<ContestWindow[]>('contest_windows')
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -718,9 +747,8 @@ export async function overrideNextTx(
   call: string,
   grid: string | null,
   text: string,
-  expectedQso?: AppSnapshot['qso'],
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('override_next_tx', { call, grid, text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
+  return invoke<AppSnapshot>('override_next_tx', { call, grid, text })
 }
 
 /** The operator erased a decode pane — mirror it to cooperating apps via the
@@ -898,10 +926,11 @@ export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
 }
 
-/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+/** Why an edit changed nothing: the contact is no longer as it was shown; it is no longer in the
+ *  log at all; no call or no band;
  *  another number of counties than a county line has; a satellite contact's band; club sync,
  *  which cannot carry an edit to the club. */
-export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+export type ContestEditRefusal = 'changed' | 'gone' | 'incomplete' | 'rows' | 'satellite' | 'club'
 
 /** What an edit came to: the contact as it was and as it is now (one row, or one per county),
  *  and where it had already gone, which keeps what it said — or why nothing changed. */
@@ -919,13 +948,20 @@ export interface ContestContactEdit {
 }
 
 /** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
- *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  `whenUnix`, as the screen showed it) and still reads as `opened`, the rows the form was filled
+ *  from, else `refused: changed`. It keeps its time, serial and
  *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
  *  keys or stops TX. */
-export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+export async function contestEdit(
+  call: string,
+  whenUnix: number,
+  edit: ContestContactEdit,
+  opened: FieldDayQso[],
+): Promise<ContestEditAnswer> {
   return invoke<ContestEditAnswer>('contest_edit', {
     call,
     whenUnix,
+    opened,
     newCall: edit.call,
     rows: edit.rows,
     band: edit.band,
@@ -1014,7 +1050,7 @@ export async function contestLogSatellite(
  *  the gesture is a correction and a move-on in the same keystrokes.
  *
  *  ⚠️ COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke: bound to each edit it
- *  mints a binding per prefix of the call and strands all but the last. `contestZoneHint` is the
+ *  mints a binding per prefix of the call and strands all but the last. `contestPlace` is the
  *  per-keystroke endpoint; this is deliberately not. */
 export async function contestWorking(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_working', { call })
@@ -1277,12 +1313,6 @@ export async function openPanelWindow(panel: string): Promise<void> {
   await invoke('open_panel_window', { panel })
 }
 
-/** Open (or bring forward) the Remote stations window: the hosted Remote page in a Nexus window
- *  of its own. Windows only; rejects elsewhere, and when the Remote service cannot be reached. */
-export async function openRemoteStationsWindow(): Promise<void> {
-  await invoke('open_remote_stations_window')
-}
-
 /** Open (or bring forward) the Stations on this network window: stations paired over the shack's
  *  own network, with no internet, its page in `locale`. Windows only; rejects elsewhere. */
 export async function openLanStationsWindow(locale: string): Promise<void> {
@@ -1342,6 +1372,12 @@ export async function focusWindow(): Promise<void> {
   return invoke<void>('focus_window')
 }
 
+/** Flash the calling window's taskbar button (a dock bounce on macOS) until the operator looks,
+ *  without taking focus. Rejects where there is no window to flash (a browser). */
+export async function requestWindowAttention(): Promise<void> {
+  return invoke<void>('request_window_attention')
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
@@ -1350,21 +1386,21 @@ export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
 
 /** Operator "Resend": re-arm the current QSO message (re-transmit a stalled or
  * uncopied step). No-op outside a QSO. Returns the fresh snapshot. */
-export async function qsoResend(expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_resend', remoteApplicationTransport() ? { expectedQso } : {})
+export async function qsoResend(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_resend', {})
 }
 
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
  * `text`, directed to the current DX when known. Returns the fresh snapshot. */
-export async function qsoFreetext(text: string, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('qso_freetext', { text, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
+export async function qsoFreetext(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('qso_freetext', { text })
 }
 
 /** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
  *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
  *  the UI must not claim success then. Snapshot is fresh either way. */
-export async function logCurrentQso(context?: { expectedKey?: string | null; expectedTier?: string; expectedQso?: import('./types').QsoStatus | null }): Promise<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }> {
-  return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', remoteApplicationTransport() ? { ...context } : {})
+export async function logCurrentQso(): Promise<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
 }
 
 /** Where a log form's STATE came from: typed or picked by the operator, filled in by a callbook
@@ -1525,11 +1561,23 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** The CQ zone the country file gives a callsign, or null — through the same adapter the
- *  contest scorer places a call with. A HINT for the contest strip's zone box (its
- *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
-export async function contestZoneHint(call: string): Promise<number | null> {
-  return invoke<number | null>('contest_zone_hint', { call })
+/** Where the contest `event` places a callsign, or null: the country its scorer counts the call
+ *  as (a WAE area is its own only in CQ WW, where IT9 is Sicily; in every other contest IT9 is
+ *  Italy) and the CQ zone the country file gives it, out of ONE resolve, the scorer's. The zone is
+ *  a HINT for the contest strip's zone box (its placeholder), never a logged value: a station
+ *  outside its prefix's zone sends its own. */
+export async function contestPlace(call: string, event: string): Promise<{ entity: string; cqZone: number | null } | null> {
+  return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call, event })
+}
+
+/** Every call of the contest log placed for the Stats tab, in one ask: the country the contest
+ *  `event` counts each as (`contestPlace`'s) and the country file's point for it; null where the
+ *  file cannot place a call. Local: the country file, no network. */
+export async function contestStatsPlaces(
+  calls: string[],
+  event: string,
+): Promise<({ entity: string; lat: number; lon: number } | null)[]> {
+  return invoke<({ entity: string; lat: number; lon: number } | null)[]>('contest_stats_places', { calls, event })
 }
 
 /** What the log last said of `call`'s county or state, for the contest entry's box receiving
@@ -1547,11 +1595,13 @@ export async function retireWantedCalls(): Promise<void> {
   await invoke<void>('retire_wanted_calls')
 }
 
-/** Send the station the watch list — whole, identity only — so the Needed board puts its stations
- *  first, for this window and every Remote browser (operator, 2026-09-24: "watched counts as
- *  needed"). The main window sends it on launch and after every edit; `false` when refused (any
- *  other window). */
-export async function setWatchList(entries: { kind: WatchKind; value: string }[]): Promise<boolean> {
+/** Send the station the watch list — whole, each entry with its alert gates and label but never
+ *  its note — so the Needed board puts its stations first, for this window and every Remote browser
+ *  (operator, 2026-09-24: "watched counts as needed"), and the station raises its alerts. The main
+ *  window sends it on launch and after every edit; `false` when refused (any other window). */
+export async function setWatchList(
+  entries: Pick<WatchFilter, 'id' | 'kind' | 'value' | 'cqOnly' | 'minSnr' | 'label'>[],
+): Promise<boolean> {
   return invoke<boolean>('set_watch_list', { entries })
 }
 
@@ -1596,6 +1646,9 @@ export interface OtaEdit {
   myRef: string | null
   theirProgram: string | null
   theirRef: string | null
+  /** The worked station's IOTA reference ("NA-001"). Blank leaves the stored one, as the park
+   *  boxes do. */
+  iota: string | null
 }
 
 /** Exactly what the Logbook's edit form writes to one contact — tempo-core's `QsoEdit`, whose field
@@ -1630,8 +1683,357 @@ export interface QsoEdit {
  *  and paper-card marks where the form changed them — one write, where the form used to send three
  *  commands. Confirmation, credit and upload state are kept as they are; a callsign correction
  *  re-queues the uploads (the backend's one edit policy). Returns once it is on disk. */
-export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAnswer> {
-  return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
+export async function editQsoById(target: RowRef, edit: QsoEdit, fields?: FieldEdit[]): Promise<RowAnswer> {
+  return invoke<RowAnswer>('edit_qso_by_id', fields?.length ? { target, edit, fields } : { target, edit })
+}
+
+/** One change the Logbook's contact card makes to a field the log keeps as it was written (`extra`:
+ *  a county, a zone, a tag another program wrote) — tempo-core's `FieldEdit`. `old` is the value the
+ *  card showed (null: the contact had none); the change is refused as `changed` when the contact no
+ *  longer holds it. `new: null` removes the field. Sent beside the edit, in the same change. */
+export interface FieldEdit {
+  tag: string
+  old: string | null
+  new: string | null
+}
+
+/** One field a change to a contact changed (ADIF tag; `null` where the contact did not carry it). */
+export interface QsoFieldChange { tag: string; old: string | null; new: string | null }
+
+/** One entry of a contact's change history. `source` is a token (`operator`, `import`, `fill`,
+ *  `lotw`, `eqsl`, `qrz`, `pota`, `contest`, `remote`, `file`, `undo`), never prose. */
+export interface QsoHistoryEntry {
+  seq: number
+  /** `unknown`: a kind a later build recorded — shown, never undone. */
+  kind: 'create' | 'edit' | 'delete' | 'merge' | 'fill' | 'unknown'
+  source: string
+  run: string
+  atMs: number
+  undoes: number | null
+  undoneBy: number | null
+  changes: QsoFieldChange[]
+}
+
+/** A contact deleted from the log and not put back. */
+export interface DeletedQso {
+  id: string
+  call: string
+  band: string
+  mode: string
+  whenUnix: number
+  deletedAtMs: number
+  source: string
+}
+
+/** What an undo made. `run` is the undo's own run: undoing it is the redo. The counts are the
+ *  contacts it could not change, by why: `changedSince` includes a contact an import added that
+ *  was edited or confirmed since (it stays), `duplicate` one the log holds already under another
+ *  id (it is not put back twice). The calls name those contacts, sorted, each once. `kept`: the
+ *  fields a later change moved; `held`: the fields it left because putting them back would send a
+ *  contact under a call it was not made under (a blank station call). */
+export interface UndoAnswer {
+  changed: number
+  run: string | null
+  kept: string[]
+  held: string[]
+  /** The call in Settings a held blank station call would have sent the contacts under; `null`
+   *  when Settings names none. */
+  heldUnder: string | null
+  gone: number
+  alreadyThere: number
+  changedSince: number
+  duplicate: number
+  unknownKind: number
+  changedSinceCalls: string[]
+  duplicateCalls: string[]
+  /** The contacts whose callsign it changed with nothing known of where the call it replaced was
+   *  sent (the session that corrected it has ended): marked not uploaded to every service. */
+  owedCalls: string[]
+  /** The contacts whose callsign it changed while the call it replaced has gone, or may have
+   *  gone, to the services named (their own names): marked not uploaded there. A correction no
+   *  service was sent is not here — its undo cancelled the re-send and put the upload marks back. */
+  owedAt: { call: string; services: string[] }[]
+}
+
+/** One contact's change history, oldest first. */
+export async function qsoHistory(id: string): Promise<QsoHistoryEntry[]> {
+  return invoke<QsoHistoryEntry[]>('qso_history', { id })
+}
+
+/** The contacts deleted and not put back, newest first. */
+export async function recentlyDeletedQsos(limit?: number): Promise<DeletedQso[]> {
+  return invoke<DeletedQso[]>('recently_deleted_qsos', { limit: limit ?? null })
+}
+
+/** Undo one change to a contact. Sends nothing to any service. Returns once it is on disk. */
+export async function undoQsoChange(seq: number): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_qso_change', { seq })
+}
+
+/** Undo every change of one run, as one transaction. Sends nothing to any service. Only at the
+ *  station: a computer driving it is refused, as a purge is. */
+export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_history_run', { run })
+}
+
+/** Undo a run that changed one contact: the Redo of one change's undo or of one restore. Asked
+ *  from afar as the undo is; a run over more contacts is refused (`undoHistoryRun`'s). */
+export async function redoQsoChange(run: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('redo_qso_change', { run })
+}
+
+/** A purge, an import, the one-time contest-column copy or a whole run's undo whose whole-run undo
+ *  can still be asked for. */
+export interface HistoryRun {
+  /** What `undoHistoryRun` takes. */
+  run: string
+  /** `contestColumns`: merged contest contacts' received grid, name and QTH copied into their own
+   *  fields, once. `undo`: a whole run's undo, which undone is the redo. */
+  kind: 'purge' | 'import' | 'contestColumns' | 'undo'
+  atMs: number
+  /** How many contacts it changed. */
+  contacts: number
+  /** Whether undoing it takes contacts out of the log (else it puts them back). */
+  removes: boolean
+}
+
+/** The purges, imports and whole undos that can still be undone whole, newest first: the lasting
+ *  way to undo one after its toast has gone, through `undoHistoryRun`. */
+export async function undoableHistoryRuns(): Promise<HistoryRun[]> {
+  return invoke<HistoryRun[]>('undoable_history_runs')
+}
+
+/** Put a deleted contact back, as its latest delete took it out — unless it was logged again since
+ *  (`duplicate`). `anyway`: put it back all the same, beside the one logged since. */
+export async function restoreDeletedQso(id: string, anyway = false): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('restore_deleted_qso', { id, anyway })
+}
+
+// ── The Logbook's clean-up tools: duplicates and merge, bulk edit, the check ─────────────────
+// Each change is ONE run of the log's history (`run`, undone whole by `undoHistoryRun`). None
+// sends anything to a service, and none changes the worked call, so every confirmation stays. The
+// one upload mark a tool clears is a bulk STATION_CALLSIGN change's: the next upload sends the
+// contact under the new call. The changes are the station's own: a computer driving it is refused,
+// as a purge is.
+
+/** What a clean-up tool's change made. `run`: its undo; `null` when it changed nothing. The counts
+ *  are what it left alone: gone since shown, changed since shown, a merge whose conflict must be
+ *  chosen, a merge of copies that are two contacts. */
+export interface ToolRun {
+  changed: number
+  run: string | null
+  gone: number
+  changedSince: number
+  needsChoice: number
+  distinct: number
+}
+
+/** A field two copies of a contact disagree on. `guarded`: must be chosen (a confirmed copy's
+ *  value, the QSL-sent mark, the contest exchange, a comment or notes, an identity field).
+ *  `chosen`: the copy the suggested merge takes. */
+export interface DupeConflict {
+  tag: string
+  values: { id: string; value: string }[]
+  guarded: boolean
+  chosen: string
+}
+
+/** One contact logged more than once: its copies in log order, each with its revision. */
+export interface DupeGroup {
+  copies: LoggedQso[]
+  revisions: string[]
+  keep: number
+  conflicts: DupeConflict[]
+}
+
+export interface DupeScan {
+  scanned: number
+  groups: DupeGroup[]
+}
+
+/** `rule`: the log's own duplicate rule (the same station, band and mode within 5 minutes);
+ *  `possible`: within an hour. Changes nothing. */
+export async function findLogDuplicates(tier: 'rule' | 'possible'): Promise<DupeScan> {
+  return invoke<DupeScan>('find_log_duplicates', { tier })
+}
+
+/** One merge: the copy kept, every copy with the revision it was shown with, and for a
+ *  conflicting field the copy whose value is taken. */
+export interface MergeAsk {
+  keep: string
+  copies: { id: string; revision: string }[]
+  choices: Record<string, string>
+}
+
+export async function mergeLogDuplicates(merges: MergeAsk[]): Promise<ToolRun> {
+  return invoke<ToolRun>('merge_log_duplicates', { merges })
+}
+
+/** A field the clean-up tools set or clear, by its ADIF name. */
+export type CleanupField =
+  | 'MY_GRIDSQUARE' | 'MY_RIG' | 'OPERATOR' | 'STATION_CALLSIGN' | 'PROP_MODE' | 'SAT_NAME'
+  | 'TX_PWR' | 'MY_POTA_REF' | 'MY_SOTA_REF'
+  | 'GRIDSQUARE' | 'BAND' | 'DXCC' | 'IOTA' | 'POTA_REF' | 'SOTA_REF' | 'TIME_OFF'
+
+/** One field set (`value`) or cleared (`null`). */
+export interface FieldChange { field: CleanupField; value: string | null }
+
+/** The contacts a bulk edit acts on: those ticked, or every one the Logbook's filter shows. */
+export type BulkTarget = { ids: string[] } | { query: LogQuery }
+
+/** What a bulk edit would make of its contacts. `ids`: the contacts previewed, which the apply is
+ *  handed back. `recall`: of those it changes, the ones whose station call it replaces with another.
+ *  `resend`: of those, the ones uploaded under the station call it changes. `unconfirm`: the LoTW,
+ *  eQSL and QRZ confirmations that change of station call takes off. */
+export interface BulkPreview {
+  ids: string[]
+  selected: number
+  change: number
+  unchanged: number
+  missing: number
+  recall: number
+  resend: number
+  unconfirm: number
+  /** Those a filled or cleared station call sends to a service not yet sent them under another
+   *  call: `moveTo`, instead of `moveFrom`. Their upload marks stay. */
+  moves: number
+  moveTo: string | null
+  moveFrom: string[]
+  /** Those it moves into or out of an activation (a park or summit of yours, or the call it was
+   *  worked under); of those, the ones already sent to a service (their marks stay, nothing is sent
+   *  again). Of every one it changes, moved or not, the ones in an activation file already exported
+   *  — `activationFiles` names those files ("US-1234 2026-10-20 KD9TAW"), which no longer match the
+   *  log. */
+  activationChanges: number
+  activationUploaded: number
+  activationExported: number
+  activationFiles: string[]
+}
+
+export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {
+  return invoke<BulkPreview>('bulk_edit_preview', { target, changes })
+}
+
+/** The change, on exactly the contacts a preview counted (`preview.ids`): refused, changing nothing,
+ *  unless they are the `expectCount` the operator confirmed and the contacts it sends under another
+ *  call are still the `expectMoves` under `expectMoveTo` the operator acknowledged. */
+export async function bulkEditApply(
+  ids: string[],
+  expectCount: number,
+  expectMoves: number,
+  expectMoveTo: string | null,
+  changes: FieldChange[],
+): Promise<ToolRun> {
+  return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, expectMoves, expectMoveTo, changes })
+}
+
+/** What "Update from callbook" would do with its contacts: the distinct calls, those the lookup
+ *  cache answers (`kept`, no lookup), the rest at the pace (`estimateSecs`), the day's network
+ *  lookups (`spent`) under the `cap`, and per ADIF field how many contacts the fill could give it —
+ *  exact for a kept answer, at most for a call still to look up. Changes nothing, looks nothing
+ *  up. */
+export interface CallbookUpdatePreview {
+  ids: string[]
+  selected: number
+  missing: number
+  calls: number
+  kept: number
+  toLookUp: number
+  /** What those may cost against the cap: a stroked call is asked again for its base. */
+  lookupsNeeded: number
+  paceSecs: number
+  estimateSecs: number
+  spent: number
+  cap: number
+  /** QRZ's own count of the account's lookups, from its last answer in the last day. */
+  qrzCount: number | null
+  couldChange: number
+  fields: [string, number][]
+  configured: boolean
+  /** The services each call is asked of, in order, as set up (callook.info: US calls only). */
+  services: ('qrz' | 'hamqth' | 'callook')[]
+  /** Contacts older than 12 months left without a location field the answer would have given. */
+  locationTooOld: number
+}
+
+/** How an update ended: `done`, `cancelled`, `limit` (the day's cap), `refused` (QRZ answering
+ *  call after call with no record: refusing lookups) or `failed` (`error` says why). `made`: the
+ *  fill's change, undone whole by its run — a fill stopped part-way has one too. `notLookedUp`:
+ *  calls a later run picks up. */
+export interface CallbookUpdateEnd {
+  stop: 'done' | 'cancelled' | 'limit' | 'refused' | 'failed'
+  error: string | null
+  /** QRZ's last Message/Error, in its own words (shown, as QRZ asks). */
+  qrzSaid: string | null
+  /** QRZ was left out: the account has no XML subscription. */
+  qrzSkipped: boolean
+  unknown: string[]
+  notLookedUp: number
+  made: ToolRun | null
+}
+
+export interface CallbookUpdateStatus {
+  running: boolean
+  done: number
+  total: number
+  fromCache: number
+  lookedUp: number
+  spent: number
+  cap: number
+  /** The lookups are done, and the fill waits for the radio to stop transmitting. */
+  waitingForTx: boolean
+  /** QRZ's last Message/Error this run, in its own words. */
+  qrzSaid: string | null
+  /** QRZ is left out of this run: the account has no XML subscription. */
+  qrzSkipped: boolean
+  ended: CallbookUpdateEnd | null
+}
+
+export async function callbookUpdatePreview(target: BulkTarget): Promise<CallbookUpdatePreview> {
+  return invoke<CallbookUpdatePreview>('callbook_update_preview', { target })
+}
+
+/** Start the update on exactly the contacts a preview counted; refused unless they are the
+ *  `expectCount` the operator confirmed. Answers at once: the progress is `callbookUpdateStatus`. */
+export async function callbookUpdateStart(ids: string[], expectCount: number): Promise<void> {
+  return invoke<void>('callbook_update_start', { ids, expectCount })
+}
+
+export async function callbookUpdateStatus(): Promise<CallbookUpdateStatus> {
+  return invoke<CallbookUpdateStatus>('callbook_update_status')
+}
+
+/** Stop after the lookup in hand: what was found is filled as one change. */
+export async function callbookUpdateCancel(): Promise<void> {
+  return invoke<void>('callbook_update_cancel')
+}
+
+/** The last update's end, if it has not been reported yet: answered once. */
+export async function callbookUpdateTakeEnd(): Promise<CallbookUpdateEnd | null> {
+  return invoke<CallbookUpdateEnd | null>('callbook_update_take_end')
+}
+
+/** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or
+ *  `null` when none can be proposed. */
+export interface LogProblem {
+  id: string
+  call: string
+  whenUnix: number
+  kind: 'grid' | 'myGrid' | 'dxcc' | 'noBand' | 'bandFreq' | 'future' | 'endBeforeStart' | 'iota' | 'pota' | 'sota'
+  field: CleanupField | null
+  current: string | null
+  fix: { value: string | null } | null
+}
+
+export async function checkLogbook(): Promise<{ checked: number; problems: LogProblem[] }> {
+  return invoke('check_logbook')
+}
+
+/** One ticked fix, with what the check found in its field: left out when that changed since. */
+export interface LogFix { id: string; field: CleanupField; expect: string | null; value: string | null }
+
+export async function applyLogFixes(fixes: LogFix[]): Promise<ToolRun> {
+  return invoke<ToolRun>('apply_log_fixes', { fixes })
 }
 
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
@@ -1677,16 +2079,52 @@ export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
 }
 
-/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file.
- * Irreversible; the UI gates this behind a typed confirmation. Returns the number
- * of contacts removed. */
-export async function purgeLog(): Promise<number> {
-  return invoke<number>('purge_log')
+/** What a purge answers: how many contacts it removed, and its run in the log's history — what
+ *  its Undo undoes, and nothing else. */
+export interface PurgeAnswer { removed: number; run: string }
+
+/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file. The UI gates this
+ * behind a typed confirmation; every contact is kept in the history for the toast's Undo. */
+export async function purgeLog(): Promise<PurgeAnswer> {
+  return invoke<PurgeAnswer>('purge_log')
 }
 
 /** DXCC-first award progress computed from the logbook (cty.dat-resolved). */
 export async function getAwards(): Promise<AwardSummary> {
   return invoke<AwardSummary>('get_awards')
+}
+
+/** The whole-log DXCC chart: every current entity × every DXCC band, by mode class. */
+export async function getDxccChart(): Promise<import('./types').DxccChart> {
+  return invoke('get_dxcc_chart')
+}
+
+/** What to QSL: unconfirmed contacts whose confirmation fills a slot an award still needs,
+ *  most valuable first. Read-only. */
+export async function getWhatToQsl(): Promise<import('./types').QslWant[]> {
+  return invoke('get_what_to_qsl')
+}
+
+/** The operator's custom awards and their standing in the log. */
+export async function getCustomAwards(): Promise<import('./types').CustomAwardsView> {
+  return invoke('get_custom_awards')
+}
+
+/** Replace the custom award definitions; answers them as kept (normalised, each with an id). */
+export async function setCustomAwards(
+  awards: import('./types').CustomAward[],
+): Promise<import('./types').CustomAward[]> {
+  return invoke('set_custom_awards', { awards })
+}
+
+/** The definitions a custom awards file holds, checked — not yet kept. */
+export async function readCustomAwardsFile(text: string): Promise<import('./types').CustomAward[]> {
+  return invoke('read_custom_awards_file', { text })
+}
+
+/** The station's custom award definitions as a file another station imports. */
+export async function exportCustomAwards(): Promise<string> {
+  return invoke('export_custom_awards')
 }
 
 /** The Stats pane: what the log holds for `call`, typed in a log entry on `band` in `mode` —
@@ -1718,6 +2156,17 @@ export async function getConfirmationDiagnostics(): Promise<DiagnosticsReport> {
 /** Import an external ADIF logbook (deduped merge → real "needs" + B4). */
 export async function importAdif(text: string): Promise<ImportStats> {
   return invoke<ImportStats>('import_adif', { text })
+}
+
+/** What importing a log file (ADIF, ADX or Cabrillo) would do, before anything is written. */
+export async function previewImport(text: string): Promise<ImportPreview> {
+  return invoke<ImportPreview>('preview_import', { text })
+}
+
+/** Import a log file (ADIF, ADX or Cabrillo) as one undoable run; `newOnly` leaves every contact the
+ *  log already holds as it is. Answers with the no-loss report. */
+export async function importLog(text: string, newOnly: boolean): Promise<ImportDone> {
+  return invoke<ImportDone>('import_log', { text, newOnly })
 }
 
 /** Reconcile a LoTW (or any ADIF) confirmation report INTO the log: upgrade
@@ -1845,9 +2294,29 @@ export async function clearHamqthPassword(): Promise<void> {
 }
 
 /** Look up a callsign on QRZ.com (uses the stored username + keychain password;
- *  session key cached server-side in memory). */
+ *  session key cached server-side in memory). The answer is kept for the window
+ *  (`features/callbookAnswers`), so the station card shows it whoever asked. */
 export async function qrzLookup(callsign: string): Promise<QrzLookup> {
-  return invoke<QrzLookup>('qrz_lookup', { callsign })
+  const r = await invoke<QrzLookup>('qrz_lookup', { callsign })
+  noteCallbookAnswer(callsign, r)
+  return r
+}
+
+/** Look a callsign up again, skipping the callbook cache, and keep the new answer. */
+export async function callbookRefresh(callsign: string): Promise<QrzLookup> {
+  const r = await invoke<QrzLookup>('callbook_refresh', { callsign })
+  noteCallbookAnswer(callsign, r)
+  return r
+}
+
+/** How many calls the on-disk callbook cache holds. */
+export async function callbookCacheCount(): Promise<number> {
+  return invoke<number>('callbook_cache_count')
+}
+
+/** Forget every kept callbook answer. No contact is touched. */
+export async function callbookCacheClear(): Promise<void> {
+  await invoke<void>('callbook_cache_clear')
 }
 
 /** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). */
@@ -2237,15 +2706,22 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
-/** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
-export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
-  await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })
+/** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
+ *  Returns the snapshot, whose `radio.skipTx1` the box draws. */
+export async function setSkipTx1(enabled: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_skip_tx1', { enabled })
 }
 
 /** Write text to the operator's Downloads folder; returns the full saved path. Reliable in a
  *  WebView2 window where a browser `<a download>` blob may silently fail. */
 export async function saveTextToDownloads(filename: string, text: string): Promise<string> {
   return invoke<string>('save_text_to_downloads', { filename, text })
+}
+
+/** Save As: the OS save dialog, opening in Downloads with `filename` filled in, then the text
+ *  written where the operator picked. The saved path, or null when the dialog was cancelled. */
+export async function saveTextAs(filename: string, text: string): Promise<string | null> {
+  return invoke<string | null>('save_text_as', { filename, text })
 }
 
 /** Binary sibling of saveTextToDownloads for the share-card PNG (base64-encoded bytes) —
@@ -2277,10 +2753,18 @@ export async function shackFileRead(
   return invoke('shack_file_read', { folder, name, offset })
 }
 
-/** One piece of a station file, written into THIS computer's Downloads folder at `offset`;
- *  returns the full saved path. */
-export async function shackFileSave(filename: string, base64: string, offset: number): Promise<string> {
-  return invoke<string>('shack_file_save', { filename, base64, offset })
+/** Where a saved piece went: the file's name in THIS computer's Downloads folder, which the later
+ *  pieces of the same save name, and its full path. */
+export interface ShackSaved {
+  name: string
+  path: string
+}
+
+/** One piece of a station file, written into THIS computer's Downloads folder at `offset`. The
+ *  piece at offset 0 starts a new file, under the next free name (`name (1).ext`) when one of that
+ *  name is there already; each later piece names the file it started. */
+export async function shackFileSave(filename: string, base64: string, offset: number): Promise<ShackSaved> {
+  return invoke<ShackSaved>('shack_file_save', { filename, base64, offset })
 }
 
 /** One received SSTV picture from the station, whole (base64), by its gallery path. */
@@ -2306,8 +2790,8 @@ export async function osNotify(title: string, body: string): Promise<void> {
  * Switch the top-level operating mode (and operator role). Returns the fresh
  * snapshot so callers can render the new mode immediately.
  */
-export async function setMode(mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_mode', { mode, ...(remoteApplicationTransport() ? { expectedQso } : {}) })
+export async function setMode(mode: ModeRequest): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_mode', { mode })
 }
 
 /**
@@ -2381,12 +2865,14 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself).
+ * "keyboard" and "jtty" are the one Keyboard section with PSK or JTTY as its modem, which
+ * picks the band plan the section's entry lands on.
  * `keepDial`: the Phone tab pressed on the SSTV screen. With `followFreq` the engine keeps the
  * dial where Phone may transmit there and homes it where it may not; without, nothing homes.
  * Either way an FM channel the SSTV screen holds stays FM in Phone. Sent only when true, so every
  * other entry's wire is unchanged. */
 export async function setOperatingMode(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'jtty',
   followFreq: boolean,
   keepDial = false,
 ): Promise<AppSnapshot> {
@@ -2402,7 +2888,7 @@ export async function setOperatingMode(
  * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
  * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8' | 'jtty',
   freqMhz: number,
   band: string,
   call?: string,
@@ -2724,7 +3210,7 @@ export async function getVoiceMessages(): Promise<VoiceMessage[]> {
 }
 
 // --- license class + licensed band plan ---
-/** Set the operator's amateur license class (technician/general/extra/open). */
+/** Set the operator's amateur license class (novice/technician/general/advanced/extra/open). */
 export async function setLicenseClass(licenseClass: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_license_class', { class: licenseClass })
 }
@@ -2855,6 +3341,12 @@ export async function renameRadio(id: number, name: string): Promise<AppSnapshot
   return invoke<AppSnapshot>('rename_radio', { id, name })
 }
 
+/** Disable (`enabled: false`) or enable a radio. A disabled radio keeps its profile and Nexus lets go
+ * of its port. Disabling the operating radio is refused. Returns the snapshot. */
+export async function setRadioEnabled(id: number, enabled: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_radio_enabled', { id, enabled })
+}
+
 /** Set a radio's band-coverage set (empty = covers everything) for auto-routing. Returns snapshot. */
 export async function setRadioBands(id: number, bands: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_bands', { id, bands })
@@ -2909,6 +3401,10 @@ export interface RadioProfilePatch {
    * instead of only around a send (#130). Per radio, so it must ride the patch — a per-radio
    * field missing here is silently dropped on Save (the 2026-08-17 Flex-three data loss). */
   sstvHoldDataSubmode: boolean
+  /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
+   * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
+   * neighbours — a per-radio field missing here is blanked on Save. */
+  aprsDataFm: boolean
   audioIn: string
   audioOut: string
   txLevel: number
@@ -2995,6 +3491,12 @@ export async function setTune(on: boolean): Promise<AppSnapshot> {
  * a TX gate is down (TX off, outside privileges, transmitter busy) — it keys the transmitter. */
 export async function atuTune(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('atu_tune')
+}
+
+/** Switch the radio's built-in tuner OUT of line — the click on ATU ON (#344). Keys nothing;
+ * rejects with the reason while anything is on the air or when the tuner is not in line. */
+export async function atuBypass(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('atu_bypass')
 }
 
 /** Emergency stop: halt any transmit immediately. Returns the fresh snapshot. */
@@ -3622,6 +4124,109 @@ export async function pskStop(): Promise<PskState> {
   return invoke<PskState>('psk_stop')
 }
 
+// ---- JTTY (WSJT-X's keyboard mode). Every command answers the whole JttyState (a send, with what
+// it did). The engine checks every TX gate on each transmit command and refuses with its reason. ----
+
+/** Live JTTY state (poll while the JTTY cockpit is visible). */
+export async function getJttyState(): Promise<JttyState> {
+  return invoke<JttyState>('get_jtty_state')
+}
+
+/** Arm or stop the JTTY decoder by an explicit operator act (session-only; a stop is remembered,
+ * so entering the view does not restart it behind the operator). */
+export async function jttyArm(on: boolean): Promise<JttyState> {
+  return invoke<JttyState>('jtty_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the JTTY view. Receive-only; the engine owns the
+ * policy (only upgrades from off, honours the session stop and the Settings opt-out). */
+export async function jttyAutoArm(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_auto_arm')
+}
+
+/** WSJT-X's Rx frequency and F Tol: the audio channel always searched. F Tol is kept between
+ * sessions, as WSJT-X keeps it; Rx is not. */
+export async function jttySetRx(rxHz: number, ftolHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_rx', { rxHz, ftolHz })
+}
+
+/** The JTTY waterfall's visible range: WSJT-X searches its fixed channels inside it. */
+export async function jttySetBand(lowHz: number, highHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_band', { lowHz, highHz })
+}
+
+/** Empty the JTTY receive window (WSJT-X's Erase). */
+export async function jttyClear(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_clear')
+}
+
+/** Decode again (WSJT-X's Decode button, and a double-click on a waterfall row with that row's
+ * time): the receive audio still kept, or 40 s of it from 5 s before the row. Receive only. */
+export async function jttyDecodeAgain(atUtcMs: number | null = null): Promise<JttyState> {
+  return invoke<JttyState>('jtty_decode_again', { atUtcMs })
+}
+
+/** Answer the JTTY Log QSO prompt `id` (Log QSO or Not now). `taken` for the first answer of the
+ * prompt still asked, which takes it for every screen; log the contact only on `taken`. Any other
+ * answer says why it took nothing. */
+export async function jttyLogPromptAnswer(id: number): Promise<JttyLogPromptAnswer> {
+  return invoke<JttyLogPromptAnswer>('jtty_log_prompt_answer', { id })
+}
+
+/** Give back JTTY Log QSO prompt `id`, taken by a Log QSO that then logged nothing: every screen
+ * asks it again. Logs and sends nothing. */
+export async function jttyLogPromptRelease(id: number): Promise<void> {
+  return invoke<void>('jtty_log_prompt_release', { id })
+}
+
+/** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
+ * session). `hisCall` is the dock's Call (`%H`); `hisSnr` the SNR of the decode it was picked
+ * from (`%R`), null when it was typed (WSJT-X's -10). */
+export async function jttySend(text: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_send', { text, hisCall, hisSnr })
+}
+
+/** F-key `n` (1–8): its template in the message style in force, compiled as WSJT-X compiles it. */
+export async function jttyFkey(n: number, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_fkey', { n, hisCall, hisSnr })
+}
+
+/** Start live entry with what is typed so far (WSJT-X's Alt+J). */
+export async function jttyLiveStart(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_start', { typed, hisCall, hisSnr })
+}
+
+/** Commit live typing: `flush` after a pause (all of it), otherwise once five words are complete
+ * beyond the three WSJT-X holds back. */
+export async function jttyLiveCommit(
+  typed: string,
+  hisCall: string,
+  flush: boolean,
+  hisSnr: number | null = null,
+): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush, hisSnr })
+}
+
+/** Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed; the session ends. */
+export async function jttySignOff(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_sign_off', { typed, hisCall, hisSnr })
+}
+
+/** Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. */
+export async function jttyStop(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_stop')
+}
+
+/** JTTY's Tx frequency (Hz): refused while JTTY transmits. */
+export async function jttySetTx(txHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_tx', { txHz })
+}
+
+/** The JTTY contest serial number (`%E`, `%N`), kept in Settings as WSJT-X keeps it. */
+export async function jttySetSerial(serial: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_serial', { serial })
+}
+
 // ---- JS8 (interfaces.md §3.6 — every command answers the whole Js8State, the PSK shape) ----
 
 /** The operator ENTERED the JS8 view: `set_tier(JS8)` + retune to the JS8 watering hole for
@@ -3887,44 +4492,43 @@ export async function sstvStop(): Promise<SstvState> {
 }
 
 /** Set the TX period: true = even/"1st" slots, false = odd/"2nd". */
-type FtRuntimeGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtRuntimeContext | null | undefined }
-const ftRuntimeArgs = (context?: FtRuntimeGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
-
-type FtSettingsGesture = { expectedTier: string; expected: import('./remote-web/station-operation').FtSettingsContext | null | undefined }
-const ftSettingsArgs = (context?: FtSettingsGesture) => remoteApplicationTransport() ? { expectedTier: context?.expectedTier, expected: context?.expected } : {}
-
-export async function setTxCycleAuto(auto: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto, ...ftSettingsArgs(context) })
+export async function setTxCycleAuto(auto: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_cycle_auto', { auto })
 }
 
 export async function setBeacon(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beacon', { on })
 }
 
-export async function setTxEven(even: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_even', { even, ...ftSettingsArgs(context) })
+export async function setTxEven(even: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_even', { even })
 }
 
 /** Set the receive audio offset (Hz) — the green marker; TX stays unchanged. */
-export async function setRxOffset(hz: number, context?: FtRuntimeGesture): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_rx_offset', { hz, ...ftRuntimeArgs(context) })
+export async function setRxOffset(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rx_offset', { hz })
 }
 
 /** Set the transmit audio offset (Hz) — the red marker. */
-export async function setTxOffset(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_tx_offset', { hz, ...ftSettingsArgs(context) })
+export async function setTxOffset(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_offset', { hz })
 }
 
-/** Explicit combined-marker gesture, atomic at the remote station. */
-export async function setBothOffsets(hz: number, context?: FtSettingsGesture): Promise<AppSnapshot> {
-  if (remoteApplicationTransport()) return invoke<AppSnapshot>('set_ft_both_offsets', { hz, ...ftSettingsArgs(context) })
+/** Explicit combined-marker gesture: the TX offset, then the RX offset. */
+export async function setBothOffsets(hz: number): Promise<AppSnapshot> {
   await setTxOffset(hz)
   return setRxOffset(hz)
 }
 
 /** Hold the TX offset fixed when selecting a decoded station ("Hold Tx Freq"). */
-export async function setHoldTxFreq(on: boolean, context?: FtSettingsGesture): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_hold_tx_freq', { on, ...ftSettingsArgs(context) })
+export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_hold_tx_freq', { on })
+}
+
+/** The Spots view's "Spotted from" chips, which Pounce follows (#174): continent codes and
+ * DXCC countries, as the chips carry them. Empty lists = every spot. Kept for the session. */
+export async function setPounceSpotterFilter(conts: string[], entities: string[]): Promise<void> {
+  return invoke<void>('set_pounce_spotter_filter', { conts, entities })
 }
 
 /** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and
@@ -3944,6 +4548,22 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
  * the live value across every settings save, so this verb is the only thing that moves it. */
 export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beta_updates', { on })
+}
+
+/** Save the Logbook's column choice (features/logColumns.ts) — the ONE write path for
+ * `logbookColumns`, for the same stale-snapshot reason as `setBetaUpdates`: the backend keeps the
+ * live value across every settings save. Narrow, never the settings form, which would also move
+ * the transmit gate's generation for a change that has nothing to do with transmitting. `null`
+ * forgets the choice: the default table. */
+export async function setLogbookColumns(columns: LogColumnsSaved | null): Promise<void> {
+  return invoke<void>('set_logbook_columns', { columns })
+}
+
+/** Save the Logbook's named filters (features/logFilter.ts) — the ONE write path for
+ * `logbookFilters`, narrow for the same stale-snapshot reason as `setLogbookColumns`. The whole list
+ * each time: saving, renaming and deleting a filter are each one write of the list it leaves. */
+export async function setLogbookFilters(filters: SavedLogFilter[]): Promise<void> {
+  return invoke<void>('set_logbook_filters', { filters })
 }
 
 /** Start Nexus when the operator signs in to this computer — the ONE write path for Settings ▸
@@ -4085,11 +4705,13 @@ export async function postSpot(freqMhz: number, call: string, comment: string): 
   return invoke('post_spot', { freqMhz, call, comment })
 }
 
-/** "Spot me": your own activation to pota.app and the DX cluster, once, with each result. The call,
- *  park, dial and mode sent are the station's; `reference` and `dialHz` are what the confirm showed.
- *  Rejects with `contextChanged` if either has moved since, `noActivation` with none on. */
-export async function selfSpot(reference: string, dialHz: number): Promise<SelfSpotReport> {
-  return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz })
+/** "Spot me": your own activation to pota.app and the DX cluster, once, with each result — each park
+ *  of a two-fer to pota.app on its own. The call, parks, dial and mode sent are the station's;
+ *  `reference` and `dialHz` are what the confirm showed, `comment` the operator's ("QRV" when
+ *  absent or blank). Rejects with `contextChanged` if either has moved since, `noActivation` with
+ *  none on, `invalidComment` for one neither target takes. */
+export async function selfSpot(reference: string, dialHz: number, comment?: string): Promise<ActivationSpotReport> {
+  return invoke<ActivationSpotReport>('self_spot_activation', { reference, dialHz, comment })
 }
 
 /** What the contest screen's Spot me posted (`contest_spot.rs`). */
@@ -4233,6 +4855,58 @@ export async function getOtaMapSpots(): Promise<OtaMapSpot[]> {
   return invoke<OtaMapSpot[]>('get_ota_map_spots')
 }
 
+/** One park's activator standing under one callsign. */
+export interface ParkStanding {
+  reference: string
+  /** From the park directory; empty when it has none. */
+  name: string
+  /** UTC days with ten or more distinct contacts there. */
+  activations: number
+  /** UTC days that fell short of ten. */
+  attempts: number
+  /** Distinct contacts there, every day's (Kilo's count). */
+  qsos: number
+  lastDate: string
+}
+
+/** One callsign's POTA activator standing, counted from the log by the activation counter's rule. */
+export interface ActivatorStats {
+  callsign: string | null
+  activations: number
+  attempts: number
+  qsos: number
+  parksActivated: number
+  /** The next "different parks" achievement; null past the last. */
+  nextParkTier: number | null
+  roverBest: number
+  roverBestDate: string | null
+  /** UTC days reaching 5, 10, 15, 20, 25 and 30 parks. */
+  roverDays: number[]
+  parks: ParkStanding[]
+}
+
+/** A park of yours for the map: the running activation's, or one you have activated. */
+export interface MyPark {
+  reference: string
+  name: string
+  lat: number
+  lon: number
+  /** Placed by a grid square rather than the park's own pin. */
+  approx: boolean
+  activating: boolean
+  activations: number
+}
+
+export interface PotaActivator {
+  calls: ActivatorStats[]
+  parks: MyPark[]
+}
+
+/** The operator's POTA activator standing per callsign, and the parks of theirs the map shows. */
+export async function getPotaActivator(): Promise<PotaActivator> {
+  return invoke<PotaActivator>('get_pota_activator')
+}
+
 /** The street-map packs installed in the maps folder. Empty until the operator downloads one. */
 export async function streetMapPacks(): Promise<StreetPack[]> {
   return invoke<StreetPack[]>('street_map_packs')
@@ -4310,9 +4984,19 @@ export async function setActivationState(myState: string): Promise<Activation> {
   return invoke<Activation>('set_activation_state', { myState })
 }
 
+/** The grid the activation's contacts carry as MY_GRIDSQUARE (blank clears it); never Settings'. */
+export async function setActivationGrid(grid: string): Promise<Activation> {
+  return invoke<Activation>('set_activation_grid', { grid })
+}
+
 /** End the current activation. */
 export async function clearActivation(): Promise<Activation> {
   return invoke<Activation>('clear_activation')
+}
+
+/** "Still activating": an activation taken up at launch, paused until now, tags contacts again. */
+export async function resumeActivation(): Promise<Activation> {
+  return invoke<Activation>('resume_activation')
 }
 
 /** Read the current activation state. */
@@ -4653,7 +5337,37 @@ export interface ClientStatus {
   computerBuild?: string
   /** The station's Nexus version, as its last welcome said it: null until one has. */
   stationBuild?: string | null
+  /** The day the station stops taking this computer on its network (seconds since 1970), while that
+   *  is within a week and this computer has not signed in again. */
+  signInBy?: number | null
+  /** Operate's launch is signing in again for the station: the sign-in waits in the browser. */
+  signingAgain?: boolean
+  /** The station is kept by its service id until this computer first reaches it on its network
+   *  (signed in to from elsewhere): the internet road is its only road from here. */
+  away?: boolean
+  /** Why a press of PTT on this computer would not key the station, or `null`/absent when a press
+   *  would (or did) key. Recorded by the station's own arming path — display only; the UI never
+   *  decides whether a press keys. Absent on a station build older than the one that added it. */
+  pttRefusal?: PttRefusal | null
+  /** The station holds this computer from transmit, in any mode, as its snapshot says it: with
+   *  `leftSecs` only when the station would lift the hold by itself. Display only. Absent/null when
+   *  not held, and on a station build older than the one that added it. */
+  txHold?: TxHold | null
 }
+
+/** The reasons a client PTT press does not key, as the station's arming path records them. The
+ *  names are a backend contract (`client_status`), matched one-for-one by `ClientBanner`. */
+export type PttRefusal =
+  | 'notPhone'
+  | 'txDisabled'
+  | 'outsideLicence'
+  | 'tuning'
+  | 'otherOwner'
+  | 'clockRepair'
+  | 'onHold'
+  | 'noPresence'
+  | 'noFeed'
+  | 'noAudio'
 
 /** The test build's road switch: both roads as they are, or one of them blocked. */
 export type BenchPosition = 'normal' | 'blockLink' | 'blockStopRoad'
@@ -4723,9 +5437,11 @@ export async function clientTakeControl(): Promise<void> {
   return invoke<void>('client_take_control')
 }
 
-/** Leave: this computer's Nexus starts again as itself, the station handed back first. */
-export async function leaveClientMode(): Promise<void> {
-  return invoke<void>('leave_client_mode')
+/** Leave: this computer's Nexus starts again as itself, the station handed back first. With
+ *  `pairAgain`, while the station refuses this computer in a way only a new pairing ends, the start
+ *  that follows opens Stations on this network offering Pair again for it. */
+export async function leaveClientMode(pairAgain?: boolean): Promise<void> {
+  return invoke<void>('leave_client_mode', pairAgain ? { pairAgain } : undefined)
 }
 
 /** Load the durable UI-state store (`ui-state.json`, beside settings.json). See
@@ -4770,6 +5486,17 @@ export async function exportLogForActivation(
   callsign: string | null,
 ): Promise<LogExport> {
   return invoke<LogExport>('export_log_for_activation', { reference, dayStartUnix, callsign })
+}
+
+/** The activation file `exportLogForActivation` made was saved: the station remembers it, so a later
+ *  change to those contacts can say the file no longer matches the log. Asked only once the save
+ *  succeeded. */
+export async function noteActivationExported(
+  reference: string,
+  dayStartUnix: number,
+  callsign: string | null,
+): Promise<void> {
+  return invoke<void>('note_activation_exported', { reference, dayStartUnix, callsign })
 }
 
 /** Everything that makes this station THIS station, as one JSON file (#28) — settings plus the

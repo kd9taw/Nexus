@@ -4,9 +4,15 @@
 // or from France only". The panel could only say "heard on MY continent". The backend now sends
 // where each voice for a spot is (the spotter and every corroborator, cty.dat-resolved, since the
 // UI has no cty.dat), and the panel filters on it: a spot stays when ANY voice matches.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import { SpotsPanel } from './SpotsPanel'
+
+const setPounceSpotterFilter = vi.fn(async (_conts: string[], _entities: string[]) => {})
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
+  setPounceSpotterFilter: (conts: string[], entities: string[]) => setPounceSpotterFilter(conts, entities),
+}))
 import type { SpotRow } from '../types'
 
 const spot = (
@@ -52,6 +58,28 @@ afterEach(() => {
   cleanup()
   sessionStorage.clear()
   localStorage.clear()
+  setPounceSpotterFilter.mockClear()
+})
+
+describe('Pounce follows the Spots board\'s spotted-from chips (#174)', () => {
+  it('the board sends its chips to Pounce as they change', () => {
+    renderPanel()
+    expect(setPounceSpotterFilter).toHaveBeenLastCalledWith([], [])
+    fireEvent.click(within(screen.getByRole('group', { name: 'Spotted from' })).getByRole('button', { name: 'EU' }))
+    expect(setPounceSpotterFilter).toHaveBeenLastCalledWith(['EU'], [])
+    fireEvent.click(within(screen.getByRole('group', { name: 'Spotter countries' })).getByRole('button', { name: 'France' }))
+    expect(setPounceSpotterFilter).toHaveBeenLastCalledWith(['EU'], ['France'])
+  })
+
+  it('a Spots pane on another screen keeps its own chips and leaves Pounce alone', () => {
+    render(
+      <SpotsPanel spots={SPOTS} bandPlan={[]} selectedCall={null} onSelect={() => {}} onWork={() => {}}
+        pane={{ scope: 'phone' } as never} />,
+    )
+    // The board sends on mount (above), so a pane that would send at all has sent by now.
+    expect(screen.getByText('JA1ABC'), 'premise: the pane rendered').toBeTruthy()
+    expect(setPounceSpotterFilter).not.toHaveBeenCalled()
+  })
 })
 
 describe('spotted-from filter (#174)', () => {

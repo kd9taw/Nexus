@@ -44,44 +44,51 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
  *
  * `badge` is the mode badge's own form where the short one has a word too wide for the rail
  * (`contestBadgeName`).
+ *
+ * `submit` is where the sponsor takes the Cabrillo log, its own page or address, read off its site
+ * (2026-10-26). The end-of-contest checklist SHOWS it to copy; Nexus never opens it or sends a log
+ * anywhere. Absent where the sponsor names none Nexus could read.
  */
-export const CONTESTS: { id: string; name: string; short: string; badge?: string }[] = [
-  { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd, short: 'Field Day' },
+export const CONTESTS: { id: string; name: string; short: string; badge?: string; submit?: string }[] = [
+  { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd, short: 'Field Day', submit: 'https://field-day.arrl.org/fdentry.php' },
   { id: 'wfd', name: FD_EVENT_NAMES.wfd, short: 'WFD' },
   // ⚠️ Sweepstakes is TWO contests, not one with two modes: ARRL runs the CW weekend
   // and the Phone weekend separately, scores them separately and gives each its own
   // Cabrillo token. The sponsor's own names, so an operator reads the same words here
   // and on arrl.org.
-  { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)', short: 'SS CW' },
-  { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)', short: 'SS Phone' },
+  { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)', short: 'SS CW', submit: 'https://contest-log-submission.arrl.org/' },
+  { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)', short: 'SS Phone', submit: 'https://contest-log-submission.arrl.org/' },
   // ⚠️ ARRL VHF is THREE contests, not one row with three dates. The January running
   // prices 902/1296 MHz and 2.3 GHz-and-up differently from June and September
   // (VHF-Rules.pdf v1.2 §5.1 vs §5.2), each running has its own ADIF id and Cabrillo
   // token, and each is on its own weekend in its own month. ARRL's own current names,
   // as they appear on the contest calendar.
-  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF', badge: 'Jan VHF' },
-  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF', badge: 'Jun VHF' },
-  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF', badge: 'Sep VHF' },
+  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF', badge: 'Jan VHF', submit: 'https://contest-log-submission.arrl.org/' },
+  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF', badge: 'Jun VHF', submit: 'https://contest-log-submission.arrl.org/' },
+  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF', badge: 'Sep VHF', submit: 'https://contest-log-submission.arrl.org/' },
+  // The ARRL RTTY Roundup, by the name on arrl.org/rtty-roundup. RTTY only: every other mode is
+  // in the rules data's banned list, so a contact in one is logged and scores nothing.
+  { id: 'arrlrtty', name: 'ARRL RTTY Roundup', short: 'RTTY Roundup', badge: 'RTTY RU', submit: 'https://contest-log-submission.arrl.org/' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
   // Journal) and have their own rules, so they are not arms of these rows.
-  { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)', short: 'CQ WW CW' },
-  { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)', short: 'CQ WW SSB' },
+  { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)', short: 'CQ WW CW', submit: 'https://cqww.com/logcheck/' },
+  { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)', short: 'CQ WW SSB', submit: 'https://cqww.com/logcheck/' },
   // CQ WW RTTY, therefore, is a row of its own (the sponsor's name, from cqwwrtty.com).
-  { id: 'cqww_rtty', name: 'CQ World-Wide RTTY DX Contest', short: 'CQ WW RTTY' },
-  { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW' },
-  { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB' },
-  { id: 'cqp', name: 'California QSO Party', short: 'CQP' },
+  { id: 'cqww_rtty', name: 'CQ World-Wide RTTY DX Contest', short: 'CQ WW RTTY', submit: 'https://cqwwrtty.com/logcheck/' },
+  { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW', submit: 'https://cqwpx.com/logcheck/' },
+  { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB', submit: 'https://cqwpx.com/logcheck/' },
+  { id: 'cqp', name: 'California QSO Party', short: 'CQP', submit: 'https://cqp.org/logsubmit-main.html' },
   // The sponsor is the Western Illinois Amateur Radio Club; the name is the one its own
   // rules and its sample log use ("Announcing the 2025 Illinois QSO Party").
-  { id: 'ilqp', name: 'Illinois QSO Party', short: 'ILQP' },
+  { id: 'ilqp', name: 'Illinois QSO Party', short: 'ILQP', submit: 'n9jf@arrl.net' },
   // The sponsor is the NYQP committee (nyqp.org); the name is the one its own rules use
   // ("2026 New York QSO Party Rules").
-  { id: 'nyqp', name: 'New York QSO Party', short: 'NYQP' },
-  { id: 'ohqp', name: 'Ohio QSO Party', short: 'OhQP' },
-  { id: 'tnqp', name: 'Tennessee QSO Party', short: 'TNQP' },
-  { id: 'txqp', name: 'Texas QSO Party', short: 'TXQP' },
+  { id: 'nyqp', name: 'New York QSO Party', short: 'NYQP', submit: 'https://nyqp.contesting.com/nyqpsubmitlog.php' },
+  { id: 'ohqp', name: 'Ohio QSO Party', short: 'OhQP', submit: 'https://www.ohqp.org/index.php/submit-log/' },
+  { id: 'tnqp', name: 'Tennessee QSO Party', short: 'TNQP', submit: 'https://tnqp.contesting.com/' },
+  { id: 'txqp', name: 'Texas QSO Party', short: 'TXQP', submit: 'https://txqp.contesting.com/txqpsubmitlog.php' },
 ]
 
 /** The sponsor's name for a contest by its rules-file id — the id itself for one this menu
@@ -166,6 +173,7 @@ export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
   cqp: 'serial',
   arrlss_cw: 'serial',
   arrlss_ssb: 'serial',
+  arrlrtty: 'serial',
   cqwpx_cw: 'serial',
   cqwpx_ssb: 'serial',
   cqww_cw: 'transmitter',

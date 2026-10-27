@@ -49,12 +49,14 @@ interface ButtonProps {
    *  `data-psk-macro`) — each cockpit queries only its own, so two mounted docks never find
    *  each other's keys. */
   slotAttr: string
-  /** The station may be operated from here (a Remote observer may not). */
-  control: boolean
   /** This key's editor is open. */
   editing: boolean
   /** The next Enter in the contest strip sends this key (Enter Sends Message): it glows. */
   lit?: boolean
+  /** The CW turn cue on this key: lit now, outlined dashed as the other station's over ends,
+   *  dotted when it is only a suggestion; and the id of the words that say so. A cue never sends:
+   *  the key sends only when it is pressed, exactly as without one. */
+  cue?: { glow: 'now' | 'soon' | 'maybe'; describedBy: string }
   /** Hover text for a filled key: the message as it will go out. */
   title: string
   /** Already-resolved captions for an empty key and for the ✎. */
@@ -75,9 +77,9 @@ interface ButtonProps {
 export function MacroButton({
   slot,
   slotAttr,
-  control,
   editing,
   lit = false,
+  cue,
   title,
   emptyLabel,
   emptyTitle,
@@ -93,13 +95,13 @@ export function MacroButton({
       {...{ [slotAttr]: slot.key }}
       onContextMenu={(e) => {
         e.preventDefault()
-        if (control) onEdit('message')
+        onEdit('message')
       }}
     >
       <button
         type="button"
-        className={`cw-macro${empty ? ' rtty-macro-empty' : ''}${lit ? ' esm-lit' : ''}`}
-        disabled={!control}
+        className={`cw-macro${empty ? ' rtty-macro-empty' : ''}${lit ? ' esm-lit' : ''}${cue ? ` turn-${cue.glow}` : ''}`}
+        aria-describedby={cue?.describedBy}
         onClick={empty ? () => onEdit('title') : onSend}
         title={empty ? emptyTitle : title}
       >
@@ -108,7 +110,7 @@ export function MacroButton({
           {empty ? emptyLabel : slot.label.trim() || slot.text}
         </span>
       </button>
-      {control && !empty && (
+      {!empty && (
         <button
           type="button"
           className="rtty-macro-edit"
@@ -326,7 +328,6 @@ export interface MacroSetSwitchLabels {
 
 interface SetSwitchProps {
   set: MacroSetId
-  control: boolean
   /** The shown set holds any key of the operator's own — otherwise there is nothing to reset. */
   customized: boolean
   /** The inline "reset this set?" question is showing. Owned by the cockpit, because Esc must
@@ -343,7 +344,6 @@ interface SetSwitchProps {
  *  nothing in this webview). */
 export function MacroSetSwitch({
   set,
-  control,
   customized,
   confirming,
   labels,
@@ -359,7 +359,6 @@ export function MacroSetSwitch({
           type="button"
           className={`rtty-arm${set === id ? ' on' : ''}`}
           aria-pressed={set === id}
-          disabled={!control}
           onClick={() => {
             if (set !== id) onSwitch(id)
           }}
@@ -388,7 +387,7 @@ export function MacroSetSwitch({
         <button
           type="button"
           className="le-qrz"
-          disabled={!control || !customized}
+          disabled={!customized}
           title={labels.resetTitle(labels.name(set))}
           onClick={() => onConfirming(true)}
         >

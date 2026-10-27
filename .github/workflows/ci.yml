@@ -24,8 +24,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # A push to main starts this through ci-main.yml, which skips a commit that already passed here.
   pull_request:
     branches: [main]
   # Manual trigger — also the diagnostic lever for "why has CI never run".
@@ -175,10 +174,16 @@ jobs:
       # `cargo test -p tempo-core --test fd_rules_corpus` (in the run above):
       # every refuse fixture must exit 1 with its recorded reason, every accept
       # fixture must exit 0.
+      #
+      # `!cancelled()` on this step and clippy: they run after a red test step,
+      # so one push reports a bad seed or a lint along with the failing tests
+      # instead of leaving them for the next push (21 Oct: both were skipped).
       - name: fd-rules publish gate on the in-repo seed
+        if: ${{ !cancelled() }}
         run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
       - name: cargo clippy (deny warnings)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # The feature-gated crates, which a plain `--workspace` run does not build:
@@ -278,6 +283,12 @@ jobs:
       # code and its tests both.
       - name: cargo clippy tempo-client --features device,bench-road-switch
         run: cargo clippy -p tempo-client --features device,bench-road-switch,tempo-audio/serial --all-targets -- -D warnings
+
+      # ...and its tests in that shape, which the lint above only compiles: the road switch's own
+      # tests exist only with the feature, so no other step runs them. The crate's other tests run
+      # here again too, which costs seconds and needs no list of names that could fall behind.
+      - name: cargo test tempo-client --features device,bench-road-switch
+        run: cargo test -p tempo-client --features device,bench-road-switch,tempo-audio/serial --no-fail-fast
 
       # The DeepCW inference bridge: compiled by no other Linux job (the model
       # file is gitignored, so only compile coverage is possible here — see the
@@ -418,6 +429,16 @@ jobs:
       # same toolchain, cache and `-D warnings`. It builds nothing that ships.
       - name: cargo clippy src-tauri --features radio,bench-road-switch
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features radio,bench-road-switch -- -D warnings
+
+      # The tests that exist only in that shape, which the lint above compiles and nothing ran
+      # until 2026-10-23: two of them had gone red unseen, when a feed added later was taken for
+      # a press. Each Stop road alone stopping every kind of over with the other road blocked, a
+      # start refused while either road is blocked, a road opened under a blocked link reaching
+      # nothing, and the switch's own command. Filtered by name, not the whole suite again: the
+      # filters are every test the feature adds (`cargo test ... -- --list` with and without it
+      # differ by exactly these five, and by the no-switch guard the step above runs).
+      - name: cargo test src-tauri --features radio,bench-road-switch (the road switch's tests)
+        run: 'cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio,bench-road-switch -- road_switch stop_road::bench:: a_road_opened_while_the_link_is_blocked'
 
       - name: Set up Node.js for the native Remote integration
         uses: actions/setup-node@v7
@@ -715,6 +736,15 @@ jobs:
       # by hand. Hermetic (a throwaway repo per case, no network, ~1 s), both directions.
       - name: release-prep refuses before it changes anything, and its re-run goes through
         run: bash scripts/release-prep.test.sh
+
+      # The repository is public and its working notes are not. A comment, test name or doc that
+      # cites one of them (a ruling, task, agent or batch number, a private document's section, a
+      # file under tasks/) leaks the shape of the private tree and tells a reader nothing. A
+      # push-time scrub sees only what a push adds; this reads the whole tree on every commit.
+      # Hermetic (~3 s, no network); it runs its own planted controls first and fails closed, and
+      # its header lists the false positives it allows and why.
+      - name: The tree cites no private notes, rulings or task ids
+        run: bash scripts/check-internal-refs.sh
 
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
@@ -1039,7 +1069,11 @@ jobs:
             src-tauri/target
             target/fftw-mingw
             target/vpx-mingw
-          key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          # The cross script is in the key because it holds FFTW's configure flags. Under a key
+          # that ignores them, an exact hit keeps restoring the library built with the old flags
+          # and is never saved again. The script's stamp refuses that old build (a restore-key
+          # match still brings one in) and rebuilds it; this key lets the rebuild be cached.
+          key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock', 'scripts/build-windows-cross.sh') }}
           restore-keys: |
             ${{ runner.os }}-wincross-
 

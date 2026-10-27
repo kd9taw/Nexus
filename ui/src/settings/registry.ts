@@ -29,11 +29,13 @@
  * supported 1024×768 floor, so labels stay short. */
 export type SettingsTabId =
   | 'station'
+  | 'remote'
   | 'radio'
   | 'phone'
   | 'cw'
   | 'digital'
   | 'spots'
+  | 'logbook'
   | 'logging'
   | 'contesting'
   | 'appearance'
@@ -49,6 +51,10 @@ export interface SettingsTabDef {
  * `##` headings equal these labels IN ORDER, so this array and the manual move together. */
 export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'station', label: 'Station' },
+  // The core Remote card — sign-in, pairing, browser/computer approvals — lives on its own tab
+  // (operator, 2026-10-23), next to Station. The Radio-tab rig-share/Icom-network settings and the
+  // Appearance-tab Conditions-on-a-TV setting are a different concern and stay where they are.
+  { id: 'remote', label: 'Remote' },
   { id: 'radio', label: 'Radio' },
   // The three mode tabs mirror the nav rail's own top-level shape (Phone · CW · Digital), which
   // is the taxonomy the operator already navigates. It is also the only axis that can house SSTV
@@ -59,6 +65,11 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'cw', label: 'CW' },
   { id: 'digital', label: 'Digital' },
   { id: 'spots', label: 'Spots & Alerts' },
+  // The logbook's own settings — its display, how long it keeps a deleted contact, the callbook
+  // lookups and the reference data a contact is checked against — on one tab (operator,
+  // 2026-10-25). Logging & Connectors keeps the service sign-ins, the uploads and the programs
+  // that log through Nexus.
+  { id: 'logbook', label: 'Logbook' },
   { id: 'logging', label: 'Logging & Connectors' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
@@ -101,18 +112,23 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     // Units (#248) lives here because it is app-wide: distances, temperature and wind speed.
     keywords: ['callsign', 'call sign', 'grid', 'maidenhead', 'locator', 'license', 'licence',
-      'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call',
+      'class', 'extra', 'general', 'technician', 'novice', 'advanced',
+      'operator name', 'state', 'my call',
       'units', 'miles', 'km', 'kilometres', 'kilometers', 'imperial', 'metric', 'distance',
       'temperature', 'fahrenheit', 'celsius', 'wind speed'],
   },
 
+  // ---- Remote ------------------------------------------------------------------
+  // The one core Remote card, on its own tab (operator, 2026-10-23). The id stays `remote-access`
+  // — it is a public deep-link anchor and the manual's slug — so every existing pointer still
+  // lands; only the tab it sits on changed.
   {
-    id: 'remote-access', label: 'Remote access', tab: 'station',
+    id: 'remote-access', label: 'Remote access', tab: 'remote',
     keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet',
       // Remote as a stream: the words for sending this window to a browser.
       'stream', 'streaming', 'screen sharing', 'video',
       // The other end: this PC opening the Remote page in a Nexus window of its own.
-      'remote stations', 'operate remotely', 'remote window', 'full screen',
+      'connect to my station', 'remote stations', 'operate remotely', 'remote window', 'full screen',
       // Remote over this network: another computer on the same network, no internet.
       'this network', 'local network', 'lan', 'pair a computer', 'no internet'],
   },
@@ -182,6 +198,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // reporter named for 80 m was not. The other two are the SYMPTOM, which is what an
       // operator types when they have never seen the switch: "the icom are back in USB mode".
       'lsb-d', 'back to usb', 'stays in usb',
+      // #393: APRS in DATA-FM on the FT-991A, under the words its menu and the report use.
+      'aprs data-fm', 'aprs fm-data', 'fm pkt port', 'menu 077', 'aprs silent',
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
@@ -211,6 +229,15 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // how they discover it is the receive side. Searching for the wrong word is not a wrong search.
     keywords: ['headphones', 'monitor', 'listen', 'receive audio', 'rx audio', 'speakers',
       'sidetone out', 'passthrough'],
+  },
+  {
+    id: 'scope-source',
+    label: 'Scope source',
+    tab: 'radio',
+    // An operator with an SDRplay receiver searches for the hardware or the program, not for
+    // "scope source".
+    keywords: ['sdrplay', 'sdrconnect', 'rsp', 'rspduo', 'rsp1a', 'rsp1b', 'rspdx', 'sdr',
+      'panadapter', 'rx out', 'external receiver', 'second receiver', 'waterfall source'],
   },
   {
     id: 'satellite-doppler',
@@ -359,7 +386,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'PSK',
     tab: 'digital',
     keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
-      'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan'],
+      'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan',
+      // JTTY, the Keyboard section's other modem, keeps its one setting here.
+      'jtty', 'wsjt-x keyboard', '14.090'],
   },
   {
     id: 'js8',
@@ -431,9 +460,72 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
       // 'pop-up' too.
       'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right',
+      // …and how long they stay (#321): "I look over sometimes and miss a notification".
+      'dwell', 'how long', 'seconds', 'miss',
       // The new DXCC / grid alert's own switch, and the three band menus the Needed boards
       // follow. Searched for by what they do: the beep, or what the board lists.
-      'beep', 'needed board'],
+      'beep', 'needed board',
+      // The board's opt-in WPX and WAE chips, by the awards' names and by what they mark.
+      'wpx', 'prefix', 'wae', 'worked all europe'],
+  },
+
+  // ---- Logbook -----------------------------------------------------------------
+  // The logbook's own settings (operator, 2026-10-25). The callbook lookups, worked-before and the
+  // three reference lists came from Logging & Connectors; the columns and the station card from
+  // Appearance; the deleted-contact retention from Config's Data & log folder. Every control kept
+  // its setting, so a stored choice is untouched; the moved sections kept their ids.
+  {
+    id: 'logbook-display',
+    label: 'Logbook display',
+    tab: 'logbook',
+    keywords: ['logbook columns', 'columns', 'column width', 'more columns', 'reset columns',
+      'table', 'station card', 'callsign card', 'call card', 'hover', 'pointer'],
+  },
+  {
+    // How long the log's history keeps a deleted contact for Recently deleted and Undo.
+    id: 'logbook-history',
+    label: 'Deleted contacts',
+    tab: 'logbook',
+    keywords: ['recently deleted', 'undo', 'history', 'keep deleted', 'retention', 'purge',
+      'restore a contact'],
+  },
+  {
+    // QRZ's callbook sign-in (the XML lookup, not the Logbook API key, which uploads and stays with
+    // the uploads), HamQTH, callook.info and the answers kept on this computer.
+    id: 'callbook',
+    label: 'Callbook lookups',
+    tab: 'logbook',
+    neededInHourOne: true,
+    keywords: ['qrz', 'qrz lookup', 'qrz xml', 'qrz password', 'qrz username', 'hamqth', 'callook',
+      'callook.info', 'name lookup', 'autofill', 'name and grid', 'callbook cache', 'lookup cache',
+      'offline lookup', 'clear cache', 'refresh', 'refresh a call', 'update from callbook', 'update from qrz',
+      'lookups per day', 'daily limit', 'lookup pace'],
+  },
+  {
+    id: 'connections-b4',
+    label: 'Worked-before (B4) & dupes',
+    tab: 'logbook',
+    keywords: ['b4', 'worked before', 'dupe', 'duplicate', 'match mode', 'band', 'highlight',
+      'wsjt-x', 'already worked'],
+  },
+  {
+    id: 'lotw-users',
+    label: 'LoTW users list',
+    tab: 'logbook',
+    keywords: ['lotw', 'logbook of the world', 'users', 'marks', 'known users'],
+  },
+  {
+    id: 'callsign-state',
+    label: 'Callsign → state database',
+    tab: 'logbook',
+    keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
+  },
+  {
+    id: 'country-file',
+    label: 'Country file (DXCC)',
+    tab: 'logbook',
+    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
+      'country'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------
@@ -445,13 +537,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'not uploading', 'last upload', 'failing', 'revoked', 'wrong password', 'green'],
   },
   {
-    id: 'connections-b4',
-    label: 'Worked-before (B4) & dupes',
-    tab: 'logging',
-    keywords: ['b4', 'worked before', 'dupe', 'duplicate', 'match mode', 'band', 'highlight',
-      'wsjt-x', 'already worked'],
-  },
-  {
     id: 'integrations-feeds',
     label: 'Integrations & Feeds',
     tab: 'logging',
@@ -459,7 +544,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
       'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
-      'troubleshooting', 'bug report', 'crash'],
+      'troubleshooting', 'bug report', 'crash',
+      // Logging the space weather on each contact (K_INDEX / A_INDEX / SFI).
+      'space weather', 'k index', 'a index', 'sfi', 'solar flux'],
   },
   {
     id: 'antenna-gain',
@@ -488,34 +575,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['n1mm', 'contest logger', 'broadcast', 'contactinfo'],
   },
   {
-    id: 'lotw-users',
-    label: 'LoTW users list',
-    tab: 'logging',
-    keywords: ['lotw', 'logbook of the world', 'users', 'marks', 'known users'],
-  },
-  {
-    id: 'callsign-state',
-    label: 'Callsign → state database',
-    tab: 'logging',
-    keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
-  },
-  {
-    id: 'country-file',
-    label: 'Country file (DXCC)',
-    tab: 'logging',
-    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
-      'country'],
-  },
-  {
     id: 'confirmations',
     label: 'Confirmations',
     tab: 'logging',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
-      'callbook', 'repeaterbook', 'tqsl', 'station location',
+      'repeaterbook', 'tqsl', 'station location',
       'wrl', 'world radio league', 'qth nickname', 'nickname',
-      'download everything again', 're-download', 'whole history', 'missing confirmations'],
+      'download everything again', 're-download', 'whole history', 'missing confirmations',
+      'qrz logbook', 'logbook api key'],
   },
 
   // ---- Contesting --------------------------------------------------------------
@@ -534,7 +603,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
       'which contest', 'role', 'in state', 'out of state', 'contest mode', 'field day mode',
-      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data',
+      'start the contest', 'start contest', 'stop contest', 'set up a contest', 'contest setup',
+      'wizard', 'switch', 'rules', 'rules year', 'rules update', 'rules data',
       'rst sent', 'snt', 'sent report'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
@@ -685,7 +755,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'spectrum', 'panadapter', 'wide graph', 'scope colours', 'scope colors'],
   },
   {
-    // The Logbook's globe, and where the Connect map's own choices live.
+    // The Logbook's globe, and where the Connect map's own choices live. The Logbook's columns
+    // moved to Settings ▸ Logbook with their Reset.
     id: 'map-globe',
     label: 'Map & globe',
     tab: 'appearance',
@@ -749,7 +820,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Accessibility & eyes-free',
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick'],
+      'eyes free', 'tick', 'turn cue', 'chirp'],
   },
 
   // ---- Config ------------------------------------------------------------------
@@ -794,7 +865,10 @@ export const TAB_ALIASES: Record<string, SettingsTabId> = {
   // FT8/FT4 rows (`FREQ_MODES`), while its top-level name promised park, net and repeater
   // frequencies it does not have.
   frequencies: 'digital',
-  // 0.17 consolidation (fourteen → eight)
+  // 0.17 consolidation (fourteen → eight). "Logbook & QSL" stays on Logging & Connectors even
+  // though a Logbook tab exists again (2026-10-25): what that old tab held was the service
+  // accounts and uploads, which stayed there. A pointer that names a moved section ("Logbook &
+  // QSL ▸ HamQTH") lands on it by the section, never by this line.
   'logbook & qsl': 'logging',
   'logbook and qsl': 'logging',
   integrations: 'logging',
@@ -824,6 +898,13 @@ export const SECTION_ALIASES: Record<string, string> = {
   'sound-card': 'audio',
   'logbook-qsl': 'confirmations',
   'qsl-services': 'confirmations',
+  // Settings ▸ Logbook (2026-10-25). These were headings and rows inside other sections, never
+  // sections of their own: the callbook cache and the HamQTH sign-in sat in Confirmations, the
+  // Logbook columns in Appearance ▸ Map & globe. A pointer that names one lands on the section
+  // that holds it now.
+  'callbook-cache': 'callbook',
+  hamqth: 'callbook',
+  'logbook-columns': 'logbook-display',
   'setup-health': 'radios',
   // Field Day's section by its old LABELS (its id never changed). "Field Day Setup" was the
   // whole section, whose class and section are still there; "Contest mode" was the name it had
@@ -861,7 +942,8 @@ export function sectionById(id: string): SettingsSectionDef | undefined {
   // own spelling — prose says "Settings ▸ Q65", "MSK144", "JT65", never "q65". Comparing a raw
   // caller string against a lowercase id silently returned undefined for every mode written the
   // way a ham writes it, which is precisely the dead end this module exists to prevent.
-  const resolved = norm(SECTION_ALIASES[norm(id)] ?? id)
+  // An alias is keyed by its slug, and prose writes the name ("Callbook cache"), so try both.
+  const resolved = norm(SECTION_ALIASES[norm(id)] ?? SECTION_ALIASES[sectionSlug(id)] ?? id)
   return SETTINGS_SECTIONS.find((s) => s.id === resolved)
 }
 

@@ -22,6 +22,8 @@ export const PANE_IDS = [
   'needed',
   // Per-operator contest statistics (2026-10-17), appended for the same reason.
   'operators',
+  // The activator's Activation box (2026-10-25), appended for the same reason.
+  'activation',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 

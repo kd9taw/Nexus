@@ -133,6 +133,16 @@ describe('filterAlerts — mode (multi-select)', () => {
     const on = filterAlerts([rtty], { ...DEFAULT_FILTERS, modes: only('Digital') })
     expect(on.map((x) => x.call)).toEqual(['DL1RT'])
   })
+
+  it('JTTY is governed by the Digital chip too (its row carries its own label)', () => {
+    // A label the fold does not know is a class the board cannot classify, and such a row
+    // always shows: without the fold, Digital off would leave the JTTY row on the board.
+    const jtty = a('K4JTY', ['NewMode'], '20m', 'JTTY')
+    const off = filterAlerts([jtty], { ...DEFAULT_FILTERS, modes: only('CW') })
+    expect(off).toHaveLength(0)
+    const on = filterAlerts([jtty], { ...DEFAULT_FILTERS, modes: only('Digital') })
+    expect(on.map((x) => x.call)).toEqual(['K4JTY'])
+  })
 })
 
 describe('filterAlerts — AND composition', () => {

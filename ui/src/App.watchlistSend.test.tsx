@@ -2,8 +2,9 @@
 //
 // THE DESKTOP SENDS THE STATION ITS WATCH LIST (operator, 2026-09-24: "watched counts as needed").
 // The station puts the list's stations first on the Needed board — this window's and every Remote
-// browser's — so the main window sends the list on launch and after every edit, identity only, and
-// then reads the board again: taking an entry off the list takes its row off at once, not at the
+// browser's — and raises the list's alerts, so the main window sends the list on launch and after
+// every edit, each entry with its alert gates and label but never the operator's note, and then
+// reads the board again: taking an entry off the list takes its row off at once, not at the
 // next 30-second poll. A Remote browser mounts the same App and must send nothing: its watch list is
 // its own, and the station's board follows the station's.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -105,17 +106,21 @@ beforeEach(() => {
 afterEach(cleanup)
 
 // The first entry carries everything an entry can besides its identity — the alert's gates, a label
-// and the operator's own note (#390) — and none of it may reach the station.
+// and the operator's own note (#390). The gates and the label reach the station, which raises the
+// alert; the note is the Settings manager's alone and never does.
 const LAUNCH = [
   newWatchFilter('call', 'VP8*', { cqOnly: true, minSnr: -10, label: 'Falklands', notes: 'Falklands DXp, until 10/15' }),
   newWatchFilter('grid', 'EM7*'),
 ]
 
 describe('the desktop sends the station its watch list', () => {
-  it('on launch, identity only, and reads the board after it', async () => {
+  it('on launch, with the alert gates and label but never the note, and reads the board after it', async () => {
     saveWatchlist(LAUNCH)
     render(<App />)
-    const sent = `list ${JSON.stringify([{ kind: 'call', value: 'VP8*' }, { kind: 'grid', value: 'EM7*' }])}`
+    const sent = `list ${JSON.stringify([
+      { id: LAUNCH[0].id, kind: 'call', value: 'VP8*', cqOnly: true, minSnr: -10, label: 'Falklands' },
+      { id: LAUNCH[1].id, kind: 'grid', value: 'EM7*' },
+    ])}`
     await waitFor(() => expect(station.calls).toContain(sent))
     await waitFor(() => expect(station.calls.slice(station.calls.indexOf(sent))).toContain('board'))
   })
@@ -130,7 +135,7 @@ describe('the desktop sends the station its watch list', () => {
       saveWatchlist([LAUNCH[1]])
       window.dispatchEvent(new Event(WATCHLIST_CHANGED))
     })
-    const sent = `list ${JSON.stringify([{ kind: 'grid', value: 'EM7*' }])}`
+    const sent = `list ${JSON.stringify([{ id: LAUNCH[1].id, kind: 'grid', value: 'EM7*' }])}`
     await waitFor(() => expect(station.calls).toEqual([sent, 'board']))
   })
 

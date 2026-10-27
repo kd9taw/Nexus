@@ -11,21 +11,23 @@
 import { useEffect, useState } from 'react'
 import { clusterSelfSpot } from '../api'
 import { t } from '../i18n'
-import { contestLogMode, usePskName } from '../features/contestMode'
+import { contestLogMode, useKeyboardMode } from '../features/contestMode'
 import { useSpotMe } from './ContestSpotMe'
 
 /** The station, as much of it as the comment needs: its operating section (`radio.operatingMode`),
  *  the rig mode it commands (`radio.sideband`: USB, LSB, AM, FM…) and the digital section's tier. */
 export interface SpotMeStation {
   section?: string
+  /** The Keyboard section's mode on the air (`radio.keyboardMode`: PSK31, QPSK31 or JTTY). */
+  keyboardMode?: string
   sideband?: string
   tier?: string
 }
 
 /** The mode a self-spot names: the section's mode as its contacts log (`contestLogMode`), and on Phone
  *  the voice mode the rig is set to, so AM and FM say so. */
-export function spotMeMode(section: string | undefined, sideband: string | undefined, pskName: string | null, tier?: string): string {
-  const { fdMode, mode } = contestLogMode(section, pskName, tier)
+export function spotMeMode(section: string | undefined, sideband: string | undefined, keyboardMode: string | null, tier?: string): string {
+  const { fdMode, mode } = contestLogMode(section, keyboardMode, tier)
   if (fdMode !== 'PH') return mode
   const rig = (sideband ?? '').trim().toUpperCase()
   return /^W?FM/.test(rig) ? 'FM' : rig === 'AM' ? 'AM' : 'SSB'
@@ -64,8 +66,8 @@ function rememberComment(mode: string, text: string) {
   }
 }
 
-export function SpotsSpotMe({ section, sideband, tier }: SpotMeStation) {
-  const mode = spotMeMode(section, sideband, usePskName(section), tier)
+export function SpotsSpotMe({ section, keyboardMode, sideband, tier }: SpotMeStation) {
+  const mode = spotMeMode(section, sideband, useKeyboardMode(section, keyboardMode), tier)
   const [comment, setComment] = useState(() => commentFor(mode))
   // Follow the station from mode to mode, each with its own comment.
   useEffect(() => {

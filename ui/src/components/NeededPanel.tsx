@@ -1,4 +1,3 @@
-import { useStationCapability, useStationControl } from '../stationAccess'
 // The "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
@@ -191,6 +190,29 @@ const NEED_TYPE_OPTS: NeedTypeFilter[] = [
 /** The programmes' own names — the same four letters in every language. */
 const POTA_PROGRAM = 'POTA'
 const SOTA_PROGRAM = 'SOTA'
+/** The awards' own names, the same three letters in every language. */
+const WPX_AWARD = 'WPX'
+const WAE_AWARD = 'WAE'
+
+/** The opt-in WPX and WAE chips (Settings ▸ Spots & Alerts ▸ Alerts, both off as they ship). The
+ *  station sends `wpxNeed` / `waeNeed` only while its setting is on, so a board with them off renders
+ *  exactly as it did before they existed. */
+function awardChips(a: NeedAlert): { label: string; title: string }[] {
+  const chips: { label: string; title: string }[] = []
+  if (a.wpxNeed) {
+    chips.push({
+      label: WPX_AWARD,
+      title: t('need.chip.wpx.title', { prefix: a.wpxNeed, band: a.band, mode: a.mode }),
+    })
+  }
+  if (a.waeNeed) {
+    chips.push({
+      label: WAE_AWARD,
+      title: t('need.chip.wae.title', { country: a.waeNeed, band: a.band, mode: a.mode }),
+    })
+  }
+  return chips
+}
 
 /** The chip's word. A switch rather than a table so each key is a literal at its use. */
 function needTypeLabel(value: NeedTypeFilter): string {
@@ -249,7 +271,6 @@ export interface NeededPanelProps {
    * the log. Omitted in the popped-out window (no cross-window nav) → those rows fall
    * back to a plain band QSY. */
   onWork?: (alert: NeedAlert) => void
-  canWork?: (alert: NeedAlert) => boolean
   /** Point the antenna rotator at this need's call (great-circle bearing). Omitted when
    * no rotator is configured → the ↗ button is hidden. */
   onPoint?: (call: string) => void
@@ -263,6 +284,14 @@ export interface NeededPanelProps {
   /** Open Settings at a section id (see settings/registry.ts). Omitted in the pop-out window
    * (no cross-window nav) → the phone-source line stays plain text there. */
   onOpenSettings?: (target: string) => void
+  /** A contest is running (the engine's `fieldDay.running`, the one contest-active signal) — the
+   *  moment the demand gate works against the operator: contesting wants everyone on the air, not
+   *  only unworked needs. Shows the "all spots" bar below; absent/false, nothing changes. */
+  contestActive?: boolean
+  /** Surface the un-gated Spots view (all spots on the air, where SSB on the band is one chip
+   *  away). Wired by the host — the view/pane switch to Spots. Shown only with `contestActive`;
+   *  omit it and the bar never renders. */
+  onShowAllSpots?: () => void
   /** Hosted as a PANE of another screen rather than as the Needed view or its pop-out — see
    *  NeededPane. Both of those pass none and are exactly as they were. */
   pane?: NeededPane
@@ -331,19 +360,16 @@ export function NeededPanel({
   onQsy,
   onSelect,
   onWork,
-  canWork,
   onPoint,
   onPopOut,
   phoneSource,
   onOpenSettings,
+  contestActive,
+  onShowAllSpots,
   pane,
 }: NeededPanelProps) {
-  const control = useStationControl()
   // An evidence line's distances ("heard by K9LC (EN52, 26 km)") in the operator's units.
   const units = useUnits()
-  // The rotator is steerable from a browser only while the station advertises it.
-  const rotatorCapability = useStationCapability('rotator')
-  const rotatorControl = control || rotatorCapability
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -474,7 +500,6 @@ export function NeededPanel({
     const a = rows[i]
     if (!a) return
     onSelect(a.call)
-    if (!control && !canWork?.(a)) return
     if (onWork) onWork(a)
     else onQsy(a)
   })
@@ -512,9 +537,9 @@ export function NeededPanel({
             {t('needed.countFiltered', { count: alerts.length })}
           </span>
         )}
-        {/* Not in a pane: a few inches of height, rows that say what a click does in their own
-            tooltip, and a host that shows the collection's status on Remote. */}
-        {!pane && <span className="np-hint">{control ? t('needed.hint') : t('remote.collectionObserver')}</span>}
+        {/* Not in a pane: a few inches of height, and rows that say what a click does in their
+            own tooltip. */}
+        {!pane && <span className="np-hint">{t('needed.hint')}</span>}
         {/* Filter toggle button */}
         <button
           type="button"
@@ -529,8 +554,8 @@ export function NeededPanel({
           </svg>{' '}
           {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
-        {!pane && rotatorControl && onPoint && <RotatorWidget />}
-        {control && onPopOut && (
+        {!pane && onPoint && <RotatorWidget />}
+        {onPopOut && (
           <button
             type="button"
             className="np-popout"
@@ -540,7 +565,7 @@ export function NeededPanel({
             {t('needed.popOut.label')}
           </button>
         )}
-        {control && !pane && <label className="np-autopop" title={t('needed.autoPop.title')}>
+        {!pane && <label className="np-autopop" title={t('needed.autoPop.title')}>
           <input
             type="checkbox"
             checked={autopop}
@@ -556,6 +581,26 @@ export function NeededPanel({
           <span>{t('needed.autoPop.label')}</span>
         </label>}
       </div>
+
+      {/* CONTEST SHOW-ALL-SSB. During a contest the board's demand gate — only stations
+          you still NEED surface — hides exactly what a contester is scanning for: everyone on the
+          air. Rather than relax the gate here (this board only ever holds needs, not the firehose),
+          this bar, shown only while a contest runs, points one click at the un-gated Spots view,
+          where "Phone" is a chip. It is a visible, understandable mode, not a silent swap; outside a
+          contest it does not render and the board is exactly as it was. */}
+      {contestActive && onShowAllSpots && (
+        <div className="np-phone-src">
+          {t('needed.contest.allSpots.note')}{' '}
+          <button
+            type="button"
+            className="np-popout"
+            onClick={onShowAllSpots}
+            title={t('needed.contest.allSpots.title')}
+          >
+            {t('needed.contest.allSpots.label')}
+          </button>
+        </div>
+      )}
 
       {/* Phone-source liveness — Phone needs come ONLY from the human DX-cluster node, so a
           dead/absent source explains an empty Phone column at a glance (RBN covers CW/digital). */}
@@ -698,14 +743,14 @@ export function NeededPanel({
           </div>
         ) : (
           rows.map((a, i) => {
-            const canQsy = control && knownBands.has(a.band)
+            const canQsy = knownBands.has(a.band)
             const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
             // Every mode is click-to-work when the host wires onWork (main window):
             // the work path QSYs the rig AND opens the matching cockpit — a Digital
             // need must land in the FT8 cockpit, not just move the dial (the
             // "radio switched but the app didn't" bug). The pop-out has no onWork,
             // so its rows fall back to the QSY-only branch below.
-            const workable = (control || !!canWork?.(a)) && !!onWork
+            const workable = !!onWork
             const age = ageLabel(a.admittedAt)
             const evidence = a.evidence ? fmtKmTokens(a.evidence, units) : null
             const evidenceLine = evidence ? (age ? `${evidence} · ${age}` : evidence) : null
@@ -746,14 +791,14 @@ export function NeededPanel({
                         deg: az.deg,
                         band: a.band,
                         mode: a.mode,
-                        tags: a.tags.join(' '),
+                        tags: [...a.tags, ...awardChips(a).map((c) => c.label)].join(' '),
                       })
                     : t('needed.row.aria', {
                         call: a.call,
                         entity: a.entity,
                         band: a.band,
                         mode: a.mode,
-                        tags: a.tags.join(' '),
+                        tags: [...a.tags, ...awardChips(a).map((c) => c.label)].join(' '),
                       })
                 }
                 tabIndex={roving.rowProps(i).tabIndex}
@@ -780,6 +825,11 @@ export function NeededPanel({
                       {chipFor(tag).label}
                     </span>
                   ))}
+                  {awardChips(a).map((c) => (
+                    <span key={c.label} className="need-chip" title={c.title}>
+                      {c.label}
+                    </span>
+                  ))}
                 </span>
                 <span className="np-call">
                   <button
@@ -791,7 +841,7 @@ export function NeededPanel({
                     {a.call}
                   </button>
                   <RarityChip rarity={a.gridRarity} />
-                  {rotatorControl && onPoint && (
+                  {onPoint && (
                     <button
                       type="button"
                       className="np-point"

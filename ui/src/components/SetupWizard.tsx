@@ -2,7 +2,7 @@
 // Settings ▸ Radio sections — the two were migrated in one batch and must be reworded in one
 // change, or the wizard and the panel drift apart again. What stays in this file is the same
 // vocabulary Settings ▸ Radio keeps: device and port names, Hamlib model names and numbers,
-// baud rates, IPs and host:port addresses, the callsign/grid EXAMPLES (WIZARD_EXAMPLES), the
+// baud rates, IPs and host:port addresses, the grid EXAMPLES (WIZARD_EXAMPLES), the
 // ADIF extensions and every `value` this dialog writes — the license `id`, the connection
 // kind, the pack id. The LABEL beside each of those moved; the token did not.
 import { useEffect, useRef, useState } from 'react'
@@ -28,15 +28,16 @@ import {
   updateRadioProfile,
   type TciServerFound,
 } from '../api'
-import { baudForRig, radioPatch, RIG_EXAMPLES } from './SettingsPanel'
+import { baudForRig, radioPatch } from './SettingsPanel'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
-import { IS_MAC, IS_WINDOWS } from '../platform'
+import { IS_WINDOWS } from '../platform'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
 import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT, TCI_RIG_MODEL, TCI_RIG_MODEL_NAME, tciProbeMessage, tciServerName } from '../tci'
+import { upperTyped } from '../typedInput'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -108,6 +109,11 @@ interface Props {
 // Settings ▸ Station, so they resolve from the catalog at the call site.
 const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
   {
+    id: 'novice',
+    labelKey: 'setup.finish.license.novice',
+    blurbKey: 'setup.finish.license.novice.blurb',
+  },
+  {
     id: 'technician',
     labelKey: 'setup.finish.license.technician',
     blurbKey: 'setup.finish.license.technician.blurb',
@@ -116,6 +122,11 @@ const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
     id: 'general',
     labelKey: 'setup.finish.license.general',
     blurbKey: 'setup.finish.license.general.blurb',
+  },
+  {
+    id: 'advanced',
+    labelKey: 'setup.finish.license.advanced',
+    blurbKey: 'setup.finish.license.advanced.blurb',
   },
   {
     id: 'extra',
@@ -155,16 +166,12 @@ const KEYING: { value: string; label: () => string; blurb: () => string }[] = [
 ]
 
 /**
- * The callsign, grid and address EXAMPLES this dialog shows — invariant tokens, not prose.
- * Same rule as `RIG_EXAMPLES` in the Settings panel: a "localised" N0CALL is not a reserved
- * example callsign anywhere, and a translated grid names a square in the wrong ocean. The two
- * grids are quoted inside the invalid-locator sentence, which interpolates them.
+ * The grid EXAMPLES the invalid-locator sentence quotes — invariant tokens, not prose: a
+ * translated grid names a square in the wrong ocean. The sentence interpolates them.
  */
 const WIZARD_EXAMPLES = {
-  callsign: 'N0CALL',
   grid: 'FN31',
   gridFull: 'FN31pr',
-  netAddr: '127.0.0.1:5002',
 } as const
 
 /** Strict Maidenhead check — a persisted locator must be a real one, not just
@@ -794,10 +801,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               <input
                 type="text"
                 value={mycall}
-                placeholder={WIZARD_EXAMPLES.callsign}
                 autoComplete="off"
                 spellCheck={false}
-                onChange={(e) => setMycall(e.target.value.toUpperCase())}
+                onChange={(e) => setMycall(upperTyped(e.target))}
               />
             </label>
             <label className="wizard-field">
@@ -805,7 +811,6 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               <input
                 type="text"
                 value={mygrid}
-                placeholder={WIZARD_EXAMPLES.grid}
                 autoComplete="off"
                 spellCheck={false}
                 className={gridState === 'bad' ? 'bad' : ''}
@@ -1038,9 +1043,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                       type="text"
                       list="wizard-ptt-port-list"
                       value={pttSerialPort}
-                      placeholder={t('settings.rigControl.pttPort.placeholder', {
-                        example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
-                      })}
+                      placeholder={t('settings.rigControl.pttPort.placeholder')}
                       autoComplete="off"
                       spellCheck={false}
                       onChange={(e) => setPttSerialPort(e.target.value)}
@@ -1147,7 +1150,6 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 <input
                   type="text"
                   value={rigAddr}
-                  placeholder={WIZARD_EXAMPLES.netAddr}
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(e) => setRigAddr(e.target.value)}

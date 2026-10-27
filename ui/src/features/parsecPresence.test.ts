@@ -5,11 +5,9 @@ import { parsecStatusText, parsecStopLane, parsecSwitchPlacement } from './parse
 import { EN } from '../i18n/en'
 
 describe('where the switch appears', () => {
-  it('is offered on Windows, explained elsewhere, and never on the Remote page', () => {
-    expect(parsecSwitchPlacement(true, false)).toBe('offered')
-    expect(parsecSwitchPlacement(false, false)).toBe('unavailable')
-    expect(parsecSwitchPlacement(true, true)).toBe('hidden')
-    expect(parsecSwitchPlacement(false, true)).toBe('hidden')
+  it('is offered on Windows and explained elsewhere', () => {
+    expect(parsecSwitchPlacement(true)).toBe('offered')
+    expect(parsecSwitchPlacement(false)).toBe('unavailable')
   })
 })
 

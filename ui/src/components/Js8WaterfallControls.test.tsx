@@ -41,7 +41,6 @@ function mount(state: Js8State, props: Partial<Parameters<typeof Js8WaterfallCon
       js8={state}
       rxOffsetHz={1234}
       txOffsetHz={2100}
-      canControl
       active
       onState={onState}
       {...props}
@@ -91,15 +90,10 @@ describe('the waterfall controls', () => {
     expect(js8QsyToCentre).toHaveBeenCalledTimes(1)
   })
 
-  it('QSY to centre is not offered while a frame is on the air, nor from a window that may not control', () => {
+  it('QSY to centre is not offered while a frame is on the air', () => {
     mount(js8({}, true))
     fireEvent.click(screen.getByRole('button', { name: t('js8.wf.pill.on', { lo: 500, hi: 2500 }) }))
     expect((screen.getByRole('button', { name: t('js8.wf.qsy.action') }) as HTMLButtonElement).disabled).toBe(true)
-    cleanup()
-    mount(js8(), { canControl: false })
-    fireEvent.click(screen.getByRole('button', { name: t('js8.wf.pill.on', { lo: 500, hi: 2500 }) }))
-    expect((screen.getByRole('button', { name: t('js8.wf.qsy.action') }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('switch', { name: t('js8.wf.filter.label') }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a scheduled change is announced once, while JS8 is on screen, with Cancel', async () => {
@@ -110,14 +104,14 @@ describe('the waterfall controls', () => {
     const hidden = mount(js8({ hop }), { active: false })
     expect(pushToast, 'not while JS8 is hidden').not.toHaveBeenCalled()
     hidden.rerender(
-      <Js8WaterfallControls js8={js8({ hop })} rxOffsetHz={0} txOffsetHz={0} canControl active onState={hidden.onState} />,
+      <Js8WaterfallControls js8={js8({ hop })} rxOffsetHz={0} txOffsetHz={0} active onState={hidden.onState} />,
     )
     expect(pushToast).toHaveBeenCalledTimes(1)
     const [text, kind, ttl, opts] = vi.mocked(pushToast).mock.calls[0]
     expect([text, kind, ttl]).toEqual([t('js8.hop.toast', { mhz: '7.078000', secs: 30 }), 'info', 30_000])
     expect(opts?.actionLabel).toBe(t('js8.wf.hop.cancel'))
     hidden.rerender(
-      <Js8WaterfallControls js8={js8({ hop })} rxOffsetHz={0} txOffsetHz={0} canControl active onState={hidden.onState} />,
+      <Js8WaterfallControls js8={js8({ hop })} rxOffsetHz={0} txOffsetHz={0} active onState={hidden.onState} />,
     )
     expect(pushToast, 'once per change').toHaveBeenCalledTimes(1)
     await act(async () => {
@@ -135,11 +129,10 @@ describe('the row menus’ "Centre filter at …Hz"', () => {
     expect(js8CentreFilterItem({ enabled: false, centerHz: 1500, widthHz: 2000 }, 1210.6, onState)).toBeNull()
     const item = js8CentreFilterItem({ enabled: true, centerHz: 1500, widthHz: 500 }, 1210.6, onState)
     expect(item?.label).toBe(t('js8.wf.centreAt', { hz: 1211 }))
-    expect(item?.disabled).toBe(false)
+    expect(item?.disabled).toBeUndefined()
     await act(async () => {
       item?.onSelect()
     })
     expect(js8SetFilter).toHaveBeenCalledWith({ enabled: true, centerHz: 1211, widthHz: 500 })
-    expect(js8CentreFilterItem({ enabled: true, centerHz: 1500, widthHz: 500 }, 900, onState, false)?.disabled).toBe(true)
   })
 })

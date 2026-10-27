@@ -1,23 +1,23 @@
-//! Station-owned authority for the lease, Stop and the FT gestures.
+//! Station-owned authority for the lease and Stop.
 //! Cloud admission routes an approved browser; only a local grant (given at the
-//! shack, or restored for a still-approved browser) permits a lease. FT8/FT4 CQ
-//! and TX On/Off require a separate local transmit grant, and no grant arms TX;
-//! Stop has independent admission. A held FT contact's log append already begun
-//! cannot be rolled back on disconnect. Its bounded receipt remains queryable by
-//! the same device while locally permitted.
+//! shack, or restored for a still-approved browser) permits a lease, and no grant
+//! arms TX. Stop has independent admission. The lane takes no station action: the
+//! old Remote page's FT8/FT4 and held-contact actions, their receipts and its
+//! transmit grant are gone, and a browser that still sends one is answered
+//! `stationUnsupported` (`Request::StationControl`, `Request::Result`).
 use super::transport::identifier;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Mutex,
 };
 use std::time::{Duration, Instant};
-use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
+use tempo_app::engine::remote_transmit::RemoteTxHold;
+use tempo_app::remote_control::transmit::TransmitAuthority;
 
-mod logging;
 mod station;
 mod transmit_stop;
 
@@ -36,7 +36,10 @@ fn snapshot_id() -> Result<String, &'static str> {
 
 const LEASE: Duration = Duration::from_secs(5);
 const WINDOW: Duration = Duration::from_secs(2);
-const RESULT_AGE: Duration = Duration::from_secs(600);
+/// How long the shack's grant waits for Core before it is refused `remoteBusy`: past the brief
+/// holds of a live computer's traffic and the radio loop's tick, short enough that a stuck Core
+/// never hangs an Approve.
+const GRANT_WAIT: Duration = Duration::from_millis(250);
 const MAX_COUNTER: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,12 +86,16 @@ pub enum Request {
         #[serde(rename = "transmitEpoch")]
         transmit_epoch: String,
     },
+    /// The old Remote page's read of a station control's receipt. Retired with the controls; still
+    /// read, so that either road refuses it by name (`stationUnsupported`) as it always did.
     Result {
         #[serde(rename = "requestId")]
         request_id: String,
         #[serde(rename = "operationId")]
         operation_id: String,
     },
+    /// The old Remote page's FT8/FT4 and held-contact actions. Retired: read only so that either
+    /// road refuses one by name (`stationUnsupported`), whatever its action, and nothing runs.
     StationControl {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -102,8 +109,8 @@ pub enum Request {
         command_window_id: String,
         #[serde(rename = "clientSequence")]
         client_sequence: u64,
-        context: station::Context,
-        action: Box<station::Action>,
+        context: Value,
+        action: Value,
     },
 }
 impl Request {
@@ -135,80 +142,42 @@ struct Lease {
     /// 2026-10-04, "both at once").
     lan: Option<u64>,
 }
-struct Receipt {
-    id: String,
-    session: String,
-    device: String,
-    fingerprint: Vec<u8>,
-    at: Instant,
-    /// `None` while the write is still in flight (a control receipt's answer is its completion
-    /// and never lives here). See `value`.
-    value: Option<Value>,
-    control: Option<Completion>,
-    // The result payload can require a newer decoder than the Result request.
-    // Never send v4 QSO evidence to a browser which only understands v2/v3.
-    result_version: u8,
-}
-impl Receipt {
-    /// What a replay or a Result request is answered with. A receipt whose write has not come
-    /// back — its file sync or network post runs with Core released — answers `remoteBusy`,
-    /// exactly what the browser was told while that work held the lock, so it waits rather than
-    /// appending or posting twice.
-    fn value(&self) -> Result<Value, &'static str> {
-        match (&self.control, &self.value) {
-            (Some(control), _) => Ok(control_value(&self.id, control.outcome())),
-            (None, Some(value)) => Ok(value.clone()),
-            (None, None) => Err("remoteBusy"),
-        }
-    }
-    fn pending(&self) -> bool {
-        match &self.control {
-            Some(control) => control.outcome() == Outcome::Pending,
-            None => self.value.is_none(),
-        }
-    }
-}
-fn control_value(id: &str, outcome: Outcome) -> Value {
-    let mut value = serde_json::to_value(outcome)
-        .unwrap_or_else(|_| json!({"outcome":"unknown","reason":"hardwareUnconfirmed"}));
-    value["operation"] = json!("stationControl");
-    value["operationId"] = json!(id);
-    value
-}
-/// A control's outcome has settled: what the transport needs to tell the browser unprompted
-/// (operation v5). Carries nothing the browser could not poll for — it is the poll, arriving
-/// early — so a notice that is dropped costs a round trip and never an outcome.
-#[derive(Clone, Debug)]
-pub struct CompletionNotice {
-    pub session: String,
-    pub device: String,
-    pub operation_id: String,
-    pub version: u8,
-    pub connection: u64,
-}
 struct Core {
     epoch: u64,
     connection: u64,
     lease_epoch: u64,
     boot: Option<String>,
-    grants: BTreeSet<String>,
     control_grants: BTreeSet<String>,
-    transmit_grants: BTreeSet<String>,
     lease: Option<Lease>,
     revision: u64,
     context: Option<Vec<u8>>,
     windows: VecDeque<Window>,
-    receipts: VecDeque<Receipt>,
+    /// The transmit WAIVER STATE the station recorded for each sign-in auto-granted device (the
+    /// 2026-10-23 sign-in decision), by device id. FAIL-CLOSED: this map does not decide whether a
+    /// device is sign-in-granted — the durable service list does, through
+    /// [`Authority::signin_devices`] — it only records a POSITIVE outcome. A sign-in-granted device
+    /// with an entry here is held or waived per the entry; a sign-in-granted device with NO entry is
+    /// held (its grant never recorded a positive waiver/window). Written by
+    /// `Controller::grant_vouched` (held with its window) and
+    /// `grant_approved` (waived at the shack); a waiver is cleared on revoke. The engine's arm gate is
+    /// set from the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). A
+    /// restart restores only the windows of the devices the service had confirmed it notified
+    /// ([`Authority::restore_transmit_windows`]) and the waivers given at the shack
+    /// ([`Authority::restore_transmit_waivers`]), and every other sign-in device is held.
+    tx_grants: BTreeMap<String, TxGrant>,
 }
-impl Core {
-    /// Record a receipt and spend the command window it was admitted under.
-    fn open(&mut self, receipt: Receipt) {
-        self.receipts.push_back(receipt);
-        while self.receipts.len() > 1024 {
-            self.receipts.pop_front();
-        }
-        self.windows.clear();
-    }
+/// What the station recorded for a sign-in auto-granted device's transmit (the 2026-10-23 sign-in
+/// decision). Presence of a value is a POSITIVE record; its absence for a sign-in-granted device is
+/// a hold (fail-closed).
+#[derive(Clone, Copy)]
+enum TxGrant {
+    /// Held from transmit until this monotonic moment (its 15-minute window); past it, free.
+    Held { until: Instant },
+    /// Waived: an Approve at the shack. Free to transmit.
+    Waived,
+    /// Waived at the shack before a restart, and kept for it (`vault::Waivers`). Free to transmit
+    /// only once the service's list is heard (`tx_held_for`): held until then.
+    Restored,
 }
 impl Default for Core {
     fn default() -> Self {
@@ -217,30 +186,20 @@ impl Default for Core {
             connection: 0,
             lease_epoch: 0,
             boot: snapshot_id().ok(),
-            grants: BTreeSet::new(),
             control_grants: BTreeSet::new(),
-            transmit_grants: BTreeSet::new(),
             lease: None,
             revision: 0,
             context: None,
             windows: VecDeque::new(),
-            receipts: VecDeque::new(),
+            tx_grants: BTreeMap::new(),
         }
     }
 }
-/// Grants remembered from before a restart or a Turn on, per browser: remote logging, station
-/// control and FT8/FT4 transmit. See `Authority::restore`.
+/// Grants remembered from before a restart or a Turn on, per browser: station control. See
+/// `Authority::restore`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DurableGrants {
-    pub logging: Vec<String>,
     pub control: Vec<String>,
-    pub transmit: Vec<String>,
-}
-/// A grant a local revoke removes without waiting for Core (#318). Transmit has its own queue.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Grant {
-    Logging,
-    Station,
 }
 #[derive(Default)]
 pub struct Authority {
@@ -248,7 +207,6 @@ pub struct Authority {
     connection: AtomicU64,
     lease_epoch: AtomicU64,
     core: Mutex<Core>,
-    hardware: Revocation,
     transmit: TransmitAuthority,
     /// A streamed session's transmit presence (see `stream_presence`). Its own authority, not
     /// `transmit`'s: the engine's stand-down (`halt_tx`) moves `transmit`, and a Stop ends a
@@ -256,14 +214,9 @@ pub struct Authority {
     /// authority when a lease ends, which stops everything at the station on the next tick.
     presence: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
-    transmit_revocations: Mutex<BTreeSet<String>>,
-    /// Logging and station-control revokes, queued as `transmit_revocations` is; see
+    /// Station-control revokes, by device, queued so a revoke never waits for Core; see
     /// `revoke_grant_device`.
-    grant_revocations: Mutex<BTreeSet<(Grant, String)>>,
-    /// Where a settled control's notice goes (see `CompletionNotice`): the live transport's
-    /// bounded queue, set per socket. None, or a full queue, means the browser polls as it did
-    /// before operation v5 — this is never load-bearing.
-    completions: Mutex<Option<tokio::sync::mpsc::Sender<CompletionNotice>>>,
+    grant_revocations: Mutex<BTreeSet<String>>,
     /// The LAN road's open connections. Its own lock, never held while another is taken, so
     /// asking whether a connection is open can wait on nothing.
     lan: Mutex<LanRoad>,
@@ -281,8 +234,27 @@ pub struct Authority {
     /// The computers approved for the room's tunnel, who hold station control while hosted Remote
     /// is on (see `hold_tunnel_devices`). Unset in a build of the service without the tunnel.
     tunnel_devices: std::sync::OnceLock<LanDevices>,
-    #[cfg(test)]
-    before_sync: Option<Box<dyn Fn() + Send + Sync>>,
+    /// The device ids the service lists as added by a sign-in (`addedBy == "account"`): the
+    /// PROVENANCE a transmit hold keys to (the 2026-10-23 sign-in decision). The controller replaces
+    /// it from the durable service list on every list, so it does not depend on any station write
+    /// surviving — that is what makes a sign-in-granted device fail CLOSED (held) when its waiver
+    /// record is missing. Empty (no list heard yet) names nobody, so nobody is held. Its own leaf
+    /// lock, only ever taken alone (the controller's replace) or after Core (the gate's read).
+    /// `None` until the first list is heard — the UNKNOWN state, which holds an account-road
+    /// controller fail-closed rather than reading an empty set as "not sign-in-added".
+    signin_devices: Mutex<Option<BTreeSet<String>>>,
+    /// The subset of [`Authority::signin_devices`] the service confirms a durable owner-notice
+    /// record exists for (the 2026-10-23 sign-in decision). A HELD sign-in device's transmit lifts
+    /// (once its window elapses) only while it is here; a device not confirmed is held even past
+    /// its window. Replaced from the durable list on every list, beside `signin_devices`.
+    notified_devices: Mutex<BTreeSet<String>>,
+    /// The service's ids for each computer (or phone) on the room's tunnel, by the name the tunnel
+    /// takes it as (`lan::tunnel_device_id`): one device under two names. The transmit hold, its
+    /// records and the sign-in provenance all key by the service id, so the hold reads a tunnel name
+    /// as those ids ([`Authority::hold_names`]). More than one only for listed devices that share a
+    /// key, and then the name is held while any of them is. Replaced beside the tunnel's own list
+    /// (`Control::sync_approved`). Its own leaf lock, taken alone or after Core.
+    tunnel_owners: Mutex<BTreeMap<String, BTreeSet<String>>>,
 }
 /// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
 /// Called under Core: it may take no lock that is ever held while Core is taken.
@@ -298,13 +270,12 @@ impl Authority {
     }
 
     /// The transmit authority's revocation, for the ENGINE to hold so that a local stand-down
-    /// (`Engine::halt_tx`) retires remote transmit the way Remote's own Stop does. Shares the
-    /// counter a browser is shown as `transmitEpoch`.
+    /// (`Engine::halt_tx`) moves the counter a browser is shown as `transmitEpoch`, its Stop's
+    /// token, as Remote's own Stop does.
     pub fn transmit_revocation(&self) -> tempo_app::remote_control::Revocation {
         self.transmit.revocation()
     }
     fn revoke_execution(&self) {
-        self.hardware.revoke();
         self.transmit.revoke();
         self.presence.revoke();
     }
@@ -349,6 +320,316 @@ impl Authority {
             .filter_map(|devices| devices.get())
             .any(|devices| devices().iter().any(|d| d == device))
     }
+    /// Replace the set of device ids the service lists as added by a sign-in (`addedBy ==
+    /// "account"`): the provenance a transmit hold keys to (the 2026-10-23 sign-in decision). The
+    /// controller calls this from the durable list on every list it hears, so the provenance cannot
+    /// be lost by a station write failing. See [`Authority::signin_devices`].
+    pub fn set_signin_devices(&self, devices: BTreeSet<String>) {
+        if let Ok(mut held) = self.signin_devices.lock() {
+            *held = Some(devices);
+        }
+    }
+    /// Forget the sign-in provenance list, back to the pre-list (`None`) state: for a test to
+    /// exercise the restart/startup window where an account-road controller is held fail-closed.
+    #[cfg(test)]
+    pub(crate) fn forget_signin_devices(&self) {
+        if let Ok(mut held) = self.signin_devices.lock() {
+            *held = None;
+        }
+    }
+    /// Whether `device` is a computer the station paired or enrolled on its OWN network (the LAN
+    /// book). RECORDED provenance (the book), not the lease's transport: a genuinely on-network
+    /// device, so its transmit is never held (the 2026-10-23 sign-in decision's LAN-enrolment
+    /// waiver). The tunnel's approved computers are NOT included here — a tunnelled connection can
+    /// never take the LAN waiver, even presenting a LAN marker.
+    fn is_lan_device(&self, device: &str) -> bool {
+        self.lan_devices
+            .get()
+            .is_some_and(|devices| devices().iter().any(|d| d == device))
+    }
+    /// Replace the subset of sign-in devices the service confirms a durable owner-notice record for
+    /// (the 2026-10-23 sign-in decision). The controller calls this from the list beside
+    /// `set_signin_devices`. See [`Authority::notified_devices`].
+    pub fn set_notified_devices(&self, devices: BTreeSet<String>) {
+        if let Ok(mut held) = self.notified_devices.lock() {
+            *held = devices;
+        }
+    }
+    /// Replace the service's ids for each computer on the room's tunnel, by its tunnel name. See
+    /// [`Authority::tunnel_owners`].
+    pub fn set_tunnel_owners(&self, owners: BTreeMap<String, BTreeSet<String>>) {
+        if let Ok(mut held) = self.tunnel_owners.lock() {
+            *held = owners;
+        }
+    }
+    /// The names the transmit hold keys `device` by: a computer on the room's tunnel by the service's
+    /// ids for it, so its tunnel name is held exactly as they are; a device the service names by its
+    /// own. FAIL-CLOSED: `None`, which holds, for a name of the shack's own (version 8: a tunnel
+    /// name or a LAN id, `lan::tunnel_device_id`) that the map does not place, so one that has
+    /// just left the tunnel, or whose revoke was lost, is held; and while the map's lock is
+    /// poisoned. A computer in the LAN book never gets here (`tx_held_for`).
+    fn hold_names(&self, device: &str) -> Option<BTreeSet<String>> {
+        if let Some(owners) = self.tunnel_owners.lock().ok()?.get(device) {
+            return (!owners.is_empty()).then(|| owners.clone());
+        }
+        let shacks = identifier(device) && device.as_bytes()[14] == b'8';
+        (!shacks).then(|| BTreeSet::from([device.to_string()]))
+    }
+    /// Whether the service confirms a durable owner-notice record exists for `device`: the
+    /// precondition a held sign-in device's transmit lifts against.
+    fn is_notified(&self, device: &str) -> bool {
+        self.notified_devices
+            .lock()
+            .is_ok_and(|devices| devices.contains(device))
+    }
+    /// Record that a sign-in auto-granted `device` is HELD from transmit until `until` (its
+    /// 15-minute window). A positive record; absence of one for a sign-in device also holds (the
+    /// 2026-10-23 sign-in decision, fail-closed).
+    pub fn hold_transmit_until(&self, device: &str, until: Instant) {
+        self.set_tx_grant(device, TxGrant::Held { until });
+    }
+    /// Record that a sign-in auto-granted `device` is WAIVED (an Approve at the shack): free to
+    /// transmit.
+    pub fn waive_transmit(&self, device: &str) {
+        self.set_tx_grant(device, TxGrant::Waived);
+    }
+    /// Record the station's POSITIVE transmit outcome for a sign-in auto-granted `device` (the
+    /// 2026-10-23 sign-in decision): `Held { until }` for its 15-minute window, or `Waived` for an
+    /// Approve at the shack. Writing nothing here for a sign-in-granted
+    /// device leaves it HELD (fail-closed): the gate reads `is_signin_granted` and finds no waiver.
+    fn set_tx_grant(&self, device: &str, grant: TxGrant) {
+        if let Ok(mut c) = self.core.lock() {
+            // Kept, never pruned: an elapsed `Held` is still a positive record (granted, window
+            // passed) and must stay distinct from "no record" — dropping it would turn an
+            // elapsed-and-notified device back into the fail-closed held case. The map is at most
+            // the station's device count.
+            c.tx_grants.insert(device.to_string(), grant);
+        }
+    }
+    /// What is left at `now` of the transmit window the station recorded for each of `devices`
+    /// that has one: zero once it has elapsed, and for an Approve at the shack. A device with no
+    /// record is left out. What the station keeps across a restart for the sign-in devices the
+    /// service confirmed it notified ([`Authority::restore_transmit_windows`]).
+    pub fn transmit_windows(
+        &self,
+        devices: &BTreeSet<String>,
+        now: Instant,
+    ) -> BTreeMap<String, Duration> {
+        let Ok(c) = self.core.lock() else {
+            return BTreeMap::new();
+        };
+        devices
+            .iter()
+            .filter_map(|device| {
+                let left = match c.tx_grants.get(device)? {
+                    TxGrant::Held { until } => until.saturating_duration_since(now),
+                    TxGrant::Waived | TxGrant::Restored => Duration::ZERO,
+                };
+                Some((device.clone(), left))
+            })
+            .collect()
+    }
+    /// Restore, after a restart, the transmit window kept for each sign-in device the service had
+    /// confirmed it notified: held for what was `left` of it from `now`, never longer than a whole
+    /// window (`account::TX_HOLD`). Only ever a `Held` — an
+    /// Approve at the shack comes back as an elapsed window, which still waits for the list to
+    /// confirm the device and its notice (`tx_held_for`) — and never over a record this run made.
+    pub fn restore_transmit_windows(
+        &self,
+        windows: impl IntoIterator<Item = (String, Duration)>,
+        now: Instant,
+    ) {
+        if let Ok(mut c) = self.core.lock() {
+            for (device, left) in windows {
+                c.tx_grants.entry(device).or_insert(TxGrant::Held {
+                    until: now + left.min(super::account::TX_HOLD),
+                });
+            }
+        }
+    }
+    /// Restore, at launch, the waivers given at the shack before the restart for `devices`, each
+    /// already checked against what the station remembers of it (`Controller::resume`). Over the
+    /// window kept with it, since the waiver came after that window. Each waits for the list
+    /// ([`TxGrant::Restored`]).
+    pub fn restore_transmit_waivers(&self, devices: impl IntoIterator<Item = String>) {
+        if let Ok(mut c) = self.core.lock() {
+            for device in devices {
+                c.tx_grants.insert(device, TxGrant::Restored);
+            }
+        }
+    }
+    /// Forget each waiver restored at launch whose device is not in `kept`: what the station keeps of
+    /// its waivers now (`Controller::vouch`). A waiver given in this run is left as it is.
+    pub fn keep_restored(&self, kept: &BTreeSet<String>) {
+        if let Ok(mut c) = self.core.lock() {
+            c.tx_grants.retain(|device, grant| {
+                !matches!(grant, TxGrant::Restored) || kept.contains(device)
+            });
+        }
+    }
+    /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;
+    /// candidacy comes from RECORDED provenance, never the connection's transport: a device in the
+    /// LAN book (`is_lan_device`) is never held. FAIL-CLOSED on every uncertainty:
+    /// - a positive local `Waived` record (an Approve at the shack) frees
+    ///   at once, even before the provenance list has loaded; one restored after a restart
+    ///   (`Restored`) frees only once the list has loaded;
+    /// - the list UNKNOWN (`None`, no list heard yet) → HELD: an empty set must not read as "not
+    ///   sign-in-added", so an account-road controller waits until the list confirms it;
+    /// - the list loaded and this device NOT in it → free (confirmed not sign-in-added);
+    /// - in it, `Held` → held until the window has elapsed AND the owner notice is confirmed durable
+    ///   (the 2026-10-23 sign-in decision: an absent/unconfirmed notice holds it even past 15 min);
+    ///   in it with NO record → HELD; a poisoned lock → HELD.
+    ///
+    /// A computer on the room's tunnel is asked under the service's ids for it
+    /// ([`Self::hold_names`]), whatever name holds the lease, and held while any of them is; a name
+    /// of the shack's own whose service id is not known is HELD.
+    fn tx_held_for(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
+        // A device paired or enrolled on the station's OWN network (the LAN book) is locally
+        // trusted — recorded provenance, not transport — so it is never held, even before the
+        // account list loads.
+        if self.is_lan_device(device) {
+            return false;
+        }
+        self.hold_names(device)
+            .is_none_or(|names| names.iter().any(|name| self.held_as(name, grants, now)))
+    }
+    /// [`Self::tx_held_for`] for one name the hold keys by.
+    fn held_as(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
+        // A local positive waiver (an Approve at the shack) frees at once.
+        if matches!(grants.get(device), Some(TxGrant::Waived)) {
+            return false;
+        }
+        match self.signin_devices.lock().as_deref() {
+            Ok(Some(set)) if !set.contains(device) => false,
+            Ok(Some(_)) => match grants.get(device) {
+                Some(TxGrant::Waived | TxGrant::Restored) => false,
+                Some(TxGrant::Held { until }) => now < *until || !self.is_notified(device),
+                None => true,
+            },
+            Ok(None) => true,
+            Err(_) => true,
+        }
+    }
+    /// Whether the station holds `device` from transmit at `now`, as the grants and the sign-in
+    /// provenance decide, without driving the engine: what the shack shows as held.
+    pub(crate) fn tx_held(&self, device: &str, now: Instant) -> bool {
+        // A poisoned lock holds, as `tx_held_for` does.
+        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
+            return true;
+        };
+        self.tx_held_for(device, &grants, now)
+    }
+
+    /// Set the engine's transmit-arm gate from the CONTROLLING device's fail-closed hold state
+    /// (the 2026-10-23 sign-in decision). Called at every lease event under the Engine lock, so the
+    /// gate always reflects who holds the station now: a held device's hold never leaks onto the
+    /// next controller or the local operator, and a sign-in controller without a positive waiver
+    /// cannot start a transmission. With no controller nobody is held. The hold itself stops and
+    /// disarms nothing — the engine side refuses only a START (an arm, a key, a send, an over).
+    fn apply_tx_hold(&self, c: &Core, engine: &mut tempo_app::engine::Engine, now: Instant) {
+        // EVERY controller goes through `tx_held_for`: the decision is a pure function of RECORDED
+        // provenance, never the lease's transport (a tunnelled connection that looks LAN must not
+        // skip the hold — the 2026-10-23 sign-in decision). With no controller, nobody is held.
+        let held = c
+            .lease
+            .as_ref()
+            .is_some_and(|l| self.tx_held_for(&l.device, &c.tx_grants, now));
+        engine.set_remote_transmit_held(held);
+    }
+
+    /// Whether the device driving the station from afar is held from transmit right now — the value
+    /// [`Self::apply_tx_hold`] sets, re-derived from the live lease so the engine's hold can track
+    /// the CURRENT controller on the radio loop's own tick (the 2026-10-23 sign-in decision). It
+    /// reconciles first, so a lease ended WITHOUT a further request — Remote turned off, a retired
+    /// connection, a revoke, or expiry — is cleared here and the hold lifts; a still-controlling
+    /// held device keeps its lease and stays held. Returns `None` while a request holds Core (it is
+    /// setting the gate itself), so the tick leaves the flag be; it never blocks the radio loop and
+    /// cannot deadlock a request, which takes Core then the engine with the same `try` discipline.
+    ///
+    /// Beside the gate's answer it says, for the remote PC's display only, whether the owner of a
+    /// held device was notified and, when only its window holds it, what is left of that window
+    /// ([`Self::hold_shown`]). Only the gate's answer is decided under Core; the display is worked
+    /// out after Core is free, from the grants as the gate read them, so the tick holds Core no
+    /// longer than the gate needs and a request (the shack's grant among them) is not kept waiting.
+    pub fn current_transmit_hold(&self, now: Instant) -> Option<RemoteTxHold> {
+        let (device, grants) = {
+            let mut c = self.core.try_lock().ok()?;
+            // Authority unavailable (Remote off past the counter, or saturated): no device can
+            // operate the station, so none is held and the local operator is free.
+            if self.reconcile(&mut c, now).is_err() {
+                return Some(RemoteTxHold::default());
+            }
+            match c.lease.as_ref() {
+                Some(l) if self.tx_held_for(&l.device, &c.tx_grants, now) => {
+                    (l.device.clone(), c.tx_grants.clone())
+                }
+                _ => return Some(RemoteTxHold::default()),
+            }
+        };
+        Some(self.hold_shown(&device, &grants, now))
+    }
+
+    /// [`Self::hold_shown`] for each of `devices` at `now`, as the remote PC holding the lease under
+    /// it would be told, for the shack's Devices list: DISPLAY ONLY, never read to decide anything.
+    /// One snapshot of the grants for them all, so a status read takes Core once however many
+    /// devices are held, and none with nobody held. One not held, or a poisoned lock, says nothing.
+    pub(crate) fn hold_display(
+        &self,
+        devices: &[String],
+        now: Instant,
+    ) -> BTreeMap<String, RemoteTxHold> {
+        if devices.is_empty() {
+            return BTreeMap::new();
+        }
+        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
+            return BTreeMap::new();
+        };
+        devices
+            .iter()
+            .filter(|device| self.tx_held_for(device, &grants, now))
+            .map(|device| (device.clone(), self.hold_shown(device, &grants, now)))
+            .collect()
+    }
+
+    /// What the remote PC may be told of `device`, which the gate holds: notified only when the
+    /// service confirms a notice for every name it is held under ([`Self::hold_names`]), and the
+    /// time left only then, and only when each of those names is held by its window alone (the
+    /// provenance list loaded and naming it), the longest of them. Anything less says no time.
+    /// Display only, and taken without Core: it never decides the gate.
+    fn hold_shown(
+        &self,
+        device: &str,
+        grants: &BTreeMap<String, TxGrant>,
+        now: Instant,
+    ) -> RemoteTxHold {
+        let held: Vec<String> = self
+            .hold_names(device)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| self.held_as(name, grants, now))
+            .collect();
+        let owner_notified = !held.is_empty() && held.iter().all(|name| self.is_notified(name));
+        let listed = |name: &String| {
+            self.signin_devices
+                .lock()
+                .is_ok_and(|set| set.as_ref().is_some_and(|set| set.contains(name)))
+        };
+        let left = held
+            .iter()
+            .map(|name| match grants.get(name) {
+                Some(TxGrant::Held { until }) if *until > now && listed(name) => Some(*until - now),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .and_then(|lefts| lefts.into_iter().max())
+            .filter(|_| owner_notified);
+        RemoteTxHold {
+            held: true,
+            owner_notified,
+            left,
+        }
+    }
+
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
@@ -454,9 +735,7 @@ impl Authority {
         }
         if c.epoch != epoch {
             c.epoch = epoch;
-            c.grants.clear();
             c.control_grants.clear();
-            c.transmit_grants.clear();
             c.lease = None;
             c.windows.clear();
             c.context = None;
@@ -474,21 +753,8 @@ impl Authority {
             c.control_grants
                 .extend(devices().into_iter().filter(|d| identifier(d)));
         }
-        // A local revoke cannot wait behind a durable append. Retire its grant
-        // before any later heartbeat, state or command can consume Core again.
-        let revoked = std::mem::take(
-            &mut *self
-                .transmit_revocations
-                .lock()
-                .map_err(|_| "authorityUnavailable")?,
-        );
-        for device in revoked {
-            c.transmit_grants.remove(&device);
-            if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.transmit.revoke();
-            }
-        }
-        // Logging and station control the same way (#318). A revoked controller loses its
+        // A local revoke never waits for Core (#318): its grant is retired here, before any
+        // later heartbeat or state can consume Core again. A revoked controller loses its
         // lease here, as it always has when Core was free.
         let grants_revoked = std::mem::take(
             &mut *self
@@ -497,15 +763,15 @@ impl Authority {
                 .map_err(|_| "authorityUnavailable")?,
         );
         let mut controller_revoked = false;
-        for (grant, device) in grants_revoked {
-            match grant {
-                Grant::Logging => {
-                    c.grants.remove(&device);
-                }
-                Grant::Station => {
-                    c.control_grants.remove(&device);
-                    c.transmit_grants.remove(&device);
-                }
+        for device in grants_revoked {
+            c.control_grants.remove(&device);
+            // A revoke ends a waiver given at the shack with the grant (its record forgets it too,
+            // `Persist::Browser`): granted again, the device is held until it is waived again.
+            if matches!(
+                c.tx_grants.get(&device),
+                Some(TxGrant::Waived | TxGrant::Restored)
+            ) {
+                c.tx_grants.remove(&device);
             }
             controller_revoked |= c.lease.as_ref().is_some_and(|l| l.device == device);
         }
@@ -528,13 +794,6 @@ impl Authority {
         {
             c.windows.pop_front();
         }
-        while c
-            .receipts
-            .front()
-            .is_some_and(|r| now.saturating_duration_since(r.at) >= RESULT_AGE)
-        {
-            c.receipts.pop_front();
-        }
         self.sync_stop_owner(c, now);
         Ok(())
     }
@@ -548,80 +807,9 @@ impl Authority {
         c.revision += 1;
         Ok(())
     }
-    /// The transport's queue for settled controls. One socket at a time holds the station, so
-    /// the newest simply replaces the last; a notice for an older connection is refused by
-    /// `completion_event` anyway.
-    pub fn watch_completions(&self, sink: tokio::sync::mpsc::Sender<CompletionNotice>) {
-        if let Ok(mut current) = self.completions.lock() {
-            *current = Some(sink);
-        }
-    }
-    /// Arrange for `notice` to reach the transport when `completion` settles — only for a
-    /// browser that negotiated v5, because an older page has no parser for the event and its
-    /// socket would close on it. `try_send`, never a wait: the queue is bounded and a full one
-    /// drops the notice, which the browser's own polling covers.
-    fn notify_on_finish(&self, completion: &Completion, notice: CompletionNotice) {
-        if notice.version < 5 {
-            return;
-        }
-        let Some(sink) = self.completions.lock().ok().and_then(|s| s.clone()) else {
-            return;
-        };
-        completion.on_finish(std::sync::Arc::new(move || {
-            let _ = sink.try_send(notice.clone());
-        }));
-    }
-    /// The unprompted `operationEvent` for a settled control: its outcome and the state a
-    /// `State` request would return now — computed under the same locks, in the same order, as
-    /// `handle_version`, so the browser can install it exactly as it installs a reply. None when
-    /// there is nothing to say (the receipt is gone, the socket has changed) and the browser is
-    /// left to its poll.
-    ///
-    /// Waits for both locks rather than answering `stationBusy`: the radio loop that settled
-    /// the outcome still holds Engine when the notice arrives, and this runs on a blocking
-    /// thread the transport does not wait on. Engine is taken first, as `handle_version` takes
-    /// Core then tries Engine and every other Core user only tries, so nothing can wait on
-    /// this thread while it waits.
-    pub fn completion_event(
-        &self,
-        notice: &CompletionNotice,
-        engine: &crate::SharedEngine,
-    ) -> Option<String> {
-        let now = Instant::now();
-        let engine = tempo_app::engine::engine_lock_result(engine).ok()?;
-        let mut c = self.core.lock().ok()?;
-        self.reconcile(&mut c, now).ok()?;
-        if !self.current(notice.connection) {
-            return None;
-        }
-        let value = c
-            .receipts
-            .iter()
-            .find(|r| {
-                r.id == notice.operation_id
-                    && r.session == notice.session
-                    && r.device == notice.device
-            })?
-            .value()
-            .ok()?;
-        self.context(&mut c, &engine).ok()?;
-        let control = Some((
-            notice.version,
-            station::Context::capture(&engine),
-            engine.remote_ft_available(),
-            engine.remote_ft_tx_owned(),
-        ));
-        let state = self
-            .state(&mut c, &notice.session, &notice.device, now, control)
-            .ok()?;
-        Some(
-            json!({"type":"operationEvent","sessionId":notice.session,"operationId":notice.operation_id,"value":value,"state":state})
-                .to_string(),
-        )
-    }
     /// The epoch every local grant belongs to. Any local decision that clears permissions
     /// (Turn off Remote, take over, turning Remote on again) moves it. Revoking one browser does not:
-    /// it takes that browser's grants alone (`permit`, `permit_station`, `permit_transmit`).
+    /// it takes that browser's grant alone (`permit_station`).
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
@@ -631,30 +819,16 @@ impl Authority {
     /// `epoch` is the epoch captured when Remote came on. If it has moved, a local decision has been
     /// made since and its answer stands: nothing is restored. The grants land in a fresh revision
     /// with no command window and no lease, so nothing issued before the restore can be used with
-    /// them.
-    ///
-    /// FT8/FT4 transmit is restored only for a browser that also holds station control, exactly as
-    /// `permit_transmit` requires. ⛔ Restoring it arms nothing: the TX-enable latch is untouched,
-    /// the lease is dropped, and keying still needs the browser's own TX On under a fresh lease.
+    /// them. ⛔ Restoring arms nothing: the TX-enable latch is untouched and the lease is dropped.
     pub fn restore(&self, epoch: u64, grants: &DurableGrants) -> Result<bool, &'static str> {
         let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
         self.reconcile(&mut c, Instant::now())?;
         if c.epoch != epoch || self.epoch.load(Ordering::SeqCst) != epoch {
             return Ok(false);
         }
-        for device in grants.logging.iter().filter(|d| identifier(d)) {
-            if c.grants.len() < 16 {
-                c.grants.insert(device.clone());
-            }
-        }
         for device in grants.control.iter().filter(|d| identifier(d)) {
             if c.control_grants.len() < 16 {
                 c.control_grants.insert(device.clone());
-            }
-        }
-        for device in &grants.transmit {
-            if c.control_grants.contains(device) {
-                c.transmit_grants.insert(device.clone());
             }
         }
         if c.lease.take().is_some() {
@@ -666,42 +840,27 @@ impl Authority {
         Ok(true)
     }
     /// A revoke never waits for Core (#318): it is queued for `reconcile`, which applies it
-    /// before anything else consumes Core, as `permit_transmit` does. A grant may still be
-    /// refused `remoteBusy`.
-    pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
-        if !identifier(device) {
-            return Err("invalidRequest");
-        }
-        if !allow {
-            self.revoke_grant_device(Grant::Logging, device)?;
-        }
-        let mut c = match self.core.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
-            Err(_) => return Err("remoteBusy"),
-        };
-        self.reconcile(&mut c, Instant::now())?;
-        if allow {
-            if c.grants.len() >= 16 && !c.grants.contains(device) {
-                return Err("remoteBusy");
-            }
-            c.grants.insert(device.to_string());
-        }
-        self.sync_stop_owner(&c, Instant::now());
-        Ok(())
-    }
-    /// Revoking station control revokes transmit with it; like `permit`, a revoke never waits.
+    /// before anything else consumes Core. A grant waits for Core up to [`GRANT_WAIT`], past the
+    /// brief holds of a live computer's traffic and the radio loop's tick, and is refused
+    /// `remoteBusy` only when Core is held longer. Its callers hold only Control, which no Core
+    /// holder ever takes, so the wait cannot deadlock.
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
         if !allow {
-            self.revoke_grant_device(Grant::Station, device)?;
+            self.revoke_grant_device(device)?;
         }
-        let mut c = match self.core.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
-            Err(_) => return Err("remoteBusy"),
+        let waited = Instant::now() + GRANT_WAIT;
+        let mut c = loop {
+            match self.core.try_lock() {
+                Ok(c) => break c,
+                Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < waited => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(_) => return Err("remoteBusy"),
+            }
         };
         self.reconcile(&mut c, Instant::now())?;
         if allow {
@@ -713,42 +872,10 @@ impl Authority {
         self.sync_stop_owner(&c, Instant::now());
         Ok(())
     }
-    /// Local permission, never implied by a receiver grant, and it arms nothing.
-    /// Removing it revokes the current TX permit without waiting for Engine.
-    pub fn permit_transmit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
-        if !identifier(device) {
-            return Err("invalidRequest");
-        }
-        if !allow {
-            self.revoke_transmit_device(device)?;
-        }
-        let mut c = match self.core.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
-            Err(_) => return Err("remoteBusy"),
-        };
-        self.reconcile(&mut c, Instant::now())?;
-        if allow {
-            if !c.control_grants.contains(device) {
-                return Err("localPermissionRequired");
-            }
-            c.transmit_grants.insert(device.to_string());
-        } else {
-            c.transmit_grants.remove(device);
-            if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.transmit.revoke();
-            }
-        }
-        self.sync_stop_owner(&c, Instant::now());
-        Ok(())
-    }
     /// May this browser listen to the station's receive audio right now?
     ///
     /// Two things, and both are the operator's: the local **control** grant, and this
-    /// browser's own live lease. A logging-only browser holds `grants` and a perfectly
-    /// valid lease and is refused here — hearing a shack is not a consequence of being
-    /// allowed to write to its log, and the two permissions are given separately at the
-    /// radio precisely so they can be withheld separately.
+    /// browser's own live lease.
     ///
     /// Nothing here can key anything. It is a read of permission state, and the caller
     /// it serves holds no transmit authority at all.
@@ -794,9 +921,8 @@ impl Authority {
     /// S8: the streamed session's transmit presence, minted under the lease that admitted it. The
     /// same checks as admission; a deadline of five seconds from now, and never past the lease.
     ///
-    /// ⛔ IT GRANTS NOTHING. It is not the FT permit (`permit_generation`): nothing is armed or
-    /// keyed with it and no browser gesture is bound to it, so there is no displayed generation to
-    /// check it against. Held by the engine, its only power is to stop every transmission at the
+    /// ⛔ IT GRANTS NOTHING: nothing is armed or keyed with it and no browser gesture is bound to
+    /// it, so there is no displayed generation to check it against. Held by the engine, its only power is to stop every transmission at the
     /// station when it lapses (`engine/remote_stream.rs`).
     pub fn stream_presence(
         &self,
@@ -869,7 +995,7 @@ impl Authority {
         self.presence.revoke();
     }
 
-    /// Any admitted browser departure ends the shared logging lease. This is
+    /// Any admitted browser departure ends the shared lease. This is
     /// deliberately conservative and cannot wait behind a file append. Grants
     /// survive; a controller must explicitly acquire a fresh lease afterward.
     pub fn disconnect_session(&self, session: &str) {
@@ -887,7 +1013,7 @@ impl Authority {
         if self.reconcile(&mut c, Instant::now()).is_err() {
             return json!({"devices":[],"controller":null});
         }
-        json!({"devices":c.grants,"controlDevices":c.control_grants,"transmitDevices":c.transmit_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
+        json!({"controlDevices":c.control_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
     }
     fn context(
         &self,
@@ -927,11 +1053,10 @@ impl Authority {
         session: &str,
         device: &str,
         now: Instant,
-        control: Option<(u8, station::Context, bool, bool)>,
+        control: Option<(u8, station::Context, bool)>,
     ) -> Result<Value, &'static str> {
         self.sync_stop_owner(c, now);
-        let allowed =
-            c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
+        let allowed = control.is_some() && c.control_grants.contains(device);
         let owned = allowed
             && c.lease
                 .as_ref()
@@ -959,80 +1084,40 @@ impl Authority {
             "actions":Vec::<&str>::new(),"txArmed":false});
         if control
             .as_ref()
-            .is_some_and(|(version, _, _, _)| *version >= 4)
+            .is_some_and(|(version, _, _)| *version >= 4)
         {
             // The stop token goes to any controlling browser (stop anything, 2026-09-14), and stays
             // with one whose lease has since run out (expired-lease stop, 2026-09-15) — that is what
             // `holds_stop_token` is, and for a live controller it is exactly the old
-            // `owned && control_grants.contains(device)`. It starts nothing: every FT action also
-            // checks the live lease, the transmit grant and its own capability.
+            // `owned && control_grants.contains(device)`. It starts nothing: it is only a Stop's.
             value["transmitEpoch"] = if self.holds_stop_token(session, device) {
                 json!(format!("{:016x}", self.transmit.generation()))
             } else {
                 Value::Null
             };
         }
-        if let Some((version, context, ft_available, tx_owned)) = control {
+        if let Some((version, context, tx_on)) = control {
             let mut capabilities = vec![];
             if version >= 4 {
-                if c.grants.contains(device) {
-                    capabilities.push("qsoLogging");
-                }
                 if c.control_grants.contains(device) {
                     // Listening to the station's receive audio. The hint is what makes
                     // the negotiation work in BOTH directions: a browser that has never
                     // heard of it never offers a listen control, and a station built
                     // without the audio lane never advertises it, so nobody is ever
                     // asked for something the other end cannot do. It is under the
-                    // CONTROL grant, not the logging one — see `audio_admitted`.
+                    // control grant — see `audio_admitted`.
                     #[cfg(feature = "radio")]
                     capabilities.push("audioListen");
-                    // Operation v5: this station tells the browser a control's outcome the
-                    // moment it settles (`operationEvent`), so the page may stop re-reading
-                    // after each command. NEGOTIATED, never assumed from the page's own
-                    // version: `version` is the one the relay agreed for this request, so a
-                    // v5 page on an older station never sees the hint and keeps its immediate
-                    // re-read. A hint like `audioListen` - it names no action.
-                    if version >= 5 {
-                        capabilities.push("outcomePush");
-                    }
                 }
-                value["txArmed"] = json!(owned && tx_owned);
-                if ft_available
-                    && c.control_grants.contains(device)
-                    && c.transmit_grants.contains(device)
-                {
-                    capabilities.extend([
-                        "ftOperate",
-                        "ftCall",
-                        "ftExchange",
-                        "ftMessages",
-                        "ftSettings",
-                        "ftRuntime",
-                    ]);
-                }
+                // The station's TX-enable latch, for display only: nothing on either end decides a
+                // transmission on it. Only with the lease and the stop token beside it, as the page
+                // requires of a `txArmed` that is true.
+                value["txArmed"] = json!(owned && tx_on && value["transmitEpoch"].is_string());
             }
             value["controls"] = json!({"context":context,"capabilities":capabilities});
         }
         Ok(value)
     }
-    /// The serialized size and fingerprint a replay is matched on.
-    ///
-    /// ⚠️ **This must match exactly the receipt-bearing arm in [`Self::handle_version`]**: a
-    /// request that arm takes with no fingerprint is refused `invalidRequest`.
-    ///
-    /// `None` for every other request, deliberately: one whose arm keeps no receipt must not
-    /// acquire a lookup it never had. The size is returned rather than bounded here so the
-    /// 4 KiB refusal keeps its old position inside the arm.
-    fn replay_fingerprint(request: &Request) -> Result<Option<(usize, Vec<u8>)>, &'static str> {
-        if !matches!(request, Request::StationControl { .. }) {
-            return Ok(None);
-        }
-        let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
-        let fingerprint = digest(&SHA256, &bytes).as_ref().to_vec();
-        Ok(Some((bytes.len(), fingerprint)))
-    }
-
     pub fn handle(
         &self,
         connection: u64,
@@ -1061,9 +1146,13 @@ impl Authority {
             transmit_stop::stop_station(engine);
             return Ok(json!({"stop":"accepted"}));
         }
-        if !matches!(version, 1..=5)
-            || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
-        {
+        if matches!(
+            request,
+            Request::StationControl { .. } | Request::Result { .. }
+        ) {
+            return Err("stationUnsupported");
+        }
+        if !matches!(version, 1..=5) {
             return Err("stationUnsupported");
         }
         if !self.current(connection) {
@@ -1080,95 +1169,31 @@ impl Authority {
         if !permitted(&c, version, device, request) {
             return Err("localPermissionRequired");
         }
-        // ⚠️ A REPLAY IS ANSWERED BEFORE THE ENGINE LOCK, AND THAT ORDER IS THE WHOLE FIX.
-        //
-        // A duplicate request's entire answer is a stored [`Receipt`]: Core guards `receipts`
-        // and the Engine is not consulted for one. The `try_lock` below fails the WHOLE call
-        // whenever the station's own radio loop holds the Engine for a tick, so while this
-        // lookup sat 160 lines downstream a replay was refused `stationBusy` for a lock it
-        // never needed — and a browser could not retrieve the receipt for an operation that
-        // had ALREADY applied. It reached CI as a flaky `logManual` replay
-        // (`remote/test/native.test.mjs:782`), which is a race against a ~20 ms tick.
-        //
-        // That the refusal was never intended is recorded one screen up in [`Receipt::value`]:
-        // a replay whose write is still in flight answers `remoteBusy`, "so it waits rather
-        // than appending or posting twice". The design already has a considered answer for a
-        // contended replay, and `stationBusy` is not it.
-        //
-        // Only the fingerprint moves. The size bound and every other check stay where they
-        // were in the arm, so no error keeps a different precedence than before.
-        //
-        // ⚠️ WHAT BOTH EARLY ANSWERS BELOW DO SKIP is `self.context(&mut c, &engine)`, which
-        // runs after the lock and, when the station context has changed, clears the command
-        // windows and advances the revision. That is unavoidable — it needs the very Engine
-        // these two do not take — and it is safe, because it is housekeeping a READ cannot
-        // make unsafe: the next request that actually writes takes the lock, runs `context`
-        // itself, and refuses on `staleContext` / `windowExpired` exactly as before. Receipt
-        // ageing is unaffected; `reconcile` above already ran.
-        let replay = Self::replay_fingerprint(request)?;
-        if let Some((_, fingerprint)) = replay.as_ref() {
-            if let Some(r) = c.receipts.iter().find(|r| r.id == request.id()) {
-                return if r.session == session
-                    && r.device == device
-                    && r.fingerprint == *fingerprint
-                {
-                    r.value()
-                } else {
-                    Err("requestConflict")
-                };
-            }
-        }
-        // …and so is a `Result` request, for the identical reason: it is a pure receipt READ.
-        // It reads `c.receipts`, `c.grants`/`c.control_grants` and `device` — Core and nothing
-        // else — so the Engine lock below was refusing `stationBusy` to a browser that only
-        // wanted the answer already on file. No failure was ever attributed to this one; it is
-        // the same defect as the replay above, one arm over, and swept with it rather than
-        // left to be rediscovered with a smaller window.
-        if let Request::Result { operation_id, .. } = request {
-            if !identifier(operation_id)
-                || !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
-            {
-                return Err("localPermissionRequired");
-            }
-            return c
-                .receipts
-                .iter()
-                .find(|r| {
-                    r.id == *operation_id
-                        && r.device == device
-                        && (version >= 2 || r.control.is_none())
-                })
-                .ok_or("resultExpired")
-                .and_then(|receipt| {
-                    if version < receipt.result_version {
-                        Err("stationUnsupported")
-                    } else {
-                        receipt.value()
-                    }
-                });
-        }
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
-        let shared_engine = engine;
-        let mut engine =
-            tempo_app::engine::engine_try_lock(shared_engine).map_err(|_| "stationBusy")?;
+        let mut engine = tempo_app::engine::engine_try_lock(engine).map_err(|_| "stationBusy")?;
         self.context(&mut c, &engine)?;
         let control = (version >= 2).then(|| {
             (
                 version,
                 station::Context::capture(&engine),
-                engine.remote_ft_available(),
-                engine.remote_ft_tx_owned(),
+                engine.tx_enabled(),
             )
         });
         match request {
-            Request::StopTransmit { .. } => unreachable!("handled before ordinary operations"),
-            Request::State { .. } => self.state(&mut c, session, device, now, control),
+            Request::StopTransmit { .. }
+            | Request::Result { .. }
+            | Request::StationControl { .. } => {
+                unreachable!("handled before ordinary operations")
+            }
+            Request::State { .. } => {
+                self.apply_tx_hold(&c, &mut engine, now);
+                self.state(&mut c, session, device, now, control)
+            }
             Request::Acquire {
                 station_boot_id, ..
             } => {
-                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
-                {
+                if !(version >= 2 && c.control_grants.contains(device)) {
                     return Err("localPermissionRequired");
                 }
                 if c.boot.as_deref() != Some(station_boot_id.as_str()) {
@@ -1190,6 +1215,7 @@ impl Authority {
                     });
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::Heartbeat { lease_id, .. } => {
@@ -1198,15 +1224,8 @@ impl Authority {
                     return Err("notController");
                 }
                 l.until = now + LEASE;
-                let until = l.until;
-                if c.transmit_grants.contains(device) {
-                    if let Some(permit) = self.transmit.permit(until) {
-                        // An accepted heartbeat extends only an already-owned,
-                        // unexpired transmission. It cannot arm or take over TX.
-                        engine.renew_remote_transmit(permit, now);
-                    }
-                }
                 engine.poll_remote_transmit(now);
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::Release { lease_id, .. } => {
@@ -1218,13 +1237,13 @@ impl Authority {
                     c.windows.clear();
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::TakeControl {
                 station_boot_id, ..
             } => {
-                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
-                {
+                if !(version >= 2 && c.control_grants.contains(device)) {
                     return Err("localPermissionRequired");
                 }
                 if lan_road(connection).is_none() {
@@ -1258,182 +1277,8 @@ impl Authority {
                     });
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
-            }
-            Request::Result { .. } => unreachable!("handled before the Engine lock"),
-            Request::StationControl {
-                station_boot_id,
-                lease_id,
-                expected_revision,
-                command_window_id,
-                client_sequence,
-                ..
-            } => {
-                // The same local grant `permitted` checked above, read again under this lock.
-                if !permitted(&c, version, device, request) {
-                    return Err("localPermissionRequired");
-                }
-                // Both computed by `replay_fingerprint` before the Engine lock, where the
-                // receipt lookup that used to live here now runs — see the note there. The
-                // size bound stays in this position so its precedence is unchanged, and
-                // reaching this line means no receipt carried this request id.
-                let Some((size, fingerprint)) = replay else {
-                    return Err("invalidRequest");
-                };
-                if size > 4096 {
-                    return Err("invalidRequest");
-                }
-                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
-                    return Err("staleStation");
-                }
-                let l = c.lease.as_ref().ok_or("leaseExpired")?;
-                if l.id != *lease_id || l.session != session || l.device != device {
-                    return Err("notController");
-                }
-                if *client_sequence == 0 || *client_sequence > MAX_COUNTER {
-                    return Err("invalidRequest");
-                }
-                if *client_sequence <= l.sequence {
-                    return Err("resultExpired");
-                }
-                if *client_sequence != l.sequence + 1 {
-                    return Err("sequenceConflict");
-                }
-                if *expected_revision != c.revision {
-                    return Err("staleContext");
-                }
-                let window = c
-                    .windows
-                    .iter()
-                    .find(|w| w.id == *command_window_id)
-                    .ok_or("windowExpired")?;
-                let current = now.max(Instant::now());
-                if current.saturating_duration_since(window.at) >= WINDOW
-                    || current >= l.until
-                    || self.epoch.load(Ordering::SeqCst) != c.epoch
-                    || !self.current(connection)
-                    || c.lease_epoch != self.lease_epoch.load(Ordering::SeqCst)
-                {
-                    return Err("windowExpired");
-                }
-                if c.receipts.iter().any(Receipt::pending) {
-                    return Err("remoteBusy");
-                }
-                if let Request::StationControl {
-                    action, context, ..
-                } = request
-                {
-                    if action.is_logging() {
-                        self.advance(&mut c)?;
-                        c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                        let prepared = logging::prepare(&mut engine, action);
-                        drop(engine);
-                        // The hardware receipt's own shape: pending under Core, finished once
-                        // the file sync comes back with Core released (see the log change above).
-                        let completion = Completion::default();
-                        c.open(Receipt {
-                            id: request.id().into(),
-                            session: session.into(),
-                            device: device.into(),
-                            fingerprint,
-                            at: current,
-                            value: None,
-                            control: Some(completion.clone()),
-                            result_version: 4,
-                        });
-                        drop(c);
-                        self.notify_on_finish(
-                            &completion,
-                            CompletionNotice {
-                                session: session.into(),
-                                device: device.into(),
-                                operation_id: request.id().into(),
-                                version,
-                                connection,
-                            },
-                        );
-                        #[cfg(test)]
-                        if let Some(probe) = &self.before_sync {
-                            probe();
-                        }
-                        let outcome = match prepared {
-                            Ok(work) => work.finish(shared_engine),
-                            Err(reason) => Outcome::Rejected { reason },
-                        };
-                        completion.finish(outcome.clone());
-                        return Ok(control_value(request.id(), outcome));
-                    }
-                    let deadline = (current + Duration::from_secs(5)).min(l.until);
-                    let transmit_permit = if let Some(epoch) = action.transmit_epoch() {
-                        if !c.transmit_grants.contains(device) {
-                            return Err("localPermissionRequired");
-                        }
-                        if epoch.len() != 16
-                            || !epoch
-                                .bytes()
-                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                        {
-                            return Err("invalidRequest");
-                        }
-                        let expected =
-                            u64::from_str_radix(epoch, 16).map_err(|_| "invalidRequest")?;
-                        Some(
-                            self.transmit
-                                .permit_generation(expected, deadline)
-                                .ok_or("staleContext")?,
-                        )
-                    } else {
-                        None
-                    };
-                    // Taken for an FT gesture as it always was, and held to the end of this arm.
-                    let _permit = self
-                        .hardware
-                        .permit(deadline)
-                        .ok_or("authorityUnavailable")?;
-                    self.advance(&mut c)?;
-                    c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let executed = if let Some(transmit_permit) = transmit_permit {
-                        station::execute_transmit(&mut engine, context, action, transmit_permit)
-                    } else {
-                        // Every action but the logging ones is an FT gesture, which carries its
-                        // transmit epoch.
-                        Err(tempo_app::remote_control::Reason::UnsupportedAction)
-                    };
-                    let completion = match executed {
-                        Ok(result) => result,
-                        Err(reason) => {
-                            let result = Completion::default();
-                            result.finish(Outcome::Rejected { reason });
-                            result
-                        }
-                    };
-                    let value = control_value(request.id(), completion.outcome());
-                    c.open(Receipt {
-                        id: request.id().into(),
-                        session: session.into(),
-                        device: device.into(),
-                        fingerprint,
-                        at: current,
-                        value: None,
-                        control: Some(completion.clone()),
-                        result_version: 2,
-                    });
-                    // After the receipt is in, so a settlement that races this registration
-                    // (the radio loop can be that fast on a rejected target) finds the receipt
-                    // the event is built from. `on_finish` tells at once if it already settled.
-                    self.notify_on_finish(
-                        &completion,
-                        CompletionNotice {
-                            session: session.into(),
-                            device: device.into(),
-                            operation_id: request.id().into(),
-                            version,
-                            connection,
-                        },
-                    );
-                    return Ok(value);
-                }
-                Err("invalidRequest")
             }
         }
     }
@@ -1443,15 +1288,8 @@ impl Authority {
 /// lease-only requests need none here; their arms keep their own rules.
 fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
     match request {
-        Request::Acquire { .. } | Request::TakeControl { .. } | Request::Result { .. } => {
-            c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
-        }
-        Request::StationControl { action, .. } => {
-            if action.is_logging() {
-                c.grants.contains(device)
-            } else {
-                c.control_grants.contains(device)
-            }
+        Request::Acquire { .. } | Request::TakeControl { .. } => {
+            version >= 2 && c.control_grants.contains(device)
         }
         _ => true,
     }

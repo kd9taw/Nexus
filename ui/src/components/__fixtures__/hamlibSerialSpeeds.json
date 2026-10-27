@@ -1,6 +1,6 @@
 {
   "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
-  "catalog": 119,
+  "catalog": 120,
   "rigs": [
     {
       "model": 1001,
@@ -559,6 +559,12 @@
       "name": "Icom IC-7300",
       "min": 4800,
       "max": 115200
+    },
+    {
+      "model": 3075,
+      "name": "Icom IC-7850/7851",
+      "min": 300,
+      "max": 19200
     },
     {
       "model": 3076,

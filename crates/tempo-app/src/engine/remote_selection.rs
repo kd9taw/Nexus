@@ -983,8 +983,11 @@ mod tests {
         assert!(!engine.remote_settings_path.as_ref().unwrap().exists());
     }
 
+    /// Admission is passive, and a disabled radio is refused as the desktop refuses it: its port
+    /// was released for another program, and a selection would open it again. Remote kept
+    /// disabled radios selectable until disabling came to mean releasing the port.
     #[test]
-    fn selection_admission_is_passive_and_configured_disabled_radios_remain_selectable() {
+    fn selection_admission_is_passive_and_a_disabled_radio_is_refused() {
         for enabled in [false, true] {
             let (mut engine, incoming, connection) = station();
             engine
@@ -996,13 +999,24 @@ mod tests {
                 .enabled = enabled;
             let before = engine.settings.clone();
             let authority = Revocation::default();
-            let completion = engine
-                .queue_remote_radio_selection(incoming, connection, permit(&authority))
-                .unwrap();
+            let admitted =
+                engine.queue_remote_radio_selection(incoming, connection, permit(&authority));
             assert_eq!(
                 engine.settings, before,
                 "admission cannot switch or rewrite profiles"
             );
+            if !enabled {
+                assert!(
+                    matches!(admitted, Err(Reason::InvalidAction)),
+                    "a disabled radio is refused"
+                );
+                assert!(
+                    engine.take_remote_radio_selection().is_none(),
+                    "nothing queued"
+                );
+                continue;
+            }
+            let completion = admitted.unwrap();
             assert_eq!(completion.outcome(), Outcome::Pending);
             let request = engine.take_remote_radio_selection().unwrap();
             assert_eq!(request.settings().active_radio, incoming);

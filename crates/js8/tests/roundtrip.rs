@@ -117,7 +117,7 @@ proptest! {
         prop_assert_eq!(decode_word(&flipped, speed).err(), Some(FrameError::Crc));
     }
 
-    /// The reassembly safety property (Task B4.6): compose a multi-frame checksummed message,
+    /// The reassembly safety property: compose a multi-frame checksummed message,
     /// then feed its frames with one dropped. A closed message either carries the EXACT body, or
     /// is reported incomplete/checksum-bad, or - the one exception the protocol cannot rule out -
     /// its text collides with the real body on the 16-bit checksum.

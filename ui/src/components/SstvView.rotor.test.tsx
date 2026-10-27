@@ -11,7 +11,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { SstvView } from './SstvView'
 import { pointRotatorAtCall, readRotator } from '../api'
-import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 
@@ -123,18 +122,6 @@ describe('the SSTV cockpit carries the rotor strip', () => {
     // The strip is mounted and asking — so the absence below is its answer, not a missing strip.
     await waitFor(() => expect(poll).toHaveBeenCalled())
     await settle()
-    expect(strip()).toBeNull()
-    expect(screen.queryByLabelText(t('remote.rotatorUnavailable'))).toBeNull()
-  })
-
-  it('shows a browser without the station’s rotator control the unavailable plate', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <SstvView snap={snap} />
-      </StationControlContext.Provider>,
-    )
-    const plate = await screen.findByLabelText(t('remote.rotatorUnavailable'))
-    expect(plate.closest('.cockpit-header')).not.toBeNull()
     expect(strip()).toBeNull()
   })
 

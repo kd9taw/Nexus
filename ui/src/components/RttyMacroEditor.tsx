@@ -44,7 +44,6 @@ export const isEmptyRttySlot = isEmptyMacroSlot
 
 interface ButtonProps {
   slot: RttyMacroSlot
-  control: boolean
   editing: boolean
   /** The next Enter in the contest strip sends this key (Enter Sends Message). */
   lit?: boolean
@@ -54,13 +53,12 @@ interface ButtonProps {
 }
 
 /** One F-key macro, captioned from RTTY's catalog. */
-export function RttyMacroButton({ slot, control, editing, lit, title, onSend, onEdit }: ButtonProps) {
+export function RttyMacroButton({ slot, editing, lit, title, onSend, onEdit }: ButtonProps) {
   return (
     <MacroButton
       slot={slot}
       lit={lit}
       slotAttr={RTTY_SLOT_ATTR}
-      control={control}
       editing={editing}
       title={title}
       emptyLabel={t('rtty.macro.empty.label')}
@@ -120,7 +118,6 @@ export function RttyMacroEditor({ slot, left, saving, focus, onSave, onSendOnce,
 
 interface SetSwitchProps {
   set: RttySetId
-  control: boolean
   customized: boolean
   confirming: boolean
   onConfirming: (on: boolean) => void
@@ -131,7 +128,6 @@ interface SetSwitchProps {
 /** Everyday / Contest and "Reset set", captioned from RTTY's catalog. */
 export function RttyMacroSetSwitch({
   set,
-  control,
   customized,
   confirming,
   onConfirming,
@@ -150,7 +146,6 @@ export function RttyMacroSetSwitch({
   return (
     <MacroSetSwitch
       set={set}
-      control={control}
       customized={customized}
       confirming={confirming}
       labels={labels}

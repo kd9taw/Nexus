@@ -58,15 +58,14 @@ export type LogChange =
    * showed, so the station refuses it if either has moved since. */
   | { kind: 'selfSpot'; reference: string; dialHz: number }
   /** ⛔ A public DX cluster spot of ANOTHER station — the desktop Spot dialog's three fields,
-   * posted from the station's own cluster login. Station control, not the logging grant, and
-   * confirmed on every click. */
+   * posted from the station's own cluster login. Station control, confirmed on every click. */
   | { kind: 'spot'; call: string; freqMhz: number; comment: string }
   /** Operating preferences from the station's allow-list, against the Settings document revision the
    * page showed. Station control writes station preferences and the logging grant writes logging
    * ones; a change carrying both needs both. */
   | { kind: 'settings'; revision: string; values: Record<string, unknown> }
   /** Curating the station's working channel list, against the `programming` document revision the
-   * page showed. Station control, not the logging grant: it writes the station's programming file.
+   * page showed. Station control: it writes the station's programming file.
    * A row is named by its channel ID and never by a position — a position is stale the moment
    * anything else touches the list. */
   | { kind: 'programEdit'; revision: string; edit: ProgramEdit }
@@ -146,7 +145,7 @@ export type OperationRequest =
       clientSequence: number
       change: LogChange
     }
-  /** A read under this browser's logging lease: the list of activations (no selection), or one chunk
+  /** A read under this browser's lease: the list of activations (no selection), or one chunk
    * of one activation file. It spends no command sequence and changes nothing at the station. */
   | {
       type: 'activationExport'

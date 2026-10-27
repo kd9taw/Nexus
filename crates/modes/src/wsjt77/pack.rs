@@ -252,6 +252,9 @@ fn ihashcall(c0: &[u8], m: u32) -> i64 {
 #[derive(Default)]
 struct Ledger {
     saved22: Vec<i64>,
+    /// `pack77` read a local it had not assigned (the cases this file's header names): the frame
+    /// the Fortran writes is not decided by the text ([`reads_unassigned`]).
+    unassigned: bool,
 }
 
 impl Ledger {
@@ -819,7 +822,10 @@ fn pack77_06(nwords: usize, w: &mut [W13; 19], ledger: &mut Ledger) -> R<Option<
                     36 * 10 * d(word[i1]) + 10 * d(word[i1 + 1]) + d(word[i1 + 2])
                 }
                 // npfx is never assigned for a longer suffix.
-                _ => return Err(Vendored),
+                _ => {
+                    ledger.unassigned = true;
+                    return Err(Vendored);
+                }
             };
             p + NZZZ
         };
@@ -1015,7 +1021,10 @@ fn pack77_3(nwords: usize, w: &mut [W13; 19], ledger: &mut Ledger) -> R<Option<[
             }
         }
         None if imult > 0 => 8000 + imult,
-        None => return Err(Vendored),
+        None => {
+            ledger.unassigned = true;
+            return Err(Vendored);
+        }
     };
     let itu = usize::from(tu);
     let n28a = pack28(&mut w[itu], ledger)?;
@@ -1025,7 +1034,10 @@ fn pack77_3(nwords: usize, w: &mut [W13; 19], ledger: &mut Ledger) -> R<Option<[
     // null leaves irpt undefined, and a blank word (past the last) stops the program.
     let irpt = match ld_int(&w[2 + itu + ir])? {
         Ld::Value(v) => ((i64::from(v) - 509) / 10 - 2).clamp(0, 7),
-        _ => return Err(Vendored),
+        _ => {
+            ledger.unassigned = true;
+            return Err(Vendored);
+        }
     };
     let mut c = C77::new();
     c.b(itu as i64, 1)
@@ -1089,12 +1101,17 @@ fn pack77_4(nwords: usize, w: &mut [W13; 19], ledger: &mut Ledger) -> R<Option<[
         (1, n12, adjustr(&assign::<11>(&call_1)))
     } else if i3 == 4 {
         // Neither call is hashed and no CQ: c11 and n12 are never assigned.
+        ledger.unassigned = true;
         return Err(Vendored);
     } else {
         // i3 stays -1: pack77 goes on, and a later packer writes over this c77.
         return Ok(None);
     };
-    let n12 = n12.ok_or(Vendored)?;
+    let Some(n12) = n12 else {
+        // save_hash_call returned before it set n12.
+        ledger.unassigned = true;
+        return Err(Vendored);
+    };
     let n58 = c11.iter().fold(0i64, |n, &ch| n * 38 + digit(C, ch));
     let mut nrpt = if feq(&w[2], b"RRR") {
         1
@@ -1321,6 +1338,17 @@ fn unpacks(c77: &[u8; 77], ledger: &Ledger) -> R<bool> {
         (5, _) => bits(c77, 50, 74) <= 18_662_399,
         _ => false,
     })
+}
+
+/// Whether `pack77` reads a local it never assigned on its way through `msg37`: `pack77_3`'s
+/// serial or report, `pack77_4`'s calls, `pack77_06`'s prefix. What the vendored encoder then
+/// sends is whatever that memory held, not anything the text says: WSJT-X 3.0.2's own `genft8`
+/// made `W9XYZ/M K1ABC TNX` a frame that decodes as `<...>` and `W9XYZ K1ABC TNX 73` a bad
+/// message, and the copy vendored here made the first `<...>` once and `<...> ZZZZZZZZZ/` the
+/// next time. The text has no frame of its own.
+pub fn reads_unassigned(msg37: &[u8; 37]) -> bool {
+    let mut ledger = Ledger::default();
+    pack77(msg37, &mut ledger).is_err() && ledger.unassigned
 }
 
 /// `pack77` for `genft8` / `genft4`: the 77 message bits, or `None` where those routines call the

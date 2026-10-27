@@ -46,6 +46,10 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         // Sits here rather than with the older Icoms so a 7610 owner's neighbour is findable —
         // the curated lineage otherwise jumps IC-756PROIII straight to IC-7610.
         (3063, "Icom IC-7600"),
+        // IC-7850 / IC-7851 (#412): one Hamlib model for both, `RIG_MODEL_IC785x`, Stable in the
+        // bundled 4.7.1 (`rigctl -l`: "IC-7850/7851"). Hamlib only: Nexus's own CI-V and Icom
+        // network clients do not speak to it, and no one has run it on a bench yet.
+        (3075, "Icom IC-7850/7851"),
         (3081, "Icom IC-9700"),
         // IC-7760 (split control-head/RF-deck flagship). Verified index 92 in the bundled
         // Hamlib 4.7.1 riglist.h → model 3092. Driven via Hamlib rigctld over the controller's
@@ -1499,6 +1503,19 @@ mod tests {
     /// They are in the **verified** tier deliberately: "Show all models" defaults OFF, so an
     /// entry that lives only in `extended_rig_models` is invisible to exactly the operator
     /// who has this problem.
+    /// #412: an IC-7851 owner found no IC-7851 in either list and had to run rigctld by hand. Hamlib
+    /// has one model for the IC-7850 and IC-7851 (`RIG_MODEL_IC785x`, 3075, Stable in the bundled
+    /// 4.7.1, named "IC-7850/7851" by its `rigctl -l`), and it is in the default list, where an
+    /// owner looks first, under the name the radio is sold by.
+    #[test]
+    fn the_ic_7850_7851_is_in_the_default_list() {
+        assert!(
+            rig_models().contains(&(3075, "Icom IC-7850/7851")),
+            "Hamlib 3075 must be in the default list"
+        );
+        assert_eq!(rig_model_name(3075), Some("Icom IC-7850/7851"));
+    }
+
     #[test]
     fn the_sdr_program_profiles_are_in_the_default_list() {
         let verified: HashSet<u32> = rig_models().into_iter().map(|(m, _)| m).collect();

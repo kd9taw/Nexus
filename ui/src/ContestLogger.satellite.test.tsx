@@ -90,7 +90,7 @@ function respond(cmd: string, args: Record<string, unknown> | undefined): unknow
   }
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -153,7 +153,7 @@ describe('the logger window while the engine holds a bird', () => {
     await mountLogger()
     await nextRead()
     expect(satAsks, 'control: the window asked about the hold').toBeGreaterThan(0)
-    expect(within(entry()).getByPlaceholderText('W1AW')).toBeTruthy()
+    expect(within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })).toBeTruthy()
     expect(satLine()).toBeNull()
     expect(document.body.textContent).not.toContain('Satellites screen')
   })
@@ -162,10 +162,10 @@ describe('the logger window while the engine holds a bird', () => {
     held = AO91
     await mountLogger()
     expect(satLine(), 'control: the line is on show').not.toBeNull()
-    fireEvent.change(within(entry()).getByPlaceholderText('W1AW'), { target: { value: 'K9ABC' } })
+    fireEvent.change(within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'K9ABC' } })
     fireEvent.change(within(entry()).getByLabelText('Class'), { target: { value: '2A' } })
     fireEvent.change(within(entry()).getByLabelText('Section'), { target: { value: 'WI' } })
-    fireEvent.keyDown(within(entry()).getByPlaceholderText('W1AW'), { key: 'Enter' })
+    fireEvent.keyDown(within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { key: 'Enter' })
     await settle()
     await settle()
     expect(logged).toEqual([{ cmd: 'contest_log_manual', call: 'K9ABC', fields: [['CLASS', '2A'], ['SECTION', 'WI']], mode: 'PH' }])

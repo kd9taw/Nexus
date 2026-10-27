@@ -68,7 +68,7 @@ afterEach(async () => {
 async function renderKeyer() {
   const view = render(
     <>
-      <VoiceKeyer txEnabled keyed={false} transmitting={false} />
+      <VoiceKeyer txEnabled keyed={false} voicePlaying={false} />
       <Toasts />
     </>,
   )

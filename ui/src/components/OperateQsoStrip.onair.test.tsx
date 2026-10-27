@@ -11,7 +11,7 @@
 // Display only. Every reader of the strip's `tx` class and of that flag was checked first: the
 // class is read by two paint rules (the wash, and the caption's ON AIR sign in styles.css) and by
 // no code, and the flag decided only the class and the caption. No control in the strip is
-// enabled, disabled or routed on it; Stop TX's authority is `useStationStopControl()` alone.
+// enabled, disabled or routed on it.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { OperateQsoStrip } from './OperateQsoStrip'

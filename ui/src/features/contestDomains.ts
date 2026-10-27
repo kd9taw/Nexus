@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from './arrlSections'
+import { ARRL_RTTY_US_QTH, ARRL_RTTY_VE_QTH } from './arrlRttyQth'
 import { CQWW_RTTY_US_QTH, CQWW_RTTY_VE_QTH } from './cqwwRttyQth'
 import { ILQP_COUNTIES, ILQP_MULTS } from './ilqpQth'
 import { NYQP_COUNTIES, NYQP_MULTS } from './nyqpQth'
@@ -82,6 +83,17 @@ const CQWW_RTTY_QTH: ContestDomain = {
     { label: 'VE', values: CQWW_RTTY_VE_QTH },
   ],
   total: CQWW_RTTY_US_QTH.length + CQWW_RTTY_VE_QTH.length,
+}
+
+/** The ARRL RTTY Roundup's W/VE multipliers — its state/province board's universe, grouped the
+ *  same way. A guarded mirror of the seed (see `arrlRttyQth.ts`). */
+const ARRL_RTTY_QTH: ContestDomain = {
+  codes: new Set([...ARRL_RTTY_US_QTH, ...ARRL_RTTY_VE_QTH].map((q) => q.code)),
+  groups: [
+    { label: 'W', values: ARRL_RTTY_US_QTH },
+    { label: 'VE', values: ARRL_RTTY_VE_QTH },
+  ],
+  total: ARRL_RTTY_US_QTH.length + ARRL_RTTY_VE_QTH.length,
 }
 
 /** ⭐ The Illinois QSO Party's 102 counties — the sponsor's own chart, mirrored in
@@ -146,6 +158,7 @@ const DOMAINS: Record<string, ContestDomain> = {
   // The plain 85-section universe under its own Rust id, same table.
   arrl_sections: FD_SECTIONS,
   cqww_rtty_qth: CQWW_RTTY_QTH,
+  arrl_rtty_qth: ARRL_RTTY_QTH,
   il_counties: IL_COUNTIES,
   il_mults: IL_MULTS,
   ny_counties: NY_COUNTIES,

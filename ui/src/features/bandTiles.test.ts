@@ -62,6 +62,17 @@ describe('the band tiles', () => {
     expect(view(tiles.filter((t) => t.band === '2m'))).toEqual([['2m', 'open', 'Open', 'var(--band-open)', 'active', false, false, 'Tropo']])
   })
 
+  it('show a UHF band only while an opening is seen there or the radio is on it, not for its closed report', () => {
+    const closed = [report('20m', 'Open', 'Quiet'), report('70cm', 'Closed', 'Closed'), report('33cm', 'Closed', 'Closed'), report('23cm', 'Closed', 'Closed')]
+    expect(bandTiles(snap(closed), null, NOW).map((t) => t.band), 'reported closed: no tile').toEqual(['20m'])
+    const tiles = bandTiles(snap(closed, { openings: [opening('70cm', 'Tropo')] }), '23cm', NOW)
+    expect(tiles.map((t) => [t.band, t.mode, t.onRig])).toEqual([
+      ['20m', null, false],
+      ['70cm', 'Tropo', false],
+      ['23cm', null, true],
+    ])
+  })
+
   it('are hollow and neutral, never green, with no data, offline data or stale data', () => {
     const bands = [report('20m', 'Open', 'Active')]
     for (const [why, p] of [

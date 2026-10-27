@@ -2,7 +2,7 @@
 // come from the catalog; the ids and the colour values are code.
 //
 // THE BUILT-IN THEMES — "skins" in code, "Theme" in the UI (Settings ▸ Appearance ▸ Theme). Operator
-// picks of 2026-09-27 (tasks/themes-and-layout-spec-2026-09-27.md §4): "All ten", "Keep locked inks",
+// picks of 2026-09-27: "All ten", "Keep locked inks",
 // "Per-theme Night", "HC wins surfaces", "Dark/Light switch", "Yes, on Auto", "Keep these names".
 //
 // A SKIN IS AN AXIS OVER A BASE, NOT A THIRD THEME. Each one rides on `base`, the `data-theme` it

@@ -15,7 +15,7 @@
 //! the real feed, with the control that a started lane does produce bytes on the same
 //! instrument.
 //!
-//! ## One encoder, every listener (plan P5)
+//! ## One encoder, every listener
 //!
 //! A browser Listening on the relay's lane and a streamed page's `audio` channel hear the
 //! station at once. The feed still has one reader, and it belongs to [`ReceiveFanout`]: the
@@ -32,9 +32,7 @@
 //! ## Only a controlling browser may listen
 //!
 //! Admission is [`super::operations::Authority::audio_admitted`]: the operator's local
-//! **control** grant plus this browser's own live lease. A logging-only browser holds
-//! the logging grant and a perfectly valid lease, and is refused — listening to a shack
-//! is not a consequence of being allowed to write to its log. The lane re-checks on a
+//! **control** grant plus this browser's own live lease. The lane re-checks on a
 //! slow cadence as well as at the start, so a lapsed lease stops the audio rather than
 //! leaving a stream running for a browser that no longer controls anything.
 //!
@@ -85,7 +83,7 @@ const RECHECK: Duration = Duration::from_secs(1);
 /// kind of claim that stays true until it quietly does not.
 pub const MAX_MESSAGE_BYTES: usize = 1024;
 
-/// The station's one receive-audio encoder, shared by every listener (plan P5): the relay's
+/// The station's one receive-audio encoder, shared by every listener: the relay's
 /// Listen lane and each stream's `audio` channel. One per station, built beside the feed.
 pub struct ReceiveFanout {
     feed: Arc<ReceiveAudioFeed>,

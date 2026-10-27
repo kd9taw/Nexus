@@ -15,7 +15,8 @@
 //!   headset's microphone, resampled to 48 kHz and cut into 20 ms frames, each encoded
 //!   (`MicEncoder`: voice, 32 kbit/s constant, no DTX, no FEC) and sent at once, one a datagram,
 //!   numbered from the press's start on the capture's own clock, so the station places each frame
-//!   on the over's clock by its number. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
+//!   on the over's clock by its number. A press that went on from the one speaking (an answered
+//!   Lock, [`OnAir::went_on_from`]) carries on its numbers, its encoder and its clock. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
 //!   that is already later than the station's lead-in could still play ([`LATE`]), is dropped and
 //!   its number skipped, so after a stall the station plays a hole where the stall was, never a
 //!   burst. The press is client mode's, a held press on Stop's road (src-tauri's `client_mode`), and
@@ -232,6 +233,10 @@ struct Shared {
     /// acted on what changed.
     #[cfg(test)]
     turns: std::sync::atomic::AtomicU64,
+    /// The press's clock, once a test holds it: each microphone frame is judged by this instant in
+    /// place of the machine's, so a frame is late only by what the test makes it.
+    #[cfg(test)]
+    clock: Mutex<Option<Instant>>,
 }
 
 /// This computer's end of one link's audio road. Cheap to share: every holder is the same road.
@@ -288,6 +293,8 @@ impl AudioRoad {
             ended: AtomicBool::new(false),
             #[cfg(test)]
             turns: Default::default(),
+            #[cfg(test)]
+            clock: Default::default(),
         });
         let theirs = shared.clone();
         std::thread::Builder::new()
@@ -311,6 +318,12 @@ impl AudioRoad {
     #[cfg(test)]
     fn turns(&self) -> u64 {
         self.shared.turns.load(Ordering::Acquire)
+    }
+
+    /// Holds the press's clock at `now`: every frame the road cuts from here is judged by it.
+    #[cfg(test)]
+    fn clock(&self, now: Instant) {
+        *lock(&self.shared.clock) = Some(now);
     }
 }
 
@@ -443,6 +456,8 @@ impl Speaking {
             let number = self.frame;
             self.frame = self.frame.saturating_add(1);
             let now = Instant::now();
+            #[cfg(test)]
+            let now = lock(&shared.clock).unwrap_or(now);
             let started = *self.started.get_or_insert(now);
             let due = started + Duration::from_millis(MIC_FRAME_MS * u64::from(number - 1));
             // Later than the station could still play: dropped, its number skipped, so the
@@ -515,16 +530,23 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
                 listened = Some(now);
             }
         }
-        // The microphone, only while a press is live: a new press starts on fresh audio.
+        // The microphone, only while a press is live: a new press starts on fresh audio, and a
+        // press that went on from the one speaking (an answered Lock) carries its audio on.
         #[cfg(any(test, feature = "test-util"))]
         let _sending = lock(&shared.on_air.sender);
         match shared.on_air.press() {
             Some(press) => {
                 shared.headset.want_input();
                 if speaking.as_ref().is_none_or(|s| s.press != press) {
-                    let _ = rings.take_mic();
-                    speaking = Speaking::new(press);
-                    no_word_for = None;
+                    let from = shared.on_air.went_on_from();
+                    match speaking.as_mut().filter(|s| Some(s.press) == from) {
+                        Some(going_on) => going_on.press = press,
+                        None => {
+                            let _ = rings.take_mic();
+                            speaking = Speaking::new(press);
+                            no_word_for = None;
+                        }
+                    }
                 }
                 if let Some(speaking) = speaking.as_mut() {
                     speaking.pass(shared);
@@ -655,6 +677,25 @@ mod tests {
                         self.peer = Some(from);
                         heard.push((up, Instant::now()));
                     }
+                }
+            }
+            heard
+        }
+
+        /// Everything the road has sent that the station has not read yet, with when it was read:
+        /// read until nothing is waiting, so a reader a loaded machine wakes late misses nothing.
+        fn drain(&mut self) -> Vec<(Up, Instant)> {
+            let mut heard = Vec::new();
+            let mut buffer = [0u8; 2048];
+            while let Ok((length, from)) = self.socket.recv_from(&mut buffer) {
+                let up = self
+                    .keys
+                    .receive
+                    .open(&buffer[..length])
+                    .and_then(|(kind, body)| Up::read(kind, &body));
+                if let Some(up) = up {
+                    self.peer = Some(from);
+                    heard.push((up, Instant::now()));
                 }
             }
             heard
@@ -902,22 +943,85 @@ mod tests {
         assert!(headset.inputs.load(Ordering::SeqCst) > 0);
     }
 
-    /// ★ No burst after a stall: with the sender held 300 ms, the frames the microphone captured
-    /// meanwhile are not sent when it is let go, only those the station could still play on time,
-    /// and their numbers are skipped, so the station plays a hole where the stall was. CONTROL:
-    /// before the stall the frames went one by one, numbered in turn.
+    /// ★ A press that went on from the one speaking (an answered Lock) carries the microphone on:
+    /// its frames go under the new press, numbered on from the old press's last, so the station
+    /// places them on the same over's clock. CONTROL: the old press's frames were numbered from 1,
+    /// and a press begun afresh after it starts again at frame 1.
     #[test]
-    fn after_a_stall_nothing_comes_in_a_burst() {
+    fn a_press_that_goes_on_carries_the_microphone_on() {
         let (_road, mut station, headset, on_air) = road();
         let speaking = speak(&headset.rings);
-        on_air.pressing(Some(5));
-        let before = mics(&station.heard(Duration::from_millis(500)));
-        let stalled = lock(&on_air.sender);
-        let released = Instant::now() + Duration::from_millis(300);
-        let during = station.heard(Duration::from_millis(300));
-        drop(stalled);
-        let after = mics(&station.heard(Duration::from_millis(500)));
+        on_air.pressing(Some(3));
+        let before = mics(&station.heard(Duration::from_millis(400)));
+        assert!(on_air.renew(3, 4));
+        let after = mics(&station.heard(Duration::from_millis(400)));
+        on_air.pressing(Some(9));
+        let fresh = mics(&station.heard(Duration::from_millis(300)));
         speaking.store(false, Ordering::SeqCst);
+        let numbers = |sent: &[(u64, u32, Vec<u8>, Instant)], press: u64| -> Vec<u32> {
+            sent.iter()
+                .filter(|(p, ..)| *p == press)
+                .map(|(_, n, ..)| *n)
+                .collect()
+        };
+        let old: Vec<u32> = [numbers(&before, 3), numbers(&after, 3)].concat();
+        assert_eq!(old.first(), Some(&1), "CONTROL: {old:?}");
+        let renewed = numbers(&after, 4);
+        assert!(renewed.len() > 10, "{renewed:?}");
+        assert_eq!(
+            renewed[0],
+            old.last().unwrap() + 1,
+            "numbered on: {old:?} then {renewed:?}"
+        );
+        assert!(renewed.windows(2).all(|w| w[1] == w[0] + 1), "{renewed:?}");
+        assert_eq!(
+            numbers(&fresh, 9).first(),
+            Some(&1),
+            "CONTROL: a fresh press"
+        );
+    }
+
+    /// ★ No burst after a stall: with the sender held while 300 ms of the microphone come in, the
+    /// frames captured meanwhile are not sent when it is let go, only those the station could still
+    /// play on time, and their numbers are skipped, so the station plays a hole where the stall
+    /// was. CONTROL: before the stall the frames went one by one, numbered in turn. The press's
+    /// clock is the test's, each frame cut at its own moment, so the stall is the only lateness
+    /// there is: on the machine's clock a loaded machine can make frames late before the stall (a
+    /// stand-in microphone falling behind, the road's thread starved) and move the press's start,
+    /// which widens or narrows what a stall lets through.
+    #[test]
+    fn after_a_stall_nothing_comes_in_a_burst() {
+        let (road, mut station, headset, on_air) = road();
+        let rings = &headset.rings;
+        // The microphone's `n`th 20 ms from the press's start, a 1 kHz tone, and the moment on the
+        // press's clock it is all there.
+        let tone = |n: usize| {
+            (n * MIC_FRAME_SAMPLES..(n + 1) * MIC_FRAME_SAMPLES)
+                .map(|i| 0.4 * (2.0 * std::f32::consts::PI * 1_000.0 * i as f32 / 48_000.0).sin())
+        };
+        let start = Instant::now();
+        let ready = |n: usize| start + Duration::from_millis(MIC_FRAME_MS * n as u64);
+        on_air.pressing(Some(5));
+        // The road starts a press on fresh audio: the microphone speaks once it has.
+        turned(&road);
+        for n in 0..25 {
+            road.clock(ready(n));
+            rings.captured(tone(n));
+            turned(&road);
+        }
+        let before = mics(&station.drain());
+        let stalled = lock(&on_air.sender);
+        for n in 25..40 {
+            rings.captured(tone(n));
+        }
+        // Let go the moment the last of it is all there: the oldest frame the station could still
+        // play is then exactly `LATE` old, the most the rule ever lets through at once.
+        road.clock(ready(39));
+        let during = station.drain();
+        let released = Instant::now();
+        drop(stalled);
+        turned(&road);
+        let after = mics(&station.drain());
         assert!(before.windows(2).all(|w| w[1].1 == w[0].1 + 1), "control");
         let last_before = mics(&during)
             .last()

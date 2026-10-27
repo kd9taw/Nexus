@@ -101,6 +101,10 @@ impl Client {
             // service may list them to it, each device with its kind and platform. A service
             // without them ignores the header and lists browsers alone.
             .header("x-nexus-device-kind", "1")
+            // This Nexus checks devices' proofs itself (`account`), so the service may list each
+            // device's role, how it was added, its proof and a computer's LAN key. A service without
+            // account sign-in ignores the header.
+            .header("x-nexus-device-proof", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
@@ -145,6 +149,8 @@ impl Client {
                 Some("trialUsedOnThisPc") => "trialUsedOnThisPc",
                 // The service needs a newer Nexus at the shack to approve a station.
                 Some("updateRequired") => "updateRequired",
+                // The station has invited as many people as the service keeps.
+                Some("inviteLimit") => "inviteLimit",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",
@@ -259,7 +265,7 @@ pub struct Feeds {
     ///
     /// Holding this grants nothing: it is a read of already-captured receive audio, and
     /// while nobody is listening it copies nothing. It is the station's ONE encoder, shared by
-    /// the Listen lane here and every stream's `audio` channel (plan P5).
+    /// the Listen lane here and every stream's `audio` channel.
     #[cfg(feature = "radio")]
     pub audio: Option<std::sync::Arc<super::audio::ReceiveFanout>>,
     /// What a streamed session needs from the application: the window its input goes to, and
@@ -309,10 +315,9 @@ pub async fn connected(
         "x-nexus-operation-ft-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
-    // Operation v5: this station tells a v5 browser a control's outcome the moment it settles
-    // (`operationEvent`), instead of leaving it to poll. A service without the header keeps the
-    // exact v4 contract and the browser keeps polling; nothing is pushed to a browser that did
-    // not negotiate it.
+    // Operation v5, still offered so the version a service agrees with this station does not
+    // move. v5 added pushing a station control's outcome (`operationEvent`); with no station
+    // control left there is nothing to push, and no state advertises `outcomePush`.
     request.headers_mut().insert(
         "x-nexus-operation-push-version",
         "1".parse().map_err(|_| "invalidResponse")?,
@@ -388,28 +393,27 @@ pub async fn connected(
 }
 
 /// The hosted page's operations this station no longer takes. A relay forwards each to any station
-/// that negotiated its operation version, so one can still arrive.
-const RETIRED_OPERATIONS: [&str; 4] = [
+/// that negotiated its operation version, so one can still arrive. A station control or a `result`
+/// this station cannot read is one of them too; one it reads is refused by name all the same
+/// (`operations::Request::StationControl`).
+const RETIRED_OPERATIONS: [&str; 6] = [
     "logManual",
     "logChange",
     "activationExport",
     "programExport",
+    "stationControl",
+    "result",
 ];
 
-/// The `stationUnsupported` answer to a well-formed operation request this station no longer takes:
-/// a retired operation, or a station control that is neither an FT gesture nor the held contact's
-/// log action. `None` for anything else, which stays a protocol error.
+/// The `stationUnsupported` answer to a well-formed operation request this station no longer takes.
+/// `None` for anything else, which stays a protocol error.
 fn retired_operation(text: &str) -> Option<String> {
     let message: Value = serde_json::from_str(text).ok()?;
     let session = message.get("sessionId")?.as_str()?;
     let request = message.get("request")?;
     let id = request.get("requestId")?.as_str()?;
     let kind = request.get("type")?.as_str()?;
-    let control = request.pointer("/action/action").and_then(Value::as_str);
-    let retired = RETIRED_OPERATIONS.contains(&kind)
-        || kind == "stationControl"
-            && control
-                .is_some_and(|action| !action.starts_with("ft.") && !action.starts_with("qso."));
+    let retired = RETIRED_OPERATIONS.contains(&kind);
     (message.get("type")?.as_str()? == "operationRequest" && retired && identifier(session) && identifier(id))
         .then(|| json!({"type":"operationResponse","sessionId":session,"requestId":id,"error":"stationUnsupported"}).to_string())
 }
@@ -452,16 +456,6 @@ where
         .clone();
     let operation_connection = super::operations::Connection::new(authority);
     let mut operation_task: Option<tokio::task::JoinHandle<String>> = None;
-    // Settled controls, for operation v5 (`operationEvent`). Bounded, and the authority
-    // `try_send`s into it and drops on full: a notice is the poll arriving early, never the
-    // only way an outcome reaches a browser. The loop keeps a sender of its own so `recv`
-    // below cannot see the channel close while the loop runs.
-    let (completion_sink, mut completions) =
-        tokio::sync::mpsc::channel::<super::operations::CompletionNotice>(8);
-    operation_connection
-        .authority
-        .watch_completions(completion_sink.clone());
-    let mut event_task: Option<tokio::task::JoinHandle<Option<String>>> = None;
     status.set("connected", None);
     let mut tick = tokio::time::interval(Duration::from_millis(tempo_app::remote_monitor::POLL_MS));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -690,24 +684,6 @@ where
                 Some(Ok(Message::Ping(_))) => {},
                 Some(Ok(Message::Close(_))) | None => return Err("serviceUnavailable"),
                 _ => return Err("invalidResponse"),
-            },
-            // A control settled (operation v5). The event is built on its own blocking task,
-            // never on this loop and never in the operation task's slot - so a browser request
-            // arriving meanwhile is not told `stationBusy` for it, and Stop above is read exactly
-            // as before. One at a time; the queue holds the rest.
-            notice = completions.recv(), if event_task.is_none() => {
-                if let Some(notice) = notice {
-                    let authority = operation_connection.authority.clone(); let engine = engine.clone();
-                    event_task = Some(tokio::task::spawn_blocking(move || authority.completion_event(&notice, &engine)));
-                }
-            },
-            event = async { event_task.as_mut().expect("guarded event task").await }, if event_task.is_some() => {
-                event_task = None;
-                // Nothing to say (the receipt or the connection is gone) is not an error: the
-                // browser still has its poll.
-                if let Ok(Some(data)) = event {
-                    outbound.send(Message::Text(data.into()))?;
-                }
             },
             // A streamed session's signalling: an answer, a candidate, how the stream stands. Few
             // and small; it never waits on the session thread, which only ever hands these over.

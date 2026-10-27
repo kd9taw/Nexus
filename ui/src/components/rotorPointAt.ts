@@ -29,9 +29,8 @@ export function pointedTo(pointed: PointedAt): string {
   return t('rotor.pointed.to.country', { country: pointed.country ?? '' })
 }
 
-/** The strip's `onPointAt` for a cockpit. `control` is the cockpit's `useStationControl()`: a
- *  browser gets no bearing back and reports a refusal in the Remote's own words. */
-export function rotorPointAt(control: boolean): (call: string, longPath?: boolean) => void {
+/** The strip's `onPointAt` for a cockpit. */
+export function rotorPointAt(): (call: string, longPath?: boolean) => void {
   return (call, longPath = false) => {
     pointRotatorAtCall(call, longPath)
       .then((pointed: PointedAt | null | undefined) =>
@@ -55,7 +54,7 @@ export function rotorPointAt(control: boolean): (call: string, longPath?: boolea
       )
       .catch((e) =>
         pushToast(
-          control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : t('remote.controlRequestFailed'),
+          t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }),
           'error',
         ),
       )

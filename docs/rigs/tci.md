@@ -29,10 +29,7 @@ The TCI connection is **Beta**:
 | Transmitting through the program | Works: see [Transmitting](#transmitting) |
 | CW over TCI | With the **Soundcard** keyer. Not yet through the program's own keyer |
 | The program's panadapter in Nexus's scope | Works with **SDR panadapter in the scope** on |
-| The stations you need, shown on the program's panadapter | Not yet |
-
-The **Spots on the SDR panadapter** switch is in Settings already and is saved
-with the radio. It takes effect when that part arrives.
+| The stations you need, shown on the program's panadapter | Works with **Spots on the SDR panadapter** on |
 
 ---
 
@@ -81,7 +78,7 @@ on the radio.
 | **SDR program** | **Automatic** learns the program from what it does. Name ExpertSDR3, Thetis or piHPSDR only if Nexus reads yours wrongly; naming one fills in the port it comes set to. | Automatic |
 | **Audio over TCI** | Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable. Off, Nexus uses the sound card under **Audio**, as with any CAT radio. | On |
 | **SDR panadapter in the scope** | The program's own spectrum in Nexus's RF scope and in the Phone and CW scopes. The FT8/FT4 waterfall stays on the receive audio. | Off |
-| **Spots on the SDR panadapter** | The stations you still need, marked on the program's panadapter, 100 at most. Clicking one tunes Nexus to it; it never transmits. Not yet in effect. | Off |
+| **Spots on the SDR panadapter** | The stations you still need, marked on the program's panadapter in the Needed board's colours, 100 at most. Clicking one there tunes Nexus to it and does nothing else; it never transmits. | Off |
 
 Every field is per radio: each radio card keeps its own.
 

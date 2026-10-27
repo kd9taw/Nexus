@@ -17,6 +17,12 @@ import type { FieldDayQso, FieldDayStatus } from '../types'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import { pushToast } from '../toast'
 
+// A computer driving a station (client mode): off unless a case turns it on.
+const driving = vi.hoisted(() => ({ on: false }))
+vi.mock('../features/durableStore', async (actual) => ({
+  ...(await actual<typeof import('../features/durableStore')>()),
+  drivesAnotherStation: () => driving.on,
+}))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()),
@@ -260,6 +266,26 @@ describe('a press through the Remote stream clears nothing', () => {
     await settle()
     expect(api.contestClear).not.toHaveBeenCalled()
     said('Only at the station: a press through Remote clears no contact.', 'error')
+    await clickTwice()
+    expect(api.contestClear).toHaveBeenCalledWith(3, 'K9NR', T0 + 60)
+  })
+})
+
+// A computer driving a station: Clear is the station's alone, as through the stream. It used to be
+// sent, refused there as station-only, and said "Nexus could not clear the contacts", which named
+// no reason. It now says the station-only line, and sends nothing.
+describe('on a computer driving a station', () => {
+  afterEach(() => {
+    driving.on = false
+  })
+  it('Clear test contacts says it is only at the station, and sends nothing; CONTROL: at the station it clears', async () => {
+    api.contestClear.mockResolvedValue({ outcome: 'cleared', contacts: 2, sentTo: NOWHERE })
+    driving.on = true
+    await show(LOG)
+    await clickTwice()
+    expect(api.contestClear).not.toHaveBeenCalled()
+    said('Only at the station: a press through Remote clears no contact.', 'error')
+    driving.on = false
     await clickTwice()
     expect(api.contestClear).toHaveBeenCalledWith(3, 'K9NR', T0 + 60)
   })

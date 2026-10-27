@@ -200,6 +200,8 @@ mod tests {
             grid: None,
             park: None,
             state_from: None,
+            wpx_need: None,
+            wae_need: None,
         }
     }
 

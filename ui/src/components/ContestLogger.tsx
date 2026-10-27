@@ -76,11 +76,15 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { pollSingleFlight } from '../singleFlight'
 import { withErrorToast } from '../toast'
-import type { AppSnapshot, FieldDayStatus } from '../types'
+import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
+import { contactLabel } from '../features/contestRemoval'
+import { isStreamInput } from '../remote-native/stream-input'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { useLoggerLayout } from '../features/contestLoggerLayout'
-import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
+import { contestLogMode, stationMode, useKeyboardMode } from '../features/contestMode'
+import { closedText } from '../features/contestEdit'
+import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
 import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
@@ -92,7 +96,7 @@ import { PaneSeam } from './PaneSeam'
 const TEXT_SCALE_KEY = 'nexus.contestLogger.textScale'
 
 /** How many of the newest contacts the entry lists under its boxes. */
-export const LAST_CONTACTS = 5
+export const LAST_CONTACTS = 10
 
 /** The text size as stored, clamped on load into the range A− / A+ writes — a Connect box's, 80–160 %
  *  in steps of 10 — and 100 % for anything that is not a size (nothing stored, a hand edit). */
@@ -137,15 +141,27 @@ function KeepInFront() {
   )
 }
 
-/** The newest contacts of the running contest, newest first, in the contest screen's own columns. */
+/** The newest contacts of the running contest, newest first, in the contest screen's own columns.
+ *  Each row's Edit opens the contest screen's own edit (`ContestContactEdit`) in the row's place, with
+ *  the screen's refusals: never through the Remote stream, and at a club the line says how a contact
+ *  is fixed there instead, because club sync cannot carry an edit to the other laptops.
+ *
+ *  The edit is the contact's, by its call and time, not a place in the list: contacts logged while it
+ *  is open push its row down, and past the ten it stays open after them, as typed. The line it leaves
+ *  is held to the bottom edge of the list's box, so no scroll position hides it (the logbook-copy
+ *  warning above all) and in a short window it takes its room from the list, never from the window;
+ *  it goes at the next edit or contact logged. */
 export function LastContacts({
   fieldDay,
   style,
   boxRef,
+  onEditDone,
 }: {
   fieldDay: FieldDayStatus
   style: CSSProperties
   boxRef: RefObject<HTMLElement>
+  /** An edit is over (saved or left): the host gives the keyboard back to its entry. */
+  onEditDone: () => void
 }) {
   const titleId = useId()
   const fieldDayColumns = isFieldDay(fieldDay.event)
@@ -161,31 +177,118 @@ export function LastContacts({
         .reverse(),
     [fieldDay.log],
   )
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
+  const [note, setNote] = useState<EditNote | null>(null)
+  // A county line is one contact: the edit takes all its rows from the whole log.
+  const editRows = editing
+    ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
+    : []
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
+  useEffect(() => {
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setNote({ text: closedText(fieldDay.log, editing.whenUnix), alert: true })
+  }, [editing, editRows.length, fieldDay.log])
+  // A contact logged retires the line; an edit, which leaves the count as it was, does not.
+  const logLen = fieldDay.log.length
+  const seenLen = useRef(logLen)
+  useEffect(() => {
+    if (logLen > seenLen.current) setNote(null)
+    seenLen.current = logLen
+  }, [logLen])
+  const editRow = (q: FieldDayQso) => {
+    if (isStreamInput()) {
+      setNote({ text: t('contest.edit.remote'), alert: true })
+      return
+    }
+    if (fieldDay.club) {
+      setNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    // Another edit open in this window (the strip's Ctrl+Y, the contest screen's): it keeps the
+    // keyboard and its typing, and no second one opens.
+    if (!editing && focusOpenContestEdit()) {
+      setNote({ text: t('contest.edit.open'), alert: false })
+      return
+    }
+    setNote(null)
+    saving.current = false
+    setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
+  }
+  const editDone = (done: EditNote | null) => {
+    saving.current = false
+    setEditing(null)
+    setNote(done)
+    onEditDone()
+  }
+  // The edit stands in the place of the first of its rows shown here, or after the ten once
+  // newer contacts have pushed all of them out.
+  const editAt = rows.findIndex(({ row }) => editRows.includes(row.qso))
+  const edit =
+    editRows.length > 0 ? (
+      <ContestContactEdit
+        key={`edit-${editRows[0].call}-${editRows[0].whenUnix}`}
+        rows={editRows}
+        receives={fieldDay.receives ?? []}
+        role={fieldDay.role}
+        bands={fieldDay.bands}
+        onSaving={() => {
+          saving.current = true
+        }}
+        onDone={editDone}
+      />
+    ) : null
   return (
-    <section className="contest-logger-recent" aria-labelledby={titleId} style={style} ref={boxRef}>
-      <div className="contest-logger-recent-body">
-        <h2 id={titleId} className="contest-logger-recent-title">
-          {t('contestLogger.recent.title')}
-        </h2>
-        <ContestLogHead
-          fieldDayColumns={fieldDayColumns}
-          isWfd={fieldDay.event === 'wfd'}
-          slotColumns={slotColumns}
-          role={fieldDay.role}
-          numbered={numbered}
-        />
-        {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
-        {rows.map(({ row, at }) => (
-          <ContestLogRow
-            key={`${row.qso.call}-${at}`}
-            row={row}
+    <>
+      <section className="contest-logger-recent" aria-labelledby={titleId} style={style} ref={boxRef}>
+        <div className="contest-logger-recent-body">
+          <h2 id={titleId} className="contest-logger-recent-title">
+            {t('contestLogger.recent.title')}
+          </h2>
+          <ContestLogHead
             fieldDayColumns={fieldDayColumns}
+            isWfd={fieldDay.event === 'wfd'}
             slotColumns={slotColumns}
+            role={fieldDay.role}
             numbered={numbered}
           />
-        ))}
-      </div>
-    </section>
+          {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
+          {rows.map(({ row, at }, i) => {
+            if (editRows.includes(row.qso)) return i === editAt ? edit : null
+            return (
+              <ContestLogRow
+                key={`${row.qso.call}-${at}`}
+                row={row}
+                fieldDayColumns={fieldDayColumns}
+                slotColumns={slotColumns}
+                numbered={numbered}
+              >
+                {row.qso.whenUnix ? (
+                  <button
+                    type="button"
+                    className="fd-edit"
+                    title={t('contest.edit.title')}
+                    aria-label={t('contest.edit.aria', { contact: contactLabel([row.qso]) })}
+                    onClick={() => editRow(row.qso)}
+                  >
+                    {t('contest.edit.label')}
+                  </button>
+                ) : null}
+              </ContestLogRow>
+            )
+          }).concat(editAt === -1 ? [edit] : [])}
+        </div>
+        {note && (
+          <p className="fd-removed-note contest-logger-recent-note" role={note.alert ? 'alert' : 'status'}>
+            {note.text}
+          </p>
+        )}
+      </section>
+    </>
   )
 }
 
@@ -247,8 +350,9 @@ export function ContestLargeEntry({
   entryOnly?: boolean
 }) {
   const section = snap.radio.operatingMode
-  const pskName = usePskName(section)
-  const m = contestLogMode(section, pskName, snap.link.tier)
+  // PSK and JTTY are one section: the mode on the air is the snapshot's `keyboardMode`.
+  const keyboardMode = useKeyboardMode(section, snap.radio.keyboardMode)
+  const m = contestLogMode(section, keyboardMode, snap.link.tier)
   // THE TEXT SIZE (A− / A+): a factor on the app's Text size for the entry and the last contacts,
   // remembered on this computer for this window and clamped as it is read back.
   const [textScale, setTextScale] = useState(() => loggerTextScale(surfaceGet(TEXT_SCALE_KEY)))
@@ -259,6 +363,12 @@ export function ContestLargeEntry({
   }
   const scaled = { '--logger-text-scale': textScale } as CSSProperties
   const recentBox = useRef<HTMLElement>(null)
+  // A last contact's edit is over: the caret goes back to Call, as after the strip's own Ctrl+Y edit.
+  const entryBox = useRef<HTMLDivElement>(null)
+  const focusCall = () =>
+    requestAnimationFrame(() =>
+      entryBox.current?.querySelector<HTMLInputElement>('input.le-fd-input-call')?.focus({ preventScroll: true }),
+    )
   return (
     <>
       <section className="contest-logger-entry" aria-label={t('contestLogger.entry.aria')}>
@@ -297,7 +407,7 @@ export function ContestLargeEntry({
             {t('contestLogger.satellite.note', { bird: satellite })}
           </p>
         )}
-        <div className="contest-logger-scaled" style={scaled}>
+        <div className="contest-logger-scaled" style={scaled} ref={entryBox}>
           <LogEntry
             snap={snap}
             mode={m.mode}
@@ -309,7 +419,7 @@ export function ContestLargeEntry({
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
             noCreditChip={
-              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
+              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, keyboardMode)} />
             }
             operatorBox={
               <OperatorBox
@@ -325,7 +435,7 @@ export function ContestLargeEntry({
       </section>
       {!entryOnly && (
         <>
-          <LastContacts fieldDay={fieldDay} style={scaled} boxRef={recentBox} />
+          <LastContacts fieldDay={fieldDay} style={scaled} boxRef={recentBox} onEditDone={focusCall} />
           {/* THE LAST CONTACTS' DIVIDER: it sizes the list, and the Contest screen under it takes what is
               left (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows"). The list stays
               no taller than its rows, so the divider shortens it and gives the room back; it paints
@@ -438,6 +548,7 @@ export function ContestLogger({
           fdRuleset={fdRuleset}
           tier={snap.link.tier}
           section={snap.radio.operatingMode}
+          keyboardMode={snap.radio.keyboardMode}
           logger
           contestSwitch={contestSwitch}
           operatorAsk={operatorAsk}

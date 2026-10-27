@@ -85,9 +85,9 @@ export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedA
 
     // ---- Mode multi-select: keep only the operator's enabled modes (an unknown mode
     // class always shows, so the board never silently swallows a need it can't classify).
-    // RTTY/FT8/FT4 are Digital submodes (no separate chip), so the Digital toggle governs them. ----
+    // RTTY/FT8/FT4/JTTY are Digital submodes (no separate chip), so the Digital toggle governs them. ----
     const cls = (
-      a.mode === 'RTTY' || a.mode === 'FT8' || a.mode === 'FT4' ? 'Digital' : a.mode
+      a.mode === 'RTTY' || a.mode === 'FT8' || a.mode === 'FT4' || a.mode === 'JTTY' ? 'Digital' : a.mode
     ) as ModeClass
     if (MODE_CLASSES.includes(cls) && !filters.modes[cls]) return false
 

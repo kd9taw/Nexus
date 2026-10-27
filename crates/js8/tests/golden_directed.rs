@@ -1,4 +1,4 @@
-//! Golden test of the JS8 reassembler against JS8Call's own DIRECTED.TXT (sanitised, Task B4.1).
+//! Golden test of the JS8 reassembler against JS8Call's own DIRECTED.TXT (sanitised).
 //!
 //! Drives `Reassembler::feed` with every ALL.TXT frame (js8call_frames.txt, in decode order,
 //! on the fixture's `# +N` clock) and renders each closed `Message` with `render_directed`, then
@@ -123,7 +123,7 @@ fn reassembler_reproduces_js8calls_directed_txt() {
     );
 }
 
-/// Positive control (feedback-negative-results-need-a-positive-control): the coverage number is
+/// Positive control: the coverage number is
 /// meaningless unless a broken renderer would drop it. These exact lines MUST be produced, and
 /// each exercises a different code path — the faux HB, the CQ doubling, a directed SNR ack, a
 /// portable/base directed command, and a multi-frame checksummed MSG body.

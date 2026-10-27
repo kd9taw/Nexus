@@ -88,7 +88,7 @@ function respond(cmd: string, args: Record<string, unknown> | undefined): unknow
   }
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -123,7 +123,7 @@ const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 const strip = () => screen.getByRole('region', { name: t('contestLogger.entry.aria') })
 const box = (caption: string) => within(strip()).getByLabelText(caption) as HTMLInputElement
 const sentBox = () => within(strip()).queryByLabelText(t('logEntry.fd.rstSent.label')) as HTMLInputElement | null
-const callBox = () => within(strip()).getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => within(strip()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const logButton = () => strip().querySelector('.le-fd-log-btn') as HTMLButtonElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const last = () => logged[logged.length - 1]

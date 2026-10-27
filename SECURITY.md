@@ -25,7 +25,7 @@ on the current line.
 **Please report security issues privately. Do not open a public GitHub issue
 for a suspected vulnerability.**
 
-Email: **kd9taw@protonmail.com** (KD9TAW)
+Email: **contact@hamradiotools.io** (KD9TAW)
 
 If you would like to encrypt, say so in a first low-detail message and we can
 arrange a key out of band.
@@ -125,4 +125,4 @@ intent from a volunteer project, not a contractual guarantee.
 ---
 
 *Nexus — <https://sourceforge.net/projects/nexus-ham-radio/> — KD9TAW
-&lt;kd9taw@protonmail.com&gt;*
+&lt;contact@hamradiotools.io&gt;*

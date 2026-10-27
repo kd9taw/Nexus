@@ -33,6 +33,12 @@ vi.mock('../api', () => ({
   }),
 }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
+vi.mock('../settings/patch', () => ({
+  patchSettings: vi.fn(async (edit: (s: Settings) => Partial<Settings>) => {
+    calls.push(`patch:${JSON.stringify(edit({} as Settings))}`)
+    return {}
+  }),
+}))
 const stream = { input: false }
 vi.mock('../remote-native/stream-input', () => ({ isStreamInput: () => stream.input }))
 const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>
@@ -253,5 +259,90 @@ describe('the checklist', () => {
     expect(screen.queryByRole('checkbox', { name: /Merge/ })).toBeNull()
     expect(screen.queryByRole('checkbox', { name: /Export/ })).toBeNull()
     expect(document.querySelectorAll('.contest-over-row')).toHaveLength(6)
+  })
+})
+
+describe('the end-of-contest items beside the export', () => {
+  /** An Illinois QSO Party log that leaves out its entry class, its email and its power category. */
+  const missing = () =>
+    contestOverOffer(clubNow(), 212, 'ilqp', 0, {
+      missing: ['ENTRY-CLASS', 'EMAIL', 'CATEGORY-POWER'],
+      choices: { entryClasses: ['ILLINOIS FIXED HIGH POWER', 'UNLIMITED'] },
+    })
+  const summary = () => 'NEXUS SUMMARY'
+
+  it('offers the Summary, unticked like everything else, and shows where to send the log without opening it', () => {
+    render(<ContestOverDialog offer={missing()} onNotNow={vi.fn()} onTurnOff={vi.fn()} summaryText={summary} />)
+    expect(box(/Export the Summary/).checked).toBe(false)
+    expect([...document.querySelectorAll('input[type="checkbox"]')].every((b) => !(b as HTMLInputElement).checked)).toBe(true)
+    const submit = document.querySelector('[data-submit]')!
+    expect(submit.querySelector('code')!.textContent).toBe('n9jf@arrl.net')
+    // Text to copy, never a link Nexus follows.
+    expect(submit.querySelector('a')).toBeNull()
+    expect(submit.textContent).toContain('Nexus does not send it for you.')
+  })
+
+  it('names the missing lines, with a box for each one filled at export time and the restart for one read at the start', () => {
+    open(missing())
+    const lines = [...document.querySelectorAll('.contest-over-line')].map((l) => [
+      l.getAttribute('data-line'),
+      l.querySelector('select, input')?.tagName ?? null,
+    ])
+    expect(lines).toEqual([
+      ['ENTRY-CLASS', 'SELECT'],
+      ['EMAIL', 'INPUT'],
+      ['CATEGORY-POWER', null],
+    ])
+    expect(document.querySelector('[data-line="CATEGORY-POWER"]')!.textContent).toContain('turn Contest mode off and on again')
+    const cls = screen.getByRole('combobox', { name: 'Entry class (ENTRY-CLASS)' }) as HTMLSelectElement
+    expect([...cls.options].map((o) => o.value)).toEqual(['', 'ILLINOIS FIXED HIGH POWER', 'UNLIMITED'])
+  })
+
+  it('saves what was filled in BEFORE the export, then the Summary, then the put-backs, in that order', async () => {
+    const turnOff = vi.fn(async () => {
+      calls.push('turnOff')
+    })
+    render(<ContestOverDialog offer={missing()} onNotNow={vi.fn()} onTurnOff={turnOff} summaryText={summary} />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Entry class (ENTRY-CLASS)' }), {
+      target: { value: 'UNLIMITED' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Email for contest logs (EMAIL)' }), {
+      target: { value: ' op@example.org ' },
+    })
+    fireEvent.click(box(/Export the Cabrillo log/))
+    fireEvent.click(box(/Export the Summary/))
+    fireEvent.click(box(/Callsign on the air/))
+    await press(/Turn off/)
+    const stamp = new Date().toISOString().slice(0, 10)
+    expect(calls).toEqual([
+      'patch:{"contestEntryClass":"UNLIMITED","contestEmail":"op@example.org"}',
+      'export:cabrillo',
+      `save:ilqp-log-${stamp}.cbr`,
+      `save:ilqp-summary-${stamp}.txt`,
+      'turnOff',
+    ])
+    expect(api.saveTextToDownloads).toHaveBeenCalledWith(`ilqp-summary-${stamp}.txt`, 'NEXUS SUMMARY')
+    expect(turnOff).toHaveBeenCalledWith({ mycall: 'K9ABC' })
+  })
+
+  it('CONTROL: a line filled in without the export ticked is not saved, and nothing unticked runs', async () => {
+    const { turnOff } = open(missing())
+    fireEvent.change(screen.getByRole('textbox', { name: 'Email for contest logs (EMAIL)' }), {
+      target: { value: 'op@example.org' },
+    })
+    await press(/Turn off/)
+    expect(calls).toEqual(['turnOff'])
+    expect(turnOff).toHaveBeenCalledWith({})
+  })
+
+  it('refuses the Summary through the Remote stream, as the Contest screen does', async () => {
+    stream.input = true
+    const turnOff = vi.fn()
+    render(<ContestOverDialog offer={missing()} onNotNow={vi.fn()} onTurnOff={turnOff} summaryText={summary} />)
+    fireEvent.click(box(/Export the Summary/))
+    await press(/Turn off/)
+    expect(screen.getByRole('alert').textContent).toBe('Only at the station: a press through Remote exports no log.')
+    expect(calls).toEqual([])
+    expect(turnOff).not.toHaveBeenCalled()
   })
 })

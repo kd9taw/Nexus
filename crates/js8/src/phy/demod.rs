@@ -360,7 +360,7 @@ mod tests {
             // Gross-scale sanity only: a −5 dB (2500 Hz convention) frame must not
             // report +40 (baseline read as 0) or −60 (the floor). JS8Call's absolute
             // SNR scale vs the WSJT-X convention is measured, not assumed — the lab
-            // (Task B3.11 ab_js8.py) compares stock vs Nexus SNR per file and fails
+            // compares stock vs Nexus SNR per file and fails
             // on a mean offset > 3 dB; `snr_estimate_tracks_level` pins the slope.
             //
             // The reported SNR falls monotonically with speed for the SAME injected

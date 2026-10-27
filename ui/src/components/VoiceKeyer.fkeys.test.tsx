@@ -45,7 +45,7 @@ afterEach(() => {
 })
 
 async function renderKeyer() {
-  const view = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+  const view = render(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
   await act(async () => {})
   return view
 }

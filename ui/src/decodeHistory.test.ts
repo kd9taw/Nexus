@@ -9,6 +9,7 @@ import {
   passesFilter,
   periodStartMs,
   renderWindow,
+  rowTimeMs,
   RX_TOL_HZ,
   TIER_PERIOD_SECS,
 } from './decodeHistory'
@@ -243,6 +244,44 @@ describe('period separator UTC', () => {
     expect(fmtUtc(periodStartMs(16, 'FT2'))).toBe('000100')
     // …and slot 17 lands on the 3.75 s grid, not a whole second.
     expect(periodStartMs(17, 'FT2')).toBe(63_750)
+  })
+
+  it('takes the live period over the table one (MSK144, FST4, Q65 and JS8 make it a setting)', () => {
+    // MSK144 slot 4 at a 30 s period = 120 s; the table's 15 s would say 60 s.
+    expect(periodStartMs(4, 'MSK144', 30)).toBe(120_000)
+    expect(periodStartMs(4, 'MSK144')).toBe(60_000)
+  })
+})
+
+describe('the time a row shows (rowTimeMs)', () => {
+  it('a received row: the start of the period its audio came from, never when it arrived', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    // Ingested at boundary slot 5 (audio slot 4, 00:01:00), 34 s into the next period.
+    h.ingest([row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })], 5, 94_000)
+    const [d] = h.entries()
+    expect(d.at).toBe(94_000)
+    expect(rowTimeMs(d, 'FT8')).toBe(60_000)
+    expect(rowTimeMs(d, 'FT8', 30)).toBe(120_000)
+  })
+
+  it('a row heard before a band or mode change: the period it was heard in', () => {
+    // Heard on FT8 (boundary slot 4, the period at 45 s), shown after a change to FT4: its slot
+    // comes in FT4's numbering (8), which would date it 52.5 s.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT4')
+    h.ingestLate(
+      { band: '40m', dialMhz: 7.074, tier: 'FT8', periodStartMs: 45_000, slot: 8, rows: [row({ message: 'CQ K2DEF FN20', freqHz: 800 })] },
+      94_000,
+    )
+    expect(rowTimeMs(h.entries()[0], 'FT4')).toBe(45_000)
+  })
+
+  it('an own transmission: when it was sent', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([row({ message: 'CQ KD9TAW EN52', freqHz: 1500, mine: true, txAt: 75 })], 6, 94_000)
+    expect(rowTimeMs(h.entries()[0], 'FT8')).toBe(75_000)
   })
 })
 

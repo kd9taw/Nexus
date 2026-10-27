@@ -284,3 +284,38 @@ describe('Backup & reset carries the appearance', () => {
     expect(localStorage.getItem(WF_PALETTE_KEY)).toBeNull()
   })
 })
+
+// #306: the backup always went to Downloads, with no say in where. Save as… asks the OS where
+// (opening in Downloads, under the same dated name) and saves the same file there; Back up still
+// saves straight to Downloads.
+describe('Save as… lets the operator pick the folder (#306)', () => {
+  it('saves the same backup where the operator picks, and says where', async () => {
+    const { pushToast } = await import('../toast')
+    vi.mocked(pushToast).mockClear()
+    api.get('saveTextAs').mockImplementation(() => Promise.resolve('/mnt/usb/nexus-settings.json'))
+    renderPanel(setters())
+    fireEvent.click(await screen.findByRole('button', { name: EN['settings.transmit.backup.saveAs'] }))
+    await waitFor(() => expect(api.get('saveTextAs')).toHaveBeenCalledTimes(1))
+    const [name, text] = api.get('saveTextAs').mock.calls[0] as [string, string]
+    expect(name).toMatch(/^nexus-settings-\d{4}-\d{2}-\d{2}\.json$/)
+    expect(JSON.parse(text).settings).toEqual({ mycall: 'KD9TAW' })
+    expect(api.get('saveTextToDownloads')).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(pushToast).toHaveBeenCalledWith(
+        EN['settings.transmit.backup.done'].replace('{{path}}', '/mnt/usb/nexus-settings.json'),
+        'success',
+      ),
+    )
+  })
+
+  it('a cancelled Save as… saves nothing and says nothing', async () => {
+    const { pushToast } = await import('../toast')
+    vi.mocked(pushToast).mockClear()
+    renderPanel(setters()) // saveTextAs answers null: the dialog was cancelled
+    fireEvent.click(await screen.findByRole('button', { name: EN['settings.transmit.backup.saveAs'] }))
+    await waitFor(() => expect(api.get('saveTextAs')).toHaveBeenCalledTimes(1))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(pushToast).not.toHaveBeenCalled()
+    expect(api.get('saveTextToDownloads')).not.toHaveBeenCalled()
+  })
+})

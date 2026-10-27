@@ -45,13 +45,16 @@ it('one card: the sign-in status, then each browser with its key and the one thi
       { id: pinned, name: 'Chrome on Windows', approved: 1, expiresAt: now + 30 * day, key: fingerprint('a') },
       { id: unpinned, name: 'Laptop', approved: 1, expiresAt: now + 30 * day, key: fingerprint('b') },
       { id: waiting, name: 'Firefox on Android', approved: 0, expiresAt: now + 600000, key: fingerprint('c') },
-    ], pinnedDevices: [pinned], loggingPermissions: [pinned], stationPermissions: [pinned], transmitPermissions: [] })
-  const list = await screen.findByRole('list')
+    ], pinnedDevices: [pinned], stationPermissions: [pinned] })
+  const list = (await screen.findByRole('group', { name: 'You' })).querySelector('ul')!
   expect(screen.getByRole('status').textContent).toBe('Connected to the Remote service')
-  const rows = within(list).getAllByRole('listitem')
+  const rows = [...list.children] as HTMLElement[]
   expect(rows.map(row => row.querySelector('.remote-native-browser-name')?.textContent)).toEqual(['Chrome on Windows', 'Laptop', 'Firefox on Android'])
-  expect(rows.map(row => row.querySelector('.remote-native-browser-key')?.textContent)).toEqual(
+  // Each key in the row's details; on the row itself too where Approve would pin it.
+  expect(rows.map(row => row.querySelector('details .remote-native-browser-key')?.textContent)).toEqual(
     [`Key ${short(fingerprint('a'))}`, `Key ${short(fingerprint('b'))}`, `Key ${short(fingerprint('c'))}`])
+  expect(rows.map(row => row.querySelector(':scope > .remote-native-browser-key')?.textContent)).toEqual(
+    [undefined, `Key ${short(fingerprint('b'))}`, `Key ${short(fingerprint('c'))}`])
   // Approved and pinned: it can stream, and Remove is its one action.
   expect(within(rows[0]).queryByRole('button', { name: 'Approve' })).toBeNull()
   expect(within(rows[0]).getByRole('button', { name: 'Remove' })).toBeTruthy()
@@ -60,31 +63,22 @@ it('one card: the sign-in status, then each browser with its key and the one thi
   expect(within(rows[1]).getByRole('button', { name: 'Approve' })).toBeTruthy()
   expect(rows[2].textContent).toContain('Asks to stream this station.')
   fireEvent.click(within(rows[2]).getByRole('button', { name: 'Approve' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: fingerprint('c'), kind: 'browser' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, key: fingerprint('c'), kind: 'browser' }))
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: pinned, approve: false }))
-  // The permission and housekeeping controls are all under Advanced, which starts folded.
+  // The housekeeping controls are under Advanced, which starts folded; a browser's station controls fold
+  // under its own row (one list: the browser approvals Advanced repeated are gone).
   const advanced = document.querySelector('details.remote-native-advanced') as HTMLDetailsElement
   expect(advanced.open).toBe(false)
   expect(advanced.querySelector('summary')?.textContent).toBe('Advanced')
-  for (const name of ['Revoke logging permission', 'Revoke station controls', 'Allow FT8/FT4 transmission from the Remote page', 'Refresh browser requests',
-    'Revoke station access', 'Approve browser', 'Approve again', 'Revoke browser approval']) {
+  for (const name of ['Refresh browser requests', 'Revoke station access']) {
     expect(within(advanced).getAllByRole('button', { name }).length, `${name} is kept under Advanced`).toBeGreaterThan(0)
     expect(within(main()).queryByRole('button', { name }), `${name} is not in the card itself`).toBeNull()
   }
-  expect(within(advanced).getAllByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }).length).toBeGreaterThan(0)
-  expect(within(main()).queryByRole('checkbox')).toBeNull()
-})
-
-it('the approve in the card honours the transmit tick under Advanced, exactly as the old approve did (off unless ticked)', async () => {
-  const waiting = crypto.randomUUID()
-  const actions = mount({ phase: 'connected', origin: 'https://remote-staging.hamradiotools.io', stationId: crypto.randomUUID(),
-    accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null, pinnedDevices: [],
-    devices: [{ id: waiting, name: 'Phone', approved: 0, expiresAt: Date.now() + 600000, key: fingerprint('d') }] })
-  const row = (await screen.findAllByRole('listitem'))[0]
-  fireEvent.click(within(document.querySelector('.remote-native-advanced') as HTMLElement).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
-  fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
-  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: waiting, approve: true, transmit: true, key: fingerprint('d'), kind: 'browser' }]))
+  expect(within(rows[0].querySelector('details')!).getByRole('button', { name: 'Revoke station controls' })).toBeTruthy()
+  for (const name of ['Approve browser', 'Revoke browser approval'])
+    expect(screen.queryByRole('button', { name }), `${name}: one name per act`).toBeNull()
+  expect(document.querySelector('.remote-native')!.querySelector('input[type=checkbox]'), 'no transmit tick anywhere').toBeNull()
 })
 
 // A status with no device list (a stand-in backend's answer) is a station with no devices: the card renders, and
@@ -108,7 +102,7 @@ it('not linked yet, the card says so and holds the pairing steps; Remote off, th
     pairingId: null, pairingCode: null, expiresAt: null, devices: [], error: null })
   expect((await screen.findByRole('status')).textContent).toBe('Remote is off')
   expect(within(main()).getByRole('button', { name: 'Turn on Remote' })).toBeTruthy()
-  expect(within(main()).getByText('No current browser requests or approvals')).toBeTruthy()
+  expect(within(main()).getByText('No devices yet.')).toBeTruthy()
 })
 
 // S3-L1: the shack shows its own key the way the Remote page shows the key it kept for the station, so
@@ -123,6 +117,6 @@ it('the card shows this station\'s key in eight groups, as the Remote page shows
   // Control: a station with no key yet (paired by an earlier Nexus, or a store that would not answer).
   cleanup()
   mount({ ...station, stationKey: null })
-  await screen.findByText('No current browser requests or approvals')
+  await screen.findByText('No devices yet.')
   expect(document.body.textContent).not.toContain('This station’s key')
 })

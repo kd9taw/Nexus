@@ -5,7 +5,7 @@
 //! code is copied. `phy` never sees text, `proto` never sees audio; the seam is
 //! [`phy::Word87`] — 87 info bits (72 payload + 3 i3 + 12 CRC-12) MSB-first in 11 bytes.
 //!
-//! WHY one crate, two modules (judge.md ruling): a separate proto crate bought nothing once
+//! WHY one crate, two modules: a separate proto crate bought nothing once
 //! the modem is Rust — no gfortran in the proto tests to keep out — and would add a manifest
 //! plus a re-export layer that can drift. WHY pure Rust: every vendored WSJT-X routine hardcodes
 //! NSPS=1920 at compile time, uses the flipped Costas, Gray-maps and fuses `unpack77`; none is

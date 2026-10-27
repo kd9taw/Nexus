@@ -1,7 +1,8 @@
-//! Exercise the real lease/heartbeat authority around native FT ownership.
-//! Direct ownership tests and closed browser CQ/TX/Stop requests share native policy.
+//! Exercise the real lease authority and Stop around native FT ownership.
 use super::*;
 
+/// A controlling browser's FT8 CQ on the air, as a streamed controller's Call CQ puts it there:
+/// the native verb, under the session's presence minted from the lease.
 fn armed() -> (Fixture, Instant, Value) {
     let f = Fixture::new();
     {
@@ -13,84 +14,22 @@ fn armed() -> (Fixture, Instant, Value) {
     }
     let now = Instant::now();
     let state = acquire_controls_version(&f, now, 3);
-    f.authority.permit_transmit(DEVICE, true).unwrap();
-    let permit = f.authority.transmit.permit(now + LEASE).unwrap();
-    f.engine
-        .lock()
-        .unwrap()
-        .start_remote_ft_cq(permit, None)
+    let presence = f
+        .authority
+        .stream_presence(SESSION, DEVICE, state["leaseId"].as_str().unwrap(), now)
         .unwrap();
+    {
+        let mut e = f.engine.lock().unwrap();
+        e.start_cq(None).unwrap();
+        assert!(e.hold_remote_presence(presence, now));
+    }
     (f, now, state)
-}
-
-fn heartbeat(
-    f: &Fixture,
-    state: &Value,
-    session: &str,
-    now: Instant,
-) -> Result<Value, &'static str> {
-    f.authority.handle_version(
-        (f.connection, 3),
-        session,
-        DEVICE,
-        &Request::Heartbeat {
-            request_id: id(),
-            lease_id: state["leaseId"].as_str().unwrap().into(),
-        },
-        &f.engine,
-        now,
-    )
-}
-
-#[test]
-fn transmit_permission_is_separate_boot_scoped_and_never_arms() {
-    let f = Fixture::new();
-    assert_eq!(
-        f.authority.permit_transmit(DEVICE, true),
-        Err("localPermissionRequired")
-    );
-    f.authority.permit_station(DEVICE, true).unwrap();
-    assert_eq!(f.authority.local_status()["transmitDevices"], json!([]));
-    f.authority.permit_transmit(DEVICE, true).unwrap();
-    assert_eq!(
-        f.authority.local_status()["transmitDevices"],
-        json!([DEVICE])
-    );
-    assert!(!f.engine.lock().unwrap().tx_enabled());
-    f.authority.invalidate();
-    assert_eq!(f.authority.local_status()["transmitDevices"], json!([]));
-    assert_eq!(
-        f.authority.permit_transmit(DEVICE, true),
-        Err("localPermissionRequired")
-    );
-}
-
-#[test]
-fn transmit_heartbeat_renews_only_the_current_live_owner() {
-    let (f, now, state) = armed();
-    assert_eq!(
-        heartbeat(&f, &state, OTHER, now + Duration::from_secs(1)),
-        Err("notController")
-    );
-    heartbeat(&f, &state, SESSION, now + Duration::from_secs(2)).unwrap();
-    let mut e = f.engine.lock().unwrap();
-    assert!(!e.poll_remote_transmit(now + LEASE));
-    assert!(e.tx_enabled());
-    assert!(e.poll_remote_transmit(now + LEASE + Duration::from_secs(2)));
-    assert!(!e.tx_enabled());
-    drop(e);
-    assert_eq!(
-        heartbeat(&f, &state, SESSION, now + LEASE + Duration::from_secs(2)),
-        Err("leaseExpired")
-    );
 }
 
 #[test]
 fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
     for cause in [
-        "grant",
         "stationGrant",
-        "loggingGrant",
         "disconnect",
         "connection",
         "invalidate",
@@ -101,12 +40,8 @@ fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
         // an in-flight modem or other native operation.
         let mut e = f.engine.lock().unwrap();
         match cause {
-            "grant" => f.authority.permit_transmit(DEVICE, false).unwrap(),
             "stationGrant" => {
                 f.authority.permit_station(DEVICE, false).unwrap();
-            }
-            "loggingGrant" => {
-                f.authority.permit(DEVICE, false).unwrap();
             }
             "disconnect" => f.authority.disconnect_session(SESSION),
             "connection" => {
@@ -123,26 +58,9 @@ fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
 }
 
 #[test]
-fn transmit_regrant_and_heartbeat_cannot_revive_old_tx_or_own_native_tx() {
-    for local in [false, true] {
-        let (f, now, state) = armed();
-        if local {
-            f.engine.lock().unwrap().set_tx_enabled(true);
-        }
-        f.authority.permit_transmit(DEVICE, false).unwrap();
-        f.authority.permit_transmit(DEVICE, true).unwrap();
-        heartbeat(&f, &state, SESSION, now + Duration::from_secs(1)).unwrap();
-        let mut e = f.engine.lock().unwrap();
-        assert_eq!(e.tx_enabled(), local);
-        assert!(!e.poll_remote_transmit(now + Duration::from_secs(20)));
-        assert_eq!(e.tx_enabled(), local);
-    }
-}
-
-#[test]
 fn transmit_release_ends_the_permit_and_other_device_revoke_does_not() {
     let (f, now, state) = armed();
-    f.authority.permit_transmit(OTHER, false).unwrap();
+    f.authority.permit_station(OTHER, false).unwrap();
     assert!(!f.engine.lock().unwrap().poll_remote_transmit(now));
     f.authority
         .handle_version(
@@ -174,63 +92,73 @@ fn transmit_stop_does_not_wait_for_engine_or_a_pending_file_operation() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
-    let mut engine = f.engine.lock().unwrap();
+    let engine = f.engine.lock().unwrap();
     let _pending_file_operation = f.authority.core.lock().unwrap();
     let result = f
         .authority
         .handle_version((f.connection, 4), SESSION, DEVICE, &request, &f.engine, now)
         .unwrap();
     assert_eq!(result, json!({"stop":"accepted"}));
-    assert!(engine.poll_remote_transmit(now));
+    assert!(
+        engine.tx_enabled(),
+        "the acceptance did not wait for the engine"
+    );
+    drop(engine);
+    drop(_pending_file_operation);
+    for _ in 0..200 {
+        if !f.engine.lock().unwrap().tx_enabled() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut engine = f.engine.lock().unwrap();
     assert!(!engine.tx_enabled());
     assert!(engine.take_slot_tx_abort());
 }
 
 /// Stop TX is never refused (operator ruling, 2026-10-03): the same Stop delivered again after a
-/// new remote CQ was armed stops that CQ too, although its token is from before the first Stop.
-/// Admission alone does it, before the engine is free: it retires the generation the CQ was armed
-/// under. This replaced `transmit_stop_rejects_a_replay_after_a_new_remote_arm`, which pinned the
+/// new CQ was armed stops that CQ too, although its token is from before the first Stop: the
+/// station runs its stop (`transmit_stop::stop_station`) for the replay as for the first. The
+/// CQ is the native Call CQ a streamed controller's click is. This replaced `transmit_stop_rejects_a_replay_after_a_new_remote_arm`, which pinned the
 /// opposite (the replay refused `staleContext` and the new CQ left armed).
 #[test]
 fn a_replayed_stop_after_a_new_remote_arm_still_stops_it() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
-    f.authority
-        .stop_transmit(f.connection, SESSION, DEVICE, &request, now)
-        .unwrap();
+    assert_eq!(
+        stop_v4(&f, DEVICE, &request, now),
+        Ok(json!({"stop":"accepted"}))
+    );
     {
         let mut e = f.engine.lock().unwrap();
-        assert!(e.poll_remote_transmit(now));
+        assert!(!e.tx_enabled(), "the first Stop left the CQ armed");
         e.take_immediate_retune();
-        e.start_remote_ft_cq(f.authority.transmit.permit(now + LEASE).unwrap(), None)
-            .unwrap();
-        // Positive control: the new CQ is armed and its permit is live.
-        assert!(!e.poll_remote_transmit(now));
+        e.start_cq(None).unwrap();
+        // Positive control: the new CQ is armed.
         assert!(e.tx_enabled());
     }
     assert_eq!(
-        f.authority
-            .stop_transmit(f.connection, SESSION, DEVICE, &request, now),
-        Ok(())
+        stop_v4(&f, DEVICE, &request, now),
+        Ok(json!({"stop":"accepted"}))
     );
-    let mut e = f.engine.lock().unwrap();
-    assert!(e.poll_remote_transmit(now), "the new CQ's permit survived");
+    let e = f.engine.lock().unwrap();
     assert!(!e.tx_enabled(), "the new CQ is still armed");
 }
 
 // ── Stop anything (operator decision 2026-09-14) ────────────────────────────────────────────────
 // A browser holding station control stops ANY transmission at the station, however it started: a
-// keyed mic, a tune carrier, the CW keyer, the voice keyer, RTTY, PSK, SSTV or FT. The station runs
-// every local stop verb (`transmit_stop::stop_station`). Transmit permission is needed only to START;
-// a browser without station control is refused and changes nothing. This replaces
+// keyed mic, a tune carrier, the CW keyer, the voice keyer, RTTY, PSK, JTTY, SSTV or FT. The station runs
+// every local stop verb (`transmit_stop::stop_station`). A browser without station control is
+// refused and changes nothing. This replaces
 // `transmit_stop_cannot_stop_a_new_local_transmission`, which pinned the opposite rule.
 
-pub(crate) const LOCAL_TRANSMISSIONS: [&str; 8] =
-    ["ptt", "tune", "cw", "voice", "rtty", "psk", "sstv", "ft"];
+pub(crate) const LOCAL_TRANSMISSIONS: [&str; 9] = [
+    "ptt", "tune", "cw", "voice", "rtty", "psk", "jtty", "sstv", "ft",
+];
 
-/// A controlling v4 browser, with or without FT8/FT4 transmit permission, and nothing keyed.
-fn controlling(transmit: bool) -> (Fixture, Instant, Value) {
+/// A controlling v4 browser, and nothing keyed.
+fn controlling() -> (Fixture, Instant, Value) {
     let f = Fixture::new();
     {
         let mut e = f.engine.lock().unwrap();
@@ -241,9 +169,6 @@ fn controlling(transmit: bool) -> (Fixture, Instant, Value) {
     }
     let now = Instant::now();
     acquire_controls_version(&f, now, 4);
-    if transmit {
-        f.authority.permit_transmit(DEVICE, true).unwrap();
-    }
     let state = control_state_version(&f, now, 4);
     assert_eq!(state["phase"], "controlling");
     (f, now, state)
@@ -275,6 +200,14 @@ pub(crate) fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
             e.set_operating_mode("keyboard", false);
             e.set_tx_enabled(true);
             e.psk_send_text("CQ TEST").unwrap();
+        }
+        "jtty" => {
+            e.set_operating_mode("jtty", false);
+            e.set_frequency(14.090, "20m", "USB");
+            e.set_tx_enabled(true);
+            let plan = e.jtty_plan_send("CQ TEST", "", None).unwrap();
+            let rendered = tempo_app::engine::jtty_tx::render(&plan).unwrap();
+            e.jtty_commit(plan, rendered).unwrap();
         }
         "sstv" => {
             e.set_operating_mode("phone", false);
@@ -309,6 +242,7 @@ pub(crate) fn assert_stopped(e: &mut tempo_app::engine::Engine, kind: &str) {
         "voice" => assert!(e.take_voice_abort(), "{kind}: playback is flushed"),
         "rtty" => assert!(e.take_rtty_abort(), "{kind}: the over is aborted"),
         "psk" => assert!(e.take_psk_abort(), "{kind}: the over is aborted"),
+        "jtty" => assert!(e.take_jtty_abort(), "{kind}: what is on the air is cut"),
         "sstv" => assert!(e.take_sstv_abort(), "{kind}: the image is aborted"),
         _ => {}
     }
@@ -325,53 +259,34 @@ fn stop_v4(
 }
 
 #[test]
-fn a_controlling_browser_stops_any_local_transmission_with_or_without_transmit_permission() {
+fn a_controlling_browser_stops_any_local_transmission() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    for transmit in [false, true] {
-        for kind in LOCAL_TRANSMISSIONS {
-            let (f, now, state) = controlling(transmit);
-            assert!(
-                state["transmitEpoch"].is_string(),
-                "station control alone holds the stop token (transmit={transmit})"
-            );
-            key_locally(&mut f.engine.lock().unwrap(), kind);
-            assert_eq!(
-                stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
-                Ok(json!({"stop":"accepted"})),
-                "{kind} transmit={transmit}"
-            );
-            assert_stopped(&mut f.engine.lock().unwrap(), kind);
-        }
+    for kind in LOCAL_TRANSMISSIONS {
+        let (f, now, state) = controlling();
+        assert!(
+            state["transmitEpoch"].is_string(),
+            "station control alone holds the stop token"
+        );
+        key_locally(&mut f.engine.lock().unwrap(), kind);
+        assert_eq!(
+            stop_v4(&f, DEVICE, &stop_request(&f, &state), now),
+            Ok(json!({"stop":"accepted"})),
+            "{kind}"
+        );
+        assert_stopped(&mut f.engine.lock().unwrap(), kind);
     }
 }
 
 #[test]
 fn a_browser_without_station_control_is_refused_and_stops_nothing() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    for scene in ["noLease", "loggingOnly", "controlRevoked", "otherDevice"] {
+    for scene in ["noLease", "controlRevoked", "otherDevice"] {
         let f = Fixture::new();
         let now = Instant::now();
         let state = match scene {
             "noLease" => {
                 f.authority.permit_station(DEVICE, true).unwrap();
                 control_state_version(&f, now, 4)
-            }
-            "loggingOnly" => {
-                f.authority.permit(DEVICE, true).unwrap();
-                let boot = control_state_version(&f, now, 4)["stationBootId"].clone();
-                f.authority
-                    .handle_version(
-                        (f.connection, 4),
-                        SESSION,
-                        DEVICE,
-                        &Request::Acquire {
-                            request_id: id(),
-                            station_boot_id: boot.as_str().unwrap().into(),
-                        },
-                        &f.engine,
-                        now,
-                    )
-                    .unwrap()
             }
             "controlRevoked" => {
                 acquire_controls_version(&f, now, 4);
@@ -385,16 +300,6 @@ fn a_browser_without_station_control_is_refused_and_stops_nothing() {
             }
             _ => unreachable!(),
         };
-        if scene == "loggingOnly" {
-            assert_eq!(
-                state["phase"], "controlling",
-                "positive control: a logging lease is held"
-            );
-            assert!(
-                state["transmitEpoch"].is_null(),
-                "logging alone holds no stop token"
-            );
-        }
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
         let request = Request::StopTransmit {
             request_id: id(),
@@ -446,7 +351,7 @@ fn an_expired_lease_still_stops_and_starts_nothing() {
                           // the station transmit, so by the time the operator presses Stop the station has already
                           // reconciled the expired lease away and taken the generation it was issued with.
     for settled in [false, true] {
-        let (f, now, state) = controlling(false);
+        let (f, now, state) = controlling();
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
         let expired = now + LEASE + Duration::from_secs(1);
         let target = if settled {
@@ -486,7 +391,7 @@ fn an_expired_lease_still_stops_and_starts_nothing() {
 fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     for scene in ["released", "revokedAfterExpiry", "takenOverAfterExpiry"] {
-        let (f, now, state) = controlling(false);
+        let (f, now, state) = controlling();
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
         let expired = now + LEASE + Duration::from_secs(1);
         let boot: String = state["stationBootId"].as_str().unwrap().into();
@@ -592,7 +497,7 @@ fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
 #[test]
 fn a_delayed_stop_still_stops_what_is_on_the_air_now() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    let (f, now, state) = controlling(false);
+    let (f, now, state) = controlling();
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
     let request = stop_request(&f, &state);
     assert_eq!(
@@ -629,7 +534,7 @@ fn a_delayed_stop_still_stops_what_is_on_the_air_now() {
 #[test]
 fn a_stop_is_accepted_at_once_while_the_engine_is_busy_and_stops_as_soon_as_it_is_free() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    let (f, now, state) = controlling(false);
+    let (f, now, state) = controlling();
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
     let busy = f.engine.lock().unwrap();
     assert_eq!(
@@ -697,8 +602,7 @@ fn transmit_stop_requires_the_exact_granted_lease_and_new_protocol() {
                 }
                 "staleStation"
             }
-            // Station control is what Stop needs (transmit permission only starts): revoking it
-            // refuses the Stop.
+            // Station control is what Stop needs: revoking it refuses the Stop.
             "grant" => {
                 f.authority.permit_station(DEVICE, false).unwrap();
                 "localPermissionRequired"
@@ -767,8 +671,6 @@ fn transmit_stop_token_is_only_returned_to_the_granted_v4_owner() {
         )
         .unwrap();
     assert!(value["transmitEpoch"].is_null());
-    // Revoking FT8/FT4 transmit keeps the stop token: station control alone may stop.
-    f.authority.permit_transmit(DEVICE, false).unwrap();
     let state = |f: &Fixture| {
         f.authority
             .handle_version(
@@ -790,301 +692,6 @@ fn transmit_stop_token_is_only_returned_to_the_granted_v4_owner() {
     assert!(state(&f)["transmitEpoch"].is_null());
 }
 
-fn ready_ft(tier: tempo_app::dto::Tier) -> (Fixture, Instant, Value) {
-    ready_ft_link(tier, true)
-}
-
-fn ready_ft_link(tier: tempo_app::dto::Tier, connected: bool) -> (Fixture, Instant, Value) {
-    let f = Fixture::new();
-    {
-        let mut e = f.engine.lock().unwrap();
-        e.set_tier(tier);
-        e.configure_remote_settings_store(f.dir.join("settings.json"));
-        e.set_tx_enabled(false);
-        e.take_immediate_retune();
-        e.take_slot_tx_abort();
-        let radio = e.remote_open_radio().unwrap();
-        let read = e.remote_radio_read(&radio, Instant::now());
-        let hz = (e.settings().dial_mhz * 1e6).round() as u64;
-        e.remote_observe_cat(read.as_ref(), Some(connected));
-        e.remote_observe_dial(read.as_ref(), Some(hz));
-        e.remote_observe_mode(read.as_ref(), Some("PKTUSB"));
-        e.remote_observe_ptt(read.as_ref(), Some(false));
-    }
-    let now = Instant::now();
-    acquire_controls_version(&f, now, 4);
-    f.authority.permit_transmit(DEVICE, true).unwrap();
-    let state = control_state_version(&f, now, 4);
-    (f, now, state)
-}
-fn ft_command(state: &Value, action: Value) -> Request {
-    serde_json::from_value(json!({"type":"stationControl","requestId":id(),"stationBootId":state["stationBootId"],
-        "leaseId":state["leaseId"],"expectedRevision":state["revision"],"commandWindowId":state["commandWindowId"],
-        "clientSequence":state["nextSequence"],"context":state["controls"]["context"],"action":action})).unwrap()
-}
-fn ft_run(f: &Fixture, request: &Request) -> Result<Value, &'static str> {
-    f.authority.handle_version(
-        (f.connection, 4),
-        SESSION,
-        DEVICE,
-        request,
-        &f.engine,
-        Instant::now(),
-    )
-}
-
-/// One approval (operator decision 2026-09-13): a transmit grant can now come back when Remote comes
-/// on after a restart. Coming back arms nothing. Transmit without station control is not restored at
-/// all. With it, the browser is offered FT operating, but the TX-enable latch stays off, taking the
-/// lease and heartbeating arm nothing, and only the browser's own TX On does.
-#[test]
-fn a_restored_transmit_grant_arms_nothing_until_the_browser_presses_tx_on() {
-    use tempo_app::dto::Tier;
-    for tier in [Tier::Ft8, Tier::Ft4] {
-        let f = Fixture::new();
-        {
-            let mut e = f.engine.lock().unwrap();
-            e.set_tier(tier);
-            e.configure_remote_settings_store(f.dir.join("settings.json"));
-            e.set_tx_enabled(false);
-            e.take_immediate_retune();
-            e.take_slot_tx_abort();
-            let radio = e.remote_open_radio().unwrap();
-            let read = e.remote_radio_read(&radio, Instant::now());
-            let hz = (e.settings().dial_mhz * 1e6).round() as u64;
-            e.remote_observe_cat(read.as_ref(), Some(true));
-            e.remote_observe_dial(read.as_ref(), Some(hz));
-            e.remote_observe_mode(read.as_ref(), Some("PKTUSB"));
-            e.remote_observe_ptt(read.as_ref(), Some(false));
-        }
-        let epoch = f.authority.epoch();
-        let transmit_only = DurableGrants {
-            transmit: vec![DEVICE.into()],
-            ..Default::default()
-        };
-        assert_eq!(f.authority.restore(epoch, &transmit_only), Ok(true));
-        assert_eq!(
-            f.authority.local_status()["transmitDevices"],
-            json!([]),
-            "never restored without station control"
-        );
-        let grants = DurableGrants {
-            control: vec![DEVICE.into()],
-            transmit: vec![DEVICE.into()],
-            ..Default::default()
-        };
-        assert_eq!(f.authority.restore(epoch, &grants), Ok(true));
-        assert_eq!(
-            f.authority.local_status()["transmitDevices"],
-            json!([DEVICE])
-        );
-        assert!(
-            !f.engine.lock().unwrap().tx_enabled(),
-            "restoring leaves the latch off"
-        );
-
-        let now = Instant::now();
-        let boot = control_state_version(&f, now, 4)["stationBootId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let owner = f
-            .authority
-            .handle_version(
-                (f.connection, 4),
-                SESSION,
-                DEVICE,
-                &Request::Acquire {
-                    request_id: id(),
-                    station_boot_id: boot,
-                },
-                &f.engine,
-                now,
-            )
-            .unwrap();
-        f.authority
-            .handle_version(
-                (f.connection, 4),
-                SESSION,
-                DEVICE,
-                &Request::Heartbeat {
-                    request_id: id(),
-                    lease_id: owner["leaseId"].as_str().unwrap().into(),
-                },
-                &f.engine,
-                now,
-            )
-            .unwrap();
-        let state = control_state_version(&f, now, 4);
-        assert!(
-            state["controls"]["capabilities"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("ftOperate")),
-            "positive control: the restored grant is real"
-        );
-        assert_eq!(state["txArmed"], false);
-        {
-            let e = f.engine.lock().unwrap();
-            assert!(
-                !e.tx_enabled() && !e.remote_ft_tx_owned(),
-                "a lease and a heartbeat arm nothing"
-            );
-        }
-        let tx_on = ft_command(
-            &state,
-            json!({"action":"ft.txEnabled","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"on":true}),
-        );
-        assert_eq!(ft_run(&f, &tx_on).unwrap()["outcome"], "applied");
-        assert!(
-            f.engine.lock().unwrap().tx_enabled(),
-            "positive control: the browser's TX On is what arms it"
-        );
-    }
-}
-
-#[test]
-fn transmit_message_choice_uses_the_original_exchange_and_native_target() {
-    use tempo_app::engine::remote_transmit::FtExchangeContext;
-    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
-        let (f, _, state) = ready_ft(tier);
-        assert!(state["controls"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("ftMessages")));
-        let cq = ft_command(
-            &state,
-            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
-        );
-        assert_eq!(ft_run(&f, &cq).unwrap()["outcome"], "applied");
-        f.engine.lock().unwrap().take_immediate_retune();
-        let expected = FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
-        let current = control_state_version(&f, Instant::now(), 4);
-        let command = ft_command(
-            &current,
-            json!({"action":"ft.message","expectedTier":tier,
-            "transmitEpoch":current["transmitEpoch"],"expectedQso":expected,
-            "call":"W1AW","grid":"FN31","text":"W1AW KD9TAW -12"}),
-        );
-        assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
-        let qso = f.engine.lock().unwrap().snapshot().qso.unwrap();
-        assert_eq!(qso.dxcall.as_deref(), Some("W1AW"));
-        assert_eq!(qso.tx_now.as_deref(), Some("W1AW KD9TAW -12"));
-        let current = control_state_version(&f, Instant::now(), 4);
-        let stale = ft_command(
-            &current,
-            json!({"action":"ft.message","expectedTier":tier,
-            "transmitEpoch":current["transmitEpoch"],"expectedQso":expected,
-            "call":"K2ABC","grid":null,"text":"K2ABC KD9TAW -10"}),
-        );
-        assert_eq!(ft_run(&f, &stale).unwrap()["outcome"], "rejected");
-        assert_eq!(f.engine.lock().unwrap().snapshot().qso.unwrap(), qso);
-    }
-}
-
-#[test]
-fn transmit_exchange_controls_reuse_native_policy_and_reject_an_advanced_display() {
-    use tempo_app::engine::remote_transmit::FtExchangeContext;
-    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
-        let (f, _, state) = ready_ft(tier);
-        assert!(state["controls"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("ftExchange")));
-        let cq = ft_command(
-            &state,
-            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
-        );
-        assert_eq!(ft_run(&f, &cq).unwrap()["outcome"], "applied");
-        f.engine.lock().unwrap().take_immediate_retune();
-        let original = FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
-        for change in [
-            json!({"kind":"freeText","text":"TNX 73"}),
-            json!({"kind":"resend"}),
-            json!({"kind":"monitor"}),
-        ] {
-            let expected =
-                FtExchangeContext::from(&f.engine.lock().unwrap().snapshot().qso.unwrap());
-            let current = control_state_version(&f, Instant::now(), 4);
-            let command = ft_command(
-                &current,
-                json!({"action":"ft.exchange","expectedTier":tier,"transmitEpoch":current["transmitEpoch"],"expectedQso":expected,"change":change}),
-            );
-            assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
-            assert!(
-                f.engine.lock().unwrap().tx_enabled(),
-                "native S&P does not disarm the TX latch"
-            );
-        }
-        let current = control_state_version(&f, Instant::now(), 4);
-        let stale = ft_command(
-            &current,
-            json!({"action":"ft.exchange","expectedTier":tier,"transmitEpoch":current["transmitEpoch"],"expectedQso":original,"change":{"kind":"resend"}}),
-        );
-        assert_eq!(ft_run(&f, &stale).unwrap()["outcome"], "rejected");
-    }
-}
-
-#[test]
-fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
-    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    use tempo_app::dto::Tier;
-    for tier in [Tier::Ft8, Tier::Ft4] {
-        let (f, _, state) = ready_ft(tier);
-        assert!(state["controls"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("ftOperate")));
-        let command = ft_command(
-            &state,
-            json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":"DX"}),
-        );
-        assert_eq!(ft_run(&f, &command).unwrap()["evidence"], "stationState");
-        assert!(f.engine.lock().unwrap().tx_enabled());
-        let armed = control_state_version(&f, Instant::now(), 4);
-        assert_eq!(armed["txArmed"], true);
-        let off = ft_command(
-            &armed,
-            json!({"action":"ft.txEnabled","expectedTier":tier,"transmitEpoch":armed["transmitEpoch"],"on":false}),
-        );
-        assert_eq!(ft_run(&f, &off).unwrap()["outcome"], "applied");
-        assert!(!f.engine.lock().unwrap().take_slot_tx_abort());
-        assert!(!f.engine.lock().unwrap().tx_enabled());
-        let stop = stop_request(&f, &state);
-        assert_eq!(ft_run(&f, &stop).unwrap(), json!({"stop":"accepted"}));
-        // Stop anything (2026-09-14): the station halts at once rather than leaving the halt to
-        // the radio loop's permit poll, so the poll finds nothing left to stop.
-        let mut e = f.engine.lock().unwrap();
-        assert!(!e.remote_ft_tx_owned());
-        assert!(!e.poll_remote_transmit(Instant::now()));
-        assert!(!e.tx_enabled());
-        assert!(e.take_slot_tx_abort());
-    }
-}
-
-#[test]
-fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matches() {
-    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    let (f, _, state) = ready_ft(tempo_app::dto::Tier::Ft8);
-    let command = ft_command(
-        &state,
-        json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"direction":null}),
-    );
-    assert_eq!(
-        ft_run(&f, &stop_request(&f, &state)).unwrap(),
-        json!({"stop":"accepted"})
-    );
-    assert_eq!(ft_run(&f, &command), Err("staleContext"));
-    assert!(!f.engine.lock().unwrap().tx_enabled());
-    let fresh = control_state_version(&f, Instant::now(), 4);
-    let command = ft_command(
-        &fresh,
-        json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":fresh["transmitEpoch"],"direction":null}),
-    );
-    assert_eq!(ft_run(&f, &command).unwrap()["outcome"], "applied");
-    assert!(f.engine.lock().unwrap().tx_enabled());
-}
-
 /// A Stop must not leave the station fighting itself for Engine.
 ///
 /// The satellite disarm briefly ran on a thread of its own, so the request the browser sends right
@@ -1098,11 +705,11 @@ fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matc
 #[test]
 fn transmit_stop_does_not_leave_the_station_busy_for_the_next_request() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    let (f, _, _) = ready_ft(tempo_app::dto::Tier::Ft8);
+    let (f, _, _) = controlling();
     for _ in 0..200 {
         let state = control_state_version(&f, Instant::now(), 4);
         assert_eq!(
-            ft_run(&f, &stop_request(&f, &state)).unwrap(),
+            stop_v4(&f, DEVICE, &stop_request(&f, &state), Instant::now()).unwrap(),
             json!({"stop":"accepted"})
         );
         let after = f.authority.handle_version(
@@ -1121,237 +728,6 @@ fn transmit_stop_does_not_leave_the_station_busy_for_the_next_request() {
     }
 }
 
-#[test]
-fn transmit_browser_arm_requires_its_own_grant_and_fresh_radio_context() {
-    for cause in [
-        "permission",
-        "link",
-        "tier",
-        "generation",
-        "direction",
-        "local",
-    ] {
-        let (f, _, state) = ready_ft_link(tempo_app::dto::Tier::Ft8, cause != "link");
-        let mut action = json!({"action":"ft.cq","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"direction":null});
-        match cause {
-            "permission" => f.authority.permit_transmit(DEVICE, false).unwrap(),
-            "link" => {}
-            "tier" => action["expectedTier"] = json!("FT4"),
-            "generation" => action["transmitEpoch"] = json!("ffffffffffffffff"),
-            "direction" => action["direction"] = json!("CQ DX W1AW"),
-            "local" => f.engine.lock().unwrap().set_tx_enabled(true),
-            _ => unreachable!(),
-        }
-        let result = ft_run(&f, &ft_command(&state, action));
-        assert!(
-            result.is_err() || result.unwrap()["outcome"] == "rejected",
-            "{cause}"
-        );
-        assert_eq!(
-            f.engine.lock().unwrap().tx_enabled(),
-            cause == "local",
-            "{cause}"
-        );
-    }
-}
-
-#[test]
-fn transmit_local_revocation_does_not_wait_for_a_pending_durable_write() {
-    let (f, now, _) = armed();
-    let core = f.authority.core.lock().unwrap();
-    let result = f.authority.permit_transmit(DEVICE, false);
-    assert_eq!(
-        result,
-        Ok(()),
-        "a local revoke must not wait for a file sync"
-    );
-    assert!(f.engine.lock().unwrap().poll_remote_transmit(now));
-    drop(core);
-    let state = control_state_version(&f, Instant::now(), 4);
-    // The stop token stays (station control alone may stop); starting FT does not.
-    assert!(state["transmitEpoch"].is_string());
-    assert!(!state["controls"]["capabilities"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("ftOperate")));
-    assert!(!f.engine.lock().unwrap().tx_enabled());
-}
-
-#[test]
-fn ft_preferences_require_transmit_grant_and_match_durable_native_state() {
-    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
-        for change in [
-            json!({"kind":"txOffset","hz":1800}),
-            json!({"kind":"bothOffsets","hz":2200}),
-            json!({"kind":"hold","on":true}),
-            json!({"kind":"even","even":false}),
-            json!({"kind":"auto","auto":false}),
-        ] {
-            let (f, _, state) = ready_ft(tier);
-            assert!(state["controls"]["capabilities"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("ftSettings")));
-            let expected = f.engine.lock().unwrap().remote_ft_settings().unwrap();
-            let request = ft_command(
-                &state,
-                json!({"action":"ft.setting","expectedTier":tier,
-                "transmitEpoch":state["transmitEpoch"],"expected":expected,"change":change}),
-            );
-            for version in [2, 3] {
-                assert_eq!(
-                    f.authority.handle_version(
-                        (f.connection, version),
-                        SESSION,
-                        DEVICE,
-                        &request,
-                        &f.engine,
-                        Instant::now()
-                    ),
-                    Err("stationUnsupported")
-                );
-            }
-            let response = ft_run(&f, &request).unwrap();
-            assert_eq!(response["outcome"], "applied", "{response}");
-            assert_eq!(
-                response["evidence"],
-                if change["kind"] == "auto" {
-                    "stationState"
-                } else {
-                    "settingsSaved"
-                }
-            );
-            assert!(!f.engine.lock().unwrap().tx_enabled());
-            let after = f.engine.lock().unwrap().remote_ft_settings().unwrap();
-            assert_ne!(expected.key, after.key);
-            match change["kind"].as_str().unwrap() {
-                "txOffset" => assert_eq!(after.tx_offset_hz, 1800.0),
-                "bothOffsets" => {
-                    assert_eq!(after.tx_offset_hz, 2200.0);
-                    assert_eq!(after.rx_offset_hz, 2200.0);
-                }
-                "hold" => assert!(after.hold_tx_freq),
-                "even" => {
-                    assert!(!after.tx_even);
-                    assert!(!after.tx_cycle_auto);
-                }
-                "auto" => assert!(!after.tx_cycle_auto),
-                _ => unreachable!(),
-            }
-            assert_eq!(ft_run(&f, &request).unwrap(), response);
-            assert_eq!(f.engine.lock().unwrap().remote_ft_settings(), Some(after));
-        }
-    }
-}
-
-#[test]
-fn ft_preferences_refuse_lost_grant_changed_context_and_unavailable_radio() {
-    for cause in ["grant", "context", "radio"] {
-        let (f, _, state) = ready_ft_link(tempo_app::dto::Tier::Ft8, cause != "radio");
-        let expected = f.engine.lock().unwrap().remote_ft_settings().unwrap();
-        let request = ft_command(
-            &state,
-            json!({"action":"ft.setting","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],
-            "expected":expected,"change":{"kind":"txOffset","hz":1800}}),
-        );
-        if cause == "grant" {
-            f.authority.permit_transmit(DEVICE, false).unwrap();
-        }
-        if cause == "context" {
-            let mut e = f.engine.lock().unwrap();
-            e.set_hold_tx_freq(!expected.hold_tx_freq);
-            e.set_hold_tx_freq(expected.hold_tx_freq);
-        }
-        let before = f.engine.lock().unwrap().settings().clone();
-        let result = ft_run(&f, &request);
-        if cause == "grant" {
-            assert!(result.is_err());
-        } else {
-            assert_eq!(result.unwrap()["outcome"], "rejected");
-        }
-        assert_eq!(f.engine.lock().unwrap().settings(), &before);
-        assert!(!f.dir.join("settings.json").exists());
-    }
-}
-
-#[test]
-fn ft_runtime_rx_and_skip_work_through_the_current_lease_without_owning_local_tx() {
-    for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
-        for armed in [false, true] {
-            let (f, _, state) = ready_ft(tier);
-            assert!(state["controls"]["capabilities"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("ftRuntime")));
-            if armed {
-                let request = ft_command(
-                    &state,
-                    json!({"action":"ft.cq","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"direction":null}),
-                );
-                assert_eq!(ft_run(&f, &request).unwrap()["outcome"], "applied");
-                f.engine.lock().unwrap().take_immediate_retune();
-            }
-            for change in [
-                json!({"kind":"rxOffset","hz":900}),
-                json!({"kind":"skipTx1","on":true}),
-            ] {
-                let state = control_state_version(&f, Instant::now(), 4);
-                let expected = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
-                let request = ft_command(
-                    &state,
-                    json!({"action":"ft.runtime","expectedTier":tier,"transmitEpoch":state["transmitEpoch"],"expected":expected,"change":change}),
-                );
-                let response = ft_run(&f, &request).unwrap();
-                assert_eq!(response["outcome"], "applied", "{response}");
-                assert_eq!(
-                    response["evidence"],
-                    if change["kind"] == "rxOffset" {
-                        "settingsSaved"
-                    } else {
-                        "stationState"
-                    }
-                );
-                let after = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
-                assert_eq!(after.settings.tx_offset_hz, expected.settings.tx_offset_hz);
-                assert_eq!(after.settings.rx_offset_hz, 900.0);
-                if change["kind"] == "skipTx1" {
-                    assert!(after.skip_tx1);
-                }
-                assert_eq!(f.engine.lock().unwrap().tx_enabled(), armed);
-                assert_eq!(ft_run(&f, &request).unwrap(), response);
-                assert_eq!(f.engine.lock().unwrap().remote_ft_runtime(), Some(after));
-            }
-        }
-    }
-}
-
-#[test]
-fn ft_runtime_refuses_local_skip_change_or_revoked_transmit_grant() {
-    for revoked in [false, true] {
-        let (f, _, state) = ready_ft(tempo_app::dto::Tier::Ft8);
-        let expected = f.engine.lock().unwrap().remote_ft_runtime().unwrap();
-        let request = ft_command(
-            &state,
-            json!({"action":"ft.runtime","expectedTier":"FT8","transmitEpoch":state["transmitEpoch"],"expected":expected,"change":{"kind":"skipTx1","on":true}}),
-        );
-        if revoked {
-            f.authority.permit_transmit(DEVICE, false).unwrap();
-        } else {
-            let mut e = f.engine.lock().unwrap();
-            e.set_skip_tx1(true);
-            e.set_skip_tx1(false);
-        }
-        let result = ft_run(&f, &request);
-        if revoked {
-            assert!(result.is_err());
-        } else {
-            assert_eq!(result.unwrap()["outcome"], "rejected");
-        }
-        assert!(!f.engine.lock().unwrap().skip_tx1());
-        assert!(!f.dir.join("settings.json").exists());
-    }
-}
-
 // ── A stand-down AT THE SHACK retires the browser's transmit epoch ──────────────────────────────
 // `d564adc5` made an FT gesture pressed during a confirming window HELD rather than refused, and
 // the browser cancels a held gesture only on its OWN Stop or TX-off. Nothing at the shack moved
@@ -1364,10 +740,10 @@ fn ft_runtime_refuses_local_skip_change_or_revoked_transmit_grant() {
 // hooked to the button alone would leave a logger's halt with the same hole.
 #[test]
 fn a_stand_down_at_the_shack_retires_a_held_browser_transmit_epoch() {
-    let (f, now, state) = controlling(true);
+    let (f, now, state) = controlling();
     let epoch = state["transmitEpoch"]
         .as_str()
-        .expect("a controlling browser with transmit permission is shown an epoch")
+        .expect("a controlling browser is shown an epoch")
         .to_string();
     assert_eq!(
         u64::from_str_radix(&epoch, 16).unwrap(),
@@ -1403,4 +779,467 @@ fn a_stand_down_at_the_shack_retires_a_held_browser_transmit_epoch() {
             .is_some(),
         "the browser could not re-arm after the stand-down"
     );
+}
+
+/// The device's own heartbeat, which re-asserts the engine's arm gate from its current state.
+fn heartbeat(f: &Fixture, lease_id: &str, now: Instant) {
+    f.authority
+        .handle_version(
+            (f.connection, 3),
+            SESSION,
+            DEVICE,
+            &Request::Heartbeat {
+                request_id: id(),
+                lease_id: lease_id.into(),
+            },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+}
+
+/// Mark DEVICE as a sign-in-added device of the account (what the durable service list does).
+fn signed_in(f: &Fixture) {
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::from([DEVICE.to_string()]));
+}
+
+/// ★ THE 2026-10-23 SIGN-IN DECISION: a device whose control came from a sign-in is refused
+/// transmit while it controls, for its 15-minute window, yet keeps control and the receiver. The
+/// station records the hold; the lease the device takes sets the engine's arm gate
+/// (`apply_tx_hold`): the engine refuses an arm and nothing keys. A waiver — here an Approve at the
+/// shack — reconciled on the next heartbeat, lets it transmit.
+#[test]
+fn a_sign_in_held_device_is_refused_transmit_while_it_controls() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // The service lists it as sign-in-added, and the station recorded its 15-minute hold.
+    signed_in(&f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    // It takes control with no shack press; the lease sets the engine's arm gate.
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.remote_transmit_held(), "the controlling device is held");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused while held");
+    }
+    // Approve at the shack waives it; the next heartbeat reconciles the engine gate.
+    f.authority.waive_transmit(DEVICE);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "the waiver lifted the hold");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "control: it transmits once waived");
+}
+
+/// ★ FAIL-CLOSED: a device the service lists as sign-in-added but for which NO waiver record exists
+/// is HELD from transmit while it controls — the default is held, never open.
+#[test]
+fn a_sign_in_device_with_no_record_is_held_fail_closed() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // Listed as sign-in-added, but the station recorded no hold or waiver for it.
+    signed_in(&f);
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        e.remote_transmit_held(),
+        "a sign-in device with no record is held, not open"
+    );
+    e.set_tx_enabled(true);
+    assert!(
+        !e.tx_enabled(),
+        "transmit arm refused with no waiver record"
+    );
+}
+
+/// ★ A sign-in device with a positive WAIVED record transmits at once.
+#[test]
+fn a_waived_sign_in_device_may_transmit() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    f.authority.waive_transmit(DEVICE);
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "a waived device is not held");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm when waived");
+}
+
+/// ★ A controller the LOADED service list CONFIRMS is not sign-in-added is never held, whatever
+/// stale record it carries — the hold keys only to confirmed sign-in provenance.
+#[test]
+fn a_controller_confirmed_not_sign_in_is_never_held() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // The list is LOADED (heard) and does not name DEVICE, even though a stale hold is recorded.
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::new());
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "a controller the loaded list confirms is not sign-in-added is not held"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm");
+}
+
+/// ★ FAIL-CLOSED STARTUP: before the provenance list is heard (`None`, not an empty set), an
+/// account-road controller is HELD — an empty/unknown list must never read as "not sign-in-added".
+/// Once the list loads and confirms the device is not sign-in-added, it is freed.
+#[test]
+fn an_account_road_controller_is_held_until_the_list_loads() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // Back to the pre-list state (as after a restart, before the first list sync).
+    f.authority.forget_signin_devices();
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(
+            e.remote_transmit_held(),
+            "an account-road controller is held while the list is unknown"
+        );
+        e.set_tx_enabled(true);
+        assert!(
+            !e.tx_enabled(),
+            "transmit arm refused before the list is heard"
+        );
+    }
+    // The list loads and does not name this device: now it is confirmed not sign-in-added, and free.
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::new());
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "freed once the list confirms it");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm once confirmed");
+}
+
+/// Confirm DEVICE's durable owner-notice record (what the service list's `notified` does).
+fn notified(f: &Fixture) {
+    f.authority
+        .set_notified_devices(std::collections::BTreeSet::from([DEVICE.to_string()]));
+}
+
+/// ★ What the remote PC is told of its hold (`radio.txHold`, display only): held in its window,
+/// the owner notice unconfirmed, no time is given, since only Allow to transmit lifts it then; once
+/// the notice is confirmed, the time left in the window; with the provenance list unknown, held
+/// but no time, since the window's end would not lift it; allowed at the shack, nothing. The
+/// radio loop's tick carries it into the snapshot.
+#[test]
+fn the_hold_shown_to_the_remote_pc_gives_the_time_only_after_a_notice() {
+    use tempo_app::dto::TxHold;
+    let f = Fixture::new();
+    f.wire_tx_hold();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let _ = acquire_controls_version(&f, now, 3);
+    let shown = || {
+        let mut e = f.engine.lock().unwrap();
+        e.poll_remote_transmit(now);
+        (e.remote_transmit_held(), e.snapshot().radio.tx_hold)
+    };
+    let not_notified = TxHold {
+        owner_notified: false,
+        left_secs: None,
+    };
+    assert_eq!(shown(), (true, Some(not_notified)), "no notice: no time");
+
+    notified(&f);
+    let counting = TxHold {
+        owner_notified: true,
+        left_secs: Some(15 * 60),
+    };
+    assert_eq!(shown(), (true, Some(counting)), "notified: the time left");
+
+    f.authority.forget_signin_devices();
+    let unlisted = TxHold {
+        owner_notified: true,
+        left_secs: None,
+    };
+    assert_eq!(shown(), (true, Some(unlisted)), "list unknown: no time");
+
+    f.authority.waive_transmit(DEVICE);
+    assert_eq!(
+        shown(),
+        (false, None),
+        "allowed: nothing held, nothing shown"
+    );
+}
+
+/// ★ THE NOTIFICATION PRECONDITION (the 2026-10-23 sign-in decision, point 3): a sign-in device
+/// whose owner-notice record the service has NOT confirmed stays HELD even once its 15-minute
+/// window has elapsed. Only when the notice is confirmed does the elapsed window free it.
+#[test]
+fn a_held_device_stays_held_past_its_window_until_the_notice_is_confirmed() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    // A window already elapsed against the fixture clock (the real clock is an hour behind it).
+    f.authority.hold_transmit_until(DEVICE, Instant::now());
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(
+            e.remote_transmit_held(),
+            "held past its window while the notice is unconfirmed"
+        );
+        e.set_tx_enabled(true);
+        assert!(
+            !e.tx_enabled(),
+            "transmit arm refused until the notice is confirmed"
+        );
+    }
+    // The service confirms the durable notice row; the next heartbeat lifts the elapsed hold.
+    notified(&f);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "control: the elapsed window frees it once the notice is confirmed"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it transmits once confirmed and elapsed");
+}
+
+/// ★ A WAIVER KEPT ACROSS A RESTART WAITS FOR THE LIST: restored at launch, it frees the device only
+/// once the service's list is heard and names it as a sign-in device; before that it is held, as
+/// any account-road controller is. CONTROL: a waiver given in this run frees at once.
+#[test]
+fn a_restored_waiver_frees_only_once_the_list_is_heard() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority.forget_signin_devices();
+    f.authority.restore_transmit_waivers([DEVICE.to_string()]);
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.remote_transmit_held(), "restored, list not heard: held");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused before the list");
+    }
+    signed_in(&f);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(!e.remote_transmit_held(), "the list names it: free");
+        e.set_tx_enabled(true);
+        assert!(e.tx_enabled(), "it may arm once the list is heard");
+    }
+
+    let control = Fixture::new();
+    control.authority.forget_signin_devices();
+    control.authority.waive_transmit(DEVICE);
+    assert!(
+        !control.authority.tx_held(DEVICE, control.now()),
+        "CONTROL: a waiver given in this run frees at once"
+    );
+}
+
+/// ★ A REVOKE ENDS A WAIVER: station control revoked and given back, a waived sign-in device (given
+/// in this run or restored) is held again until it is waived again. CONTROL: given back with no
+/// revoke between, it stays free.
+#[test]
+fn a_revoke_ends_a_waiver() {
+    for (restored, revoke) in [(false, false), (false, true), (true, true)] {
+        let f = Fixture::new();
+        signed_in(&f);
+        if restored {
+            f.authority.restore_transmit_waivers([DEVICE.to_string()]);
+        } else {
+            f.authority.waive_transmit(DEVICE);
+        }
+        if revoke {
+            f.authority.permit_station(DEVICE, false).unwrap();
+        }
+        f.authority.permit_station(DEVICE, true).unwrap();
+        assert_eq!(
+            f.authority.tx_held(DEVICE, f.now()),
+            revoke,
+            "restored {restored}, revoked {revoke}"
+        );
+    }
+}
+
+/// ★ NO OVER-HOLD OF A LOCAL CONTROLLER: a code-paired / LAN-enrolled controller (recorded in the
+/// LAN book) is FREE even before the account list has loaded (`None`). Its own recorded provenance
+/// clears it ahead of the fail-closed `None` arm — a normal local operator is never held in any
+/// list state.
+#[test]
+fn a_lan_book_controller_is_free_even_before_the_list_loads() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority.forget_signin_devices(); // no account list heard yet
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![DEVICE.to_string()])); // recorded on-network provenance
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "a LAN-book controller is free even with the list unknown"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm");
+}
+
+/// ★ A TUNNEL COMPUTER IS ASKED UNDER THE SERVICE'S ID FOR IT: the name the room's tunnel takes it
+/// as is held exactly as that id is, and freed by that id's waiver; one standing for a device the
+/// list names as not signed in is free. FAIL-CLOSED: a name of the shack's own whose service id is
+/// not known is held, whatever the list says, on the tunnel's list or (just removed, its revoke not
+/// yet queued) off it; a computer in the LAN book is not.
+#[test]
+fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
+    const TUNNEL: &str = "60000000-0000-8000-8000-000000000001";
+    let f = Fixture::new();
+    let now = f.now();
+    signed_in(&f);
+    f.authority
+        .hold_tunnel_devices(Box::new(|| vec![TUNNEL.to_string()]));
+    assert!(
+        f.authority.tx_held(TUNNEL, now),
+        "a tunnel name whose service id is not known"
+    );
+    let stands_for = |id: &str| {
+        f.authority.set_tunnel_owners(BTreeMap::from([(
+            TUNNEL.to_string(),
+            BTreeSet::from([id.to_string()]),
+        )]))
+    };
+    stands_for(OTHER);
+    assert!(
+        !f.authority.tx_held(TUNNEL, now),
+        "CONTROL: one standing for a device not signed in"
+    );
+    stands_for(DEVICE);
+    assert!(
+        f.authority.tx_held(TUNNEL, now),
+        "one standing for a sign-in device"
+    );
+    f.authority.waive_transmit(DEVICE);
+    assert!(!f.authority.tx_held(TUNNEL, now), "its service id's waiver");
+
+    // Removed: off the map, and (as the tunnel's list says next) off the tunnel.
+    const OFF: &str = "60000000-0000-8000-8000-000000000002";
+    const LAN: &str = "70000000-0000-8000-8000-000000000001";
+    f.authority.set_tunnel_owners(BTreeMap::new());
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![LAN.to_string()]));
+    assert!(
+        f.authority.tx_held(OFF, now),
+        "a name of the shack's own no longer on the tunnel and not yet revoked"
+    );
+    assert!(
+        !f.authority.tx_held(LAN, now),
+        "CONTROL: one in the LAN book"
+    );
+}
+
+/// A sign-in-held device in control, with the real radio-loop hold source wired (as `Service::start`
+/// wires it) so a `poll_remote_transmit` tick re-derives the gate off the live lease. Asserts the
+/// premise and the CONTROL: it is held while it controls, and a tick while it is STILL controlling
+/// keeps it held — the local operator cannot arm, the hold never fails open. Returns the lease state
+/// for the test to make the device DEPART.
+fn held_controller(f: &Fixture, now: Instant) -> Value {
+    f.wire_tx_hold();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    signed_in(f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let state = acquire_controls_version(f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(e.remote_transmit_held(), "premise: held while it controls");
+    // CONTROL: a tick while the held device is STILL controlling must keep the hold on.
+    e.poll_remote_transmit(now);
+    assert!(
+        e.remote_transmit_held(),
+        "a still-controlling held device stays held across a radio-loop tick"
+    );
+    e.set_tx_enabled(true);
+    assert!(
+        !e.tx_enabled(),
+        "the local operator cannot arm while the held device controls"
+    );
+    e.set_tx_enabled(false);
+    drop(e);
+    state
+}
+
+/// The local operator can arm transmit at their own radio again, once the held controller is gone.
+fn arms_locally(f: &Fixture) {
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "the hold lifted once the held controller stopped controlling"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "the local operator arms at their own radio");
+}
+
+/// ★ B1 — REMOTE TURNED OFF. A held sign-in device is the controller; the operator turns Remote off
+/// (`invalidate`, the single thing `Control::stop` does to the authority), which brings no further
+/// request. The radio loop's next tick re-derives the gate off the now-cleared lease, and the local
+/// operator can arm again. REDDENS before the fix: the gate stuck on and locked the local operator out.
+#[test]
+fn the_sign_in_hold_lifts_when_remote_is_turned_off() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.invalidate();
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE CONNECTION IS RETIRED. The held controller's socket drops (`retire_connection`) with
+/// no further request; the next tick re-derives the gate off the ended lease.
+#[test]
+fn the_sign_in_hold_lifts_when_the_connection_is_retired() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.retire_connection(f.connection);
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE SESSION DISCONNECTS. The held controller's session goes (`disconnect_session`) with no
+/// further request; the next tick re-derives the gate off the ended lease.
+#[test]
+fn the_sign_in_hold_lifts_when_the_session_disconnects() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.disconnect_session(SESSION);
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE CONTROLLER IS REPLACED (revoked at the shack). The held controller's station grant is
+/// taken (`permit_station(.., false)`), which ends its lease but brings no request of its own; the
+/// next tick re-derives the gate off the now-controllerless station.
+#[test]
+fn the_sign_in_hold_lifts_when_the_controller_is_revoked() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.permit_station(DEVICE, false).unwrap();
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
 }

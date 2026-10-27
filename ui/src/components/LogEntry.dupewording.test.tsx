@@ -101,7 +101,7 @@ function dupeHint(fieldDay: FieldDayStatus): string {
       fdMode="PH"
     />,
   )
-  fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: 'w1aw' } })
+  fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'w1aw' } })
   const hits = screen
     .queryAllByRole('alert')
     .map((el) => el.textContent ?? '')
@@ -190,7 +190,7 @@ describe('the log strip names only the dupe components its ruleset keys on', () 
     render(
       <LogEntry snap={snap} mode="PH" defaultRst="59" exchange="terrestrial" fieldDay={fd} fdMode="PH" />,
     )
-    fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: 'k1abc' } })
+    fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'k1abc' } })
     expect(
       screen.getByText(
         'Club dupe: another position already worked K1ABC on 20m PH — logging is allowed but adds no points',

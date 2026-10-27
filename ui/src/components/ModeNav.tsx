@@ -25,6 +25,7 @@ import {
   RotateCcw,
   Users,
   MessagesSquare,
+  Captions,
 } from 'lucide-react'
 import { Fragment, useState, type ButtonHTMLAttributes } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
@@ -35,7 +36,7 @@ import { contestBadgeName } from '../fdEvent'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
 // TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
-// named for itself: the seven mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS, JS8) and
+// named for itself: the mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, JTTY, SSTV, APRS, JS8) and
 // the one named for a programme (POTA / SOTA) carry their names verbatim below, because a mode
 // name and a programme name are the same letters in every language (`i18n/index.ts`, the
 // invariant-token rule). "Contest" is a word, so it is a catalog entry; the contest its tooltip
@@ -75,8 +76,8 @@ interface Props {
   clubBoard?: boolean
 }
 
-/** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
-export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs' | 'js8'
+/** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · JTTY · SSTV · APRS · JS8). */
+export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'jtty' | 'sstv' | 'aprs' | 'js8'
 
 interface DigitalSub {
   mode: DigitalMode
@@ -124,6 +125,15 @@ const DIGITAL_SUBS: DigitalSub[] = [
     icon: Keyboard,
     titleKey: 'nav.digital.psk.title',
     active: (v) => v === 'psk',
+  },
+  // JTTY, WSJT-X's keyboard mode, beside PSK: the Keyboard section's other modem, with a cockpit
+  // of its own. Hidden when switched off in Settings ▸ Features, like RTTY/PSK/SSTV.
+  {
+    mode: 'jtty',
+    label: 'JTTY',
+    icon: Captions,
+    titleKey: 'nav.digital.jtty.title',
+    active: (v) => v === 'jtty',
   },
   {
     mode: 'sstv',
@@ -334,9 +344,11 @@ export function ModeNav({
           <div className="mode-nav-group" role="group" aria-label={t('nav.digital.group.aria')}>
             <span className="mode-nav-group-label">{t('nav.digital.group.label')}</span>
             {DIGITAL_SUBS.filter(
-              // FT + Tempo are core (always shown); RTTY/SSTV hide when disabled
-              // in Settings ▸ Features (their DigitalMode doubles as FeatureId).
-              (s) => s.mode === 'digital' || s.mode === 'tempo' || enabled[s.mode] !== false,
+              // FT is core (always shown); the rest hide when disabled in Settings ▸
+              // Features. Their DigitalMode doubles as FeatureId, except Tempo's, which
+              // is the `chat` section (#402).
+              (s) =>
+                s.mode === 'digital' || enabled[s.mode === 'tempo' ? 'chat' : s.mode] !== false,
             ).map((s) => {
               const Icon = s.icon
               const active = s.active(view, tier)

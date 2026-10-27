@@ -289,8 +289,15 @@ pub enum MultSource {
         key: &'static str,
         domain: Option<&'static str>,
     },
-    /// The DXCC entity of the worked callsign (CQ WW's country multiplier).
+    /// The DXCC entity of the worked callsign — a WAE area counts as the DXCC entity it
+    /// belongs to (Sicily is Italy): the DX multiplier of every contest that counts
+    /// countries other than CQ WW and WAE DX ([`counted_country`](super::counted_country)).
     DxccEntity,
+    /// The country of the worked callsign on CQ WW's and WAE DX's list: the DXCC entities
+    /// with each WAE area a country of its own (Sicily, Shetland, African Italy, Vienna
+    /// Intl Ctr, Bear Island, European Turkey). Written `{"type": "dxcc_entity", "wae": true}`
+    /// in the rules file.
+    WaeCountry,
     /// The callsign prefix (CQ WPX).
     Prefix,
 }
@@ -403,7 +410,12 @@ fn mult_key(m: &MultiplierRule, row: &ScoreRow<'_>) -> Option<(String, String)> 
             .iter()
             .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
             .map(|v| canonical_mult_value(&v.raw, v.domain)),
-        MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
+        MultSource::DxccEntity => row
+            .entity
+            .map(|e| super::counted_country(e, false).to_string()),
+        MultSource::WaeCountry => row
+            .entity
+            .map(|e| super::counted_country(e, true).to_string()),
         MultSource::Prefix => row.prefix.map(|p| p.to_string()),
     };
     let value = value.filter(|v| !v.is_empty())?;
@@ -422,6 +434,15 @@ fn mult_key(m: &MultiplierRule, row: &ScoreRow<'_>) -> Option<(String, String)> 
 }
 
 impl Scoring {
+    /// Whether this contest counts a WAE area as a country of its own — CQ WW and WAE DX
+    /// ([`MultSource::WaeCountry`]). Every other contest names and counts a worked call's
+    /// DXCC entity ([`counted_country`](super::counted_country)).
+    pub fn counts_wae_areas(&self) -> bool {
+        self.multipliers
+            .iter()
+            .any(|m| m.source == MultSource::WaeCountry)
+    }
+
     /// `(qso_pts, powered_pts)` for these rows at the given stored power tier.
     ///
     /// Byte-for-byte the old `ScoringModel::qso_and_powered`: sum the per-row points,
@@ -655,7 +676,7 @@ pub fn boards(
                 }),
                 scope: m.scope,
             }),
-            MultSource::DxccEntity | MultSource::Prefix => None,
+            MultSource::DxccEntity | MultSource::WaeCountry | MultSource::Prefix => None,
         })
         .collect();
     // ⭐ ONE BOARD PER UNIVERSE. A board is a grid of a slot's values over a domain, and

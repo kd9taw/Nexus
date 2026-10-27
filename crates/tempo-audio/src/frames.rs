@@ -21,6 +21,9 @@ pub const FRAME_LEN: usize = tempo_fast::NMAX;
 pub struct RxRing {
     buf: VecDeque<f32>,
     cap: usize,
+    /// Samples ever pushed: the position one past the newest sample, counted from the ring's
+    /// creation. Never reset, so a position names the same sample for as long as it is held.
+    pushed: u64,
 }
 
 impl Default for RxRing {
@@ -40,6 +43,7 @@ impl RxRing {
         Self {
             buf: VecDeque::with_capacity(cap),
             cap,
+            pushed: 0,
         }
     }
 
@@ -63,6 +67,7 @@ impl RxRing {
 
     /// Append captured samples, dropping the oldest beyond the capacity.
     pub fn push(&mut self, samples: &[f32]) {
+        self.pushed += samples.len() as u64;
         self.buf.extend(samples.iter().copied());
         while self.buf.len() > self.cap {
             self.buf.pop_front();
@@ -94,6 +99,39 @@ impl RxRing {
         let mut out: Vec<f32> = self.buf.iter().skip(skip).copied().collect();
         out.resize(self.cap, 0.0);
         out
+    }
+
+    /// The position of the first sample [`RxRing::frame_latest_padded`]`(n)` takes now, for
+    /// [`RxRing::frame_from`].
+    pub fn latest_start(&self, n: usize) -> u64 {
+        let take = n.min(self.buf.len()).min(self.cap);
+        self.pushed - take as u64
+    }
+
+    /// How many samples from position `start` on are held, or `None` when `start` is no longer
+    /// (or not yet) in the ring.
+    pub fn held_from(&self, start: u64) -> Option<usize> {
+        let oldest = self.pushed - self.buf.len() as u64;
+        (start >= oldest && start <= self.pushed).then(|| (self.pushed - start) as usize)
+    }
+
+    /// Up to `n` samples from position `start` on, at the START of a `cap`-sample window, zero at
+    /// the tail: [`RxRing::frame_latest_padded`]'s shape, anchored at a sample instead of at the
+    /// newest one. Frames taken this way from one start are sample-aligned with each other, as
+    /// WSJT-X's passes all read one buffer from the period's start. `None` when `start` is no
+    /// longer held.
+    pub fn frame_from(&self, start: u64, n: usize) -> Option<Vec<f32>> {
+        let held = self.held_from(start)?;
+        let skip = self.buf.len() - held;
+        let mut out: Vec<f32> = self
+            .buf
+            .iter()
+            .skip(skip)
+            .take(n.min(self.cap))
+            .copied()
+            .collect();
+        out.resize(self.cap, 0.0);
+        Some(out)
     }
 
     /// The `len` samples that START `age_samples` before the newest sample: the window
@@ -148,6 +186,41 @@ mod tests {
         let f = r.frame_latest_padded(99);
         assert_eq!(&f[..5], &[9.0, 9.0, 1.0, 2.0, 3.0]);
         assert!(f[5..].iter().all(|&x| x == 0.0));
+    }
+
+    /// A frame taken from a position is the frame `frame_latest_padded` took then, and frames
+    /// taken from it later line up with it sample for sample, however much more has arrived; a
+    /// position no longer held gives none.
+    #[test]
+    fn frames_from_one_position_line_up() {
+        let mut r = RxRing::with_capacity(8);
+        r.push(&[9.0, 9.0, 1.0, 2.0]); // 9s = the previous slot's tail
+        let start = r.latest_start(2);
+        assert_eq!(start, 2);
+        assert_eq!(r.frame_from(start, 2), Some(r.frame_latest_padded(2)));
+        r.push(&[3.0, 4.0, 5.0]);
+        let f = r.frame_from(start, 4).unwrap();
+        assert_eq!(
+            &f[..4],
+            &[1.0, 2.0, 3.0, 4.0],
+            "from the same sample, later"
+        );
+        assert!(f[4..].iter().all(|&x| x == 0.0), "zero tail");
+        assert_eq!(r.held_from(start), Some(5));
+        assert_ne!(
+            r.frame_latest_padded(4)[..4],
+            f[..4],
+            "control: the latest four have moved on"
+        );
+        r.push(&[6.0, 7.0, 8.0, 10.0]); // the ring drops 9, 9, 1, 2 and 3
+        assert_eq!(r.held_from(start), None, "no longer held");
+        assert_eq!(r.frame_from(start, 4), None);
+        r.clear();
+        assert_eq!(
+            r.held_from(start),
+            None,
+            "a cleared ring holds nothing from before"
+        );
     }
 
     /// `tail_window(age, len)` = the `len` samples starting `age` samples before the newest

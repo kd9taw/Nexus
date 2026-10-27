@@ -46,6 +46,7 @@
 // light panel and stays brighter than the light Night accent (#006fae) that Night dims it to.
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import {
@@ -522,25 +523,35 @@ describe('TX, the critical orange and the need set stay locked', () => {
     expect(blockProblems(RULES)).toEqual([])
   })
 
-  it('stores nothing for a locked colour: every palette key in the tree is a role’s key', () => {
+  it('stores nothing for a locked colour: every palette key in the tree is a role’s key', async () => {
     const src = fileURLToPath(new URL('.', import.meta.url))
     const keys = new Set<string>()
     // Every file is read as bytes and only one holding the key's prefix is decoded (2026-10-20): decoding all ~13 MB
-    // of the tree was most of this case's own work (34-160 ms alone, ~20 ms without it), and the case has run past
-    // its 5 s budget in a loaded full run. A match starts with that ASCII prefix, and UTF-8 spells ASCII as the same
-    // bytes and never inside another character, so a file without them holds no match.
-    const PREFIX = Buffer.from('nexus-palette-')
+    // of the tree was most of this case's own work (34-160 ms alone, ~20 ms without it). A match starts with that
+    // ASCII prefix, and UTF-8 spells ASCII as the same bytes and never inside another character, so a file without
+    // them holds no match.
+    // What is left is I/O, and the claim needs all of it: ~620 files, 13 MB. In loaded full runs the case still
+    // stalled for up to 40 s, past its 5 s budget, when the suite's workers had outgrown the box's memory and the
+    // files were no longer cached: the time went to waiting on the reads (2026-10-21). So no entry is stat'ed (the
+    // directory entries say which are directories; the walk used to stat all ~1,900, ~1,250 of them files it never
+    // reads), and the reads overlap, eight in flight, so their waits do too.
+    const files: string[] = []
     const walk = (dir: string) => {
-      for (const e of readdirSync(dir)) {
-        const p = join(dir, e)
-        if (statSync(p).isDirectory()) walk(p)
-        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) {
-          const bytes = readFileSync(p)
-          if (bytes.includes(PREFIX)) for (const m of bytes.toString('utf8').matchAll(/nexus-palette-[\w-]+/g)) keys.add(m[0])
-        }
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name)
+        if (e.isDirectory() || (e.isSymbolicLink() && statSync(p).isDirectory())) walk(p)
+        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) files.push(p)
       }
     }
     walk(src)
+    const PREFIX = Buffer.from('nexus-palette-')
+    const lane = async () => {
+      for (let p = files.pop(); p !== undefined; p = files.pop()) {
+        const bytes = await readFile(p)
+        if (bytes.includes(PREFIX)) for (const m of bytes.toString('utf8').matchAll(/nexus-palette-[\w-]+/g)) keys.add(m[0])
+      }
+    }
+    await Promise.all(Array.from({ length: 8 }, lane))
     for (const m of read('../index.html').matchAll(/nexus-palette-[\w-]+/g)) keys.add(m[0])
     expect([...keys].sort()).toEqual(PALETTE_ROLES.map((r) => r.storage).sort())
   })

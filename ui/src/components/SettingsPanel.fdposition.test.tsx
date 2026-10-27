@@ -78,6 +78,16 @@ const RADIO = {
 }
 
 /** `club` = how this station is wired into the club event; the rest is a saveable station. */
+/** A Contesting box by its caption. These fields are a <div class="settings-field">, so the
+ *  caption is a plain <span> with no label association to the input, and the boxes show no
+ *  placeholder to find them by. */
+const findBox = async (caption: string) =>
+  (await screen.findByText(caption, { selector: '.settings-label' }))
+    .closest('.settings-field')!
+    .querySelector('input') as HTMLInputElement
+const findJoinBox = () => findBox('Join event at')
+const findEventNameBox = () => findBox('Event name')
+
 function settingsFixture(club: Record<string, unknown>) {
   return {
     ...defaultSettings,
@@ -187,9 +197,7 @@ describe('a blank position name refuses a club-sync save', () => {
     )
     renderPanel()
     await openContesting()
-    // By placeholder, not by label: that field is a <div class="settings-field">, so its
-    // "Join event at" text is a plain <span> with no label association to the input.
-    fireEvent.change(await screen.findByPlaceholderText('192.168.1.10:42073'), {
+    fireEvent.change(await findJoinBox(), {
       target: { value: '192.168.1.10:42073' },
     })
     await clickSave()
@@ -436,7 +444,7 @@ describe('clicking a found club event joins it', () => {
   /** The block holding Find club events and what it found. */
   const findBlock = () =>
     screen.getByRole('button', { name: 'Find club events' }).closest('.settings-field') as HTMLElement
-  const joinBox = () => screen.getByPlaceholderText('192.168.1.10:42073') as HTMLInputElement
+  const joinBox = () => document.querySelector('input[data-setting="fdJoinAddr"]') as HTMLInputElement
   const saves = () => api.get('setSettings').mock.calls.map((c) => c[0] as Record<string, unknown>)
   const link = (over: Partial<ClubLink>): ClubLink => ({
     role: 'position',
@@ -566,7 +574,7 @@ describe('clicking a found club event joins it', () => {
     )
     renderPanel()
     await openContesting()
-    const eventName = (await screen.findByPlaceholderText('W9ABC Field Day')) as HTMLInputElement
+    const eventName = await findEventNameBox()
     fireEvent.change(eventName, { target: { value: 'Unsaved edit' } })
     fireEvent.click(await findEvents())
 
@@ -589,7 +597,7 @@ describe('clicking a found club event joins it', () => {
     await waitFor(() => expect(station.now().fdJoinAddr).toBe(HOST))
     // The laptop leaves the event from elsewhere, then the operator saves an edit of their own here.
     station.elsewhere({ fdJoinAddr: '' })
-    fireEvent.change(await screen.findByPlaceholderText('W9ABC Field Day'), { target: { value: 'Unsaved edit' } })
+    fireEvent.change(await findEventNameBox(), { target: { value: 'Unsaved edit' } })
     await clickSave()
     await waitFor(() => expect(station.now().fdEventName).toBe('Unsaved edit'))
     expect(station.now().fdJoinAddr).toBe('')
@@ -640,7 +648,7 @@ describe('clicking a found club event joins it', () => {
     const station = backend(settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent' }))
     renderPanel()
     await openContesting()
-    fireEvent.change(await screen.findByPlaceholderText('192.168.1.10:42073'), {
+    fireEvent.change(await findJoinBox(), {
       target: { value: '192.168.1.20' },
     })
     await Promise.resolve()

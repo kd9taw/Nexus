@@ -5,7 +5,7 @@ import { heatColor } from '../../propViz'
 import type { RegionBandCell } from '../../types'
 import { t } from '../../i18n'
 
-const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m']
+const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '33cm', '23cm']
 
 export function ActivityMatrix({
   cells,

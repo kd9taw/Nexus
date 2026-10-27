@@ -224,6 +224,15 @@ pub struct NeedAlert {
     /// chip's tooltip says which.
     #[serde(default)]
     pub state_from: Option<StateSource>,
+    /// The WPX prefix this station would be new on this band in this mode class, when the
+    /// operator has turned on "Show WPX prefix needs" ([`crate::awards_more::mark_award_needs`]).
+    /// `None` otherwise, and then not sent, so a board with the setting off is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wpx_need: Option<String>,
+    /// The WAE country this station would be new in on this band in this mode class, when the
+    /// operator has turned on "Show WAE country needs"; `None` otherwise, and then not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wae_need: Option<String>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -340,12 +349,14 @@ pub fn score_slots(
     // DXCC (Challenge slots), VUCC grids, WAS states, WAZ zones — so "worked" only
     // silences a need when it was worked on THIS band: a grid worked on 20 m is
     // genuinely new again on 2 m, where it is a far rarer achievement. A label
-    // [`Band`] doesn't model (70cm/23cm) resolves to `None`, and nothing can be
+    // [`Band`] doesn't model (13 cm and up) resolves to `None`, and nothing can be
     // proven worked on a band we can't name, so those needs fail OPEN and still
     // alert — the same absence-means-needed rule [`crate::dxped::LogNeeds`] answers by.
+    // 70 cm, 33 cm and 23 cm ARE modelled, so a grid, zone or state worked there clears
+    // its need there (`a_grid_worked_on_a_uhf_band_is_not_new_there`).
     let heard_on = Band::from_band_token(band);
     // ⚠️ `heard_on == None` HAS TWO MEANINGS, and until 2026-08-13 they shared one arm.
-    // * UNMODELLED — a real band this crate does not model ("70cm"). We cannot prove the
+    // * UNMODELLED — a real band this crate does not model ("13cm"). We cannot prove the
     //   station is worked there, and staying silent would swallow a genuine new grid, so
     //   those needs fail OPEN (the paragraph above, and the two tests it names).
     // * ABSENT — `""`, which is what `settings.band` carries whenever the dial is off the
@@ -358,9 +369,11 @@ pub fn score_slots(
     //   "worked this entity EVER" needs no band.
     let band_named = !band.trim().is_empty();
 
-    // DXCC need — ARRL DXCC entities only (WAE/CQ-only entities earn no DXCC tag).
+    // DXCC need — ARRL DXCC entities only (WAE/CQ-only entities earn no DXCC tag), and only
+    // on a band with a DXCC band slot: the ARRL keeps no DXCC award on 70/33/23 cm, so a
+    // station heard there carries no DXCC tag, as before those bands were modelled.
     if info.is_dxcc {
-        if let Some(b) = heard_on {
+        if let Some(b) = heard_on.filter(|b| crate::awards::fills_dxcc_band_slot(*b)) {
             match needs.need(info.entity, b, mode) {
                 NeedKind::Atno => tags.push(NeedTag::NewEntity),
                 NeedKind::NewBand => tags.push(NeedTag::NewBand),
@@ -400,9 +413,9 @@ pub fn score_slots(
     // dismisses, or silently swallow a genuine new grid. The first is noise; the second loses
     // the thing the Needed board exists for. Pinned by
     // `an_unparseable_band_is_treated_as_needed_not_worked` (a garbage string) and
-    // `an_unmodelled_band_still_alerts_rather_than_going_silent` (a REAL band we do not
-    // model, e.g. 70 cm — reachable for an IC-9700 operator, since the band plan ships FT8
-    // channels there). Two inputs, same rule: fail open.
+    // `an_unmodelled_band_still_alerts_rather_than_going_silent` (a grid worked on another
+    // band is still new on 70 cm, which an IC-9700 operator reaches through the band plan's
+    // FT8 channels). Two inputs, same rule: fail open.
     if let Some(g) = &g4 {
         match heard_on {
             Some(b) if slots.worked_grids.contains(&(g.clone(), b)) => {
@@ -489,11 +502,18 @@ pub fn score_slots(
                 .unwrap_or(ModeClass::from_adif(mode).label()),
             info.entity
         ),
+        // A 6 m square of the 48 contiguous states is also a square the ARRL Fred Fish
+        // Memorial Award needs, and the row names it (`crate::ffma`).
         NeedTag::NewGrid => format!(
-            "New grid — {} on {} ({})",
+            "New grid — {} on {} ({}){}",
             g4.as_deref().unwrap_or("?"),
             band,
-            info.entity
+            info.entity,
+            if heard_on == Some(Band::B6) && g4.as_deref().is_some_and(crate::ffma::is_ffma_grid) {
+                " · FFMA"
+            } else {
+                ""
+            }
         ),
         NeedTag::NewState => format!(
             "New state — {} on {} ({})",
@@ -529,13 +549,13 @@ pub fn score_slots(
         // "RTTY" is carried through as a DISPLAY/ROUTING submode (never a ModeClass
         // variant): it lets the row read "RTTY" and route to the RTTY cockpit, and keeps
         // an RTTY row distinct from an FT8 row of the same call/band in rank()'s dedup.
-        // Carry the SPECIFIC digital submode (RTTY/FT8/FT4) as the display+routing label so the
-        // Needed board designates the exact mode and keeps them as distinct rows in rank()'s
+        // Carry the SPECIFIC digital submode (RTTY/FT8/FT4/JTTY) as the display+routing label so
+        // the Needed board designates the exact mode and keeps them as distinct rows in rank()'s
         // dedup. A label only: the mode need above was judged on the exact mode, which rides
-        // in `exact_mode`. Everything else keeps its class.
+        // in `exact_mode`. Everything else keeps its class. JTTY's row opens the JTTY cockpit.
         mode: {
             let up = mode.to_ascii_uppercase();
-            if up == "RTTY" || up == "FT8" || up == "FT4" {
+            if up == "RTTY" || up == "FT8" || up == "FT4" || up == "JTTY" {
                 up
             } else {
                 ModeClass::from_adif(mode).label().to_string()
@@ -547,6 +567,8 @@ pub fn score_slots(
         grid: grid.map(str::to_string),
         park: None, // set by activation_alert; a scored award row names no activation
         state_from: None, // set by rank and activation_alert, which know where the state came from
+        wpx_need: None,
+        wae_need: None,
     })
 }
 
@@ -710,7 +732,7 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         // fabricate a NewMode. Spell the tiers in upper case with the rest.
         "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
         | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
-        | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
+        | "JTTY" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }
@@ -855,6 +877,8 @@ pub fn activation_alert(
         grid: spot.grid.clone(),
         park: None, // filled in below, on the merged row as well as this one
         state_from: None,
+        wpx_need: None,
+        wae_need: None,
     });
     // The award's row names the scored mode itself where it names FT8, FT4 or RTTY; this row is
     // the class, as it always was.
@@ -971,6 +995,8 @@ pub fn watched_alert(
         grid: grid.map(str::to_string),
         park: None,
         state_from: None,
+        wpx_need: None,
+        wae_need: None,
     });
     mark_watched(&mut alert);
     alert
@@ -981,8 +1007,8 @@ pub fn watched_alert(
 /// why VHF additionally requires corroboration — see [`heard_near_me`]).
 /// - 6m/4m (Es-dominant): 250 km — Es patches run ~100–400 km, so the receiver must
 ///   share the operator's patch footprint.
-/// - 2m (tropo/aurora-dominant, NOT Es): 800 km — tropo enhancement rides synoptic
-///   high-pressure systems that span 1000 km+, and aurora illuminates a whole
+/// - 2m and the UHF bands (tropo/aurora-dominant, NOT Es): 800 km — tropo enhancement
+///   rides synoptic high-pressure systems that span 1000 km+, and aurora illuminates a whole
 ///   curtain-facing region, so a receiver hundreds of km away is routinely inside
 ///   the same lift. The old Es-derived 250 km dropped nearly all real 2m opening
 ///   evidence (paths run 300–1500 km). Matches the opening detector's
@@ -990,7 +1016,7 @@ pub fn watched_alert(
 /// - HF: F2 footprints are continent-scale; 1500 km holds.
 pub fn near_me_radius_km(band: Band) -> f64 {
     match band {
-        Band::B2 => 800.0,
+        Band::B2 | Band::B70cm | Band::B33cm | Band::B23cm => 800.0,
         b if b.is_vhf() => 250.0,
         _ => 1500.0,
     }
@@ -1091,11 +1117,14 @@ pub const VHF_MIN_DX_KM: f64 = 400.0;
 /// operator completes is NOT workable from an ordinary station, so those reception
 /// reports must not reach the Needed board (this is exactly why EU 2 m stations,
 /// ~7000 km off, were showing as "needed now"). Single-hop sporadic-E tops out
-/// ~2400 km on 2 m/4 m. `None` = no terrestrial ceiling: 6 m routinely spans the
-/// globe via F2 (solar max) and multi-hop Es, so its long-haul DX is real and stays.
+/// ~2400 km on 2 m/4 m. The UHF bands take the same ceiling: Es does not reach them,
+/// and while a rare marine duct can carry 70 cm or 23 cm further, moonbounce is the
+/// everyday reason a UHF station is heard past it. `None` = no terrestrial ceiling:
+/// 6 m routinely spans the globe via F2 (solar max) and multi-hop Es, so its long-haul
+/// DX is real and stays.
 pub fn vhf_max_terrestrial_km(band: Band) -> Option<f64> {
     match band {
-        Band::B2 | Band::B4 => Some(2400.0),
+        Band::B2 | Band::B4 | Band::B70cm | Band::B33cm | Band::B23cm => Some(2400.0),
         _ => None,
     }
 }
@@ -2292,6 +2321,53 @@ mod tests {
         );
     }
 
+    /// A station heard in JTTY reads "JTTY" on its row and routes to the JTTY cockpit, as an RTTY
+    /// row reads RTTY, and it still scores as a Digital award. A JTTY row and an FT8 row of the
+    /// same call and band are two rows (two cockpits), and a PSK31 row keeps its class label:
+    /// only the modes with a cockpit of their own on that list carry their name.
+    #[test]
+    fn jtty_carries_its_own_label_and_still_scores_as_a_digital_award() {
+        let needs = LogNeeds::new(); // empty log → any DX is a new one
+        let alert = |mode: &str| {
+            score(
+                "3Y0J",
+                "20m",
+                mode,
+                None,
+                None,
+                &needs,
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .unwrap()
+        };
+        let a = alert("JTTY");
+        assert_eq!(a.mode, "JTTY", "display/routing label");
+        assert_eq!(a.exact_mode.as_deref(), Some("JTTY"));
+        assert!(a.tags.contains(&NeedTag::NewEntity), "{:?}", a.tags);
+        assert_eq!(alert("jtty").mode, "JTTY", "any case");
+        assert_eq!(alert("PSK31").mode, "Digital", "control: the class label");
+        let heard = |mode: &str, mhz: f64| Heard {
+            call: "3Y0J".into(),
+            band: "20m".into(),
+            mode: mode.into(),
+            freq_mhz: Some(mhz),
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: None,
+        };
+        let ranked = rank(
+            &[heard("JTTY", 14.0915), heard("FT8", 14.074)],
+            &needs,
+            &slots(&HashSet::new(), &HashSet::new(), &HashSet::new()),
+        );
+        let mut modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
+        modes.sort_unstable();
+        assert_eq!(modes, ["FT8", "JTTY"]);
+    }
+
     #[test]
     fn rank_keeps_rtty_and_ft8_of_the_same_call_band_as_two_rows() {
         // The (call, band, mode) dedup key must treat RTTY and FT8 as DISTINCT
@@ -2767,10 +2843,10 @@ mod tests {
         );
     }
 
-    /// A band label [`Band`] doesn't model (70 cm, 23 cm) can't be proven worked, so
-    /// the per-band needs fail OPEN and still alert — the pre-existing behaviour, kept
-    /// deliberately: silencing an IC-9700 operator's UHF grids would be the opposite
-    /// of the fix.
+    /// A grid worked only on 20 m is still a new grid on 70 cm — silencing an IC-9700
+    /// operator's UHF grids would be the opposite of the fix. (70 cm was unmodelled when this
+    /// was written and failed open; it is modelled now and still alerts, because the square
+    /// is genuinely unworked there.)
     #[test]
     fn an_unmodelled_band_still_alerts_rather_than_going_silent() {
         let mut n = LogNeeds::new();
@@ -2788,6 +2864,85 @@ mod tests {
         )
         .expect("70cm is still a chase, not a silent band");
         assert!(a.tags.contains(&NeedTag::NewGrid), "{:?}", a.tags);
+    }
+
+    /// 70 cm, 33 cm and 23 cm are modelled bands now, so a grid already worked ON the band is
+    /// not a new grid there — it used to fail open and nag for a square the log already holds —
+    /// while the same grid heard on another UHF band is still new. ARRL keeps no DXCC award on
+    /// these bands, so being heard there never claims a new DXCC band either.
+    #[test]
+    fn a_grid_worked_on_a_uhf_band_is_not_new_there() {
+        for band in ["70cm", "33cm", "23cm"] {
+            let mut n = LogNeeds::new();
+            n.add("W1AW", "20m", "FT8", None, None, true);
+            n.add("K1XYZ", band, "FT8", Some("FN31"), None, true);
+            let tags = |heard_on: &str| {
+                score(
+                    "K1ABC",
+                    heard_on,
+                    "FT8",
+                    Some("FN31"),
+                    None,
+                    &n,
+                    n.worked_zones(),
+                    n.worked_grids(),
+                    &HashSet::new(),
+                )
+                .map(|a| a.tags)
+                .unwrap_or_default()
+            };
+            let here = tags(band);
+            assert!(
+                !here.contains(&NeedTag::NewGrid),
+                "FN31 is worked on {band}, so it is not a new grid there: {here:?}"
+            );
+            assert!(
+                !here.contains(&NeedTag::NewBand),
+                "no DXCC band award on {band}: {here:?}"
+            );
+            let other = if band == "23cm" { "70cm" } else { "23cm" };
+            assert!(
+                tags(other).contains(&NeedTag::NewGrid),
+                "FN31 worked on {band} is still new on {other}"
+            );
+        }
+    }
+
+    /// A 6 m grid the Fred Fish Memorial Award still needs is a need, and the row says so; the
+    /// same square on 2 m, or a 6 m square outside the 48 states, is a plain new grid.
+    #[test]
+    fn a_needed_ffma_square_on_6m_names_the_award() {
+        // The entity, zone and mode are worked and confirmed on both bands, so the grid is
+        // the row's only need and leads it.
+        let mut n = LogNeeds::new();
+        for band in ["6m", "2m"] {
+            n.add("W1AW", band, "FT8", Some("FN42"), None, true);
+        }
+        let headline = |band: &str, grid: &str| {
+            score(
+                "K1ABC",
+                band,
+                "FT8",
+                Some(grid),
+                None,
+                &n,
+                n.worked_zones(),
+                n.worked_grids(),
+                &HashSet::new(),
+            )
+            .filter(|a| a.tags.contains(&NeedTag::NewGrid))
+            .map(|a| a.headline)
+            .unwrap_or_default()
+        };
+        let six = headline("6m", "FN31");
+        assert!(six.contains("FN31") && six.contains("FFMA"), "{six}");
+        let two = headline("2m", "FN31");
+        assert!(two.contains("FN31") && !two.contains("FFMA"), "{two}");
+        let outside = headline("6m", "BL11");
+        assert!(
+            outside.contains("BL11") && !outside.contains("FFMA"),
+            "{outside}"
+        );
     }
 
     /// …and the OTHER `None`, which until now shared its arm: an ABSENT band. Off the ham
@@ -3035,6 +3190,7 @@ mod tests {
             "JT65",
             "JT9",
             "JS8",
+            "JTTY",
             "MFSK",
             "MSK144",
             "OLIVIA",
@@ -3060,7 +3216,7 @@ mod tests {
             }
         }
         assert_eq!(
-            named, 26,
+            named, 27,
             "control: the tokens the feed names were all reached"
         );
     }
@@ -3761,6 +3917,8 @@ mod tests {
                 grid: None,
                 park: None,
                 state_from: None,
+                wpx_need: None,
+                wae_need: None,
             }
         }
         let mut alerts = vec![

@@ -114,4 +114,27 @@ describe('operating time', () => {
     })
     expect(text).toContain('Operating time:  on 0:20   off 0:45 (breaks of 30 min or more)')
   })
+
+  it('the Score Summary takes the contest’s own minimum: the same log under CQ WW’s 60 minutes has no break', () => {
+    const text = buildSummaryText({
+      eventName: 'CQ WW DX CW',
+      isWfd: false,
+      rulesYear: 2026,
+      rulesGenerated: '2026-09-17T00:00:00Z',
+      myClass: '',
+      mySection: '',
+      log: LOG,
+      modes: { dig: 0, cw: 4, ph: 0 },
+      workedSet: new Set<string>(),
+      powerMult: 1,
+      qsoPts: 8,
+      poweredPoints: 8,
+      bonusPoints: 0,
+      totalScore: 16,
+      claimedBonuses: [],
+      contest: { sending: '599 4', multCount: 2 },
+      minOffSec: 60 * 60,
+    })
+    expect(text).toContain('Operating time:  on 1:05   off 0:00 (breaks of 60 min or more)')
+  })
 })

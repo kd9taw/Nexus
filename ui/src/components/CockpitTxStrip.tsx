@@ -1,11 +1,9 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react'
-import { haltTx } from '../api'
-import { withErrorToast } from '../toast'
-import { useStationControl, useStationStopControl, useStationStopProgress } from '../stationAccess'
 import { t } from '../i18n'
-import type { AppSnapshot, RadioStatus } from '../types'
+import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { RadioTuneNote } from './RadioTuneNote'
+import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -13,23 +11,27 @@ import { RadioTuneNote } from './RadioTuneNote'
 // regression, and three of them are what `components/stop-line.test.tsx` matches by accessible
 // name (/^stop tx$/i, /^tune$/i, /^tx on$|^tx off$/i). Transmit-path controls and their accessible
 // names move in their own batch, with the stop-line sweeps re-run. Everything else here — the
-// group's name, the TX state, Hold Tx, the remote stop's progress — is catalogued.
+// group's name, the TX state, Hold Tx — is catalogued.
 
 export interface CockpitTxStripProps {
   radio: RadioStatus
-  /** Takes the snapshot a REMOTE Stop TX answers with. */
-  onSnap?: (s: AppSnapshot) => void
   /** Arm/disarm TX (WSJT-X "Enable Tx"). Omit ⇒ the first slot shows the latch READ-ONLY (Phone
-   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). */
+   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). Phone and CW pass it
+   *  on a computer driving a station, where entering the section arms nothing: from afar the button
+   *  arms it. */
   onSetTxEnabled?: (on: boolean) => void
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
   /** Run the RADIO's own built-in ATU. Rendered only when the rig reports a tuner (`radio.atu`). */
   onAtuTune?: () => void
+  /** Switch the radio's tuner OUT of line — "Switch tuner out" in the ATU button's menu (#344;
+   *  right-click, or a long press on touch). A click always runs a tune-up. Without it, or where the
+   *  radio's path has no switch-out (`radio.atuSwitchOut`), no menu is offered. */
+  onAtuBypass?: () => void
   /** Stop TX — the screen's own stop (CW passes stopCw()+haltTx(), RTTY rttyStop()+haltTx()). */
   onStopTx?: () => void
   /** Hold Tx, the slot modes' fifth control (Tempo; FT draws its own strip). */
-  hold?: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }
+  hold?: { on: boolean; onChange: (on: boolean) => void }
 }
 
 /**
@@ -46,17 +48,12 @@ export interface CockpitTxStripProps {
  * replaces sat under the dock or below the window.
  *
  * THE FIRST SLOT IS THE LATCH, AND KEEPS ONE WIDTH: a button where the screen arms TX here (RTTY,
- * PSK, JS8, SSTV, Tempo, APRS), its read-only twin where the screen arms it itself (Phone, CW), so
+ * PSK, JS8, SSTV, Tempo, APRS), its read-only twin where the screen arms it itself (Phone, CW, at the station), so
  * Tune, ATU and Stop TX sit at the same x on every screen. The button keys on the SLOT flag, as
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTune, onStopTx, hold }: CockpitTxStripProps) {
-  const control = useStationControl()
-  // Stop's own authority, never ordinary control freshness — see the Stop TX button below.
-  const remoteStop = useStationStopControl()
-  // How far a remote Stop has got. ACCEPTANCE IS NOT RF: see `useStationStopProgress`.
-  const stopProgress = useStationStopProgress(radio)
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
@@ -72,16 +69,21 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
     !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
+  // ⭐ ATU ON (#344, operator ruling): the label says when the radio reports its tuner in line; a
+  // click ALWAYS runs a tune-up, as it always did. Switching the tuner out is the button's menu
+  // (right-click / long press), offered only where Nexus can send it and only while the tuner is
+  // in. It keys nothing, so the tune-up's lockouts do not grey the button while the menu is offered
+  // (`aria-disabled` keeps the click a no-op and the right-click alive); the backend refuses the
+  // switch-out on the air and says so.
+  const atuMenu = useAtuSwitchOutMenu(radio.atu === true && radio.atuSwitchOut === true && !!onAtuBypass)
+  const atuTuneBlocked = !radio.txAllowed || !!radio.atuStartTuneUnsupported
 
   return (
-    // The hosted OBSERVER's strip scrolls with its cockpit, as its dock does (`.remote-observer-dock`):
-    // its controls are disabled, and a parked strip of disabled buttons covered the contact the
-    // observer was reading on a phone. With station control it is pinned like the dock.
-    <div className={`cockpit-txstrip${control ? '' : ' remote-observer-strip'}`} ref={ref}>
+    <div className="cockpit-txstrip" ref={ref}>
       <div className="op-controls cq-txctl" role="group" aria-label={t('operate.strip.txControls.aria')}>
         {/* ⚠️ DEFERRED (i18n), the four controls below — see this file's header. */}
         {onSetTxEnabled && !radio.transmitting ? (
-          <button disabled={!control}
+          <button
             type="button"
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
@@ -113,7 +115,7 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
             className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onTune(!radio.tuning)}
-            disabled={!control || !radio.txAllowed}
+            disabled={!radio.txAllowed}
             title={radio.txRefusal ?? "Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."}
           >
             Tune
@@ -127,38 +129,44 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
         {onAtuTune && radio.atu != null && (
           <button
             type="button"
-            className="op-btn atu"
-            onClick={onAtuTune}
-            disabled={!control || !radio.txAllowed || !!radio.atuStartTuneUnsupported}
+            ref={atuMenu.buttonRef}
+            className={`op-btn atu${radio.atu ? ' on' : ''}`}
+            aria-pressed={radio.atu}
+            aria-haspopup={atuMenu.offered ? 'menu' : undefined}
+            onClick={atuMenu.click(atuTuneBlocked ? undefined : onAtuTune)}
+            disabled={!atuMenu.offered && atuTuneBlocked}
+            aria-disabled={atuMenu.offered && atuTuneBlocked ? true : undefined}
+            {...atuMenu.handlers}
             title={`${
               radio.atuStartTuneUnsupported
                 ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
                 : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-            } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`}
+            } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}${
+              atuMenu.offered ? ' Right-click or long-press to switch it out.' : ''
+            }`}
           >
-            ATU
+            {radio.atu ? 'ATU ON' : 'ATU'}
+            {atuMenu.offered && onAtuBypass && (
+              <AtuSwitchOutMenu
+                open={atuMenu.open}
+                onOpenChange={atuMenu.setOpen}
+                onSwitchOut={onAtuBypass}
+                buttonRef={atuMenu.buttonRef}
+              />
+            )}
           </button>
         )}
         {/* THE stop control of every screen that draws this strip; its label is the accessible
-            name every stop-line sweep looks for (/^stop tx$/i).
-
-            REMOTE (operator decision 2026-09-14): in the browser this is the station's one remote
-            stop, the same path Operate's FtStopControl uses — halt_tx → the hosted control
-            transport → the operation client's `stopTransmit`. Its authority is
-            useStationStopControl (connected + a station-issued stop token), so stale readings, a
-            pending command or the busy banner never disable it. The screen's own handler is
-            local-only: its extra verbs (stop_cw, rtty_stop, psk_stop) have no remote route. The
-            station stops ANY transmission for it, however it started. */}
+            name every stop-line sweep looks for (/^stop tx$/i). */}
         {onStopTx && (
-          <button disabled={!(control || remoteStop)} type="button" className="op-btn stop"
-            data-remote-stop={(!control && remoteStop) || undefined}
-            onClick={control ? onStopTx : () => void withErrorToast(() => haltTx(), t('shell.halt.failed')).then(s => { if (s) onSnap?.(s) })}
+          <button type="button" className="op-btn stop"
+            onClick={onStopTx}
             title="Stop TX (Esc)">
             Stop TX
           </button>
         )}
         {hold && (
-          <button disabled={hold.disabled}
+          <button
             type="button"
             className={`op-btn hold${hold.on ? ' on' : ''}`}
             aria-pressed={hold.on}
@@ -169,16 +177,6 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
           </button>
         )}
       </div>
-      {/* ⚠️ NEVER "stopped" on acceptance. The station answers an accepted Stop before the halt has
-          run — when its Engine is held it runs afterwards on its own thread — so this reads SENT
-          until the station's own transmitter reading goes free, and STOPPED only then. AFTER the
-          cluster, so it never moves the controls. */}
-      {onStopTx && stopProgress !== 'idle' && (
-        <span className={`cockpit-stopstate${stopProgress === 'stopped' ? ' done' : ''}`} role="status"
-          title={stopProgress === 'stopped' ? t('remote.stop.stopped.title') : stopProgress === 'sent' ? t('remote.stop.sent.title') : undefined}>
-          {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent') : t('remote.stop.sending')}
-        </span>
-      )}
       {/* The ON AIR sign reads the arbiter (`isOnAir`), never the FT slot flag alone, so a voice
           over, CW, RTTY, a tune or a key held at the radio all light it; an over armed through the
           stream lights it once the voice keys it (`lit`, above). Paint only. */}
@@ -205,14 +203,13 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
 /** THE STICKY EDGES' TWO PLACEMENT INPUTS, measured because CSS cannot read a sibling's box.
  *  · `--cockpit-txstrip-bottom` on the strip: the dock's height. The dock is sticky at `bottom: 0`,
  *    so a strip parked at 0 would park UNDER it — Stop TX covered by the PTT row, the exact defect
- *    at the 150–175 % pins. A dock that is not sticky (the hosted observer's) clears nothing.
+ *    at the 150–175 % pins. A dock that is not sticky clears nothing.
  *  · `--cockpit-txstrip-h` on the SHELL: the strip's rendered height while it is sticky, which the
  *    shell's `scroll-padding-top` reads so whatever is scrolled to the start lands below a strip
  *    parked at the top. RENDERED, not offsetHeight: under the UI zoom Chrome applies
  *    `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded 42 screen px under a
  *    74 px strip), and more padding than the strip only scrolls a target a little lower.
- *  Re-read on every render as well as on a resize: station control arriving turns the observer's
- *  dock and strip sticky with no change of size for an observer to see. */
+ *  Re-read on every render as well as on a resize. */
 const isDock = (c: Element): c is HTMLElement =>
   c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
 

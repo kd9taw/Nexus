@@ -252,7 +252,7 @@ fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
         rig_conn: "tci".into(),
         ..RadioConfig::default()
     };
-    let launch = launch_transport(&cfg, &s);
+    let launch = launch_transport(&cfg, &s, None);
     let want = Transport::from_settings(&s);
     assert!(launch.tci_target().is_some());
     assert_eq!(
@@ -270,7 +270,7 @@ fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
         tci_port: 50001,
         ..tempo_app::settings::RadioProfile::default()
     });
-    let (_, pool) = monitor_want(&s);
+    let (_, pool) = monitor_want(&s, None);
     let (_, t) = pool
         .iter()
         .find(|(id, _)| *id == 9)
@@ -838,8 +838,13 @@ fn every_over_of_nexus_goes_out_on_its_own_audio_and_none_on_the_sdr_microphone(
     for (what, setup) in overs {
         let mut s = TciScene::new([], waits(), setup).on_a_made_up_clock();
         s.routed(what);
+        // A step a tick, as `run` paces them: the made-up clock never runs ahead of the real one.
+        // Unpaced, 50 steps took about 20 ms, and the APRS frame (0.49 s and its tail) had ended
+        // and its audio gone with the unkey before the program pulled its first frame, when it
+        // was slow to.
         for _ in 0..50 {
             s.step();
+            std::thread::sleep(Duration::from_millis(20));
         }
         s.audio_reached(what);
         assert_eq!(
@@ -1125,7 +1130,7 @@ fn with_audio_over_tci_off_an_ft8_over_keys_the_programs_input_and_plays_on_the_
     assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
 }
 
-/// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT (M10 in the loop). A voice-keyer message going out
+/// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT. A voice-keyer message going out
 /// on Nexus's audio is stopped part way: the loop's hard stop empties the transmit route, so nothing
 /// of the message is left to send, and the over ends. Here the SDR program does not confirm the
 /// unkey and goes on pulling: what it gets after our stop is silence. None of the message goes to
@@ -1329,10 +1334,9 @@ fn the_loops_own_link_dropping_under_its_over_does_not_unkey_it() {
     s.engine().set_ptt(true);
     s.run_until("the PTT never keyed", |s| s.sent(0, "trx:0,true") == 1);
     s.run(200);
-    assert!(
-        s.rig.send_raw_set("X\nHELP\nHELP\nHELP"),
-        "the lines went out"
-    );
+    // The lines ride behind a raw set's verb (`W X`); what the shim answers it is beside the
+    // point, and the hang-up below is the premise that they arrived.
+    let _ = s.rig.send_raw_set("X\nHELP\nHELP\nHELP");
     // A read may still take an answer to a line before the hang-up as its own, an error that is no
     // link fault; the drive the shim does answer reads only on a link that is still up.
     let hung_up = (0..10).any(|_| {

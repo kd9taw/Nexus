@@ -13,11 +13,9 @@ type Key = 'js8HbNetworking' | 'js8HbAnywhere' | 'js8HbQsoPause' | 'js8HbAckRate
 
 export function Js8HeartbeatSettings({
   form,
-  disabled,
   update,
 }: {
   form: Settings
-  disabled: boolean
   update: (key: Key, value: boolean) => void
 }) {
   // The QSO pause is ON by default (`!== false`: a form from before the key reads it on); the
@@ -36,7 +34,6 @@ export function Js8HeartbeatSettings({
           <label className="settings-toggle">
             <span className="settings-label">{label}</span>
             <button
-              disabled={disabled}
               type="button"
               role="switch"
               aria-checked={on}

@@ -47,7 +47,6 @@ export function Js8InboxPanel({
   inbox,
   call,
   onCall,
-  canControl,
   onRead,
   onDelete,
   onReply,
@@ -58,7 +57,6 @@ export function Js8InboxPanel({
   /** The station shown, or null for all of them. */
   call: string | null
   onCall: (call: string | null) => void
-  canControl: boolean
   /** Mark a message read (picking an unread one). */
   onRead: (id: number) => void
   /** Delete these messages. */
@@ -92,17 +90,17 @@ export function Js8InboxPanel({
   const pick = (e: Js8InboxEntry) => {
     setCurrent(e.id)
     setPicked([e.id])
-    if (e.state === 'unread' && canControl) onRead(e.id)
+    if (e.state === 'unread') onRead(e.id)
   }
   const toggle = (e: Js8InboxEntry, on: boolean) => {
     setPicked((p) => (on ? [...p.filter((id) => id !== e.id), e.id] : p.filter((id) => id !== e.id)))
     if (on) {
       setCurrent(e.id)
-      if (e.state === 'unread' && canControl) onRead(e.id)
+      if (e.state === 'unread') onRead(e.id)
     }
   }
   const remove = () => {
-    if (!canControl || picked.length === 0) return
+    if (picked.length === 0) return
     onDelete(picked)
     setPicked([])
   }
@@ -135,7 +133,7 @@ export function Js8InboxPanel({
         <button
           type="button"
           className="cw-macro js8-inbox-act js8-inbox-reply"
-          disabled={!canControl || currentEntry == null}
+          disabled={currentEntry == null}
           onClick={() => currentEntry && onReply(currentEntry)}
           title={t('js8.inbox.reply.title')}
         >
@@ -144,7 +142,7 @@ export function Js8InboxPanel({
         <button
           type="button"
           className="cw-macro js8-inbox-act js8-inbox-delete"
-          disabled={!canControl || picked.length === 0}
+          disabled={picked.length === 0}
           onClick={remove}
           title={t('js8.inbox.deleteSelected.title')}
         >

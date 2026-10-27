@@ -111,8 +111,9 @@ describe('log-recursive averaging: time constants, measured', () => {
     expect(swingDb(250)).toBeLessThan(40 / 5)
     expect(swingDb(50)).toBeGreaterThan(40 / 2)
     expect(swingDb(scaleDefaults('cw').averageMs)).toBeGreaterThan(40 / 2)
-    // And Phone keeps the specification's 250 ms.
-    expect(scaleDefaults('phone').averageMs).toBe(250)
+    // And Phone defaults to 100 ms (operator ruling 2026-10-23): less settling lag on the voice
+    // trace than the old 250 ms placeholder, still well above CW's off.
+    expect(scaleDefaults('phone').averageMs).toBe(100)
   })
 })
 

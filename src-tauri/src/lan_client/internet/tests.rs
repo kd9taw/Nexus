@@ -5,6 +5,8 @@ use super::*;
 use futures_util::{SinkExt, StreamExt};
 use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_FIXED};
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -24,6 +26,8 @@ struct Seen {
     refuse_pipe: Option<(u16, &'static str)>,
     /// What `client/session` lists.
     session: Option<Value>,
+    /// The last `client/device` body it took.
+    device_body: Option<Value>,
 }
 
 /// Whether `signature` is the key `spki`'s over the five lines for `challenge`, `method`, `path`
@@ -209,6 +213,7 @@ fn answer_to(
             return reply(401, json!({"error":"invalidSignature"}));
         }
         seen.device_key = Some(key);
+        seen.device_body = Some(sent);
         return reply(
             200,
             json!({"deviceId":DEVICE,"approved":false,"expiresAt":1}),
@@ -290,137 +295,119 @@ fn picking(pick: Option<&str>) -> (Choose, Arc<Mutex<Vec<Vec<Choice>>>>) {
 
 async fn registered(origin: &str, seen: &Arc<Mutex<Seen>>) -> InternetRoad {
     let (station_key, _) = ComputerKey::generate().unwrap();
-    seen.lock().unwrap().session =
-        Some(json!({"entitlement":{"enabled":true,"expiresAt":u64::MAX},
-        "stations":[{"id":STATION,"name":"Shack","stationKey":station_key.public_key()}]}));
     let service = Service::new(origin).unwrap();
-    let (choose, offered) = picking(None);
-    let (road, approved) = register_with(&service, "token-1", "Den PC", choose)
+    let (key, pkcs8) = ComputerKey::generate().unwrap();
+    let (device_id, approved) = service
+        .register("token-1", STATION, &key, None, "Den PC")
         .await
         .unwrap();
-    assert!(offered.lock().unwrap().is_empty(), "asked with one station");
     assert!(!approved);
-    assert_eq!(road.station_key, station_key.public_key());
-    road
+    assert_eq!(
+        seen.lock().unwrap().device_key.as_deref(),
+        Some(key.public_key())
+    );
+    InternetRoad {
+        station_id: STATION.into(),
+        device_id,
+        station_key: station_key.public_key().to_string(),
+        pkcs8,
+    }
 }
 
-/// ★ Registering: the account's one station is read with the token, and this computer registers a
-/// new key of its own as a device, signed by that key over a challenge the account was given; the
-/// road kept is the service's station id, the device id it gave and the station key it listed.
-/// CONTROL: an entitlement that does not take in the internet road registers nothing
-/// (`internetNotIncluded`).
+/// ★ Registering: this computer's road key as a device of the account's station, signed by that key
+/// over a challenge the account was given, and the device id the service gave. With the sign-in's
+/// proof, the LAN key and the proof ride along; without one, neither does. CONTROL: a road key the
+/// signature is not by is refused (`accessDenied`).
 #[tokio::test]
-async fn adding_the_road_registers_a_new_key_for_the_accounts_station() {
+async fn registering_is_signed_by_the_road_key_and_carries_the_proof_when_given() {
     let (origin, seen) = service().await;
     let road = registered(&origin, &seen).await;
     assert_eq!(
         (road.station_id.as_str(), road.device_id.as_str()),
         (STATION, DEVICE)
     );
+    let body = seen.lock().unwrap().device_body.clone().unwrap();
     let key = ComputerKey::restore(&road.pkcs8).unwrap();
     assert_eq!(
-        seen.lock().unwrap().device_key.as_deref(),
-        Some(key.public_key())
+        body,
+        json!({"name":"Den PC","kind":"computer","platform":platform(),"publicKey":key.public_key()})
     );
 
     let service = Service::new(&origin).unwrap();
-    let before = seen.lock().unwrap().requests.len();
-    seen.lock().unwrap().session = Some(json!({"entitlement":{"enabled":true,"expiresAt":1},
-        "stations":[{"id":STATION,"name":"Shack","stationKey":key.public_key()}]}));
+    let (lan, _) = ComputerKey::generate().unwrap();
+    let registered = service
+        .register(
+            "token-1",
+            STATION,
+            &key,
+            Some((&lan, "the-proof")),
+            "Den PC",
+        )
+        .await;
+    assert_eq!(registered, Ok((DEVICE.to_string(), false)));
     assert_eq!(
-        register_with(&service, "token-1", "Den PC", picking(None).0)
+        seen.lock().unwrap().device_body.clone().unwrap(),
+        json!({"name":"Den PC","kind":"computer","platform":platform(),"publicKey":key.public_key(),
+            "lanKey":lan.public_key(),"proof":"the-proof"})
+    );
+    // Not an id of the service's: nothing is sent.
+    let before = seen.lock().unwrap().requests.len();
+    assert_eq!(
+        service
+            .register("token-1", "not-an-id", &key, None, "Den PC")
             .await
             .err(),
-        Some("internetNotIncluded")
+        Some("invalidResponse")
     );
-    let asked: Vec<String> = seen.lock().unwrap().requests[before..]
-        .iter()
-        .map(|(_, p)| p.clone())
-        .collect();
-    assert_eq!(
-        asked,
-        vec!["/api/remote/client/session".to_string()],
-        "nothing registered"
-    );
+    assert_eq!(seen.lock().unwrap().requests.len(), before);
 }
 
 /// ★ The road kept says this computer's key for it as the station shows that key when it asks to
 /// approve this computer: the shack's own fingerprint (`remote_service::fingerprint`) of the key the
-/// service registered for the device, which is what the service lists to the station. And whether the
-/// device still waits for that approval; the road is kept for the station paired here. CONTROL: a road
-/// the service approved at once waits for nothing.
+/// service registered for the device, which is what the service lists to the station. Whether the
+/// device still waits for that approval, and the road kept for the station, are the sign-in's
+/// (`super::account`). CONTROL: a record with no key in it shows none.
 #[tokio::test]
 async fn the_road_kept_says_this_computers_key_as_the_station_shows_it() {
-    const PAIRED: &str = "60000000-0000-4000-8000-000000000001";
     let (origin, seen) = service().await;
-    for approved in [false, true] {
-        let road = registered(&origin, &seen).await;
-        let listed = seen.lock().unwrap().device_key.clone().unwrap();
-        let stations = Arc::new(Stations::new(Arc::new(
-            crate::lan_client::tests::StationStore::default(),
-        )));
-        stations
-            .keep(&crate::lan_client::tests::record(
-                PAIRED,
-                &["192.168.1.20:42075"],
-            ))
-            .unwrap();
-        let pkcs8 = road.pkcs8.clone();
-        let (waiting, key) = keep_road(Arc::clone(&stations), PAIRED.into(), road, approved)
-            .await
-            .unwrap();
-        assert_eq!(
-            Some(key),
-            crate::remote_service::fingerprint(&listed),
-            "the key the station shows"
-        );
-        assert_eq!(waiting, !approved, "waits only while not approved there");
-        assert_eq!(
-            stations.internet(PAIRED).unwrap().map(|kept| kept.pkcs8),
-            Some(pkcs8),
-            "kept for the station paired here"
-        );
-    }
+    let road = registered(&origin, &seen).await;
+    let listed = seen.lock().unwrap().device_key.clone().unwrap();
+    let shown = shown_key(&road);
+    assert!(shown.is_some(), "a key to show");
+    assert_eq!(
+        shown,
+        crate::remote_service::fingerprint(&listed),
+        "the key the station shows"
+    );
+    let mut broken = clone_road(&road);
+    broken.pkcs8 = "00".into();
+    assert_eq!(shown_key(&broken), None, "no key in it");
 }
 
-/// ★ An account with two stations: the operator is offered each one's id and name, and the station
-/// picked is the one registered with, and its listed key the one kept. CONTROL: no pick (cancelled,
-/// or the window gone), or an id the service never listed, registers nothing (`stationNotChosen`).
+/// ★ A road registered without a proof is for the account's one station, or the one the operator
+/// picks: each station's id and name offered, and the one picked is the one listed. CONTROL: no
+/// pick (cancelled, or the window gone), or an id the service never listed, picks nothing
+/// (`stationNotChosen`); an entitlement that does not take in the internet road picks nothing
+/// (`internetNotIncluded`), nor does an account with no station.
 #[tokio::test]
-async fn an_account_with_two_stations_asks_which_and_registers_with_the_one_picked() {
+async fn a_road_without_a_proof_is_for_the_station_the_operator_picks() {
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
-    let (origin, seen) = service().await;
     let (club_key, _) = ComputerKey::generate().unwrap();
     let (shack_key, _) = ComputerKey::generate().unwrap();
-    seen.lock().unwrap().session = Some(json!({"entitlement":{"access":"internet"},"stations":[
+    let session = json!({"entitlement":{"access":"internet"},"stations":[
         {"id":CLUB,"name":"Club station","stationKey":club_key.public_key()},
-        {"id":STATION,"name":"Shack","stationKey":shack_key.public_key()}]}));
-    let service = Service::new(&origin).unwrap();
-    let device = format!("/api/remote/stations/{STATION}/client/device");
-    let registers = |seen: &Arc<Mutex<Seen>>| {
-        seen.lock()
-            .unwrap()
-            .requests
-            .iter()
-            .filter(|(_, path)| path.ends_with("/client/device"))
-            .count()
-    };
+        {"id":STATION,"name":"Shack","stationKey":shack_key.public_key()}]});
     for pick in [None, Some("30000000-0000-4000-8000-0000000000ff")] {
         let (choose, offered) = picking(pick);
         assert_eq!(
-            register_with(&service, "token-1", "Den PC", choose)
-                .await
-                .err(),
+            chosen(&session, choose).await.err(),
             Some("stationNotChosen"),
             "{pick:?}"
         );
         assert_eq!(offered.lock().unwrap().len(), 1);
-        assert_eq!(registers(&seen), 0, "{pick:?}: registered");
     }
     let (choose, offered) = picking(Some(STATION));
-    let (road, _) = register_with(&service, "token-1", "Den PC", choose)
-        .await
-        .unwrap();
+    let station = chosen(&session, choose).await.unwrap();
     assert_eq!(
         offered.lock().unwrap().as_slice(),
         [vec![
@@ -434,10 +421,24 @@ async fn an_account_with_two_stations_asks_which_and_registers_with_the_one_pick
             },
         ]]
     );
-    assert_eq!(road.station_id, STATION);
-    assert_eq!(road.station_key, shack_key.public_key());
-    let asked = seen.lock().unwrap().requests.clone();
-    assert_eq!(asked.last(), Some(&("POST".to_string(), device)));
+    assert_eq!(station["id"], STATION);
+    assert_eq!(station["stationKey"], shack_key.public_key());
+
+    let (choose, offered) = picking(None);
+    let one = json!({"entitlement":{"enabled":true,"expiresAt":u64::MAX},
+        "stations":[{"id":STATION,"name":"Shack","stationKey":shack_key.public_key()}]});
+    assert_eq!(chosen(&one, choose).await.unwrap()["id"], STATION);
+    assert!(offered.lock().unwrap().is_empty(), "asked with one station");
+    let ended = json!({"entitlement":{"enabled":true,"expiresAt":1},"stations":one["stations"]});
+    assert_eq!(
+        chosen(&ended, picking(None).0).await.err(),
+        Some("internetNotIncluded")
+    );
+    let none = json!({"entitlement":{"access":"internet"},"stations":[]});
+    assert_eq!(
+        chosen(&none, picking(None).0).await.err(),
+        Some("stationUnavailable")
+    );
 }
 
 /// ★ Reopening needs no sign-in: TURN credentials and a renewal are asked as the device, each
@@ -523,42 +524,6 @@ fn clone_road(road: &InternetRoad) -> InternetRoad {
         station_key: road.station_key.clone(),
         pkcs8: road.pkcs8.clone(),
     }
-}
-
-/// ★ The sign-in's loopback listener takes only the redirect it is waiting for: a favicon and a
-/// redirect with another state are answered and the wait goes on; the code with this state is
-/// taken. CONTROL: the issuer's refusal with this state ends the wait (`signInRefused`).
-#[tokio::test]
-async fn the_loopback_listener_takes_only_this_sign_ins_redirect() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let at = listener.local_addr().unwrap();
-    let ask = |target: &'static str| async move {
-        let mut stream = TcpStream::connect(at).await.unwrap();
-        stream
-            .write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
-            .await
-            .unwrap();
-        let mut page = String::new();
-        let _ = stream.read_to_string(&mut page).await;
-        page
-    };
-    let waiting = tokio::spawn(async move {
-        let code = redirected(&listener, "state-1").await;
-        (code, listener)
-    });
-    assert!(ask("/favicon.ico").await.contains("not the sign-in"));
-    assert!(ask("/callback?code=stolen&state=other")
-        .await
-        .contains("not the sign-in"));
-    assert!(ask("/callback?code=the-code&state=state-1")
-        .await
-        .contains("signed in"));
-    let (code, listener) = waiting.await.unwrap();
-    assert_eq!(code, Ok("the-code".to_string()));
-
-    let refused = tokio::spawn(async move { redirected(&listener, "state-2").await });
-    let _ = ask("/callback?error=access_denied&state=state-2").await;
-    assert_eq!(refused.await.unwrap(), Err("signInRefused"));
 }
 
 /// The service's refusals as this computer names them: only those it knows, the rest by status.

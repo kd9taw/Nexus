@@ -1326,3 +1326,105 @@ fn another_contests_screen_lets_none_of_a_contests_contacts_go_while_its_running
         .collect();
     assert_eq!(qso_lines(&e), lines, "its Cabrillo file");
 }
+
+/// **Each contest contact keeps the radio and the power it was made with, through the
+/// journal and a restart, into the Logbook** — with the contact's time as its end time. The
+/// operator changed radio and power between the two contacts; each merged copy names its own.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_its_own_radio_power_and_end_time() {
+    let d = Dir::new("contest-merge-kit");
+    let mut s = field_day_settings();
+    s.rig_model_name = "Icom IC-7300".into();
+    s.station_power_w = Some(100.0);
+    let mut e = launch(&d, &s);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    save(&mut e, |s| {
+        s.rig_model_name = "Elecraft KX3".into();
+        s.station_power_w = Some(5.0);
+    });
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(
+        contest_calls(&e),
+        ["K1ABC", "W1AW"],
+        "PREMISE: both came back"
+    );
+    assert_eq!(merge(&mut e), (2, 0));
+    for (call, rig, watts) in [
+        ("K1ABC", "Icom IC-7300", 100.0),
+        ("W1AW", "Elecraft KX3", 5.0),
+    ] {
+        let r = copy_of(&e, call);
+        assert_eq!(r.my_rig.as_deref(), Some(rig), "{call}");
+        assert_eq!(r.tx_power, Some(watts), "{call}");
+        assert_eq!(r.time_off_unix, Some(r.when_unix), "{call}");
+        assert_eq!(r.operator.as_deref(), Some("W9XYZ"), "{call}: nobody named");
+    }
+}
+
+/// **A contest contact carries the power the radio measured on its over**, ahead of Settings ▸
+/// Station power, into the Logbook: the operator turned the radio down between the two contacts
+/// and never touched Settings.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_the_power_the_radio_measured() {
+    let d = Dir::new("contest-merge-measured-power");
+    let mut s = field_day_settings();
+    s.station_power_w = Some(100.0);
+    let mut e = launch(&d, &s);
+    let over = |e: &mut Engine, w: f32| {
+        e.observe_rig_tx_meters(None, None, Some(w), None);
+        e.clear_rig_tx_meters();
+    };
+    over(&mut e, 40.0);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    over(&mut e, 5.0);
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(merge(&mut e), (2, 0));
+    assert_eq!(copy_of(&e, "K1ABC").tx_power, Some(40.0));
+    assert_eq!(copy_of(&e, "W1AW").tx_power, Some(5.0));
+}
+
+/// **Each contest contact keeps the grid it was made from, through the journal and a restart,
+/// into the Logbook — marked as Nexus's own, so the LoTW upload leaves it out**, as an ordinary
+/// contact's Settings grid is. The operator moved between the two contacts; each merged copy
+/// names its own grid, every service is sent it, and the LoTW batch carries neither.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_its_grid_which_lotw_never_sees() {
+    let d = Dir::new("contest-merge-grid");
+    let mut s = field_day_settings();
+    s.mygrid = "en52".into();
+    let mut e = launch(&d, &s);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    save(&mut e, |s| s.mygrid = "EN61ab".into());
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(
+        contest_calls(&e),
+        ["K1ABC", "W1AW"],
+        "PREMISE: both came back"
+    );
+    assert_eq!(merge(&mut e), (2, 0));
+    let copies = [copy_of(&e, "K1ABC"), copy_of(&e, "W1AW")];
+    let lotw = crate::station::lotw_batch_adif(&copies, false, "W9XYZ", "EN52");
+    assert!(
+        lotw.contains("<CALL:5>K1ABC") && lotw.contains("<CALL:4>W1AW"),
+        "the control: both contacts are in the batch: {lotw}"
+    );
+    assert!(!lotw.contains("MY_GRIDSQUARE"), "{lotw}");
+    for (r, grid) in copies.iter().zip(["EN52", "EN61AB"]) {
+        assert_eq!(r.my_grid.as_deref(), Some(grid), "{}", r.call);
+        assert_eq!(tempo_core::logbook::self_filled(r), ["MY_GRIDSQUARE"]);
+        let sent = tempo_core::logbook::adif_record(r);
+        assert!(
+            sent.contains(&format!("<MY_GRIDSQUARE:{}>{grid}", grid.len())),
+            "{sent}"
+        );
+    }
+}

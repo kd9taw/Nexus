@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::net::{ToSocketAddrs, UdpSocket};
 
 use crate::decode::Decode;
-use crate::mode::{make_mode, Mode, ModeKind};
+use crate::mode::{make_mode, Mode, ModeKind, PassCarry};
 
 /// Inputs for one decode interval (slot). Native sources decode `iwave`; passive
 /// sources (UDP) ignore the audio and drain queued network decodes.
@@ -90,6 +90,28 @@ impl<'a> DecodeRequest<'a> {
     }
 }
 
+/// Where a decoder reports while its pass runs, as WSJT-X's decoders call back with each new
+/// decode (`ft8_decode.f90:233-238`, `ft4_decode.f90:456`) for jt9 to write and flush at once, so a
+/// decode reaches its reader the moment it is found instead of when the pass ends.
+pub trait DecodeSink {
+    /// A decode the pass has just accepted. It is also in the list the pass returns, in the same
+    /// place: the decodes come in the decoder's own order, the RX frequency's candidates first.
+    fn found(&mut self, d: &Decode);
+    /// Asked after each FT8 sync candidate is tried: `true` stops the pass there, with what it has
+    /// found (WSJT-X asks its early pass's give-up at exactly this point, `ft8_decode.f90:240-242`).
+    /// Never asked by FT4, which has no give-up.
+    fn give_up(&mut self) -> bool {
+        false
+    }
+    /// Asked before FT8's rescue pass starts and after each of its sync candidates (the full pass
+    /// once more on the raw audio, after a full pass from the early pass's residual): `true` gives
+    /// the rescue up there, keeping what it found; before it starts, the period's result is the
+    /// full pass's alone.
+    fn give_up_rescue(&mut self) -> bool {
+        false
+    }
+}
+
 /// A source of [`Decode`]s, driven once per slot boundary by the engine.
 pub trait SignalSource: Send {
     /// Human-readable label for the UI (e.g. `"Native (FT8)"`, `"WSJT-X UDP"`).
@@ -114,24 +136,51 @@ pub trait SignalSource: Send {
         let _ = a7_final;
         self.decode(req)
     }
+
+    /// [`decode_a7`](SignalSource::decode_a7), telling `sink` of each decode the moment the
+    /// decoder finds it (a native FT8 or FT4 source). Every other source hands its decodes over
+    /// only in the returned list; this default tells `sink` nothing.
+    fn decode_streaming(
+        &mut self,
+        req: &DecodeRequest,
+        a7_final: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        let _ = sink;
+        self.decode_a7(req, a7_final)
+    }
+
+    /// WSJT-X's FT8 47 step for a native FT8 source ([`Mode::subtract_early`]): subtract this
+    /// period's early decodes from `req.iwave`, the period's first 13.536 s, for the full pass that
+    /// follows. Decodes nothing; `sink` is asked only whether to give up. Every other source has
+    /// no such step and does nothing.
+    fn subtract_early(&mut self, req: &DecodeRequest, sink: &mut dyn DecodeSink) -> usize {
+        let _ = (req, sink);
+        0
+    }
 }
 
 /// Native decode: run the active [`Mode`] over locally captured audio.
 pub struct NativeSource {
     mode: Box<dyn Mode>,
+    /// What the mode keeps between the passes of one period ([`PassCarry`]): FT8's early decodes
+    /// and the 47 step's residual. This decoder's own, so one radio chain's can never reach
+    /// another's; a new mode starts a new one.
+    carry: PassCarry,
 }
 
 impl NativeSource {
     /// Wrap an explicit boxed mode.
     pub fn new(mode: Box<dyn Mode>) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            carry: PassCarry::default(),
+        }
     }
 
     /// Build from a [`ModeKind`].
     pub fn from_kind(kind: ModeKind) -> Self {
-        Self {
-            mode: make_mode(kind),
-        }
+        Self::new(make_mode(kind))
     }
 
     /// The active mode.
@@ -139,9 +188,16 @@ impl NativeSource {
         self.mode.as_ref()
     }
 
-    /// Switch modes at runtime (e.g. the user picks FT4 instead of FT8).
+    /// Switch modes at runtime (e.g. the user picks FT4 instead of FT8). Nothing the old mode
+    /// carried between passes survives the switch.
     pub fn set_mode(&mut self, mode: Box<dyn Mode>) {
         self.mode = mode;
+        self.carry = PassCarry::default();
+    }
+
+    /// What this decoder carries between the passes of the period ([`PassCarry`]).
+    pub fn carry(&self) -> &PassCarry {
+        &self.carry
     }
 }
 
@@ -199,6 +255,63 @@ impl SignalSource for NativeSource {
             d.mode = Some(kind);
         }
         decs
+    }
+
+    fn decode_streaming(
+        &mut self,
+        req: &DecodeRequest,
+        a7_final: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        /// Tags each decode with the mode that found it before `sink` sees it, as the returned
+        /// list is tagged below.
+        struct Tagged<'a> {
+            kind: ModeKind,
+            sink: &'a mut dyn DecodeSink,
+        }
+        impl DecodeSink for Tagged<'_> {
+            fn found(&mut self, d: &Decode) {
+                let mut d = d.clone();
+                d.mode = Some(self.kind);
+                self.sink.found(&d);
+            }
+            fn give_up(&mut self) -> bool {
+                self.sink.give_up()
+            }
+            fn give_up_rescue(&mut self) -> bool {
+                self.sink.give_up_rescue()
+            }
+        }
+        let kind = self.mode.kind();
+        // With this decoder's carry: FT8's full pass starts from the early pass's residual, as
+        // WSJT-X's does ([`Mode::decode_frame_carry`]).
+        let mut decs = self.mode.decode_frame_carry(
+            req.iwave,
+            req.nfa,
+            req.nfb,
+            req.ndepth,
+            req.mycall,
+            req.hiscall,
+            req.nqso_progress,
+            req.nfqso,
+            req.nftx,
+            req.frame_time_ms,
+            a7_final,
+            req.partial,
+            req.ap,
+            req.ap_cq_only,
+            &mut self.carry,
+            &mut Tagged { kind, sink },
+        );
+        for d in &mut decs {
+            d.mode = Some(kind);
+        }
+        decs
+    }
+
+    fn subtract_early(&mut self, req: &DecodeRequest, sink: &mut dyn DecodeSink) -> usize {
+        self.mode
+            .subtract_early(req.iwave, req.ndepth, &mut self.carry, sink)
     }
 }
 

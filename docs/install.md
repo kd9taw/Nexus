@@ -14,13 +14,13 @@ come here for the complete picture.
   (Pi 3/4/5). All four platforms build from the same tree and ship together every release.
   Intel Macs are source-build only. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
   Fast** keeps FT8 and FT4 decoding in real time.
-- **On a PC, Linux means Ubuntu 24.04 or newer** — Debian 13 (trixie), Fedora 40+, Mint 22
-  and anything else built on a C library of at least that vintage. Both PC Linux files are
-  built on Ubuntu 24.04, and the AppImage does not change this: an AppImage carries the
-  application's own libraries but not the system C library, so it needs the same minimum the
-  `.deb` does. On something older — Ubuntu 22.04, or Mint 21.x, which is built on it — the
-  package installs without complaint and then the app does not start, which is a poor way to
-  find out. Check with `ldd --version`: you need 2.39 or higher. The two Raspberry Pi packages
+- **On a PC, Linux means Ubuntu 22.04 or newer** — Mint 21 and later, Debian 12 (bookworm)
+  and 13 (trixie), Fedora 36+, and anything else built on a C library of at least that
+  vintage. Both PC Linux files are built on Ubuntu 22.04, and the AppImage does not change
+  this: an AppImage carries the application's own libraries but not the system C library, so
+  it needs the same minimum the `.deb` does. On something older — Ubuntu 20.04, or Debian 11 —
+  the package installs without complaint and then the app does not start, which is a poor way
+  to find out. Check with `ldd --version`: you need 2.35 or higher. The two Raspberry Pi packages
   are separate and each names the Pi OS it is built for.
 - **A radio with CAT + audio**, or a network rig (FlexRadio, remote `rigctld`).
   You can install and explore without a radio — the wizard and every panel open —
@@ -51,8 +51,8 @@ files you download by hand):
 |---|---|
 | `Nexus_<version>_x64-setup.exe` | Windows 10/11 x64 — NSIS, per-user, bundles WebView2 and Hamlib |
 | `Nexus_<version>_aarch64.dmg` | macOS on Apple Silicon — signed + notarized; bundles Hamlib |
-| `Nexus_<version>_amd64.AppImage` | Linux on a PC, portable — one file, updates itself in place (Ubuntu 24.04 or newer) |
-| `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC (Ubuntu 24.04 / Debian 13 or newer) |
+| `Nexus_<version>_amd64.AppImage` | Linux on a PC, portable — one file, updates itself in place (Ubuntu 22.04 or newer) |
+| `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC (Ubuntu 22.04 / Debian 12 or newer) |
 | `Nexus_<version>_pi_arm64_bookworm.deb` | Raspberry Pi OS bookworm, 64-bit |
 | `Nexus_<version>_pi_arm64_trixie.deb` | Raspberry Pi OS trixie, 64-bit |
 
@@ -234,7 +234,7 @@ platforms. `~/.config` is hidden in Finder: press **⌘⇧.** in an Open dialog,
 |---|---|---|---|
 | Settings | `%APPDATA%\tempo\settings.json` | `~/.config/tempo/settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
 | **Logbook** | `%APPDATA%\tempo\log.sqlite3` | `~/.config/tempo/log.sqlite3` | The logbook itself, a database. Never copy it while Nexus is running |
-| **Logbook, as ADIF** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — every contact, kept up to date a moment after each change. **This is the file to back up** |
+| **Logbook, as ADIF** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.8 — every contact, kept up to date a moment after each change. **This is the file to back up** |
 | Logbook backups | `%APPDATA%\tempo\backups\` | `~/.config/tempo/backups/` | Dated copies of `log.adi` Nexus takes by itself — see [Restoring the logbook](#restoring-the-logbook-from-a-backup-copy) |
 | Received-audio recordings | `%APPDATA%\tempo\recordings\` | `~/.config/tempo/recordings/` | Only if you enable audio saving; can get large |
 | UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | the webview's own store for `com.kd9taw.tempo` | Theme, UI scale, panel layout, wizard-seen flag, board filters |

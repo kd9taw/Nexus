@@ -1,0 +1,108 @@
+Technician Digital spans Some([(28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Technician Phone spans Some([(28.3, 28.5), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Technician Cw spans Some([(3.525, 3.6), (7.025, 7.125), (21.025, 21.2), (28.0, 28.5), (50.0, 54.0), (144.0, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Technician Rtty spans Some([(28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Technician Keyboard spans Some([(28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Technician 160m starts [None, None, None, None, None] home None shade None
+Technician 80m starts [None, None, Some(3.525), None, None] home None shade None
+Technician 60m starts [None, None, None, None, None] home None shade None
+Technician 40m starts [None, None, Some(7.025), None, None] home None shade None
+Technician 30m starts [None, None, None, None, None] home None shade None
+Technician 20m starts [None, None, None, None, None] home None shade None
+Technician 17m starts [None, None, None, None, None] home None shade None
+Technician 15m starts [None, None, Some(21.025), None, None] home None shade None
+Technician 12m starts [None, None, None, None, None] home None shade None
+Technician 10m starts [Some(28.0), Some(28.3), Some(28.0), Some(28.0), Some(28.0)] home Some((28.3, "USB")) shade Some((28.3, 28.5))
+Technician 6m starts [Some(50.1), Some(50.1), Some(50.0), Some(50.1), Some(50.1)] home Some((50.1, "USB")) shade Some((50.1, 54.0))
+Technician 4m starts [None, None, None, None, None] home None shade None
+Technician 2m starts [Some(144.1), Some(144.1), Some(144.0), Some(144.1), Some(144.1)] home Some((144.1, "USB")) shade Some((144.1, 148.0))
+Technician 1.25m starts [Some(222.0), Some(222.0), Some(222.0), Some(222.0), Some(222.0)] home Some((222.0, "USB")) shade Some((222.0, 225.0))
+Technician 70cm starts [Some(420.0), Some(420.0), Some(420.0), Some(420.0), Some(420.0)] home Some((420.0, "USB")) shade Some((420.0, 450.0))
+Technician 33cm starts [Some(902.0), Some(902.0), Some(902.0), Some(902.0), Some(902.0)] home Some((902.0, "USB")) shade Some((902.0, 928.0))
+Technician 23cm starts [Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0)] home Some((1240.0, "USB")) shade Some((1240.0, 1300.0))
+Technician 13cm starts [Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0)] home Some((2300.0, "USB")) shade None
+Technician 9cm starts [None, None, None, None, None] home None shade None
+Technician 6cm starts [Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0)] home Some((5650.0, "USB")) shade Some((5650.0, 5925.0))
+Technician 3cm starts [Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0)] home Some((10000.0, "USB")) shade Some((10000.0, 10500.0))
+Technician 1.25cm starts [Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0)] home Some((24000.0, "USB")) shade Some((24000.0, 24250.0))
+Technician 1.885 lsb true wide true usb_only false
+Technician 3.885 lsb true wide true usb_only false
+Technician 5.3305 lsb false wide false usb_only true
+Technician 5.36 lsb false wide false usb_only true
+Technician 7.2 lsb true wide true usb_only false
+Technician 14.3 lsb true wide true usb_only false
+Technician 28.4 lsb true wide false usb_only false
+Technician 29.6 lsb true wide true usb_only false
+Technician 146.52 lsb true wide true usb_only false
+General Digital spans Some([(1.8, 2.0), (3.525, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.025, 7.125), (10.1, 10.15), (14.025, 14.15), (18.068, 18.11), (21.025, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+General Phone spans Some([(1.8, 2.0), (3.8, 4.0), (5.3305, 5.3334), (5.3465, 5.3494), (5.3515, 5.3665), (5.3715, 5.3744), (5.4035, 5.4064), (7.175, 7.3), (14.225, 14.35), (18.11, 18.168), (21.275, 21.45), (24.93, 24.99), (28.3, 29.7), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+General Cw spans Some([(1.8, 2.0), (3.525, 3.6), (3.8, 4.0), (5.3319944999999995, 5.3320055), (5.3479944999999995, 5.3480055), (5.3515, 5.3665), (5.3729945, 5.3730055000000005), (5.4049945, 5.405005500000001), (7.025, 7.125), (7.175, 7.3), (10.1, 10.15), (14.025, 14.15), (14.225, 14.35), (18.068, 18.168), (21.025, 21.2), (21.275, 21.45), (24.89, 24.99), (28.0, 29.7), (50.0, 54.0), (144.0, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+General Rtty spans Some([(1.8, 2.0), (3.525, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.025, 7.125), (10.1, 10.15), (14.025, 14.15), (18.068, 18.11), (21.025, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+General Keyboard spans Some([(1.8, 2.0), (3.525, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.025, 7.125), (10.1, 10.15), (14.025, 14.15), (18.068, 18.11), (21.025, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+General 160m starts [Some(1.8), Some(1.8), Some(1.8), Some(1.8), Some(1.8)] home Some((1.8028, "LSB")) shade Some((1.8, 2.0))
+General 80m starts [Some(3.525), Some(3.8), Some(3.525), Some(3.525), Some(3.525)] home Some((3.8028, "LSB")) shade Some((3.8, 4.0))
+General 60m starts [None, None, None, None, None] home None shade None
+General 40m starts [Some(7.025), Some(7.175), Some(7.025), Some(7.025), Some(7.025)] home Some((7.1777999999999995, "LSB")) shade Some((7.175, 7.3))
+General 30m starts [Some(10.1), None, Some(10.1), Some(10.1), Some(10.1)] home None shade None
+General 20m starts [Some(14.025), Some(14.225), Some(14.025), Some(14.025), Some(14.025)] home Some((14.225, "USB")) shade Some((14.225, 14.35))
+General 17m starts [Some(18.068), Some(18.11), Some(18.068), Some(18.068), Some(18.068)] home Some((18.11, "USB")) shade Some((18.11, 18.168))
+General 15m starts [Some(21.025), Some(21.275), Some(21.025), Some(21.025), Some(21.025)] home Some((21.275, "USB")) shade Some((21.275, 21.45))
+General 12m starts [Some(24.89), Some(24.93), Some(24.89), Some(24.89), Some(24.89)] home Some((24.93, "USB")) shade Some((24.93, 24.99))
+General 10m starts [Some(28.0), Some(28.3), Some(28.0), Some(28.0), Some(28.0)] home Some((28.3, "USB")) shade Some((28.3, 29.7))
+General 6m starts [Some(50.1), Some(50.1), Some(50.0), Some(50.1), Some(50.1)] home Some((50.1, "USB")) shade Some((50.1, 54.0))
+General 4m starts [None, None, None, None, None] home None shade None
+General 2m starts [Some(144.1), Some(144.1), Some(144.0), Some(144.1), Some(144.1)] home Some((144.1, "USB")) shade Some((144.1, 148.0))
+General 1.25m starts [Some(222.0), Some(222.0), Some(222.0), Some(222.0), Some(222.0)] home Some((222.0, "USB")) shade Some((222.0, 225.0))
+General 70cm starts [Some(420.0), Some(420.0), Some(420.0), Some(420.0), Some(420.0)] home Some((420.0, "USB")) shade Some((420.0, 450.0))
+General 33cm starts [Some(902.0), Some(902.0), Some(902.0), Some(902.0), Some(902.0)] home Some((902.0, "USB")) shade Some((902.0, 928.0))
+General 23cm starts [Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0)] home Some((1240.0, "USB")) shade Some((1240.0, 1300.0))
+General 13cm starts [Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0)] home Some((2300.0, "USB")) shade None
+General 9cm starts [None, None, None, None, None] home None shade None
+General 6cm starts [Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0)] home Some((5650.0, "USB")) shade Some((5650.0, 5925.0))
+General 3cm starts [Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0)] home Some((10000.0, "USB")) shade Some((10000.0, 10500.0))
+General 1.25cm starts [Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0)] home Some((24000.0, "USB")) shade Some((24000.0, 24250.0))
+General 1.885 lsb true wide true usb_only false
+General 3.885 lsb true wide true usb_only false
+General 5.3305 lsb false wide false usb_only true
+General 5.36 lsb false wide false usb_only true
+General 7.2 lsb true wide true usb_only false
+General 14.3 lsb true wide true usb_only false
+General 28.4 lsb true wide true usb_only false
+General 29.6 lsb true wide true usb_only false
+General 146.52 lsb true wide true usb_only false
+Extra Digital spans Some([(1.8, 2.0), (3.5, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.0, 7.125), (10.1, 10.15), (14.0, 14.15), (18.068, 18.11), (21.0, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Extra Phone spans Some([(1.8, 2.0), (3.6, 4.0), (5.3305, 5.3334), (5.3465, 5.3494), (5.3515, 5.3665), (5.3715, 5.3744), (5.4035, 5.4064), (7.125, 7.3), (14.15, 14.35), (18.11, 18.168), (21.2, 21.45), (24.93, 24.99), (28.3, 29.7), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Extra Cw spans Some([(1.8, 2.0), (3.5, 4.0), (5.3319944999999995, 5.3320055), (5.3479944999999995, 5.3480055), (5.3515, 5.3665), (5.3729945, 5.3730055000000005), (5.4049945, 5.405005500000001), (7.0, 7.3), (10.1, 10.15), (14.0, 14.35), (18.068, 18.168), (21.0, 21.45), (24.89, 24.99), (28.0, 29.7), (50.0, 54.0), (144.0, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Extra Rtty spans Some([(1.8, 2.0), (3.5, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.0, 7.125), (10.1, 10.15), (14.0, 14.15), (18.068, 18.11), (21.0, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Extra Keyboard spans Some([(1.8, 2.0), (3.5, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.0, 7.125), (10.1, 10.15), (14.0, 14.15), (18.068, 18.11), (21.0, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
+Extra 160m starts [Some(1.8), Some(1.8), Some(1.8), Some(1.8), Some(1.8)] home Some((1.8028, "LSB")) shade Some((1.8, 2.0))
+Extra 80m starts [Some(3.5), Some(3.6), Some(3.5), Some(3.5), Some(3.5)] home Some((3.6028000000000002, "LSB")) shade Some((3.6, 4.0))
+Extra 60m starts [None, None, None, None, None] home None shade None
+Extra 40m starts [Some(7.0), Some(7.125), Some(7.0), Some(7.0), Some(7.0)] home Some((7.1278, "LSB")) shade Some((7.125, 7.3))
+Extra 30m starts [Some(10.1), None, Some(10.1), Some(10.1), Some(10.1)] home None shade None
+Extra 20m starts [Some(14.0), Some(14.15), Some(14.0), Some(14.0), Some(14.0)] home Some((14.15, "USB")) shade Some((14.15, 14.35))
+Extra 17m starts [Some(18.068), Some(18.11), Some(18.068), Some(18.068), Some(18.068)] home Some((18.11, "USB")) shade Some((18.11, 18.168))
+Extra 15m starts [Some(21.0), Some(21.2), Some(21.0), Some(21.0), Some(21.0)] home Some((21.2, "USB")) shade Some((21.2, 21.45))
+Extra 12m starts [Some(24.89), Some(24.93), Some(24.89), Some(24.89), Some(24.89)] home Some((24.93, "USB")) shade Some((24.93, 24.99))
+Extra 10m starts [Some(28.0), Some(28.3), Some(28.0), Some(28.0), Some(28.0)] home Some((28.3, "USB")) shade Some((28.3, 29.7))
+Extra 6m starts [Some(50.1), Some(50.1), Some(50.0), Some(50.1), Some(50.1)] home Some((50.1, "USB")) shade Some((50.1, 54.0))
+Extra 4m starts [None, None, None, None, None] home None shade None
+Extra 2m starts [Some(144.1), Some(144.1), Some(144.0), Some(144.1), Some(144.1)] home Some((144.1, "USB")) shade Some((144.1, 148.0))
+Extra 1.25m starts [Some(222.0), Some(222.0), Some(222.0), Some(222.0), Some(222.0)] home Some((222.0, "USB")) shade Some((222.0, 225.0))
+Extra 70cm starts [Some(420.0), Some(420.0), Some(420.0), Some(420.0), Some(420.0)] home Some((420.0, "USB")) shade Some((420.0, 450.0))
+Extra 33cm starts [Some(902.0), Some(902.0), Some(902.0), Some(902.0), Some(902.0)] home Some((902.0, "USB")) shade Some((902.0, 928.0))
+Extra 23cm starts [Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0), Some(1240.0)] home Some((1240.0, "USB")) shade Some((1240.0, 1300.0))
+Extra 13cm starts [Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0), Some(2300.0)] home Some((2300.0, "USB")) shade None
+Extra 9cm starts [None, None, None, None, None] home None shade None
+Extra 6cm starts [Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0), Some(5650.0)] home Some((5650.0, "USB")) shade Some((5650.0, 5925.0))
+Extra 3cm starts [Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0), Some(10000.0)] home Some((10000.0, "USB")) shade Some((10000.0, 10500.0))
+Extra 1.25cm starts [Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0), Some(24000.0)] home Some((24000.0, "USB")) shade Some((24000.0, 24250.0))
+Extra 1.885 lsb true wide true usb_only false
+Extra 3.885 lsb true wide true usb_only false
+Extra 5.3305 lsb false wide false usb_only true
+Extra 5.36 lsb false wide false usb_only true
+Extra 7.2 lsb true wide true usb_only false
+Extra 14.3 lsb true wide true usb_only false
+Extra 28.4 lsb true wide true usb_only false
+Extra 29.6 lsb true wide true usb_only false
+Extra 146.52 lsb true wide true usb_only false

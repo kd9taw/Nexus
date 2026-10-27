@@ -9,7 +9,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { RotorPane } from './RotorPane'
-import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import { css, loadSheets } from '../../cssCascade.testkit'
 import type { CallBearing, PointedAt, RotatorState } from '../../types'
@@ -175,18 +174,6 @@ describe('no bearing, no line and no number — as line 2 has it', () => {
     expect(line2To()).toBe('→ EC1DD')
     expect(line()).toBeNull()
     expect(off()).toBeNull()
-  })
-
-  it('a browser on Nexus Remote: no line 2, so no line either, and nothing asked', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RotorPane entryCall="EC1DD" />
-      </StationControlContext.Provider>,
-    )
-    await shown()
-    expect(line()).toBeNull()
-    expect(off()).toBeNull()
-    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
   })
 })
 

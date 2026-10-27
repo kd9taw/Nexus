@@ -18,7 +18,6 @@ import { resolve } from 'node:path'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot, ReceiversStatus, ReceiverStatus } from '../types'
 import { setAfGain, setSubLevel } from '../api'
-import { StationControlContext } from '../stationAccess'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
@@ -264,22 +263,5 @@ describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
     cleanup()
     mountDual(dual(SUB_7610, false))
     expect(document.querySelector('[data-receiver-plate="main"]')).toBeNull()
-  })
-
-  it('a browser that does not hold station control sees the row with every Sub slider dead', () => {
-    // The Remote page draws the same row (SubReceiverRemote.test.tsx drives its real operation
-    // contract); without control of a station that takes `radio.subLevel`, nothing is live.
-    const snap = snapWith(dual(SUB_7610, true))
-    render(
-      <StationControlContext.Provider value={false}>
-        <PhoneCockpit snap={snap} theme="dark" />
-      </StationControlContext.Provider>,
-    )
-    expect(subStrip()).not.toBeNull()
-    const inputs = [...subStrip()!.querySelectorAll('input[type="range"]')] as HTMLInputElement[]
-    expect(inputs.length).toBe(3)
-    for (const i of inputs) expect(i.disabled, i.getAttribute('aria-label') ?? '').toBe(true)
-    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
-    expect(mockSetSubLevel, 'a dead slider sent a Sub level').not.toHaveBeenCalled()
   })
 })

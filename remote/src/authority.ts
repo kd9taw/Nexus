@@ -32,6 +32,34 @@ export interface RemoteEnv {
   /** '1' once every Nexus that pairs sends its callsign and PC: an approve without them is refused
    *  `updateRequired` instead of starting a trial guarded by the mailbox alone. */
   TRIAL_IDENTITY_REQUIRED?: string
+  /** '1' while Remote is free during the beta: a trial or a grant that has run out still allows
+   *  internet use (`entitlementOf`). It takes away the END only: who may start one, a ban, deletion,
+   *  the rate limits and the LAN rules are all as they are without it. Unset is today's trial. */
+  REMOTE_BETA_FREE?: string
+  /** The private billing Worker's `BillingService` entrypoint, which holds the payment keys this relay never
+   *  does. Bound only once that environment's billing Worker is deployed (`billing.deployed` in
+   *  scripts/staging-common.mjs); until then it is absent, the billing routes answer `billingNotAvailable`
+   *  and the page shows no Subscribe or Manage button. */
+  BILLING?: BillingService
+  /** The email provider's API key for the owner-device notice (the 2026-10-23 sign-in decision), a Worker secret. ⛔ A
+   *  CREDENTIAL GATE the operator wires in production; UNSET in every build today, so
+   *  `deviceAddedNotice` sends nothing (a no-op, never an error). Never commit a real key. */
+  OWNER_NOTICE_API_KEY?: string
+  /** The From address the owner-device notice is sent as (the tenant's verified sender, e.g.
+   *  `Nexus Remote <noreply@hamradiotools.io>`). Unset disables the notice with the key. */
+  OWNER_NOTICE_FROM?: string
+  /** Where the owner-device notice is POSTed. Defaults to the provider's endpoint; set only to
+   *  point a test's capture server at it. Production leaves it unset (the default). */
+  OWNER_NOTICE_ENDPOINT?: string
+}
+/** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` (`cancel`:
+ *  `{ cancelled }`) or `{ error, status }`. */
+export interface BillingService {
+  checkout(accountId: string, plan: 'monthly' | 'annual'): Promise<unknown>
+  portal(accountId: string): Promise<unknown>
+  /** Ends the account's live subscription at once, and closes its checkouts that could still be paid,
+   *  answering `{ cancelled }` only once the payment provider shows nothing left that can charge. */
+  cancel(accountId: string): Promise<unknown>
 }
 
 export class Refusal extends Error {
@@ -138,6 +166,78 @@ export function mailbox(address: string): string {
   return `${local}@${domain}`
 }
 
+/** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
+ *  station, and how to recognise it. `toEmail` is the STATION OWNER's verified address, read
+ *  transiently and never stored; `null` when the owner's address is not available on this sign-in —
+ *  a guest's sign-in carries the guest's address, not the owner's — which turns the notice into a
+ *  no-op (nothing is sent, `sent_at` stays null, the device stays held: "no email, no unlock"). */
+export interface DeviceAddedNotice {
+  accountId: string
+  stationId: string
+  deviceId: string
+  toEmail: string | null
+  stationName: string
+  deviceName: string
+  kind: string
+}
+/** Email the account holder that a device was added to their Nexus Remote account by a sign-in
+ *  (the 2026-10-23 sign-in decision). The durable `notices` row is written FIRST and is the
+ *  precondition the station's transmit hold lifts against; delivery (who/when/which station, how to
+ *  revoke) is its gated second half.
+ *
+ *  ⛔ CREDENTIAL GATE (gate 5): the provider key (`OWNER_NOTICE_API_KEY`) and sender
+ *  (`OWNER_NOTICE_FROM`) are production Worker secrets the operator wires. With either unset — the
+ *  case in every build today — or with no owner address on this sign-in, the row is still written
+ *  but no mail is sent and `sent_at` stays null. `sent_at` is set ONLY when the provider accepts the
+ *  send (a 2xx); a rejection or a network failure leaves it null. Since `notified` is `sent_at IS
+ *  NOT NULL`, each of these leaves the device held ("no email, no unlock", operator 2026-10-24). The
+ *  real key is never committed and no live mail is sent here; the address is used once and dropped. */
+export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotice, now: number): Promise<void> {
+  // The DURABLE ENQUEUE comes first: one `notices` row a device, the record the station's transmit
+  // hold lifts against (the native list surfaces its existence as `notified`). A store error leaves
+  // no row — the device is added but stays held (fail-closed) — and never fails the registration.
+  try {
+    await env.DB.prepare(`INSERT INTO notices(id, account_id, station_id, device_id, created_at)
+      SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM notices WHERE device_id=?)`)
+      .bind(uuid(), notice.accountId, notice.stationId, notice.deviceId, now, notice.deviceId).run()
+  } catch {
+    return
+  }
+  const key = env.OWNER_NOTICE_API_KEY, from = env.OWNER_NOTICE_FROM
+  if (!key || !from || !notice.toEmail) return
+  const manage = `${env.PUBLIC_REMOTE_ORIGIN}/remote/`
+  const text =
+    `A device was just added to your Nexus Remote account by signing in.\n\n` +
+    `Device: ${notice.deviceName} (${notice.kind})\n` +
+    `Station: ${notice.stationName}\n` +
+    `When: ${new Date(now).toISOString()}\n\n` +
+    `It can control your station, but it cannot transmit for the first 15 minutes.\n` +
+    `If this was not you, remove it now at ${manage}`
+  // Mark the notice sent ONLY when the provider ACCEPTS it (a 2xx). `notified` — the precondition
+  // the station's transmit hold lifts against — is `sent_at IS NOT NULL`, so a rejection (401/422/
+  // a 5xx) or a network failure leaves `sent_at` null and the device held past its window until a
+  // shack Approve ("no email, no unlock", operator 2026-10-24).
+  let accepted = false
+  try {
+    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        from,
+        to: notice.toEmail,
+        subject: 'A device was added to your Nexus Remote account',
+        text,
+      }),
+    })
+    accepted = res.ok
+  } catch {
+    accepted = false
+  }
+  if (!accepted) return
+  await env.DB.prepare('UPDATE notices SET sent_at=? WHERE device_id=? AND sent_at IS NULL')
+    .bind(now, notice.deviceId).run()
+}
+
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
 /** The provider's signing keys, fetched from the configured issuer and cached for this isolate. */
 function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
@@ -152,7 +252,7 @@ function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
  *  identifying anyone again. STAGING.md carries the Action to paste. */
 const CLAIM_NS = 'https://nexus.hamradiotools.io/'
 
-export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   browserOrigin(request, env)
   return signedIn(request, env, now, env.AUTH0_CLIENT_ID)
 }
@@ -164,14 +264,14 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
  *  It carries no Origin and holds no cookie. A request with either came from a browser, so it is
  *  refused before its token is read: that is what keeps every native route out of a page's reach
  *  (no CSRF, whatever credential the page holds), as `native()` keeps the station's. */
-export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
   const clientId = env.AUTH0_NATIVE_CLIENT_ID || 'unconfigured'
   // Never the SPA's own id, which would let the page's tokens in here.
   requireValue(clientId !== env.AUTH0_CLIENT_ID, 'serviceNotConfigured', 503)
   return signedIn(request, env, now, clientId)
 }
-async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean }> {
+async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
     clientId !== 'unconfigured', 'serviceNotConfigured', 503)
   let subject: string, until: number, email: string | null = null
@@ -221,10 +321,13 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
   requireValue(row, 'serviceUnavailable', 503)
-  // `subject` rides alongside Identity rather than inside it. The caller destructures it off, so
-  // it never reaches the object that index.ts spreads into the browser identity and on into relay
-  // socket state - the provider subject is not something the wire needs to carry.
-  return { accountId: row.id, expiresAt: until, subject, verified: email !== null }
+  // `subject` and `email` ride alongside Identity rather than inside it. The caller destructures
+  // them off, so neither reaches the object that index.ts spreads into the browser identity and on
+  // into relay socket state - the provider subject is not something the wire needs to carry, and
+  // the plaintext address is kept NOWHERE (only its hashes are stored): `email` is handed to the
+  // caller transiently for the owner-device notice (the 2026-10-23 sign-in decision) and must be used and dropped there,
+  // never stored or sent to the wire.
+  return { accountId: row.id, expiresAt: until, subject, verified: email !== null, email }
 }
 
 /** How long after its sign-in a proof is taken, and how far ahead of this service's clock its signing
@@ -315,6 +418,10 @@ export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000
  *  the provider is still retrying it. */
 export const PAID_GRACE_MS = 24 * 60 * 60 * 1000
 export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000
+/** During the beta, how far ahead an account's internet use is dated. Every session takes the nearer of
+ *  this and its own lease, so switching the beta off ends internet use within a day at most, as the
+ *  trial's own date would have. */
+export const BETA_LEASE_MS = 24 * 60 * 60 * 1000
 
 export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: string | null; periodEnd: number | null; renews: boolean }
 /** The one answer to "what may this account do now", from its trial and its subscription together.
@@ -324,7 +431,9 @@ export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: s
  *  `plan` is what the page needs to say why. */
 export type AccountEntitlement = Entitlement & { access: 'internet' | 'lan' | 'none'; plan: Plan }
 export type EntitlementRow = { enabled: number | null; expires_at: number | null; started_at: number | null; source: string | null
-  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null }
+  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null
+  /** 1 when the account was deleted (its subject renamed `deleted:<id>`); the beta never extends it. */
+  deleted?: number | null }
 
 /** Until when a subscription in this status allows internet use; 0 when it does not. A subscription
  *  that is not on one of our prices has no plan, and pays for nothing. */
@@ -335,10 +444,15 @@ function paidUntil(row: EntitlementRow): number {
   return 0
 }
 
-export function entitlementOf(accountId: string, row: EntitlementRow, now: number): AccountEntitlement {
+export function entitlementOf(accountId: string, row: EntitlementRow, now: number, beta = false): AccountEntitlement {
   // A disabled trials row is an operator's ban, and outranks anything paid: no internet, no LAN.
   const disabled = row.enabled !== null && row.enabled !== 1
-  const until = disabled ? 0 : Math.max(row.enabled === 1 ? row.expires_at ?? 0 : 0, paidUntil(row))
+  // The beta keeps a trial or a grant running past its date. Only one the account already holds: an
+  // account that never had one still starts it through the same gates (`requireMayPair`).
+  // Never for a deleted account: deletion ended its trial, and the beta must not quietly restart it.
+  const extend = beta && row.deleted !== 1
+  const trialUntil = row.enabled === 1 ? extend ? Math.max(row.expires_at ?? 0, now + BETA_LEASE_MS) : row.expires_at ?? 0 : 0
+  const until = disabled ? 0 : Math.max(trialUntil, paidUntil(row))
   const internet = until > now
   // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
   // that is the arithmetic this field exists to stop two separate consumers from guessing at.
@@ -353,11 +467,12 @@ export function entitlementOf(accountId: string, row: EntitlementRow, now: numbe
 
 export async function readEntitlement(env: RemoteEnv, accountId: string, now: number): Promise<AccountEntitlement> {
   const row = await env.DB.prepare(`SELECT t.enabled, t.expires_at, t.started_at, t.source,
-    s.status, s.plan, s.period_end, s.cancel_at_period_end
+    s.status, s.plan, s.period_end, s.cancel_at_period_end,
+    (SELECT CASE WHEN acc.subject LIKE 'deleted:%' THEN 1 ELSE 0 END FROM accounts acc WHERE acc.id=a.id) AS deleted
     FROM (SELECT ? AS id) a LEFT JOIN trials t ON t.account_id=a.id LEFT JOIN subscriptions s ON s.account_id=a.id`)
     .bind(accountId).first<EntitlementRow>()
   requireValue(row, 'serviceUnavailable', 503)
-  return entitlementOf(accountId, row, now)
+  return entitlementOf(accountId, row, now, env.REMOTE_BETA_FREE === '1')
 }
 
 /** The account as a LAN-only session sees it (a ticket of scope 'lan'): usable on the shack's own
@@ -423,14 +538,16 @@ export async function requireUnspentIdentity(env: RemoteEnv, accountId: string, 
   const self = await env.DB.prepare('SELECT email_hash, mailbox_hash FROM accounts WHERE id=?')
     .bind(accountId).first<{ email_hash: string | null; mailbox_hash: string | null }>()
   if (!self?.email_hash && !self?.mailbox_hash) return
-  const spent = await env.DB.prepare(`SELECT t.expires_at FROM trials t
+  const spent = await env.DB.prepare(`SELECT t.expires_at, t.enabled, a.subject LIKE 'deleted:%' AS deleted FROM trials t
     JOIN accounts a ON a.id = t.account_id
     WHERE a.id != ? AND (a.mailbox_hash = ? OR a.email_hash IN (?, ?)) LIMIT 1`)
-    .bind(accountId, self.mailbox_hash, self.email_hash, self.mailbox_hash).first<{ expires_at: number }>()
+    .bind(accountId, self.mailbox_hash, self.email_hash, self.mailbox_hash).first<{ expires_at: number; enabled: number; deleted: number }>()
   if (!spent) return
   // A sibling account is still RUNNING a trial: that is the same person with two sign-ins, not a
   // second entitlement, so point them at the one they already have rather than starting another.
-  throw new Refusal(spent.expires_at > now ? 'trialActiveElsewhere' : 'trialEnded')
+  // During the beta a sibling's trial runs on past its date unless that account was deleted.
+  const running = spent.expires_at > now || (env.REMOTE_BETA_FREE === '1' && spent.enabled === 1 && spent.deleted !== 1)
+  throw new Refusal(running ? 'trialActiveElsewhere' : 'trialEnded')
 }
 export type StationRow = { id: string; account_id: string; name: string; enabled: number; generation: number; policy_version: number }
 export async function station(env: RemoteEnv, stationId: string): Promise<StationRow> {

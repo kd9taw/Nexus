@@ -16,7 +16,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { RttyCockpit } from './RttyCockpit'
-import { StationControlContext } from '../stationAccess'
 import * as toast from '../toast'
 import type { AppSnapshot, LoggedQso, RttyState } from '../types'
 
@@ -80,7 +79,7 @@ vi.mock('../api', () => ({
   contestLogManual: (...a: unknown[]) => contestLog(...a),
   contestWorking: async (..._a: unknown[]) => ({}),
   contestEntryReset: async () => ({}),
-  contestZoneHint: vi.fn(async () => null),
+  contestPlace: vi.fn(async () => null),
   contestIMoved: vi.fn(async () => ({})),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
@@ -138,11 +137,9 @@ function caretAt(offset: number) {
   Object.defineProperty(document, 'caretRangeFromPoint', { value: hit, configurable: true })
 }
 
-async function renderCockpit(control = true) {
+async function renderCockpit() {
   const r = render(
-    <StationControlContext.Provider value={control}>
-      <RttyCockpit snap={snap} />
-    </StationControlContext.Provider>,
+    <RttyCockpit snap={snap} />,
   )
   await act(async () => {
     await Promise.resolve()
@@ -258,13 +255,6 @@ describe('grab a callsign from Decoded text', () => {
     expect(callBox().value).toBe('VE3/K1ABC')
     await waitFor(() => expect(logCall().value).toBe('VE3/K1ABC'))
   })
-
-  it('is inert for a Remote observer, whose Call box is disabled', async () => {
-    await renderCockpit(false)
-    caretAt(TEXT.indexOf('K1ABC'))
-    await doubleClick()
-    expect(callBox().value).toBe('')
-  })
 })
 
 describe('the Call box and the log callsign are one field', () => {
@@ -350,9 +340,7 @@ async function renderContest(receives: unknown[] = CQ_WW, text = CONTEST_TEXT) {
     },
   } as unknown as AppSnapshot
   const r = render(
-    <StationControlContext.Provider value={true}>
-      <RttyCockpit snap={contestSnap} />
-    </StationControlContext.Provider>,
+    <RttyCockpit snap={contestSnap} />,
   )
   await act(async () => {
     await Promise.resolve()

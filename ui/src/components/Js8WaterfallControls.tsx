@@ -43,13 +43,11 @@ export function js8CentreFilterItem(
   filter: Js8Filter | undefined,
   offsetHz: number,
   onState: (s: Js8State) => void,
-  canControl = true,
 ): MenuItem | null {
   if (!filter?.enabled) return null
   const hz = Math.round(offsetHz)
   return {
     label: t('js8.wf.centreAt', { hz }),
-    disabled: !canControl,
     onSelect: () => {
       void act(() => js8SetFilter({ ...filter, centerHz: hz }), onState)
     },
@@ -60,8 +58,6 @@ interface Props {
   js8: Js8State | null
   rxOffsetHz: number
   txOffsetHz: number
-  /** This window may change the station (false on an observing Remote). */
-  canControl: boolean
   /** The JS8 view is the one on screen: the scheduled-change notice is raised only then. */
   active: boolean
   onState: (s: Js8State) => void
@@ -113,7 +109,7 @@ function HzInput({
   )
 }
 
-export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, active, onState }: Props) {
+export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, active, onState }: Props) {
   const [open, setOpen] = useState(false)
   // The station's own state, here and on the Remote page; absent from an older station, and
   // then there is nothing true to show (no plate rather than a default that may be wrong).
@@ -143,15 +139,13 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
         : t('js8.hop.toast', { mhz, secs }),
       'info',
       Math.max(secs, 1) * 1000,
-      canControl
-        ? {
-            prominent: true,
-            actionLabel: t('js8.wf.hop.cancel'),
-            action: () => {
-              void act(() => js8HopAnswer(false), onState)
-            },
-          }
-        : { prominent: true },
+      {
+        prominent: true,
+        actionLabel: t('js8.wf.hop.cancel'),
+        action: () => {
+          void act(() => js8HopAnswer(false), onState)
+        },
+      },
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hopKey, active])
@@ -185,7 +179,6 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
             <label className="settings-toggle">
               <span className="settings-label">{t('js8.wf.filter.label')}</span>
               <button
-                disabled={!canControl}
                 type="button"
                 role="switch"
                 aria-checked={filter.enabled}
@@ -205,7 +198,7 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               value={filter.centerHz}
               min={120}
               max={4880}
-              disabled={!canControl || !filter.enabled}
+              disabled={!filter.enabled}
               onCommit={(hz) => setFilter({ ...filter, centerHz: hz })}
             />
             <HzInput
@@ -213,14 +206,14 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               value={filter.widthHz}
               min={120}
               max={5000}
-              disabled={!canControl || !filter.enabled}
+              disabled={!filter.enabled}
               onCommit={(hz) => setFilter({ ...filter, widthHz: hz })}
             />
           </div>
           <button
             type="button"
             className="settings-linkbtn"
-            disabled={!canControl || !filter.enabled}
+            disabled={!filter.enabled}
             onClick={() => setFilter({ ...filter, centerHz: Math.round(rxOffsetHz) })}
             title={t('js8.wf.sync.title', { hz: Math.round(rxOffsetHz) })}
           >
@@ -235,13 +228,12 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               value={center}
               min={500}
               max={4000}
-              disabled={!canControl}
               onCommit={(hz) => void act(() => js8SetQsyCenter(hz), onState)}
             />
             <button
               type="button"
               className="settings-refresh"
-              disabled={!canControl || sending || Math.round(txOffsetHz) === center}
+              disabled={sending || Math.round(txOffsetHz) === center}
               onClick={() => void act(js8QsyToCentre, onState)}
             >
               {t('js8.wf.qsy.action')}
@@ -265,7 +257,6 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               <button
                 type="button"
                 className="settings-refresh"
-                disabled={!canControl}
                 onClick={() => void act(() => js8HopAnswer(true), onState)}
               >
                 {t('js8.wf.hop.now')}
@@ -273,7 +264,6 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               <button
                 type="button"
                 className="settings-refresh"
-                disabled={!canControl}
                 onClick={() => void act(() => js8HopAnswer(false), onState)}
               >
                 {t('js8.wf.hop.cancel')}

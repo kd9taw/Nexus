@@ -36,7 +36,7 @@ transmit | crates/tempo-app/src/engine/remote_transmit/** | as above
 transmit | crates/tempo-audio/src/slot.rs | slot boundaries: which period an over belongs to, and whether it is still the current one
 transmit | crates/tempo-audio/src/service.rs | the audio service that actually renders and plays TX audio and drops PTT when it ends. A buffer that swallowed the tail of an over left a rig keyed for 90 s (WSPR, 1.x)
 transmit | crates/tempo-audio/src/service/** | as above
-transmit | crates/tempo-audio/src/voice.rs | the voice keyer: a recorded message keys the rig with no operator hand on the mic
+transmit | crates/tempo-codec/src/voice.rs | the voice keyer: a recorded message keys the rig with no operator hand on the mic
 transmit | crates/tempo-audio/src/control_line.rs | RTS/DTR hardware PTT. An RTS line asserted at open keyed a rig at launch (1.x)
 transmit | crates/tempo-audio/src/serial_keyer.rs | serial CW keying — a keyer that stops mid-character leaves the key down
 transmit | crates/tempo-audio/src/winkeyer.rs | WinKeyer CW keying, same hazard with a device in between
@@ -172,4 +172,3 @@ bandplan | crates/tempo-core/src/channel.rs | channelised segments such as the f
 bandplan | ui/src/band.ts | the UI's own band arithmetic — frequency to band, and back
 bandplan | ui/src/components/Band*.tsx | the band pickers, menus, strips and maps: what the operator is offered
 bandplan | ui/src/components/FrequencyControl.tsx | where the operator types or spins a frequency
-bandplan | ui/src/remote-web/band-choices.ts | the same offer, made to a Remote browser

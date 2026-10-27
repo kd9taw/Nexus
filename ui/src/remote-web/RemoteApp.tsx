@@ -10,6 +10,7 @@ import { deviceKey } from './device-key'
 import { acceptStationKey, forgetStationKey, stationKeyView, type StationKeyView } from './station-key'
 import { browserLabel } from './browser-label'
 import { BetaNote } from './BetaNote'
+import { AddStation, RemoteLanding } from './RemoteLanding'
 import { shortFingerprint } from './stream-protocol'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
@@ -33,6 +34,12 @@ const Wordmark = () => <span className="remote-site-wordmark">
 // reads as "this product is finished with me" rather than "ask and it can be extended". During a
 // closed beta every trial is granted by hand anyway, so asking is the actual mechanism.
 const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
+// Buying a plan during the app's trial keeps the trial's days when at least this much of it is left: the
+// payment provider's 48 hours, plus the five minutes the billing service allows for the time between. With
+// less, the plan starts and the first payment is taken at once, and Subscribe says so before the press.
+const TRIAL_KEPT_MS = 48 * 3600000 + 300000
+// The word typed to delete the account, the same in every language, as the service asks for it.
+const DELETE_WORD = 'DELETE'
 // Browser approval lifetime: warn this long before the end that using this browser cannot move.
 const APPROVAL_WARNING_MS = 7 * 86400000
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
@@ -55,6 +62,8 @@ export function RemoteApp() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [code, setCode] = useState('')
+  // What has been typed into Delete account's confirmation box.
+  const [deleteWord, setDeleteWord] = useState('')
   // Keyed by station id: two cards must not share one edit box, and opening one must not put the
   // other into edit mode. null means nobody is renaming.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
@@ -182,6 +191,28 @@ export function RemoteApp() {
   })
   const keyChanged = (stationId: string) => !!stationKeys[stationId] && stationKeys[stationId].keptPrint !== stationKeys[stationId].print
   const leave = () => { connection?.stop(); setConnection(null) }
+  // The account's copy, as a file the browser saves.
+  const downloadCopy = () => void act(async () => {
+    if (!client) return
+    const url = URL.createObjectURL(new Blob([JSON.stringify(await client.post('account/export'), null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url; link.download = 'nexus-remote-account.json'
+    document.body.append(link); link.click(); link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  })
+  // Gone for good: the service cancels any subscription first and refuses, deleting nothing, if it cannot.
+  // Then this browser forgets the station keys it kept, and signs out.
+  const deleteAccount = () => {
+    if (deleteWord !== DELETE_WORD) return
+    void act(async () => {
+      if (!client) return
+      await client.post('account/delete', { confirm: DELETE_WORD })
+      const stations = session?.stations ?? []
+      connection?.stop(); setConnection(null); setSession(null); setDeleteWord('')
+      await Promise.all(stations.map(station => forgetStationKey(station.id).catch(() => {})))
+      await client.signOut()
+    })
+  }
   const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
   // Opened from the card's Stream or Listen, which IS the operator asking: the view starts once, on
   // its own, as soon as the station can be asked (the press is consumed there; a stream that ends
@@ -200,6 +231,16 @@ export function RemoteApp() {
   // An account that has never held a trial may pair - that is the self-serve path, and gating
   // the pairing form on `entitled` made it unreachable for exactly the people who need it.
   const canPair = trial?.state === 'active' || trial?.state === 'none'
+  // Free during the beta: the service keeps a trial running past its date, so there are no days to count.
+  const beta = session?.beta === true
+  // Subscribe and Manage, only where the service has billing on. A subscription that has not ended is
+  // changed or cancelled in the provider's portal; one that has ended can be bought again, and its
+  // invoices are still in the portal.
+  const plan = trial?.plan
+  const subscribed = plan?.kind === 'subscription' && !['canceled', 'incomplete_expired'].includes(plan.status ?? '')
+  const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session && !beta ? trial.expiresAt - session.serverNow : null
+  const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}) =>
+    void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) })
   const daysLeft = trial && session
     ? Math.max(0, Math.ceil((trial.expiresAt - session.serverNow) / 86400000))
     : 0
@@ -253,7 +294,11 @@ export function RemoteApp() {
     // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
     : code === 'tryLater' ? t('remote.tryLater')
     // Set by the page, not the service: an open session whose next ticket was refused.
-    : code === 'sessionEnded' ? t('remote.sessionEnded')
+    : code === 'sessionEnded' ? (beta ? t('remote.sessionEndedBeta') : t('remote.sessionEnded'))
+    : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
+    : code === 'noSubscription' ? t('remote.billing.noSubscription')
+    : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
+    : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
@@ -299,7 +344,8 @@ export function RemoteApp() {
       </div>
         {/* After confirming the email, Auth0 shows its own "verified" page and does not send the
             operator back here, so the way back is said before they leave. */}
-        <p>{t('remote.signUpHint')}</p></>}
+        <p>{t('remote.signUpHint')}</p>
+        <RemoteLanding betaChannel={BETA_CHANNEL} /></>}
       {session && <>
         {/* The account id is only an instruction while there is something to pair. Once stations
             are approved it is support detail, not a step, and a raw UUID presented as a standing
@@ -313,12 +359,32 @@ export function RemoteApp() {
         {/* The pilot branch must survive: an absent start stays absent and is NEVER computed as
             expiresAt minus fourteen days. Migration 0002 deliberately did not backfill, because an
             invented start cannot afterwards be told from a real one. */}
-        {trial?.state === 'active' && <p className="remote-site-status remote-site-status--active" role="status">{trial.startedAt === null
+        {trial?.state === 'active' && <p className="remote-site-status remote-site-status--active" role="status">{beta ? t('remote.betaFree') : trial.startedAt === null
           ? t('remote.trialUnknownStart', { until: utcDate(trial.expiresAt) })
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
         {lanOnly && session.stations.length > 0 && <p className="remote-site-status" role="status">{t('remote.lanFree')}</p>}
+        {session.stations.length === 0 && !session.pending && <AddStation />}
+        {/* No price here: the provider's checkout shows it, with the tax, before anything is paid. The
+            renewal terms sit beside Subscribe, and checkout repeats them beside its own pay button. */}
+        {client?.billing && trial && trial.state !== 'disabled' && <section className="rm-card remote-section remote-billing">
+          <h2>{t('remote.billing.title')}</h2>
+          {!subscribed && <>
+            <div className="remote-actions">
+              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'monthly' })}>{t('remote.billing.subscribeMonthly')}</button>
+              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'annual' })}>{t('remote.billing.subscribeYearly')}</button>
+            </div>
+            <p>{t('remote.billing.renewalTerms')}</p>
+            {trialLeft !== null && <p>{trialLeft >= TRIAL_KEPT_MS ? t('remote.billing.trialKept') : t('remote.billing.chargedNow')}</p>}
+          </>}
+          {plan?.kind === 'subscription' && <>
+            <p>{t('remote.billing.manageHint')}</p>
+            <div className="remote-actions">
+              <button className="remote-button" disabled={busy} onClick={() => goToBilling('portal')}>{t('remote.billing.manage')}</button>
+            </div>
+          </>}
+        </section>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&
           <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
@@ -411,7 +477,7 @@ export function RemoteApp() {
                 minutes: Math.max(0, Math.ceil((session.pending.expiresAt - session.serverNow) / 60000)),
               })}</p>
             : <>
-                <p role="status">{t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
+                <p role="status">{beta ? t('remote.confirmAttachPromptBeta', { station: session.pending.name }) : t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
                 <p className="remote-warning">{t('remote.confirmAttachWarning')}</p>
                 {/* Through act(), like every other service call here: outside it a refused attach
                     showed nothing at all and the rejection went unhandled. */}
@@ -437,6 +503,25 @@ export function RemoteApp() {
         </section>}
         {/* At the limit the pairing card used to vanish with no word about why. */}
         {canPair && !session.pending && session.stations.length >= 2 && <p role="status">{t('remote.stationLimitReached')}</p>}
+        <section className="rm-card remote-section remote-account-data">
+          <h2>{t('remote.account.title')}</h2>
+          <p>{t('remote.account.exportHint')}</p>
+          <div className="remote-actions">
+            <button className="remote-button" disabled={busy} onClick={downloadCopy}>{t('remote.account.export')}</button>
+          </div>
+          {/* The confirmation is typed into the page, never a browser dialog. A live subscription ends with
+              the account, at once and with no refund of the unused part: said before the press. */}
+          <details><summary>{t('remote.account.delete')}</summary>
+            <p>{t('remote.account.deleteWhat')}</p>
+            <p>{t('remote.account.deleteKept')}</p>
+            {subscribed && <p className="rm-warning">{t('remote.account.deleteSubscription')}</p>}
+            <form onSubmit={event => { event.preventDefault(); deleteAccount() }}>
+              <label>{t('remote.account.deleteConfirm', { word: DELETE_WORD })}<input autoComplete="off" spellCheck={false} value={deleteWord}
+                onChange={event => setDeleteWord(event.target.value)} /></label>
+              <button className="remote-button" disabled={busy || deleteWord !== DELETE_WORD}>{t('remote.account.deleteButton')}</button>
+            </form>
+          </details>
+        </section>
       </>}
     </div>
     <footer className="remote-site-footer"><Wordmark /><a href="/remote-licenses.txt">{t('remote.licenses')}</a></footer>

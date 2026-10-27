@@ -206,7 +206,10 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
         // and restarts nothing, so there is no reason to make the operator wait for it later —
         // the whole point is that when they press install, it is instant.
         setPhase('downloading')
-        const dl = up.download ?? up.downloadAndInstall
+        // Bound to `up`: the plugin's `download` is a class method that reads `this.rid`, so taken
+        // off the object and called bare it throws "Cannot read properties of undefined (reading
+        // 'rid')" and no update ever downloads.
+        const dl = up.download?.bind(up) ?? up.downloadAndInstall?.bind(up)
         if (!dl) {
           setPhase('available')
           told?.({ kind: 'failed' })

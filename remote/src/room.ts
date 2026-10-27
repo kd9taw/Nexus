@@ -326,13 +326,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       finally { if (this.streamOrder.get(sessionId) === settled) this.streamOrder.delete(sessionId) }
       return
     }
-    // A pushed control outcome (operation v5) leaves no relay state behind it, so like audio it
-    // returns WITHOUT a checkpoint: the O(peers) attachment sweep would be paid to serialise
-    // nothing, on the one message whose whole point is to arrive sooner.
-    if (parsed && typeof parsed === 'object' && parsed.type === 'operationEvent' && attachment.role === 'station') {
-      this.operations.receiveStation(parsed)
-      return
-    }
     if(parsed&&typeof parsed==='object'&&typeof parsed.type==='string'&&parsed.type.startsWith('operation')){
       if(attachment.role==='station')this.operations.receiveStation(parsed)
       else {

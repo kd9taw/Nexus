@@ -14,7 +14,6 @@ import { useEffect, useState } from 'react'
 import { rotatorBearingToCall } from '../api'
 import { ROTATOR_POLL_MS } from './rotorTargets'
 import { pollSingleFlight } from '../singleFlight'
-import { useStationControl } from '../stationAccess'
 import type { CallBearing } from '../types'
 
 /** Why the station has no bearing for a call: the code its bearing read refused with (`noGrid`: the
@@ -49,9 +48,8 @@ const NONE: ReadonlyMap<string, CallAim> = new Map()
  * answer is only ever looked up by its own call. No entry until the station has answered.
  */
 export function useCallBearings(calls: readonly string[]): ReadonlyMap<string, CallAim> {
-  const local = useStationControl()
   // One key per set of calls: the order a list is drawn in is no reason to ask again.
-  const key = local ? [...new Set(calls.filter(Boolean))].sort().join(' ') : ''
+  const key = [...new Set(calls.filter(Boolean))].sort().join(' ')
   const [aims, setAims] = useState<ReadonlyMap<string, CallAim>>(NONE)
   useEffect(() => {
     if (!key) return

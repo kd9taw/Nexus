@@ -1,0 +1,44 @@
+# CI on main — start ci.yml for a commit pushed to main, unless that exact commit already passed.
+#
+# Commits usually reach main by fast-forward from a branch whose ci.yml run, started by hand
+# (workflow_dispatch), already passed every job on the same commit. Running all of ci.yml again on
+# main tested the same tree twice and held GitHub's runners while the next branch's run queued
+# behind it. This job asks whether a successful workflow_dispatch run of ci.yml exists for exactly
+# this commit. If there is none (a direct push, a release-prep commit) or the lookup fails, it
+# starts ci.yml on main, so every commit on main still has a full run behind it.
+#
+# Only workflow_dispatch runs count: a pull_request run tests a merge tree, not this commit (see
+# scripts/require-green-ci), and ci.yml no longer runs on push.
+
+name: CI on main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Run CI unless this commit already passed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Look for a passed run, else start ci.yml on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=workflow_dispatch&status=success&per_page=100" \
+            --jq "[.workflow_runs[] | select(.head_sha == \"$SHA\" and .event == \"workflow_dispatch\" and .conclusion == \"success\")] | length") || n=""
+          if [ -n "$n" ] && [ "$n" -ge 1 ]; then
+            echo "ci.yml already passed on $SHA ($n run(s)); not running it again." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "No passed ci.yml run found on $SHA (lookup result: '${n}'); starting ci.yml on main." | tee -a "$GITHUB_STEP_SUMMARY"
+          gh workflow run ci.yml --repo "$REPO" --ref main

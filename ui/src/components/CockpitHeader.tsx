@@ -1,4 +1,3 @@
-import { useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts) for the CAT
 // pill's two plates alone. The TX-enable latch, Tune, ATU and Stop TX it used to draw for six
 // cockpits — and their deferred labels — moved to the TX strip under the scope
@@ -66,7 +65,6 @@ export interface CockpitHeaderProps {
   bandControl: ReactNode
   /** Commit a typed dial (MHz). Omit ⇒ the readout is display-only. */
   onCommitDial?: (mhz: number) => void
-  remoteFrequency?: boolean
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
   /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
@@ -125,7 +123,6 @@ export function CockpitHeader({
   modeIndicator,
   bandControl,
   onCommitDial,
-  remoteFrequency = false,
   wheelTune = false,
   digitTune = false,
   wheelStepHz = 100,
@@ -136,7 +133,6 @@ export function CockpitHeader({
   power,
   catStatus,
 }: CockpitHeaderProps) {
-  const control = useStationControl()
   const powerValue = power?.value
   const radio = snap.radio
   const catOk = radio.catOk === true
@@ -241,7 +237,6 @@ export function CockpitHeader({
             // that a frequency table cannot see (a General on 14.010 read as fine before).
             txBlocked={!radio.txAllowed}
             onCommit={onCommitDial}
-            remoteFrequency={remoteFrequency}
             digitTune={digitTune}
             onTuneHz={tuneBy}
             // THE optimistic dial, and the only readout in the app that gets one: the main dial of
@@ -283,7 +278,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <WheelRange wheelStep={power.wheelStep} disabled={!control || powerValue == null}
+            <WheelRange wheelStep={power.wheelStep} disabled={powerValue == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -306,7 +301,7 @@ export function CockpitHeader({
               style={{ visibility: powerValue == null ? 'hidden' : undefined }}
               onChange={(e) => {
                 const raw = Number(e.target.value)
-                if (control) power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
+                power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
               }}
               onPointerDown={() => { power.onPointerDown?.() }}
               onPointerUp={() => { power.onPointerUp?.() }}

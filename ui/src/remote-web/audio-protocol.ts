@@ -40,7 +40,7 @@ export type AudioBundle = {
 /** Station -> browser: whether the station is feeding this session, and why not. */
 export type AudioState = { type: 'audioState'; listening: boolean; reason?: string }
 /** Browser -> station. The lease is the browser's claim to station control; the
- *  station re-checks it against its own authority and refuses a logging-only lease.
+ *  station re-checks it against its own authority.
  *  `proof` is the browser's own (S1-M1, `lane-proof.ts`), which the station requires. */
 export type AudioListen = { type: 'audioListen'; listening: boolean; leaseId: string; proof?: LaneProof }
 /** What the relay actually hands the station: the browser's identity is stamped by the

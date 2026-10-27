@@ -55,7 +55,7 @@ fn macro_text(set: &str, key: &str) -> String {
 
 /// (contest, what F2 keys to K9AAA, what F6 keys) for W9XYZ in Cook County, Illinois, CQ
 /// zone 4, at EN52, check 05, section IL, single operator at low power.
-const CASES: [(&str, &str, &str); 16] = [
+const CASES: [(&str, &str, &str); 17] = [
     ("ilqp", "K9AAA 5NN COOK", "TU 5NN COOK"),
     ("tnqp", "K9AAA 5NN IL", "TU 5NN IL"),
     ("ohqp", "K9AAA 5NN IL", "TU 5NN IL"),
@@ -72,6 +72,9 @@ const CASES: [(&str, &str, &str); 16] = [
     ("arrlvhf_jan", "K9AAA EN52", "TU EN52"),
     ("arrlvhf_jun", "K9AAA EN52", "TU EN52"),
     ("arrlvhf_sep", "K9AAA EN52", "TU EN52"),
+    // The RTTY Roundup takes RTTY only, and a CW contact in it scores nothing; the CW cockpit's
+    // keys still send what a W/VE station sends (Special Rules 4.2.1).
+    ("arrlrtty", "K9AAA 5NN IL", "TU 5NN IL"),
 ];
 
 #[test]

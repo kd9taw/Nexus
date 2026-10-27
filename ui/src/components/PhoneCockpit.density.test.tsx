@@ -306,7 +306,7 @@ function renderFramedBandStrip() {
 async function renderFramedKeyer() {
   const { container } = render(
     <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" fit="content">
-      <VoiceKeyer txEnabled keyed={false} transmitting={false} />
+      <VoiceKeyer txEnabled keyed={false} voicePlaying={false} />
     </CockpitPaneFrame>,
   )
   await act(async () => {})
@@ -326,7 +326,7 @@ function renderBareBandStrip() {
 async function renderBareKeyer() {
   const { container } = render(
     <div>
-      <VoiceKeyer txEnabled keyed={false} transmitting={false} />
+      <VoiceKeyer txEnabled keyed={false} voicePlaying={false} />
     </div>,
   )
   await act(async () => {})

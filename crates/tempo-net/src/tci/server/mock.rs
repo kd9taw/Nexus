@@ -1,6 +1,7 @@
 //! A backend that records every call and answers as a test sets it, for the server's tests (the
 //! CAT broker's `MockBackend` pattern).
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -88,6 +89,10 @@ pub(super) struct Mock {
     pub(super) answers: Mutex<Answers>,
     pause: Mutex<Pause>,
     resumed: Condvar,
+    /// The mode each program last asked, kept as the app's engine keeps it (it keys a program's own
+    /// audio only after a voice mode): by program number, from the ask until that program's
+    /// `disconnected`, and never cleared when a program connects.
+    asked: Mutex<HashMap<ClientId, String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -110,6 +115,11 @@ impl Mock {
 
     pub(super) fn answers(&self) -> MutexGuard<'_, Answers> {
         lock(&self.answers)
+    }
+
+    /// The mode the backend keeps as `client`'s last ask, if any.
+    pub(super) fn asked(&self, client: ClientId) -> Option<String> {
+        lock(&self.asked).get(&client).cloned()
     }
 
     /// Hold the next calls named `at` (after recording them) until [`Mock::release`].
@@ -191,6 +201,7 @@ impl TciBackend for Mock {
     }
 
     fn disconnected(&self, client: ClientId) {
+        lock(&self.asked).remove(&client);
         self.record(Call::Disconnected(client));
     }
 
@@ -206,6 +217,10 @@ impl TciBackend for Mock {
 
     fn set_mode(&self, client: ClientId, mode: &Word) -> Result<Word, Refusal> {
         self.record(Call::SetMode(client, mode.as_str().to_string()));
+        self.hold("set_mode");
+        // Kept whatever comes of the change, as the engine keeps it: after the call began, as the
+        // engine's record waits on its lock.
+        lock(&self.asked).insert(client, mode.as_str().to_string());
         self.answers().mode.map(|()| mode.clone())
     }
 

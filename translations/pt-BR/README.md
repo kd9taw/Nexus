@@ -92,7 +92,7 @@ glossary, not argue.
 
 ## Plurals — a few rows come in pairs
 
-95 strings change with the count, so they appear as two rows, with `::one` and `::other` on the
+97 strings change with the count, so they appear as two rows, with `::one` and `::other` on the
 end of the key:
 
 ```
@@ -113,10 +113,10 @@ you like.
 |---:|---:|---|
 | **1** | **746** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 320 | First run — the setup wizard and the Getting Started guide. The first thing a new operator meets. |
-| **3** | 1052 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
-| **4** | 499 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 3243 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
-| **6** | 1492 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
+| **3** | 1048 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
+| **4** | 500 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
+| **5** | 3284 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
+| **6** | 1438 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 
 **Tier 1 on its own is a real release.** 746 rows, about 32,000 characters — roughly 9% of the
 text — and it buys a program whose menus, buttons, status messages and log form are all in
@@ -147,7 +147,7 @@ tell me, it just is not in this file.
 
 ## Sending it back
 
-Email the filled CSV to **kd9taw@protonmail.com**. Any amount is welcome — a hundred rows or all
+Email the filled CSV to **contact@hamradiotools.io**. Any amount is welcome — a hundred rows or all
 of them. If it is easier to send in pieces as you go, send in pieces. If something in the English
 does not make sense, or a string is impossible to translate without seeing the screen, put a
 question in the `notes` cell of that row and I will answer it rather than guess.

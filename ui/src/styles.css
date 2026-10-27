@@ -321,6 +321,12 @@ html {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Why the toast's action did not happen (Toasts.tsx): its own line under the message. */
+.ui-toast-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-weight: 700;
+}
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */
   pointer-events: auto;
@@ -4220,6 +4226,13 @@ body.resizing-row {
 .map-path-call {
   font-weight: 600;
   color: var(--accent);
+  /* A button (it opens the station card) that still reads as the call in the readout. */
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 .map-path-fig {
   font-family: var(--font-mono);
@@ -6098,9 +6111,17 @@ h2 {
   padding: var(--gap);
 }
 
-/* Three-pane workspace (chat/qso/fieldDay/band): waterfall on the right rail. Fluid
+/* Three-pane workspace (Tempo): a full-width waterfall strip, then three columns. Fluid
    side columns driven by CSS vars (drag-resizable via the splitters). The single-panel
-   views (.layout.single) are NOT data-three-pane and are unaffected. */
+   views (.layout.single) are NOT data-three-pane and are unaffected.
+   THE WATERFALL STRIP (2026-10-26, "width and height to be consistent"): every mode's waterfall
+   starts at the same full width and 25 % of its shell, so Tempo's is a row of this grid (`wf`)
+   across all five tracks, sized by its divider (App `--tempo-wf-h`, written on this element,
+   stored per surface as `nexus.split.tempo.waterfall`) between the yielding floor and the
+   ceiling every waterfall strip has (features/paneSeam WATERFALL_SPLIT_MIN/MAX, the JS8/RTTY
+   rule's own numbers). A track, not the item's height: a percentage resolves against this grid's
+   content height, as a shell child's basis does against its shell. The right rail (`waterfall`,
+   the area's old name) now holds Band Activity and the link pill. */
 .layout[data-three-pane] {
   grid-template-columns:
     minmax(var(--rail-min, 200px), var(--left-rail-w))
@@ -6108,16 +6129,43 @@ h2 {
     minmax(0, 1fr)
     auto
     var(--right-rail-w);
-  grid-template-areas: 'stations split-left center split waterfall';
+  grid-template-rows:
+    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
+    minmax(0, 1fr);
+  grid-template-areas:
+    'wf wf wf wf wf'
+    'stations split-left center split waterfall';
 }
 /* Tempo cockpit: a full-width shared header row above the three panes (chat
    view only — other three-pane views pass no header and are unaffected), so
    Tempo's header spans the whole workspace like the single-pane cockpits. */
 .layout[data-three-pane].has-tempo-header {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows:
+    auto
+    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
+    minmax(0, 1fr);
   grid-template-areas:
     'header header header header header'
+    'wf wf wf wf wf'
     'stations split-left center split waterfall';
+}
+/* The strip: the Waterfall's own root, a direct grid item, drawn as a panel like the cells beside it. */
+.layout[data-three-pane] > .waterfall-wrap {
+  grid-area: wf;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* Its divider stands in the strip's own cell, on its bottom edge, and hangs into the row gap below:
+   it takes no track of its own (a row of its own would cost the grid a second gap), and it is
+   centred in the gap, over no pane. */
+.pane-splitter.horizontal.tempo-wf-seam {
+  grid-area: wf;
+  align-self: end;
+  margin: 0 0 calc(-0.5 * var(--gap) - var(--space-1));
 }
 .grid-header {
   grid-area: header;
@@ -7235,6 +7283,27 @@ select optgroup {
 }
 .op-btn.monitor:not(.on) {
   color: var(--text-faint);
+}
+/* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
+   both themes define. The menu that switches it out is anchored on an empty span inside the
+   button (AtuSwitchOutMenu.tsx); it takes no room. */
+.op-btn.atu.on {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+/* The anchor sits on the button's bottom-left corner, so the menu opens below (or, without room, above)
+   the strip's row and never over Stop TX beside it (measured by `scripts/browser-probe --desktop atu`). */
+.op-btn.atu {
+  position: relative;
+}
+.atu-menu-anchor {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 .op-btn.tune.keyed {
   background: var(--state-ok);
@@ -8682,6 +8751,10 @@ select optgroup {
   outline: none;
   border-color: var(--accent);
 }
+/* The comment is free text, so it takes the whole row under the four short fields. */
+.logconfirm-grid .logconfirm-comment {
+  grid-column: 1 / -1;
+}
 .logconfirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -9955,10 +10028,21 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-color: var(--accent, #4ea1ff);
   cursor: default;
 }
-/* Guided mode: the single recommended next key glows so a non-CW op just follows it. */
-.cw-macro.recommended {
-  border-color: var(--accent, #4ea1ff);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
+/* THE TURN CUE on a CW F-key (CwCockpit): lit when it is your turn or they are signing, a dashed
+   outline while their over ends, dotted when it is only a suggestion. A colour, a shadow and an
+   outline, never a border width: the key keeps its size, so nothing in the dock moves as the cue
+   comes and goes, and keyboard focus keeps its own ring. */
+.cw-macro.turn-now {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.cw-macro.turn-soon:not(:focus-visible) {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+}
+.cw-macro.turn-maybe:not(:focus-visible) {
+  outline: 2px dotted var(--accent);
+  outline-offset: 1px;
 }
 /* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow — the CW
    and RTTY F-keys, and the voice keyer's slots. */
@@ -10091,6 +10175,101 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-family: var(--font-mono);
   font-weight: 700;
   text-transform: uppercase;
+}
+/* THE TURN LAMP (CwTurnLamp), first on the send row. Its slot is a share of the row, never the
+   width of its words, so what it says never moves His Call or Send; when the row is short of room
+   it gives way first, the words cut and the glyph kept (`min-width`, not a size @media), and its
+   tooltip leads with the whole line. 17em holds every English line and every language's main
+   states (measured in Chrome at 85%: the longest English, "Probably you · F5 once", needs 14.5em;
+   at 12em German's "Sie sind dran · F2" was cut). Every
+   state has its own glyph and words, and the colour and the border style only repeat them: the
+   accent filled for your turn, amber for the other station sending, dashed for hold, dotted for
+   not sure. The text is the theme's own ink, or the accent's ink on the accent. */
+.cw-turn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 1 17em;
+  min-width: 2.4em;
+  overflow: hidden;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cw-turn-glyph {
+  flex: 0 0 auto;
+}
+.cw-turn-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-turn[data-turn='idle'],
+.cw-turn[data-turn='listen'] {
+  color: var(--text-dim);
+}
+.cw-turn[data-turn='theySend'],
+.cw-turn[data-turn='finishing'] {
+  border-color: var(--state-warn);
+}
+.cw-turn[data-turn='theySend'] .cw-turn-glyph,
+.cw-turn[data-turn='finishing'] .cw-turn-glyph {
+  color: var(--state-warn);
+}
+.cw-turn[data-turn='yourTurn'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cw-turn[data-turn='closing'] {
+  border-color: var(--accent);
+}
+.cw-turn[data-turn='hold'] {
+  border-style: dashed;
+  border-color: var(--state-warn);
+}
+.cw-turn[data-turn='unsure'] {
+  border-style: dotted;
+  border-color: var(--accent);
+}
+/* The window the lamp counts down (our listening, or a race): a ring that empties as the read
+   steps; it never animates on its own. */
+.cw-turn-ring {
+  flex: 0 0 auto;
+  width: 0.9em;
+  height: 0.9em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: conic-gradient(currentColor calc(var(--cw-turn-left, 0) * 360deg), transparent 0);
+}
+/* The turn cue's pace hint in the Decode head: their speed beside ours, a button that keys at
+   theirs for this contact. An amber border with the ⇣ when ours is 3 WPM or more faster; the
+   figures stay in the theme's ink, which amber text would not match for contrast on the light
+   theme. */
+.cw-pace {
+  padding: 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cw-pace:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+}
+.cw-pace.fast {
+  border-color: var(--state-warn);
+  color: var(--text);
 }
 
 /* ---- Shared cockpit log strip (CW + Phone): rich entry — autofill, prior-QSO, notes ---- */
@@ -10643,6 +10822,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 [data-pane='log'] > .pane-body {
   scroll-padding-bottom: 6em;
 }
+/* The shared comment sits on its own line above Notes and is drawn like it (LogEntry.tsx). */
+.le-comment,
 .le-notes {
   width: 100%;
   resize: vertical;
@@ -10652,6 +10833,10 @@ input.cw-pitch::-webkit-inner-spin-button {
   padding: 6px var(--space-3);
   line-height: 1.4;
   font-family: inherit;
+}
+.le-comment {
+  display: block;
+  margin-bottom: var(--space-2);
 }
 .le-hint {
   display: block;
@@ -12305,6 +12490,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   line-height: 1.4;
 }
+.vk-flex-dax-note {
+  margin: 0 0 10px;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
 .vk-fd-hint strong {
   font-family: var(--font-mono);
   font-weight: 800;
@@ -12672,6 +12864,165 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-faint);
+}
+/* THE CONTEST STATS TAB (ContestStats.tsx) — the scoreboard's place on the Contest screen, in the
+   panel's own scroll (no scroller of its own). Every row wraps and every grower is minmax(0, …), so
+   nothing in it can push the panel wider than the window: 48 hour bars share the row's width. */
+.contest-tabs {
+  flex-wrap: wrap;
+}
+.contest-stats {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.contest-stats h3 {
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text);
+}
+.contest-stats-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.contest-stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9em), 1fr));
+  gap: var(--space-2);
+}
+.contest-stats-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.contest-stats-val {
+  font-family: var(--font-mono);
+  font-size: calc(22px * var(--text-scale));
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contest-stats-label {
+  font-size: calc(10px * var(--text-scale));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  text-align: center;
+}
+.contest-stats-note,
+.contest-stats-longest {
+  margin: 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+}
+.contest-stats-longest {
+  color: var(--text);
+}
+.contest-stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.contest-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22em), 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+.contest-stats-hours {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 8em;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.contest-stats-hours > li {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.contest-stats-hour-bar {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-end;
+  background: var(--bg-elev);
+  border-radius: 2px 2px 0 0;
+}
+.contest-stats-hour-fill {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+.contest-stats-hour-label {
+  flex: 0 0 auto;
+  height: 1.2em;
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+  overflow: visible;
+  white-space: nowrap;
+}
+.contest-stats-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.contest-stats-bars > li {
+  display: grid;
+  grid-template-columns: minmax(0, 10em) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+}
+.contest-stats-bar-key {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.contest-stats-bar-track {
+  height: 0.8em;
+  background: var(--bg-elev);
+  border-radius: 2px;
+}
+.contest-stats-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.contest-stats-bar-count {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.contest-stats-section > button,
+.contest-over-stats {
+  align-self: flex-start;
 }
 .fd-state-chip {
   flex: 0 0 auto;
@@ -13730,6 +14081,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    the county decides that. */
 .le-fd-dupe.le-fd-dupe-maybe {
   color: var(--state-warn);
+}
+/* THE COUNTRY ON THE CALL CAPTION'S LINE (LogEntry): the call's country, and its CQ zone where the
+   contest receives one, after the DUPE badge in `.le-fd-cap-marked`'s zero-width row, so it never
+   widens the field or adds height. It shrinks first (a shrink factor far above the badge's 1), so
+   the badge always has the line before it does; what does not fit is clipped with an ellipsis.
+   Tokens only, both themes. */
+.le-fd-country {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
 }
 .settings-input.le-fd-input-maybe,
 .settings-input.le-fd-input-maybe:focus {
@@ -14971,6 +15336,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 3px var(--space-2);
 }
+.radio-disabled-badge {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid color-mix(in srgb, var(--text-faint) 45%, transparent);
+  border-radius: 999px;
+  padding: 3px var(--space-2);
+}
 .radio-card-meta {
   margin-top: 6px;
   font-size: calc(11px * var(--text-scale));
@@ -15398,6 +15774,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+/* CW's "Colors" and its picker, one group (a <label> around both). Shrink-to-fit, so the
+   picker's own `margin-left: auto` (.wf-palette) has no free space to take inside it, and the
+   word stays against its select. A soft rule opens the group: the word is in the zero-beat
+   name's small uppercase, and without it "+120 Hz COLORS" still read as one run. It never
+   shrinks or wraps: pressure in the row still lands on the zero-beat's name and the title. */
+.ph-scope-palette {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  white-space: nowrap;
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-soft);
+}
+/* ONE FREE SPACE PER HEAD: in front of the controls, the title's `margin-right: auto`. The
+   strip's ✕ brings `margin-left: auto` of its own (.cockpit-popout), and two auto margins split
+   the row's free space: CW's "Colors" stayed by the zero-beat reading while its picker went to
+   the middle of the row, a third of the space from each, and Phone's picker stood a third of
+   the space short of the ✕ (measured in Chrome at 1280x800: 190 px between "Colors" and its
+   picker; Phone's picker 280 px from the ✕). */
+.ph-scope-head > .cockpit-popout {
+  margin-left: 0;
 }
 
 /* THE CW ZERO-BEAT INDICATOR (ZeroBeat.tsx) — lamp + needle + signed offset, riding the CW
@@ -16473,6 +16872,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
   cursor: pointer;
 }
+/* The station being worked, red as WSJT-X marks it. */
+.wf-tag.selected {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+/* How many tags found no row (`tagLanes`): a count at the right of the top row. */
+.wf-tag-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  pointer-events: auto;
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1.4;
+}
 .wf-tag.dim {
   color: var(--text-faint);
   border-color: var(--border-soft);
@@ -16655,10 +17072,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 [data-viewport='xs'] .layout[data-three-pane] {
   /* Narrowest desktop class: tighten further and lower the rail floor so the
-     center pane keeps usable width. The waterfall stays in its rail and is never
-     hidden — the rail only narrows. (There is no top-strip alternative: the
-     `data-layout` attribute an older comment here promised had no writer and no
-     CSS, and was deleted with the rest of that dead vocabulary.) */
+     center pane keeps usable width. The rail only narrows. (The waterfall has been a
+     full-width strip above the columns since 2026-10-26, not in this rail.) */
   --left-rail-w: 210px;
   --rail-min: 168px;
   --right-rail-w: clamp(240px, calc(0.32 * var(--vw-eff, 100vw)), 360px);
@@ -16770,11 +17185,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
 [data-viewport='sm'] .grid-waterfall,
+[data-viewport='sm'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='sm'] .pane-splitter.horizontal.tempo-wf-seam,
 [data-viewport='xs'] .grid-header,
 [data-viewport='xs'] .grid-stations,
 [data-viewport='xs'] .grid-center,
-[data-viewport='xs'] .grid-waterfall {
+[data-viewport='xs'] .grid-waterfall,
+[data-viewport='xs'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='xs'] .pane-splitter.horizontal.tempo-wf-seam {
   grid-area: auto;
+}
+/* Tempo's waterfall strip (2026-10-26) stacks under the header at the house default share of the
+   window: in the collapse its row is content-height, so the strip carries the height itself (its
+   divider is hidden here, as every divider is). */
+[data-viewport='sm'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='xs'] .layout[data-three-pane] > .waterfall-wrap {
+  height: max(min(8em, calc(0.28 * var(--vh-eff, 100vh))), calc(0.25 * var(--vh-eff, 100vh)));
 }
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
@@ -17370,6 +17796,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field-call .settings-input {
   flex: 1 1 120px;
 }
+/* The shared comment (above Notes) is drawn like it, a line shorter. */
+.logbook-comment {
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
+  line-height: 1.4;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;
@@ -17390,7 +17823,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-3);
   margin-top: var(--space-3);
 }
-.logbook-row {
+.logbook-table .logbook-row {
   /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: the fractional share
      shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end clip the
      leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor (not
@@ -17416,8 +17849,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      neighbour gives up a share and the tail floor is untouched. The one real cost is a
      thirteenth track's worth of `.log-row`'s `gap: 10px`: 10px more fixed overhead per row,
      taken off the fr pool, which at the 384px floor's worst case (1366px) is ~1% of the
-     row. Not measured in a browser — arithmetic off the sheet. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr);
+     row. Not measured in a browser — arithmetic off the sheet.
+
+     THE TRACKS NOW COME FROM THE COLUMN MODEL (ui/src/features/logColumns.ts). The Logbook sets
+     `--log-cols` on `.logbook-table`, cut from the same list of columns its header and rows
+     render, so a cell without a track cannot be written; the tail is still the measured floor
+     above (`ACTIONS_TRACK`). The defaults are the compact template this rule used to hold. Two
+     classes, not one: `[data-viewport='sm'] .log-row` (two classes too, earlier in the sheet)
+     would otherwise win at the narrow sizes and put the four-track generic log template back. */
+  grid-template-columns: var(--log-cols);
 }
 .log-note {
   /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
@@ -17580,9 +18020,49 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-searchbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: var(--space-2) var(--space-3);
+}
+/* The Logbook's field filters: a panel on its own line under the search box. It sits in the pinned
+   block above the rows, so it is bounded and scrolls inside itself rather than pushing the rows
+   off a short window. */
+.log-filter-panel {
+  flex: 1 0 100%;
+  max-height: calc(0.4 * var(--vh-eff, 100vh));
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: var(--bg);
+}
+.log-filter-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+}
+.log-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(9.5rem, 100%), 1fr));
+  gap: var(--space-1) var(--space-2);
+}
+.log-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.log-filter-field .settings-input {
+  min-width: 0;
+}
+.log-th-place {
+  font-size: var(--fs-micro);
+  vertical-align: super;
 }
 .log-search {
   flex: 1 1 auto;
@@ -17630,81 +18110,106 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
 }
 
-/* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
-   Tauri minimum where all eleven fit, and never fired under pinned zoom where
-   they don't): keep Call, Country, Band, QSL, Notes, actions; hide
-   Freq/Mode/Sent/Rcvd/Time/Park.
-
-   SIX TRACKS, AND THE COUNT IS THE POINT. This was five, written 2026-06-07 when five cells
-   survived the hide list. The Notes column landed 2026-08-23 and is not in that list, so the
-   row has had SIX visible cells and five tracks ever since — and grid-auto-flow being `row`,
-   the sixth cell (the action cluster) was auto-placed onto a second GRID ROW, under the
-   callsign, on every narrow window and at every pinned zoom that produces one. That is the
-   1024×768 supported floor and 1366 at 125%. It also left the cluster in an implicit `auto`
-   track where no floor from this sheet could reach it. The tail track carries the same
-   measured floor as the wide template above; styles-logbook-actions.test.tsx checks the track
-   count against the cells the component actually renders, so a seventh column cannot do this
-   again silently. */
-[data-viewport='sm'] .logbook-row,
-[data-viewport='xs'] .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr);
-}
-/* Freq, mode, sent, rcvd, DATE, TIME, park. #239 split one Time column into two, so this list
-   grew by one and the template below did NOT: the narrow row shows the same six cells it
-   always did — call, country, band, QSL, notes, actions. 1024×768, the supported floor, is
-   `sm` (classifyViewport: < 1100), so the new column costs that width nothing. */
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(6),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(7),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(8),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(9),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(10),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(4),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(5),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(6),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(7),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(8),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(9),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(10) {
-  display: none;
-}
+/* Narrow (EFFECTIVE width): the fitted table keeps Call, Country, Band, QSL, Notes and the
+   actions, and leaves the rest out. That choice is the column model's now (`narrow` in
+   ui/src/features/logColumns.ts): the Logbook renders only those cells at `sm`/`xs` and cuts the
+   template from the same list. The old rules here hid cells by POSITION (`:nth-child`), which is
+   wrong the moment a column can be hidden, and kept a second six-track template that had to be
+   counted against them by hand (it was one short from 2026-08-23, and the action cluster wrapped
+   under the callsign). A table showing columns beyond the defaults keeps every one at every
+   width and scrolls sideways, as "More columns" did. */
 /* keep edit/delete reachable on touch (no hover) */
 [data-viewport='sm'] .logbook-row .log-rowbtn,
 [data-viewport='xs'] .logbook-row .log-rowbtn {
   opacity: 1;
 }
-/* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
-   the horizontal axis in this mode; the sticky search + header ride inside it, so header and
-   rows scroll sideways together. 21 tracks = the 13 above with eight inserted before Notes
-   (end time, my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's
-   CONTENT,
-   so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
-   narrow-viewport column rules are exactly as they were; on, every column shows at any width,
-   because the point of the mode is to see them all. */
+/* The wide log: any column beyond the defaults shown (#239's "More columns" was the first).
+   `.log-scroll` stays the ONE scroll owner and only gains the horizontal axis in this mode; the
+   sticky search + header ride inside it, so header and rows scroll sideways together. The floor is
+   on the scroller's CONTENT, so nothing is clipped — it scrolls. Off, none of this applies and the
+   fitted table is exactly as it was; on, every chosen column shows at any width, because the point
+   of choosing them is to see them. */
 .logbook-table.wide .log-scroll {
   overflow-x: auto;
 }
 .logbook-table.wide .log-sticky,
 .logbook-table.wide .log-rows {
-  /* 118rem held 19 tracks; the end-time column (#329) adds a 0.9fr one, and the floor moves
-     with it so the block keeps the share it was sized for instead of squeezing its
-     neighbours. #239's Date/Time split does NOT move it again: the pair divides the 1.6fr the
-     single column had, so the row's fr total is what this number was taken against. */
-  min-width: 123rem;
+  /* `--log-min-w` is the column model's (`logTableMinWidth`): each shown column's share at the
+     rate "More columns" was sized at (its 21 tracks, 18fr, held 123rem — so that table is the
+     width it always was), plus any dragged px width. */
+  min-width: var(--log-min-w, 123rem);
 }
-.logbook-table.wide .logbook-row {
-  /* Second line = the "More columns" block. Its first track is the contact's END time
-     (#329), sized like the Time column it mirrors. `styles-logbook-actions.test.tsx` holds
-     this list to one track per cell the component renders. */
-  grid-template-columns:
-    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr
-    0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
-    1.4fr minmax(384px, 0.8fr);
+/* A column's resize handle: the right edge of its header cell. Inside the cell (which clips), so
+   it never takes a grid track or a tab stop of its own. */
+.logbook-row.head > .log-cell {
+  position: relative;
 }
-[data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
-[data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {
-  display: block;
+.log-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.log-col-resize:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* An upload column's mark: the state in a glyph, its words in the tooltip. */
+.log-upload.done {
+  color: var(--state-good);
+}
+.log-upload.waiting,
+.log-upload.none {
+  color: var(--text-faint);
+}
+.log-upload.failed {
+  color: var(--state-weak);
+}
+/* The column chooser: portaled (its box measures the real window), long, so it scrolls inside
+   the room Radix says it has. */
+.log-columns-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.log-columns-hint {
+  max-width: 22rem;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.log-columns-group {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.log-columns-check {
+  display: inline-block;
+  width: 1em;
+}
+.log-columns-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-soft);
+}
+/* The edit form's read-only line: what the contact carries that no box there edits. */
+.logbook-also dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+.logbook-also dt {
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.logbook-also dd {
+  margin: 0;
 }
 
 /* scrollbars */
@@ -19260,10 +19765,11 @@ body.pane-dragging {
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
   /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
-     clamps 88–420 px, and to what this rule honours); 22% stays the untouched default. `flex-shrink:1` + no px
+     clamps 88–420 px, and to what this rule honours). The untouched default is 25 % of the SHELL,
+     painted here as the body's share (OperateCockpit `defaultOf`); 25% is only the pre-paint fallback. `flex-shrink:1` + no px
      floor + a max lets it YIELD on short windows instead of starving the lists
      below — the fit-scale keeps it a comfortable size at normal sizes. */
-  flex: 0 1 var(--cockpit-wf-h, 22%);
+  flex: 0 1 var(--cockpit-wf-h, 25%);
   min-height: 0;
   max-height: 60%;
   display: flex;
@@ -19580,7 +20086,7 @@ button.cq-skiptx1.on {
 /* THE TX CLUSTER, ONE SIZE ON EVERY SCREEN — FT's strip and every other screen's TX strip
    (CockpitTxStrip) draw it, so it is SCOPED to `.cq-txctl`: .op-btn/.op-controls are shared with
    the TopBar and RoamPanel, and an unscoped rule would bleed there. THE HEADER'S SIZE (operator
-   batch 60): the cockpit headers' Stop TX was 93×29 at 100 %, FT's 66×24, and the cluster moved
+   pick): the cockpit headers' Stop TX was 93×29 at 100 %, FT's 66×24, and the cluster moved
    out of those headers, so no Stop TX may come out smaller than the header's was — it inherits the
    cockpit's text size and the header buttons' padding. Same place, same handlers, always visible
    (the dock law allows styling, forbids hiding or relocating). inline-flex so the read-only latch
@@ -19617,6 +20123,11 @@ button.cq-skiptx1.on {
    button's own font — sized to 'TX Off' plus the padding. */
 .cq-txctl .op-btn.monitor {
   min-width: 6.2em;
+}
+/* …and ATU flips ATU ↔ ATU ON with the radio's tuner (#344): a floor sized to 'ATU ON' plus the
+   padding (93 px at 1920×1080, measured), so Stop TX does not move when the tuner goes in or out. */
+.cq-txctl .op-btn.atu {
+  min-width: 7em;
 }
 /* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
 .cq-txctl .op-btn.readonly {
@@ -20445,6 +20956,20 @@ button.cq-skiptx1.on {
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
 }
+/* The line a last contact's edit leaves (ContestLogger `LastContacts`): the last thing in the list's
+   scroller, held to its bottom edge, so it is on screen however far the list is scrolled (in the flow
+   alone, after ten rows, it was below the list's edge at 1024×768), and its room comes out of the
+   list's: under it, at 640×480 and the 420×320 floor, it was past the bottom of the window. Its text
+   on the list's 1600 px measure and inset, on an opaque surface the rows scroll under. */
+.contest-logger-recent-note {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  max-width: none;
+  padding: var(--space-1) max(var(--space-4), calc(50% - 800px + var(--space-4)));
+  font-size: var(--fs-body);
+  background: var(--bg-elev);
+}
 /* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
    the screen while a contest runs, the last contacts under it, and the screen below, scrolling in
    its own panel as it always has. One wrapper, there with or without the entry: alone, the screen
@@ -20519,9 +21044,9 @@ button.cq-skiptx1.on {
 /* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
    mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr) 32px;
 }
-/* ── THE TWO BOARDS AS PHONE AND CW PANES (#345, plan H8) ─────────────────────────────────
+/* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
    fill panes. This is the content half of that, in the sanctioned place (`.pane-body >
    .cw-decode` is the precedent): `.np-pane` is the cockpits' wrapper, `.np-board` the board's
@@ -20606,7 +21131,19 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .np-board .sp-grid .np-row {
-  grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr);
+  grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr) 30px;
+}
+/* The per-row Spot action (📢 → SpotDialog) sits in its own trailing cell. The compact
+   Connect box (`.cn-spots`, which drops columns to fit a rail) has no room for it and its grid
+   templates do not include the column, so the action is hidden there — the board's view and the
+   Phone/CW panes carry it. */
+.cn-spots [data-col='spot'] {
+  display: none;
+}
+.sp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 /* ── THE SPOTS BOARD AS A CONNECT BOX (components/connect/SpotsBox.tsx) ───────────────────
    The same board as a pane (`.np-board`, above), in a Connect slot: a rail from 200 to 720 px
@@ -21194,8 +21731,10 @@ button.cq-skiptx1.on {
 }
 /* #386 — the distance cap, a compact picker among the filters, in Band Activity's sort picker's
    look (`.od-sort select`). The `select` base rule owns the arrow (background-image and
-   padding-right, both !important); this sets the face, the ink and the box. */
-.or-distance {
+   padding-right, both !important); this sets the face, the ink and the box. #324's worked window
+   beside Hide worked wears the same face. */
+.or-distance,
+.or-worked-window {
   background: var(--bg-elev);
   color: var(--text);
   border: 1px solid var(--border);
@@ -21439,6 +21978,10 @@ button.cq-skiptx1.on {
 }
 .cq-state.running {
   color: var(--tx);
+}
+/* The TX watchdog ended the call: red, as WSJT-X paints its "Runaway Tx watchdog". */
+.cq-state.watchdog {
+  color: var(--state-weak);
 }
 /* Unmistakable "you're in a self-sustaining CQ run" badge: the engine works each answering
    station then returns to CQ, so make that state obvious with a live pulsing pill. */
@@ -21697,6 +22240,21 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+}
+/* Which worked stations −B4 hides (#409) — a chip-sized picker beside it, the Spots pane's
+   `.sp-worked-window` shape. The `select` base rule owns the arrow. */
+.od-b4-scope {
+  padding: 1px 6px;
+  font-size: 0.71rem;
+  font-weight: 600;
+  background-color: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.od-b4-scope:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
 }
 .od-sort {
   display: flex;
@@ -22768,6 +23326,9 @@ button.cq-skiptx1.on {
 .pota-activation {
   display: flex;
   align-items: center;
+  /* An activation carries a count per park, a P2P count and its grid: they wrap onto a second
+     line in a narrow window rather than push Stop out of reach. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   padding: 6px var(--space-3);
   margin: 0 0 var(--space-2);
@@ -22794,7 +23355,53 @@ button.cq-skiptx1.on {
   max-width: 160px;
 }
 .pota-act-text {
-  flex: 1;
+  /* A basis, so the sentence keeps a readable width and the counts and the grid wrap onto the
+     next line beside it rather than crush it to a word a line. */
+  flex: 1 1 20em;
+}
+/* Today's count of an activation, one per park ("US-1234 7 of 10 · 3 to go"), and its P2P
+   count: the ink of the strip on a hairline, lit in the good colour once a park is valid. */
+.pota-act-progress {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--text) 35%, transparent);
+}
+.pota-act-progress.valid {
+  border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 14%, transparent);
+}
+/* The grid the contacts carry while activating — six characters, never Settings'. */
+.pota-act-grid {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+}
+.pota-act-grid .pota-act-grid-input {
+  width: 9ch;
+  padding: 1px 6px;
+  flex: 0 0 auto;
+}
+/* No grid known: the contacts carry none, so the strip says it beside the box — the state ask's
+   warning frame, the text in the body colour. */
+.pota-act-grid-none,
+.pota-act-calls {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--state-warn) 45%, transparent);
+  background: color-mix(in srgb, var(--state-warn) 8%, transparent);
+}
+/* The spot's comment beside Spot me, and the QRT offer beside Stop (unticked each activation). */
+.pota-spot-comment {
+  flex: 0 1 auto;
+  width: 9ch;
+  min-width: 5ch;
 }
 /* The state an activation's contacts carry as MY_STATE, or, on a state line, the ask for it. */
 .pota-act-state {
@@ -23012,6 +23619,13 @@ button.cq-skiptx1.on {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+}
+/* P2P — you are activating, so this activator is a park-to-park contact. The text ink on the
+   accent's hairline, so it reads in every theme without a contrast special case. */
+.pota-badge-p2p {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid var(--accent);
 }
 .pota-badge-open {
   color: #22c55e;
@@ -25765,7 +26379,7 @@ button.sat-chip:disabled {
      hideable) and the 45% zoom-corrected cap (raw vh is zoom-blind) keep a stale
      persisted % structurally harmless. The % basis resolves against the flex container.
      Guarded by cockpit-shells.test.ts (winning flex-grow must compute to 0). */
-  flex: 0 1 var(--cw-scope-h, 22%);
+  flex: 0 1 var(--cw-scope-h, 25%);
   height: auto;
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
@@ -25777,21 +26391,10 @@ button.sat-chip:disabled {
      the scope. That band is real estate the drag now actually controls — pull the seam
      down and the scope keeps it (as the sole grower this control did nothing at all:
      rendered height was basis-independent, measured identical at 12/30/52/90%). */
-  flex: 0 1 var(--ph-scope-h, 22%);
+  flex: 0 1 var(--ph-scope-h, 25%);
   height: auto;
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
-}
-/* BESIDE THE LEFT SIDE (2026-10-03) the scope stands in the stage (cockpit-panes.css), and the row
-   that holds the stage takes the stage's INTRINSIC height as its automatic minimum — where a column
-   counts each child at its preferred size, the scope at its content height rather than the 8em floor it
-   shrinks to under deficit. On a 1280×720 effective window that scrolled the shell 22 px further and
-   set the TX strip 22 px lower than without the side (measured in Chrome). Size containment makes the
-   scope's intrinsic size its floor, which is all the flex layout gives it under deficit anyway; laid
-   out, its size is still its basis clamped by the rule above. Only beside the side: with no side its
-   basis resolves against the shell, and nothing here changes. cockpit-shells.test.ts computes both. */
-.phone-cockpit .ph-scope-panel--beside {
-  contain: size;
 }
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. It never
    shrinks: as a default flex item it gave its own 8 px to an overfull column (thinning to
@@ -25824,14 +26427,14 @@ button.sat-chip:disabled {
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
    a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px),
    and FT's arranged columns (`.op-stack`, 8 px, in cockpit-panes.css: their dividers carry `in-op-stack`).
-   Phone's scope divider carries `in-column` too since its left side (2026-10-03): it stands in the
-   stage (cockpit-panes.css), whose gap is the shell's, so a shell-child selector cannot reach it.
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
    sm/xs viewports, which hide every divider. cockpit-shells.test.ts computes each net. */
 .layout.single.rtty-cockpit > .pane-splitter.horizontal,
 .layout.single.psk-cockpit > .pane-splitter.horizontal,
+.layout.single.jtty-cockpit > .pane-splitter.horizontal,
 .layout.single.sstv-view > .pane-splitter.horizontal,
 .layout.single.cw-cockpit > .pane-splitter.horizontal,
+.layout.single.phone-cockpit > .pane-splitter.horizontal,
 .layout.single.js8-cockpit > .pane-splitter.horizontal,
 .pane-splitter.horizontal.in-column {
   margin-block: calc(-0.5 * var(--space-3) - var(--space-1));
@@ -27549,6 +28152,7 @@ button.sat-chip:disabled {
    full-view host needs this; it is not optional chrome. */
 .rtty-host,
 .psk-host,
+.jtty-host,
 .sstv-host,
 .aprs-host,
 .js8-host {
@@ -27556,6 +28160,7 @@ button.sat-chip:disabled {
 }
 .rtty-host[hidden],
 .psk-host[hidden],
+.jtty-host[hidden],
 .sstv-host[hidden],
 .aprs-host[hidden],
 .js8-host[hidden] {
@@ -27589,12 +28194,15 @@ button.sat-chip:disabled {
      (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
-  --cockpit-fill-min: var(--rtty-fill-min, 10em);
+  --cockpit-fill-min: 10em;
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
-   that knob to the region-less shells. Same deficit valve as .layout.single.cw-cockpit. */
-.layout.single.js8-cockpit {
+   that knob to the region-less shells. Same deficit valve as .layout.single.cw-cockpit.
+   JTTY is one too: its three panes (All Decodes, QSO Frequency, the log strip) fill a
+   region's columns. */
+.layout.single.js8-cockpit,
+.layout.single.jtty-cockpit {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -27630,20 +28238,25 @@ button.sat-chip:disabled {
    sized by the frame's own inline role flex, which this sheet cannot and must not
    restyle (cockpit-panes.test.ts fences .pane-frame growth). Deficit flows to the
    shell's `overflow-y: auto` valve above.) */
-/* RTTY waterfall (PSK rides the same rule): a strip of its own height (mirrors the CW/Phone
+/* RTTY waterfall (PSK and JTTY ride the same rule): a strip of its own height (mirrors the CW/Phone
    .ph-scope-panel) so the canvas has real device pixels to draw into. A flex:1 stage collapses
    to 0 in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then skip
    every row.
 
    SIZED BY ITS DIVIDER since layout L6 (JS8's shape, L2): the operator drags or arrows its
-   height, stored per surface (`nexus.split.rtty.waterfall` / `.psk.waterfall`) and clamped
+   height, stored per surface (`nexus.split.rtty.waterfall` / `.psk.waterfall` / `.jtty.waterfall`) and clamped
    against the live box on load and on every resize (PaneSeam's strip kind); grow 0 so the dragged
    basis is what renders (cockpit-shells.test.ts). The default, 25 % of the shell, is where the
    old fixed `0.22 × --vh-eff` measured (base tree, in Chrome): 25.1 % at 1024×768 and 1366×768,
    24.5 % at 1920×1080. The var is the SHELL's own (each shell carries its divider's), so the one
-   name serves both cockpits. */
-.rtty-cockpit .waterfall-wrap,
-.psk-cockpit .waterfall-wrap {
+   name serves all three cockpits.
+
+   On RTTY the strip is the ROW `.rtty-wf-row` (2026-10-26): the waterfall, then the tuning scope right of
+   it (its size: cockpit-panes.css `.rtty-tuning-box`), so the waterfall keeps this height and the scope
+   its size, and the waterfall gives up the width. The divider sizes the row. */
+.rtty-wf-row,
+.psk-cockpit .waterfall-wrap,
+.jtty-cockpit .waterfall-wrap {
   flex: 0 1 var(--rtty-wf-h, 25%);
   /* A YIELDING FLOOR. `min-height: 120px` here was the one px pin left on a strip whose
      height is otherwise a share of the window, and until L6 this strip had no operator
@@ -27654,10 +28267,22 @@ button.sat-chip:disabled {
      floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
      is a decoder with no display. Its divider's lower end is exactly this floor
      (WATERFALL_SPLIT_MIN). */
-  min-height: min(var(--rtty-wf-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)));
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
   /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
      transcript and the log strip below it are what this cockpit is for. */
   max-height: calc(0.45 * var(--vh-eff, 100vh));
+}
+/* RTTY's strip row: the waterfall takes the width the tuning scope leaves (a zero basis, so the scope's
+   own size is what stands) and the row's whole height. The row is the size container the scope's square
+   reads (`100cqh`), so where the operator drags the strip shorter than the square the square follows. */
+.rtty-wf-row {
+  display: flex;
+  gap: var(--space-2);
+  container-type: size;
+}
+.rtty-wf-row > .waterfall-wrap {
+  flex: 1 1 0;
+  min-width: 0;
 }
 /* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
    stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and
@@ -27772,6 +28397,98 @@ button.sat-chip:disabled {
   min-height: 0;
   height: auto;
 }
+/* JTTY's panes: WSJT-X's own lines, wrapped where WSJT-X wraps them (the engine's line carries
+   the newline and the two-space continuation; `.cw-decode-text` keeps them, pre-wrap), and by the
+   box only where a pane is narrower than WSJT-X's 40 characters. A confirmed call is a button that
+   reads as the text it is, marked by an underline; a message still arriving is dimmed until it
+   ends. */
+.jtty-line.growing {
+  color: var(--text-dim);
+}
+.jtty-call {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.jtty-call:hover,
+.jtty-call:focus-visible {
+  color: var(--accent);
+}
+/* JTTY's F-keys while ✎ Edit keys is on: each key is its template's line edit (WSJT-X's msg1..msg8),
+   in the key's own grid track so nothing in the dock moves; the input ellipsizes inside it. */
+.jtty-fkey-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.jtty-fkey-edit > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* WSJT-X's "JTTY review" spacer: a quiet rule with its words, before the first line a decode-again
+   found, in each pane. */
+.jtty-review-heading {
+  margin: var(--space-1) 0;
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+/* The Log QSO prompt after a TU send: one quiet line at the top of the log pane, the question and its
+   two buttons, wrapping on a narrow pane. It covers nothing; the strip below it is unchanged. */
+.jtty-log-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-label);
+}
+/* Under the question, when it replaced one never answered: whose that was, quieter than the question. */
+.jtty-log-prompt-note {
+  color: var(--text-dim);
+}
+/* WSJT-X's "Frames: sent/total" before Send: a quiet count, its digits steady as they change. */
+.jtty-frames {
+  flex: 0 0 auto;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The message style beside the Call box and the serial: a label and WSJT-X's two choices. */
+.jtty-style {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+/* Rx and F Tol in the header's control cluster: WSJT-X's two spin boxes, side by side. */
+.jtty-rx-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.jtty-rx-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.jtty-rx-input {
+  width: 6em;
+  font-variant-numeric: tabular-nums;
+}
 /* PSK TX dock drive hint — the one operator-facing ALC/IMD sentence (the plan's
    "modest default drive + a dock hint, no auto-ALC"). Quiet caption styling: it
    is standing advice, not an alert, and must not compete with the Stop row. */
@@ -27808,7 +28525,7 @@ button.sat-chip:disabled {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning`).
+/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning-box`).
    The picture's colours are read off the canvas's own computed tokens (--bg, --rx, --text-faint,
    --text-dim), so it follows both themes with no token of its own. */
 /* Shown over the square when there is nothing to draw: disarmed, or our own over. */
@@ -31596,6 +32313,148 @@ tr.sel .aprs-sym {
   font-size: var(--fs-body);
   color: var(--state-weak);
 }
+.contest-over-missing {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.contest-over-missing legend {
+  padding: 0 var(--space-1);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.contest-over-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--fs-body);
+}
+.contest-over-line .contest-over-note {
+  margin: 0;
+}
+.contest-over-line input,
+.contest-over-line select {
+  min-width: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+  padding: 3px 6px;
+}
+/* Where the sponsor takes the log: shown to copy, never a link Nexus opens. */
+.contest-over-submit {
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;
+}
+.contest-over-submit .contest-over-note {
+  margin: 0;
+}
+.contest-over-address {
+  font-family: var(--font-mono);
+  user-select: all;
+}
+
+/* ============ Contest setup (ContestSetupWizard.tsx): the first-run wizard's step framework ============ */
+.contest-setup .wizard-dots {
+  flex-wrap: wrap;
+}
+.contest-setup-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.contest-setup-pick {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: calc(13px * var(--text-scale));
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+.contest-setup-pick.sel {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.contest-setup-pick-name {
+  font-weight: 700;
+  min-width: 0;
+}
+.contest-setup-pick-when {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+}
+.contest-setup-tick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-setup-warn {
+  margin: 0 0 var(--space-2);
+  color: var(--alert-warning);
+  font-size: var(--fs-body);
+}
+.contest-setup-warn p {
+  margin: 0 0 var(--space-1);
+}
+.contest-setup-bad {
+  margin: 0 0 var(--space-2);
+  color: var(--state-weak);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.contest-setup-exchange {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-setup-checks {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-4);
+  font-size: var(--fs-body);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.contest-setup-checks .warn {
+  color: var(--alert-warning);
+}
+.contest-setup-on {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-title);
+  font-weight: 700;
+}
+/* "Set up a contest…" / "Change setup…" in the Contest screen's banner. */
+.fd-setup-btn {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* The quiet "this weekend" line (Contest screen, Contests pane). */
+.contest-soon {
+  margin: 0 0 var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+}
 /* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
    inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive
    confirms painted as an ordinary accent save button, and the one visual cue that this button
@@ -31897,6 +32756,132 @@ tr.sel .aprs-sym {
 .qso-detail-bare {
   color: var(--text-dim);
   margin: 0;
+}
+
+/* A contact's history (QsoHistory.tsx), the detail view's last section: newest change first, each
+   a head line (when · what · who, and its Undo) over the fields it changed, old → new, in the
+   detail view's own two-column list. The dialog scrolls, so the list needs no height of its own. */
+.qso-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.qso-history-entry + .qso-history-entry {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.qso-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.qso-history-when {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.qso-history-what {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.qso-history-undone {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.qso-history-changes {
+  margin-top: 2px;
+}
+
+/* Recently deleted (RecentlyDeleted.tsx): a `ui/Dialog`, which scrolls its own content past its
+   capped height. One line per contact, wrapping on a narrow window rather than running wide. */
+.recently-deleted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.recently-deleted-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+.recently-deleted-call {
+  font-weight: 700;
+}
+.recently-deleted-when {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* A restore refused as a duplicate: why, in words, and Restore anyway — a line of its own under the
+   row, never Restore relabelled where the pointer already is. */
+.recently-deleted-anyway {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  font-size: 0.85em;
+}
+
+/* The Logbook's clean-up tools (LogTools.tsx): a `ui/Dialog`, which scrolls its own content past
+   its capped height. Rows wrap on a narrow window rather than running wide; a question asked before
+   a change sits on a line of its own, never where the pointer already is. */
+.log-tools-tabs,
+.log-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0;
+}
+.log-tools-row input[type='text'] {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+.log-tools-list,
+.log-tools-copies,
+.log-tools-conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.log-tools-group {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.log-tools-copy,
+.log-tools-conflicts > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: 2px 0;
+}
+.log-tools-choice {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.log-tools-note {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* A guarded conflict not chosen yet: its group cannot merge until it is. */
+.log-tools-note.danger {
+  color: var(--state-weak);
+  font-weight: 700;
+}
+.log-tools-confirm {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  font-size: 0.85em;
 }
 
 /* ===========================================================================
@@ -32237,6 +33222,143 @@ tr.sel .aprs-sym {
   font-weight: 600;
 }
 
+/* THE ACTIVATION PANE (ActivationPane): the activation's head line, each park's count on the
+   strip's hairline, the rate, and its contacts in plain rows. No size of its own: a box sizes it
+   (the shared list's fill role), and the window scrolls it in its own pop-out. */
+.act-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.act-pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.act-pane-ref {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.act-pane-time,
+.act-pane-rate,
+.act-pane-more,
+.act-pane-paused,
+.act-pane-calls {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
+.act-pane-parks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.act-pane-park {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--text) 35%, transparent);
+}
+.act-pane-park.valid {
+  border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 14%, transparent);
+}
+.act-pane-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.act-pane-togo,
+.act-pane-p2p {
+  white-space: nowrap;
+  font-size: var(--fs-micro);
+}
+.act-pane-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.act-pane-row {
+  display: grid;
+  /* Every column may give way, so a narrow box never scrolls sideways: the call first. */
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content);
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+}
+.act-pane-row:nth-child(even) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.act-pane-row.empty {
+  display: block;
+  color: var(--text-dim);
+}
+.act-pane-when {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.act-pane-call {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.act-pane-bm,
+.act-pane-their {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-pane-their {
+  color: var(--text-dim);
+}
+/* Its own window: the shell is the one scroll owner. */
+.detached-activation {
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+.act-window-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-title);
+}
+/* The "Activation over?" checklist (ActivationOverDialog), on the contest checklist's items. */
+.activation-over {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.activation-over-parks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.activation-over-files,
+.activation-over-notes {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: var(--fs-micro);
+}
+.activation-over-files li {
+  overflow-wrap: anywhere;
+}
+.activation-over-notes {
+  color: var(--text-dim);
+}
+
 /* NEEDED BY BAND (AwardsView): per band, never worked and worked-not-confirmed, each count a
    button that opens its list under the row. */
 .aw-bn-table {
@@ -32279,4 +33401,82 @@ tr.sel .aprs-sym {
   font-size: var(--fs-label);
   color: var(--text-dim);
   overflow-wrap: anywhere;
+}
+/* The whole-log DXCC chart: entities × bands, a cell shaded by its standing under the mode
+   filter. Its own scroller, so ~340 rows never stretch the Awards column; the header row and the
+   entity column stay in view while it scrolls. */
+.aw-chart-scroll {
+  max-height: calc(0.6 * var(--vh-eff, 100vh));
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.aw-chart {
+  border-collapse: collapse;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+.aw-chart thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel, var(--bg));
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 2px var(--space-1);
+}
+.aw-chart tbody th {
+  position: sticky;
+  left: 0;
+  background: var(--panel, var(--bg));
+  text-align: left;
+  font-weight: 600;
+  padding: 1px var(--space-2) 1px 2px;
+  white-space: nowrap;
+}
+.aw-chart tbody th[data-s='needed'] {
+  color: var(--text-faint);
+}
+.aw-cc {
+  display: inline-block;
+  min-width: 14px;
+  height: 12px;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
+td.aw-cc {
+  display: table-cell;
+  min-width: 26px;
+}
+.aw-cc[data-s='confirmed'] {
+  background: var(--state-good);
+}
+.aw-cc[data-s='worked'] {
+  background: color-mix(in srgb, var(--state-ok) 55%, transparent);
+}
+.aw-cc[data-s='needed'] {
+  background: transparent;
+}
+.aw-chart-only {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.aw-qsl-via {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.aw-custom-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+}
+.aw-custom-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-dim);
 }

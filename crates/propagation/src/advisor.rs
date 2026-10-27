@@ -132,9 +132,12 @@ impl Default for AdvisorConfig {
 /// VHF modeled openness ([`crate::likelihood::PathModel`] is HF-only): a season +
 /// geomagnetic heuristic. Kept at/below the prior cap so it can never alone promote a
 /// VHF band past Quiet — it just makes 6m/4m read "watch for Es" in season and
-/// "closed" out of season, instead of a flat year-round Quiet.
+/// "closed" out of season, instead of a flat year-round Quiet. The UHF bands open by
+/// tropo, which neither the season nor Kp predicts, so they read closed until heard.
 fn vhf_modeled(band: Band, now: i64, wx: &SpaceWx) -> (Workability, f32) {
-    if wx.kp >= 5.0 {
+    if band.is_uhf() {
+        (Workability::Closed, 0.02)
+    } else if wx.kp >= 5.0 {
         (Workability::Marginal, 0.20) // auroral VHF
     } else if band.is_vhf() && is_es_season(now) {
         (Workability::Marginal, 0.18) // Es season — watch
@@ -321,6 +324,8 @@ impl PropAdvisor {
 
         let modeled_reason = if modeled_work.is_open() {
             "open per model".to_string()
+        } else if band.is_uhf() {
+            "UHF — needs a tropo lift".to_string()
         } else if band.is_vhf() {
             "VHF — needs Es/aurora".to_string()
         } else {

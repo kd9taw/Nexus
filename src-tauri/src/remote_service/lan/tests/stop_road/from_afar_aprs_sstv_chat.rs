@@ -157,8 +157,8 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 /// station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing (the
 /// heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would, and each turns
 /// off what transmits by itself. The shack got only what the screen sent, and `afar`
-/// with the stand-down alone: no time crossed. CONTROL: each over is on the air before it ends, and
-/// each press was answered with no refusal.
+/// with the two generations alone: no time crossed. CONTROL: each over is on the air before it
+/// ends, and each press was answered with no refusal.
 #[test]
 fn aprs_sstv_and_chat_started_from_afar_end_by_either_road_alone_and_by_presence() {
     let _alone = alone();
@@ -185,7 +185,7 @@ fn aprs_sstv_and_chat_started_from_afar_end_by_either_road_alone_and_by_presence
                     "{what}: premise, on the air"
                 );
                 // No time crossed: each press reached the handler with what the screen sent and
-                // the stand-down the lane wrote, nothing else.
+                // the generations the lane wrote, nothing else.
                 let got = got.lock().unwrap().clone();
                 for (cmd, args) in &presses {
                     let (_, reached) = got
@@ -197,7 +197,7 @@ fn aprs_sstv_and_chat_started_from_afar_end_by_either_road_alone_and_by_presence
                     sent.insert("afar".into(), afar.clone());
                     assert_eq!(reached, &Value::Object(sent), "{what}: {cmd}");
                     let keys: Vec<&String> = afar.as_object().unwrap().keys().collect();
-                    assert_eq!(keys, ["standDown"], "{what}: {cmd} {afar}");
+                    assert_eq!(keys, ["standDown", "startsVoided"], "{what}: {cmd} {afar}");
                 }
                 match end {
                     "link" => {

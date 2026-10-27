@@ -214,16 +214,17 @@ export interface StripSeamProps {
    *  here: Connect's bottom strip, which leaves the map at least half of the grid (layout L7). */
   maxShare?: number
   /** Added to the divider's own classes: `in-column` gives back the gap of a column the divider's
-   *  sheet may not name (Phone's scope divider, in its stage — styles.css). */
+   *  sheet may not name (styles.css `.pane-splitter.horizontal.in-column`). */
   className?: string
-  /** The box the STORED percentage is a share of, where that is not the strip's flex container.
-   *  Phone's scope (2026-10-03) keeps its share of the whole SHELL when the left side puts it in a
-   *  shorter stage, so showing the side narrows the scope without shortening it and the TX strip
-   *  under it keeps its height on the screen. What is painted is still a % of the container (the
-   *  same height, re-based); the stored value never changes meaning. Absent: the flex container.
-   *  A function, not a ref: it is read from the divider's first layout effect, which runs before an
-   *  ANCESTOR's ref is attached. */
-  shareOf?: () => HTMLElement | null
+  /** The box the DEFAULT percentage is a share of, where that is not the strip's flex container.
+   *  FT's waterfall (2026-10-26, "width and height to be consistent") stands in `.cockpit-body`,
+   *  under the cockpit's own rows, but its default is 25 % of the whole SHELL, as every other
+   *  cockpit's waterfall is. A height the operator stored keeps its meaning (a share of the
+   *  container), so only the untouched default moves; a reset clears the stored value, so the next
+   *  load measures the default against this box again. What is painted is still a % of the
+   *  container. Absent: the flex container. A function, not a ref: it is read from the divider's
+   *  first layout effect, which runs before an ANCESTOR's ref is attached. */
+  defaultOf?: () => HTMLElement | null
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -294,7 +295,7 @@ interface StripBox {
   el: HTMLElement
   /** Content span, CSS px. */
   span: number
-  /** The span the stored percentage is a share of (`shareOf`'s, else `span`), CSS px. */
+  /** The span the DEFAULT percentage is a share of (`defaultOf`'s, else `span`), CSS px. */
   ref: number
   z: number
   lo: number
@@ -302,15 +303,15 @@ interface StripBox {
 }
 
 /** The box `el`'s children are laid out in: `el` itself, or — where it generates no box
- *  (`display: contents`: Phone's stage while its left side is not shown, cockpit-panes.css
- *  `.cockpit-flat`) — the nearest ancestor that does. */
+ *  (`display: contents`, cockpit-panes.css `.cockpit-flat`: a wrapper that gains a box only in
+ *  some layouts) — the nearest ancestor that does. Phone's scope stood in one until 2026-10-26. */
 function layoutBox(el: HTMLElement | null): HTMLElement | null {
   let b = el
   while (b && getComputedStyle(b).display === 'contents') b = b.parentElement
   return b
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, shareOf }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, defaultOf }: StripSeamProps) {
   // The variable lives on the strip's PARENT, so it inherits to the strip whatever box the strip is
   // laid out in; the box it is measured against is the flex container its % basis resolves in — the
   // same element, unless the parent generates no box (`layoutBox`).
@@ -319,12 +320,18 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   // Read through a ref: a caller's inline function is a new one every render, and as a dependency of
   // the observer's effect below it re-ran the whole setup — a measure and a new ResizeObserver — on
   // every render of a cockpit the app keeps mounted.
-  const shareOfRef = useRef(shareOf)
-  shareOfRef.current = shareOf
+  const defaultOfRef = useRef(defaultOf)
+  defaultOfRef.current = defaultOf
   // The operator's PREFERENCE as stored (null: none, and the sheet's own size stands — only for a
   // strip whose default is the sheet's). A re-clamp never writes it. `undefined` = not read yet.
   const pref = useRef<number | null | undefined>(undefined)
-  if (pref.current === undefined) pref.current = parseSplitPct(surfaceGet(storageKey)) ?? defaultPct
+  // Whether that preference is the DEFAULT (nothing stored), which `defaultOf` measures elsewhere.
+  const isDefault = useRef(false)
+  if (pref.current === undefined) {
+    const stored = parseSplitPct(surfaceGet(storageKey))
+    isDefault.current = stored == null
+    pref.current = stored ?? defaultPct
+  }
   // The % on the container now: the preference fitted into the live box, or a drag in flight;
   // null while the strip stands at the sheet's own size.
   const painted = useRef<number | null>(pref.current)
@@ -360,7 +367,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
       hi = Math.min(hi, honoured[1])
     }
     // The layout wins a disagreement: past its ceiling the divider could not move at all.
-    const of = shareOfRef.current?.()
+    const of = defaultOfRef.current?.()
     const refSpan = of && of !== el ? contentSpan(of, axis, z) : span
     return { host: target, el, span, ref: refSpan > 0 ? refSpan : span, z, lo: Math.min(lo, hi), hi }
   }
@@ -406,7 +413,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
       painted.current = pct
       return
     }
-    settle(b, clampIn(b, (pct / 100) * b.ref))
+    settle(b, clampIn(b, (pct / 100) * (isDefault.current ? b.ref : b.span)))
   }
   /** Where the strip stands, CSS px: the painted size, or the sheet's own. */
   const current = (b: StripBox) => clampIn(b, painted.current != null ? (painted.current / 100) * b.span : stripSize(b.z))
@@ -429,9 +436,10 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     const el = strip.current?.parentElement
     if (!el || typeof ResizeObserver === 'undefined') return
     // The parent, and the box the strip is laid out in, which may be a different element and may
-    // CHANGE: Phone's stage has no box until its left side shows, then has one (a resize of the
-    // parent from nothing to something, observed here), and after it goes the shell's resizes are
-    // the ones that matter again. Every box it has been laid out in stays observed.
+    // CHANGE: a `.cockpit-flat` wrapper has no box until its layout gives it one (a resize of the
+    // parent from nothing to something, observed here), and after that goes the outer box's resizes
+    // are the ones that matter again. Every box it has been laid out in stays observed, and so does
+    // the box its default is a share of (`defaultOf`).
     const watched = new Set<Element>()
     const ro = new ResizeObserver(() => {
       watch(container())
@@ -445,7 +453,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     }
     watch(el)
     watch(container())
-    watch(shareOfRef.current?.() ?? null)
+    watch(defaultOfRef.current?.() ?? null)
     if (ownSize && strip.current) ro.observe(strip.current)
     return () => ro.disconnect()
   }, [strip, ownSize, after, findTries])
@@ -455,9 +463,10 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     if (!b) return
     const at = clampIn(b, px)
     settle(b, at)
-    // Stored as a share of the box it is a share of (the container, unless `shareOf` says otherwise).
-    const pct = (at / b.ref) * 100
+    // Stored as a share of the container, whatever box the default is measured against.
+    const pct = (at / b.span) * 100
     pref.current = pct
+    isDefault.current = false
     surfaceSet(storageKey, String(pct))
   }
 
@@ -479,8 +488,11 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
       commit={commit}
       reset={() => {
         pref.current = defaultPct
-        // '' reads back as "never set" (parseSplitPct), which is what a sheet-sized default is.
-        surfaceSet(storageKey, defaultPct == null ? '' : String(defaultPct))
+        isDefault.current = true
+        // '' reads back as "never set" (parseSplitPct), which is what a sheet-sized default is — and
+        // what a default measured against another box (`defaultOf`) must be: stored, it would read
+        // back as a share of the container.
+        surfaceSet(storageKey, defaultPct == null || defaultOf ? '' : String(defaultPct))
         fit()
       }}
       drag={(e) => {

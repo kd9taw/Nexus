@@ -80,7 +80,7 @@ export interface RateReadings {
  * to 1970 or fake a contact in this second. The sort is not decoration — a club merge
  * interleaves logs from several hosts, so append order is not time order.
  */
-function stampsAscending(log: readonly FieldDayQso[]): number[] {
+function stampsAscending(log: readonly Pick<FieldDayQso, 'whenUnix'>[]): number[] {
   const out: number[] = []
   for (const q of log) {
     const t = q.whenUnix
@@ -113,8 +113,9 @@ function rollingHour(ascending: readonly number[], nowUnix: number): number {
   return n
 }
 
-/** The three readings, from the contest log and the current time (Unix seconds). */
-export function contestRate(log: readonly FieldDayQso[], nowUnix: number): RateReadings {
+/** The three readings, from the contest log and the current time (Unix seconds). Any log of
+ *  timestamped contacts reads the same way: the Activation pane's is its own contacts. */
+export function contestRate(log: readonly Pick<FieldDayQso, 'whenUnix'>[], nowUnix: number): RateReadings {
   const ascending = stampsAscending(log)
   return {
     windows: RATE_WINDOWS.map((size) => windowRate(ascending, size, nowUnix)),

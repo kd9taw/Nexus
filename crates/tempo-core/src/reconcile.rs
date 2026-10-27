@@ -521,8 +521,65 @@ pub fn reconcile_lotw<R: StoredRecord>(
         incoming,
         pairs,
         |row| of_settings_call(row, settings_call),
-        keep_lotw_dxcc,
+        |rec, inc| {
+            keep_lotw_dxcc(rec, inc);
+            keep_lotw_detail(rec, inc);
+        },
     )
+}
+
+/// What LoTW's QSL detail (`qso_qsldetail=yes`) says of the contact beyond the confirmation: the
+/// partner's grid, county, IOTA, zones, prefix and state, from the station location they signed
+/// with. Each fills a field the log holds no value in, as [`apply_match`] fills STATE and CQZ;
+/// and where a callbook lookup filled the field at log time
+/// ([`CALLBOOK_FILLED_FIELD`](crate::logbook::callbook::CALLBOOK_FILLED_FIELD)), LoTW's value
+/// replaces it and the field comes off the mark: the station's own signed location outranks the
+/// address in its callbook entry, and the awards count by it. A value the operator typed, or
+/// another program logged, is never touched. LoTW's rows only — another service's report fills
+/// what [`apply_match`] fills and no more.
+fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
+    use crate::logbook::callbook::{is_callbook_filled, unmark_callbook_filled};
+    let take = |rec: &QsoRecord, tag: &str, held: Option<&str>| {
+        held.is_none_or(|v| v.trim().is_empty()) || is_callbook_filled(rec, tag)
+    };
+    let given = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    // What the log holds is read wherever the record keeps it (`record_field`): a merged contest
+    // contact's exchange columns hold what the other station sent, and a value LoTW wrote beside
+    // one of them would be a second, conflicting tag in every upload.
+    let held = crate::logbook::record_field;
+    if let Some(grid) = given(&inc.grid) {
+        if take(rec, "GRIDSQUARE", held(rec, "GRIDSQUARE")) {
+            rec.grid = Some(grid);
+            unmark_callbook_filled(rec, "GRIDSQUARE");
+        }
+    }
+    if let Some(state) = given(&inc.state) {
+        if take(rec, "STATE", rec.state.as_deref()) {
+            rec.state = Some(state);
+            unmark_callbook_filled(rec, "STATE");
+        }
+    }
+    if let Some(iota) = given(&inc.ota.iota) {
+        if take(rec, "IOTA", rec.ota.iota.as_deref()) {
+            rec.ota.iota = Some(iota);
+            unmark_callbook_filled(rec, "IOTA");
+        }
+    }
+    for tag in ["CNTY", "CQZ", "ITUZ", "PFX"] {
+        let Some(value) = crate::logbook::extra_field(inc, tag).filter(|v| !v.is_empty()) else {
+            continue;
+        };
+        if take(rec, tag, held(rec, tag)) {
+            let value = value.to_string();
+            crate::logbook::set_extra(rec, tag, Some(value));
+            unmark_callbook_filled(rec, tag);
+        }
+    }
 }
 
 /// LoTW's DXCC for a contact it confirmed. Where the log holds none, [`apply_match`] has just
@@ -2008,6 +2065,137 @@ mod tests {
         assert_eq!((sum.matched, sum.newly_confirmed), (2, 2));
         let credits: Vec<&[String]> = log.iter().map(|r| r.credit_granted.as_slice()).collect();
         assert_eq!(credits, [["WAS".to_string()], ["DXCC".to_string()]]);
+    }
+
+    /// ★ LoTW's QSL detail keeps what it carries for the contact: the partner's grid, county,
+    /// IOTA, ITU zone and prefix. Each fills an empty field; a value the log holds stays, unless
+    /// a callbook lookup filled it, when LoTW's replaces it and it is LoTW's from then on (CQZ
+    /// too). A callbook value never replaces a LoTW one: the callbook fills only empty fields,
+    /// and a LoTW value carries no mark.
+    #[test]
+    fn lotw_detail_fills_empty_fields_and_replaces_only_a_callbook_value() {
+        use crate::logbook::callbook::{callbook_filled, fill_from_callbook, CallbookAnswer};
+        let d = 20_000;
+        let detail = |r: QsoRecord| {
+            let mut r = under(confirms(r, "DXCC"), "K2DEF");
+            r.grid = Some("FN31pr".into());
+            r.ota.iota = Some("NA-001".into());
+            for (k, v) in [
+                ("CNTY", "CT,HARTFORD"),
+                ("CQZ", "5"),
+                ("ITUZ", "8"),
+                ("PFX", "W1"),
+            ] {
+                crate::logbook::set_extra(&mut r, k, Some(v.into()));
+            }
+            r
+        };
+        // An empty contact takes all of it.
+        let mut log = vec![under(w1aw_at(d, 12, 0), "K2DEF")];
+        reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
+        let got = |r: &QsoRecord| {
+            let x = |k: &str| crate::logbook::extra_field(r, k).map(str::to_string);
+            (
+                r.grid.clone(),
+                r.ota.iota.clone(),
+                x("CNTY"),
+                x("CQZ"),
+                x("ITUZ"),
+                x("PFX"),
+            )
+        };
+        let lotw = (
+            Some("FN31pr".to_string()),
+            Some("NA-001".to_string()),
+            Some("CT,HARTFORD".to_string()),
+            Some("5".to_string()),
+            Some("8".to_string()),
+            Some("W1".to_string()),
+        );
+        assert_eq!(got(&log[0]), lotw);
+
+        // A contact the operator filled keeps every value.
+        let mut mine = under(w1aw_at(d, 12, 0), "K2DEF");
+        mine.grid = Some("FN42".into());
+        mine.ota.iota = Some("NA-046".into());
+        for (k, v) in [
+            ("CNTY", "MA,ESSEX"),
+            ("CQZ", "4"),
+            ("ITUZ", "7"),
+            ("PFX", "K1"),
+        ] {
+            crate::logbook::set_extra(&mut mine, k, Some(v.into()));
+        }
+        let mut log = vec![mine.clone()];
+        reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
+        assert_eq!(got(&log[0]), got(&mine), "the operator's values stay");
+
+        // The same values, filled by a callbook lookup: LoTW's replace them, and the mark goes.
+        let mut looked_up = under(w1aw_at(d, 12, 0), "K2DEF");
+        looked_up.country = Some("United States".into());
+        fill_from_callbook(
+            &mut looked_up,
+            &CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN42".into()),
+                state: Some("MA".into()),
+                county: Some("Essex".into()),
+                iota: Some("NA-046".into()),
+                cq_zone: Some(4),
+                itu_zone: Some(7),
+                ..Default::default()
+            },
+        );
+        assert!(!callbook_filled(&looked_up).is_empty(), "premise: marked");
+        let mut log = vec![looked_up];
+        reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
+        assert_eq!(got(&log[0]), lotw, "LoTW's values replace the callbook's");
+        assert_eq!(
+            log[0].state.as_deref(),
+            Some("MA"),
+            "the row carried no state"
+        );
+        assert_eq!(
+            callbook_filled(&log[0]),
+            ["STATE"],
+            "only the callbook's state is left"
+        );
+        // …and a row that carries one replaces that too.
+        let mut with_state = detail(w1aw_at(d, 12, 0));
+        with_state.state = Some("CT".into());
+        reconcile_lotw(&mut log, &[with_state], Some("K2DEF"));
+        assert_eq!(log[0].state.as_deref(), Some("CT"));
+        assert!(
+            callbook_filled(&log[0]).is_empty(),
+            "nothing is the callbook's now"
+        );
+
+        // Only LoTW's rows do this: another service's report fills nothing it did not before.
+        let mut log = vec![under(w1aw_at(d, 12, 0), "K2DEF")];
+        reconcile(&mut log, &[detail(w1aw_at(d, 12, 0))]);
+        assert_eq!(log[0].grid, None);
+
+        // A merged contest contact holds what the other station SENT in its exchange columns
+        // (a grid, before the merge moved it to the record's own field; a zone and a county):
+        // that is a value the log holds, and LoTW writes no second, conflicting one beside it.
+        let mut merged = under(w1aw_at(d, 12, 0), "K2DEF");
+        merged.contest = Some(Box::new(crate::logbook::ContestFields {
+            adif: vec![
+                ("GRIDSQUARE".into(), "FN42".into()),
+                ("CQZ".into(), "4".into()),
+                ("CNTY".into(), "MA,ESSEX".into()),
+            ],
+            ..Default::default()
+        }));
+        let mut log = vec![merged.clone()];
+        reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
+        let out = crate::logbook::adif_record(&log[0]);
+        for (tag, want) in [("GRIDSQUARE", "FN42"), ("CQZ", "4"), ("CNTY", "MA,ESSEX")] {
+            assert_eq!(out.matches(&format!("<{tag}:")).count(), 1, "{tag}: {out}");
+            assert_eq!(crate::logbook::record_field(&log[0], tag), Some(want));
+        }
+        // …and fills what the exchange did not carry.
+        assert_eq!(crate::logbook::extra_field(&log[0], "ITUZ"), Some("8"));
     }
 
     /// A contact naming no call of its own is the Settings call's: N2OLD's row in its minute

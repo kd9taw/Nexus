@@ -14,6 +14,7 @@ import {
   stdMessageList,
   toggleIgnored,
   txGrid4,
+  txRowIndex,
 } from './txMessages'
 
 describe('report formatting (WSJT-X sign + two digits)', () => {
@@ -181,7 +182,7 @@ describe('nonstandard-call (hashed) display parity', () => {
     const m = genStdMessages({ dxCall: 'PJ4/K1ABC', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
     expect(m.tx1).toBe('<PJ4/K1ABC> W9XYZ EN37')
     expect(m.tx2).toBe('<PJ4/K1ABC> W9XYZ -08')
-    expect(m.tx4).toBe('<PJ4/K1ABC> W9XYZ RR73')
+    expect(m.tx4).toBe('PJ4/K1ABC <W9XYZ> RR73')
     expect(m.tx6).toBe('CQ W9XYZ EN37')
   })
   it('a nonstandard SENDER beside a plain call hashes its OWN call so the number rides', () => {
@@ -204,6 +205,32 @@ describe('nonstandard-call (hashed) display parity', () => {
     expect(k.tx1).toBe('<K1ABC> PJ4/W9XYZ')
     expect(k.tx2).toBe('K1ABC <PJ4/W9XYZ> -08')
     expect(k.tx3).toBe('K1ABC <PJ4/W9XYZ> R-08')
+  })
+  it("RR73 and 73 from a standard call to a nonstandard one are WSJT-X's: that call whole, mine hashed", () => {
+    // WSJT-X 3.0.2's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs, mainwindow.cpp
+    // 9701 and 9709): `hisCall <my_callsign> RR73` (or RRR, the same expression), a type 4
+    // message. stdCall passes /P and /R, so a portable call of mine closes the same way. The
+    // engine sends exactly these.
+    for (const my of ['K1ABC', 'K1ABC/P', 'K1ABC/R'])
+      for (const dx of ['W9XYZ/M', 'PJ4/W9XYZ', 'YW18FIFA']) {
+        const m = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', snr: -12 })
+        expect([m.tx4, m.tx5], `${my} × ${dx}`).toEqual([`${dx} <${my}> RR73`, `${dx} <${my}> 73`])
+        const r = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', preferRrr: true })
+        expect(r.tx4, `${my} × ${dx} RRR`).toBe(`${dx} <${my}> RRR`)
+      }
+    // Tx1–Tx3 keep the DX hashed.
+    const m = genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC', myGrid: 'FN42', snr: -12 })
+    expect(stdMessageList(m).slice(0, 3)).toEqual([
+      '<W9XYZ/M> K1ABC FN42',
+      '<W9XYZ/M> K1ABC -12',
+      '<W9XYZ/M> K1ABC R-12',
+    ])
+    // The RRR a /P call sends as its roger where no number can ride (Tx3) keeps its form.
+    expect(genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC/P', myGrid: 'FN42' }).tx3).toBe(
+      '<W9XYZ/M> K1ABC/P RRR',
+    )
+    // A call the decoder could not resolve is no callsign to put in full.
+    expect(genStdMessages({ dxCall: '<...>', myCall: 'K1ABC', myGrid: 'FN42' }).tx5).toBe('<...> K1ABC 73')
   })
   it('a nonstandard SENDER beside a slashed call still carries neither grid nor number', () => {
     const m = genStdMessages({ dxCall: 'K1ABC/P', myCall: 'PJ4/W9XYZ', myGrid: 'EN37', snr: -8 })
@@ -277,8 +304,8 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
       '<PJ4/K1ABC> KD9TAW/P',
       '<PJ4/K1ABC> KD9TAW/P',
       '<PJ4/K1ABC> KD9TAW/P RRR',
-      '<PJ4/K1ABC> KD9TAW/P RR73',
-      '<PJ4/K1ABC> KD9TAW/P 73',
+      'PJ4/K1ABC <KD9TAW/P> RR73', // RR73 and 73: WSJT-X's, the DX whole and mine hashed
+      'PJ4/K1ABC <KD9TAW/P> 73',
       'CQ KD9TAW/P EN52',
     ])
     expect(m[2]).not.toBe(m[0])
@@ -288,20 +315,21 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
   it('only a nonstandard call beside a plain call changes — every other pair byte for byte', () => {
     // The panel's half of tempo-core/tests/portable_suffix_air.rs's table, row for row. The
     // two ★ rows are WSJT-X's report and roger with MY call hashed; every other row is what
-    // the panel showed before.
+    // the panel showed before, but for a standard call's RR73 and 73 to a nonstandard one (the
+    // three PJ4/K1ABC rows of mine), WSJT-X's `PJ4/K1ABC <KD9TAW> RR73`.
     const rows: [string, string, string][] = [
       ['KD9TAW', 'PA0A', 'PA0A KD9TAW EN52 | PA0A KD9TAW -07 | PA0A KD9TAW R-07 | PA0A KD9TAW RR73 | PA0A KD9TAW 73'],
       ['KD9TAW', 'PA0A/P', 'PA0A/P KD9TAW EN52 | PA0A/P KD9TAW -07 | PA0A/P KD9TAW R-07 | PA0A/P KD9TAW RR73 | PA0A/P KD9TAW 73'],
       ['KD9TAW', 'PA0A/R', 'PA0A/R KD9TAW EN52 | PA0A/R KD9TAW -07 | PA0A/R KD9TAW R-07 | PA0A/R KD9TAW RR73 | PA0A/R KD9TAW 73'],
-      ['KD9TAW', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | <PJ4/K1ABC> KD9TAW RR73 | <PJ4/K1ABC> KD9TAW 73'],
+      ['KD9TAW', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | PJ4/K1ABC <KD9TAW> RR73 | PJ4/K1ABC <KD9TAW> 73'],
       ['KD9TAW/P', 'PA0A', 'PA0A KD9TAW/P EN52 | PA0A KD9TAW/P -07 | PA0A KD9TAW/P R-07 | PA0A KD9TAW/P RR73 | PA0A KD9TAW/P 73'],
       ['KD9TAW/P', 'PA0A/P', 'PA0A/P KD9TAW/P EN52 | PA0A/P KD9TAW/P -07 | PA0A/P KD9TAW/P R-07 | PA0A/P KD9TAW/P RR73 | PA0A/P KD9TAW/P 73'],
       ['KD9TAW/P', 'PA0A/R', '<PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P RRR | <PA0A/R> KD9TAW/P RR73 | <PA0A/R> KD9TAW/P 73'],
-      ['KD9TAW/P', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | <PJ4/K1ABC> KD9TAW/P RR73 | <PJ4/K1ABC> KD9TAW/P 73'],
+      ['KD9TAW/P', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | PJ4/K1ABC <KD9TAW/P> RR73 | PJ4/K1ABC <KD9TAW/P> 73'],
       ['KD9TAW/R', 'PA0A', 'PA0A KD9TAW/R EN52 | PA0A KD9TAW/R -07 | PA0A KD9TAW/R R-07 | PA0A KD9TAW/R RR73 | PA0A KD9TAW/R 73'],
       ['KD9TAW/R', 'PA0A/P', '<PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R RRR | <PA0A/P> KD9TAW/R RR73 | <PA0A/P> KD9TAW/R 73'],
       ['KD9TAW/R', 'PA0A/R', 'PA0A/R KD9TAW/R EN52 | PA0A/R KD9TAW/R -07 | PA0A/R KD9TAW/R R-07 | PA0A/R KD9TAW/R RR73 | PA0A/R KD9TAW/R 73'],
-      ['KD9TAW/R', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | <PJ4/K1ABC> KD9TAW/R RR73 | <PJ4/K1ABC> KD9TAW/R 73'],
+      ['KD9TAW/R', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | PJ4/K1ABC <KD9TAW/R> RR73 | PJ4/K1ABC <KD9TAW/R> 73'],
       // ★
       ['OE/PD1SCO', 'PA0A', '<PA0A> OE/PD1SCO | PA0A <OE/PD1SCO> -07 | PA0A <OE/PD1SCO> R-07 | <PA0A> OE/PD1SCO RR73 | <PA0A> OE/PD1SCO 73'],
       ['OE/PD1SCO', 'PA0A/P', '<PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO RRR | <PA0A/P> OE/PD1SCO RR73 | <PA0A/P> OE/PD1SCO 73'],
@@ -439,5 +467,52 @@ describe('cqSuggestionFromText — the valid form to offer a refused Tx6', () =>
       expect(cqDirFromText(ok, MY), `control: ${ok} is accepted`).not.toBeUndefined()
       expect(cqSuggestionFromText(ok, MY), ok).toBeNull()
     }
+  })
+})
+
+describe('txRowIndex — the row the station\'s queued over stands for (the next-dot)', () => {
+  const rows = stdMessageList(genStdMessages({ dxCall: 'W1ABC', myCall: 'KD9TAW', myGrid: 'EN61', snr: -9 }))
+
+  it('picks the row showing the exact text', () => {
+    rows.forEach((text, i) => expect(txRowIndex(rows, text), text).toBe(i))
+    const edited = [...rows.slice(0, 4), 'TNX 73 GL', 'CQ DX KD9TAW EN61']
+    expect(txRowIndex(edited, 'TNX 73 GL'), 'an edited Tx5').toBe(4)
+    expect(txRowIndex(edited, 'CQ DX KD9TAW EN61'), 'a directed Tx6').toBe(5)
+  })
+
+  it('reads the step from the over when the rows carry another report', () => {
+    expect(txRowIndex(rows, 'W1ABC KD9TAW -12'), 'Tx2').toBe(1)
+    expect(txRowIndex(rows, 'W1ABC KD9TAW R+03'), 'Tx3').toBe(2)
+  })
+
+  it('reads the step from the over when the DX box holds another call', () => {
+    for (const [text, row] of [
+      ['K2DEF KD9TAW EN61', 0],
+      ['K2DEF KD9TAW -05', 1],
+      ['K2DEF KD9TAW R-05', 2],
+      ['K2DEF KD9TAW RR73', 3],
+      ['K2DEF KD9TAW RRR', 3],
+      ['K2DEF KD9TAW 73', 4],
+      ['CQ KD9TAW EN61', 5],
+    ] as const) {
+      expect(txRowIndex(rows, text), text).toBe(row)
+    }
+  })
+
+  it('reads the hashed forms a nonstandard pair sends', () => {
+    expect(txRowIndex(rows, '<PJ4/K1ABC> KD9TAW EN61')).toBe(0)
+    expect(txRowIndex(rows, '<PJ4/K1ABC> KD9TAW')).toBe(0)
+    expect(txRowIndex(rows, 'PA0A <OE/PD1SCO> R-01')).toBe(2)
+    expect(txRowIndex(rows, 'PJ4/K1ABC <KD9TAW> RR73')).toBe(3)
+    expect(txRowIndex(rows, 'PJ4/K1ABC <KD9TAW> 73')).toBe(4)
+    expect(txRowIndex(rows, 'CQ KD9TAW/QRP')).toBe(5)
+  })
+
+  it('puts the dot nowhere for no over, free text, or an exchange that is none of the six', () => {
+    expect(txRowIndex(rows, null)).toBeNull()
+    expect(txRowIndex(rows, '')).toBeNull()
+    expect(txRowIndex(rows, 'TNX BOB 73 GL')).toBeNull()
+    expect(txRowIndex(rows, 'W1ABC KD9TAW R 3A WI'), 'a Field Day exchange').toBeNull()
+    expect(txRowIndex(rows, 'W1ABC KD9TAW RR73X')).toBeNull()
   })
 })

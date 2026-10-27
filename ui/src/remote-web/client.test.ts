@@ -671,3 +671,25 @@ it('puts the LAN-only scope on the wire for a LAN-only ticket and renewal, and n
     ['/api/remote/stations/st/renew', { sessionId: 'se' }],
   ])
 })
+
+// Subscribe and Manage go to the payment provider's own page, and only there: whatever else the service
+// answers is refused before the page could go to it.
+it('takes the billing page only from the provider\'s own checkout or billing domain', async () => {
+  const requests: { path: string; body: unknown }[] = []
+  let url: unknown = null
+  vi.stubGlobal('fetch', vi.fn(async (path: string, init: RequestInit) => {
+    requests.push({ path, body: JSON.parse(init.body as string) })
+    return new Response(JSON.stringify({ url }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }))
+  const client = new BrowserClient({ getTokenSilently: async () => 'token' } as unknown as Auth0Client)
+  url = 'https://checkout.stripe.com/c/pay/cs_test_fixture'
+  await expect(client.billingPage('checkout', { plan: 'annual' })).resolves.toBe(url)
+  url = 'https://billing.stripe.com/p/session/fixture'
+  await expect(client.billingPage('portal')).resolves.toBe(url)
+  expect(requests).toEqual([{ path: '/api/remote/billing/checkout', body: { plan: 'annual' } }, { path: '/api/remote/billing/portal', body: {} }])
+  for (const [kind, answer] of [['checkout', 'https://billing.stripe.com/p/session/fixture'], ['portal', 'https://checkout.stripe.com/c/pay/cs_test_fixture'],
+    ['checkout', 'https://checkout.stripe.com.example.invalid/pay'], ['portal', 'javascript:alert(1)'], ['checkout', null]] as const) {
+    url = answer
+    await expect(client.billingPage(kind, kind === 'checkout' ? { plan: 'monthly' } : {})).rejects.toMatchObject({ status: 503, code: 'serviceUnavailable' })
+  }
+})

@@ -52,7 +52,7 @@ const fieldDay = {
   log: [],
 } as unknown as FieldDayStatus
 
-const call = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const call = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 // The standard variant's callsign box — a different layout, so a different placeholder.
 const stdCall = () => screen.getByPlaceholderText('Call') as HTMLInputElement
 
@@ -119,8 +119,8 @@ describe('LogEntry — space walks the contest exchange, box to box', () => {
   // Contest operators tab with the space bar: they arrive with that in their fingers, and a
   // logger that ignores it feels broken at speed.
   // Tab is unchanged (plain DOM order); this adds a second way, it does not replace one.
-  const cls = () => screen.getByPlaceholderText('1D')
-  const sect = () => screen.getByPlaceholderText('WI')
+  const cls = () => screen.getByLabelText(/^Class/)
+  const sect = () => screen.getByLabelText(/^Section/)
 
   it('walks Call → Class → Section → Call', () => {
     renderFd()

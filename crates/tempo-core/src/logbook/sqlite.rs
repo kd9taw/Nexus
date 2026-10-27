@@ -63,7 +63,7 @@ use super::{
     UploadOutcome, UploadState, UploadStatus, Watermarks,
 };
 use rusqlite::{params, params_from_iter, Connection};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
@@ -185,6 +185,13 @@ fn with_submode(rec: &mut QsoRecord, submode: Option<String>) {
 /// ([`LogDb::each_narrow_with`]): one join on `qso_extra`'s own key per field, as the SUBMODE's
 /// is. A name is an ADIF field name — upper-case letters, digits and `_` — or the read is refused,
 /// since it is written into the statement.
+///
+/// ⭐ And beside each, the same tag among the row's contest columns (`qso_contest_adif`, the
+/// first by `ord`, on that table's own key): a merged contest contact keeps what the other
+/// station sent there, the CQ zone of a CQ WW exchange among it, and a whole row holds it in
+/// [`ContestFields::adif`]. Read here too, a narrow row answers `logbook::record_field` as the
+/// whole row does; without it the award folds counted the country file's zone for a contact whose
+/// station had sent its own.
 fn extra_columns(extras: &[&str]) -> Result<(String, String)> {
     let (mut values, mut joins) = (String::new(), String::new());
     for (i, name) in extras.iter().enumerate() {
@@ -197,12 +204,43 @@ fn extra_columns(extras: &[&str]) -> Result<(String, String)> {
                 (*name).to_string(),
             )));
         }
-        values.push_str(&format!(", x{i}.value"));
+        values.push_str(&format!(
+            ", x{i}.value, (SELECT c.value FROM qso_contest_adif c \
+             WHERE c.qso_id = q.id AND c.tag = '{name}' ORDER BY c.ord LIMIT 1)"
+        ));
         joins.push_str(&format!(
             " LEFT JOIN qso_extra x{i} ON x{i}.qso_id = q.id AND x{i}.name = '{name}'"
         ));
     }
     Ok((values, joins))
+}
+
+/// How many values [`extra_columns`] selects for `extras`: each field's passthrough value and its
+/// contest column's.
+fn extras_width(extras: &[&str]) -> usize {
+    2 * extras.len()
+}
+
+/// Put what [`extra_columns`] read for `extras`, from `at` on, where a whole row holds it: the
+/// passthrough value in `extra`, the contest column's in the contest block.
+fn with_extras(
+    rec: &mut QsoRecord,
+    row: &rusqlite::Row<'_>,
+    at: usize,
+    extras: &[&str],
+) -> Result<()> {
+    for (i, name) in extras.iter().enumerate() {
+        if let Some(value) = row.get::<_, Option<String>>(at + 2 * i)? {
+            super::set_extra(rec, name, Some(value));
+        }
+        if let Some(value) = row.get::<_, Option<String>>(at + 2 * i + 1)? {
+            rec.contest
+                .get_or_insert_with(Default::default)
+                .adif
+                .push((name.to_string(), value));
+        }
+    }
+    Ok(())
 }
 
 /// Which rows a narrow read visits.
@@ -410,6 +448,11 @@ CREATE TABLE IF NOT EXISTS contest_exchange (
 -- duplicate-`STATE` guard, which reads `contest.adif` and would then write the tag twice —
 -- the "undefined territory" LoTW/TQSL reject.
 --
+-- The merge itself no longer stores the modelled ones here: it moves the reports, serials and
+-- the received grid, name and QTH into the record's own fields. Rows merged before it moved the
+-- grid, name and QTH still hold those here, which is why `logbook::record_field` reads this
+-- block after the field and the ADIF writer skips one the field has already written.
+--
 -- Keyed on `ord`, never on `tag`: `ord` is unique by construction, so a ruleset that declared
 -- one tag twice cannot violate the key, and no colliding row can destroy a QSO.
 CREATE TABLE IF NOT EXISTS qso_contest_adif (
@@ -437,7 +480,11 @@ CREATE TABLE IF NOT EXISTS qso_contest_adif (
 /// through them builds only the rest when it resumes. ⚠️ Do not reformat them. SQLite records
 /// each statement's text from the index name onward in `sqlite_master`, so as written a store
 /// built by this list carries the same schema, byte for byte, as one built before the split.
-const INDEXES: [&str; 9] = [
+///
+/// `qso_extra_cnty` is PARTIAL: only the `CNTY` rows of the passthrough, by value, so the Logbook's
+/// county filter reads those rows and never walks every passthrough row of the log
+/// (`filter_sql`). Without it a county filter would join the passthrough once per contact.
+const INDEXES: [&str; 10] = [
     "CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm)",
     "CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix)",
     "CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC)",
@@ -447,12 +494,16 @@ const INDEXES: [&str; 9] = [
     "CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key)",
     "CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw)",
     "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_extra_cnty ON qso_extra(value COLLATE NOCASE) WHERE name = 'CNTY'",
 ];
 
 /// The reads behind the UI's log questions (SPEC-2 v3 C17a): the order vectors, rows by rowid,
 /// the call index.
 mod query_reads;
 pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
+
+/// The Logbook's field filters as a `WHERE`, and the read of the rows an order is built from.
+mod filter_sql;
 
 /// A store written before contacts were held in one form, read back through every decoder.
 #[cfg(test)]
@@ -738,6 +789,10 @@ pub struct Batch<'a> {
     /// Other `log_meta` keys, set in the same transaction — a change's own facts about its
     /// rows, on its last chunk only, like the watermarks (`fill_ver`, SPEC-2 v3 D2-A).
     pub meta: &'a [(&'static str, i64)],
+    /// Where the change came from: with it, every contact the batch adds, changes or takes out
+    /// gets its history, written in this same transaction ([`super::history`]). `None` writes
+    /// none.
+    pub history: Option<&'a super::history::Note>,
     /// Move the shared [`INDEX_SEQ`] on by one, in the same transaction: the last chunk of a
     /// change a hot index must be built again for, when another window made it (every change
     /// but a stamp — [`super::writer::Change::stamp_only`]).
@@ -933,6 +988,9 @@ impl LogDb {
     /// transaction, and an index that is already there is left as it is — so a build cut short
     /// by a crash is finished by calling this again.
     pub fn build_indexes(&self, progress: &mut dyn FnMut(usize, usize)) -> Result<()> {
+        // The change history's, first: its tables are new or small, so these cost nothing a
+        // progress bar would show.
+        self.conn.execute_batch(super::history::INDEXES)?;
         progress(0, INDEXES.len());
         for (built, sql) in INDEXES.iter().enumerate() {
             self.conn.execute_batch(sql)?;
@@ -973,6 +1031,9 @@ impl LogDb {
             }
         }
         db.conn.execute_batch(DDL)?;
+        // The change history's two tables, beside the log's own. An older build opens a store
+        // holding them as it always did, and never reads them.
+        db.conn.execute_batch(super::history::DDL)?;
         Ok(db)
     }
 
@@ -1104,13 +1165,90 @@ impl LogDb {
     /// which takes the write lock before it reads (`BEGIN IMMEDIATE`): no other connection can
     /// commit between the check and the writes. A row that is not as expected refuses the whole
     /// batch ([`Error::Conflict`]), and nothing of it is written.
+    ///
+    /// **A batch with a [`Batch::history`] note writes each contact's history in the same
+    /// transaction**, from the rows as this transaction read them before it wrote: a crash keeps
+    /// both or neither. The rows it takes out are read, checked and recorded
+    /// [`ROWS_PER_STATEMENT`] at a time, so a purge of the whole log in one transaction holds one
+    /// chunk of it in memory, never the log.
     pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
+        // What the batch writes, by id: a row it also takes out is an edit, not a delete.
+        let written: HashSet<RecordId> = b.upsert.iter().filter_map(|w| w.rec.id).collect();
+        let read =
+            |id: &RecordId| b.history.is_some() || b.expect.is_some_and(|e| e.contains_key(id));
+        let mut recorder = b
+            .history
+            .map(|note| super::history::Recorder::new(&tx, note, &written));
+        let mut conflicts: Vec<RecordId> = Vec::new();
+        // A purge that names no row takes out every row the store holds: each one's history, a
+        // chunk of the log at a time, never the log at once.
+        if let (true, Some(rec)) = (b.clear, recorder.as_mut()) {
+            let mut failed = None;
+            self.each_record(ROWS_PER_STATEMENT, &mut |old| match rec.deleted(&old) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(e) => {
+                    failed = Some(e);
+                    ControlFlow::Break(())
+                }
+            })?;
+            if let Some(e) = failed {
+                return Err(e);
+            }
+        }
+        // The rows it only takes out, as the store holds them before the batch — what the check
+        // compares and what the history keeps — read inside the write lock a bounded chunk at a
+        // time, so a purge of the whole log never holds the whole log.
+        for chunk in b.remove.chunks(ROWS_PER_STATEMENT) {
+            let ids: Vec<RecordId> = chunk
+                .iter()
+                .copied()
+                .filter(|id| !written.contains(id) && read(id))
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let stored = self.stored(&ids)?;
+            if let Some(expect) = b.expect {
+                // Taken out, so one already gone is as expected.
+                conflicts.extend(Self::conflicts(&ids, expect, &stored, |_| true));
+            }
+            if let Some(rec) = recorder.as_mut() {
+                for id in chunk {
+                    if let Some(old) = stored.get(id) {
+                        rec.deleted(old)?;
+                    }
+                }
+            }
+        }
+        // The rows it writes, as the store holds them before the batch: bounded by the batch's own
+        // rows, which it holds already.
+        let ids: Vec<RecordId> = b
+            .upsert
+            .iter()
+            .filter_map(|w| w.rec.id)
+            .filter(|id| read(id))
+            .collect();
+        let stored = if ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.stored(&ids)?
+        };
         if let Some(expect) = b.expect {
-            self.check_expected(&b, expect)?;
+            let taken_out: HashSet<&RecordId> =
+                b.remove.iter().filter(|id| written.contains(id)).collect();
+            conflicts.extend(Self::conflicts(&ids, expect, &stored, |id| {
+                taken_out.contains(id)
+            }));
+        }
+        if !conflicts.is_empty() {
+            return Err(Error::Conflict { rows: conflicts });
+        }
+        if let Some(rec) = recorder.as_mut() {
+            rec.written(&stored, b.upsert)?;
         }
         {
             if b.clear {
@@ -1189,41 +1327,35 @@ impl LogDb {
         Ok(())
     }
 
-    /// [`Self::apply`]'s check, inside its transaction: every row the batch writes or takes out
-    /// that the change expects something of is still as the change's plan read it — none there
-    /// for a row put in, the same row for one changed, the same row or already gone for one
-    /// taken out.
-    fn check_expected(&self, b: &Batch<'_>, expect: &HashMap<RecordId, Expect>) -> Result<()> {
-        let ids: Vec<RecordId> = b
-            .remove
-            .iter()
+    /// [`Self::apply`]'s check, inside its transaction: of `ids`, the rows the change expects
+    /// something of that are not as its plan read them — none there for a row put in, the same
+    /// row for one changed, the same row or already gone for one taken out (`taken_out`).
+    /// `stored` holds the rows the store held before the batch, by id — at least every one of
+    /// `ids` the change expects something of.
+    fn conflicts(
+        ids: &[RecordId],
+        expect: &HashMap<RecordId, Expect>,
+        stored: &HashMap<RecordId, QsoRecord>,
+        taken_out: impl Fn(&RecordId) -> bool,
+    ) -> Vec<RecordId> {
+        ids.iter()
             .copied()
-            .chain(b.upsert.iter().filter_map(|w| w.rec.id))
-            .filter(|id| expect.contains_key(id))
-            .collect();
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let stored: HashMap<RecordId, QsoRecord> = self
-            .rows_by_ids(&ids)?
+            .filter(|id| match (expect.get(id), stored.get(id)) {
+                (None, _) | (Some(Expect::Absent), None) => false,
+                (Some(Expect::Absent), Some(_)) => true,
+                (Some(Expect::Row(_)), None) => !taken_out(id),
+                (Some(Expect::Row(was)), Some(now)) => !same_row(was, now),
+            })
+            .collect()
+    }
+
+    /// The rows `ids` name, as the store holds them, by id.
+    fn stored(&self, ids: &[RecordId]) -> Result<HashMap<RecordId, QsoRecord>> {
+        Ok(self
+            .rows_by_ids(ids)?
             .into_iter()
             .filter_map(|r| r.id.map(|id| (id, r)))
-            .collect();
-        let taken_out: std::collections::HashSet<&RecordId> = b.remove.iter().collect();
-        let rows: Vec<RecordId> = ids
-            .into_iter()
-            .filter(|id| match (&expect[id], stored.get(id)) {
-                (Expect::Absent, None) => false,
-                (Expect::Absent, Some(_)) => true,
-                (Expect::Row(_), None) => !taken_out.contains(id),
-                (Expect::Row(was), Some(now)) => !same_row(was, now),
-            })
-            .collect();
-        if rows.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::Conflict { rows })
-        }
+            .collect())
     }
 
     /// Move the shared [`INDEX_SEQ`] on by one, in a transaction of its own: for a change the
@@ -1236,6 +1368,80 @@ impl LogDb {
             [INDEX_SEQ],
         )?;
         Ok(())
+    }
+
+    /// The connection, for a test that reads a table no method reads.
+    #[cfg(test)]
+    pub(crate) fn conn_for_tests(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// One contact's history, oldest change first ([`super::history`]).
+    pub fn history_of(&self, id: RecordId) -> Result<Vec<super::history::Entry>> {
+        super::history::of_qso(&self.conn, id)
+    }
+
+    /// One entry of the history, by its place in the order of changes.
+    pub fn history_entry(&self, seq: i64) -> Result<Option<super::history::Entry>> {
+        super::history::entry(&self.conn, seq)
+    }
+
+    /// Every entry one run made, in the order it made them.
+    pub fn history_run(&self, run: &str) -> Result<Vec<super::history::Entry>> {
+        super::history::of_run(&self.conn, run)
+    }
+
+    /// The contacts deleted and not put back, newest first, at most `limit`.
+    pub fn history_deleted(&self, limit: usize) -> Result<Vec<super::history::Entry>> {
+        super::history::deleted(&self.conn, limit)
+    }
+
+    /// The contacts `run` added that another run has changed since, each with the latest such
+    /// change ([`super::history::changed_after`]).
+    pub fn history_changed_after(&self, run: &str) -> Result<HashMap<RecordId, i64>> {
+        super::history::changed_after(&self.conn, run)
+    }
+
+    /// The entries of `run` that stand undone now ([`super::history::undone_in`]).
+    pub fn history_undone_in(&self, run: &str) -> Result<HashSet<i64>> {
+        super::history::undone_in(&self.conn, run)
+    }
+
+    /// The contacts added after the change `after_seq`, not by an undo, each with the latest such
+    /// entry ([`super::history::created_after`]).
+    pub fn history_created_after(&self, after_seq: i64) -> Result<HashMap<RecordId, i64>> {
+        super::history::created_after(&self.conn, after_seq)
+    }
+
+    /// Take out of the history, in one transaction, up to `limit` of the whole contacts deletes
+    /// kept that were made before `before_ms` ([`super::history::trim`]). How many it took out:
+    /// fewer than `limit` means none is left.
+    pub fn trim_history(&mut self, before_ms: i64, limit: usize) -> Result<usize> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let taken = super::history::trim(&tx, before_ms, limit)?;
+        tx.commit()?;
+        Ok(taken)
+    }
+
+    /// The latest run `source` made (any source's when `None`) that changed a contact.
+    pub fn history_latest_run(
+        &self,
+        source: Option<&str>,
+    ) -> Result<Option<super::history::RunSummary>> {
+        super::history::latest_run(&self.conn, source)
+    }
+
+    /// The purges, imports and whole-run undos a whole-run undo can still be asked for, made at
+    /// `since_ms` or later, newest first, at most `limit` ([`super::history::undoable_runs`]).
+    pub fn history_undoable_runs(
+        &self,
+        since_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<super::history::RunSummary>> {
+        super::history::undoable_runs(&self.conn, since_ms, limit)
     }
 
     /// Every record, in the order they were stored.
@@ -1397,6 +1603,8 @@ impl LogDb {
             if let (Some(c), Some(adif)) = (rec.contest.as_deref_mut(), directed.remove(&id)) {
                 c.adif = adif;
             }
+            // A history-only tag an older build left in the passthrough goes back where it belongs.
+            super::history::heal_history_only(&mut rec);
             // The same emptiness test `parse_contest` applies, for the same reason: a `Some`
             // here is a claim that this contact belonged to a contest, and an all-empty block
             // would make that claim of every ordinary QSO.
@@ -1641,7 +1849,7 @@ impl LogDb {
         let stamp_at = QSO_COLUMNS.len();
         let submode_at = stamp_at + if narrow.uploads { 4 } else { 0 };
         let extras_at = submode_at + usize::from(submode);
-        let rowid_at = extras_at + extras.len();
+        let rowid_at = extras_at + extras_width(extras);
         // The record being assembled: a row with several stamps arrives as several joined rows,
         // one after another, all with its rowid.
         let mut current: Option<(i64, QsoRecord)> = None;
@@ -1661,11 +1869,7 @@ impl LogDb {
                 if submode {
                     with_submode(&mut rec, row.get(submode_at)?);
                 }
-                for (i, name) in extras.iter().enumerate() {
-                    if let Some(value) = row.get::<_, Option<String>>(extras_at + i)? {
-                        super::set_extra(&mut rec, name, Some(value));
-                    }
-                }
+                with_extras(&mut rec, row, extras_at, extras)?;
                 // And the same form: the hot index holds narrow rows and compares them with the
                 // whole ones `decode` hands a plan.
                 super::canonical::contact(&mut rec);
@@ -2662,6 +2866,51 @@ mod tests {
 
         let actual: String = adif_header() + &back.iter().map(adif_record).collect::<String>();
         (expected, actual, records.len())
+    }
+
+    /// Every field the log funnel now fills — the own-station fields and which of them
+    /// Nexus filled itself, the worked station's continent and distance, the space weather —
+    /// survives the store, the app-private mark included (the operator's own log keeps it;
+    /// `round_trip` above compares what goes to the services, which withholds it).
+    #[test]
+    fn the_logged_place_and_space_weather_fields_round_trip_through_the_store() {
+        let own = "<CALL:6>JA1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261022<TIME_ON:6>120000\
+                   <OPERATOR:5>K2DEF<MY_GRIDSQUARE:4>FN31<MY_STATE:2>WI<CONT:2>AS<DISTANCE:5>10893\
+                   <K_INDEX:1>3<A_INDEX:1>7<SFI:3>149\
+                   <APP_NEXUS_SELF_FILLED:22>MY_GRIDSQUARE,MY_STATE<EOR>";
+        let mut records = parse_adif(own);
+        records[0].id = Some(RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        let mut db = LogDb::open_in_memory().expect("open");
+        db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+            .expect("insert");
+        let back = db.load_all().expect("load");
+        assert_eq!(
+            crate::logbook::adif_record_own_log(&back[0]),
+            crate::logbook::adif_record_own_log(&records[0])
+        );
+        assert_eq!(
+            crate::logbook::self_filled(&back[0]),
+            ["MY_GRIDSQUARE", "MY_STATE"]
+        );
+        for (tag, value) in [
+            ("MY_STATE", "WI"),
+            ("CONT", "AS"),
+            ("DISTANCE", "10893"),
+            ("K_INDEX", "3"),
+            ("A_INDEX", "7"),
+            ("SFI", "149"),
+        ] {
+            assert_eq!(
+                crate::logbook::extra_field(&back[0], tag),
+                Some(value),
+                "{tag}"
+            );
+        }
+        assert_eq!(back[0].my_grid.as_deref(), Some("FN31"));
+        assert_eq!(back[0].operator.as_deref(), Some("K2DEF"));
     }
 
     /// What the stored fixture actually contains, so the proof below cannot pass vacuously.
@@ -3883,6 +4132,7 @@ mod tests {
             meta: &[],
             index_move: false,
             expect: None,
+            history: None,
         };
         db.apply(batch()).expect("first write");
         db.apply(batch()).expect("the same row written again");
@@ -4872,6 +5122,13 @@ mod tests {
             );
         }
         assert!(!plan.contains("SCAN x"), "{plan}");
+        // And each field's contest column beside it: on that table's own key, never a scan of
+        // every contest row for each contact.
+        assert!(
+            plan.contains("SEARCH c USING INDEX sqlite_autoindex_qso_contest_adif_1 (qso_id=?)"),
+            "{plan}"
+        );
+        assert!(!plan.contains("SCAN c"), "{plan}");
     }
 
     // ── a streamed read of whole records ─────────────────────────────────────

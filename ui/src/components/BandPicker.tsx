@@ -5,12 +5,12 @@
 // The 🔒 chip is a READOUT of `txAllowed`, not a transmit control: it says the engine is already
 // blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission.
 import { useEffect, useState } from 'react'
-import { useStationCapability, useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandChipInk, bandColor } from '../bandColors'
 import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
+import { showWhenDriving } from '../features/drivingRefusal'
 
 interface Props {
   snap: AppSnapshot
@@ -33,38 +33,21 @@ interface Props {
  * and never the lock.
  */
 export function BandPicker({ snap, mode, onSnap }: Props) {
-  const local = useStationControl(), capability = useStationCapability('bandSelection')
-  const control = local || (capability && snap.radio.source === 'native' && snap.radio.operatingMode?.toLowerCase() === mode &&
-    snap.radio.catOk === true && !snap.radio.txEnabled && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning && !snap.radio.txBusyReason)
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    if (!control) { setPlan([]); return }
-    let live = true, running = false
-    const refresh = async () => {
-      if (running) return
-      running = true
-      try { const next = await getLicensedBandPlan(mode); if (live) setPlan(next) }
-      // A read that failed is not a licence change: KEEP the last answer. Emptying the plan here
-      // disabled the trigger, and a disabled trigger closes the menu Radix is holding open — so one
-      // unavailable settings read over a WAN cancelled the dropdown under the operator's finger,
-      // swallowed the pick they were making, and reopened the menu unbidden a second later. Real
-      // loss of control is the `!control` branch above, which does clear; this is a missed poll.
-      catch { /* keep the bands already known */ }
-      finally { running = false }
-    }
-    void refresh()
-    // Native retains its existing read. Remote refreshes station license choices
-    // through the shared Settings cache and drops a late answer after loss.
-    const timer = local ? undefined : setInterval(() => { void refresh() }, 1000)
-    return () => { live = false; clearInterval(timer) }
-  }, [mode, control, local])
+    let live = true
+    getLicensedBandPlan(mode)
+      .then((next) => { if (live) setPlan(next) })
+      // A read that failed is not a licence change: KEEP the last answer.
+      .catch(() => {})
+    return () => { live = false }
+  }, [mode])
 
   const onPick = (band: string) => {
-    if (!control) return
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
 
   // If the operator has manually tuned to a band that's not a licensed jump target (or off
@@ -87,7 +70,6 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       {/* A Nexus menu, not the system select: each band carries its condition (BandMenu.tsx). */}
       <BandMenu
-        disabled={!control || (!local && plan.length === 0)}
         triggerClassName="band-picker-trigger"
         value={snap.radio.band}
         onPick={onPick}

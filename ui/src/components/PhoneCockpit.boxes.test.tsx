@@ -242,7 +242,7 @@ describe('Phone with boxes', () => {
     expect(boxFrame('box1')!.querySelector('.box-body')!.classList.contains('box-body--stacked')).toBe(false)
   })
 
-  it('a box on the left side stands beside the scope on a wide window, in its column on a narrow one, the record untouched', async () => {
+  it('a box on the left side stands beside the region on a wide window, in its column on a narrow one, the record untouched', async () => {
     await windowWidth(1600)
     render(<Live />)
     await tier(1200)

@@ -14,7 +14,8 @@ export type DecodeSort = 'time' | 'snr' | 'freq' | 'dt'
 /** A decode plus the slot + wall-clock time it was first heard (history bookkeeping). */
 export interface DecodeEntry extends DecodeRow {
   slot: number
-  /** Epoch ms when first heard — drives the per-row UTC column. */
+  /** Epoch ms when the row first reached the list: its order within a period, and the arrival time
+   *  in the UTC column's tooltip (the column itself shows the period, {@link rowTimeMs}). */
   at: number
   /** Stable dedupe key (slot-scoped) — doubles as the React row key. */
   id: string
@@ -92,9 +93,24 @@ export const TIER_PERIOD_SECS: Record<Tier, number> = {
   TempoDeep: 15,
 }
 
-/** UTC epoch-ms of a slot's period start (engine slots count from the Unix epoch). */
-export function periodStartMs(slot: number, tier: Tier): number {
-  return slot * TIER_PERIOD_SECS[tier] * 1000
+/** UTC epoch-ms of a slot's period start (engine slots count from the Unix epoch). `periodSecs` is
+ *  the live T/R period (`link.periodSecs`) where the caller has it; the table's is the default. */
+export function periodStartMs(slot: number, tier: Tier, periodSecs: number = TIER_PERIOD_SECS[tier]): number {
+  return slot * periodSecs * 1000
+}
+
+/**
+ * UTC epoch-ms a row's time column shows: the START of the period it was heard in, as WSJT-X's Band
+ * Activity and ALL.TXT stamp a decode. Never the moment the row reached the list (`at`, which the
+ * column's tooltip gives): a full-pass decode lands seconds into the NEXT period, and stamped with
+ * its arrival it read as heard there. A row ingested at slot s carries audio from slot s-1, as for
+ * the period separator. A row heard before a band or mode change keeps the period it was heard in;
+ * an own transmission shows when it was sent.
+ */
+export function rowTimeMs(d: DecodeEntry, tier: Tier, periodSecs?: number): number {
+  if (d.heard) return d.heard.periodStartMs
+  if (d.mine) return d.at
+  return periodStartMs(d.slot - 1, tier, periodSecs)
 }
 
 /** UTC HHMMSS (matches WSJT-X's compact time column / period separator). */

@@ -725,18 +725,29 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('focusable, announces its height, and steps, jumps and resets to its own 13 % default', async () => {
+  // 25 % of the shell, every cockpit's waterfall default (2026-10-26: "width and height to be
+  // consistent"); CW's was 13 % from 0.17.11's decode-first cockpit.
+  it('focusable, announces its height, and steps, jumps and resets to the common 25 % default', async () => {
     layOut({ 'main.cw-cockpit': { height: 1000 } })
     await renderCockpit()
     const sep = screen.getByRole('separator', { name: 'scope height' })
     expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
-    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => sep.getAttribute(a))).toEqual(['130', '128', '346'])
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => sep.getAttribute(a))).toEqual(['250', '128', '346'])
     fireEvent.keyDown(sep, { key: 'ArrowDown' })
-    expect(shell().style.getPropertyValue('--cw-scope-h')).toBe(`${(146 / 1000) * 100}%`)
-    expect(localStorage.getItem('nexus.split.cw.scope')).toBe(String((146 / 1000) * 100))
+    expect(shell().style.getPropertyValue('--cw-scope-h')).toBe(`${(266 / 1000) * 100}%`)
+    expect(localStorage.getItem('nexus.split.cw.scope')).toBe(String((266 / 1000) * 100))
     fireEvent.keyDown(sep, { key: 'End' })
     expect(sep.getAttribute('aria-valuenow')).toBe('346')
     fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--cw-scope-h')).toBe('25%')
+    expect(localStorage.getItem('nexus.split.cw.scope')).toBe('25')
+  })
+
+  it('a height dragged under the old 13 % default is the operator’s and is kept exactly — the new default never replaces it', async () => {
+    localStorage.setItem('nexus.split.cw.scope', '13')
+    layOut({ 'main.cw-cockpit': { height: 1000 } })
+    await renderCockpit()
+    expect(screen.getByRole('separator', { name: 'scope height' }).getAttribute('aria-valuenow')).toBe('130')
     expect(shell().style.getPropertyValue('--cw-scope-h')).toBe('13%')
     expect(localStorage.getItem('nexus.split.cw.scope')).toBe('13')
   })

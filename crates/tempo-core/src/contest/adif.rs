@@ -85,7 +85,7 @@ pub fn directed_columns(row: &LoggedQso, spec: &ExchangeSpec) -> Vec<(String, St
 /// state-or-province exports under the county tag. For a plain `Enum` slot the two
 /// agree by construction (a ruleset sets the slot's tags *from* its domain's), so this
 /// is the general rule rather than a special case.
-fn tags_for(spec: &ExchangeSpec, v: &FieldValue) -> super::spec::AdifTags {
+pub(crate) fn tags_for(spec: &ExchangeSpec, v: &FieldValue) -> super::spec::AdifTags {
     v.domain
         .and_then(|id| domain_by_id(spec, id))
         .map(|d| d.adif)

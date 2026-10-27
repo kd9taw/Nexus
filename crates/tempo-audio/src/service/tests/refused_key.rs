@@ -281,6 +281,59 @@ fn a_refused_voice_message_is_not_played() {
     assert_eq!(s.banner(), None);
 }
 
+/// ⭐ THE SNAPSHOT SAYS A VOICE MESSAGE IS PLAYING FOR AS LONG AS THE LOOP PLAYS IT
+/// (`radio.voicePlaying`, which the voice keyer reads to know its message ended), and no longer;
+/// a message the radio refused never reads as playing once the loop has refused it.
+#[test]
+fn the_snapshot_says_a_voice_message_plays_until_its_over_ends() {
+    let send = |e: &mut Engine| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    };
+    let playing = |s: &Scene| s.engine.lock().unwrap().snapshot().radio.voice_playing;
+    let mut s = Scene::new(Key::Accepts, send);
+    assert!(playing(&s), "queued");
+    s.run_to(600.0);
+    assert!(s.keys() >= 1, "premise: keyed");
+    assert!(playing(&s), "mid-message");
+    s.run_to(3_000.0);
+    assert_eq!(s.backend.played.len(), 12_000, "premise: played whole");
+    assert!(!playing(&s), "the over ended");
+
+    let mut s = Scene::new(Key::Refuses, send);
+    s.run_to(2_000.0);
+    assert!(s.backend.played.is_empty(), "premise: refused");
+    assert!(!playing(&s), "a refused message never ended");
+}
+
+/// ⭐ A VOICE MESSAGE READS AS PLAYING UNTIL ITS OWN OVER ENDS, whatever else moves the loop's
+/// shared PTT deadline: a later over that pushes that deadline past the message's end neither
+/// ends the message early nor keeps it playing after its end.
+#[test]
+fn a_voice_message_plays_until_its_own_deadline_not_the_shared_one() {
+    let mut s = Scene::new(Key::Accepts, |e| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    });
+    let playing = |s: &Scene| s.engine.lock().unwrap().snapshot().radio.voice_playing;
+    s.run_to(600.0);
+    assert!(playing(&s), "premise: mid-message");
+    let own = s
+        .state
+        .voice_until_ms
+        .expect("premise: the message's deadline");
+    // A later over on the same key, ending well after the message.
+    s.state.tx_until_ms = Some(own + 5_000.0);
+    s.run_to(700.0);
+    assert!(playing(&s), "a later over ended the message early");
+    s.run_to(own + 40.0);
+    assert!(
+        s.state.tx_until_ms.is_some(),
+        "premise: the later over is still on the air"
+    );
+    assert!(!playing(&s), "the message read as playing after its end");
+}
+
 /// ⭐ AN SSTV PICTURE THE RADIO REFUSES IS NOT SENT. It was fed into the receiving radio for its
 /// whole length.
 #[test]
@@ -858,13 +911,19 @@ fn a_refused_late_start_ft8_key_is_not_played_and_halts_tx() {
             Some(0),
             "scene guard: slot 0's boundary is consumed"
         );
-        ft8_cq(&mut s.engine.lock().unwrap());
-        s.run_to(200.0);
-        assert_eq!(s.keys(), 1, "premise: the late start tried the key, once");
+        // Asked before the late start: its key records the slot as keyed too, as the boundary's does.
         assert!(
             !s.state.boundary_keyed.is_some_and(|k| k.tx_this_slot),
             "scene guard: the boundary did not key"
         );
+        assert_eq!(
+            s.keys(),
+            0,
+            "scene guard: nothing keyed before the late start"
+        );
+        ft8_cq(&mut s.engine.lock().unwrap());
+        s.run_to(200.0);
+        assert_eq!(s.keys(), 1, "premise: the late start tried the key, once");
         if key == Key::Refuses {
             assert!(s.backend.played.is_empty(), "the over was played");
             assert!(!s.armed(), "TX is still on");

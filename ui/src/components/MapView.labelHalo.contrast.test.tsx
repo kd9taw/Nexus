@@ -57,6 +57,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => feeds.sats),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 // The street renderer's stand-in (jsdom has no WebGL): it keeps the props MapView gives it, so a test
 // can hand MapView a camera.

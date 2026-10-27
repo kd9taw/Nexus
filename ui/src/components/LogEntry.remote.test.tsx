@@ -137,3 +137,23 @@ it('preserves an existing draft until an explicit replacement and blocks replace
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
   expect(submit.mock.calls[0][0]).toMatchObject({ call: 'N2SPOT', band: '40m', freqMhz: 7.198, mode: 'SSB', rstSent: '59' })
 })
+
+it('a Remote draft on a host that logs an audio offset keeps the dial plus that offset, through a QSY', async () => {
+  // PSK logs the dial plus its netted centre and JTTY the dial plus its Tx; a contact drafted
+  // from afar is captured with the same frequency the station's own strip would log.
+  for (const [mode, offset, want] of [['PSK31', 1200, 14.0712], ['JTTY', 1800, 14.0918]] as const) {
+    const submit = vi.fn(async (_record: unknown) => {}), recall = vi.fn(() => null)
+    const remote = { submit, canSubmit: true, busy: false, resetKey: 0, recall }
+    const dial = mode === 'JTTY' ? 14.09 : 14.07
+    const at = { ...snap, radio: { ...snap.radio, dialMhz: dial } } as AppSnapshot
+    const props = { mode, defaultRst: '599', exchange: 'terrestrial' as const, logOffsetHz: offset }
+    const h = render(<LogEntry {...props} snap={at} remote={remote} />)
+    fireEvent.change(call(), { target: { value: 'W1AW' } })
+    h.rerender(<LogEntry {...props} snap={{ ...snap, radio: { ...snap.radio, band: '40m', dialMhz: 7.07 } }} remote={remote} />)
+    expect(recall).toHaveBeenLastCalledWith('W1AW', { band: '20m', freqMhz: want, mode })
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit.mock.calls[0][0], mode).toMatchObject({ call: 'W1AW', band: '20m', freqMhz: want, mode })
+    cleanup()
+  }
+})

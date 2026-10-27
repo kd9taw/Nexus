@@ -72,7 +72,7 @@ function typeCall(call: string) {
       fdMode="PH"
     />,
   )
-  fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: call } })
+  fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: call } })
 }
 
 afterEach(() => cleanup())

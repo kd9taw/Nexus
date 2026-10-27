@@ -136,8 +136,57 @@ fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         // Best-effort on a not-yet-mapped window: some window managers only honour a
         // maximise request once the window is shown. Failing here degrades to the restore
         // rect — the right size, on screen, un-maximised — never to a lost window.
+        maximize_hidden(app, window);
+    }
+}
+
+/// Maximise the main window while it is still hidden, without the operator ever seeing it.
+///
+/// On Windows a plain `maximize()` shows it: tao maximises with `ShowWindow(SW_MAXIMIZE)`,
+/// which also shows a hidden window, and only then hides it again with `SW_HIDE`. A launch
+/// that restored a maximised window drew an empty full-screen frame around the splash for a
+/// moment, then took it away until the app was ready. So the window is cloaked
+/// (`DWMWA_CLOAK`: Windows keeps it, nothing draws it) for that one call and uncloaked
+/// straight after, still hidden and now maximised — the show at the end of the launch is
+/// untouched. All three run on the main thread, where tao applies the maximise as it is
+/// called, so the uncloak cannot overtake it; and if the window handle is unavailable the
+/// maximise is made as before, flash and all, never skipped.
+#[cfg(windows)]
+fn maximize_hidden(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    let Ok(hwnd) = window.hwnd() else {
+        let _ = window.maximize();
+        return;
+    };
+    let hwnd = hwnd.0 as isize;
+    let cloak = move |on: bool| {
+        let on = i32::from(on);
+        // SAFETY: `hwnd` is the live main window's handle, and the attribute is a BOOL read
+        // from a local that outlives the call.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd as _,
+                DWMWA_CLOAK as u32,
+                &on as *const i32 as *const _,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    };
+    let w = window.clone();
+    let sent = app.run_on_main_thread(move || {
+        cloak(true);
+        let _ = w.maximize();
+        cloak(false);
+    });
+    if sent.is_err() {
         let _ = window.maximize();
     }
+}
+
+/// Elsewhere a maximise request on the hidden window is made as it always was.
+#[cfg(not(windows))]
+fn maximize_hidden(_app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let _ = window.maximize();
 }
 
 /// Snapshot the window on close so the next launch reopens where it was.
@@ -474,80 +523,6 @@ pub(crate) fn arm_panel_capture(window: &tauri::WebviewWindow) {
     });
 }
 
-// ---- The Remote stations window ------------------------------------------------------------
-
-// The fourth window, and the fourth record: the hosted Remote page in a window of its own
-// (`crate::remote_window`). It takes the main window's policy, as the Connect dashboard does, with
-// its own minimum, plus one rule of its own: a window closed in FULL SCREEN writes nothing. Full
-// screen is the monitor's box, not one the operator chose; stored, it would reopen as a borderless
-// monitor-sized window that is no longer full screen. The last windowed box stays, as it does for
-// a minimised close.
-
-/// `<config_dir>/window-remote-stations.json`, beside the other records and so per profile.
-fn remote_path() -> std::path::PathBuf {
-    crate::settings_path().with_file_name("window-remote-stations.json")
-}
-
-/// The open decision, pure: the record at `path` clamped against the monitors attached now.
-/// `None` on a first open or for a record with no believable box: the caller opens at its
-/// default size, fitted to the work area and centred.
-fn restore_remote_from(
-    path: &std::path::Path,
-    monitors: &[WorkArea],
-    primary: Option<WorkArea>,
-    min: (f64, f64),
-) -> Option<geom::Restored> {
-    geom::restore(geom::load(path), monitors, primary, min)
-}
-
-/// What to write on close, pure: the main window's rule, and nothing at all from full screen.
-fn capture_remote_from(
-    prev: Option<WindowGeometry>,
-    cur: WindowGeometry,
-    minimized: bool,
-    fullscreen: bool,
-) -> Option<WindowGeometry> {
-    if fullscreen {
-        return None;
-    }
-    geom::capture(prev, cur, minimized)
-}
-
-/// What opening the Remote stations window should do, against the monitors attached now.
-pub(crate) fn restore_remote(app: &tauri::AppHandle, min: (f64, f64)) -> Option<geom::Restored> {
-    let (all, primary) = monitors(app);
-    restore_remote_from(&remote_path(), &all, primary, min)
-}
-
-/// Snapshot the Remote stations window's box. A no-op for any other window, so the quit path
-/// can sweep every window with it.
-pub(crate) fn capture_remote(window: &tauri::WebviewWindow) {
-    if window.label() != crate::remote_window::LABEL {
-        return;
-    }
-    let Some(cur) = live_geometry(window) else {
-        return;
-    };
-    let path = remote_path();
-    let minimized = window.is_minimized().unwrap_or(false);
-    let fullscreen = window.is_fullscreen().unwrap_or(false);
-    if let Some(g) = capture_remote_from(geom::load(&path), cur, minimized, fullscreen) {
-        let _ = geom::save(&path, &g);
-    }
-}
-
-/// Arm the save-on-close on the Remote stations window, on the window itself
-/// ([`arm_panel_capture`]'s shape). Closing the main window closes this one with `close()`, which
-/// sends `CloseRequested` first, so that close is caught too.
-pub(crate) fn arm_remote_capture(window: &tauri::WebviewWindow) {
-    let w = window.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::CloseRequested { .. }) {
-            capture_remote(&w);
-        }
-    });
-}
-
 /// Whether "stay behind other windows" is offered on this platform: Windows only, for now.
 ///
 /// tao's Windows implementation holds the window at the bottom of the z-order on every
@@ -705,6 +680,17 @@ pub fn focus_window(window: tauri::WebviewWindow) -> Result<(), String> {
     window.set_focus().map_err(|e| e.to_string())
 }
 
+/// Flash the calling window's taskbar button (macOS: bounce the dock icon once) until the operator
+/// looks at it, without taking the keyboard from whatever they are in. The FT8/FT4 strip asks this
+/// once when the TX watchdog stops a call, as WSJT-X alerts its window on the same trip. Nothing at
+/// the radio; no effect when the window already has focus.
+#[tauri::command]
+pub fn request_window_attention(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .request_user_attention(Some(tauri::UserAttentionType::Informational))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +713,46 @@ mod tests {
     #[test]
     fn the_restore_floor_matches_the_shells_minimum_window() {
         assert_eq!(geom::MIN_INNER, (900.0, 600.0));
+    }
+
+    /// A launch that restores a maximised main window must not show it before the launch does.
+    /// tao maximises a hidden window with `ShowWindow(SW_MAXIMIZE)`, which shows it, and hides it
+    /// again only afterwards: on Windows the operator saw an empty full-screen frame flash
+    /// around the splash. So [`restore`] maximises through [`maximize_hidden`], which on Windows
+    /// cloaks the window for exactly that call. Source-read, because what is under test is the
+    /// order of calls on a real window, which no test here can make.
+    #[test]
+    fn a_maximised_restore_maximises_the_hidden_window_cloaked() {
+        let src = include_str!("window_state.rs");
+        let body = |sig: &str| {
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig} is defined"));
+            let rest = &src[start..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        let restore = body("\nfn restore(");
+        assert!(
+            !restore.contains(".maximize()"),
+            "restore never maximises the hidden window itself"
+        );
+        assert!(
+            restore.contains("maximize_hidden(app, window)"),
+            "it maximises through maximize_hidden"
+        );
+        let windows = body("#[cfg(windows)]\nfn maximize_hidden(");
+        let at = |needle: &str| {
+            windows
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` in maximize_hidden"))
+        };
+        assert!(
+            at("cloak(true)") < at("let _ = w.maximize();")
+                && at("let _ = w.maximize();") < at("cloak(false)"),
+            "on Windows the maximise happens inside the cloak, and the cloak is lifted after it"
+        );
+        assert!(
+            at("run_on_main_thread(") < at("cloak(true)"),
+            "all three on the main thread, where each runs as it is called"
+        );
     }
 
     // ---- the Connect dashboard pop-out ---------------------------------------------------
@@ -1087,122 +1113,5 @@ mod tests {
         .unwrap();
         assert!(!load_panel(&path).unwrap().on_top);
         let _ = std::fs::remove_file(&path);
-    }
-
-    // ---- the Remote stations window ----------------------------------------------------------
-
-    const REMOTE_MIN: (f64, f64) = crate::remote_window::MIN_INNER;
-
-    fn windowed(w: f64, h: f64, x: f64, y: f64) -> WindowGeometry {
-        WindowGeometry {
-            w,
-            h,
-            x,
-            y,
-            maximized: false,
-        }
-    }
-
-    /// A scratch record file of its own per test, written with `g` (or absent for `None`).
-    fn remote_record(tag: u32, g: Option<WindowGeometry>) -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("nexus_remoterec_{}_{tag}.json", std::process::id()));
-        match g {
-            Some(g) => geom::save(&path, &g).unwrap(),
-            None => {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-        path
-    }
-
-    #[test]
-    fn the_remote_record_is_a_per_profile_sibling_of_settings_and_nobody_elses() {
-        let p = remote_path();
-        assert_eq!(p.file_name().unwrap(), "window-remote-stations.json");
-        assert_eq!(p.parent(), crate::settings_path().parent());
-        assert_ne!(p, geometry_path());
-        assert_ne!(Some(p), panel_path("connect", Instance::Main));
-    }
-
-    /// Remembered, and clamped ON LOAD to the monitors attached at that moment — the rule this
-    /// module exists for. Read through the window's own record file, as an open reads it.
-    #[test]
-    fn the_remote_window_reopens_where_it_was_clamped_to_the_monitors_attached_now() {
-        let second = area(1920.0, 0.0, 2560.0, 1400.0, 1.0);
-        let path = remote_record(1, Some(windowed(2400.0, 1300.0, 2000.0, 40.0)));
-        // Its monitor still attached: the same place and the same box.
-        let r = restore_remote_from(&path, &[primary(), second], Some(primary()), REMOTE_MIN)
-            .expect("a believable box restores");
-        assert_eq!(r.position, Some((2000.0, 40.0)));
-        assert_eq!((r.w, r.h), (2400.0, 1300.0));
-        // That monitor unplugged since: centred on the primary and fitted to it, never replayed
-        // off-screen.
-        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
-        assert_eq!(r.position, None, "centred");
-        assert_eq!((r.w, r.h), (1920.0, 1040.0), "fitted to the work area");
-        // A box too small to be believed opens at the default; a small believable one is held
-        // up to the window's own minimum.
-        let path = remote_record(2, Some(windowed(300.0, 250.0, 40.0, 40.0)));
-        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
-        assert_eq!((r.w, r.h), REMOTE_MIN);
-        let path = remote_record(3, Some(windowed(120.0, 90.0, 40.0, 40.0)));
-        assert_eq!(
-            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
-            None
-        );
-        // Nothing saved, or a torn file: the caller's default.
-        let path = remote_record(4, None);
-        assert_eq!(
-            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
-            None
-        );
-        std::fs::write(&path, "{\"w\": 1280,").unwrap();
-        assert_eq!(
-            restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN),
-            None
-        );
-        for tag in 1..=4 {
-            let _ = std::fs::remove_file(remote_record(tag, None));
-        }
-    }
-
-    #[test]
-    fn a_remote_window_closed_full_screen_reopens_at_its_last_windowed_box() {
-        let before = windowed(1280.0, 800.0, 100.0, 80.0);
-        let full = windowed(1920.0, 1080.0, 0.0, 0.0);
-        assert_eq!(
-            capture_remote_from(Some(before), full, false, true),
-            None,
-            "full screen writes nothing"
-        );
-        // So the record still holds the windowed box, and the next open restores it.
-        let path = remote_record(5, Some(before));
-        if let Some(g) = capture_remote_from(geom::load(&path), full, false, true) {
-            geom::save(&path, &g).unwrap();
-        }
-        let r = restore_remote_from(&path, &[primary()], Some(primary()), REMOTE_MIN).unwrap();
-        assert_eq!((r.w, r.h, r.position), (1280.0, 800.0, Some((100.0, 80.0))));
-        let _ = std::fs::remove_file(&path);
-        // A windowed close is recorded as the main window's is: the box, never a minimised park
-        // rect, and a maximised close keeps the box under it.
-        let moved = windowed(1400.0, 900.0, 300.0, 120.0);
-        assert_eq!(
-            capture_remote_from(Some(before), moved, false, false),
-            Some(moved)
-        );
-        let parked = windowed(1400.0, 900.0, -32000.0, -32000.0);
-        assert_eq!(capture_remote_from(Some(before), parked, true, false), None);
-        let maxed = WindowGeometry {
-            maximized: true,
-            ..windowed(1920.0, 1040.0, 0.0, 0.0)
-        };
-        assert_eq!(
-            capture_remote_from(Some(before), maxed, false, false),
-            Some(WindowGeometry {
-                maximized: true,
-                ..before
-            })
-        );
     }
 }

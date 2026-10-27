@@ -28,7 +28,7 @@
 //! [`Simulator::wait_for`] instead of sleeping.
 //!
 //! **No process-wide state.** Every simulator binds its own port and owns everything it uses, so
-//! any number run side by side in one test binary (memory `reference-test-port-races`): nothing
+//! any number run side by side in one test binary: nothing
 //! here binds a port it was told, and no port is released and bound again.
 //!
 //! The simulator is test support. It binds 127.0.0.1 only and never talks to a radio.

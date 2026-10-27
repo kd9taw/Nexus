@@ -32,6 +32,11 @@ pub struct Pass {
     /// The characters inside the tail guard: PROVISIONAL, for display only. The next pass
     /// confirms them or replaces them.
     pub pending: String,
+    /// `confirmed` and `pending` again, letter by letter, each with the absolute stream time
+    /// the model placed it at: the CW turn cue reads silences and over boundaries from these
+    /// (`tempo_core::cw_turn`).
+    pub confirmed_at: Vec<(f64, char)>,
+    pub pending_at: Vec<(f64, char)>,
 }
 
 /// The transcript cursor across passes.
@@ -77,11 +82,13 @@ impl Stitcher {
         for (t_rel, ch) in chars {
             let t_abs = start_abs + *t_rel as f64;
             if t_abs > self.emitted_until {
-                if t_abs <= cutoff {
-                    out.confirmed.push_str(ch);
+                let (text, timed) = if t_abs <= cutoff {
+                    (&mut out.confirmed, &mut out.confirmed_at)
                 } else {
-                    out.pending.push_str(ch);
-                }
+                    (&mut out.pending, &mut out.pending_at)
+                };
+                text.push_str(ch);
+                timed.extend(ch.chars().map(|c| (t_abs, c)));
             }
         }
         self.emitted_until = cutoff.max(self.emitted_until);
@@ -238,5 +245,23 @@ mod tests {
             &chars(&[(0.0, "A"), (11.0, "B"), (13.8, "C")]),
         );
         assert_eq!(q.confirmed, "C", "and the cursor follows the newest window");
+    }
+
+    /// Every letter a pass gives carries the stream time it was heard at, in the same order as
+    /// the text, the provisional ones included: what the turn cue measures silences with.
+    #[test]
+    fn a_pass_gives_each_letter_its_stream_time() {
+        let mut s = Stitcher::default();
+        // The window spans 5 s … 20 s; the tail guard starts at 19.5 s.
+        let p = s.pass(
+            1,
+            20.0,
+            WIN,
+            &chars(&[(1.0, "K"), (1.25, " "), (14.5, "N"), (14.8, "?")]),
+        );
+        assert_eq!((p.confirmed.as_str(), p.pending.as_str()), ("K N", "?"));
+        assert_eq!(p.confirmed_at, vec![(6.0, 'K'), (6.25, ' '), (19.5, 'N')]);
+        // The model's times are f32 seconds into the window.
+        assert_eq!(p.pending_at, vec![(5.0 + f64::from(14.8f32), '?')]);
     }
 }

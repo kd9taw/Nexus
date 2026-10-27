@@ -6,6 +6,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { js8Typeahead, js8TypeaheadState } from '../api'
 import type { Js8Typeahead } from '../types'
+import { showWhenDriving } from '../features/drivingRefusal'
 
 export interface Js8TypeaheadBox {
   /** A message of the box's is going out. */
@@ -85,7 +86,12 @@ export function useJs8Typeahead(text: string, setText: (text: string) => void): 
         while (pendingRef.current !== null && viewRef.current) {
           const text = pendingRef.current
           pendingRef.current = null
-          const v = await js8Typeahead(seenRef.current.length, text).then(parse, () => undefined)
+          // A refusal leaves the box as it is. On a computer driving a station it is shown: the
+          // typed words did not go out, and the link or the station said why.
+          const v = await js8Typeahead(seenRef.current.length, text).then(parse, (e) => {
+            showWhenDriving(e)
+            return undefined
+          })
           if (v !== undefined) reconcile(v)
         }
       } finally {

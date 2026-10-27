@@ -65,7 +65,7 @@ on sub client all
 reply 0
 send S{h}|client 0x{h} connected local_ptt=0 client_id=6F1C2A3B-0000-4000-8000-00000000B001 program=Nexus station=Nexus
 
-# Nothing restored on a first connect: no slices, no pans (plan §4.5 step 8).
+# Nothing restored on a first connect: no slices, no pans.
 on sub slice all
 reply 0
 

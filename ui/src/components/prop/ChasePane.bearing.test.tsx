@@ -12,7 +12,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import type { CallBearing, NeedAlert } from '../../types'
 import type { PaneContext } from '../connect/paneContext'
-import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import { ChasePane } from './ChasePane'
 
@@ -104,19 +103,5 @@ describe('the Chase box draws the bearing its ↗ turns to', () => {
     await waitFor(() => expect(why('EC1DD')?.textContent).toBe(t('rotor.pane.aim.noGrid')))
     expect(headings('EC1DD')[0]).toBeNull()
     expect(document.body.textContent).not.toMatch(/\b0°/)
-  })
-
-  it('in a browser asks the station nothing and draws no heading it would not turn to', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <ChasePane ctx={ctx(need('EC1DD', 'Spain'))} />
-      </StationControlContext.Provider>,
-    )
-    // Control: the row is drawn.
-    expect(headings('EC1DD')).toHaveLength(1)
-    await new Promise((r) => setTimeout(r, 20))
-    expect(headings('EC1DD')[0]).toBeNull()
-    expect(why('EC1DD')).toBeNull()
-    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
   })
 })

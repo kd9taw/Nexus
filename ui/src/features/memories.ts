@@ -580,6 +580,20 @@ export function deleteGroup(bank: MemoriesBank, id: string): MemoriesBank {
   }
 }
 
+/** Put each of `ids` in group `groupId` as well, keeping every group a row is already in (#360:
+ *  the selection bar's Add to group). An unknown group changes nothing. Like the editor's Groups
+ *  box, membership is not content, so a pack row stays the pack's. */
+export function addMemoriesToGroup(bank: MemoriesBank, ids: readonly string[], groupId: string): MemoriesBank {
+  if (!bank.groups.some((g) => g.id === groupId)) return bank
+  const want = new Set(ids)
+  return {
+    ...bank,
+    memories: bank.memories.map((m) =>
+      want.has(m.id) && !m.groups.includes(groupId) ? { ...m, groups: [...m.groups, groupId] } : m,
+    ),
+  }
+}
+
 export function setMemoryGroups(bank: MemoriesBank, id: string, groups: string[]): MemoriesBank {
   const valid = new Set(bank.groups.map((g) => g.id))
   const next = groups.filter((g) => valid.has(g))
@@ -609,7 +623,9 @@ export interface RecallPlan {
   settingsPatch: RecallSettingsPatch | null
 }
 
-const DIGITAL_MODES = new Set(['FT8', 'FT4', 'DIG', 'DIGITAL', 'DATA', 'JS8', 'PSK', 'PSK31', 'RTTY'])
+// JTTY: a memory saved from the JTTY cockpit carries it, and outside this set it would recall as
+// PHONE (SSB) — a voice mode commanded on a data frequency.
+const DIGITAL_MODES = new Set(['FT8', 'FT4', 'DIG', 'DIGITAL', 'DATA', 'JS8', 'PSK', 'PSK31', 'RTTY', 'JTTY'])
 
 /** Where a memory's mode lives: FM/SSB/AM → Phone, CW → CW, digital → Operate.
  * The memory "just works" from any cockpit (operator decision: auto-switch). */

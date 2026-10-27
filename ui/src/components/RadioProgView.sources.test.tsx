@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// N46 P1: one row per machine, merged from the directories that cover a search. Program names each
+// One row per machine, merged from the directories that cover a search. Program names each
 // machine's directories and its date, flags a disagreement between them and shows what each
 // listed (never resolving it silently), credits RSGB on screen and in the exported file beside the
 // other directories, says plainly when the RSGB list could not be read, and finds a channel saved

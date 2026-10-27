@@ -76,11 +76,8 @@ pub struct QsoEdit {
     pub qsl_card: bool,
 }
 
-/// The park/summit half of an edit (ADIF `MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO`, `*_SOTA_REF`).
-///
-/// ⚠️ [`super::Ota::iota`] is deliberately absent. The form carries the stored value straight
-/// back out rather than offering a box for it, so it is not something an edit can change, and
-/// a field in the key that no edit can move only widens the refusal surface.
+/// The park/summit half of an edit (ADIF `MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO`, `*_SOTA_REF`),
+/// and the worked station's IOTA reference.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OtaEdit {
@@ -88,6 +85,124 @@ pub struct OtaEdit {
     pub my_ref: Option<String>,
     pub their_program: Option<String>,
     pub their_ref: Option<String>,
+    /// The worked station's IOTA reference ("NA-001"), which the form has a box for now. A
+    /// blank one means LEAVE ALONE, as the park refs and the end time do, so the form corrects
+    /// a reference and never clears one. Text that is not a reference is refused
+    /// ([`QsoEdit::iota`]). Missing from an older payload, it reads as blank.
+    #[serde(default)]
+    pub iota: Option<String>,
+}
+
+/// ⭐ **One change to a field the log keeps as it was written** ([`QsoRecord::extra`]: the ADIF
+/// fields the record does not model — a county, a zone, a QSL date, a tag another program wrote),
+/// from the Logbook's contact card. `new: None` removes the field. A blank value is a removal.
+///
+/// **A CHANGE, not the field list.** It travels beside a [`QsoEdit`], never inside it: the edit
+/// key is a hash of what an edit can write, and the passthrough is also where a LoTW or eQSL
+/// download writes its dates, so a key over it would refuse an operator's edit every time a
+/// confirmation landed. Instead each change carries the value it was made against (`old`), and
+/// is refused when the contact no longer holds that value — the same refusal, field by field.
+/// A field nobody changed is never sent, so it is never written: what a download put there
+/// meanwhile stays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FieldEdit {
+    /// The ADIF field name, in capitals as the log keeps it (`CNTY`).
+    pub tag: String,
+    /// The value the contact held when the card opened it; `None` for a field it did not have.
+    pub old: Option<String>,
+    /// The value to write; `None` (or blank) removes the field.
+    pub new: Option<String>,
+}
+
+impl FieldEdit {
+    /// What the change writes: its value, or `None` — a removal — for none or a blank one.
+    pub fn value(&self) -> Option<String> {
+        self.new.clone().filter(|v| !v.trim().is_empty())
+    }
+
+    /// Whether `stored` still holds the value the change was made against, exactly.
+    pub fn is_fresh(&self, stored: &QsoRecord) -> bool {
+        let held = stored
+            .extra
+            .iter()
+            .find(|(k, _)| *k == self.tag)
+            .map(|(_, v)| v.as_str());
+        held == self.old.as_deref()
+    }
+
+    /// `Err` for a change this card may not make, saying why: a name that is not one, a field
+    /// Nexus or a service keeps for itself, or one the log reads as part of a field it models
+    /// (a park's `MY_SIG`, a contest's `STX`, an upload's `LOTW_QSL_SENT`) — written here, it
+    /// would change that field behind its own box, or be undone by the next read of the log.
+    pub fn check(&self) -> Result<(), String> {
+        let tag = self.tag.as_str();
+        let named = !tag.is_empty()
+            && tag
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if !named {
+            return Err(format!(
+                "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
+            ));
+        }
+        if tag.starts_with("APP_NEXUS_")
+            || tag.starts_with("APP_TEMPO_")
+            || tag == super::EQSL_AG_FIELD
+        {
+            return Err(format!(
+                "{tag} is kept by Nexus or by a service, not typed — it cannot be changed here."
+            ));
+        }
+        for v in [&self.old, &self.new].into_iter().flatten() {
+            if !v.trim().is_empty() && !passthrough_only(tag, v) {
+                return Err(format!(
+                    "{tag} is part of a field the card edits in its own box (or a service keeps) — change it there."
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `Err` for a change to a field the contest exchange of `stored` holds, saying why. A merged
+    /// contest contact keeps its exchange's ADIF columns (a QSO party's `CNTY`, `ARRL_SECT`,
+    /// `CLASS`, `CQZ` …) in its contest block, and the ADIF writer, the uploads and the awards
+    /// ([`super::record_field`]) read them from there: written as a field kept as written, the
+    /// change would be saved and shown, and reach none of them. A column holding only blanks holds
+    /// the field as well: the writer writes every non-empty column, in place of a field beside it.
+    pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
+        let held = stored.contest.as_deref().is_some_and(|c| {
+            c.adif
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case(&self.tag) && !v.is_empty())
+        });
+        if held {
+            return Err(format!(
+                "{} is part of this contact's contest exchange, which exports, uploads and awards read — it cannot be changed here.",
+                self.tag
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether the log reads `tag` = `value` as nothing but a field kept as written: a contact that
+/// carries it parses to the contact without it, plus that one passthrough field. Asked of the
+/// log's own reader, so the answer is the reader's, never a list kept beside it.
+fn passthrough_only(tag: &str, value: &str) -> bool {
+    const BASE: &str =
+        "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>120000<BAND:3>20m<FREQ:6>14.074<MODE:2>CW";
+    let without = super::parse_adif(&format!("{BASE}<EOR>\n"));
+    let with = super::parse_adif(&format!("{BASE}{}<EOR>\n", super::field(tag, value)));
+    let (Some(a), Some(b)) = (without.first(), with.first()) else {
+        return false;
+    };
+    if !b.extra.iter().any(|(k, _)| k == tag) || a.extra.iter().any(|(k, _)| k == tag) {
+        return false;
+    }
+    let mut b = b.clone();
+    b.extra.retain(|(k, _)| k != tag);
+    &b == a
 }
 
 /// A park box the form reads as empty: no value, or an empty one (the form's own truthiness).
@@ -95,13 +210,52 @@ fn blank(r: &Option<String>) -> bool {
     r.as_deref().is_none_or(str::is_empty)
 }
 
+/// ⭐ **What an edit's State does to `stored`**, as the record's own state and, where it changed
+/// the state of a merged contest exchange, the contest block to write in place of the stored one
+/// (`None`: the stored block stays, as an edit always keeps it). Every path that writes an edited
+/// State comes here ([`QsoEdit::record`], an edit of a whole contact, the park-state check).
+///
+/// The state an edit is compared with is the one every reader takes ([`super::record_field`]):
+/// on a merged contest contact, the state the exchange carried, which is what the form showed.
+/// Left as it was shown, the record's own state stays as stored and the exchange is untouched;
+/// changed, the record's own state is the edit's and the exchange's `STATE` becomes it too, in
+/// its place, so the upload, WAS and the custom awards all count the one state.
+pub fn edited_state(
+    state: &Option<String>,
+    stored: &QsoRecord,
+) -> (Option<String>, Option<Box<super::ContestFields>>) {
+    let typed = state.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let exchange = stored
+        .contest
+        .as_deref()
+        .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"));
+    if exchange.is_some() && typed == super::record_field(stored, "STATE") {
+        return (stored.state.clone(), None);
+    }
+    let contest = exchange.zip(typed).map(|(c, state)| {
+        let mut c = c.clone();
+        for (t, v) in &mut c.adif {
+            if t == "STATE" {
+                *v = state.to_string();
+            }
+        }
+        Box::new(c)
+    });
+    (state.clone(), contest)
+}
+
 impl QsoEdit {
     /// The editable projection of a stored record — the other half of the key's definition.
+    ///
+    /// Its State is the contact's state as every reader takes it ([`super::record_field`]): on a
+    /// merged contest contact, the state the exchange carried, which its uploads and WAS count.
     pub fn project(r: &QsoRecord) -> QsoEdit {
         QsoEdit {
             call: r.call.clone(),
             grid: r.grid.clone(),
-            state: r.state.clone(),
+            state: super::record_field(r, "STATE")
+                .map(str::to_string)
+                .or_else(|| r.state.clone()),
             band: r.band.clone(),
             freq_mhz: r.freq_mhz,
             mode: r.mode.clone(),
@@ -119,6 +273,7 @@ impl QsoEdit {
                 my_ref: r.ota.my_ref.clone(),
                 their_program: r.ota.their_program.clone(),
                 their_ref: r.ota.their_ref.clone(),
+                iota: r.ota.iota.clone(),
             },
             my_grid: r.my_grid.clone(),
             my_rig: r.my_rig.clone(),
@@ -164,16 +319,28 @@ impl QsoEdit {
     /// would carry the stored `iota` only because the form did, which it does, below.
     ///
     /// The fields the form echoed from the row it opened (`confirmed`, `awardConfirmed`,
-    /// `upload`, the park's `iota`) are echoed here from `stored` — the first three are
-    /// overwritten by `update_record` whatever they hold, and `iota` is the one the form keeps.
+    /// `upload`) are echoed here from `stored`, and `update_record` overwrites them whatever they
+    /// hold. The IOTA reference is the edit's where it carries one, else the stored one.
+    ///
+    /// ⭐ **A State edit replaces the state a merged contest exchange carries.** The exchange's
+    /// `STATE` is what the record's ADIF writes in place of the field (the duplicate-`STATE`
+    /// guard), and what WAS and the custom awards read ([`super::record_field`]), so an edit of the
+    /// field alone would reach none of them. Where the operator changed State from the one the
+    /// form showed ([`Self::project`]: the exchange's), the stored contest block comes back with
+    /// its `STATE` set to theirs, in its place; everything else in it is the stored block's, which
+    /// `update_record` would have restored. An edit that leaves State as the form showed it leaves
+    /// the exchange's alone, and the record's own field as it was.
     pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
+        // A reference the edit refuses is never written; the edit command refuses it first.
+        let iota = self.iota().ok().flatten();
+        let (state, contest) = edited_state(&self.state, stored);
         QsoRecord {
             // Identity is the log's: `update_record` restores the stored id.
             id: None,
             call: self.call.clone(),
             grid: self.grid.clone(),
             country: None,
-            state: self.state.clone(),
+            state,
             band: self.band.clone(),
             freq_mhz: self.freq_mhz,
             freq_rx_mhz: None,
@@ -197,18 +364,22 @@ impl QsoEdit {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: stored.upload.clone(),
-            // The form's own rule: with both park refs blank it sends no `ota` at all, and
-            // `update_record` puts the stored one back whole; otherwise the four fields as the
-            // form fills them, with the stored IOTA it echoes.
+            // The form's own rule: with both park refs blank it sends no park at all, and
+            // `update_record` puts the stored one back whole — keeping an IOTA reference the edit
+            // carries alone; otherwise the four fields as the form fills them, beside the edit's
+            // IOTA or the stored one.
             ota: if blank(&self.ota.my_ref) && blank(&self.ota.their_ref) {
-                super::Ota::default()
+                super::Ota {
+                    iota,
+                    ..super::Ota::default()
+                }
             } else {
                 super::Ota {
                     my_program: self.ota.my_program.clone(),
                     my_ref: self.ota.my_ref.clone(),
                     their_program: self.ota.their_program.clone(),
                     their_ref: self.ota.their_ref.clone(),
-                    iota: stored.ota.iota.clone(),
+                    iota: iota.or_else(|| stored.ota.iota.clone()),
                 }
             },
             dxcc: None,
@@ -219,7 +390,7 @@ impl QsoEdit {
             my_grid: self.my_grid.clone(),
             my_rig: self.my_rig.clone(),
             extra: Vec::new(),
-            contest: None,
+            contest,
         }
     }
 
@@ -244,6 +415,20 @@ impl QsoEdit {
             Some(code) => Err(format!(
                 "Unknown QSL-sent method '{code}' — use B, D, or E."
             )),
+        }
+    }
+
+    /// The IOTA reference this edit writes, in the log's one spelling: `Ok(None)` for a blank box
+    /// (leave the stored one), `Err` for text that is not a reference — refused rather than
+    /// stored as junk that no award counts.
+    pub fn iota(&self) -> Result<Option<String>, String> {
+        match self.ota.iota.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(raw) => super::valid_iota(raw).map(Some).ok_or_else(|| {
+                format!(
+                    "'{raw}' is not an IOTA reference — use a continent, a hyphen and three digits, such as NA-001."
+                )
+            }),
         }
     }
 
@@ -416,6 +601,10 @@ mod tests {
             (
                 "notes",
                 Box::new(|r: &mut QsoRecord| r.notes = Some("vertical".into())),
+            ),
+            (
+                "ota.iota",
+                Box::new(|r: &mut QsoRecord| r.ota.iota = Some("EU-005".into())),
             ),
             (
                 "ota.myProgram",
@@ -724,6 +913,7 @@ mod tests {
                 my_ref: blank.clone(),
                 their_program: None,
                 their_ref: blank.clone(),
+                iota: blank.clone(),
             };
             assert_eq!(
                 e.record(&stored).ota,
@@ -746,6 +936,55 @@ mod tests {
         );
     }
 
+    /// The IOTA box: a reference typed there is written (in the log's one spelling), with or
+    /// without a park beside it; a blank box leaves the stored reference, as the park boxes and
+    /// the end time do; and text that is not a reference is refused rather than stored as junk no
+    /// award counts. Through `update_record`, the one edit policy, as the edit command applies it.
+    #[test]
+    fn an_iota_edit_is_written_and_a_blank_one_keeps_the_stored() {
+        let edited = |stored: QsoRecord, iota: Option<&str>| {
+            let mut lb = crate::logbook::Logbook::new();
+            lb.add(stored);
+            let held = QsoRecord::clone(&lb.records()[0]);
+            let mut e = QsoEdit::project(&held);
+            e.ota.iota = iota.map(str::to_string);
+            assert!(lb.update_record(0, e.record(&held)));
+            QsoRecord::clone(&lb.records()[0]).ota
+        };
+        // A park and an island: the island changes, the park stays.
+        let ota = edited(record(), Some("EU-005"));
+        assert_eq!(ota.iota.as_deref(), Some("EU-005"));
+        assert_eq!(
+            ota.my_ref.as_deref(),
+            Some("K-1234"),
+            "the park went with it"
+        );
+        // No park at all, and no island yet: the island is written, in its one spelling.
+        let mut bare = record();
+        bare.ota = Ota::default();
+        assert_eq!(
+            edited(bare.clone(), Some(" eu-005 ")),
+            Ota {
+                iota: Some("EU-005".into()),
+                ..Ota::default()
+            }
+        );
+        // A blank box keeps what is stored, with a park and without one.
+        assert_eq!(edited(record(), None).iota.as_deref(), Some("NA-001"));
+        assert_eq!(edited(record(), Some("")).iota.as_deref(), Some("NA-001"));
+        let mut island_only = bare;
+        island_only.ota.iota = Some("NA-001".into());
+        assert_eq!(edited(island_only, None).iota.as_deref(), Some("NA-001"));
+
+        let mut e = QsoEdit::project(&record());
+        e.ota.iota = Some("EU5".into());
+        assert!(e.iota().is_err(), "junk is refused, not stored");
+        e.ota.iota = Some("eu-005".into());
+        assert_eq!(e.iota(), Ok(Some("EU-005".into())));
+        e.ota.iota = None;
+        assert_eq!(e.iota(), Ok(None));
+    }
+
     /// The form's own vocabulary for the QSL-sent mark, which the projection has to speak
     /// exactly: a sent mark with no recorded method is "SENT", not "not sent".
     #[test]
@@ -757,6 +996,217 @@ mod tests {
         assert_ne!(
             QsoEdit::project(&r).key(),
             QsoEdit::project(&record()).key()
+        );
+    }
+
+    /// ★ A State edit on a merged contest contact is the state everywhere: the exchange's copy
+    /// becomes the operator's, so the upload, WAS and a custom award all read the one value. An
+    /// edit that leaves State alone leaves the state the other station sent where it was, and
+    /// an Undo of the State edit gives that state back to every reader.
+    #[test]
+    fn a_state_edit_replaces_the_state_a_merged_contests_exchange_carries() {
+        use crate::logbook::history::{self, Kind, Note, Source, Undo};
+        use crate::logbook::sqlite::{Batch, LogDb, RowWrite};
+        use crate::logbook::{adif_record, record_field, ContestFields, Logbook};
+        use std::sync::Arc;
+
+        let mut stored = record();
+        stored.call = "W2XYZ".into();
+        // The resolver's guess, and what the station said in the exchange.
+        stored.state = Some("NJ".into());
+        stored.contest = Some(Box::new(ContestFields {
+            session: "naqp".into(),
+            contest_id: "NAQP-CW".into(),
+            adif: vec![
+                ("ARRL_SECT".into(), "NNY".into()),
+                ("STATE".into(), "NY".into()),
+            ],
+            ..ContestFields::default()
+        }));
+        // What every reader takes for the contact's state: the accessor, and the upload.
+        let read = |r: &QsoRecord| {
+            let out = adif_record(r);
+            let tags = out.matches("<STATE:").count();
+            (record_field(r, "STATE").map(str::to_string), tags, out)
+        };
+        let mut lb = Logbook::new();
+        lb.add(stored.clone());
+
+        // The form shows the state every reader counts.
+        assert_eq!(QsoEdit::project(&stored).state.as_deref(), Some("NY"));
+        // An edit of the name only: the exchange's state stays the state, and the record's own
+        // field what it was.
+        let mut e = QsoEdit::project(&stored);
+        e.name = Some("Hiram".into());
+        assert!(lb.update_record(0, e.record(&stored)));
+        let unedited = QsoRecord::clone(&lb.records()[0]);
+        let (state, tags, out) = read(&unedited);
+        assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
+        assert!(out.contains("<STATE:2>NY"), "{out}");
+        assert_eq!(unedited.contest, stored.contest, "the block is untouched");
+        assert_eq!(
+            unedited.state.as_deref(),
+            Some("NJ"),
+            "the field is untouched"
+        );
+
+        // The operator's State edit: one value, in the field and the exchange alike.
+        let mut e = QsoEdit::project(&unedited);
+        e.state = Some("PA".into());
+        assert!(lb.update_record(0, e.record(&unedited)));
+        let edited = QsoRecord::clone(&lb.records()[0]);
+        let (state, tags, out) = read(&edited);
+        assert_eq!((state.as_deref(), tags), (Some("PA"), 1), "{out}");
+        assert!(out.contains("<STATE:2>PA"), "{out}");
+        assert_eq!(edited.state.as_deref(), Some("PA"));
+        let block = edited.contest.as_deref().expect("the block stays");
+        assert_eq!(
+            block.adif,
+            [
+                ("ARRL_SECT".to_string(), "NNY".to_string()),
+                ("STATE".to_string(), "PA".to_string()),
+            ],
+            "only the exchange's state moved, in its place"
+        );
+        assert_eq!(block.session, "naqp", "the merge's key is kept");
+
+        // Undo, as the history records the edit: the state the station sent comes back.
+        let mut db = LogDb::open_in_memory().unwrap();
+        let mut row = unedited.clone();
+        row.id = Some(crate::logbook::RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        let mut after = edited.clone();
+        after.id = row.id;
+        let note = Note {
+            run: "e".into(),
+            at_ms: 1_700_000_000_000,
+            source: Source::Operator,
+            edit: Kind::Edit,
+            undoes: Default::default(),
+        };
+        for (r, note) in [(&row, None), (&after, Some(&note))] {
+            db.apply(Batch {
+                upsert: &[RowWrite::new(Arc::new(r.clone()))],
+                history: note,
+                ..Batch::default()
+            })
+            .unwrap();
+        }
+        let entries = db.history_of(row.id.unwrap()).unwrap();
+        let Ok(Undo::Revert { row: undone, .. }) = history::undo(&entries[0], Some(&after), None)
+        else {
+            panic!("the State edit undoes: {entries:?}");
+        };
+        let (state, tags, out) = read(&undone);
+        assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
+        assert_eq!(
+            undone, row,
+            "the contact before the edit, whole: NJ in the field, NY sent"
+        );
+    }
+
+    fn change(tag: &str, old: Option<&str>, new: Option<&str>) -> FieldEdit {
+        FieldEdit {
+            tag: tag.into(),
+            old: old.map(str::to_string),
+            new: new.map(str::to_string),
+        }
+    }
+
+    /// The contact card's passthrough changes: a field the log keeps only as written may be
+    /// set, corrected and removed; a name that is not one, Nexus's or a service's own field, and
+    /// a field the log reads as part of one it models are refused, with the reason.
+    #[test]
+    fn a_field_change_is_made_only_on_a_field_kept_as_written() {
+        for ok in [
+            change("CNTY", None, Some("MA,MIDDLESEX")),
+            change("CQZ", Some("5"), Some("4")),
+            change("QSLRDATE", Some("20240101"), None),
+            change("APP_OTHERPROG_FOO", None, Some("bar")),
+        ] {
+            assert_eq!(ok.check(), Ok(()), "{}", ok.tag);
+        }
+        for bad in [
+            change("cnty", None, Some("x")),
+            change("", None, Some("x")),
+            change("C NTY", None, Some("x")),
+            change("APP_NEXUS_SELF_FILLED", Some("MY_GRIDSQUARE"), None),
+            change("APP_TEMPO_UL_LOTW", None, Some("x")),
+            change(crate::logbook::EQSL_AG_FIELD, None, Some("Y")),
+            // Read into the park, the contest block, the end time and the upload state.
+            change("MY_SIG", None, Some("WWFF")),
+            change("SIG_INFO", None, Some("K-0001")),
+            change("STX", None, Some("12")),
+            change("TIME_OFF", None, Some("1210")),
+            change("NAME", None, Some("Hans")),
+            change("LOTW_QSL_SENT", None, Some("Y")),
+        ] {
+            assert!(bad.check().is_err(), "{} must be refused", bad.tag);
+        }
+        // A blank value is a removal, never a field written empty.
+        assert_eq!(change("CNTY", Some("x"), Some("  ")).value(), None);
+        assert_eq!(
+            change("CNTY", None, Some("y")).value().as_deref(),
+            Some("y")
+        );
+    }
+
+    /// The change is made against the value the card showed: any other value — another, none, or
+    /// one where the card saw none — is not the contact it was made on.
+    #[test]
+    fn a_field_change_is_fresh_only_against_the_value_it_was_made_on() {
+        let mut r = record();
+        r.extra = vec![("CNTY".into(), "MA,MIDDLESEX".into())];
+        assert!(change("CNTY", Some("MA,MIDDLESEX"), None).is_fresh(&r));
+        assert!(!change("CNTY", Some("MA,ESSEX"), None).is_fresh(&r));
+        assert!(!change("CNTY", None, Some("x")).is_fresh(&r));
+        assert!(change("CQZ", None, Some("5")).is_fresh(&r));
+        assert!(!change("CQZ", Some("5"), None).is_fresh(&r));
+    }
+
+    /// A merged contest contact keeps its exchange's ADIF columns (a QSO party's `CNTY`, a
+    /// section, a zone) in its contest block, and exports, uploads and awards read them from
+    /// there: a change to one kept as written would be saved and reach none of them, so it is
+    /// refused, saying why. A field the exchange does not hold is the card's as before.
+    #[test]
+    fn a_field_the_contest_exchange_holds_is_not_changed_beside_it() {
+        let mut r = record();
+        r.contest = Some(Box::new(crate::logbook::ContestFields {
+            contest_id: "OH-QSO-PARTY".into(),
+            adif: vec![
+                ("CNTY".into(), "OH,FRANKLIN".into()),
+                ("CQZ".into(), " ".into()),
+            ],
+            ..Default::default()
+        }));
+        for held in [
+            change("CNTY", None, Some("OH,DELAWARE")),
+            change("CNTY", Some("OH,DELAWARE"), None),
+        ] {
+            let e = held.check_on(&r).expect_err("the exchange holds CNTY");
+            assert!(e.contains("contest exchange"), "{e}");
+        }
+        assert_eq!(change("ITUZ", None, Some("8")).check_on(&r), Ok(()));
+        // A column holding only blanks is still written by the ADIF writer, before (and so in
+        // place of) a field kept beside it: it holds the field as any other value does.
+        let e = change("CQZ", None, Some("4"))
+            .check_on(&r)
+            .expect_err("a blank column the writer writes holds CQZ");
+        assert!(e.contains("contest exchange"), "{e}");
+        if let Some(c) = r.contest.as_deref_mut() {
+            c.adif.push(("ITUZ".into(), String::new()));
+        }
+        assert_eq!(
+            change("ITUZ", None, Some("8")).check_on(&r),
+            Ok(()),
+            "an empty column, which the writer skips, holds nothing"
+        );
+        r.contest = None;
+        assert_eq!(
+            change("CNTY", None, Some("OH,DELAWARE")).check_on(&r),
+            Ok(())
         );
     }
 }

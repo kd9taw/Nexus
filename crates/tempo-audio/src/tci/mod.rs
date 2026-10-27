@@ -21,7 +21,7 @@
 //! said `ready;`, and once the session has ended it is dead ([`TciDaemon::is_alive`]): the radio
 //! loop drops it and asks for a new one, which [`registry`] spaces out on the reconnect ladder. A
 //! key a session may have left on the air goes to the next one through [`registry`], whose stops
-//! then go out first after `ready;` (plan §6.1 item 8).
+//! then go out first after `ready;`.
 //!
 //! ## Transmit
 //! Every engine gate holds before the radio loop sends `T 1` (the Enable-TX latch, the stop hold,
@@ -55,7 +55,7 @@
 //! [`TciDaemon::take_new_alarm`]), each over the session ended by itself
 //! ([`TciDaemon::take_halt`]), why a key was kept off the air ([`TciDaemon::key_refused_since`]),
 //! and whether a key of ours may be on the air ([`TciDaemon::keyed`]). Each key's timing goes to
-//! the diagnostic log for the bench (plan U3, U11).
+//! the diagnostic log for the bench.
 //!
 //! ## Audio
 //! [`TciDaemon::start_with_receive`] gives the session Nexus's own audio paths ([`audio`]): the
@@ -571,6 +571,13 @@ impl TciDaemon {
         self.conn().snapshot()
     }
 
+    /// The radio the server named (`device:`), once it has: what a contact made on this radio
+    /// logs as its rig (`MY_RIG`), where the radio's model only says "TCI".
+    pub fn device(&self) -> Option<String> {
+        self.conn()
+            .read(|s| s.model.device.known().map(|d| d.as_str().to_string()))
+    }
+
     /// Who answered, in the words Test CAT shows: the program and the radio as the server named
     /// them, and the transceiver, counted from 1 as Settings counts it.
     pub fn status(&self) -> String {
@@ -825,7 +832,7 @@ fn not_ready_text(end: &End, server: SocketAddr) -> String {
 }
 
 /// The log's words for a session that reached `ready;`: who answered, and what Nexus learned of
-/// it (plan §2.6: the bench reads these back).
+/// it (the bench reads these back).
 fn connected_text(s: &Snapshot) -> String {
     let program = match (&s.evidence.program, &s.evidence.version) {
         (Some(p), Some(v)) => format!("{p} {v}"),
@@ -911,7 +918,7 @@ fn end_a_tune_past_its_hold(conn: &Connection, server: SocketAddr, watch: &Watch
 
 /// End an over of ours whose audio the SDR program stopped pulling part way through while Nexus
 /// still had some of it to send: the radio would stay keyed with nothing of ours to send until the
-/// over's own end (plan §6.1 item 4, "never a silent over"; the Flex client's route going ends an
+/// over's own end (never a silent over; the Flex client's route going ends an
 /// over the same way). Only once this key's first pull has come (until then the session's own chrono
 /// window rules), and only past the window that first pull is held to.
 fn end_an_over_the_server_stopped_pulling(conn: &Connection, server: SocketAddr, watch: &Watch) {
@@ -947,7 +954,7 @@ fn push_halt(watch: &Watch, words: String) {
 /// Drain the session's events, log the ones that matter, and keep what the radio loop must be
 /// told: the alarms and the overs the session ended. Ends at the session's last event (`Closed`:
 /// nothing follows it), or when the daemon stops. Each key's timing is one line in the diagnostic
-/// log, for the bench (plan U3, U11).
+/// log, for the bench.
 fn watch_session(
     conn: &Weak<Connection>,
     server: SocketAddr,

@@ -1,11 +1,11 @@
-//! Nexus as a TCI server, the app's side (TCI server design, task S6): the engine's answers to the
+//! Nexus as a TCI server, the app's side: the engine's answers to the
 //! programs on this computer ([`EngineTci`]), the manager that hot-applies the switch, the state
 //! programs are told, the receive audio they are sent, the transmit-audio requests (TX_CHRONO), the
 //! connection log, and the server's line in the snapshot. The protocol, the listener and its guards
 //! (loopback only, no web pages, the bounds) are `tempo_net::tci::server`'s; this file never touches
 //! a socket, and nothing here can make the server listen anywhere but `127.0.0.1` and `::1`.
 //!
-//! WHAT A PROGRAM MAY DO, AND WHAT IT MAY NOT (design §2.4, §3):
+//! WHAT A PROGRAM MAY DO, AND WHAT IT MAY NOT:
 //! - **A program transmits only through the engine's TCI rules** (`tempo_app`'s `engine/tci.rs`).
 //!   ⛔ Its key and its Tune are the engine's verdict and nothing else: "Programs on TCI may
 //!   transmit" (the station's setting, off by default, changed only at the shack), then every gate
@@ -26,14 +26,14 @@
 //!   its audio. A program's lost connection ends what it held at once, hard.
 //! - **Every stop a program sends is honoured, ungated.** `trx:0,false` from the key's owner ends
 //!   its over gracefully (what it sent plays out); from a program that keyed nothing it stops
-//!   whatever is on the air, as WSJT-X's UDP Halt Tx does (design Q8 A); `stop;` ends the
+//!   whatever is on the air, as WSJT-X's UDP Halt Tx does; `stop;` ends the
 //!   program's own key and Tune; `tune:0,false` ends Tune whoever started it; `cw_macros_stop`
 //!   ends CW from any origin.
 //! - **The dial and the mode go through the CAT broker's own rules** (`shared_retune`,
-//!   `shared_mode_change` in `lib.rs`): refused while anything is on the air (Q9 A), and the dial
+//!   `shared_mode_change` in `lib.rs`): refused while anything is on the air, and the dial
 //!   for 200 ms after a change no program made (the spec's §3.5: the radio program's own change
 //!   holds the parameter that long).
-//! - **Power only down** (Q10 A), through `set_rf_power`, so the operator's ceiling still holds.
+//! - **Power only down**, through `set_rf_power`, so the operator's ceiling still holds.
 //! - **A program's spots are marks on Nexus's band map, and nothing more** (`tempo_app`'s
 //!   `engine/tci_spots.rs`): kept with the program that sent them while "Spots from programs" is
 //!   on, bounded and aged there, gone with the program, the switch or the server. ⛔ A click on any
@@ -80,7 +80,7 @@ use crate::{conn_log, SharedEngine};
 /// The connection log's lane.
 const LANE: &str = "TCI server";
 /// How often the manager publishes the station while the server runs: 20 times a second, the most
-/// the design allows (§2.1).
+/// the publisher is allowed.
 const TICK: Duration = Duration::from_millis(50);
 /// …and how often it reads the switch while the server is not running.
 const IDLE_TICK: Duration = Duration::from_millis(1000);
@@ -91,7 +91,7 @@ const PUMP_TICK: Duration = Duration::from_millis(10);
 /// A program's dial write is refused this long after a change no program made (the spec's §3.5).
 const OPERATOR_HOLD: Duration = Duration::from_millis(200);
 /// Nexus's own transmit buffering, told as `tx_stream_audio_buffering`: the TCI over's lead-in
-/// (60 ms) and look-ahead (40 ms), the Remote microphone's numbers (design §3.3).
+/// (60 ms) and look-ahead (40 ms), the Remote microphone's numbers.
 const TX_BUFFERING_MS: u32 = 100;
 /// What an armed over asks for ahead of real time: the same buffering.
 const LEAD: Duration = Duration::from_millis(TX_BUFFERING_MS as u64);
@@ -388,7 +388,7 @@ fn describe(event: &Event) -> (&'static str, String) {
 
 impl TciBackend for EngineTci {
     fn disconnected(&self, client: ClientId) {
-        // ⛔ A LOST PROGRAM ENDS WHAT IT HELD, HARD, NOW (design §3.1 item 4): its over drops with
+        // ⛔ A LOST PROGRAM ENDS WHAT IT HELD, HARD, NOW: its over drops with
         // the abort armed in this call, so the radio loop flushes and unkeys on its next tick; its
         // microphone key and its Tune end at once. The server calls this after the program's
         // transmit calls in flight have returned and never makes another for it.
@@ -424,7 +424,7 @@ impl TciBackend for EngineTci {
         let now = Instant::now();
         let mut watch = lock(&self.dial);
         watch.look(dial_hz(&e), now);
-        // Never under an over: a retune mid-over halts it (design Q9 A). Asked and applied under
+        // Never under an over: a retune mid-over halts it. Asked and applied under
         // this one hold of the engine lock, so no key comes between the two.
         if let Some(refusal) = e.tci_retune_refusal() {
             return Err(refusal);
@@ -454,7 +454,7 @@ impl TciBackend for EngineTci {
     }
 
     fn set_drive(&self, _client: ClientId, level: u32) -> Result<u32, Refusal> {
-        // Down only (design Q10 A), through `set_rf_power`, so the operator's ceiling still binds.
+        // Down only, through `set_rf_power`, so the operator's ceiling still binds.
         // A level Nexus does not know cannot be shown to be lower.
         engine_lock(&self.engine).tci_set_drive(level)
     }
@@ -472,7 +472,7 @@ impl TciBackend for EngineTci {
     }
 
     fn key(&self, client: ClientId, kind: KeyKind, audio_started: bool) -> Result<(), Refusal> {
-        // ⛔ THE ENGINE'S VERDICT AND NOTHING ELSE (design §3.2): `Ok` arms an over of the
+        // ⛔ THE ENGINE'S VERDICT AND NOTHING ELSE: `Ok` arms an over of the
         // program's audio or holds the radio's microphone for it; a refusal names the first gate
         // that failed. A re-assert of the key it holds changes nothing.
         let program = client.get();
@@ -493,8 +493,8 @@ impl TciBackend for EngineTci {
 
     fn release(&self, client: ClientId) {
         // From the key's owner, the graceful end of its own over (what it sent plays out) or of
-        // its microphone key or Tune (design §3.4). From any other program: what is on the air
-        // stops, as for WSJT-X's Halt Tx, and holds until the operator arms (design Q8 A).
+        // its microphone key or Tune. From any other program: what is on the air
+        // stops, as for WSJT-X's Halt Tx, and holds until the operator arms.
         let halted = engine_lock(&self.engine).tci_release(client.get());
         if halted {
             self.log(
@@ -511,7 +511,7 @@ impl TciBackend for EngineTci {
     }
 
     fn tune_off(&self, client: ClientId) {
-        // Whoever started it (design §3.5). Nothing when nothing tunes: a release with nothing to
+        // Whoever started it. Nothing when nothing tunes: a release with nothing to
         // release still invalidates the over Nexus has planned.
         engine_lock(&self.engine).tci_tune_off(client.get());
     }
@@ -522,7 +522,7 @@ impl TciBackend for EngineTci {
     }
 
     fn tx_audio(&self, client: ClientId, format: AudioFormat, frame: &[u8]) {
-        // ⛔ AUDIO ONLY FOR OUR KEY (design §3.1 item 8): read with the engine lock released, then
+        // ⛔ AUDIO ONLY FOR OUR KEY: read with the engine lock released, then
         // offered to the engine, which takes it only for the over this program owns and has not
         // let go (tempo-net's contract 6: the over can end between the server's check and this).
         // Anything else is dropped, never kept for a later key.
@@ -554,14 +554,14 @@ impl TciBackend for EngineTci {
     }
 
     fn cw(&self, client: ClientId, cw: Cw) -> Result<(), Refusal> {
-        // ⛔ THE ENGINE'S VERDICT AND TEXT FILTER AND NOTHING ELSE (design §3.5): the switch and
+        // ⛔ THE ENGINE'S VERDICT AND TEXT FILTER AND NOTHING ELSE: the switch and
         // the CW tier, every station gate, one owner, the CW section, then only text Nexus's keyer
         // can send; `Ok` queues it for Nexus's own CW keyer at the programs' speed. It never arms.
         engine_lock(&self.engine).tci_cw(client.get(), &cw)
     }
 
     fn cw_stop(&self, client: ClientId) {
-        // From any origin (design §3.5), and CW only: the CW stop also cuts a slot over in flight.
+        // From any origin, and CW only: the CW stop also cuts a slot over in flight.
         engine_lock(&self.engine).tci_cw_stop(client.get());
     }
 

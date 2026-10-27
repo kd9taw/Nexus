@@ -6,7 +6,6 @@ import { resolve } from 'node:path'
 import { RecallPanel } from './RecallPanel'
 import { openQrzPage } from '../api'
 import { subscribeToasts } from '../toast'
-import { StationControlContext } from '../stationAccess'
 import type { CallHistory } from '../features/callHistory'
 import type { CallBearing, LoggedQso } from '../types'
 
@@ -213,19 +212,6 @@ describe('RecallPanel — the full card', () => {
       expect(noMine.container.querySelector('.recall-geo')?.textContent).toBe('set your grid in Settings for a bearing'),
     )
     expect(noMine.container.textContent).not.toMatch(/NaN|\b0°/)
-  })
-
-  it('in a browser asks the station nothing and draws no distance or bearing', async () => {
-    const { container } = render(
-      <StationControlContext.Provider value={false}>
-        <RecallPanel call="EC1DD" band="20m" grid="IN52TK" country="Spain" myGrid="JO21EV" hist={hist()} />
-      </StationControlContext.Provider>,
-    )
-    // Control: the card is drawn.
-    expect(container.querySelector('.recall-where')?.textContent).toBe('(IN52TK) · Spain')
-    await new Promise((r) => setTimeout(r, 20))
-    expect(container.querySelector('.recall-geo')).toBeNull()
-    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
   })
 
   it('surfaces the most recent operator note', () => {

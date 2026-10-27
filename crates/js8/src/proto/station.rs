@@ -12,7 +12,7 @@
 //! ```
 //!
 //! No other method, field or trait hands out a transmittable frame — B7 keys the radio and
-//! relies on that being the single gate every TX safety check sits above (spec invariant 13),
+//! relies on that being the single gate every TX safety check sits above,
 //! and a test pins it. Every automatic frame carries its `Origin` (Operator / Heartbeat / HbAck /
 //! AutoReply / Relay) so B7 can gate each class independently. Time and randomness are INJECTED:
 //! `tick`/`next_frame`/`on_event` take `now_ms`, and `next_frame` takes an RNG closure, so every
@@ -5591,7 +5591,7 @@ mod tests {
         );
         let t = 5 * 60 * 1000 + 1;
         // Nothing is stored or filed while it stands either: JS8Call's `continue` at :8817-8820
-        // comes before the MSG TO: and MSG branches (N38's filing difference).
+        // comes before the MSG TO: and MSG branches (JS8Call's filing difference).
         s.on_event(
             &directed(
                 "N0XYZ",
@@ -6883,7 +6883,7 @@ mod tests {
         assert_eq!(f.origin, Origin::HbAck);
     }
 
-    // ===== (F) JS8Call's reply-skipping rules, its lists and N38's filing differences =====
+    // ===== (F) JS8Call's reply-skipping rules, its lists and its filing differences =====
 
     /// Everything a station does for a command, in one look: a reply waiting (asked, queued or on
     /// its way), the inbox size, and what the composer is offered.
@@ -7148,7 +7148,7 @@ mod tests {
         );
     }
 
-    /// N38's other filing difference: nothing is filed or stored while the idle watchdog stands,
+    /// The other filing difference: nothing is filed or stored while the idle watchdog stands,
     /// as JS8Call's `if(m_tx_watchdog) continue;` (:8817-8820) comes before the MSG and MSG TO:
     /// branches. Once an operator act clears the trip, a MSG to me is filed again.
     #[test]

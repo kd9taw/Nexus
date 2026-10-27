@@ -60,6 +60,14 @@ pub struct Station {
     /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
     #[serde(default)]
     pub worked_band: bool,
+    /// Seconds since the most recent contact with this station, on any band or mode, matched
+    /// on the base call — the spot row's field of the same name, for the roster's timed Hide
+    /// worked. `None` when the log holds no contact with it.
+    #[serde(default)]
+    pub worked_ago_secs: Option<i64>,
+    /// That contact fell on today's UTC day, by the station's clock.
+    #[serde(default)]
+    pub worked_today_utc: bool,
     /// DXCC entity name (country), resolved from the callsign — DX chasers scan
     /// the roster by country. `None` unless a DXCC resolver is wired.
     #[serde(default)]
@@ -124,6 +132,67 @@ pub struct HuntDto {
     pub states: Vec<String>,
 }
 
+/// The operator's activation as the POTA/SOTA panel, the log form and the snapshot show it —
+/// every field null/empty when not activating.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationDto {
+    /// "POTA" | "SOTA", or null when not activating.
+    pub program: Option<String>,
+    /// The reference the contacts carry: one park, or a two-fer's parks as a comma list. Null
+    /// when not activating.
+    pub reference: Option<String>,
+    /// The first park's contacts today (see `parks`), for a caller that shows one number.
+    pub qso_count: usize,
+    /// Where the park or summit is ("US-ND"; two or more for a park on a state line), so the
+    /// panel can ask which state on a state line. Empty when not activating or not placed.
+    pub states: Vec<String>,
+    /// The state the activation's contacts carry as `MY_STATE` ("ND"), or null: none known yet.
+    pub my_state: Option<String>,
+    /// Each park with its contacts on the current UTC day, distinct by POTA's rule (a dupe adds
+    /// nothing), and how many of them were park to park.
+    #[serde(default)]
+    pub parks: Vec<ActivationParkDto>,
+    /// The grid the contacts carry as `MY_GRIDSQUARE` while activating, or null: none.
+    #[serde(default)]
+    pub grid: Option<String>,
+    /// When the activation started, Unix seconds (0 when not activating).
+    #[serde(default)]
+    pub started_at: u64,
+    /// The UTC day the counts are of (`unix / 86400`): when it moves on, the counts start again.
+    #[serde(default)]
+    pub utc_day: u64,
+    /// The activation was taken up at launch from the one the last session left running.
+    #[serde(default)]
+    pub restored: bool,
+}
+
+/// One park of an activation, and what it holds today ([`ActivationDto::parks`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationParkDto {
+    pub reference: String,
+    /// Distinct contacts from this park today.
+    pub count: usize,
+    /// Of those, park to park.
+    pub p2p: usize,
+    /// The calls those contacts were worked under, each with its own distinct contacts — one
+    /// activation file each, as signed (`hot::activation_day_calls`), most first. More than one is
+    /// a day POTA counts per call, not as `count`.
+    #[serde(default)]
+    pub calls: Vec<ActivationCallDto>,
+}
+
+/// One call a park's contacts today were worked under ([`ActivationParkDto::calls`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationCallDto {
+    /// `STATION_CALLSIGN`, else `OPERATOR`, upper-cased; null for neither.
+    pub callsign: Option<String>,
+    /// Distinct contacts under it.
+    pub count: usize,
+}
+
 /// The park or summit a worked Needed row is an activation of ([`AppSnapshot::work_park`]). Not a
 /// hunt: the log line the work opens fills it with the call, and nothing else ever reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +202,19 @@ pub struct WorkPark {
     pub program: String,
     /// "US-0001", "W7A/MN-001".
     pub reference: String,
+}
+
+/// A logger's WSJT-X FreeText as Tx 5 took it ([`AppSnapshot::udp_free_text`]): the text Tx 5
+/// now shows, and why its over was not sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UdpFreeText {
+    /// One more for each FreeText taken, so the cockpit applies each once.
+    pub seq: u32,
+    /// The text Tx 5 shows now; empty clears it, `None` leaves it as it is.
+    pub fill: Option<String>,
+    /// Why the over was not sent, when "send" asked for it.
+    pub refused: Option<String>,
 }
 
 /// One UDP-driven callsign highlight (JTAlert paints wanted/B4 calls).
@@ -727,6 +809,156 @@ pub struct Js8Typeahead {
     pub locked: bool,
 }
 
+/// The live JTTY state the cockpit polls (`get_jtty_state`) — `PskRxState`'s role for WSJT-X's
+/// keyboard mode: the receiver, and in `tx` what the transmitter is doing. Nothing in it can start
+/// a transmission. Computed from engine truth at poll time (`Engine::jtty_state`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyState {
+    /// The decoder is armed (session-only; the app never launches armed).
+    pub armed: bool,
+    /// WSJT-X's Rx frequency and F Tol: the audio channel always searched, `rx_hz` ± `ftol_hz`.
+    pub rx_hz: f32,
+    pub ftol_hz: f32,
+    /// The waterfall's range: the fixed 1200-1500 and 1500-1800 Hz channels are searched only
+    /// where they fall inside `low_hz..=high_hz` (WSJT-X searches them inside its wide graph).
+    pub low_hz: i32,
+    pub high_hz: i32,
+    /// The receive window, oldest first: one line per decoded message, updated in place while
+    /// it grows.
+    pub lines: Vec<JttyLine>,
+    /// The stations decoded in two separate messages a short time apart, newest first: the
+    /// only calls a lookup may be offered for, and the ones the Needed board hears.
+    pub heard: Vec<JttyHeard>,
+    /// Why receiving stopped or restarted, to show the operator (`None` when there is nothing
+    /// to say since the last arm or clear).
+    pub notice: Option<String>,
+    /// The transmitter.
+    pub tx: JttyTxState,
+}
+
+/// What JTTY's transmitter is doing (`engine::jtty_tx`), for the cockpit's dock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyTxState {
+    /// Why a send would be refused right now, or `None`.
+    pub refusal: Option<String>,
+    /// The Tx offset, Hz (WSJT-X's Tx spin box for JTTY).
+    pub tx_hz: f32,
+    /// The contest serial number (`%E` / `%N`).
+    pub serial: u32,
+    /// JTTY audio is on the air.
+    pub sending: bool,
+    /// A live session is running (continuous PTT, the filler between what is typed).
+    pub live: bool,
+    /// Segments still to go, the one on the air included (WSJT-X's "Send (3 left)").
+    pub left: u32,
+    /// Their text, one per line (the Send button's tooltip).
+    pub pending: String,
+    /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
+    pub notice: Option<String>,
+    /// WSJT-X's "Frames: sent/total" for this over: frames of what was sent that are on the air,
+    /// and those plus what is still queued (the filler in neither).
+    pub frames_sent: u32,
+    pub frames_total: u32,
+    /// The newest Log QSO prompt (a send starting "TU " went out), or `None`.
+    pub log_prompt: Option<JttyLogPrompt>,
+    /// WSJT-X's "Message style": which of the two F-key sets F1-F8 send.
+    pub style: crate::settings::JttyMessageStyle,
+    /// The eight templates F1-F8 send in that style (the keys' captions).
+    pub fkeys: Vec<String>,
+}
+
+/// WSJT-X's Log QSO prompt after a JTTY send starting "TU " goes out (`logQSOTimer`): whom the
+/// send named and the serial it sent. A prompt only: nothing is logged unless the operator logs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyLogPrompt {
+    /// Numbered from 1 each session: the cockpit asks once per prompt.
+    pub id: u64,
+    /// The DX call the send was made with (the Call box); empty when there was none.
+    pub call: String,
+    /// The serial number the exchange sent (WSJT-X's `m_xSent`), before it moved on.
+    pub serial: u32,
+    /// When the send started on the air, UTC milliseconds.
+    pub at_utc_ms: i64,
+    /// The station whose prompt this one replaced while it was still unanswered (a second TU to
+    /// another station): that contact is logged from the log strip, not from here.
+    #[serde(default)]
+    pub replaced: Option<String>,
+}
+
+/// How an answer of a Log QSO prompt went (`jtty_log_prompt_answer`): `Taken` is the first answer
+/// of the prompt still asked, and the only one that lets a screen log; every other says why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JttyLogPromptAnswer {
+    /// This answer took it: Log QSO may log the contact.
+    Taken,
+    /// Another answer (Log QSO or Not now, on any screen) took it first.
+    Answered,
+    /// The contact is in the log already, logged by another route.
+    Logged,
+    /// A newer TU raised a prompt of its own in its place.
+    Replaced,
+    /// Too old to ask, or the screen was left.
+    Expired,
+}
+
+/// One message in the JTTY receive window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyLine {
+    /// The decoder's message id: stable while the message grows.
+    pub id: i64,
+    /// When its first frame started, UTC milliseconds.
+    pub start_utc_ms: i64,
+    /// Audio frequency (Hz) and the dial it was heard on (Hz).
+    pub freq_hz: f32,
+    pub dial_hz: u64,
+    /// SNR of its first frame, dB in 2500 Hz (WSJT-X's column).
+    pub snr: i32,
+    /// The text so far, as WSJT-X shows it (keep-alive filler removed).
+    pub text: String,
+    /// The line exactly as WSJT-X's decode pane prints it, without the optional time label:
+    /// frequency, SNR and the text wrapped at 40 characters (continuations indented).
+    pub line: String,
+    /// `"growing" | "complete" | "expired" | "ended"`: still arriving, ended by its sender,
+    /// timed out, or cut off by the reception ending.
+    pub state: String,
+    /// The message belongs to the RX-frequency pane (WSJT-X's right-hand pane): it was within
+    /// F Tol of the Rx frequency when first heard, and stays there as it drifts.
+    pub rx: bool,
+    /// The calls in this line that have been decoded in two separate messages: the ones a
+    /// click may look up. A call not listed here has been heard once, and may be a false
+    /// decode.
+    pub confirmed_calls: Vec<String>,
+    /// A message this station SENT (WSJT-X shows each in the QSO Frequency pane as it starts on
+    /// the air, its SNR column blank): `snr` is 0 and `line` has no SNR.
+    pub tx: bool,
+    /// A message found by decoding again (WSJT-X's review), and which review: the panes show
+    /// each review's lines together under a heading. Absent for live reception.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<u64>,
+}
+
+/// A JTTY station decoded in two separate messages a short time apart, at its latest message
+/// that named it as the sender (WSJT-X's spot shape: `CQ|DE|<call> <sender> [grid]`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyHeard {
+    pub call: String,
+    /// The RF frequency it was heard on: dial + audio frequency, Hz.
+    pub freq_hz: u64,
+    /// The band of `freq_hz` (`"20m"`), or `""` off the band table.
+    pub band: String,
+    pub snr: i32,
+    /// A locator the message carried after the sender, if any.
+    pub grid: Option<String>,
+    /// When that message started, UTC milliseconds.
+    pub at_utc_ms: i64,
+}
+
 /// A single chat message (inbound or outbound) within a conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -830,7 +1062,8 @@ pub enum SourceKind {
     Companion,
 }
 
-/// A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured radio;
+/// A compact per-radio summary for the multi-radio switcher (dual-radio). One per enabled radio
+/// (the active radio always, even if its profile is disabled);
 /// the ACTIVE radio carries live state, the others their last-known band/frequency (they're not
 /// connected in the active-only model). Absent/1-element ⇒ the UI renders single-radio, unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1209,6 +1442,50 @@ pub enum StreamMic {
     Keyed,
 }
 
+/// Why a streamed Remote operator's held PTT would not key the station right now, as the Phone
+/// cockpit and the client banner show it beside the PTT control. DISPLAY ONLY: it names the first
+/// gate [`crate::engine::Engine::arm_remote_mic`] would hit, in that order, and once a press is
+/// armed and keyed it is `None`. Nothing keys, refuses or releases on it — it only explains a
+/// press that did nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PttRefusal {
+    /// The station is not in Phone.
+    NotPhone,
+    /// Transmit is not enabled at the station (the Enable-TX latch is off).
+    TxDisabled,
+    /// The emitted frequency is outside this station's licence privileges here.
+    OutsideLicence,
+    /// The station is sending a tune carrier.
+    Tuning,
+    /// Another source holds the transmitter (a key at the shack, an FT over, the voice keyer…).
+    OtherOwner,
+    /// The station is repairing its clock, which holds transmit.
+    ClockRepair,
+    /// This device signed in moments ago and is held from transmit until it is approved at the
+    /// station (the 2026-10-23 sign-in decision).
+    OnHold,
+    /// There is no live transmit presence for this computer (the link dropped).
+    NoPresence,
+    /// No microphone feed is set up on this computer for the audio to come from.
+    NoFeed,
+    /// The over is armed, but no microphone audio has arrived to key it.
+    NoAudio,
+}
+
+/// The controlling device's transmit hold, as [`RadioStatus::tx_hold`] shows it. DISPLAY ONLY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxHold {
+    /// The station holds a confirmed notice to the device's owner.
+    pub owner_notified: bool,
+    /// Seconds, rounded up, until the hold lifts by itself: sent only when the owner was notified
+    /// and the device's window is all that holds it. Without a notice, only Allow to transmit at
+    /// the station lifts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_secs: Option<u64>,
+}
+
 /// Which kind of problem the station's audio-error line reports ([`RadioStatus::audio_error_kind`]).
 /// Named by the line's writer beside its sentence, so the UI never reads the sentence to learn what
 /// it is about. The words, and how loudly each is shown, are the UI's.
@@ -1400,6 +1677,12 @@ pub struct RadioStatus {
     /// mode, not the sideband it was generated on) without a settings round-trip.
     #[serde(default)]
     pub operating_mode: String,
+    /// The mode the Keyboard section's contacts log under: "JTTY" on the JTTY modem, else the PSK
+    /// sub-mode picked in the PSK cockpit ("PSK31" | "QPSK31"). PSK and JTTY are ONE section
+    /// ("keyboard" above), so the section alone cannot say which is on the air. Always filled;
+    /// read it while `operating_mode` is "keyboard". Empty from a station older than this field.
+    #[serde(default)]
+    pub keyboard_mode: String,
     /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
     /// over CAT (#57). Display-only — feeds the TX badge and the meter pane.
     #[serde(default)]
@@ -1591,6 +1874,12 @@ pub struct RadioStatus {
     /// positive spelling would default a working ATU button to disabled.
     #[serde(default)]
     pub atu_start_tune_unsupported: bool,
+    /// The ATU button's menu offers "Switch tuner out" (#344): the radio reports a tuner and this
+    /// CAT path can switch it out (`Engine::atu_switch_out_supported` — never Nexus's own Flex
+    /// client, never the native Icom path). POSITIVE ON PURPOSE: a station older than the page
+    /// has no switch-out command, and `false` offers none.
+    #[serde(default)]
+    pub atu_switch_out: bool,
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,
@@ -1681,6 +1970,24 @@ pub struct RadioStatus {
     /// (`tx_busy_reason`), and nothing keys, refuses or releases on this.
     #[serde(default)]
     pub stream_mic: Option<StreamMic>,
+    /// Why a streamed Remote operator's held PTT would not key right now, or `None` when a press
+    /// would (or did) key. DISPLAY ONLY ([`PttRefusal`]): the Phone cockpit and the client banner
+    /// show it beside the PTT control so a press that did nothing is explained.
+    #[serde(default)]
+    pub ptt_refusal: Option<PttRefusal>,
+    /// The device driving the station from afar is held from transmit (the 2026-10-23 sign-in
+    /// decision), in every mode, or `None` when it is not (or nobody drives it). DISPLAY ONLY
+    /// ([`TxHold`]): the remote PC's banner and status lane say so, with the time left only where
+    /// the station would lift the hold by itself. The transmit gate reads the station's own
+    /// authority, never this. Skipped when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hold: Option<TxHold>,
+    /// A voice-keyer message is queued or on the air at the station. DISPLAY ONLY: the voice
+    /// keyer learns from its fall that its message has ended. Skipped when false, so every other
+    /// snapshot is byte for byte what it was; a station that never says it shows the keyer no
+    /// rise, so its message never reads as ended and a hide stops it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub voice_playing: bool,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]
@@ -1794,6 +2101,12 @@ pub struct RadioStatus {
     /// exactly this, "is not where anyone looks".
     #[serde(default)]
     pub cat_share_error: Option<String>,
+    /// The port the CAT broker is actually serving on (#165), `None` while it is not serving.
+    /// Usually Settings' "Sharing port"; when another program already holds that port, the
+    /// broker leaves it alone and serves on the next free one, and this is where programs must
+    /// connect. ABSENT while not sharing, so a snapshot without sharing is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_share_port: Option<u16>,
     /// The TCI server ("Share by TCI"): where programs connect, why it is not serving, and the
     /// programs connected. ABSENT while the server is switched off, so every snapshot without it
     /// is byte-identical. Written by `src-tauri/src/tci_server.rs` on each of its ticks.
@@ -1883,6 +2196,11 @@ pub struct RadioStatus {
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     #[serde(default)]
     pub hold_tx_freq: bool,
+    /// Skip Tx1: answering a CQ opens with the report instead of the grid. The
+    /// station's own session flag, carried here so a computer driving the station draws the box
+    /// from the station's value; absent (an older station) reads off, the launch value.
+    #[serde(default)]
+    pub skip_tx1: bool,
     /// Real PC-clock-vs-UTC offset in ms from an NTP probe, or `None` when the
     /// probe is disabled / offline (then the UI falls back to DT-derived health).
     ///
@@ -1923,6 +2241,13 @@ pub struct RadioStatus {
     /// The status lane says so.
     #[serde(default)]
     pub clock_repair_tx_held: bool,
+    /// A TX On was refused because a newly signed-in device that is not yet approved controls the
+    /// station, and that hold still stands (`Engine::set_remote_transmit_held`). DISPLAY ONLY: the
+    /// status lane says why the latch did not light; the refusal itself is the engine's and
+    /// nothing keys, refuses or releases on this. Skipped when false, so every other snapshot is
+    /// byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_on_held: bool,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,
@@ -2344,6 +2669,12 @@ pub struct QsoStatus {
     /// when the partner advances the QSO) — the "I've called them N times" count.
     #[serde(default)]
     pub tx_count: u32,
+    /// True when the TX watchdog disarmed TX with this QSO's message still queued: the call
+    /// was ended by the watchdog, not answered and not capped. Display only, the strip's
+    /// "watchdog stopped the call" in place of the bare state (WSJT-X turns its TX status
+    /// red with the same news). Clears when the operator turns TX on again.
+    #[serde(default)]
+    pub watchdog_stopped: bool,
 }
 
 /// Status of the coordinated-QSY ("move together") feature — a SEPARATE, opt-in
@@ -3661,6 +3992,64 @@ pub struct LoggedQso {
     pub my_rig: Option<String>,
     #[serde(default)]
     pub extra: Vec<(String, String)>,
+    /// The contest block of a contact logged in a contest, for the Logbook to SHOW (its contest
+    /// and exchange columns, the detail view). OUTBOUND ONLY: the reverse conversion ignores it,
+    /// as it always set `contest: None`, and the edit policy restores the stored block
+    /// (`Logbook::update_record`) — the window has no control that edits one, and this carries
+    /// only part of it (no session, no merge identity), so it must never become a write path.
+    ///
+    /// Skipped when absent, so every ordinary contact — and every golden of one — serializes
+    /// byte for byte as before. ⚠️ `engine/remote_logging.rs`'s `PendingRecord` flattens this
+    /// type beside its own `gridSource`; it has no sidecar named `contest`, so the held-contact
+    /// journal keeps one key per name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contest: Option<LoggedContestDto>,
+}
+
+/// A contest contact's contest fields as the Logbook shows them — a display mirror of the part of
+/// `tempo_core::logbook::ContestFields` an operator reads: the contest, the serials, the ADIF
+/// exchange strings and the exchange as logged, field by field.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoggedContestDto {
+    /// ADIF `CONTEST_ID`.
+    #[serde(default)]
+    pub contest_id: String,
+    /// ADIF `STX` / `SRX`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stx: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srx: Option<u32>,
+    /// ADIF `STX_STRING` / `SRX_STRING`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stx_string: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srx_string: Option<String>,
+    /// The exchange sent and received, `(field, value)` in the order it is rendered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sent: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<(String, String)>,
+    /// The exchange's own standard ADIF columns, `(tag, value)` (`CNTY`, `ARRL_SECT`, `CQZ` …):
+    /// what the ADIF writer, the uploads and the awards read for those fields on this contact, so
+    /// the contact card shows them and does not offer to change them beside it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adif: Vec<(String, String)>,
+}
+
+impl From<tempo_core::logbook::ContestFields> for LoggedContestDto {
+    fn from(c: tempo_core::logbook::ContestFields) -> Self {
+        LoggedContestDto {
+            contest_id: c.contest_id,
+            stx: c.stx,
+            srx: c.srx,
+            stx_string: c.stx_string,
+            srx_string: c.srx_string,
+            sent: c.sent,
+            rcvd: c.rcvd,
+            adif: c.adif,
+        }
+    }
 }
 
 /// On-the-air (POTA/SOTA) references for a QSO — serde mirror of `tempo_core::logbook::Ota`.
@@ -3760,6 +4149,12 @@ impl From<crate::logexport::Exported> for LogExportDto {
 
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
+        // The state every reader counts: a merged contest contact's exchange STATE, which its
+        // uploads carry and WAS counts, else the record's own (`record_field`). The Logbook's
+        // State column and edit form show this one.
+        let state = tempo_core::logbook::record_field(&r, "STATE")
+            .map(str::to_string)
+            .or_else(|| r.state.clone());
         LoggedQso {
             id: r.id.map(|id| id.to_string()),
             call: r.call,
@@ -3767,7 +4162,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             country: r.country,
             // Filled by the command layer (get_log) — tempo-app has no cty.dat.
             entity: None,
-            state: r.state,
+            state,
             band: r.band,
             freq_mhz: r.freq_mhz,
             freq_rx_mhz: r.freq_rx_mhz,
@@ -3803,6 +4198,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             my_grid: r.my_grid,
             my_rig: r.my_rig,
             extra: r.extra,
+            contest: r.contest.map(|c| LoggedContestDto::from(*c)),
         }
     }
 }
@@ -3919,6 +4315,8 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             my_grid: q.my_grid,
             my_rig: q.my_rig,
             extra: q.extra,
+            // `q.contest` is a display copy and deliberately dropped: an edit keeps the stored
+            // block (`Logbook::update_record`), and a new contact from the window has none.
             contest: None,
         }
     }
@@ -3944,10 +4342,15 @@ pub struct UploadReportDto {
     /// Contacts of the batch DELETED from the log while TQSL was signing it.
     #[serde(default)]
     pub skipped_deleted: usize,
+    /// Contacts held back from the batch because TQSL does not know their mode yet (a JTTY
+    /// contact, written `MODE=MFSK SUBMODE=JTTY`): left unsent and unstamped, and named in the
+    /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub held_mode: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportStats {
     pub added: usize,
@@ -3959,6 +4362,10 @@ pub struct ImportStats {
     /// that fixes every award.
     pub updated: usize,
     pub total: usize,
+    /// The import's run in the Logbook's history: what its Undo undoes, and nothing else
+    /// (`tempo_app::loghistory::undo_run`). `None` from a build that named none.
+    #[serde(default)]
+    pub run: Option<String>,
 }
 
 /// A confirmation in a synced report with no matching logged QSO (diagnostic).
@@ -4304,7 +4711,7 @@ impl DiagnosticsReportDto {
 /// A QRZ.com callsign-lookup result (the serde DTO over the pure
 /// [`tempo_core::qrz::QrzLookup`]). `grid`/`state` are subscriber-only and are
 /// routinely `None` for free QRZ accounts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrzLookupDto {
     pub call: String,
@@ -4330,6 +4737,27 @@ pub struct QrzLookupDto {
     pub lat: Option<f64>,
     #[serde(default)]
     pub lon: Option<f64>,
+    /// The rest of what a contact can hold ([`tempo_core::qrz::QrzLookup`] names each): county,
+    /// IOTA, e-mail, web page, QSL route, the LoTW/eQSL/paper-card flags and the UTC offset in
+    /// hours. Each is routinely `None`, and absent from an older answer.
+    #[serde(default)]
+    pub county: Option<String>,
+    #[serde(default)]
+    pub iota: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub web: Option<String>,
+    #[serde(default)]
+    pub qsl_via: Option<String>,
+    #[serde(default)]
+    pub lotw: Option<bool>,
+    #[serde(default)]
+    pub eqsl: Option<bool>,
+    #[serde(default)]
+    pub paper_qsl: Option<bool>,
+    #[serde(default)]
+    pub utc_offset: Option<f32>,
 }
 
 impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
@@ -4348,6 +4776,33 @@ impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
             image: r.image,
             lat: r.lat,
             lon: r.lon,
+            county: r.county,
+            iota: r.iota,
+            email: r.email,
+            web: r.web,
+            qsl_via: r.qsl_via,
+            lotw: r.lotw,
+            eqsl: r.eqsl,
+            paper_qsl: r.paper_qsl,
+            utc_offset: r.utc_offset,
+        }
+    }
+}
+
+/// callook.info, the third callbook, flows into the same DTO. It holds US licences only, so the
+/// country is the United States; the DXCC number is left to the country file, as for the others.
+impl From<tempo_core::callook::CallookLookup> for QrzLookupDto {
+    fn from(r: tempo_core::callook::CallookLookup) -> Self {
+        QrzLookupDto {
+            call: r.call,
+            name: r.name,
+            qth: r.qth,
+            grid: r.grid,
+            state: r.state,
+            country: Some("United States".to_string()),
+            lat: r.lat,
+            lon: r.lon,
+            ..Default::default()
         }
     }
 }
@@ -4372,6 +4827,15 @@ impl From<tempo_core::hamqth::HamQthLookup> for QrzLookupDto {
             image: r.image,
             lat: r.lat,
             lon: r.lon,
+            county: r.county,
+            iota: r.iota,
+            email: r.email,
+            web: r.web,
+            qsl_via: r.qsl_via,
+            lotw: r.lotw,
+            eqsl: r.eqsl,
+            paper_qsl: r.paper_qsl,
+            utc_offset: r.utc_offset,
         }
     }
 }
@@ -4602,9 +5066,15 @@ pub struct AppSnapshot {
     /// latch that Work withheld. Absent from the wire for a Work made at the station.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_afar: bool,
-    /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
+    /// Bumped by an inbound UDP Clear of Band Activity — the UI erases that pane on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// The last FreeText a logger sent (JTAlert, GridTracker), as Tx 5 took it. Absent until one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_free_text: Option<UdpFreeText>,
+    /// Bumped by an inbound UDP Clear of Rx Frequency — the UI erases that pane on change.
+    #[serde(default)]
+    pub rx_freq_clear_tick: u32,
     /// Bumped every time a QSO is logged, by ANY path — the UI fires the
     /// "clear DX call after logging" wipe on change, so a backend auto-log
     /// clears the cockpit's DX fields just like a manual log does.
@@ -4614,6 +5084,10 @@ pub struct AppSnapshot {
     /// the park). None = not hunting.
     #[serde(default)]
     pub hunt: Option<HuntDto>,
+    /// The activation running now (the activator's strip and the log form's POTA dupe badge).
+    /// None = not activating.
+    #[serde(default)]
+    pub activation: Option<ActivationDto>,
     /// Coordinated-QSY status — present only while the (opt-in) feature is enabled.
     #[serde(default)]
     pub qsy: Option<QsyStatus>,
@@ -5340,6 +5814,32 @@ mod tests {
             serde_json::to_value(&d).unwrap(),
             serde_json::json!({ "text": "<EOR>", "saving": 2, "held": 1 })
         );
+    }
+}
+
+#[cfg(test)]
+mod logged_state_tests {
+    use super::*;
+
+    /// ★ The Logbook's State column and edit form show the state every reader counts: a merged
+    /// contest contact's exchange STATE, which its upload carries and WAS counts — not the state
+    /// looked up from its call beside it. A blank exchange state is none, and the field answers.
+    #[test]
+    fn the_logbook_shows_the_state_its_exchange_carried() {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:5>K2ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+             <STATE:2>NJ<EOR>",
+        )
+        .remove(0);
+        assert_eq!(LoggedQso::from(r.clone()).state.as_deref(), Some("NJ"));
+        r.contest = Some(Box::new(tempo_core::logbook::ContestFields {
+            contest_id: "NAQP-CW".into(),
+            adif: vec![("STATE".into(), "NY".into())],
+            ..Default::default()
+        }));
+        assert_eq!(LoggedQso::from(r.clone()).state.as_deref(), Some("NY"));
+        r.contest.as_mut().unwrap().adif[0].1 = " ".into();
+        assert_eq!(LoggedQso::from(r).state.as_deref(), Some("NJ"));
     }
 }
 

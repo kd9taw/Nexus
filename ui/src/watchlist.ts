@@ -2,7 +2,7 @@
 // DXpedition chase-star to arbitrary operator-defined targets: a specific call, a
 // wildcard/prefix (VP8*, *ABC), or a whole DXCC entity, optionally gated by CQ-only
 // and a minimum SNR. A match fires the loudest alert tier (it's what the operator asked
-// to be told about), reusing the existing alert dedupe/toast plumbing.
+// to be told about); the station raises it, from the copy App sends it (`setWatchList`).
 //
 // The same list MARKS the station afterwards (maintainer, 2026-09-23): the Call Roster, the
 // Stations list and Spots put a WATCH tile on every row it names. All three ask ONE matcher
@@ -12,7 +12,6 @@
 // the matcher is pure so it's fully unit-tested.
 
 import { useEffect, useMemo, useState } from 'react'
-import type { DecodeRow } from './types'
 import { durableGet, durableSet } from './features/durableStore'
 
 export type WatchKind = 'call' | 'dxcc' | 'grid'
@@ -34,7 +33,7 @@ export interface WatchFilter {
   label?: string
   /** #390 — the operator's own note on the entry: why it is on the list and when it can come off
    *  ("Samoa DXp 9/27-10/3"). Shown and edited in the Settings manager, and nowhere else. Nothing
-   *  matches or gates on it, and the station is never sent it (App sends kind and value alone).
+   *  matches or gates on it, and the station is never sent it (App sends every other field).
    *  Absent when there is none, never an empty string. */
   notes?: string
 }
@@ -42,7 +41,7 @@ export interface WatchFilter {
 const STORAGE_KEY = 'nexus.watchlist'
 /** Dispatched by every writer of the list after it saves — the Settings manager
  *  (`WatchlistPanel`) and the one-time fold of the retired wanted list (`features/watchlistFold`);
- *  App (its alert path, and the copy it sends the station for the Needed board), `useWatchMatch`
+ *  App (the copy it sends the station, for its alerts and the Needed board), `useWatchMatch`
  *  and the manager itself re-read the list on it. */
 export const WATCHLIST_CHANGED = 'nexus:watchlist-changed'
 
@@ -72,8 +71,8 @@ export interface WatchSubject {
 }
 
 /** Does this entry name this station — its call or prefix, its DXCC entity, or its grid? The
- *  IDENTITY half of every watch match, shared by the alert (`matchWatchlist`) and the lists
- *  (`watchedEntry`), so one entry cannot come to mean two things. `call` arrives uppercased. */
+ *  IDENTITY half of a watch match, which the lists ask (`watchedEntry`). `call` arrives
+ *  uppercased. */
 function entryNames(
   f: WatchFilter,
   call: string,
@@ -94,25 +93,13 @@ function entryNames(
   return false
 }
 
-/** Return the FIRST watch filter a decode matches, or null. Pure — no I/O. */
-export function matchWatchlist(d: DecodeRow, filters: WatchFilter[]): WatchFilter | null {
-  const call = (d.from ?? '').toUpperCase()
-  if (!call) return null
-  for (const f of filters) {
-    if (f.cqOnly && !d.isCq) continue
-    if (f.minSnr != null && d.snr < f.minSnr) continue
-    if (entryNames(f, call, d.country, d.grid)) return f
-  }
-  return null
-}
-
 /**
  * The entry that puts a station on the watch list, for the lists that MARK it (the Call Roster,
  * the Stations list, Spots): the FIRST entry that names it, or null.
  *
  * IDENTITY ONLY. `cqOnly` and `minSnr` are the alert's gates ("only alert on a CQ call", "only
- * alert when SNR ≥") and they stay in `matchWatchlist`. A station does not leave the watch list
- * when it answers somebody or fades a few dB. Gated here, a row would lose its tile — and drop
+ * alert when SNR ≥"), which the station applies when it raises the alert. A station does not
+ * leave the watch list when it answers somebody or fades a few dB. Gated here, a row would lose its tile — and drop
  * out of Needed only — every time the station stopped calling CQ, and a cluster spot, which
  * carries neither a CQ flag nor an SNR, could never agree with the roster about the same call.
  */

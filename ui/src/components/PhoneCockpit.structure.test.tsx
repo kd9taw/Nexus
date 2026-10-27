@@ -4,10 +4,11 @@
 //
 // The shell contract has five child kinds: header chrome, the scope, the TX strip under it, ONE
 // pane region (.cockpit-panes, tier-stamped by useRegionCols) and the pinned TX dock — and since
-// 2026-10-03 Phone may show a sixth, THE LEFT SIDE, beside the scope, the strip and the region.
-// So in the DOM the scope, the strip and the region stand in a STAGE inside the left side's ROW,
+// 2026-10-03 Phone may show a sixth, THE LEFT SIDE, beside the region and (since 2026-10-26) under the
+// full-width scope and strip. So in the DOM the region stands in a STAGE inside the left side's ROW,
 // two wrappers that are always there and generate no box until the side shows (cockpit-panes.css
-// "THE LEFT SIDE"); the header and the dock are shell children. These tests pin the parts of that
+// "THE LEFT SIDE"); the header, the scope, its divider, the strip and the dock are shell children.
+// These tests pin the parts of that
 // contract that live in TSX, where no CSS test can see them:
 //   - every operator-content block renders through a CockpitPaneFrame inside the region,
 //   - the PTT row renders in .cockpit-txdock and NEVER inside a pane (a pane scrolls;
@@ -187,17 +188,38 @@ const renderCockpit = (props: Partial<Parameters<typeof PhoneCockpit>[0]> = {}) 
   render(<PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} {...props} />)
 
 describe('PhoneCockpit pane-grid shell', () => {
+  it('showing the left side re-parents nothing: the scope and the strip stay shell children above the row, the keyer and the log form stay put (2026-10-26)', () => {
+    // The operator's ruling: the scope and its TX strip span the FULL width above the side, and the
+    // waterfall is never re-parented or remounted. Same cockpit, the side shown by a re-render (a pane
+    // moved there in ⊞ Arrange), so a remount of any of them would show as a different node.
+    windowWidth(1600)
+    const view = renderCockpit({ panels: fakePanels() })
+    const shell = document.querySelector('main.phone-cockpit')!
+    const before = ['.ph-scope-panel', '.cockpit-txstrip', '[data-testid="vk-stub"]', '[data-testid="log-stub"]'].map((q) => document.querySelector(q)!)
+    expect(before.every(Boolean)).toBe(true)
+    expect(document.querySelector('.cockpit-left'), 'premise: no side yet').toBeNull()
+    view.rerender(<PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={sidePanels(['bandActivity'])} />)
+    expect(document.querySelector('.cockpit-left'), 'the side did not show').not.toBeNull()
+    const after = ['.ph-scope-panel', '.cockpit-txstrip', '[data-testid="vk-stub"]', '[data-testid="log-stub"]'].map((q) => document.querySelector(q)!)
+    after.forEach((el, i) => expect(el.isSameNode(before[i]), `${el.className || el.getAttribute('data-testid')} remounted`).toBe(true))
+    expect(after[0].parentElement, 'the scope left the shell').toBe(shell)
+    expect(after[1].parentElement, 'the TX strip left the shell').toBe(shell)
+    const row = shell.querySelector(':scope > .cockpit-leftrow')!
+    expect(row.previousElementSibling, 'the side does not start under the TX strip').toBe(after[1])
+    expect(row.querySelector('.ph-scope-panel, .cockpit-txstrip'), 'the scope or the strip stands beside the side').toBeNull()
+  })
+
   it('the shell holds no child kinds beyond the contract (design3 §5 rule 1)', () => {
     // The recurrence-proof leans on this: "making X unreachable would require adding a
     // shell-level sibling, which fails contract test 1" — so the test has to exist. The
-    // sanctioned shell children are header chrome, the left side's ROW (holding the stage, and
-    // the side when it shows), ONE TX dock, and modal chrome (SpotDialog portals in as
-    // .logconfirm-backdrop when open; mocked null here). The stage holds the scope (+ its
-    // divider), the TX strip and ONE pane region. Anything else is a new sibling and must update
-    // this census — deliberately, with a name — not slip in.
+    // sanctioned shell children are header chrome, the scope (+ its divider), the TX strip, the left
+    // side's ROW (holding the stage, and the side when it shows), ONE TX dock, and modal chrome
+    // (SpotDialog portals in as .logconfirm-backdrop when open; mocked null here). The stage holds
+    // ONE pane region. Anything else is a new sibling and must update this census — deliberately,
+    // with a name — not slip in.
     renderCockpit({ snap: makeSnap({ transmitting: true, txSwr: 1.2 }) })
     const shell = document.querySelector('main.layout.single.phone-cockpit')!
-    const SHELL = ['.cockpit-header', '.cockpit-flat', '.cockpit-leftrow', '.cockpit-txdock', '.logconfirm-backdrop']
+    const SHELL = ['.cockpit-header', '.ph-scope-panel', '.pane-splitter', '.cockpit-txstrip', '.cockpit-flat', '.cockpit-leftrow', '.cockpit-txdock', '.logconfirm-backdrop']
     for (const el of Array.from(shell.children)) {
       expect(
         SHELL.some((s) => el.matches(s)),
@@ -205,31 +227,28 @@ describe('PhoneCockpit pane-grid shell', () => {
       ).toBe(true)
     }
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
-    // The row, then the dock: the dock is the shell's LAST box, full width, whatever the row holds.
+    // The scope, its divider, the strip, the row, then the dock: the dock is the shell's LAST box, full
+    // width, whatever the row holds.
     const row = shell.querySelector(':scope > .cockpit-flat, :scope > .cockpit-leftrow')!
     expect(row, 'no left-side row in the shell').not.toBeNull()
     expect(row.nextElementSibling?.matches('.cockpit-txdock'), 'the dock does not follow the row').toBe(true)
+    expect(row.previousElementSibling?.matches('.cockpit-txstrip'), 'the row does not follow the TX strip').toBe(true)
     // With no side shown, the row holds the stage alone, and both are the box-less kind.
     expect(row.matches('.cockpit-flat')).toBe(true)
     expect([...row.children].map((c) => c.className)).toEqual(['cockpit-flat'])
     const stage = row.children[0]
-    for (const el of Array.from(stage.children)) {
-      expect(
-        ['.ph-scope-panel', '.pane-splitter', '.cockpit-txstrip', '.cockpit-panes'].some((s) => el.matches(s)),
-        `unexpected stage child <${el.tagName.toLowerCase()} class="${el.className}">`,
-      ).toBe(true)
-    }
-    expect(stage.querySelectorAll(':scope > .cockpit-panes').length).toBe(1)
+    expect([...stage.children].map((c) => c.className)).toEqual(['cockpit-panes'])
     expect(document.querySelectorAll('.cockpit-panes').length).toBe(1)
-    // The scope's divider gives back its column's gap from the stage (styles.css `.in-column`;
-    // cockpit-shells.test.ts computes the net in both states).
-    expect(stage.querySelector(':scope > .pane-splitter')!.classList.contains('in-column')).toBe(true)
-    // With no side the scope is not size-contained (styles.css `.ph-scope-panel--beside`).
-    expect(stage.querySelector(':scope > .ph-scope-panel')!.classList.contains('ph-scope-panel--beside')).toBe(false)
+    // The scope's divider is a shell child, so the shell rule gives back its gap (styles.css; cockpit-shells.test.ts
+    // computes the net) — it no longer needs `in-column`.
+    const scope = shell.querySelector(':scope > .ph-scope-panel')!
+    expect(scope, 'the scope is not a shell child').not.toBeNull()
+    expect(scope.nextElementSibling?.matches('.pane-splitter.horizontal'), 'the divider does not follow the scope').toBe(true)
+    expect(scope.nextElementSibling!.classList.contains('in-column')).toBe(false)
     // THE TX STRIP (2026-10-01): exactly one, directly under the scope (after its divider), holding
     // the stop controls the header used to hold — and the header none.
-    const strips = stage.querySelectorAll(':scope > .cockpit-txstrip')
-    expect(strips.length, 'no TX strip in the stage').toBe(1)
+    const strips = shell.querySelectorAll(':scope > .cockpit-txstrip')
+    expect(strips.length, 'no TX strip in the shell').toBe(1)
     expect(document.querySelectorAll('.cockpit-txstrip').length).toBe(1)
     expect(strips[0].previousElementSibling?.matches('.pane-splitter'), 'the TX strip is not directly under the scope').toBe(true)
     const named = (root: Element, re: RegExp) => [...root.querySelectorAll('button')].filter((b) => re.test(b.textContent!.trim()))
@@ -761,10 +780,8 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
       return real.call(this)
     })
   }
-  // The variable lives on the scope's PARENT — the stage — and inherits to it whatever box it is laid
-  // out in; the box measured is the stage's nearest one: the SHELL while the stage is the box-less
-  // `.cockpit-flat` (no side shown), the stage itself once the side shows (below).
-  const stage = () => document.querySelector<HTMLElement>('.ph-scope-panel')!.parentElement!
+  // The variable lives on the scope's PARENT — the SHELL, in both of the left side's states (2026-10-26).
+  const host = () => document.querySelector<HTMLElement>('.ph-scope-panel')!.parentElement!
   const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
   // jsdom loads no stylesheet: the wrappers' `display` comes from the REAL sheet's rule, read out of
   // cockpit-panes.css, so the divider walks past exactly the box-less wrapper the app renders.
@@ -783,10 +800,10 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
     sheet?.remove()
   })
 
-  it('the wrappers the divider walks past are the sheet’s own (control: the rule really loaded)', () => {
+  it('the scope’s parent is the shell, and the wrappers are the sheet’s box-less kind (control: the rule really loaded)', () => {
     renderCockpit()
-    expect(getComputedStyle(stage()).display).toBe('contents')
-    expect(stage().classList.contains('cockpit-flat')).toBe(true)
+    expect(host().matches('main.phone-cockpit')).toBe(true)
+    expect(getComputedStyle(document.querySelector('.cockpit-flat')!).display).toBe('contents')
   })
 
   it('focusable, announces its height in CSS px, and steps, jumps and resets', () => {
@@ -794,26 +811,30 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
     renderCockpit()
     const sep = screen.getByRole('separator', { name: 'scope height' })
     expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
-    expect(aria(sep)).toEqual(['220', '128', '346'])
+    // 25 % of the shell, every cockpit's waterfall default (2026-10-26); it was 22 %.
+    expect(aria(sep)).toEqual(['250', '128', '346'])
     fireEvent.keyDown(sep, { key: 'ArrowDown' })
-    expect(stage().style.getPropertyValue('--ph-scope-h')).toBe(`${(236 / 1000) * 100}%`)
-    expect(localStorage.getItem('nexus.split.phone.scope')).toBe(String((236 / 1000) * 100))
+    expect(host().style.getPropertyValue('--ph-scope-h')).toBe(`${(266 / 1000) * 100}%`)
+    expect(localStorage.getItem('nexus.split.phone.scope')).toBe(String((266 / 1000) * 100))
     fireEvent.keyDown(sep, { key: 'ArrowDown', shiftKey: true })
-    expect(sep.getAttribute('aria-valuenow')).toBe('300')
+    expect(sep.getAttribute('aria-valuenow')).toBe('330')
     fireEvent.keyDown(sep, { key: 'End' })
     expect(sep.getAttribute('aria-valuenow')).toBe('346')
     fireEvent.keyDown(sep, { key: 'Home' })
     expect(sep.getAttribute('aria-valuenow')).toBe('128')
     fireEvent.keyDown(sep, { key: 'Backspace' })
-    expect(stage().style.getPropertyValue('--ph-scope-h')).toBe('22%')
-    expect(localStorage.getItem('nexus.split.phone.scope')).toBe('22')
+    expect(host().style.getPropertyValue('--ph-scope-h')).toBe('25%')
+    expect(localStorage.getItem('nexus.split.phone.scope')).toBe('25')
   })
 
   it('a height stored by an earlier build is restored, clamped against this window, and kept', () => {
-    localStorage.setItem('nexus.split.phone.scope', '30')
+    localStorage.setItem('nexus.split.phone.scope', '22')
     layOut({ 'main.phone-cockpit': { height: 1000 } })
     const first = renderCockpit()
-    expect(stage().style.getPropertyValue('--ph-scope-h')).toBe('30%')
+    // A height stored under the old 22 % default is the operator's: kept exactly, not replaced by 25 %.
+    expect(host().style.getPropertyValue('--ph-scope-h')).toBe('22%')
+    expect(screen.getByRole('separator', { name: 'scope height' }).getAttribute('aria-valuenow')).toBe('220')
+    expect(localStorage.getItem('nexus.split.phone.scope')).toBe('22')
     first.unmount()
     localStorage.setItem('nexus.split.phone.scope', '75')
     renderCockpit()
@@ -821,24 +842,17 @@ describe('the scope divider answers the keyboard (PaneSeam)', () => {
     expect(localStorage.getItem('nexus.split.phone.scope'), 'the clamp is apply-side only').toBe('75')
   })
 
-  it('with the left side shown the scope keeps its HEIGHT: a share of the shell, painted as a share of the stage', () => {
+  it('with the left side shown the scope keeps its HEIGHT and its meaning: a share of the shell it still stands in', () => {
     windowWidth(1600)
-    layOut({ 'main.phone-cockpit': { height: 1000 }, '.cockpit-stage': { height: 800 } })
+    layOut({ 'main.phone-cockpit': { height: 1000 }, '.cockpit-stage': { height: 600 } })
     renderCockpit({ panels: sidePanels(['bandActivity']) })
-    expect(stage().classList.contains('cockpit-stage'), 'the side did not show').toBe(true)
-    expect(getComputedStyle(stage()).display).toBe('flex')
-    // Beside the side the scope's intrinsic size is its floor (styles.css `.ph-scope-panel--beside`).
-    expect(document.querySelector('.ph-scope-panel')!.classList.contains('ph-scope-panel--beside')).toBe(true)
+    expect(document.querySelector('.cockpit-stage'), 'the side did not show').not.toBeNull()
     const sep = screen.getByRole('separator', { name: 'scope height' })
-    // 22 % of the SHELL's 1000 — the 220 px it stands at with no side — not 22 % of the stage's 800:
-    // showing the side narrows the scope and leaves its height, and the strip under it, alone.
-    expect(aria(sep)).toEqual(['220', '128', '346'])
-    const painted = () => parseFloat(stage().style.getPropertyValue('--ph-scope-h'))
-    expect(painted()).toBeCloseTo((220 / 800) * 100, 6)
+    // 25 % of the SHELL's 1000 — what it stands at with no side — never a share of the stage below it.
+    expect(aria(sep)).toEqual(['250', '128', '346'])
+    expect(host().style.getPropertyValue('--ph-scope-h')).toBe('25%')
     fireEvent.keyDown(sep, { key: 'ArrowDown' })
-    expect(painted()).toBeCloseTo((236 / 800) * 100, 6)
-    // Stored as a share of the shell, as it always was: the same value means the same height.
-    expect(Number(localStorage.getItem('nexus.split.phone.scope'))).toBeCloseTo((236 / 1000) * 100, 6)
+    expect(Number(localStorage.getItem('nexus.split.phone.scope'))).toBeCloseTo((266 / 1000) * 100, 6)
   })
 })
 
@@ -933,13 +947,14 @@ describe('PhoneCockpit column dividers', () => {
   })
 })
 
-// ── THE STOP LINE'S STRIP, past the wrappers (2026-10-03) ─────────────────────────────────────────
+// ── THE STOP LINE'S STRIP, in both of the left side's states ─────────────────────────────────────
 // The TX strip parks above the sticky dock by its `--cockpit-txstrip-bottom`, the dock's height,
-// which it measures by finding the dock among its SHELL's children. Since the left side, the strip's
-// parent is the stage, not the shell: a lookup by parent finds no dock, writes 0 and parks Stop TX
-// UNDER the PTT row at a large pin (measured 2026-10-01). jsdom loads no sheet, so the two `sticky`s are
-// injected and the dock's height stubbed; what is computed is that the strip finds the dock.
-describe('the TX strip still clears the sticky dock from inside the stage', () => {
+// which it measures by finding the dock among its SHELL's children. From 2026-10-03 to 2026-10-26 the
+// strip stood in the stage, where a lookup by parent found no dock, wrote 0 and parked Stop TX UNDER
+// the PTT row at a large pin (measured 2026-10-01); it is a shell child again in both states now.
+// jsdom loads no sheet, so the two `sticky`s are injected and the dock's height stubbed; what is
+// computed is that the strip finds the dock.
+describe('the TX strip clears the sticky dock with and without the left side', () => {
   let sheet: HTMLStyleElement | null = null
   beforeEach(() => {
     sheet = document.createElement('style')
@@ -960,7 +975,7 @@ describe('the TX strip still clears the sticky dock from inside the stage', () =
       renderCockpit({ panels: side ? sidePanels(['bandActivity']) : fakePanels() })
       expect(document.querySelector('.cockpit-left') != null, 'the side state is not the one this case is about').toBe(side != null)
       const strip = document.querySelector<HTMLElement>('.cockpit-txstrip')!
-      expect(strip.parentElement!.matches('main'), 'the strip is a shell child again — this case tests nothing').toBe(false)
+      expect(strip.parentElement!.matches('main'), 'the strip left the shell').toBe(true)
       expect(strip.style.getPropertyValue('--cockpit-txstrip-bottom'), 'Stop TX would park under the PTT row').toBe('117px')
       const shell = document.querySelector<HTMLElement>('main.phone-cockpit')!
       expect(shell.style.getPropertyValue('--cockpit-txstrip-h'), 'the scroll padding left the shell').not.toBe('')
@@ -993,18 +1008,6 @@ describe('the Stats pane beside the log form', () => {
     renderCockpit({ panels: fakePanels(['stats']) })
     expect(document.querySelector('[data-pane="stats"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
-  })
-
-  it('the hosted page leaves it out', async () => {
-    const { installApplicationTransport } = await import('../applicationTransport')
-    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
-    try {
-      renderCockpit({ panels: fakePanels() })
-      expect(document.querySelector('[data-pane="stats"]')).toBeNull()
-      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
-    } finally {
-      off()
-    }
   })
 })
 
@@ -1111,19 +1114,5 @@ describe('the Recent contacts pane under the log form', () => {
     renderCockpit({ panels: fakePanels(['recent']) })
     expect(document.querySelector('[data-pane="recent"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
-  })
-})
-
-describe('the Recent contacts pane on the hosted page', () => {
-  it('is left out, as the Stats pane is: that page edits no contact', async () => {
-    const { installApplicationTransport } = await import('../applicationTransport')
-    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
-    try {
-      renderCockpit({ panels: fakePanels() })
-      expect(document.querySelector('[data-pane="recent"]')).toBeNull()
-      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
-    } finally {
-      off()
-    }
   })
 })

@@ -227,6 +227,39 @@ describe('the PSK cockpit can log a contact (#159)', () => {
     expect(rec.mode).toBe('QPSK31')
   })
 
+  it('logs the contact on the air: the dial plus the netted centre, outside a contest too', async () => {
+    // The centre the decoder is netted on is where PSK transmits (the radio loop keys the
+    // audio there) and what a contest row adds to the dial, so the strip logs the same.
+    state.current = { ...state.current, centerHz: 1200 } as PskState
+    try {
+      await renderCockpit()
+      const rec = await logACall('w1abc')
+      expect(rec.freqMhz, 'the strip logged the bare dial').toBe(14.0712)
+      expect(rec.band).toBe('20m')
+    } finally {
+      state.current = { ...state.current, centerHz: 1000 } as PskState
+    }
+  })
+
+  it('…and so does every sub-mode: a QPSK31 contact at its centre', async () => {
+    state.current = { ...state.current, centerHz: 1530 } as PskState
+    try {
+      await renderCockpit()
+      const select = screen.getByLabelText('PSK sub-mode') as HTMLSelectElement
+      await act(async () => {
+        fireEvent.change(select, { target: { value: 'qpsk31' } })
+      })
+      await waitFor(() =>
+        expect((document.querySelector('.psk-mode-select') as HTMLSelectElement).value).toBe('qpsk31'),
+      )
+      const rec = await logACall('w1abc')
+      expect(rec.mode).toBe('QPSK31')
+      expect(rec.freqMhz).toBe(14.07153)
+    } finally {
+      state.current = { ...state.current, centerHz: 1000 } as PskState
+    }
+  })
+
   it('fills the log callsign from the dock’s “their call” — WITHOUT moving the caret', async () => {
     // THE CONSTRAINT, TESTED, because it is the one that decides whether this ships at all:
     // the fill happens while the operator is typing, and the strip's OTHER machine-fill path

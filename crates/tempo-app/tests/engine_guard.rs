@@ -713,7 +713,7 @@ fn the_scan_sees_the_raw_locks_inside_the_guard_constructors() {
         "crates/tempo-app/src/engine.rs",
         "crates/tempo-audio/src/service.rs",
         "src-tauri/src/lib.rs",
-        "src-tauri/src/remote_service/operations/logging.rs",
+        "src-tauri/src/remote_service/operations/transmit_stop.rs",
     ] {
         assert!(
             files.iter().any(|(p, _)| p == must),
@@ -1012,7 +1012,7 @@ fn the_settings_scan_names_every_bare_save_and_nothing_else() {
 /// fn it sits in, and why each may keep its disk write under the Engine lock. A `save_now` anywhere
 /// else puts a change's write back under the lock the radio loop takes every 20 ms: queue the
 /// Engine's snapshot instead (`persist_settings` in src-tauri).
-const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 10] = [
+const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 8] = [
     // A restore that did not reach the disk says so, and mirrors nothing to the base config.
     ("src-tauri/src/lib.rs", "restore_settings_bundle"),
     // Remote's save-then-publish: a failed save changes nothing, so the result must come first.
@@ -1035,14 +1035,6 @@ const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 10] = [
     (
         "crates/tempo-app/src/engine/remote_settings/gain.rs",
         "save_remote_rx_gain",
-    ),
-    (
-        "crates/tempo-app/src/engine/remote_transmit/settings.rs",
-        "change_remote_ft_setting",
-    ),
-    (
-        "crates/tempo-app/src/engine/remote_transmit/runtime.rs",
-        "change_remote_ft_runtime",
     ),
     // Remote radio commits: the save picks the outcome the request reports (Applied or Unknown),
     // which must be decided inside the commit's hold.

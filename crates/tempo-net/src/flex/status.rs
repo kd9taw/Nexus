@@ -15,7 +15,7 @@
 //! `interlock band <n>` is configuration, not a state sample, and is not decoded.
 //!
 //! **The keyed state comes only from the interlock.** The radio never sends `mox=` in transmit
-//! status (port plan §4.3, from AetherSDR's 4.x behaviour), and the transmit decoder does not
+//! status (from AetherSDR's 4.x behaviour), and the transmit decoder does not
 //! read it: no field here can be mistaken for "the radio is keyed".
 //!
 //! PORTED from AetherSDR (https://github.com/aethersdr/AetherSDR, GPL-3.0; the upstream file

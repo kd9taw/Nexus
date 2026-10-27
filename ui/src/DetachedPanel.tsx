@@ -19,7 +19,7 @@ import { t } from './i18n'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
-import { pushToast, setPopupNotifications, withErrorToast } from './toast'
+import { pushToast, setPopupMinSeconds, setPopupNotifications, withErrorToast } from './toast'
 import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
@@ -89,6 +89,7 @@ import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
+import { ActivationPane } from './components/ActivationPane'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
 import { DashboardBar, StayBehindToggle } from './components/DashboardBar'
@@ -366,6 +367,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
+  // #321: and how long they stay, at least. Absent is 0, each pop-up's own time.
+  useEffect(() => {
+    setPopupMinSeconds(settings?.popupMinSecs ?? 0)
+  }, [settings?.popupMinSecs])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
   // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed;
@@ -409,9 +414,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }, [isBandMap])
 
   // Drive a command then mirror the returned snapshot immediately (the 300 ms poll would
-  // catch it anyway, but this keeps the cockpit snappy).
+  // catch it anyway, but this keeps the cockpit snappy). A refusal is shown in the words it came
+  // with, as the main window's same buttons show it: a transmit press that did nothing and said
+  // nothing reads as a dead button, and from a computer driving a station that was every refusal.
   const apply = (p: Promise<AppSnapshot>) => {
-    void p.then((s) => s && setSnap(s)).catch(() => {})
+    void p.then((s) => s && setSnap(s)).catch((e) => pushToast(e instanceof Error ? e.message : String(e), 'error'))
   }
 
   // ESC STOPS TRANSMIT IN THE CONTEST'S WINDOWS TOO (operator, Illinois QSO Party 2026-10-18: working
@@ -483,8 +490,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Full work path from the pop-out: the atomic workSpot switches the rig's MODE + exact
   // frequency (a bare QSY left CW clicks in DATA-U).
   const workNeed = async (a: NeedAlert) => {
-    // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
-    // switched on, at the row's own frequency or that screen's channel for the band, as from the
+    // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it
+    // is switched on, at the row's own frequency or that screen's channel for the band, as from the
     // docked board: the main window follows this Work's hint there.
     const modes = readEnabledModes()
     const screen = ownScreen(a)
@@ -744,7 +751,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
     needAlerts: boardAlerts,
     spotMe: snap
-      ? { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier: snap.link.tier }
+      ? { section: snap.radio.operatingMode, keyboardMode: snap.radio.keyboardMode, sideband: snap.radio.sideband, tier: snap.link.tier }
       : undefined,
   }
 
@@ -827,6 +834,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
+          activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}
           // The Spots, POTA/SOTA and Needed boxes, with THIS window's boards (its Spots and
           // Needed boards above, `huntOta`) and the board's own feed, the spot poll above. The
           // POTA/SOTA box waits for the first snapshot, as this window's POTA/SOTA arm does.
@@ -886,6 +894,24 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           // The QSY half of a hunt (`huntOta`, above): the board tags the hunt itself first.
           onHunt={huntOta}
         />
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'activation') {
+    // THE ACTIVATION WINDOW: the Activation pane on a monitor of its own, beside the cockpit. It reads
+    // the snapshot this window polls and asks the logbook through this window's source; it sends
+    // nothing (components/ActivationPane).
+    return (
+      <DetachedShell className="detached-activation">
+        <h2 className="act-window-title">{t('connect.pane.activation.title')}</h2>
+        {snap ? (
+          <ActivationPane act={snap.activation ?? null} logTick={snap.logTick} />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        )}
       </DetachedShell>
     )
   }
@@ -1132,7 +1158,17 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onSetTxCycleAuto={(auto: boolean) => apply(setTxCycleAuto(auto))}
           onResend={() => apply(qsoResend())}
           onFreetext={(text: string) => apply(qsoFreetext(text))}
-          onLog={() => apply(logCurrentQso().then((r) => r.snapshot))}
+          onLog={() =>
+            apply(
+              logCurrentQso().then((r) => {
+                // The engine's verdict, as the main window reads it: a false is a refusal to log
+                // (already logged, no active QSO, no report exchanged), never a write.
+                if (r.logged) pushToast(t('shell.toast.logged'), 'success', 2500)
+                else if (!r.pending) pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
+                return r.snapshot
+              }),
+            )
+          }
           onOverrideTx={(call: string, grid: string | null, text: string) =>
             apply(overrideNextTx(call, grid, text))
           }

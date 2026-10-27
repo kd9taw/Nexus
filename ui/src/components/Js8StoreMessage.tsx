@@ -11,6 +11,7 @@ import { t } from '../i18n'
 import { js8StoreMessage } from '../api'
 import type { Js8State } from '../types'
 import { pushToast } from '../toast'
+import { upperTyped } from '../typedInput'
 
 export function Js8StoreMessage({
   call,
@@ -61,7 +62,7 @@ export function Js8StoreMessage({
         className="settings-input js8-store-input"
         value={text}
         maxLength={512}
-        onChange={(e) => setText(e.target.value.toUpperCase())}
+        onChange={(e) => setText(upperTyped(e.target))}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()

@@ -495,7 +495,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'tuning', 'stream', 'recent', 'stats'])
     expect([...CW_PANELS.panelIds]).toEqual([
-      'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+      'scope', 'scopeCtl', 'dsp', 'txmeters', 'turnCue', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
       'spots', 'needed', 'recent', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
   })
@@ -616,18 +616,19 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
   })
 
-  it('Phone and CW ship their Spots and Needed hidden, the five digital cockpits their RF scope pane — and each hidden id is its own', () => {
+  it('Phone and CW ship their Spots and Needed hidden, the six digital cockpits their RF scope pane — and each hidden id is its own', () => {
     // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
     // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
     // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
     // reader of its record through `panelStateIn`. (CW's record has no raw reader: CwCockpit and
-    // panelHost read it through `stateOf`; nor do the five digital cockpits' — App and
-    // DetachedPanel build theirs with usePanelLayout, checked 2026-10-04.)
+    // panelHost read it through `stateOf`; nor do the six digital cockpits' — App and
+    // DetachedPanel build theirs with usePanelLayout, checked 2026-10-04; JTTY's, App's alone.)
     const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
-    expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
+    expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(SSTV_PANELS.defaultRemoved ?? [])], 'sstv').toEqual(['rfScope'])
+    expect([...(panelState.JTTY_PANELS.defaultRemoved ?? [])], 'jtty').toEqual(['rfScope'])
     // RTTY and PSK ship the Stats pane hidden beside it (2026-10-14), and the Recent contacts pane.
     for (const v of [RTTY_PANELS, panelState.PSK_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope', 'recent', 'stats'])
@@ -705,7 +706,7 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
   })
 })
 
-describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
+describe("CW ships Phone's two feeds hidden too", () => {
   // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in Phone.
   // Each case drives one reader of an absent state, as Phone's do, against CW's own record.
   const CW_KEY = panelStorageKey('cw')

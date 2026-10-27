@@ -75,10 +75,12 @@ describe('rig scope analysis window', () => {
     expect(screen.queryByRole('group', { name: 'Scope display settings' })).toBeNull()
   })
 
-  it('defaults to today’s window with nothing stored, and writes nothing until asked', () => {
+  it('defaults to the fast window on Phone and the balanced one on CW, and writes nothing until asked', () => {
     const { windows } = mount()
     expect(windows.map((b) => b.textContent)).toEqual(['47 Hz', '23 Hz', '12 Hz'])
-    expect(pressed(windows)).toEqual(['23 Hz']) // 2048-point, 171 ms — the shipped behaviour
+    expect(pressed(windows)).toEqual(['47 Hz']) // 1024-point, 85 ms — the phone default (operator ruling 2026-10-23)
+    cleanup()
+    expect(pressed(mount('cw').windows)).toEqual(['23 Hz']) // CW keeps the 2048-point window
     expect(localStorage.getItem(PHONE_KEY)).toBeNull()
     expect(localStorage.getItem(LEGACY_WIN_KEY)).toBeNull()
   })
@@ -89,14 +91,14 @@ describe('rig scope analysis window', () => {
     for (const legacy of ['', '8192', 'BALANCED', '2048', 'true', 'sharpest']) {
       localStorage.setItem(LEGACY_WIN_KEY, legacy)
       const { windows } = mount()
-      expect(pressed(windows), `stored=${JSON.stringify(legacy)}`).toEqual(['23 Hz'])
+      expect(pressed(windows), `stored=${JSON.stringify(legacy)}`).toEqual(['47 Hz'])
       cleanup()
     }
     localStorage.clear()
     for (const record of ['{"window":"8192"}', '{"window":null}', 'not json', '[]']) {
       localStorage.setItem(PHONE_KEY, record)
       const { windows } = mount()
-      expect(pressed(windows), `record=${record}`).toEqual(['23 Hz'])
+      expect(pressed(windows), `record=${record}`).toEqual(['47 Hz'])
       cleanup()
     }
   })
@@ -123,12 +125,11 @@ describe('rig scope analysis window', () => {
 })
 
 describe('the scope’s averaging default, per cockpit', () => {
-  // The defaults set 2026-10-04 ahead of the operator's ruling: CW off, so keying is not flattened;
-  // Phone 250 ms.
+  // CW off, so keying is not flattened; Phone 100 ms (operator ruling 2026-10-23 — it was 250 ms).
   const smooth = (strip: HTMLElement) => within(strip).getByRole('combobox', { name: /Smooth/ }) as HTMLSelectElement
 
-  it('is 250 ms on Phone and Off on CW, with nothing stored', () => {
-    expect(smooth(mount('phone').strip).value).toBe('250')
+  it('is 100 ms on Phone and Off on CW, with nothing stored', () => {
+    expect(smooth(mount('phone').strip).value).toBe('100')
     cleanup()
     expect(smooth(mount('cw').strip).value).toBe('0')
   })

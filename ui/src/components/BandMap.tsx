@@ -437,13 +437,14 @@ export function BandMap({
             beacon?.word,
             chip?.label,
             badge?.word,
-            program != null && TCI,
-            program != null && t('settings.transmit.tciServer.program.name', { id: program }),
+            program != null && t('bandMap.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandMap.spot.tci.title', { detail }) : t('bandMap.spot.title', { detail })
           const needCls = chip ? ` need-${chip.cls}` : ''
           // The dim POTA colour, by BandStrip's rule: a POTA activator no need colours, read off
           // the P's own entry (operator, 2026-10-03: "Dim POTA color for all").
@@ -458,7 +459,7 @@ export function BandMap({
                 type="button"
                 className={`bandmap-spot${needCls}${dimCls}${tciCls}${worked ? ' worked' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
                 style={{ top: `${labelY}%`, opacity }}
-                title={t('bandMap.spot.title', { detail })}
+                title={tip}
                 aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
                 // ⛔ A program's spot only tunes: never the Work, whatever it names.
                 onClick={() => (program != null ? onTciSpot?.(s) : onWorkSpot(s))}

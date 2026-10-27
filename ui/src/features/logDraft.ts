@@ -41,6 +41,8 @@ export interface LogDraft {
   workPark: { call: string; program: string; reference: string } | null
   /** The call the callbook's answer was for. */
   enrichedFor: string
+  /** When the call was entered (Unix seconds), the contact's start; null when not known. */
+  enteredUnix?: number | null
 }
 
 const drafts = new Map<string, LogDraft>()

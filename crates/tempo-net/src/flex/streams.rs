@@ -34,7 +34,7 @@
 //!
 //! # DAX TX packets
 //!
-//! [`dax_tx_packet`] builds the tested DAX TX format (port plan §4.4): packet type 1 (IF data with
+//! [`dax_tx_packet`] builds the tested DAX TX format: packet type 1 (IF data with
 //! a stream id), class id present, no trailer, TSI 3, TSF 1, the 4-bit packet count, zero
 //! timestamps, and [`TX_FRAMES_PER_PACKET`] frames of big-endian float32 stereo in class
 //! [`AUDIO_CLASS`]. They go to the radio's VITA-49 port [`VITA_PORT`] (4991). The native path
@@ -72,7 +72,7 @@ pub const TX_FRAMES_PER_PACKET: usize = 128;
 /// `TCPIP-meter` and `Discovery-protocol`; the port AetherSDR sends DAX TX to).
 pub const VITA_PORT: u16 = 4991;
 /// The radio's UDP port for a client's one-byte registration datagram, sent after registration,
-/// just before `client udpport` (port plan §4.2 and §4.5, step 7; [`super::handshake`]).
+/// just before `client udpport` ([`super::handshake`]).
 pub const UDP_REGISTRATION_PORT: u16 = 4992;
 
 /// The last holder's release is acted on this long after it (upstream `kDaxRemovalGraceMs`, far

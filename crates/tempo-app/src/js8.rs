@@ -1,6 +1,6 @@
 //! JS8 engine adapter — the ONLY place the JS8 message layer (`::js8::proto`) meets the
-//! engine and, from the TX batch on, the ONLY place a `proto::TxFrame` becomes a `TxPlan`
-//! (spec invariant 13). A CHILD module of `engine` (declared with `#[path]` there) so it
+//! engine and, from the TX batch on, the ONLY place a `proto::TxFrame` becomes a `TxPlan`.
+//! A CHILD module of `engine` (declared with `#[path]` there) so it
 //! reaches the engine's private fields without widening any visibility.
 //!
 //! WHY a separate file: the JS8 station runs JS8Call's cadence — heartbeats, autoreply,
@@ -1055,7 +1055,7 @@ impl Engine {
     }
 
     /// Operator send: `to` is a callsign or @group (None = plain text, which compose
-    /// prefixes with "MYCALL: " — identity on the wire, spec invariant 10). An operator
+    /// prefixes with "MYCALL: " — identity on the wire). An operator
     /// verb: on success it restarts the wall-clock watchdog. Never arms TX.
     pub fn js8_send(&mut self, to: Option<String>, text: String) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
@@ -1287,7 +1287,7 @@ impl Engine {
         self.js8_station.drop_queue();
     }
 
-    /// Halt is TOTAL (spec invariant 7): drop the outbox, the pending autoreply and the
+    /// Halt is TOTAL: drop the outbox, the pending autoreply and the
     /// heartbeat schedule, release the per-slot latch. Called from `halt_tx` (Stop TX, the
     /// UDP HaltTx, the watchdog kill path), from `set_tier` when LEAVING the tier, and
     /// from `set_mode`. `tx_enabled` is the caller's business: `halt_tx` drops it, a tier
@@ -1398,8 +1398,8 @@ impl Engine {
         }
     }
 
-    /// Tier-routed TX planner — the ONLY place a `proto::TxFrame` becomes a `TxPlan`
-    /// (spec invariant 13). Reached only after `plan_tx`'s mode-agnostic guards
+    /// Tier-routed TX planner — the ONLY place a `proto::TxFrame` becomes a `TxPlan`.
+    /// Reached only after `plan_tx`'s mode-agnostic guards
     /// (`!tx_enabled || tuning || !tx_allowed()`, `tier_is_rx_only`, operating mode
     /// Digital), so `tx_enabled` — the FIRST operator act — is already true here.
     ///
@@ -4930,7 +4930,7 @@ mod tests {
     }
 
     /// Outside the licence's privileges a Yes'd reply is dropped at the refusal and the cockpit
-    /// says why (N61's rule); a tune back inside them sends nothing old.
+    /// says why; a tune back inside them sends nothing old.
     #[test]
     fn a_yes_outside_privileges_is_dropped_says_so_and_is_never_sent_later() {
         let mut e = asking_engine();

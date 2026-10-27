@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// ⛔ HOW A PICTURE ENDED IS SAID ONCE, AND "FINISHED" ONLY FOR ONE THAT PLAYED OUT (N57b,
-// 2026-09-30). A picture stopped part-way through the abort path (TX Off, Stop TX, a halt) was
+// ⛔ HOW A PICTURE ENDED IS SAID ONCE, AND "FINISHED" ONLY FOR ONE THAT PLAYED OUT.
+// A picture stopped part-way through the abort path (TX Off, Stop TX, a halt) was
 // announced "SSTV transmit finished", and the dock's own Stop said "SSTV transmit stopped" and
 // then "finished". The states polled below are the ones the engine leaves (pinned on the real
 // loop by `a_pictures_progress_tells_a_play_out_from_every_early_end`): a picture that played out

@@ -33,11 +33,17 @@ pub struct CwContext<'a> {
     /// WW RTTY). Empty means "no such contest", and `{EXCH}` falls back to Field Day's
     /// `{CLASS} {SECTION}`, which is also empty outside Field Day.
     pub exch: &'a str,
+    /// Every park of the operator's own activation — `{MYPARK}`, space-separated as an n-fer
+    /// sends them ("US-1234 US-5678"). Empty with no park activation.
+    pub myparks: &'a [String],
+    /// The other station's park — `{HISPARK}` (the park being hunted). Empty if none.
+    pub hispark: &'a str,
 }
 
 /// Expand a CW macro template into the literal text to key. Recognized tokens:
 /// `{MYCALL}` `{NAME}` `{MYGRID}` `{MYSTATE}` `{RST}` (cut numbers), `!` (worked call),
-/// `{HISNAME}` / `{HISSTATE}` (the worked station's QRZ name/state), the Field Day
+/// `{HISNAME}` / `{HISSTATE}` (the worked station's QRZ name/state), `{MYPARK}` / `{HISPARK}`
+/// (every park of my activation, the other station's park), the Field Day
 /// exchange `{CLASS}` / `{SECTION}`, and `{EXCH}` — the running contest's exchange
 /// ([`CwContext::exch`]) or, when none is supplied, Field Day's "`{CLASS} {SECTION}`"
 /// (e.g. "3A WI").
@@ -56,6 +62,8 @@ pub fn expand(template: &str, ctx: &CwContext) -> String {
     out = out.replace("{MYSTATE}", ctx.mystate);
     out = out.replace("{HISNAME}", ctx.hisname);
     out = out.replace("{HISSTATE}", ctx.hisstate);
+    out = out.replace("{MYPARK}", &ctx.myparks.join(" "));
+    out = out.replace("{HISPARK}", ctx.hispark);
     out = out.replace("{RST}", &cut_numbers(ctx.rst));
     // Field Day exchange. `{EXCH}` is the full "CLASS SECTION"; trimmed so it (and the
     // whitespace-collapse below) leaves nothing when not operating FD (both fields blank).
@@ -327,6 +335,8 @@ mod tests {
             class: "3A",
             section: "WI",
             exch: "",
+            myparks: &[],
+            hispark: "",
         }
     }
 
@@ -377,6 +387,44 @@ mod tests {
         assert_eq!(expand("QTH {MYSTATE}", &bare), "QTH");
         // {HISNAME} must NOT be touched by the {NAME} substitution.
         assert_eq!(expand("{NAME} vs {HISNAME}", &c), "ALEX vs BOB");
+    }
+
+    /// ⭐ **`{MYPARK}` is every park of the activation, as an n-fer sends them on CW** —
+    /// "US-1234 US-5678" — and `{HISPARK}` the other station's. No activation, no hunted park:
+    /// each collapses like an unfilled `{NAME}`.
+    #[test]
+    fn expands_the_park_tokens() {
+        let one = ["US-1234".to_string()];
+        let two = ["US-1234".to_string(), "US-5678".to_string()];
+        let pota = CwContext {
+            mycall: "W9XYZ",
+            mystate: "WI",
+            hiscall: "K2DEF",
+            rst: "599",
+            myparks: &one,
+            hispark: "US-0042",
+            ..Default::default()
+        };
+        let f2 = "! UR {RST} {RST} {MYSTATE} {MYPARK} BK";
+        assert_eq!(expand(f2, &pota), "K2DEF UR 5NN 5NN WI US-1234 BK");
+        assert_eq!(
+            expand(
+                f2,
+                &CwContext {
+                    myparks: &two,
+                    ..pota
+                }
+            ),
+            "K2DEF UR 5NN 5NN WI US-1234 US-5678 BK"
+        );
+        assert_eq!(expand("P2P {HISPARK}", &pota), "P2P US-0042");
+        let none = CwContext {
+            myparks: &[],
+            hispark: "",
+            ..pota
+        };
+        assert_eq!(expand(f2, &none), "K2DEF UR 5NN 5NN WI BK");
+        assert_eq!(expand("P2P {HISPARK} TU", &none), "P2P TU");
     }
 
     #[test]

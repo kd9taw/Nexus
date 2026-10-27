@@ -59,7 +59,6 @@ import { OperateRoster } from './OperateRoster'
 import { PotaSotaView } from './PotaSotaView'
 import { SatellitesView } from './SatellitesView'
 import { WatchlistPanel } from './WatchlistPanel'
-import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, Station } from '../types'
 import {
@@ -251,10 +250,8 @@ function rosterSpot(): Control[] {
   const out: Control[] = []
   for (const selectedCall of ['W1AW', null]) {
     const r = render(
-      <StationControlContext.Provider value={true}>
-        <OperateRoster stations={[heard]} myGrid="EN52" currentSlot={100} needByCall={new Map()} selectedCall={selectedCall}
-          onSelect={() => {}} onCall={() => {}} onToggleIgnore={() => {}} onSpot={() => {}} />
-      </StationControlContext.Provider>,
+      <OperateRoster stations={[heard]} myGrid="EN52" currentSlot={100} needByCall={new Map()} selectedCall={selectedCall}
+        onSelect={() => {}} onCall={() => {}} onToggleIgnore={() => {}} onSpot={() => {}} />,
     )
     const b = r.container.querySelector<HTMLButtonElement>('button.or-spot')
     expect(b, 'the roster has no Spot button').not.toBeNull()

@@ -1,0 +1,88 @@
+/* THE LOGBOOK CONTACT CARD (ContactCard.tsx). A ui/Dialog: portaled to <body>, its BOX measured in
+   real window units (the contract's one raw-unit exception: .ui-dialog sets top and max-height in vh,
+   and this widens it in vw) while its content re-applies --ui-zoom. The box is the ONE scroll owner;
+   Save and Cancel stay in view at its foot (sticky, opaque) however far the card is scrolled.
+
+   Wider than the 640px default so the boxes sit five or six to a row at 1024 and up; never wider
+   than the window less its margins. */
+.ui-dialog.contact-card-dialog {
+  width: min(880px, calc(100vw - 2 * var(--space-4)));
+  padding-bottom: 0;
+}
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--fs-label);
+}
+.contact-card-head {
+  align-items: center;
+}
+/* Fields kept as written: name, value, and the remove control, in three columns; a long value
+   (an import's single unbroken token) wraps rather than widening the card. */
+.contact-card-fields {
+  display: grid;
+  grid-template-columns: minmax(7em, max-content) minmax(0, 1fr) auto;
+  gap: 4px var(--space-2);
+  align-items: center;
+  margin: var(--space-2) 0;
+}
+.contact-card-field {
+  display: contents;
+}
+.contact-card-tag {
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+.contact-card-field.removed .contact-card-tag,
+.contact-card-field.removed input,
+.contact-card-field.removed textarea {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.contact-card-field textarea {
+  resize: vertical;
+}
+.contact-card-more > summary {
+  cursor: pointer;
+}
+.contact-card-facts {
+  margin-top: var(--space-3);
+}
+.contact-card-recent {
+  width: 100%;
+  border-collapse: collapse;
+}
+.contact-card-recent th,
+.contact-card-recent td {
+  text-align: left;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+}
+.contact-card-recent th {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+.contact-card-recent tbody tr[tabindex='0'] {
+  cursor: pointer;
+}
+.contact-card-recent tbody tr[tabindex='0']:hover,
+.contact-card-recent tbody tr[tabindex='0']:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+.contact-card-recent tbody tr.current {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.contact-card-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}

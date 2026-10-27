@@ -13,10 +13,11 @@ fn remote_filter_uses_the_actual_radio_owner_without_replaying_or_overriding_a_f
         canonical_mode, "LSB",
         "positive control for a native mode mismatch"
     );
+    engine_lock(&s.engine).settings().save(&s.path).unwrap();
+    s.read_now();
     let read = s.state.remote_read(&s.engine).unwrap();
     let receipt = {
         let mut e = engine_lock(&s.engine);
-        e.settings().save(&s.path).unwrap();
         e.observe_rig_passband(Some(2400));
         e.remote_observe_mode(Some(&read), Some("LSB"));
         let connection = e

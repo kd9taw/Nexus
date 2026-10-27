@@ -27,7 +27,7 @@ vi.mock('../api', () => ({
   contestEntryReset: vi.fn(() => Promise.resolve({})),
   contestIMoved: vi.fn(() => Promise.resolve({})),
   contestRemoveLast: vi.fn(),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -93,7 +93,7 @@ function Strip({ fieldDay = party(), active = true, remote = false }: { fieldDay
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const rstBox = () => boxes()[0]
 const qthBox = () => boxes()[1]

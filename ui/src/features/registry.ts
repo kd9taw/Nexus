@@ -33,6 +33,7 @@ export type View =
   | 'sstv'
   | 'aprs'
   | 'js8'
+  | 'jtty'
   | 'connect'
   | 'dxped'
   | 'sats'
@@ -286,6 +287,23 @@ export const FEATURES: FeatureDef[] = [
       return t('features.js8.oneLine')
     },
   },
+  {
+    id: 'jtty',
+    label: 'JTTY',
+    kind: 'section',
+    category: 'Operate',
+    core: false,
+    dependsOn: [],
+    // Mode, not a goal — same doctrine as RTTY/PSK/JS8: a goal profile never auto-enables it.
+    intents: [],
+    view: 'jtty',
+    // WSJT-X's keyboard mode, a modem of the Keyboard section beside PSK: the view asserts the
+    // Keyboard section with JTTY as its modem (rigModeForView: the JTTY band plan, PKTUSB) and the
+    // cockpit auto-arms its receiver. RECEIVE ONLY in this build — transmit is its own gated work.
+    get oneLine() {
+      return t('features.jtty.oneLine')
+    },
+  },
   feature({
     id: 'logbook',
     labelKey: 'features.logbook.label',
@@ -325,7 +343,10 @@ export const FEATURES: FeatureDef[] = [
     labelKey: 'features.chat.label',
     kind: 'section',
     category: 'Operate',
-    core: true, // the spine of the MSG area — the original Tempo TempoFast/TempoDeep chat, always available
+    // The MSG area — the original Tempo TempoFast/TempoDeep chat. On by default and for every
+    // profile (all five intents), and it has a switch like the other modes (#402): off takes its
+    // rail item away and a remembered Tempo mode opens on FT (`coerceArea`).
+    core: false,
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'chat',

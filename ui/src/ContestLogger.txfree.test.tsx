@@ -75,7 +75,7 @@ const ALLOWED = new Set([
   // the window's own pin (Keep in front): this window's stacking and its record, nothing at the radio
   'get_window_on_top', 'set_window_on_top',
   // the log line: the contact, its serial binding, its hints, its sent exchange, its log
-  'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
+  'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_place', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
   'scp_ensure', 'get_scp_calls', 'get_call_history',
   // the county/state box's pre-fill from the whole log: a read of the logbook's rows for one call,
@@ -88,6 +88,9 @@ const ALLOWED = new Set([
   // Spot me: one DX cluster spot of the station's call per press, posted over the internet, keying
   // nothing (contest_spot.rs)
   'contest_self_spot',
+  // the Stats tab: every call of the log placed by the country file, and its picture saved to
+  // Downloads — reads and a file, keying nothing (ContestStats.tsx)
+  'contest_stats_places', 'save_png_to_downloads',
 ])
 
 /** What transmits, or decides whether or what the station transmits: the stop-line census's verbs,
@@ -159,7 +162,7 @@ function respond(cmd: string): unknown {
   }
   if (cmd === 'fd_merge_to_general') return [{ added: 0, already: 1, refused: 0, queued: false }, snapshot]
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -229,9 +232,11 @@ async function sweepClicks(): Promise<number> {
       return true
     })
     if (fresh.length === 0) break
-    // Entry only takes the screen out of the window, so it is pressed LAST in its round: everything it
-    // hides has been clicked by then, and the rounds after it sweep the entry-only window.
-    const hides = (el: HTMLElement) => el.textContent === t('contestLogger.layout.label')
+    // Entry only takes the screen out of the window, and the Stats tab the scoreboard, so they are
+    // pressed LAST in their round: everything they hide has been clicked by then, and the rounds after
+    // sweep what they show.
+    const hides = (el: HTMLElement) =>
+      el.textContent === t('contestLogger.layout.label') || el.textContent === t('contestStats.tab.stats')
     fresh.sort((a, b) => Number(hides(a)) - Number(hides(b)))
     for (const el of fresh) {
       if (!el.isConnected) continue
@@ -248,7 +253,7 @@ async function mountLogger(): Promise<void> {
   // The first snapshot poll lands after 300 ms; the log line is the sign it did.
   await act(async () => new Promise((r) => setTimeout(r, 400)))
   await settle()
-  expect(screen.getByPlaceholderText('W1AW'), 'control: the log line is on screen').toBeTruthy()
+  expect(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), 'control: the log line is on screen').toBeTruthy()
 }
 
 function judge(calls: string[]): { refused: string[]; keying: string[] } {
@@ -267,7 +272,7 @@ describe('the contest logger window transmits nothing', () => {
   it('every key, at the window and in every box, reaches no command that transmits', async () => {
     await mountLogger()
     // Type a whole contact first, so Enter has something to log and Esc something to clear.
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     fireEvent.change(box, { target: { value: 'K9ABC' } })
     await settle()
     const from = bridgeCalls.length
@@ -282,7 +287,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('Esc, at the window and in every box, is the stop and only the stop: one halt a press, and the entry clears', async () => {
     await mountLogger()
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     const targets: Element[] = [document.body, ...Array.from(document.querySelectorAll('input, textarea'))]
     expect(targets.length, 'control: the boxes are there to press it in').toBeGreaterThan(2)
     for (const target of targets) {
@@ -308,7 +313,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('with Alt, Ctrl or Cmd held an F-key is the system\'s, so Alt+F4 closes the window; F5 alone is still held', async () => {
     await mountLogger()
-    const call = screen.getByPlaceholderText('W1AW')
+    const call = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
     for (const [where, target] of [['the window', document.body], ['the call box', call]] as const) {
       expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5' }), `${where}: F5 was left to the webview`).toBe(false)
       expect(fireEvent.keyDown(target, { key: 'F4', code: 'F4', altKey: true }), `${where}: Alt+F4 was held`).toBe(true)

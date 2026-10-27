@@ -1,5 +1,4 @@
-//! Golden test of the JS8 frame codec against JS8Call's own ALL.TXT (sanitised, Task B4.1).
-//! Task B4.1 lands only the fixture-reader gate; Task B4.4 adds the codec assertions.
+//! Golden test of the JS8 frame codec against JS8Call's own ALL.TXT (sanitised).
 mod common;
 
 use common::golden::{read_directed, read_frames};

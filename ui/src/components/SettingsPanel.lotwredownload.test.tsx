@@ -281,3 +281,51 @@ describe('a yes starts the whole-history download at once', () => {
     expect(backend.downloadedFrom).toEqual([OLD_CURSOR])
   })
 })
+
+describe('one confirmation download at a time, as on the Logbook', () => {
+  const both = () =>
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({
+        ...defaultSettings,
+        mycall: 'KD9TAW',
+        lotwUsername: 'KD9TAW',
+        eqslUsername: 'KD9TAW',
+        lotwLastQsl: backend.cursor,
+        activeRadio: backend.activeRadio,
+      } as never),
+    )
+  const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+
+  it('while LoTW downloads, the eQSL download waits; and the other way round', async () => {
+    both()
+    let finishLotw!: (r: typeof RESULT) => void
+    api.get('downloadLotwReport').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishLotw = resolve
+        }),
+    )
+    let finishEqsl!: (r: typeof RESULT) => void
+    api.get('downloadEqslReport').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishEqsl = resolve
+        }),
+    )
+    await openLotw()
+    fireEvent.click(button('Download confirmations'))
+    await waitFor(() => expect(api.get('downloadLotwReport')).toHaveBeenCalledTimes(1))
+    expect(button('Sync eQSL now').disabled, 'eQSL waits for LoTW').toBe(true)
+    expect(button('Download everything again').disabled).toBe(true)
+    finishLotw(RESULT)
+    await waitFor(() => expect(button('Sync eQSL now').disabled).toBe(false))
+
+    fireEvent.click(button('Sync eQSL now'))
+    await waitFor(() => expect(api.get('downloadEqslReport')).toHaveBeenCalledTimes(1))
+    expect(button('Download confirmations').disabled, 'LoTW waits for eQSL').toBe(true)
+    expect(button('Download everything again').disabled).toBe(true)
+    finishEqsl(RESULT)
+    await waitFor(() => expect(button('Download confirmations').disabled).toBe(false))
+    expect(api.get('downloadLotwReport')).toHaveBeenCalledTimes(1)
+  })
+})

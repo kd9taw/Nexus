@@ -8,14 +8,14 @@
 //! call": prepended unless the line already starts with it, with @ALLCALL / a CQ or HB word /
 //! a callsign, or with `` ` `` (:2016-2040). A leading "MYCALL:" or "MYCALL " is stripped
 //! (:2001-2004) and plain data is prefixed "MYCALL: " when nothing else identifies the
-//! sender (:2065-2069; Nexus has no avoid_forced_identify — spec invariant 10). The remainder
+//! sender (:2065-2069; Nexus has no avoid_forced_identify). The remainder
 //! after a directed command is left-stripped and, for the checksummed commands, gets
 //! `" " + checksum3(body)` appended (:2148-2172) before it is data-framed. Compound cases
 //! (:2100-2146): when MYCALL or the destination is not base-packable, the frames are
 //! `Compound { mycall, grid }` then `CompoundDirected { to, cmd, num }`.
 //!
 //! WHAT IS REFUSED, and why here: an empty or non-packable MYCALL (`NoCallsign`) — this is the
-//! mode's identity gate below the engine's `structured_tx_ready` (spec TX invariant 2); an
+//! mode's identity gate below the engine's `structured_tx_ready`; an
 //! empty line; and more than `max_frames(speed)` frames (`TooLong`) — frames × period must stay
 //! under 600 s so §97.119 identification holds without inserting a frame a JS8Call receiver
 //! would read as a new message. `@APRSIS` and `@JS8NET` are destinations like any group:

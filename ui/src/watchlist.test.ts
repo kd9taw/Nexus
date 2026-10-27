@@ -1,30 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { DecodeRow } from './types'
 import {
   matchCallPattern,
-  matchWatchlist,
   watchLabel,
   loadWatchlist,
   saveWatchlist,
   newWatchFilter,
   type WatchFilter,
 } from './watchlist'
-
-const decode = (over: Partial<DecodeRow>): DecodeRow => ({
-  from: 'W1ABC',
-  snr: 0,
-  dtSec: 0,
-  freqHz: 1000,
-  message: 'CQ W1ABC FN42',
-  isCq: true,
-  directedToMe: false,
-  worked: false,
-  country: undefined,
-  tier: 'FT8',
-  rv: 0,
-  ...over,
-})
 
 describe('matchCallPattern', () => {
   it('matches exact and wildcard calls (case-insensitive)', () => {
@@ -41,48 +24,9 @@ describe('matchCallPattern', () => {
   })
 })
 
-describe('matchWatchlist', () => {
+describe('watchLabel', () => {
   const call: WatchFilter = { id: '1', kind: 'call', value: 'VP8*', label: 'Falklands' }
   const dxcc: WatchFilter = { id: '2', kind: 'dxcc', value: 'Bouvet' }
-
-  it('matches a wildcard call and a DXCC entity, first-match-wins', () => {
-    expect(matchWatchlist(decode({ from: 'VP8DXA' }), [call, dxcc])).toBe(call)
-    expect(matchWatchlist(decode({ from: '3Y0J', country: 'Bouvet' }), [call, dxcc])).toBe(dxcc)
-    expect(matchWatchlist(decode({ from: 'W1ABC', country: 'United States' }), [call, dxcc])).toBeNull()
-  })
-
-  it('respects cqOnly and minSnr gates', () => {
-    const cqOnly: WatchFilter = { id: '3', kind: 'call', value: 'W1ABC', cqOnly: true }
-    expect(matchWatchlist(decode({ isCq: false }), [cqOnly])).toBeNull()
-    expect(matchWatchlist(decode({ isCq: true }), [cqOnly])).toBe(cqOnly)
-
-    const strong: WatchFilter = { id: '4', kind: 'call', value: 'W1ABC', minSnr: -5 }
-    expect(matchWatchlist(decode({ snr: -20 }), [strong])).toBeNull()
-    expect(matchWatchlist(decode({ snr: 0 }), [strong])).toBe(strong)
-  })
-
-  it('is null for an empty call or an empty list', () => {
-    expect(matchWatchlist(decode({ from: undefined }), [call])).toBeNull()
-    expect(matchWatchlist(decode({}), [])).toBeNull()
-  })
-
-  it('matches a watched grid square, exact and by field prefix', () => {
-    const exact: WatchFilter = { id: 'g1', kind: 'grid', value: 'FN42' }
-    const field: WatchFilter = { id: 'g2', kind: 'grid', value: 'EM7*' }
-    expect(matchWatchlist(decode({ grid: 'FN42' }), [exact])).toBe(exact)
-    expect(matchWatchlist(decode({ grid: 'fn42' }), [exact])).toBe(exact)
-    expect(matchWatchlist(decode({ grid: 'FN43' }), [exact])).toBeNull()
-    expect(matchWatchlist(decode({ grid: 'EM79' }), [field])).toBe(field)
-    expect(matchWatchlist(decode({ grid: 'EM89' }), [field])).toBeNull()
-  })
-
-  it('a grid-less decode never matches a grid watch — unknown is not a hit', () => {
-    // Most FT8 frames (reports, RRR, 73) carry no grid by protocol; only CQ and the
-    // first reply announce the square. Firing on "unknown" would alert on every frame.
-    const exact: WatchFilter = { id: 'g1', kind: 'grid', value: 'FN42' }
-    expect(matchWatchlist(decode({ grid: undefined }), [exact])).toBeNull()
-    expect(matchWatchlist(decode({ grid: '' }), [exact])).toBeNull()
-  })
 
   it('watchLabel prefers the friendly label, falls back to the value', () => {
     expect(watchLabel(call)).toBe('Falklands')

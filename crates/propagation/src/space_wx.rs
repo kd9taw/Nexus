@@ -35,8 +35,8 @@ pub fn g_sfi(band: Band, sfi: f32) -> f32 {
             x if x >= 80.0 => 0.25,
             _ => 0.05,
         },
-        // VHF: Es/aurora/MS don't track SFI — let observed spots speak.
-        Band::B6 | Band::B4 | Band::B2 => 1.0,
+        // VHF/UHF: Es/aurora/MS and tropo don't track SFI — let observed spots speak.
+        Band::B6 | Band::B4 | Band::B2 | Band::B70cm | Band::B33cm | Band::B23cm => 1.0,
     }
 }
 

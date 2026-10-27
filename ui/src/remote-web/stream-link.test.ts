@@ -664,7 +664,7 @@ it('ends the stream when the tab hides or the page is left, and only lets go of 
   expect(last(h.peer.channel('ptt').sent)).toMatchObject({ type: 'pttRelease' })
 })
 
-// ── The microphone (S6, the audio design's §4.7 and M6/M8, the operator's rulings R1 and R2) ────────
+// ── The microphone ──────────────────────────────────────────────────────────────────────────────────
 
 it('the microphone is off until the operator turns it on, and only then is the browser asked, with the design\'s settings', async () => {
   const h = harness()

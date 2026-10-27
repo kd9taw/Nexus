@@ -76,6 +76,91 @@ pub fn all_txt_line(
     )
 }
 
+/// Qt's `qRound` on a non-negative `float`, the rounding WSJT-X applies to a JTTY frequency for
+/// its columns: half a hertz added in single precision, then truncated.
+pub(crate) fn q_round(d: f32) -> i32 {
+    if d >= 0.0 {
+        (d + 0.5) as i32
+    } else {
+        (d - 0.5) as i32
+    }
+}
+
+/// One ALL.TXT line for a finished JTTY message, as WSJT-X 3.3.0-beta4 writes it. WSJT-X
+/// logs the message's decode-pane line through the same `MainWindow::write_all` every mode
+/// uses, with a JTTY branch (`widgets/mainwindow.cpp` 16191-16264; the pane line is
+/// `Jtty::formatJttyDecodeLine`, `widgets/JttyMessages.hpp` 473-485, and the branch reads it
+/// back with `Jtty::parseDecodeLine`, 416-437). Described here, not transcribed:
+///
+/// 1. The pane line: the frequency rounded and right-aligned in 4, a space, the SNR
+///    right-aligned in 3, two spaces, the text.
+/// 2. The mode column is the mode padded to 6 (`JTTY  `), EXCEPT that `write_all` still looks
+///    at character 19 of the line it is given for JT65's `#` and JT9's `@` decode markers,
+///    a test older than JTTY. On a JTTY pane line that character is the text's tenth, so a
+///    message whose tenth character is `#` (what the encoder sends for a character outside
+///    the alphabet) is filed as `JT65  `; `@` is not in the JTTY alphabet. Kept: this file
+///    has to read the same as WSJT-X's.
+/// 3. The JTTY branch splits the pane line at its first space: the frequency moves to a
+///    5-wide column after `   0  0.0` (the DT and SNR columns of the other modes, which JTTY
+///    does not fill), and the rest of the line, trimmed (the SNR, two spaces, the text),
+///    follows after one space.
+/// 4. The stamp is when the message's first frame started (its sequence start), to the
+///    second; the dial is the reception's, in MHz to three places.
+///
+/// Example: `261012_221503    14.090 Rx JTTY     0  0.0 1500 -15  CQ K1ABC CQ`.
+pub fn jtty_rx_line(start_ms: i64, dial_hz: u64, freq_hz: f32, snr: i32, text: &str) -> String {
+    let pane = format!("{:>4} {:>3}  {}", q_round(freq_hz), snr, text);
+    let mode = match pane.chars().nth(19) {
+        Some('#') => "JT65  ",
+        Some('@') => "JT9   ",
+        _ => "JTTY  ",
+    };
+    let pane = pane.trim();
+    let (freq, rest) = pane.split_once(char::is_whitespace).unwrap_or((pane, ""));
+    let (y, mo, d, h, mi, se) = datetime_utc(start_ms.div_euclid(1000).max(0) as u64);
+    let line = format!(
+        "{:02}{:02}{:02}_{:02}{:02}{:02}{:>10.3} Rx {mode}   0  0.0{:>5} {}",
+        (y as u32) % 100,
+        mo,
+        d,
+        h,
+        mi,
+        se,
+        dial_hz as f64 / 1e6,
+        freq,
+        rest.trim(),
+    );
+    line.trim().to_string()
+}
+
+/// One ALL.TXT line for a JTTY segment going out, as WSJT-X writes it when the segment starts on
+/// the air (`updateJttyTransmitDisplay` → `write_all("Tx", text)`): the time it started, to the
+/// second; the dial; `Tx`; the mode column with the same character-19 test as the `Rx` line, here
+/// on the sent text itself; `   0  0.0`; the Tx offset in 5; a space; the text. Filler is never
+/// logged (the caller sends none).
+///
+/// Example: `261013_221503    14.090 Tx JTTY     0  0.0 1500 CQ K1ABC CQ`.
+pub fn jtty_tx_line(at_ms: i64, dial_hz: u64, tx_hz: f32, text: &str) -> String {
+    let mode = match text.chars().nth(19) {
+        Some('#') => "JT65  ",
+        Some('@') => "JT9   ",
+        _ => "JTTY  ",
+    };
+    let (y, mo, d, h, mi, se) = datetime_utc(at_ms.div_euclid(1000).max(0) as u64);
+    format!(
+        "{:02}{:02}{:02}_{:02}{:02}{:02}{:>10.3} Tx {mode}   0  0.0{:>5} {}",
+        (y as u32) % 100,
+        mo,
+        d,
+        h,
+        mi,
+        se,
+        dial_hz as f64 / 1e6,
+        q_round(tx_hz),
+        text,
+    )
+}
+
 /// One ALL.TXT line for a JS8 frame heard (`is_tx=false`) or keyed: [`all_txt_line`]'s, mode
 /// `JS8`, with the letter JS8Call 3.0.3 writes for the frame's `speed` (`submodeChar`,
 /// DecodedText.cpp:33-48: Normal A, Fast B, JS8 40 C, Slow E, JS8 60 I) after the audio offset,
@@ -112,8 +197,83 @@ pub fn decode_line(unix: u64, dial_mhz: f64, mode: &str, d: &modes::Decode) -> S
 mod tests {
     use super::*;
 
+    /// A JTTY segment's ALL.TXT line, byte for byte as WSJT-X's `write_all("Tx", …)` builds it:
+    /// `   0  0.0`, the Tx offset in five, a space, the text as sent.
+    #[test]
+    fn a_jtty_tx_line_is_wsjtxs_byte_for_byte() {
+        let at = T as i64 * 1000 + 999;
+        assert_eq!(
+            jtty_tx_line(at, 14_090_000, 1500.0, "CQ K1ABC CQ"),
+            "231114_221320    14.090 Tx JTTY     0  0.0 1500 CQ K1ABC CQ"
+        );
+        assert_eq!(
+            jtty_tx_line(at, 7_078_000, 2345.4, "W1AW 599 001"),
+            "231114_221320     7.078 Tx JTTY     0  0.0 2345 W1AW 599 001"
+        );
+        // The marker test reads the sent text's twentieth character.
+        assert_eq!(
+            jtty_tx_line(at, 14_090_000, 1500.0, "ABCDEFGHIJKLMNOPQRS#T"),
+            "231114_221320    14.090 Tx JT65     0  0.0 1500 ABCDEFGHIJKLMNOPQRS#T"
+        );
+    }
+
     // unix 1_700_000_000 == 2023-11-14 22:13:20 UTC → "231114_221320".
     const T: u64 = 1_700_000_000;
+
+    /// A JTTY decode's ALL.TXT line, byte for byte as WSJT-X's `write_all` writes it from the
+    /// decode-pane line (see [`jtty_rx_line`]): the first frame's start to the second (the
+    /// 0.75 s does not round up), the dial to three places, `JTTY` padded to six, the empty DT
+    /// and SNR columns, the frequency in five, then the pane line's SNR and two spaces.
+    #[test]
+    fn a_jtty_rx_line_is_wsjtxs_byte_for_byte() {
+        let at = T as i64 * 1000 + 750;
+        assert_eq!(
+            jtty_rx_line(at, 14_090_000, 1500.2, -15, "CQ K1ABC CQ"),
+            "231114_221320    14.090 Rx JTTY     0  0.0 1500 -15  CQ K1ABC CQ"
+        );
+        // A positive SNR is not signed, a one-digit one is not padded once the pane line is
+        // split (the trim takes the padding), and a low dial pads to ten.
+        assert_eq!(
+            jtty_rx_line(at, 7_078_000, 987.5, 5, "K1ABC 599 0123"),
+            "231114_221320     7.078 Rx JTTY     0  0.0  988 5  K1ABC 599 0123"
+        );
+        assert_eq!(
+            jtty_rx_line(at, 144_160_000, 2501.0, 12, "TU"),
+            "231114_221320   144.160 Rx JTTY     0  0.0 2501 12  TU"
+        );
+        // A long message is logged whole, never wrapped as the pane wraps it.
+        let long = "HELLO FROM THE SHACK IN EN52 RUNNING 100 W TO A VERTICAL ANTENNA";
+        assert_eq!(
+            jtty_rx_line(at, 14_090_000, 1500.0, -3, long),
+            format!("231114_221320    14.090 Rx JTTY     0  0.0 1500 -3  {long}")
+        );
+    }
+
+    /// WSJT-X's mode column tests character 19 of the pane line for the JT65 and JT9 decode
+    /// markers, so a JTTY text whose tenth character is `#` is filed as JT65 (see
+    /// [`jtty_rx_line`]). The control: the same `#` one place either side is not.
+    #[test]
+    fn a_jtty_rx_line_keeps_wsjtxs_marker_column() {
+        let at = T as i64 * 1000;
+        assert_eq!(
+            jtty_rx_line(at, 14_090_000, 1500.0, -9, "UR RST 59#"),
+            "231114_221320    14.090 Rx JT65     0  0.0 1500 -9  UR RST 59#"
+        );
+        for text in ["UR RST 5#9", "UR RST 599#"] {
+            assert_eq!(
+                jtty_rx_line(at, 14_090_000, 1500.0, -9, text),
+                format!("231114_221320    14.090 Rx JTTY     0  0.0 1500 -9  {text}")
+            );
+        }
+    }
+
+    #[test]
+    fn q_round_is_qts_rounding_of_a_frequency() {
+        assert_eq!(q_round(1499.5), 1500);
+        assert_eq!(q_round(1499.49), 1499);
+        assert_eq!(q_round(1499.99), 1500);
+        assert_eq!(q_round(0.0), 0);
+    }
 
     #[test]
     fn rx_line_matches_wsjtx_layout_exactly() {

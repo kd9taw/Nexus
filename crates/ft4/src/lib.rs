@@ -125,6 +125,98 @@ pub fn decode_frame(
     nfqso: i32,
     ap_cq_only: bool,
 ) -> Vec<Decode> {
+    decode_frame_impl(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        ap_cq_only,
+        None,
+    )
+}
+
+/// [`decode_frame`], handing each decode to `found` the moment the decoder finds it, as WSJT-X's
+/// FT4 decoder hands each to its callback (`ft4_decode.f90:456`). The decodes come in the
+/// decoder's own order, the candidates within 20 Hz of `nfqso` first (`getcandidates4.f90:70-81`),
+/// and each is also in the list the call returns, in the same place. FT4 has no give-up.
+///
+/// `found` runs on this thread inside the modem (the modem lock is held): it must not decode,
+/// encode or otherwise call into the modem. A panic in it is raised again here once the modem has
+/// returned; the decodes after it are not handed on.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `found` panicked.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_streaming(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    ap_cq_only: bool,
+    found: &mut dyn FnMut(&Decode),
+) -> Vec<Decode> {
+    decode_frame_impl(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        ap_cq_only,
+        Some(found),
+    )
+}
+
+/// The caller's closure behind the modem's callback pointer, and a panic it raised.
+struct Stream<'a> {
+    found: &'a mut dyn FnMut(&Decode),
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+/// The modem's callback (`tempo_decode_cb`). A panic must not unwind into the Fortran: it is kept,
+/// and [`decode_frame_impl`] raises it again.
+unsafe extern "C" fn on_found(
+    user: *mut std::os::raw::c_void,
+    rec: *const tempo_fast_sys::Ft4DecodeT,
+) -> std::os::raw::c_int {
+    // SAFETY: `user` is the `Stream` `decode_frame_impl` passed for this call, alive and not
+    // otherwise borrowed until the modem returns; `rec` points at a record the modem has just
+    // written (FT4 never passes null, and a null is ignored anyway).
+    let stream = unsafe { &mut *user.cast::<Stream<'_>>() };
+    if stream.panic.is_some() || rec.is_null() {
+        return 0;
+    }
+    let d = from_record(unsafe { &*rec });
+    let found = &mut *stream.found;
+    if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| found(&d))) {
+        stream.panic = Some(panic);
+    }
+    0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_frame_impl(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    ap_cq_only: bool,
+    found: Option<&mut dyn FnMut(&Decode)>,
+) -> Vec<Decode> {
     assert!(
         iwave.len() >= NMAX,
         "decode_frame needs at least {NMAX} samples, got {}",
@@ -134,39 +226,64 @@ pub fn decode_frame(
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
     let mut out = vec![tempo_fast_sys::Ft4DecodeT::default(); MAX_DECODES];
 
+    let mut stream = found.map(|found| Stream { found, panic: None });
     let n = {
         let _guard = modem_lock();
-        unsafe {
-            tempo_fast_sys::ft4_decode_frame(
-                iwave.as_ptr(),
-                nfa,
-                nfb,
-                ndepth,
-                myc.as_ptr(),
-                hisc.as_ptr(),
-                nqso_progress,
-                nfqso,
-                ap_cq_only as i32,
-                out.as_mut_ptr(),
-                out.len() as i32,
-            )
+        match stream.as_mut() {
+            None => unsafe {
+                tempo_fast_sys::ft4_decode_frame(
+                    iwave.as_ptr(),
+                    nfa,
+                    nfb,
+                    ndepth,
+                    myc.as_ptr(),
+                    hisc.as_ptr(),
+                    nqso_progress,
+                    nfqso,
+                    ap_cq_only as i32,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                )
+            },
+            Some(stream) => unsafe {
+                tempo_fast_sys::ft4_decode_frame_cb(
+                    iwave.as_ptr(),
+                    nfa,
+                    nfb,
+                    ndepth,
+                    myc.as_ptr(),
+                    hisc.as_ptr(),
+                    nqso_progress,
+                    nfqso,
+                    ap_cq_only as i32,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                    Some(on_found),
+                    (stream as *mut Stream<'_>).cast(),
+                )
+            },
         }
     };
+    if let Some(panic) = stream.and_then(|s| s.panic) {
+        std::panic::resume_unwind(panic);
+    }
     if n <= 0 {
         return Vec::new();
     }
-    out.into_iter()
-        .take(n as usize)
-        .map(|r| Decode {
-            message: cstr_field(&r.message),
-            sync: r.sync,
-            snr: r.snr,
-            dt: r.dt,
-            freq: r.freq,
-            nap: r.nap,
-            qual: r.qual,
-        })
-        .collect()
+    out.iter().take(n as usize).map(from_record).collect()
+}
+
+/// One modem record as a [`Decode`].
+fn from_record(r: &tempo_fast_sys::Ft4DecodeT) -> Decode {
+    Decode {
+        message: cstr_field(&r.message),
+        sync: r.sync,
+        snr: r.snr,
+        dt: r.dt,
+        freq: r.freq,
+        nap: r.nap,
+        qual: r.qual,
+    }
 }
 
 /// Read a NUL-/space-padded fixed C char field into a trimmed String.
@@ -178,6 +295,86 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every decode is handed on the moment the decoder finds it, the RX frequency's first (WSJT-X's
+    /// `getcandidates4.f90:70-81` tries the candidates within 20 Hz of nfqso first), and the
+    /// handed-on list IS the returned one; the streaming call returns exactly what the plain call
+    /// returns.
+    #[test]
+    fn streaming_hands_on_each_decode_as_found_the_rx_frequency_first() {
+        let mut seed = 0x51A7_u32;
+        let mut iwave: Vec<i16> = (0..NMAX)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                ((seed >> 8) % 31) as i16 - 15
+            })
+            .collect();
+        for (msg, f0, amp) in [
+            ("CQ K1ABC FN31", 700.0, 3000.0),
+            ("W9XYZ K2DEF EM79", 1100.0, 3000.0),
+            ("CQ N3GHI FM19", 2200.0, 3000.0),
+            ("W9XYZ K4JKL R-07", 1500.0, 600.0),
+        ] {
+            let wave = gen_wave(&encode(msg), SAMPLE_RATE, f0);
+            for (s, &v) in iwave.iter_mut().zip(&wave) {
+                *s = s.saturating_add((v * amp) as i16);
+            }
+        }
+        let plain = decode_frame(&iwave, 200, 2900, 3, "W9XYZ", "", 0, 1500, false);
+        let mut found = Vec::new();
+        let streamed = decode_frame_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            1500,
+            false,
+            &mut |d| found.push(d.clone()),
+        );
+        let fields = |v: &[Decode]| -> Vec<String> { v.iter().map(|d| format!("{d:?}")).collect() };
+        assert_eq!(
+            fields(&streamed),
+            fields(&plain),
+            "the same decodes, field for field"
+        );
+        assert_eq!(
+            fields(&found),
+            fields(&streamed),
+            "each handed on, in the returned order"
+        );
+        assert_eq!(found.len(), 4, "all four decoded: {found:?}");
+        assert_eq!(
+            found[0].message, "W9XYZ K4JKL R-07",
+            "the RX frequency's decode is handed on first"
+        );
+        // The order follows the RX frequency, not the signals: moved to 2200 Hz, that station's
+        // decode is the first one handed on.
+        let mut first = None;
+        decode_frame_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            2200,
+            false,
+            &mut |d| {
+                first.get_or_insert_with(|| d.message.clone());
+            },
+        );
+        assert_eq!(
+            first.as_deref(),
+            Some("CQ N3GHI FM19"),
+            "with the RX frequency on 2200 Hz, its decode is handed on first"
+        );
+    }
 
     /// Encode → full-frame waveform → int16 → full-frame decode recovers the
     /// message through the whole Rust/FFI stack (clean signal).

@@ -3,7 +3,6 @@
 // free. See ui/DESIGN.md.
 import * as RD from '@radix-ui/react-dialog'
 import type { ReactNode } from 'react'
-import { useStationData } from '../../stationAccess'
 
 interface DialogProps {
   open: boolean
@@ -33,9 +32,8 @@ export function Dialog({
   onCloseAutoFocus,
   children,
 }: DialogProps) {
-  const available = useStationData()
   return (
-    <RD.Root open={open && available} onOpenChange={onOpenChange}>
+    <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className="ui-dialog-overlay" />
         <RD.Content className={className ? `ui-dialog ${className}` : 'ui-dialog'} onCloseAutoFocus={onCloseAutoFocus}>

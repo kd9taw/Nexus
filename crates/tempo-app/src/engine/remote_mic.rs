@@ -1,7 +1,7 @@
 //! A streamed Remote operator's microphone, on the engine: the over's latch ([`crate::mic`]),
 //! ARMED by their held PTT, KEYED by their audio, and ended by every stop the station has.
 //!
-//! ## M1 with S7: the hold arms, audio keys, either gap unkeys
+//! ## M1: the hold arms, audio keys, either gap unkeys
 //!
 //! The page's held PTT ([`crate::remote_control::ptt_hold::PttHold`]) used to key the station on
 //! the hold alone, through the desktop's own PTT verb. Under M1 it ARMS a microphone over instead
@@ -25,9 +25,9 @@
 //! the latch is dropped, and the one-shot abort is armed when the rig was keyed, which the radio
 //! loop turns into `flush_output(); rig.ptt(false)`, as it does the voice keyer's.
 //! - `halt_tx`, the universal stop (the desktop's Stop TX, the stream's own Stop, WSJT-X's HaltTx,
-//!   a lapse of the stream's presence): unchanged, and it drops the over (M10).
+//!   a lapse of the stream's presence): unchanged, and it drops the over.
 //! - `set_tx_enabled(false)`: TX Off ends a microphone over in flight, as it does RTTY and SSTV
-//!   (M10, the design's one deliberate change to what a shipped button does).
+//!   (the one deliberate change to what a shipped button does).
 //! - The per-tick predicate ([`Engine::poll_mic`]): every gate, the ceiling, the watchdog, presence
 //!   for THIS over, the transmit route, and the audio gap.
 //! - The radio loop, when it does not own the operator's radio (`may_key`).
@@ -44,6 +44,7 @@ use super::{now_unix_millis, now_unix_secs};
 /// How much of the operator's voice must have arrived, with the rig reporting no power, before the
 /// no-power warning is believed: two seconds, the same settle as the loop's own zero-power watch.
 const MIC_NO_POWER_AFTER_MS: u64 = 2_000;
+use crate::dto::PttRefusal;
 use crate::mic::{MicDrop, MicEnded, MicFeed, MicGates, MicStatus, MicTick, MIC};
 use crate::settings::OperatingMode;
 use std::time::Instant;
@@ -74,6 +75,10 @@ impl Engine {
             || self.tuning
             || self.tx_owner().is_some()
             || self.clock_repair_holds_tx()
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // held PTT arms nothing under the already-armed latch until the device is approved
+            // ([`Engine::remote_transmit_held`]).
+            || self.remote_transmit_held()
         {
             return false;
         }
@@ -90,6 +95,56 @@ impl Engine {
         // here, and the over is measured from its key.
         self.reset_tx_watchdog();
         true
+    }
+
+    /// Why a streamed operator's held PTT would not key the station right now, for display
+    /// (`radio.pttRefusal`): the FIRST gate [`Self::arm_remote_mic`] would refuse at, in that exact
+    /// order, or — once a press is armed — the armed-but-no-audio case. `None` when a press would
+    /// key, and once one has keyed.
+    ///
+    /// It reads the live state only: it records nothing, keys nothing and relaxes no guard. The
+    /// arm's own conditions are unchanged; this only names which of them held, so the operator is
+    /// no longer left pressing a dead PTT with no word why.
+    pub fn ptt_refusal(&self, now: Instant) -> Option<PttRefusal> {
+        if self.mic.keyed() {
+            return None; // a press did key
+        }
+        if self.mic.active() {
+            // Armed by a held press; nothing keys until the first frame of audio arrives (M1).
+            return Some(PttRefusal::NoAudio);
+        }
+        // Not armed: the first gate a fresh press would meet, in `arm_remote_mic`'s order — except
+        // that the approval hold is named first (below), since it refuses the switch-on as well.
+        if self.mic_feed.is_none() {
+            return Some(PttRefusal::NoFeed);
+        }
+        if self.settings.operating_mode != OperatingMode::Phone {
+            return Some(PttRefusal::NotPhone);
+        }
+        // The approval hold is named before the latch: a held device switching TX on would be
+        // refused too, so "approve it at the station" is the reason that tells it what to do.
+        if self.remote_transmit_held() {
+            return Some(PttRefusal::OnHold);
+        }
+        if !self.tx_enabled {
+            return Some(PttRefusal::TxDisabled);
+        }
+        if !self.tx_allowed() {
+            return Some(PttRefusal::OutsideLicence);
+        }
+        if self.tuning {
+            return Some(PttRefusal::Tuning);
+        }
+        if self.tx_owner().is_some() {
+            return Some(PttRefusal::OtherOwner);
+        }
+        if self.clock_repair_holds_tx() {
+            return Some(PttRefusal::ClockRepair);
+        }
+        if !self.remote_presence.as_ref().is_some_and(|p| p.valid(now)) {
+            return Some(PttRefusal::NoPresence);
+        }
+        None // a press would key
     }
 
     /// The Phone cockpit let go of a press it armed through the stream's picture: the over ends,
@@ -339,7 +394,7 @@ mod tests {
         }
     }
 
-    // ── M1 with S7 ────────────────────────────────────────────────────────────────────────────
+    // ── M1 ────────────────────────────────────────────────────────────────────────────────────
 
     /// ★ M1: the held PTT arms, and only the page's audio keys. `arming_without_audio_never_asserts_ptt`
     /// at the engine: a hundred ticks of a held PTT with no audio key nothing.
@@ -490,9 +545,9 @@ mod tests {
         );
     }
 
-    // ── M7: a lease lapse mid-over ends it ────────────────────────────────────────────────────
+    // ── A lease lapse mid-over ends it ────────────────────────────────────────────────────────
 
-    /// ★ M7: presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
+    /// ★ Presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
     /// ends the over and arms the abort. CONTROL: a tick before the deadline it is still keyed.
     #[test]
     fn a_lapse_of_presence_mid_over_unkeys_on_the_next_tick() {
@@ -533,7 +588,7 @@ mod tests {
         }
     }
 
-    // ── M10: the existing stops, unchanged ────────────────────────────────────────────────────
+    // ── The existing stops, unchanged ─────────────────────────────────────────────────────────
 
     /// `halt_tx` (Stop TX, a Stop from the stream, HaltTx) and TX Off each end a keyed over, arm
     /// the abort, and close the feed.
@@ -597,7 +652,7 @@ mod tests {
         );
     }
 
-    /// And `Armed` only while the armed over OWNS the transmitter (the lead's Q1 ruling,
+    /// And `Armed` only while the armed over OWNS the transmitter (decided
     /// 2026-09-29): the header's ON AIR sign waits on it for every over, the page's own Hold PTT
     /// included. Anything the arbiter puts in front of it is on the air (a key at the shack, an FT
     /// over, the tune carrier), and then the over is not reported armed, so the sign lights.
@@ -774,7 +829,7 @@ mod tests {
     // ── What the page is shown (micState) ─────────────────────────────────────────────────────
 
     /// The over as the page is shown it: armed, then keyed by the voice, then its end and why.
-    /// Each end names its own cause, so the page can say the right thing (design §7).
+    /// Each end names its own cause, so the page can say the right thing.
     #[test]
     fn the_page_is_shown_the_over_and_why_it_ended() {
         use crate::mic::{MicEnded, MicStatus};
@@ -981,5 +1036,142 @@ mod tests {
         );
         e.set_remote_mic_feed(MicFeed::default());
         assert!(e.arm_remote_mic(t0), "control: with a feed it arms");
+    }
+
+    /// ★ A newly signed-in device's held PTT arms nothing under the already-armed latch (the
+    /// 2026-10-23 sign-in decision): the hold refuses the arm though everything else a press needs
+    /// is in place, and `ptt_refusal` names it. Lifted, the same press arms — the control.
+    #[test]
+    fn a_sign_in_hold_refuses_the_mic_arm_under_an_armed_latch() {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_remote_mic_feed(MicFeed::default());
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled(), "premise: entering Phone armed the latch");
+        let t0 = Instant::now();
+        e.hold_remote_presence(
+            TransmitAuthority::default().permit(t0 + PRESENCE).unwrap(),
+            t0,
+        );
+        e.set_remote_transmit_held(true);
+        assert!(
+            !e.arm_remote_mic(t0),
+            "held: the mic arms nothing under the armed latch"
+        );
+        assert!(!e.mic_armed(), "and nothing is armed");
+        assert_eq!(e.ptt_refusal(t0), Some(PttRefusal::OnHold));
+
+        e.set_remote_transmit_held(false);
+        assert!(
+            e.arm_remote_mic(t0),
+            "control: the arm takes once the hold is off"
+        );
+    }
+
+    // ── Why a press would not key (pttRefusal, display only) ──────────────────────────────────
+
+    /// ★ The first gate a press would hit is named for the page, by value and in `arm_remote_mic`'s
+    /// own order — and once armed, the armed-but-no-audio case. Recording the reason changes
+    /// nothing about the arm.
+    #[test]
+    fn ptt_refusal_names_the_first_gate() {
+        // Not Phone (a feed is installed, so the mode is the first gate a press would meet).
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_remote_mic_feed(MicFeed::default());
+        e.set_operating_mode("cw", false);
+        assert_eq!(e.ptt_refusal(Instant::now()), Some(PttRefusal::NotPhone));
+
+        // Phone, with transmit not enabled at the station.
+        let mut s = scene();
+        s.e.set_tx_enabled(false);
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::TxDisabled));
+        // The same, while the device is on the approval hold: switching TX on would be refused
+        // too, so the hold is the reason named — approval is what lets it transmit.
+        s.e.set_remote_transmit_held(true);
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::OnHold));
+        s.e.set_remote_transmit_held(false);
+
+        // Armed by a held press, with no audio yet: the over waits to key.
+        let mut s = scene();
+        assert_eq!(s.held_tick(0), MicTick::Armed, "premise: the press arms");
+        assert!(
+            s.e.mic_armed() && !s.e.mic_keyed(),
+            "premise: armed, not keyed"
+        );
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::NoAudio));
+
+        // No microphone feed set up on this computer.
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        assert_eq!(e.ptt_refusal(Instant::now()), Some(PttRefusal::NoFeed));
+    }
+
+    /// Null when a press would key, and once one has keyed: there is nothing to explain.
+    #[test]
+    fn ptt_refusal_is_none_when_a_press_would_or_did_key() {
+        let mut s = scene();
+        assert_eq!(
+            s.e.ptt_refusal(s.at(0)),
+            None,
+            "a ready press reported a refusal"
+        );
+        s.key();
+        assert!(s.e.mic_keyed(), "premise: the voice keyed it");
+        assert_eq!(
+            s.e.ptt_refusal(s.at(0)),
+            None,
+            "a keyed press reported a refusal"
+        );
+    }
+
+    /// ⛔ C1 holds across presses: one over, its key handed to a new press five times as the answer
+    /// to "Still talking?" hands it, and presence renewed at each, ends at its 10-minute ceiling
+    /// counted from its FIRST key, and no hand-over restarts the watchdog's clock. Aged to 2 s short
+    /// of the ceiling ([`crate::mic::MicLatch::age_for_test`]), it stays keyed through every new
+    /// press; aged 2 s more, the next tick drops it as `Ceiling`. CONTROL: each new press kept the
+    /// over keyed, so the ceiling, not a hand-over, ended it.
+    #[test]
+    fn the_ceiling_holds_across_presses_handed_the_key_and_renewals() {
+        let mut s = scene();
+        s.key();
+        let mut k = 1u64;
+        // The press `id` re-asserted, a frame of its voice, and a tick of the loop at `n` ms.
+        let spoken = |s: &mut Scene, id: &str, n: u64, k: &mut u64| {
+            s.hold.hold(id, s.at(n));
+            s.feed.push(frame(*k, s.at(n))).unwrap();
+            *k += 1;
+            s.tick(n)
+        };
+        for n in [20u64, 40, 60] {
+            spoken(&mut s, PRESS, n, &mut k);
+        }
+        let watchdog = s.e.tx_watchdog_start;
+        assert!(watchdog.is_some(), "premise: the watchdog's clock started");
+        s.e.mic.age_for_test(MIC.max_latch_ms - 2_000);
+        let mut n = 80u64;
+        let mut last = String::new();
+        for p in 0..5u64 {
+            last = format!("10000000-0000-4000-8000-00000000010{p}");
+            let now = s.at(n);
+            assert!(s
+                .e
+                .hold_remote_presence(s.presence.permit(now + PRESENCE).unwrap(), now));
+            for _ in 0..5 {
+                let tick = spoken(&mut s, &last, n, &mut k);
+                assert!(s.e.mic_keyed(), "new press {p} at {n} ms: {tick:?}");
+                n += 20;
+            }
+        }
+        assert!(
+            s.hold.keyed_by(&last),
+            "premise: the last new press holds the key"
+        );
+        assert_eq!(
+            s.e.tx_watchdog_start, watchdog,
+            "a hand-over restarted the watchdog's clock"
+        );
+        s.e.mic.age_for_test(2_000);
+        spoken(&mut s, &last, n, &mut k);
+        assert!(!s.e.mic_armed(), "the ceiling did not end the carried over");
+        assert_eq!(s.e.mic_ended, Some(crate::mic::MicEnded::Ceiling));
     }
 }

@@ -948,7 +948,8 @@ export function zoomWindow(
 
 /** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
  * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope, 'yaesu' = the FT-710's FT4222 USB→SPI
- * bridge; and 'tci' = an SDR program's own IQ over TCI, centred on its receiver).
+ * bridge; 'tci' = an SDR program's own IQ over TCI, centred on its receiver; and 'sdrconnect' =
+ * an SDRplay receiver's IQ through SDRconnect, the operator's other scope source).
  * ''/'audio' = the soundcard FFT, whose rows span demodulated audio-passband Hz.
  *
  * ⚠️ A FEED LABEL THIS PREDICATE DOES NOT KNOW FALLS THROUGH TO THE AUDIO READING, and nothing
@@ -956,7 +957,10 @@ export function zoomWindow(
  * real RF span. The waterfall is simply wrong. So this list and the labels the backend publishes
  * are one fact in two places — `yaesu_wf::SOURCE` names this function for the same reason. */
 export function isRfScopeSource(source: string): boolean {
-  return source === 'flex' || source === 'civ' || source === 'yaesu' || source === 'tci'
+  return (
+    source === 'flex' || source === 'civ' || source === 'yaesu' || source === 'tci' ||
+    source === 'sdrconnect'
+  )
 }
 
 /** Why a rig-scope control pane cannot appear when no native panadapter is streaming —
@@ -1407,4 +1411,41 @@ export function tuneTarget(
   if (metaKey) return 'both' // ⌘+click — mac WSJT-X parity
   if (shiftKey) return 'tx'
   return 'rx'
+}
+
+/** A label to stack on the picture: its centre (px from the left), its width (px) and its rank
+ *  (lower is kept first). */
+export interface LaneTagIn {
+  x: number
+  w: number
+  rank: number
+}
+
+/**
+ * Callsign tags stacked in rows along the top of the picture, each centred over its own
+ * frequency. FT8 puts dozens of signals in one slot, so labels side by side would pile up; taken
+ * in rank order, each goes in the first row where it clears every label already there by `gapPx`,
+ * and one that fits in none of `lanes` rows is left out and counted. A label never moves off its
+ * frequency, so its row is the only thing the crowding changes. `null` = not drawn.
+ */
+export function laneTags(
+  tags: readonly LaneTagIn[],
+  widthPx: number,
+  lanes: number,
+  gapPx: number,
+): { lane: (number | null)[]; hidden: number } {
+  const rows: [number, number][][] = Array.from({ length: Math.max(0, lanes) }, () => [])
+  const lane: (number | null)[] = tags.map(() => null)
+  const order = tags.map((_, i) => i).sort((a, b) => tags[a].rank - tags[b].rank || tags[a].x - tags[b].x)
+  for (const i of order) {
+    const { x, w } = tags[i]
+    // Kept inside the picture, as the label is drawn.
+    const l = Math.min(Math.max(0, x - w / 2), Math.max(0, widthPx - w))
+    const r = l + w
+    const k = rows.findIndex((row) => row.every(([a, b]) => r + gapPx <= a || l >= b + gapPx))
+    if (k < 0) continue
+    rows[k].push([l, r])
+    lane[i] = k
+  }
+  return { lane, hidden: lane.filter((k) => k == null).length }
 }

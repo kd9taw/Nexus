@@ -1,7 +1,7 @@
 //! The simulator's own reading of TCI's text grammar (spec §3.1), from the server's side.
 //!
 //! Written from the spec for the simulator, independently of Nexus's client codec, so that a codec
-//! bug on one side is not mirrored by the other (plan §7.1: two readings of one spec cross-check).
+//! bug on one side is not mirrored by the other (two readings of one spec cross-check).
 //!
 //! **The grammar.** A command is `name:arg1,arg2,…;`, or `name;` when it has no arguments. The
 //! reserved characters are `:` `,` `;`. Case does not matter. Several commands may share one

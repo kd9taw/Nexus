@@ -59,6 +59,7 @@ pub mod n1mm;
 pub mod n3fjp;
 pub mod pskreporter;
 pub mod qds;
+pub mod sdrconnect;
 pub mod server;
 pub mod sntp;
 pub mod tci;

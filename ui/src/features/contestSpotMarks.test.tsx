@@ -10,7 +10,11 @@ import { BandMap } from '../components/BandMap'
 import { SpotsPanel } from '../components/SpotsPanel'
 import type { DupeRule, FieldDayQso, FieldDayStatus, SpotRow } from '../types'
 
-vi.mock('../api', () => ({ setFrequency: vi.fn(() => Promise.resolve(null)), openQrzPage: vi.fn() }))
+vi.mock('../api', () => ({
+  setFrequency: vi.fn(() => Promise.resolve(null)),
+  openQrzPage: vi.fn(),
+  setPounceSpotterFilter: vi.fn(async () => {}),
+}))
 
 afterEach(() => {
   cleanup()

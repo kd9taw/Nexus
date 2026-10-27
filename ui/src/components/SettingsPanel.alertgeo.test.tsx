@@ -229,7 +229,7 @@ describe('adding a country by name', () => {
     // Nothing is offered until the operator types — the table is not even fetched.
     expect(api.get('getDxccEntityNames')).not.toHaveBeenCalled()
 
-    fireEvent.change(screen.getByPlaceholderText('type to search, e.g. France'), {
+    fireEvent.change(screen.getByPlaceholderText('type to search'), {
       target: { value: 'german' },
     })
     // Matched case-insensitively on the cty.dat spelling, which is the trap this control exists
@@ -252,7 +252,7 @@ describe('adding a country by name', () => {
 
   it('unticking a chosen country drops it', async () => {
     await openAlerts()
-    fireEvent.change(screen.getByPlaceholderText('type to search, e.g. France'), {
+    fireEvent.change(screen.getByPlaceholderText('type to search'), {
       target: { value: 'japan' },
     })
     await screen.findByRole('option', { name: 'Japan' })

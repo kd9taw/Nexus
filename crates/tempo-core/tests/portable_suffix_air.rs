@@ -278,11 +278,144 @@ fn a_nonstandard_call_still_gets_its_report_through_the_hash() {
     over(&mut st, "<PJ4/K1ABC> KD9TAW -07");
 
     st.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
-    over(&mut st, "<PJ4/K1ABC> KD9TAW 73");
+    over(&mut st, "PJ4/K1ABC <KD9TAW> 73");
     assert_eq!(
         st.dxcall.as_deref(),
         Some("PJ4/K1ABC"),
         "logs the full call"
+    );
+}
+
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
+    // WSJT-X 3.0.2 closes with a nonstandard call whole and mine hashed, a type 4 message
+    // (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and bMyCall)
+    // t=hisCall + " <" + my_callsign + "> " …`): its RR73, the RRR it sends in place of RR73
+    // (the same expression, 9701) and its 73. `bMyCall` is `stdCall`, which passes `/P`
+    // and `/R`, so a portable call of mine closes the same way. Hashed the other way round,
+    // `<W9XYZ/M> KD9TAW 73` names the same two stations in a type 1 message, not WSJT-X's.
+    for c in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
+        seed_hash(c);
+    }
+    let mut wrong = Vec::new();
+    for my in ["KD9TAW", "KD9TAW/P", "KD9TAW/R"] {
+        for dx in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
+            let roger = Msg::RReport {
+                to: my.into(),
+                de: dx.into(),
+                snr: -7,
+            };
+            let rrr = Station::start(my, "EN52", dx, Some((&roger, -7)), true, false)
+                .pending_text()
+                .unwrap_or_default();
+            let sent = (queued(my, "EN52", dx, 4), rrr, queued(my, "EN52", dx, 5));
+            let want = (
+                format!("{dx} <{my}> RR73"),
+                format!("{dx} <{my}> RRR"),
+                format!("{dx} <{my}> 73"),
+            );
+            if sent != want {
+                wrong.push(format!("{my} × {dx}\n  sent {sent:?}\n  want {want:?}"));
+                continue;
+            }
+            for t in [&sent.0, &sent.1, &sent.2] {
+                assert_eq!(i3_of(t), Some(4), "[{t}] is a type 4 message");
+                assert_on_air(ModeKind::Ft8, t);
+                assert_on_air(ModeKind::Ft4, t);
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+
+    // A whole contact with a WSJT-X station signing W9XYZ/M, each of its overs in WSJT-X's
+    // form: its report and roger with its own call hashed (`t0b`, 9597), its grid-less call
+    // (`t0a`, 9627) and its closes with mine hashed (9702, 9710).
+    let cq = Msg::parse("CQ W9XYZ/M");
+    let mut st = Station::start("KD9TAW", "EN52", "W9XYZ/M", Some((&cq, -7)), false, false);
+    over(&mut st, "<W9XYZ/M> KD9TAW EN52");
+    st.observe(&[dec("KD9TAW <W9XYZ/M> -05", -7)]);
+    over(&mut st, "<W9XYZ/M> KD9TAW R-07");
+    st.observe(&[dec("<KD9TAW> W9XYZ/M RR73", -7)]);
+    over(&mut st, "W9XYZ/M <KD9TAW> 73");
+    assert_eq!(
+        (st.state, st.dxcall.as_deref()),
+        (State::Done, Some("W9XYZ/M")),
+        "answering its CQ"
+    );
+
+    let mut run = Station::calling_cq("KD9TAW", "EN52");
+    over(&mut run, "CQ KD9TAW EN52");
+    run.observe(&[dec("<KD9TAW> W9XYZ/M", -7)]);
+    over(&mut run, "<W9XYZ/M> KD9TAW -07");
+    run.observe(&[dec("KD9TAW <W9XYZ/M> R-05", -7)]);
+    over(&mut run, "W9XYZ/M <KD9TAW> RR73");
+    run.observe(&[dec("<KD9TAW> W9XYZ/M 73", -7)]);
+    assert_eq!(
+        (run.state, run.dxcall.as_deref(), run.rx_report),
+        (State::Done, Some("W9XYZ/M"), Some(-5)),
+        "running"
+    );
+}
+
+#[test]
+fn rr73_and_73_otherwise_go_out_as_before() {
+    // Only a standard call of mine closing to a nonstandard one changes. A nonstandard call of
+    // mine beside a standard one is WSJT-X's other form already (9702, 9710); two nonstandard
+    // calls, and a `/P` beside a `/R`, keep the form they had.
+    for c in ["W9XYZ/M", "PJ4/K1ABC", "F4CYH/R"] {
+        seed_hash(c);
+    }
+    for (my, dx, rr73, bye) in [
+        ("KD9TAW", "W9XYZ", "W9XYZ KD9TAW RR73", "W9XYZ KD9TAW 73"),
+        (
+            "KD9TAW",
+            "W9XYZ/P",
+            "W9XYZ/P KD9TAW RR73",
+            "W9XYZ/P KD9TAW 73",
+        ),
+        (
+            "KD9TAW/P",
+            "W9XYZ/P",
+            "W9XYZ/P KD9TAW/P RR73",
+            "W9XYZ/P KD9TAW/P 73",
+        ),
+        (
+            "KD9TAW/P",
+            "F4CYH/R",
+            "<F4CYH/R> KD9TAW/P RR73",
+            "<F4CYH/R> KD9TAW/P 73",
+        ),
+        (
+            "PJ4/K1ABC",
+            "KD9TAW",
+            "<KD9TAW> PJ4/K1ABC RR73",
+            "<KD9TAW> PJ4/K1ABC 73",
+        ),
+        (
+            "PJ4/K1ABC",
+            "W9XYZ/M",
+            "<W9XYZ/M> PJ4/K1ABC RR73",
+            "<W9XYZ/M> PJ4/K1ABC 73",
+        ),
+        // A call the decoder could not resolve is no callsign to put in full.
+        ("KD9TAW", "<...>", "<...> KD9TAW RR73", "<...> KD9TAW 73"),
+    ] {
+        let sent = (queued(my, "EN52", dx, 4), queued(my, "EN52", dx, 5));
+        assert_eq!(sent, (rr73.to_string(), bye.to_string()), "{my} × {dx}");
+    }
+    // RRR in place of RR73 to a standard call, and the RRR a `/P` call sends as its roger
+    // where no number can ride (Tx3, not Tx4), keep their forms.
+    let roger = Msg::RReport {
+        to: "KD9TAW".into(),
+        de: "W9XYZ".into(),
+        snr: -7,
+    };
+    let st = Station::start("KD9TAW", "EN52", "W9XYZ", Some((&roger, -7)), true, false);
+    assert_eq!(st.pending_text().as_deref(), Some("W9XYZ KD9TAW RRR"));
+    assert_eq!(
+        queued("KD9TAW/P", "EN52", "PJ4/K1ABC", 3),
+        "<PJ4/K1ABC> KD9TAW/P RRR",
+        "a /P call's roger"
     );
 }
 
@@ -352,8 +485,10 @@ fn a_suffixed_operator_working_a_hashed_dx_keeps_tx3_distinguishable() {
             .map(|n| queued(my, "EN52", "PJ4/K1ABC", n))
             .collect();
         for (i, q) in tx.iter().enumerate() {
+            // The DX hashed, or in the RR73 and 73 the DX whole and mine hashed (WSJT-X's).
             assert!(
-                q.starts_with("<PJ4/K1ABC> ") && q.contains(my),
+                (q.starts_with("<PJ4/K1ABC> ") || q.starts_with(&format!("PJ4/K1ABC <{my}> ")))
+                    && q.contains(my),
                 "Tx{} must name both stations: [{q}]",
                 i + 1
             );
@@ -419,13 +554,14 @@ fn every_callsign_class_pair_puts_both_calls_on_the_air_verbatim() {
 
 #[test]
 fn a_hashed_cq_is_never_generated() {
-    // `CQ <F4CYH/P> JN18` PACKS but does not UNPACK — a hashed CQ is unusable, and
-    // generating one would put a frame on the air that nobody can decode. A CQ
-    // therefore always carries the calling station's call in full.
-    let got = on_air(ModeKind::Ft8, "CQ <PJ4/K1ABC> FK52");
+    // A hashed CQ has no frame anybody can decode, so the encoder refuses it and nothing
+    // keys (it once packed into a frame that did not unpack). A CQ therefore always carries
+    // the calling station's call in full.
     assert!(
-        got.is_empty(),
-        "a hashed CQ does not survive the round trip; got {got:?}"
+        make_mode(ModeKind::Ft8)
+            .encode("CQ <PJ4/K1ABC> FK52")
+            .is_empty(),
+        "a hashed CQ must never become an over"
     );
 
     for mycall in ["F4CYH/P", "KD9TAW/R", "PJ4/K1ABC", "YW18FIFA", "KD9TAW/QRP"] {
@@ -512,7 +648,7 @@ fn a_plain_station_follows_a_partner_that_hashes_its_own_call() {
     assert_eq!(st.state, State::AwaitRr73);
     over(&mut st, "<OE/PD1SCO> PA0A R-05");
     st.observe(&[dec("<PA0A> OE/PD1SCO RR73", -5)]);
-    over(&mut st, "<OE/PD1SCO> PA0A 73");
+    over(&mut st, "OE/PD1SCO <PA0A> 73");
     assert_eq!(st.state, State::Done);
     assert_eq!(
         st.dxcall.as_deref(),
@@ -528,7 +664,7 @@ fn a_plain_station_follows_a_partner_that_hashes_its_own_call() {
     run.observe(&[dec("PA0A <OE/PD1SCO> R-01", -5)]);
     assert_eq!(run.rx_report, Some(-1));
     assert_eq!(run.state, State::Confirming);
-    over(&mut run, "<OE/PD1SCO> PA0A RR73");
+    over(&mut run, "OE/PD1SCO <PA0A> RR73");
 }
 
 #[test]
@@ -548,20 +684,21 @@ fn only_a_nonstandard_call_beside_a_plain_partner_changes() {
 
     // Every pair's Tx1–Tx5 and every CQ, byte for byte. The two ★ rows are the change:
     // a nonstandard call beside a plain one sends WSJT-X's report and roger. Every other
-    // row is exactly what was sent before.
+    // row is exactly what was sent before, but for the RR73 and 73 a standard call sends a
+    // nonstandard one (the three PJ4/K1ABC rows of mine), WSJT-X's `PJ4/K1ABC <KD9TAW> RR73`.
     const ROWS: [(&str, &str, &str); 20] = [
         ("KD9TAW", "PA0A", "PA0A KD9TAW EN52 | PA0A KD9TAW -07 | PA0A KD9TAW R-07 | PA0A KD9TAW RR73 | PA0A KD9TAW 73"),
         ("KD9TAW", "PA0A/P", "PA0A/P KD9TAW EN52 | PA0A/P KD9TAW -07 | PA0A/P KD9TAW R-07 | PA0A/P KD9TAW RR73 | PA0A/P KD9TAW 73"),
         ("KD9TAW", "PA0A/R", "PA0A/R KD9TAW EN52 | PA0A/R KD9TAW -07 | PA0A/R KD9TAW R-07 | PA0A/R KD9TAW RR73 | PA0A/R KD9TAW 73"),
-        ("KD9TAW", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | <PJ4/K1ABC> KD9TAW RR73 | <PJ4/K1ABC> KD9TAW 73"),
+        ("KD9TAW", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | PJ4/K1ABC <KD9TAW> RR73 | PJ4/K1ABC <KD9TAW> 73"),
         ("KD9TAW/P", "PA0A", "PA0A KD9TAW/P EN52 | PA0A KD9TAW/P -07 | PA0A KD9TAW/P R-07 | PA0A KD9TAW/P RR73 | PA0A KD9TAW/P 73"),
         ("KD9TAW/P", "PA0A/P", "PA0A/P KD9TAW/P EN52 | PA0A/P KD9TAW/P -07 | PA0A/P KD9TAW/P R-07 | PA0A/P KD9TAW/P RR73 | PA0A/P KD9TAW/P 73"),
         ("KD9TAW/P", "PA0A/R", "<PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P RRR | <PA0A/R> KD9TAW/P RR73 | <PA0A/R> KD9TAW/P 73"),
-        ("KD9TAW/P", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | <PJ4/K1ABC> KD9TAW/P RR73 | <PJ4/K1ABC> KD9TAW/P 73"),
+        ("KD9TAW/P", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | PJ4/K1ABC <KD9TAW/P> RR73 | PJ4/K1ABC <KD9TAW/P> 73"),
         ("KD9TAW/R", "PA0A", "PA0A KD9TAW/R EN52 | PA0A KD9TAW/R -07 | PA0A KD9TAW/R R-07 | PA0A KD9TAW/R RR73 | PA0A KD9TAW/R 73"),
         ("KD9TAW/R", "PA0A/P", "<PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R RRR | <PA0A/P> KD9TAW/R RR73 | <PA0A/P> KD9TAW/R 73"),
         ("KD9TAW/R", "PA0A/R", "PA0A/R KD9TAW/R EN52 | PA0A/R KD9TAW/R -07 | PA0A/R KD9TAW/R R-07 | PA0A/R KD9TAW/R RR73 | PA0A/R KD9TAW/R 73"),
-        ("KD9TAW/R", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | <PJ4/K1ABC> KD9TAW/R RR73 | <PJ4/K1ABC> KD9TAW/R 73"),
+        ("KD9TAW/R", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | PJ4/K1ABC <KD9TAW/R> RR73 | PJ4/K1ABC <KD9TAW/R> 73"),
         // ★
         ("OE/PD1SCO", "PA0A", "<PA0A> OE/PD1SCO | PA0A <OE/PD1SCO> -07 | PA0A <OE/PD1SCO> R-07 | <PA0A> OE/PD1SCO RR73 | <PA0A> OE/PD1SCO 73"),
         ("OE/PD1SCO", "PA0A/P", "<PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO RRR | <PA0A/P> OE/PD1SCO RR73 | <PA0A/P> OE/PD1SCO 73"),
@@ -645,7 +782,7 @@ fn a_nonstandard_call_and_a_plain_call_exchange_both_reports_both_ways() {
             "OE/PD1SCO: PA0A <OE/PD1SCO> -05",
             "PA0A: <OE/PD1SCO> PA0A R-01",
             "OE/PD1SCO: <PA0A> OE/PD1SCO RR73",
-            "PA0A: <OE/PD1SCO> PA0A 73",
+            "PA0A: OE/PD1SCO <PA0A> 73",
         ],
         "my CQ answered"
     );
@@ -669,7 +806,7 @@ fn a_nonstandard_call_and_a_plain_call_exchange_both_reports_both_ways() {
             "OE/PD1SCO: <PA0A> OE/PD1SCO",
             "PA0A: <OE/PD1SCO> PA0A -01",
             "OE/PD1SCO: PA0A <OE/PD1SCO> R-05",
-            "PA0A: <OE/PD1SCO> PA0A RR73",
+            "PA0A: OE/PD1SCO <PA0A> RR73",
             "OE/PD1SCO: <PA0A> OE/PD1SCO 73",
         ],
         "me answering his CQ"

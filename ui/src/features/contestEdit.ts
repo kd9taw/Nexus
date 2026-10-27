@@ -3,7 +3,7 @@
 //
 // The ENGINE decides (`contest_edit`): it names the contact by its call and time — a county line
 // is one contact, one row per county — keeps its time, serial and number, and refuses one that is
-// no longer there, or any edit while club sync runs. This turns a contact's rows into the form's
+// no longer there or no longer reads as the edit opened it, or any edit while club sync runs. This turns a contact's rows into the form's
 // values and the form back into the edit, judging each box with the strip's own functions
 // (`features/contestSlots`), so an edit cannot write what the strip would refuse to log.
 //
@@ -20,6 +20,19 @@ import { SERVICE_NAMES, contactLabel } from './contestRemoval'
  *  A held key's auto-repeat is the caller's to ignore. */
 export function isEditKey(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === 'y'
+}
+
+/** What a contact's edit can change on its rows, as one string to compare: the fields `editForm`
+ *  and `editOf` read and write. The engine compares the same ones (`contest_edit`). */
+export function contactText(rows: readonly FieldDayQso[]): string {
+  return JSON.stringify(rows.map((q) => [q.call, q.band, q.mode, q.submode, q.class, q.section, q.rcvd]))
+}
+
+/** What a host says when the edit's contact is no longer in its window by the call and time
+ *  it opened with: every edit keeps a contact's time, so one still at that time had its call
+ *  changed elsewhere, and with none at it the contact was removed. */
+export function closedText(log: readonly FieldDayQso[], whenUnix: number): string {
+  return log.some((q) => q.whenUnix === whenUnix) ? t('contest.edit.changed') : t('contest.edit.gone')
 }
 
 /** The modes on the air the form offers besides the contact's own — ADIF mode names, tokens. */
@@ -120,6 +133,8 @@ export function editText(answer: ContestEditAnswer): string {
         return t('contest.edit.satellite')
       case 'club':
         return t('contest.edit.club')
+      case 'gone':
+        return t('contest.edit.gone')
       default:
         return t('contest.edit.changed')
     }

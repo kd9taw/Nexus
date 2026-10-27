@@ -135,7 +135,7 @@ mod tests {
     /// ±2.5 Hz fine search (NFSRCH) nearly flat, and on 150 of the parity lab's
     /// JS8 60 files (−4…−8 dB) JS8Call 3.0.3's decoder and this one report the
     /// same spread — mean 0.72 Hz, 95 % within 2.0, worst 2.5 — against at
-    /// most 1.0 Hz for both at JS8 40 (paritylab/js8/js8call-3.0.3).
+    /// most 1.0 Hz for both at JS8 40.
     #[test]
     fn round_trip_at_every_speed() {
         for speed in Speed::ALL {

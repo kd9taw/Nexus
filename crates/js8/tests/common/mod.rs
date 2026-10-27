@@ -10,8 +10,8 @@
 //! WHY fixtures are pinned by sha256 in a sidecar file: upstream JS8Call media/tests WAVs are
 //! GPLv3 test audio (credited in NOTICE). A pin makes a silently swapped, truncated or
 //! CRLF-mangled fixture a red test instead of a mysterious decode-count drift. No network is
-//! touched at test time (wsjtx_predicate_differential.rs rule) — the lab script
-//! ~/work/twowayfd/paritylab/js8/fetch_media_tests.sh is where bytes come from.
+//! touched at test time (wsjtx_predicate_differential.rs rule) — a lab script
+//! fetched the bytes once.
 #![allow(dead_code)] // each integration-test binary compiles this module separately
 
 pub mod golden;
@@ -116,7 +116,7 @@ pub fn fixture_dir() -> PathBuf {
 pub fn verify_fixture_pins() -> Vec<(String, PathBuf)> {
     let dir = fixture_dir();
     let sums = std::fs::read_to_string(dir.join("SHA256SUMS"))
-        .expect("crates/js8/tests/fixtures/SHA256SUMS must exist (Task B2.1)");
+        .expect("crates/js8/tests/fixtures/SHA256SUMS must exist");
     let mut verified = Vec::new();
     for line in sums.lines().filter(|l| !l.trim().is_empty()) {
         let mut it = line.split_whitespace();
@@ -239,7 +239,7 @@ pub fn stock_js8_bin() -> Option<PathBuf> {
 }
 
 /// `js8 -8 -b <letter> -d <depth> <wav>` with cwd = the WAV's directory (the CLI writes
-/// jt9_wisdom.dat + timer.out into cwd). One process per file (paritylab rule). Returns the
+/// jt9_wisdom.dat + timer.out into cwd). One process per file (the lab's rule). Returns the
 /// parsed decode lines and the `<DecodeFinished>` count. Panics on a non-zero exit or a
 /// missing `<DecodeFinished>` line — a crashed oracle is never "zero decodes".
 pub fn run_stock_js8(bin: &Path, letter: char, depth: u8, wav: &Path) -> (Vec<StockDecode>, usize) {

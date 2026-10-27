@@ -248,7 +248,7 @@ ClubLog, eQSL, and HRDLog.net).
 
 ## Logbook format
 
-Nexus reads and writes **ADIF 3.1.4** (the exported header identifies `PROGRAMID`
+Nexus reads and writes **ADIF 3.1.8** (the exported header identifies `PROGRAMID`
 `Nexus`), so importing your existing log credits your worked/confirmed history
 immediately, and exports drop straight into any other ADIF-aware tool.
 

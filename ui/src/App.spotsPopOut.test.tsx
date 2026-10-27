@@ -81,6 +81,7 @@ vi.mock('./api', async (importOriginal) => {
     getPca: vi.fn(async () => null),
     getSatellites: vi.fn(async () => null),
     getOtaMapSpots: vi.fn(async () => []),
+    getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
     getLogStats: vi.fn(async () => null),
     getContests: vi.fn(async () => []),
     getSatSchedule: vi.fn(async () => []),

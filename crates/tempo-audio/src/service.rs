@@ -21,9 +21,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tempo_app::engine::jtty_tx::{self, JttyTick};
 use tempo_app::engine::{
-    engine_lock, run_decode_job, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
-    DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
+    engine_lock, run_decode_job_streaming, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
+    DecodeProgress, DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick,
+    SatCatBackend, StreamedDecode,
 };
 use tempo_app::keyboard;
 use tempo_app::mic::{MicTick, MIC, TCI_OVER};
@@ -432,9 +434,11 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
 /// ([`seed_line_declarations`]), a NET rigctl address one of Nexus's own listeners holds
 /// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first, and the
 /// TCI connection's server with the port of Nexus's own TCI server ([`seed_tci`]).
-fn launch_transport(cfg: &RadioConfig, s: &Settings) -> Transport {
+fn launch_transport(cfg: &RadioConfig, s: &Settings, serving: Option<u16>) -> Transport {
     let mut t = Transport::from_cfg(cfg);
     seed_line_declarations(&mut t, s);
+    // Where the CAT broker is, as every later transport carries it (#165).
+    t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
     t.address_refusal = AddressRefusal::of(&t, s);
     seed_tci(&mut t, s);
     t
@@ -978,9 +982,23 @@ const MAX_TUNE_MS: f64 = 60_000.0;
 /// Safety auto-stop for a forgotten QSO recording: cap a single recording at 2 hours so a
 /// recording the operator forgot to stop can't fill the disk unbounded (~86 MB/hour).
 const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
+/// How far the wall clock may step under the engine's copy of the loop's own transmit deadline
+/// before the loop tells it again ([`RadioLoop::tell_tx_hold`]): under the engine's 250 ms margin.
+const TX_HOLD_RETELL_MS: f64 = 100.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+
+/// How long after a tune-up the radio took to read its tuner state again (#344). Not at once: while
+/// it tunes a Yaesu answers `AC002` and Hamlib reads that as "off" (`u TUNER` → `0`, captured from
+/// rigctl 4.5.5, model 1035), so the read waits for the cycle to end. The read also waits out a
+/// keyed rig on its own — the heavy poll that makes it is skipped while the rig is keyed.
+const ATU_REPROBE_AFTER_TUNE_MS: f64 = 8_000.0;
+/// How often the tuner state is read again while the radio reports a tuner (#344): slow — one
+/// `u TUNER` every ten seconds — because only a switch made at the radio needs it.
+const TUNER_REFRESH_MS: f64 = 10_000.0;
+/// Misses in a row before that slow re-read stops (see `RadioLoop::tuner_misses`).
+const TUNER_MISS_LIMIT: u8 = 3;
 /// How much WALL TIME one heavy poll may spend on blocking CAT read-back before it abandons the
 /// rest of this tick's reads and picks them up on the next heavy poll.
 ///
@@ -1059,6 +1077,8 @@ struct ReadTurns {
     /// Sub-cadenced reads whose tick has come round and that no poll has afforded yet, one bit
     /// per [`HeavyRead`].
     owed: u32,
+    /// The owed reads that do not wait for the lap to come round to them ([`Self::owe_now`]).
+    pressing: u32,
 }
 
 impl ReadTurns {
@@ -1071,6 +1091,13 @@ impl ReadTurns {
     /// A sub-cadenced read's tick has come round.
     fn owe(&mut self, read: HeavyRead) {
         self.owed |= 1 << read as u32;
+    }
+
+    /// [`Self::owe`] a read the next poll that can afford it makes even if its lap has already
+    /// passed it: the split read after a key, so a slow link reads it between overs.
+    fn owe_now(&mut self, read: HeavyRead) {
+        self.owe(read);
+        self.pressing |= 1 << read as u32;
     }
 
     /// May this poll issue `read`? Not if this lap has already read it, and not once the budget
@@ -1089,10 +1116,13 @@ impl ReadTurns {
     /// [`Self::take`] for a sub-cadenced read: only while it is owed, and the turn pays it.
     fn take_owed(&mut self, read: HeavyRead, have_budget: bool) -> bool {
         let bit = 1 << read as u32;
-        if self.owed & bit == 0 || !self.take(read, have_budget) {
+        // A pressing read asks the budget only, not where the lap is.
+        let pressing = self.pressing & bit != 0 && have_budget;
+        if self.owed & bit == 0 || !(pressing || self.take(read, have_budget)) {
             return false;
         }
         self.owed &= !bit;
+        self.pressing &= !bit;
         true
     }
 }
@@ -1167,9 +1197,18 @@ const N_TX_METERS: usize = TX_METERS.len();
 /// wire, and placed on the radio's own bar instead of Hamlib's quarter of it. `None` is a missed
 /// read on either path, so the three-strikes ladder treats both alike, and `deadline_ms` bounds
 /// both. A read: nothing is set on the radio.
-fn read_tx_meter(rig: &mut Rig, meter: &str, model: u32, deadline_ms: Option<u64>) -> Option<f32> {
+///
+/// `raw_alc` false reads that ALC with `l ALC` after all: the link never answered the raw read
+/// ([`RadioLoop::tx_alc_raw`]).
+fn read_tx_meter(
+    rig: &mut Rig,
+    meter: &str,
+    model: u32,
+    raw_alc: bool,
+    deadline_ms: Option<u64>,
+) -> Option<f32> {
     match crate::rigmodels::raw_alc_query(model) {
-        Some(query) if meter == "ALC" => rig
+        Some(query) if meter == "ALC" && raw_alc => rig
             .send_raw_within(query, deadline_ms)
             .and_then(|reply| crate::rigmodels::alc_bar_from_rm4(&reply)),
         _ => rig.read_meter_f32_within(meter, deadline_ms),
@@ -2093,7 +2132,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let (applied, remote_radio_id) = {
         let eng = engine_lock(&engine);
         (
-            launch_transport(&cfg, eng.settings()),
+            launch_transport(&cfg, eng.settings(), eng.cat_share_port()),
             eng.settings().active_radio,
         )
     };
@@ -2631,7 +2670,10 @@ fn monitor_loop(
             return;
         }
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
-        let (active, want) = monitor_want(engine_lock(&engine).settings());
+        let (active, want) = {
+            let e = engine_lock(&engine);
+            monitor_want(e.settings(), e.cat_share_port())
+        };
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
         if pending.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2646,7 +2688,7 @@ fn monitor_loop(
 
 /// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
 /// radio with a rig model.
-fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
+fn monitor_want(s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport)>) {
     let active = s.active_radio;
     // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
     // real port on a real radio — so it has to honour them too. Without this, an
@@ -2672,7 +2714,7 @@ fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
             t.control_lines = lines;
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
             // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
-            t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
             // …and our own TCI server's, so a monitor's TCI client never dials Nexus itself.
             t.tci_server_self_port = s.tci_server.then_some(s.tci_server_port);
             // And whether one of Nexus's own listeners holds this radio's NET rigctl address.
@@ -2927,7 +2969,10 @@ fn handoff_if_switched(
     let (active, want_active) = {
         let e = engine_lock(engine);
         let s = e.settings();
-        (s.active_radio, Transport::from_settings(s))
+        (
+            s.active_radio,
+            Transport::from_station(s, e.cat_share_port()),
+        )
     };
     if active == *last_active {
         // No switch in flight (or the intent vanished before the handoff won the pool —
@@ -3390,6 +3435,21 @@ fn note_refused_key(what: &str, why: &str) {
 /// through a whole QSO.
 const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
 
+/// When WSJT-X's FT8 early pass gives up, in ms into the period: `lib/ft8_decode.f90:240-242`
+/// (`if(.not.ldiskdat .and. nzhsym.eq.41 .and. tseq.ge.13.4d0) go to 800`), checked after every
+/// sync candidate, the decodes found so far kept.
+const FT8_EARLY_GIVE_UP_MS: f64 = 13_400.0;
+
+/// WSJT-X's third FT8 moment, `m_earlyDecode2` = 47 half-symbols of 3456 samples: the 47 step
+/// subtracts the early pass's decodes from the period's first 13.536 s for the full pass
+/// (`lib/ft8_decode.f90:124-149`; `DecodePass::Residual`). Its audio, in samples at 12 kHz.
+const FT8_RESIDUAL_SAMPLES: usize = 47 * 3456;
+
+/// When WSJT-X's 47 step bails out, in ms into the period: `lib/ft8_decode.f90:140-145`
+/// (`tseq.ge.14.3d0`), checked after each early decode, what was subtracted kept; the full pass
+/// subtracts the rest (`:157-160`).
+const FT8_RESIDUAL_GIVE_UP_MS: f64 = 14_300.0;
+
 /// The receive tap's ring for TCI audio: about 2.7 s at the modem rate, many times what the
 /// waterfall's thread drains in one of its 20 ms ticks.
 const TCI_TAP_RING_CAP: usize = 1 << 15;
@@ -3404,12 +3464,37 @@ enum WorkerJob {
     Js8Multi(Js8MultiJob),
 }
 
-/// The one function both workers run — a slot job yields one result, a multi-speed job one
-/// per slice (`run_js8_multi_job`). Free so a test can hand it to `spawn_with`.
-fn run_worker_job(job: WorkerJob) -> Vec<DecodeResult> {
+/// What a decode worker hands back, in the order it happens.
+enum WorkerOut {
+    /// A decode a running FT8/FT4 pass has just found, before the pass ends: WSJT-X's decoder
+    /// hands each decode on the moment it finds it (see [`StreamedDecode`]). The pass's result
+    /// follows its decodes.
+    Found(StreamedDecode),
+    /// A job's result: one per slot job, one per slice of a multi-speed job.
+    Done(DecodeResult),
+}
+
+/// The one function both workers run — a slot job hands on each decode as its pass finds it,
+/// then its result; a multi-speed job one result per slice (`run_js8_multi_job`). Free so a test
+/// can hand it to `spawn_with`.
+fn run_worker_job(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
+    /// A running pass's decodes, on to the worker's channel as they are found.
+    struct Forward<'a>(&'a mut dyn FnMut(WorkerOut));
+    impl DecodeProgress for Forward<'_> {
+        fn found(&mut self, d: StreamedDecode) {
+            (self.0)(WorkerOut::Found(d));
+        }
+    }
     match job {
-        WorkerJob::Slot(j) => vec![run_decode_job(j)],
-        WorkerJob::Js8Multi(j) => run_js8_multi_job(j),
+        WorkerJob::Slot(j) => {
+            let result = run_decode_job_streaming(j, &mut Forward(out));
+            out(WorkerOut::Done(result));
+        }
+        WorkerJob::Js8Multi(j) => {
+            for result in run_js8_multi_job(j) {
+                out(WorkerOut::Done(result));
+            }
+        }
     }
 }
 
@@ -3429,7 +3514,7 @@ fn run_worker_job(job: WorkerJob) -> Vec<DecodeResult> {
 struct DecodeWorker {
     /// `Option` only so [`Drop`] can drop the sender first, then join.
     job_tx: Option<Sender<WorkerJob>>,
-    result_rx: Receiver<DecodeResult>,
+    result_rx: Receiver<WorkerOut>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -3438,20 +3523,20 @@ impl DecodeWorker {
         Self::spawn_with("nexus-decode", run_worker_job)
     }
 
-    /// A worker thread named `name` running `run` on every job (one job may yield several
-    /// results; each is sent in order).
-    fn spawn_with(name: &str, run: fn(WorkerJob) -> Vec<DecodeResult>) -> Self {
+    /// A worker thread named `name` running `run` on every job (one job may hand back several
+    /// things — decodes as found, results; each is sent in order).
+    fn spawn_with(name: &str, run: fn(WorkerJob, &mut dyn FnMut(WorkerOut))) -> Self {
         let (job_tx, job_rx) = std::sync::mpsc::channel::<WorkerJob>();
-        let (result_tx, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<WorkerOut>();
         let handle = std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
                 // Ends when the job sender drops (loop shutdown / RadioLoop drop).
                 for job in job_rx {
-                    for result in run(job) {
-                        if result_tx.send(result).is_err() {
-                            return; // loop went away
-                        }
+                    let mut gone = false;
+                    run(job, &mut |out| gone |= result_tx.send(out).is_err());
+                    if gone {
+                        return; // loop went away
                     }
                 }
             })
@@ -3470,8 +3555,8 @@ impl DecodeWorker {
         }
     }
 
-    /// Non-blocking: take the next completed result, if one is ready.
-    fn try_recv(&self) -> Option<DecodeResult> {
+    /// Non-blocking: take the next thing the worker handed back, if one is ready.
+    fn try_recv(&self) -> Option<WorkerOut> {
         self.result_rx.try_recv().ok()
     }
 }
@@ -3597,6 +3682,11 @@ struct RadioLoop {
     /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
     /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
     flex_voice_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed, by
+    /// any route, until the keyer's Stop or the end of the over by any route clears it: what the
+    /// loop tells the engine each tick ([`Engine::set_voice_on_air`]), for the voice keyer to see
+    /// it end and for the transmit arbiter to keep every other start off the air under it.
+    voice_until_ms: Option<f64>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
     /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
     /// (`flex_voice_until_ms`), or over the DAX a digital slice already takes. The tee going takes
@@ -3727,6 +3817,12 @@ struct RadioLoop {
     /// What the engine was last told of [`Self::cw_keying_until`] (0.0 = no word), so it hears
     /// each word's window once, and its end.
     cw_keying_told: f64,
+    /// What the engine was last told of [`Self::tx_until_ms`] (0.0 = none), so it hears each
+    /// over's deadline once, and its end ([`Self::tell_tx_hold`]).
+    tx_hold_told: f64,
+    /// When it was last told a deadline: the wall clock's `now` and the monotonic clock's, to see
+    /// the wall clock step under the engine's copy ([`Self::tell_tx_hold`]).
+    tx_hold_told_at: Option<(f64, Instant)>,
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) the RIG ACCEPTED — so the
     /// shift/offset/CTCSS commands only fire on change, not every loop. `None` when not
     /// in FM. ⚠️ It is set from the rig's answer, never from the fact that the commands
@@ -3766,6 +3862,9 @@ struct RadioLoop {
     /// The live continuous-TX PSK stream, `None` when nothing is latched. See
     /// [`PskTxStream`].
     psk_stream: Option<PskTxStream>,
+    /// Unix-ms until which the JTTY audio already played is still going out — PSK's pacing role
+    /// for JTTY's frames (see `tempo_app::engine::jtty_tx`, behind every transmit guard).
+    jtty_busy_until: f64,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
     /// multi-minute image never dumps into the unbounded ring at once. `None` = no
@@ -3905,6 +4004,13 @@ struct RadioLoop {
     /// `(rig_model, is_network, flex_radio_ip)` — the ADDRESS is part of the key, see
     /// `reconcile_spectrum_source`.
     spectrum_src_key: Option<(u32, bool, String)>,
+    /// The SDRconnect scope source, while the operator's scope source is SDRconnect: the host and
+    /// port it was started for, and the scope (`crate::sdrconnect`). Reconciled each step by
+    /// `reconcile_sdrconnect`; an address change stops it and starts another.
+    sdrconnect: Option<(String, u16, crate::sdrconnect::SdrconnectScope)>,
+    /// The sentence the SDRconnect scope last put on the scope's status line, so it is written
+    /// only when it changes and cleared only when it is this source's.
+    sdrconnect_said: Option<String>,
     /// FORK-LOCAL: the FT-710's own RF spectrum, read off its internal FT4222 USB→SPI bridge.
     /// Same lifecycle as `spectrum_src` above — held beside a KEY so a rig switch stops this
     /// reader before the new radio's starts, which is what keeps a scope from streaming the
@@ -3961,6 +4067,9 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The radio name the active radio's TCI server reported, as last handed to the engine
+    /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
+    tci_device: Option<String>,
     /// The session whose receive audio starved (the receive floor fired): not taken again until
     /// the TCI client is another session (a reconnect, a saved change, a switch).
     tci_rx_failed: Option<std::sync::Weak<crate::tci::audio::Receive>>,
@@ -4007,6 +4116,14 @@ struct RadioLoop {
     /// frame. Its decodes are already folded; the boundary named here runs its TX decision and
     /// housekeeping with it, and any other boundary drops it unused.
     full_pass_frame: Option<(u64, Vec<f32>)>,
+    /// Where the slot's FT8 early pass took its audio from: (slot, the ring position of the frame's
+    /// first sample). The 47 step and the full pass take theirs from the same sample, so the three
+    /// frames of a period line up sample for sample, as WSJT-X's passes all read one buffer from
+    /// the period's start; a residual made from one frame is then valid in the next.
+    ft8_anchor: Option<(u64, u64)>,
+    /// Slot index whose FT8 47 step (`DecodePass::Residual`) was dispatched or passed over: once
+    /// per RX slot.
+    residual_done_slot: Option<u64>,
     /// MSK144's repeating early passes: (slot, index of the last 2 s interval decoded).
     /// One fixed early pass per slot is right for FT8/FT4 (callers appear before the TX
     /// window opens) and wrong for meteor scatter, where a ping lands at ANY moment and is
@@ -4025,6 +4142,8 @@ struct RadioLoop {
     js8_multi_pending: usize,
     /// When `Engine::js8_tick` last ran (unix ms) — once a second at `Tier::Js8`.
     js8_last_tick_ms: u64,
+    /// The WSJT-X Replays answered in the last [`REPLAY_GAP_MS`]: the sender's id and when (ms).
+    replays_answered: Vec<(String, u64)>,
     /// A slot whose boundary TX decision already ran AT the boundary (the WSJT-X
     /// key-at-boundary ordering, taken when the just-ended slot's early decode had
     /// folded): the slot, whether it actually keyed, and the pre-key dial for the
@@ -4278,11 +4397,32 @@ struct RadioLoop {
     read_turns: ReadTurns,
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
-    /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
-    /// not a value that moves under the operator's hand — so a rig with no tuner costs one
-    /// round-trip per confirmation, not one per poll. The answer itself lives on the engine
-    /// (`Engine::rig_tuner`), which is what the gate and the snapshot both read.
+    /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on —
+    /// so a rig with no tuner costs one round-trip per confirmation, not one per poll. A rig that
+    /// HAS one is re-read slowly for its in-line state (ATU ON, #344; [`Self::tuner_reprobe_at`]).
+    /// The answer itself lives on the engine (`Engine::rig_tuner`), which is what the gate and the
+    /// snapshot both read.
     tuner_probed: bool,
+    /// When to read the tuner's state again (#344): every [`TUNER_REFRESH_MS`] while the radio
+    /// reports a tuner, so a switch made at the radio shows; sooner after Nexus moved it — a
+    /// tune-up the radio took puts it in line, a switch-out takes it out. The button shows ATU ON
+    /// from this read, never from the click. `None` = no re-read owed.
+    tuner_reprobe_at: Option<f64>,
+    /// Consecutive re-reads of the tuner state the radio did not answer. At [`TUNER_MISS_LIMIT`]
+    /// the slow refresh stops until the next CAT confirmation — the give-up latch every periodic
+    /// read needs, because a read that times out drops the CAT socket. A miss keeps the state
+    /// shown (it never hides the ATU button).
+    tuner_misses: u8,
+    /// This radio has answered `u TUNER` with a state since it became the radio (#344). Kept across
+    /// a CAT re-confirmation — a re-read that times out drops the socket and the link comes back
+    /// through one — so a first probe the radio misses THEN is a miss like any other, keeping the
+    /// ATU button, not "no tuner". Cleared with the radio (a handoff/rebuild) and on a breaker trip,
+    /// which drops the tuner on purpose (`Engine::clear_rig_tuner`).
+    tuner_seen: bool,
+    /// When the last tune-up the radio took was sent (#344). No tuner read at all until
+    /// [`ATU_REPROBE_AFTER_TUNE_MS`] after it — the cycle is running, and a Yaesu mid-cycle reads as
+    /// "off" — so the label never flickers to ATU during a tune-up, whatever asked for the read.
+    atu_tune_started_at: Option<f64>,
     /// Where every spectrum source publishes. Held here so the CI-V native row can be published
     /// WITHOUT the engine mutex — that mutex is held across this loop's own blocking CAT at the
     /// slot boundary, which is what starved the panadapter along with the audio row.
@@ -4323,6 +4463,16 @@ struct RadioLoop {
     /// backoff applied when it fails again — `func_retry_at`/`func_retry_backoff`'s pair.
     tx_meter_retry_at: [u32; N_TX_METERS],
     tx_meter_retry_backoff: [u32; N_TX_METERS],
+    /// Has this link answered the raw ALC read ([`crate::rigmodels::raw_alc_query`])? `None` not
+    /// yet, `Some(true)` it has, `Some(false)` it never did and ALC is read with Hamlib's `l ALC`.
+    ///
+    /// ⚠️ A RIGCTLD BEFORE HAMLIB 4.6 NEVER ANSWERS IT. Its `w` waits for a CR or LF that a Yaesu
+    /// never sends and prints nothing (measured, Hamlib 4.5.5 `rigctld -m 1035`), so an FT-991
+    /// behind the operator's own rigctld lost its ALC meter in 1.19.0: three misses and ⊘, where
+    /// 1.18.0's `l ALC` read it. So when the ladder gives the raw read up on a link where it never
+    /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
+    /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
+    tx_alc_raw: Option<bool>,
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -4390,7 +4540,7 @@ impl RadioLoop {
         if self.remote_radio_id != Some(eng.settings().active_radio) {
             return None;
         }
-        let mut want = Transport::from_settings(eng.settings());
+        let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
         self.apply_port_alias(&mut want);
         if want != self.applied {
             return None;
@@ -4439,6 +4589,7 @@ impl RadioLoop {
             slot_audio_stop: None,
             window_unkeyed: None,
             flex_voice_until_ms: None,
+            voice_until_ms: None,
             voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
@@ -4465,6 +4616,8 @@ impl RadioLoop {
             cw_busy_until: 0.0,
             cw_keying_until: 0.0,
             cw_keying_told: 0.0,
+            tx_hold_told: 0.0,
+            tx_hold_told_at: None,
             last_fm: None,
             fm_push_misses: 0,
             remote_retune_uncertain: false,
@@ -4476,6 +4629,7 @@ impl RadioLoop {
             rtty_stream: None,
             psk_busy_until: 0.0,
             psk_stream: None,
+            jtty_busy_until: 0.0,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
             sstv_feed: None,
@@ -4523,12 +4677,15 @@ impl RadioLoop {
             audio_rebuild_floor: 0.0,
             spectrum_src: None,
             spectrum_src_key: None,
+            sdrconnect: None,
+            sdrconnect_said: None,
             dax_started: None,
             dax_last_audio: None,
             dax_tee_id: None,
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
@@ -4541,11 +4698,14 @@ impl RadioLoop {
             early_done_slot: None,
             full_done_slot: None,
             full_pass_frame: None,
+            ft8_anchor: None,
+            residual_done_slot: None,
             early_msk_done: None,
             js8_done: [None; Js8Speed::ALL.len()],
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
             js8_multi_pending: 0,
             js8_last_tick_ms: 0,
+            replays_answered: Vec::new(),
             boundary_keyed: None,
             js8_lead: js8_lead::Js8Lead::default(),
             rig_asserted: false, // read-only launch: nothing asserted until a real command
@@ -4608,6 +4768,10 @@ impl RadioLoop {
             func_read_next: 0,
             read_turns: ReadTurns::default(),
             tuner_probed: false,
+            tuner_reprobe_at: None,
+            tuner_misses: 0,
+            tuner_seen: false,
+            atu_tune_started_at: None,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
@@ -4617,6 +4781,7 @@ impl RadioLoop {
             tx_meter_misses: [0; N_TX_METERS],
             tx_meter_retry_at: [0; N_TX_METERS],
             tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
+            tx_alc_raw: None,
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -5521,6 +5686,55 @@ impl RadioLoop {
         }
     }
 
+    /// The SDRconnect scope source, every step: started while the operator's scope source is
+    /// SDRconnect (its RF slot then takes no other source's rows), stopped when it is the radio
+    /// again, restarted on an address change; told the dial and whether the station is on the air;
+    /// and its trouble said on the scope's status line. One engine lock; nothing here waits on
+    /// SDRconnect.
+    fn reconcile_sdrconnect(&mut self, engine: &Arc<Mutex<Engine>>) {
+        use crate::sdrconnect::{Follow, SdrconnectScope};
+        let (target, dial_hz, follow, on_air) = {
+            let e = engine_lock(engine);
+            let s = e.settings();
+            let dial_hz = (s.dial_mhz * 1_000_000.0).round();
+            let dial_hz = if dial_hz.is_finite() && dial_hz > 0.0 {
+                dial_hz as u64
+            } else {
+                0
+            };
+            (
+                s.sdrconnect_target(),
+                dial_hz,
+                Follow::from_setting(&s.sdrconnect_follow),
+                e.on_air(),
+            )
+        };
+        let same = match (&self.sdrconnect, &target) {
+            (Some((host, port, _)), Some((h, p))) => host == h && port == p,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            // The old one first: its drop hands the RF slot back before the new one takes it.
+            self.sdrconnect = None;
+            if let Some((host, port)) = target {
+                self.sdrconnect = SdrconnectScope::start(&host, port, &self.spectrum_feed)
+                    .map(|scope| (host, port, scope));
+            }
+        }
+        let said = self.sdrconnect.as_ref().and_then(|(host, port, scope)| {
+            scope.want(dial_hz, follow, on_air);
+            scope.status().state.problem(&format!("{host}:{port}"))
+        });
+        if said != self.sdrconnect_said {
+            // Over a sentence of ours, or to say one; never clearing another source's.
+            if said.is_some() || self.sdrconnect_said.is_some() {
+                engine_lock(engine).set_scope_error(said.clone());
+            }
+            self.sdrconnect_said = said;
+        }
+    }
+
     /// Native audio through Nexus's own Flex client (Beta): tell the client, every tick (an atomic
     /// store), whether the operator's `flex_native_audio` is on for the radio it serves, and keep
     /// the receive floor's clock with the source. No client, no lock.
@@ -5650,6 +5864,25 @@ impl RadioLoop {
             let mut eng = engine_lock(engine);
             eng.halt_tx();
             eng.set_cat_status(self.cat_ok, format!("TCI: {why}."));
+        }
+    }
+
+    /// The radio the active radio's TCI server named, handed to the engine when it changes: a
+    /// contact made on a TCI radio logs it as its rig (`MY_RIG`), where the radio's model only
+    /// says "TCI". `None` once no TCI session serves the active radio. Not on a switch the
+    /// handoff has not seen: `rigctld_proc` is then the radio being left.
+    fn note_tci_device(&mut self, engine: &Arc<Mutex<Engine>>) {
+        if self.switch_unhanded {
+            return;
+        }
+        let device = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .and_then(crate::tci::TciDaemon::device);
+        if device != self.tci_device {
+            self.tci_device = device.clone();
+            engine_lock(engine).set_tci_device(device);
         }
     }
 
@@ -5855,6 +6088,28 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// Tell the engine the deadline this loop holds the key to (`tx_until_ms`), on a change: a
+    /// voice-keyer message or an APRS frame it plays is handed over whole and the engine keeps
+    /// nothing of it, so without this a log change that holds the Engine lock for a long time
+    /// would go ahead under one and hold up its unkey ([`Engine::observe_loop_tx_hold`]). Reads
+    /// the deadline, and changes nothing about the over.
+    ///
+    /// Told again when the wall clock has stepped [`TX_HOLD_RETELL_MS`] since: the engine keeps the
+    /// time left on its monotonic clock, while this loop's unkey is on the wall clock, so steps
+    /// too small for the clock-jump interlock could add up past the engine's margin over a long
+    /// message and end its copy before the unkey.
+    fn tell_tx_hold(&mut self, engine: &Mutex<Engine>, now: f64) {
+        let hold = self.tx_until_ms.filter(|&t| now < t).unwrap_or(0.0);
+        let stepped = self.tx_hold_told_at.is_some_and(|(wall, mono)| {
+            ((now - wall) - mono.elapsed().as_secs_f64() * 1000.0).abs() > TX_HOLD_RETELL_MS
+        });
+        if hold != self.tx_hold_told || (hold > 0.0 && stepped) {
+            self.tx_hold_told = hold;
+            self.tx_hold_told_at = (hold > 0.0).then(|| (now, Instant::now()));
+            engine_lock(engine).observe_loop_tx_hold((hold > 0.0).then_some(hold - now));
+        }
     }
 
     /// The voice keyer's message for this tick, if one may go out, and whether it rides Nexus's
@@ -6796,9 +7051,10 @@ impl RadioLoop {
         // drops the engine's latch across a handoff; this drops the generator with it, so a
         // resumed chunk can never splice the old radio's carrier onto the new one.
         self.rtty_stream = None;
-        // PSK's latched stream, for the identical reason.
+        // PSK's latched stream, for the identical reason, and JTTY's pacing with it.
         self.psk_busy_until = 0.0;
         self.psk_stream = None;
+        self.jtty_busy_until = 0.0;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.fm_push_misses = 0;
@@ -6861,6 +7117,10 @@ impl RadioLoop {
         self.func_misses = [0; N_FUNCS];
         self.func_state = [None; N_FUNCS];
         self.tuner_probed = false;
+        self.tuner_seen = false; // the new radio's tuner is its own question
+        self.tuner_misses = 0;
+        self.tuner_reprobe_at = None;
+        self.atu_tune_started_at = None;
         self.vfo_read_native = None; // the new rig answers `v` or not on its own account
         self.level_supported = [None; N_LEVELS];
         self.level_misses = [0; N_LEVELS];
@@ -6868,6 +7128,7 @@ impl RadioLoop {
         self.tx_meter_misses = [0; N_TX_METERS];
         self.tx_meter_retry_at = [0; N_TX_METERS];
         self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+        self.tx_alc_raw = None;
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -6938,6 +7199,10 @@ impl RadioLoop {
             // a true one is a stuck transmitter.
             if self.tx_until_ms.is_some() {
                 self.tx_until_ms = Some(now);
+            }
+            // A playing voice message's own deadline is on the same dead timebase.
+            if self.voice_until_ms.is_some() {
+                self.voice_until_ms = Some(now);
             }
             engine_lock(engine).clear_clock_offset(true);
         }
@@ -7279,7 +7544,7 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
-                let mut want = Transport::from_settings(eng.settings());
+                let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
                 self.cat_port_configured.clone_from(&want.serial_port);
                 self.apply_port_alias(&mut want);
                 let cat_hold = eng.cat_port_hold();
@@ -8122,6 +8387,9 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            // The operator's other scope source, SDRconnect, when chosen: it takes the RF slot from
+            // the radio's own panadapter (`crate::sdrconnect`).
+            self.reconcile_sdrconnect(engine);
             // The TCI radio's own panadapter (its IQ): renewed for the active radio's client every
             // tick, so a client a switch left behind lapses by itself (`crate::tci::iq`). Not on a
             // switch the handoff has not seen (W0): `rigctld_proc` is the radio being left.
@@ -8135,6 +8403,7 @@ impl RadioLoop {
             );
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
+            self.note_tci_device(engine);
             self.reconcile_tci_audio(engine, &*backend);
             // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
             // the active radio's client every tick, so a client a switch left behind lapses by
@@ -8396,26 +8665,14 @@ impl RadioLoop {
                                 self.last_mode = md.clone();
                                 self.rig_asserted = true; // a real assert — credit the latch
                                 retuned = true;
-                                // ISSUE #349 (ve3wej's Flex 6400 again, on 1.14.0): #114's width
-                                // read-back went in on the STEADY-STATE retune only, and the
-                                // gesture in his report — clicking a digital section from CW or
-                                // phone — raises `immediate_retune` and lands HERE. This path
-                                // asked only whether the MODE had applied, so a rig that answers
-                                // `RPRT 0` and keeps its own 6 kHz filter read as success and the
-                                // app said nothing about the filter. A refused width OUTRANKS the
-                                // mode note for the same reason it does on the other path: a
-                                // cheerful "rig confirmed in PKTUSB" beside a 6 kHz filter is how
-                                // this stayed mysterious across three reports.
-                                retune_note = width_reassert_after_default_rung(rig, &md, sent_pb)
-                                    .or_else(|| {
-                                        mode_changed.then(|| {
-                                            // Read the mode straight back FROM the rig to confirm
-                                            // it actually applied — rigctld can answer RPRT 0
-                                            // without the rig changing, which is the only way to
-                                            // tell those apart.
-                                            mode_set_note(rig, &md, self.applied.rig_model)
-                                        })
-                                    });
+                                // No width read-back: a DATA mode asks for none (#82/#349, match
+                                // WSJT-X — see `passband_for`), so the radio's filter is its own.
+                                retune_note = mode_changed.then(|| {
+                                    // Read the mode straight back FROM the rig to confirm it
+                                    // actually applied — rigctld can answer RPRT 0 without the
+                                    // rig changing, which is the only way to tell those apart.
+                                    mode_set_note(rig, &md, self.applied.rig_model)
+                                });
                             }
                             // `last_mode` is unchanged, so the steady-state path below re-tries
                             // on later loops and re-gives-up past the budget — a non-supporting
@@ -8489,15 +8746,7 @@ impl RadioLoop {
                                 self.mode_giveup = None; // a success clears any prior give-up
                                 self.mode_saw_reject = false;
                                 retuned = true;
-                                // Rung 2 lands the mode at the RIG's own default width (6 kHz on
-                                // the Flex of issue #82). Assert the width we wanted, and if the
-                                // rig keeps its own say so — a refused width OUTRANKS the mode
-                                // note, because a cheerful "rig confirmed in PKTUSB" beside a
-                                // 6 kHz filter is exactly how this stayed mysterious.
-                                retune_note = width_reassert_after_default_rung(rig, &md, sent_pb)
-                                    .or_else(|| {
-                                        Some(mode_set_note(rig, &md, self.applied.rig_model))
-                                    });
+                                retune_note = Some(mode_set_note(rig, &md, self.applied.rig_model));
                             }
                             Err(e) => {
                                 // Retries cover a rig/rigctld still settling; past the budget the
@@ -8639,6 +8888,18 @@ impl RadioLoop {
                 self.fm_push_misses = 0;
             }
 
+            // A key Nexus applies (its own, or another program's through Nexus) holds the heavy
+            // poll below off, and with it the only read of the rig's split: the split reading
+            // does not age while it does (up to a cap), and is read again on the first poll
+            // after (`Engine::hold_observed_split_age`). The same three keyed states as the
+            // poll's own guard; a key from the radio's own microphone is not applied by Nexus
+            // and holds nothing.
+            let nexus_keyed =
+                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            if engine_lock(engine).hold_observed_split_age(nexus_keyed) {
+                self.read_turns.owe_now(HeavyRead::Split);
+            }
+
             // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another
             // app on the CAT broker) is mirrored in the UI. CAT-only — read_freq no-ops
             // (cheap) on VOX/serial. We adopt a reported change AND advance last_dial so the
@@ -8662,7 +8923,9 @@ impl RadioLoop {
                                       // prior mode's filter width before the next poll reads the rig's true state.
                 {
                     let mut eng = engine_lock(engine);
-                    eng.clear_rig_mode();
+                    // The outside-key gate keeps its copy until that poll: a reading only ever
+                    // refuses more (`Engine::clear_rig_mode_for_retune`).
+                    eng.clear_rig_mode_for_retune();
                     eng.clear_rig_passband();
                 }
                 // A CAT command (set_freq/set_mode) just SUCCEEDED, so CAT is alive — clear
@@ -8697,6 +8960,7 @@ impl RadioLoop {
                     self.tx_meter_misses = [0; N_TX_METERS];
                     self.tx_meter_retry_at = [0; N_TX_METERS];
                     self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                    self.tx_alc_raw = None;
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -8842,6 +9106,7 @@ impl RadioLoop {
                             self.tx_meter_misses = [0; N_TX_METERS];
                             self.tx_meter_retry_at = [0; N_TX_METERS];
                             self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                            self.tx_alc_raw = None;
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -8894,8 +9159,8 @@ impl RadioLoop {
                         // Does this radio have a built-in ATU? ONE round-trip per CAT
                         // confirmation, like the range table above and deliberately NOT the
                         // round-robin the DSP funcs use: this is a capability the cockpit shows
-                        // or hides a TRANSMIT control on, not a value that moves under the
-                        // operator's hand. A rig that doesn't answer `u TUNER` stays `None` and
+                        // or hides a TRANSMIT control on. (Its in-line STATE is re-read slowly
+                        // below, #344.) A rig that doesn't answer `u TUNER` stays `None` and
                         // is offered no ATU button — an ATU control on a radio with no ATU is
                         // worse than no control.
                         //
@@ -8914,7 +9179,24 @@ impl RadioLoop {
                         // is Hamlib rigctld (the native CI-V gap above), so the model settles it;
                         // Nexus's own Flex client answers it only behind its ATU switch, and says
                         // itself whether it can start a tune.
-                        if !self.tuner_probed {
+                        // ⭐ AND AGAIN, SLOWLY, WHILE THERE IS A TUNER (#344: the button reads ATU ON
+                        // while it is in line). A re-read is a periodic mirror: it waits for the
+                        // poll's read budget, a miss keeps what is shown, and three in a row stop it.
+                        //
+                        // ⛔ NOT WHILE A TUNE-UP RUNS: no read at all — first probe or re-read —
+                        // until `ATU_REPROBE_AFTER_TUNE_MS` after a tune-up the radio took. Mid-cycle
+                        // a Yaesu reads as "off", and the label would flicker to ATU.
+                        let first_probe = !self.tuner_probed;
+                        let poll_budget_left =
+                            poll_started.elapsed().as_millis() < HEAVY_POLL_BUDGET_MS;
+                        let tune_running = self
+                            .atu_tune_started_at
+                            .is_some_and(|t| now < t + ATU_REPROBE_AFTER_TUNE_MS);
+                        if !tune_running
+                            && (first_probe
+                                || (poll_budget_left
+                                    && self.tuner_reprobe_at.is_some_and(|t| now >= t)))
+                        {
                             self.tuner_probed = true;
                             let tuner = rig.read_func("TUNER");
                             // Nexus's own Flex client, once it runs the radio's ATU, says itself
@@ -8922,18 +9204,40 @@ impl RadioLoop {
                             // fitted): the profile's Hamlib model, 2036 for SmartSDR CAT,
                             // describes a CAT path that is not in use, and says it cannot. Until
                             // then the client answers no `u TUNER`, so no ATU button is offered,
-                            // and the model's answer stands, as before.
-                            let start_tune =
+                            // and the model's answer stands, as before. It has no switch-out
+                            // (`U TUNER 0` is not implemented there), so "Switch tuner out" is
+                            // offered only on the Hamlib path (#344).
+                            let (start_tune, switch_out) =
                                 match self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
-                                    Some(client) if client.runs_atu() => client.starts_atu(),
-                                    _ => crate::rigmodels::hamlib_atu_start_tune_reaches(
-                                        self.applied.rig_model,
+                                    Some(client) if client.runs_atu() => {
+                                        (client.starts_atu(), false)
+                                    }
+                                    _ => (
+                                        crate::rigmodels::hamlib_atu_start_tune_reaches(
+                                            self.applied.rig_model,
+                                        ),
+                                        true,
                                     ),
                                 };
-                            {
+                            // A miss on a radio that has already answered — a re-read, or the first
+                            // probe after a re-confirmation the dropped socket caused — keeps what
+                            // is shown and counts toward the give-up latch. Only a radio that has
+                            // never answered is "no tuner".
+                            let missed_known = tuner.is_none() && (self.tuner_seen || !first_probe);
+                            if missed_known {
+                                self.tuner_misses = self.tuner_misses.saturating_add(1);
+                            } else {
+                                self.tuner_misses = 0;
+                                self.tuner_seen = tuner.is_some();
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_tuner(tuner, start_tune);
+                                eng.observe_rig_tuner_switch_out(switch_out);
                             }
+                            // A radio that reports no tuner is never asked again on this
+                            // confirmation, as before.
+                            self.tuner_reprobe_at = (tuner.is_some()
+                                || (missed_known && self.tuner_misses < TUNER_MISS_LIMIT))
+                                .then_some(now + TUNER_REFRESH_MS);
                         }
                         // ⚠️ THE READ BUDGET (see `HEAVY_POLL_BUDGET_MS`). Every read-back
                         // below this line asks it; every WRITE and operator action below it does
@@ -9264,9 +9568,9 @@ impl RadioLoop {
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
                             // THE NATIVE CI-V DAEMON'S WIDTH IS ITS OWN VERB (`1A 03`), never `m`'s
-                            // passband: `m` answers 0 there on purpose, because the FT8 arm's width
-                            // check reads it and `M PKTUSB 3000` must not start rewriting the
-                            // operator's DATA filter (see `CivBackend`'s filter-width note). Asked
+                            // passband: `m` answers 0 there on purpose, so a client's `M PKTUSB
+                            // <width>` never starts rewriting the operator's DATA filter (see
+                            // `CivBackend`'s filter-width note). Asked
                             // in the mode `m` just named; FM has no width.
                             use crate::civ::broker::FilterWidthReading;
                             let native = self.rigctld_proc.as_ref().and_then(CatDaemon::native);
@@ -9629,6 +9933,9 @@ impl RadioLoop {
                                 // `may_key()` beside it — is not a tune-up either.
                                 FuncSet::Ok => {
                                     engine_lock(engine).note_atu_tune_started();
+                                    // The tuner is now in line: read it once the cycle is over (#344).
+                                    self.atu_tune_started_at = Some(now);
+                                    self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
                                 }
                                 // The rig ANSWERED and said no, so nothing is tuning and the
                                 // operator's QSO is none of our business — the ruling. NOT
@@ -9652,8 +9959,33 @@ impl RadioLoop {
                                          because the rig may be tuning"
                                     ));
                                     engine_lock(engine).note_atu_tune_started();
+                                    self.atu_tune_started_at = Some(now);
+                                    self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
                                 }
                             }
+                        }
+                        // ⭐ "SWITCH TUNER OUT" (#344, the ATU button's menu): `U TUNER 0` — the
+                        // same verb the tune-up sends with `2`. NOT a keying command, but never
+                        // sent under power: `take_atu_bypass` re-asks the engine that nothing is on
+                        // the air, and this whole block is skipped while the rig is keyed by anyone.
+                        // Taken only while this loop may drive the radio (`may_key`): a request
+                        // that waits out a handoff or a CAT hold stays queued, and the engine drops
+                        // it — and says so — once it is older than the tune-up's limit. What the
+                        // button shows next is the radio's own answer, read on the next heavy
+                        // poll; a refusal is said on the CAT line, not only in the diagnostics.
+                        if self.may_key() && engine_lock(engine).take_atu_bypass() {
+                            match rig.set_func_value("TUNER", 0) {
+                                FuncSet::Ok => crate::civ::diag::note("ATU: tuner switched out"),
+                                FuncSet::Refused(why) | FuncSet::Uncertain(why) => {
+                                    crate::civ::diag::note(&format!(
+                                        "ATU: the tuner switch-out was not confirmed: {why}"
+                                    ));
+                                    engine_lock(engine).note_atu_switch_out_failed(&format!(
+                                        "the radio did not confirm it ({why})"
+                                    ));
+                                }
+                            }
+                            self.tuner_reprobe_at = Some(now);
                         }
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
                         // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
@@ -9858,6 +10190,9 @@ impl RadioLoop {
                             self.func_misses = [0; N_FUNCS];
                             self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
+                            // The trip drops the tuner on purpose (`clear_rig_tuner` below): the
+                            // first probe after it is a fresh question, not a re-read (#344).
+                            self.tuner_seen = false;
                             // Name the rig config in the diagnostic too, so a capture taken while
                             // the fault is ongoing records model/port/baud (the spawn note may
                             // predate logging being armed).
@@ -10423,8 +10758,9 @@ impl RadioLoop {
                 }
                 // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
                 // Yaesu's own reference defines where Hamlib sends none
-                // (`rigmodels::cw_playback_stops`), written without waiting: Hamlib answers a raw
-                // set with nothing.
+                // (`rigmodels::cw_playback_stops`), sent in the form Hamlib does not wait on, so
+                // the unkey after them is not held for the radio's read timeout
+                // (`Rig::send_raw_set`).
                 let _ = rig.stop_morse();
                 for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
                     rig.send_raw_set(stop);
@@ -10664,7 +11000,7 @@ impl RadioLoop {
                         // the way the WinKeyer's moved. The rig's keyer speed is only
                         // observable while the rig is keying, and this shares the CAT link
                         // with the dial/mode/meter traffic that a slow serial rig already
-                        // struggles to keep up with (`reference-cat-slow-serial-deadline`)
+                        // struggles to keep up with
                         // — one slider drag is ~45 distinct values, which is 45 `KEYSPD`
                         // commands queued ahead of the next poll for no visible gain. At
                         // send time is soon enough here; the hardware keyer, which HOLDS a
@@ -11531,6 +11867,65 @@ impl RadioLoop {
             }
         }
 
+        // JTTY (WSJT-X's keyboard mode). The engine renders each segment's audio OFF this loop
+        // (the modem lock a decode can hold for seconds never stalls the unkey path) and hands it
+        // out a frame at a time; this keeps between one and two frames queued
+        // (`keyboard::JTTY`), so a loop that stops ticking unkeys within them and the tail. Every
+        // gate is re-checked on every tick while anything of JTTY's is going (`Engine::poll_jtty`),
+        // `may_key` is the one gate it cannot see, and the abort/`tx_until_ms` machinery unkeys as
+        // PSK's does. Queued segments chain with no gap: PTT stays up across them.
+        {
+            let ahead_ms = (self.jtty_busy_until - now).max(0.0);
+            let want = ahead_ms < keyboard::JTTY.stream_ahead_ms(jtty_tx::JTTY_BAUD);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                eng.set_jtty_sending(now < self.jtty_busy_until);
+                let tick = if self.may_key() {
+                    eng.poll_jtty(want, ahead_ms)
+                } else {
+                    eng.jtty_cannot_key();
+                    JttyTick::Idle
+                };
+                // AFTER the poll, so a cut it armed is taken on this same tick.
+                (eng.take_jtty_abort(), tick)
+            };
+            if abort {
+                // Only while JTTY audio is actually going (`jtty_busy_until` is the evidence), so
+                // a cut can never take an FT8 slot over riding the same PTT and ring.
+                if now < self.jtty_busy_until {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
+                self.jtty_busy_until = 0.0;
+                engine_lock(engine).set_jtty_sending(false);
+            }
+            if let JttyTick::Frame(buf) = tick {
+                // Assert the rig and key once per transmission, and again after an unkey ran
+                // underneath us; frames after the first chain onto the keyed transmitter.
+                let mut key = KeyUp::Keyed;
+                if self.tx_until_ms.is_none() || now >= self.jtty_busy_until {
+                    self.ensure_commanded(rig); // read-only launch: assert before key
+                    self.publish_tx_intent_now(); // before keying
+                    key = self.key_over(rig, false);
+                }
+                // A frame the rig would not key is not played (`key_over`), and a JTTY message
+                // cannot go on after a hole: the engine drops what it has going.
+                if key.sends() {
+                    backend.play(&buf);
+                    self.jtty_busy_until = self.jtty_busy_until.max(now) + buf.len() as f64 / 12.0;
+                    let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    engine_lock(engine).set_jtty_sending(true);
+                } else {
+                    engine_lock(engine).jtty_key_refused();
+                }
+                if let KeyUp::Refused(why) = &key {
+                    note_refused_key("JTTY not keyed", why);
+                }
+            }
+        }
+
         // APRS beacon: an explicit one-shot position beacon. The engine already rendered the
         // AFSK-1200 audio (12 kHz mono); key PTT, play it, and drop PTT via `tx_until_ms` — the
         // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard covers the
@@ -11657,8 +12052,17 @@ impl RadioLoop {
                 if mic_took_over {
                     eng.stop_voice();
                 }
+                // The keyer's Stop, taken before the report, so the message reads as ended in the
+                // tick that flushes it; an over ended by any other route has no deadline left.
+                let abort = eng.take_voice_abort();
+                if abort || self.tx_until_ms.is_none() {
+                    self.voice_until_ms = None;
+                }
+                // On the air until its OWN deadline: a later over that moves the shared one
+                // neither ends it early nor keeps it on after its end.
+                eng.set_voice_on_air(self.voice_until_ms.is_some_and(|until| now < until));
                 (
-                    eng.take_voice_abort(),
+                    abort,
                     // Held, not dropped, while the loop doesn't own the operator's radio
                     // ([`Self::may_key`]) — `poll_voice` TAKES the message, so skipping the
                     // call is what keeps it for the rig it was recorded to go out on.
@@ -11710,6 +12114,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.voice_until_ms = Some(until);
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
                         }
@@ -12573,6 +12978,7 @@ impl RadioLoop {
                 self.cw_keying_told = window;
                 engine_lock(engine).observe_cw_keying(cw_keying.then_some(window - now));
             }
+            self.tell_tx_hold(engine, now);
             let keyed_now = self.tx_until_ms.is_some()
                 || self.tuning_keyed
                 || self.manual_ptt_applied
@@ -12682,14 +13088,32 @@ impl RadioLoop {
                     // keep their cadence and a rig that answers none of them is simply left
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
+                    let model = self.applied.rig_model;
+                    let raw_alc = self.tx_alc_raw != Some(false);
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading =
-                            read_tx_meter(rig, TX_METERS[i], self.applied.rig_model, deadline);
+                        reading = read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline);
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
                             reading.is_some(),
                         );
+                        if TX_METERS[i] == "ALC"
+                            && raw_alc
+                            && crate::rigmodels::raw_alc_query(model).is_some()
+                        {
+                            if reading.is_some() {
+                                self.tx_alc_raw = Some(true);
+                            } else if self.tx_meter_supported[i] == Some(false)
+                                && self.tx_alc_raw.is_none()
+                                && deadline.is_none()
+                            {
+                                // Never answered on this link: `l ALC` gets its own three
+                                // strikes instead of the meter being parked. See `tx_alc_raw`.
+                                self.tx_alc_raw = Some(false);
+                                self.tx_meter_supported[i] = None;
+                                self.tx_meter_misses[i] = 0;
+                            }
+                        }
                         if self.tx_meter_supported[i] == Some(false) {
                             // Just gave up: arm the re-probe and double the wait for the one
                             // after (capped) — the funcs' ladder, verbatim.
@@ -12721,10 +13145,11 @@ impl RadioLoop {
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
                         // The ALC reading carries where this radio's own ALC zone ends on its
                         // bar, for the bar's colours (display only).
+                        // `l ALC` is Hamlib's scale, whose 1.0 is the zone's top: no zone of its own.
                         if alc.is_some() {
-                            eng.observe_rig_tx_alc_zone(crate::rigmodels::alc_zone_top(
-                                self.applied.rig_model,
-                            ));
+                            eng.observe_rig_tx_alc_zone(
+                                crate::rigmodels::alc_zone_top(model).filter(|_| raw_alc),
+                            );
                         }
                         // NOTIFY, NEVER ACT (the project's alerts rule). This raises a status
                         // line into the same lane as the foreign-key notice above and does
@@ -12938,6 +13363,9 @@ impl RadioLoop {
             };
             for q in &logged_qsos {
                 let time_on = q.when_unix as i64;
+                // Spelled as the ADIF writer spells `TX_PWR`, so the two messages of one contact
+                // agree; `""` when none was recorded, as WSJT-X sends an empty Tx power box.
+                let tx_power = q.tx_power.map(|p| format!("{p}")).unwrap_or_default();
                 send_logged_contact(
                     server,
                     &WsjtxQso {
@@ -12951,7 +13379,7 @@ impl RadioLoop {
                         mode: &q.mode,
                         report_sent: q.rst_sent.as_deref().unwrap_or(""),
                         report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
-                        tx_power: "",
+                        tx_power: &tx_power,
                         comments: q.comment.as_deref().unwrap_or(""),
                         name: q.name.as_deref().unwrap_or(""),
                         time_on,
@@ -13006,6 +13434,10 @@ impl RadioLoop {
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
         eng.feed_rx_audio(&captured);
+        // JTTY's PSK Reporter spots join the batch the flush below sends ([`jtty_psk_reports`]).
+        station
+            .psk_spots
+            .extend(jtty_psk_reports(&mut eng, sinks.psk.is_some()));
 
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
@@ -13373,6 +13805,14 @@ impl RadioLoop {
         // and every Tauri command queued behind it — for as long as it kept
         // sending. The overflow is not dropped, just deferred one 20 ms tick.
         if let Some(server) = sinks.wsjtx {
+            // One Replay per tick, and one per logger per REPLAY_GAP_MS: it re-sends all of Band
+            // Activity (thousands of datagrams on a busy band) with the engine lock held, so a
+            // burst of them is answered once. At most REPLAY_SOURCES loggers are answered in a gap,
+            // so a sender changing its id each time is bounded too.
+            let mut replayed = false;
+            let now_ms = now.max(0.0) as u64;
+            self.replays_answered
+                .retain(|(_, at)| now_ms.abs_diff(*at) < REPLAY_GAP_MS);
             for inb in server.drain(tempo_net::server::INBOUND_PER_TICK) {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
@@ -13386,33 +13826,43 @@ impl RadioLoop {
                             eng.halt_tx_for_failed_unkey(&why);
                         }
                     }
-                    WsjtxInbound::Clear { .. } => {
-                        // Visual clear only — the engine's decode context (answer
+                    WsjtxInbound::Clear { window, .. } => {
+                        // The panes' clear — the engine's decode context (answer
                         // parity / history) is not a window and stays intact.
-                        eng.apply_udp_clear();
+                        eng.apply_udp_clear(window);
                     }
-                    WsjtxInbound::Replay { .. } => {
-                        // A consumer that just connected wants the WHOLE current
-                        // period back — `last_decodes` alone holds only the most
-                        // recent ingest (post-early-pass it's just the boundary
-                        // stragglers). NO PSK spots here: replays must never
-                        // double-spot.
-                        if let Some(server) = sinks.wsjtx {
+                    WsjtxInbound::Replay { id }
+                        if !replayed
+                            && self.replays_answered.len() < REPLAY_SOURCES
+                            && !self.replays_answered.iter().any(|(who, _)| *who == id) =>
+                    {
+                        replayed = true;
+                        self.replays_answered.push((id, now_ms));
+                        // A consumer that just connected wants every decode Band Activity
+                        // holds, as WSJT-X re-sends its window (`replayDecodes`, mainwindow.cpp
+                        // 13374-13396), each stamped with its own period's start. NO PSK spots
+                        // here: replays must never double-spot. Not New: WSJT-X replays each
+                        // old decode "with the 'New' field set to false"
+                        // (`Network/NetworkMessage.hpp` 221-226; `postDecode (false, …)`).
+                        if let Some(server) = sinks.wsjtx.filter(|_| udp_decodes_allowed(&eng)) {
                             let tier = tier_mode(eng.tier());
-                            let ms_mid = (now as u64 % 86_400_000) as u32;
-                            for d in eng.current_period_decodes() {
-                                let _ = server.send_decode(&build_decode(
-                                    &d.message,
-                                    d.snr,
-                                    d.dt,
-                                    d.freq,
-                                    tier,
-                                    ms_mid,
-                                    d.qual < 0.17,
-                                ));
+                            for (start, d) in eng.band_activity() {
+                                let _ = server.send_decode(&WsjtxDecode {
+                                    new: false,
+                                    ..build_decode(
+                                        &d.message,
+                                        d.snr,
+                                        d.dt,
+                                        d.freq,
+                                        tier,
+                                        (start * 1000 % 86_400_000) as u32,
+                                        d.qual < 0.17,
+                                    )
+                                });
                             }
                         }
                     }
+                    WsjtxInbound::Replay { .. } => {}
                     WsjtxInbound::Location { location, .. } => {
                         eng.apply_udp_location(&location);
                     }
@@ -13420,11 +13870,8 @@ impl RadioLoop {
                         eng.set_highlight(&call, bg, fg);
                     }
                     WsjtxInbound::FreeText { text, send, .. } => {
-                        let t = text.trim();
-                        if send && !t.is_empty() {
-                            if let Err(reason) = eng.udp_free_text(t) {
-                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
-                            }
+                        if let Err(reason) = eng.udp_free_text(&text, send) {
+                            crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
                         }
                     }
                     WsjtxInbound::Reply {
@@ -13570,6 +14017,8 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        // The RX dial, before Split Operation moves it, for `boundary_keyed`.
+                        let dial_hz = eng.settings().dial_hz();
                         self.fake_it_write_back_before_key(rig, now);
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
@@ -13643,6 +14092,18 @@ impl RadioLoop {
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
+                            // This slot's TX decision is made, as `key_boundary_tx` records its
+                            // own. A call made in the other station's period keys here, on the
+                            // first tick of ours, while the FT8/FT4 full pass of the period just
+                            // heard may still be decoding; when that pass drains in this slot,
+                            // `finish_boundary` must see the slot keyed and run its housekeeping
+                            // only. Unrecorded, it planned the over again and keyed and played it
+                            // a second time ~2 s into the period (a second own row and Tx line).
+                            self.boundary_keyed = Some(KeyedBoundary {
+                                slot: slot_now,
+                                tx_this_slot: true,
+                                dial_hz,
+                            });
                         } else {
                             self.explain_flex_refusal(&mut eng, asked);
                         }
@@ -13668,6 +14129,8 @@ impl RadioLoop {
             self.early_done_slot = None;
             self.full_done_slot = None;
             self.full_pass_frame = None;
+            self.ft8_anchor = None;
+            self.residual_done_slot = None;
             self.early_msk_done = None;
             self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
@@ -13695,8 +14158,41 @@ impl RadioLoop {
         // changes what the QSO sequencer would send next asks for WSJT-X's mid-over switch
         // (`ft_midover_switch`, below). A stale one folds as before and never does: what it moved
         // goes out at the next over, as it always did.
+        //
+        // An FT8/FT4 pass hands on each decode the moment it finds it, as WSJT-X's decoder does
+        // (`StreamedDecode`), and each folds here on the tick it lands, with the same rule: one
+        // found before the boundary is in the boundary's TX decision, one found after it may
+        // switch the over on the air, one of an older period never does. A found decode never
+        // keys anything and never clears the in-flight latch; its pass's result does that.
+        //
+        // A found decode that moves the over asks for the switch at once, as each line WSJT-X
+        // reads does (`processMessage` sets `m_restart` per line): the switch takes only a decode
+        // that moved the sequencer in its own fold (`Engine::ft_midover_switch`), and the next
+        // fold in this tick — another decode, or its pass's end — would be one that did not.
         let mut ft_restart = false;
-        while let Some(result) = self.decode.try_recv() {
+        while let Some(out) = self.decode.try_recv() {
+            let result = match out {
+                WorkerOut::Found(found) => {
+                    let live = self.clock.slot_index(now);
+                    let next_before = (found.slot() == live).then(|| eng.ft_next_over(live));
+                    if eng.apply_streamed_decode(found) > 0 {
+                        if next_before.is_some_and(|before| eng.ft_next_over(live) != before) {
+                            self.ft_midover_switch(&mut eng, backend, now, false);
+                        }
+                        let cur_dial = eng.settings().dial_hz();
+                        emit_rx_decodes(
+                            sinks,
+                            &eng,
+                            &mut station.psk_spots,
+                            &mut station.psk_cache,
+                            now,
+                            cur_dial,
+                        );
+                    }
+                    continue;
+                }
+                WorkerOut::Done(result) => result,
+            };
             self.decode_in_flight = false;
             let live = self.clock.slot_index(now);
             let next_before = (result.slot() == live).then(|| eng.ft_next_over(live));
@@ -13798,7 +14294,11 @@ impl RadioLoop {
                 self.js8_last_tick_ms = now_ms;
                 eng.js8_tick(now_ms);
             }
-            while let Some(result) = self.js8_multi_worker.try_recv() {
+            while let Some(out) = self.js8_multi_worker.try_recv() {
+                // The multi-speed worker hands back results only (JS8 does not stream).
+                let WorkerOut::Done(result) = out else {
+                    continue;
+                };
                 self.js8_multi_pending = self.js8_multi_pending.saturating_sub(1);
                 if let DecodeApplied::Early { n } = eng.apply_decode_result(result) {
                     if n > 0 {
@@ -13858,9 +14358,12 @@ impl RadioLoop {
         // - FT4's only pass at `m_hsymStop` = 21 steps = 6.048 s (:2226), the whole FT4 frame.
         // The full pass is the period's authoritative decode: it replaces the boundary's, and
         // the boundary keys with its decodes when it has finished. WSJT-X's third FT8 moment
-        // (`m_earlyDecode2` = 47, :2223) decodes nothing new (ft8_decode.f90:124-150: it
-        // subtracts the early decodes for the full pass) and has no counterpart here: the full
-        // pass's own multi-pass subtraction covers it.
+        // (`m_earlyDecode2` = 47 steps = 13.536 s, :2223) decodes nothing: it subtracts the early
+        // pass's decodes so the full pass starts from the residual, finds what they hid in its
+        // first subtraction pass and hands new decodes on first (ft8_decode.f90:124-162). Here it
+        // is the `Residual` job, and the source keeps the residual for the full pass
+        // (`modes::PassCarry`). All three FT8 frames of a period are taken from the early frame's
+        // first sample (`ft8_anchor`), as WSJT-X's passes read one buffer from the period's start.
         if self.tx_until_ms.is_none()
             && !self.prev_slot_was_tx
             && self.full_done_slot != Some(slot)
@@ -13898,11 +14401,18 @@ impl RadioLoop {
                 }
                 _ => None,
             };
-            // The full pass once its moment has come (it supersedes an early pass not yet run),
-            // else the early pass.
+            // FT8's 47 step, once the early pass has run (WSJT-X's `m_earlyDecode2`).
+            let residual_at_ms = (tier_now == Tier::Ft8
+                && self.early_done_slot == Some(slot)
+                && self.residual_done_slot != Some(slot))
+            .then_some(47.0 * HSYM_MS);
+            // The full pass once its moment has come (it supersedes an early pass or a 47 step not
+            // yet run), else the early pass, else the 47 step.
             let due = match full_at_ms {
                 Some(at) if elapsed_now >= at => Some((at, DecodePass::Boundary)),
-                _ => early_at_ms.map(|at| (at, DecodePass::Early)),
+                _ => early_at_ms
+                    .map(|at| (at, DecodePass::Early))
+                    .or(residual_at_ms.map(|at| (at, DecodePass::Residual))),
             };
             if let Some((at, pass)) = due {
                 let slot_ms = eng.active_slot_secs() * 1000.0;
@@ -13913,7 +14423,14 @@ impl RadioLoop {
                 // Native FT8/FT4 only, and only when the worker is free — the early
                 // result must fold in (setting `early_seen`) before the same-slot
                 // boundary decode, so we never let two decodes race the one worker.
-                if elapsed_ms >= at
+                if pass == DecodePass::Residual {
+                    if elapsed_ms >= at
+                        && !self.decode_in_flight
+                        && eng.source_kind() == SourceKind::Native
+                    {
+                        self.dispatch_ft8_residual(&eng, slot, elapsed_ms);
+                    }
+                } else if elapsed_ms >= at
                     && elapsed_ms < slot_ms
                     && !self.rx.is_empty()
                     && !self.decode_in_flight
@@ -13935,7 +14452,18 @@ impl RadioLoop {
                     // start, tail-padded — a rolling tail of the previous slot
                     // (or front-padding) would wreck the decoder's dt alignment.
                     let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
-                    let frame = self.rx.frame_latest_padded(n);
+                    // FT8: the early frame's first sample anchors the period's later frames; the
+                    // full pass takes its frame from there while the ring still holds it.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Early {
+                        self.ft8_anchor = Some((slot, self.rx.latest_start(n)));
+                    }
+                    let anchored = match self.ft8_anchor {
+                        Some((s, start)) if tier_now == Tier::Ft8 && s == slot => {
+                            self.rx.frame_from(start, n)
+                        }
+                        _ => None,
+                    };
+                    let frame = anchored.unwrap_or_else(|| self.rx.frame_latest_padded(n));
                     // ⭐ BUILD THE NEXT OVER BEFORE THIS DECODE TAKES THE MODEM. The decode
                     // holds `MODEM_LOCK` for its whole length, and building an over needed it
                     // too, so an early decode still running at the boundary made the key wait
@@ -13958,7 +14486,33 @@ impl RadioLoop {
                     // boundary ingest's parity/history). The result folds in via the drain
                     // block: an early one publishes its spots there, a full one is kept for its
                     // boundary.
-                    let job = eng.build_decode_job(frame, slot + 1, pass);
+                    let mut job = eng.build_decode_job(frame, slot + 1, pass);
+                    // ⭐ WSJT-X's EARLY PASS GIVES UP AT 13.4 s into the period: after every sync
+                    // candidate it reads the clock and stops if it is that late
+                    // (`lib/ft8_decode.f90:240-242`, `nzhsym.eq.41 .and. tseq.ge.13.4d0`; `tseq`
+                    // is the time into the period, `timestamp` :313-328), keeping what it found.
+                    // So the early pass can never hold the decoder at the full pass's moment
+                    // (14.40 s, which waits for a free decoder) nor at the boundary (where a
+                    // decoder still busy drops the period's decode). The moment, in this tick's
+                    // period, as a monotonic deadline, so a wall-clock step cannot move it.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Early {
+                        let left_ms = (FT8_EARLY_GIVE_UP_MS - elapsed_ms).max(0.0);
+                        job = job.with_give_up_at(
+                            std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
+                        );
+                    }
+                    // The rescue pass after an FT8 full pass from the early pass's residual (the
+                    // full pass once more on the raw audio, for the few decodes the residual
+                    // loses) is the period's lowest-value work: it gives up at the next period's
+                    // early-pass moment, 11.808 s into it, so a slow computer never runs it into
+                    // that period's decoding. Given up before it starts, the full pass's result
+                    // stands alone.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Boundary {
+                        let left_ms = (slot_ms + 41.0 * HSYM_MS - elapsed_ms).max(0.0);
+                        job = job.with_rescue_give_up_at(
+                            std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
+                        );
+                    }
                     self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }
@@ -14117,12 +14671,16 @@ impl RadioLoop {
                     // exactly that slot.
                     self.last_slot = Some(slot);
                     self.dropped_decodes = self.dropped_decodes.saturating_add(1);
-                    eprintln!(
-                        "[decode] worker still busy at the slot {slot} boundary — period \
-                         dropped (total {}). The decoder is not keeping up with the T/R \
-                         period on this hardware.",
+                    let dropped = format!(
+                        "worker still busy at the slot {slot} boundary — period dropped \
+                         (total {}). The decoder is not keeping up with the T/R period on \
+                         this hardware.",
                         self.dropped_decodes
                     );
+                    eprintln!("[decode] {dropped}");
+                    // And to the diagnostic log: a Windows build has no console, so stderr
+                    // alone never told the operator that a period's decode was lost.
+                    tempo_core::applog::warn("decode", &dropped);
                     // ⭐ BUILD THIS OVER WITH THE ENGINE MUTEX RELEASED.
                     //
                     // This is the ONE branch where the modem is contended: we are
@@ -14288,6 +14846,44 @@ impl RadioLoop {
     /// Which JS8 speeds are due for a decode right now (see [`js8_due_speeds`]).
     fn js8_multi_decode_due(&mut self, now_ms: u64, enabled: u8) -> Vec<(Js8Speed, u64)> {
         js8_due_speeds(&mut self.js8_done, now_ms, enabled)
+    }
+
+    /// WSJT-X's FT8 47 step for `slot` (`DecodePass::Residual`), the decoder being free, `elapsed_ms`
+    /// into the period: the period's first 13.536 s, taken from the early frame's first sample, so
+    /// the source subtracts the early decodes for the full pass (`lib/ft8_decode.f90:124-149`).
+    ///
+    /// WSJT-X's moment is a sample count (its 47th half-symbol of audio), so the step waits for
+    /// those samples. It is passed over for the slot when it can no longer start before its 14.3 s
+    /// bail-out, or the early frame's samples are no longer held: the full pass then decodes the
+    /// raw audio, as before. Never dispatched later than that, so it cannot hold the decoder at
+    /// the full pass's 14.4 s; given up at 14.3 s like WSJT-X's.
+    fn dispatch_ft8_residual(&mut self, eng: &Engine, slot: u64, elapsed_ms: f64) {
+        let start = match self.ft8_anchor {
+            Some((s, start)) if s == slot => Some(start),
+            _ => None,
+        };
+        let held = start.and_then(|start| self.rx.held_from(start));
+        let (Some(start), Some(held)) = (start, held) else {
+            self.residual_done_slot = Some(slot);
+            return;
+        };
+        if elapsed_ms >= FT8_RESIDUAL_GIVE_UP_MS {
+            self.residual_done_slot = Some(slot);
+            return;
+        }
+        if held < FT8_RESIDUAL_SAMPLES {
+            return;
+        }
+        self.residual_done_slot = Some(slot);
+        let Some(frame) = self.rx.frame_from(start, FT8_RESIDUAL_SAMPLES) else {
+            return;
+        };
+        let left_ms = (FT8_RESIDUAL_GIVE_UP_MS - elapsed_ms).max(0.0);
+        let job = eng
+            .build_decode_job(frame, slot + 1, DecodePass::Residual)
+            .with_give_up_at(std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0));
+        self.decode.dispatch(WorkerJob::Slot(job));
+        self.decode_in_flight = true;
     }
 
     /// Finish a slot boundary once its RX decode is folded in: run the deferred
@@ -15059,15 +15655,34 @@ fn wsjtx_status(
     let tier = eng.tier();
     let (sub_mode, freq_tol, tr_period) =
         wsjtx_mode_fields(tier, eng.settings(), eng.active_slot_secs());
-    WsjtxStatusOwned {
-        dial_freq,
-        mode: tier_mode(tier),
-        tx: eng.wsjtx_tx_status(),
-        decoding,
+    let mut tx = eng.wsjtx_tx_status();
+    // In the JTTY section the Status names JTTY, as WSJT-X's does (its mode and TX mode are both
+    // `m_mode`), and its RX offset is the JTTY Rx frequency: WSJT-X keeps its two Rx spin boxes in
+    // step, and the Status reads the first. Its TX offset is JTTY's own Tx (WSJT-X's Status reads
+    // its JTTY Tx spin box), and its `m_transmitting` is its JTTY transmission too.
+    let (mode, rx_df, tx_df) = if eng.jtty_section() {
+        tx.transmitting |= eng.jtty_sending();
+        (
+            "JTTY",
+            eng.jtty_rx_hz().max(0.0) as u32,
+            eng.jtty_tx_hz().max(0.0) as u32,
+        )
+    } else {
         // REAL audio offsets (GridTracker/JTAlert show these) —
         // hardcoded 1500s confused every cooperating logger.
-        rx_df: eng.rx_offset_hz().max(0.0) as u32,
-        tx_df: eng.tx_offset_hz().max(0.0) as u32,
+        (
+            tier_mode(tier),
+            eng.rx_offset_hz().max(0.0) as u32,
+            eng.tx_offset_hz().max(0.0) as u32,
+        )
+    };
+    WsjtxStatusOwned {
+        dial_freq,
+        mode,
+        tx,
+        decoding,
+        rx_df,
+        tx_df,
         de_call: de_call.to_string(),
         de_grid: de_grid.to_string(),
         sub_mode,
@@ -15207,6 +15822,20 @@ fn js8_due_speeds(
     due
 }
 
+/// Whether FT decodes may go out as WSJT-X UDP Decode datagrams now. Not in the JTTY section:
+/// WSJT-X sends no Decode in JTTY (its JTTY receive path never calls the message client, and its
+/// FT decoder is not running), and its Status says JTTY there. Nexus's FT decoder keeps running
+/// under the Keyboard section, so its lines are held off the wire there rather than sent beside a
+/// Status that names another mode. PSK Reporter still hears them: they were decoded.
+/// The least time between two answers to one logger's WSJT-X Replay (ms).
+const REPLAY_GAP_MS: u64 = 1_000;
+/// The most loggers whose Replay is answered within one [`REPLAY_GAP_MS`].
+const REPLAY_SOURCES: usize = 4;
+
+fn udp_decodes_allowed(eng: &Engine) -> bool {
+    !eng.jtty_section()
+}
+
 fn emit_rx_decodes(
     sinks: &Sinks,
     eng: &Engine,
@@ -15219,15 +15848,16 @@ fn emit_rx_decodes(
         return;
     }
     let tier = tier_mode(eng.tier());
-    let ms_mid = (now as u64 % 86_400_000) as u32;
+    let ms_mid = udp_decode_time_ms(eng, now);
     let now_secs = (now / 1000.0) as u32;
+    let wsjtx = sinks.wsjtx.filter(|_| udp_decodes_allowed(eng));
     let me = (
         eng.settings().mycall.as_str(),
         eng.settings().mygrid.as_str(),
     );
     // ON-AIR text only — never the hound-rewritten internal form.
     for d in eng.wire_decodes() {
-        if let Some(server) = sinks.wsjtx {
+        if let Some(server) = wsjtx {
             let _ = server.send_decode(&build_decode(
                 &d.message,
                 d.snr,
@@ -15244,6 +15874,19 @@ fn emit_rx_decodes(
             queue_spot(psk_spots, psk_cache, d, tier, cur_dial, now_secs, me);
         }
     }
+}
+
+/// A UDP Decode's `Time` (ms since midnight UTC) for the decodes `eng` folded last: the START of
+/// the period they were heard in, whenever the datagram goes out. WSJT-X 3.0.2 stamps every pass of
+/// a period with its start (`dec_data.params.nutc`, `widgets/mainwindow.cpp:5397-5404`) and sends
+/// that as the Decode's Time (`postDecode`, :13409-13410), so JTAlert, GridTracker and loggers file
+/// a decode by its period. The moment of sending put a full-pass decode, which ends seconds into
+/// the next period, under that next one. ALL.TXT stamps the same second.
+fn udp_decode_time_ms(eng: &Engine, now: f64) -> u32 {
+    let unix_ms = eng
+        .last_decode_period_start_unix()
+        .map_or(now as u64, |s| s * 1000);
+    (unix_ms % 86_400_000) as u32
 }
 
 fn build_decode<'a>(
@@ -15383,6 +16026,29 @@ fn is_spot_locator(s: &str) -> bool {
         _ => false,
     };
     shape && !b[..4].eq_ignore_ascii_case(b"RR73")
+}
+
+/// JTTY's PSK Reporter spots, taken from the engine every tick (`tempo_app::engine::jtty_rx`
+/// queues only calls decoded in two separate messages), as the loop's batch entries in mode
+/// "JTTY", the mode string WSJT-X reports. With uploading off they are taken and dropped, so the
+/// queue cannot grow.
+fn jtty_psk_reports(eng: &mut Engine, uploading: bool) -> Vec<Spot> {
+    let spots = eng.take_jtty_spots();
+    if !uploading {
+        return Vec::new();
+    }
+    spots
+        .into_iter()
+        .map(|s| Spot {
+            call: s.call,
+            freq_hz: s.freq_hz,
+            snr: s.snr,
+            mode: "JTTY".to_string(),
+            // WSJT-X sends the grid when the message carries one (`CQ W1AW FN31`).
+            grid: s.grid.unwrap_or_default(),
+            time_secs: s.time_secs,
+        })
+        .collect()
 }
 
 /// Generate `n` samples of a unit-amplitude sine at `freq` Hz, continuing from
@@ -15928,11 +16594,11 @@ impl PartialEq for AddressRefusal {
 
 impl AddressRefusal {
     /// `t`'s, under the station `s`: the address as `t` dials it, against `s`'s other radios and
-    /// its broker.
+    /// the broker's port `t` carries (`broker_self_port`, where it really is: #165).
     fn of(t: &Transport, s: &Settings) -> Self {
         Self(tempo_app::settings::net_rigctl_address_refusal(
             &s.radios,
-            s.cat_broker.then_some(s.cat_broker_port),
+            t.broker_self_port,
             t.radio_id,
             t.rig_model,
             &t.rig_conn,
@@ -16113,7 +16779,17 @@ impl Transport {
         }
     }
 
+    /// The settings alone, as the tests build a transport: no broker has reported serving, so its
+    /// port is the Sharing port while sharing is on ([`Self::from_station`]).
+    #[cfg(test)]
     fn from_settings(s: &Settings) -> Self {
+        Self::from_station(s, None)
+    }
+
+    /// The transport the settings describe, with the port the CAT broker reports it is serving on (`serving`,
+    /// [`Engine::cat_share_port`]): where it stepped aside from the Sharing port (#165), that is
+    /// the port Nexus would be talking to itself on, and the Sharing port is another program's.
+    fn from_station(s: &Settings, serving: Option<u16>) -> Self {
         let mut t = Self {
             icom_data_mode: s.icom_data_mode,
             tx_audio_source: s.tx_audio_source.clone(),
@@ -16163,11 +16839,7 @@ impl Transport {
             rig_addr: s.rig_addr.clone(),
             omnirig_slot: s.omnirig_slot,
             rigctld_port: safe_rigctld_port(s.rigctld_port),
-            broker_self_port: if s.cat_broker {
-                Some(s.cat_broker_port)
-            } else {
-                None
-            },
+            broker_self_port: tempo_app::settings::sharing_self_port(s, serving),
             tci_server_self_port: s.tci_server.then_some(s.tci_server_port),
             address_refusal: AddressRefusal::default(),
             audio_in: s.audio_in.clone(),
@@ -16393,13 +17065,6 @@ impl Transport {
     }
 }
 
-/// The passband (Hz) to command alongside a rig mode. FT8/FT4 (the DATA submodes) need the
-/// FULL ~3 kHz audio passband — decodes span the whole band, and a narrow recalled DATA filter
-/// (e.g. 600 Hz on the FTDX10) clips signals — so we force 3000 Hz there.
-/// For SSB / CW / FM we pass `-1` (`RIG_PASSBAND_NOCHANGE`) so the rig keeps EXACTLY its current
-/// filter — the operator's chosen CW width / SSB filter is left untouched. (Passband `0` is
-/// Hamlib's `RIG_PASSBAND_NORMAL`, which actively commands the rig's *default* width and pops the
-/// rig's Width display on every mode change — the bug this avoids.)
 /// Is `md` a DATA/PKT mode (PKTUSB/PKTLSB, DATA-U/DATA-L)? The Icom tune path skips its
 /// temporary DATA-mode flip for these — an FT8 operator is already in DATA-U and must stay
 /// there through tune (else the release turns DATA off and strands the rig in plain USB).
@@ -16441,12 +17106,12 @@ fn mode_is_fm_family(md: &str) -> bool {
 }
 
 /// The passband for attempt `prior_fails + 1` of the bounded mode-set retry — the middle
-/// rung of the resilience ladder. DATA modes start with the full 3 kHz passband
-/// ([`passband_for`]); once a run keeps failing past [`MODE_SET_PASSBAND0_AFTER`], later
-/// attempts send passband `0` (`M PKTUSB 0` — Hamlib's `RIG_PASSBAND_NORMAL`, the rig's
-/// own default width) so a backend that rejects the width→DATA-filter mapping, not the
-/// mode itself, still gets the mode set. Non-DATA modes keep `-1` (NOCHANGE) always —
-/// `0` would actively re-command the default width and pop the rig's Width display.
+/// rung of the resilience ladder. A mode that carries a width ([`passband_for`]: AM's 6 kHz)
+/// starts with it; once a run keeps failing past [`MODE_SET_PASSBAND0_AFTER`], later attempts
+/// send passband `0` (Hamlib's `RIG_PASSBAND_NORMAL`, the rig's own default width) so a backend
+/// that rejects the width→filter mapping, not the mode itself, still gets the mode set. Every
+/// other mode — the DATA modes included (#82: this rung is what put a Flex on its 6 kHz default)
+/// — keeps `-1` (NOCHANGE) always.
 fn retry_passband(md: &str, prior_fails: u32) -> i32 {
     let pb = passband_for(md);
     if pb > 0 && prior_fails >= MODE_SET_PASSBAND0_AFTER {
@@ -16454,133 +17119,6 @@ fn retry_passband(md: &str, prior_fails: u32) -> i32 {
     } else {
         pb
     }
-}
-
-/// A `set_mode` has just been ACCEPTED — on the steady-state ladder or on an operator force
-/// retune — and `sent_pb` is the width that went with it. Hold the rig to that width: read
-/// back what it actually took and, if it kept its own, put ours back as its own `set_mode`,
-/// once. Returns the note to surface when the rig still kept its own width; `None` when there
-/// is nothing to say (no width was commanded, or the width landed).
-///
-/// Two shapes of "accepted" reach here and both are the same bug wearing different clothes:
-/// `sent_pb == 0` is the filter-agnostic rung (`RIG_PASSBAND_NORMAL` — "use YOUR own default
-/// width"), and `sent_pb > 0` is an ordinary width the rig answered `RPRT 0` and ignored.
-///
-/// ISSUE #82 (ve3wej, Flex 6400): "the filter lands at 6000 Hz on a mode/band change." The
-/// escalation to passband 0 is deliberate and stays — it is what gets the MODE accepted from a
-/// backend that chokes on the width→DATA-filter mapping rather than on the mode, instead of
-/// riding the whole retry budget into a bogus "no such mode" give-up. But a rig's default
-/// width is whatever the rig feels like (6 kHz of SSB filter on a Flex), and FT8 never wants
-/// 6000. So the rung's two halves are separated: the MODE lands first (the thing it was
-/// protecting), then the width is attempted on its own terms.
-///
-/// This cannot re-open the give-up loop. It runs only in the success arm, after the counters
-/// are cleared and `last_mode` already holds `md`, so a refusal here changes no state and the
-/// next tick sees no mode change and sends nothing — one extra command, once, on the one tick
-/// the escalation fired.
-/// Is the width the rig actually took close enough to the one we asked for?
-///
-/// PURE, because it is the whole judgement in [`width_reassert_after_default_rung`]'s
-/// accepted-but-ignored path and the rest of that function is a socket. A quarter either way:
-/// rigs own a discrete set of filters and pick the nearest, so 2700 Hz for a requested 3000 is
-/// the radio doing its job and must never be "corrected" into a warning the operator cannot
-/// act on. 6000 for 3000 is the Flex defect of #82/#114. Narrower counts too — a filter well
-/// under the mode's passband clips the audio the decoder is counting on, which is the same
-/// harm arriving from the other side.
-fn width_is_close_enough(got: i32, want: i32) -> bool {
-    (got - want).abs() <= want / 4
-}
-
-fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> Option<String> {
-    let want = passband_for(md);
-    if want <= 0 {
-        return None; // non-DATA: we sent NOCHANGE and have no width opinion to enforce
-    }
-    if sent_pb < 0 {
-        // `RIG_PASSBAND_NOCHANGE` — we deliberately did NOT command a width, so there is
-        // nothing to hold the rig to and no reason to spend a round-trip asking. That is #67's
-        // in-band dial-only case, and only the FORCE path can produce it: `retry_passband`
-        // never returns a negative for a DATA mode. The guard lives here rather than at the
-        // call site so a third caller cannot reintroduce the per-QSY filter pop #67 removed.
-        return None;
-    }
-    if sent_pb != 0 {
-        // ── THE ACCEPTED-BUT-IGNORED CASE (ve3wej again, #114 on 1.7.0, AFTER the rung fix
-        // below shipped in 1.4.0). The escalation rung is not the only way to end up on the
-        // rig's own filter: a backend can answer `M PKTUSB 3000` with RPRT 0 and simply not
-        // apply the width. The command SUCCEEDED, so nothing below runs, nothing reads the
-        // width back, and FT8 sits on a 6 kHz SSB filter with the app cheerfully reporting
-        // the mode was set. His report says exactly this — the filter is wrong on arrival,
-        // and once he sets 3 k by hand the later mode changes keep it.
-        //
-        // So on a mode change that ASKED for a specific width, read back what the rig
-        // actually took. Cost is one `m` per mode CHANGE (not per poll, and never for a
-        // non-DATA mode); mode changes are a band/section event, not a loop.
-        //
-        // ⚠️ NEEDS BENCH — a Flex 6400 over SmartSDR CAT (model 2036, IP:5002) is the
-        // reported case and nothing here has been on that hardware. What is proven is the
-        // arithmetic and that the read is issued; whether the Flex then TAKES the second
-        // width is exactly what a bench pass has to answer.
-        let (_, got) = rig.read_mode_passband();
-        let got = got? as i32; // a rig that will not report its width is not evidence of a fault
-                               // A quarter either way. Rigs pick the nearest filter they own, so 2700 for a
-                               // requested 3000 is the rig doing its job and must not be "corrected" into a note;
-                               // 6000 for 3000 is the defect. Both directions, because a filter far NARROWER than
-                               // the mode needs clips the passband the decoder is counting on.
-        if width_is_close_enough(got, want) {
-            return None;
-        }
-        if rig.set_mode(md, want).is_ok() {
-            // Believe the write only if the rig now agrees; a second RPRT 0 from a backend
-            // that ignores the width would otherwise read as success and say nothing.
-            let (_, after) = rig.read_mode_passband();
-            if after
-                .map(|a| width_is_close_enough(a as i32, want))
-                .unwrap_or(true)
-            {
-                return None;
-            }
-        }
-        return Some(format!(
-            "set {md} but the rig is on a {got} Hz filter, not the {want} Hz asked for — set \
-             the rig's DATA filter to about {} kHz by hand (FT8 needs the full audio passband)",
-            want / 1000
-        ));
-    }
-    // ── THE ESCALATION RUNG'S OWN WIDTH, AND IT IS VERIFIED NOW (#82, operator 2026-09-14:
-    // "never escalate to a zero/maximum passband on failure — fail honestly and tell the
-    // operator"). `M <mode> 0` is `RIG_PASSBAND_NORMAL` — the RIG's own default width, which on
-    // a Flex is 6000 Hz — so this rung DELIBERATELY parks the radio on a filter FT8 never wants,
-    // and the line below is what is supposed to take it off again.
-    //
-    // It used to believe a bare `RPRT 0`. ve3wej's Flex answers `RPRT 0` and keeps its own
-    // filter — that is the whole of #114, already handled on the accepted-but-ignored path
-    // above — so the escalation could still leave FT8 on a 6 kHz SSB filter while the app
-    // reported the mode set. Read it back, exactly as that path does.
-    //
-    // The RUNG ITSELF STAYS. It is what gets the MODE accepted from a backend choking on the
-    // width→DATA-filter mapping rather than on the mode; without it the ladder falls through to
-    // plain USB, which on an Icom means TX audio from the mic jack and no RF at all. What
-    // changes is that the rig is never LEFT there in silence.
-    if rig.set_mode(md, want).is_ok() {
-        return match rig.read_mode_passband().1 {
-            // A rig that will not report its width is ignorance, not evidence of a fault — the
-            // same rule the accepted-but-ignored path applies.
-            None => None,
-            Some(a) if width_is_close_enough(a as i32, want) => None,
-            Some(a) => Some(format!(
-                "set {md} at the rig's own default filter, and it is still on a {a} Hz filter, \
-                 not the {want} Hz asked for — set the rig's DATA filter to about {} kHz by hand \
-                 (FT8 needs the full audio passband)",
-                want / 1000
-            )),
-        };
-    }
-    Some(format!(
-        "set {md} but the rig kept its own filter width — it refused {want} Hz; set the rig's \
-         DATA filter to about {} kHz by hand (FT8 needs the full audio passband)",
-        want / 1000
-    ))
 }
 
 /// The plain mode underneath a submode the rig would not take — the LAST rung of the
@@ -17582,18 +18120,23 @@ mod tests {
     mod filter_width;
     mod flex_audio;
     mod ft_midover;
+    mod ft_residual;
+    mod ft_streaming;
     mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;
     mod js8_frames;
     mod js8_retune;
     mod js8_tx_delay;
+    mod jtty_status;
+    mod jtty_transmit;
     mod omnirig_coverage;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod sdrconnect_scope;
     mod split_overs;
     mod tci;
     mod tci_cw;
@@ -17601,6 +18144,7 @@ mod tests {
     mod tci_server;
     mod tci_soundcard_cw;
     mod tci_spots;
+    mod udp_decode_time;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;
@@ -18459,10 +19003,11 @@ mod tests {
             DecodePass::Boundary,
         );
         worker.dispatch(WorkerJob::Slot(job));
-        // Wait (bounded) for the worker to finish — it runs on its own thread.
+        // Wait (bounded) for the worker to finish — it runs on its own thread, behind the one
+        // process-wide modem lock, which another test's decode can hold for over a second.
         let mut result = None;
-        for _ in 0..500 {
-            if let Some(r) = worker.try_recv() {
+        for _ in 0..5_000 {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 result = Some(r);
                 break;
             }
@@ -18518,10 +19063,12 @@ mod tests {
             "the guard blocks a second concurrent dispatch"
         );
 
-        // Drain the one result → flag clears → the next dispatch is allowed again.
+        // Drain the one result → flag clears → the next dispatch is allowed again. Every decode in
+        // this test binary waits for the one process-wide modem lock, and under the full suite
+        // another test's decode can hold it for over a second, so this waits up to ten.
         let mut got = false;
-        for _ in 0..500 {
-            if let Some(r) = worker.try_recv() {
+        for _ in 0..5_000 {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 let _ = eng.apply_decode_result(r);
                 in_flight = false;
                 got = true;
@@ -18666,7 +19213,7 @@ mod tests {
         worker.dispatch(WorkerJob::Js8Multi(eng.build_js8_multi_job(slices, 5)));
         let mut results = Vec::new();
         for _ in 0..2_000 {
-            if let Some(r) = worker.try_recv() {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 results.push(r);
                 if results.len() == 2 {
                     break;
@@ -18963,6 +19510,108 @@ mod tests {
         assert!(statuses().is_empty(), "nothing changed, nothing sent");
     }
 
+    /// A logger's Replay gets all of Band Activity at once, but a source repeating it within a
+    /// second is not answered again: each answer re-sends every decode with the engine locked.
+    /// Another logger's first Replay is still answered at once.
+    #[test]
+    fn a_replay_is_answered_at_most_once_a_second_per_logger() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tier(Tier::Ft8);
+            e.fold_heard_for_test("CQ K1ABC FN42", 10);
+            e.fold_heard_for_test("CQ W2DEF FN20", 10);
+            e.fold_heard_for_test("CQ N3GHI FM19", 10);
+        }
+        assert_eq!(engine.lock().unwrap().band_activity().count(), 3);
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let to = server.local_addr().unwrap();
+        let replay = |id: &str| {
+            let mut w = tempo_net::qds::QdsWriter::new();
+            w.put_u32(0xADBC_CBDA)
+                .put_u32(2)
+                .put_u32(7)
+                .put_utf8(Some(id));
+            listener.send_to(&w.into_bytes(), to).unwrap();
+        };
+        let decodes = || {
+            let mut n = 0;
+            let mut buf = [0u8; 4096];
+            while let Ok((len, _)) = listener.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..len]);
+                r.read_u32();
+                r.read_u32();
+                if r.read_u32() == Some(2) {
+                    n += 1;
+                }
+            }
+            n
+        };
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = |now: f64| {
+            // Let the datagram reach the server's socket before the tick drains it.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        tick(100.0);
+        let _ = decodes();
+        replay("logger-a");
+        tick(120.0);
+        assert_eq!(decodes(), 3, "the first Replay gets all of Band Activity");
+        replay("logger-a");
+        tick(140.0);
+        assert_eq!(
+            decodes(),
+            0,
+            "the same logger again within a second: no answer"
+        );
+        replay("logger-b");
+        tick(160.0);
+        assert_eq!(decodes(), 3, "another logger's first Replay is answered");
+        replay("logger-a");
+        tick(1_200.0);
+        assert_eq!(
+            decodes(),
+            3,
+            "a second later the first logger is answered again"
+        );
+        // A sender changing its id each time is answered for at most REPLAY_SOURCES ids a second.
+        for (i, now) in [1_220.0, 1_240.0, 1_260.0, 1_280.0].into_iter().enumerate() {
+            replay(&format!("renamed-{i}"));
+            tick(now);
+            let want = if i < REPLAY_SOURCES - 1 { 3 } else { 0 };
+            assert_eq!(decodes(), want, "id {i}");
+        }
+    }
+
     /// The slot boundary sends a Status and keeps it, as the one the next change is told
     /// against: without it no change between boundaries would ever be sent.
     #[test]
@@ -19082,6 +19731,73 @@ mod tests {
         }
     }
 
+    /// The contact's transmit power rides the QSOLogged datagram's own `Tx power` field,
+    /// as WSJT-X fills it from its Log QSO dialog. The record carried it and the datagram said
+    /// `""` — N1MM, HRD and Log4OM log from this message, so the power never reached them.
+    #[test]
+    fn a_logged_contacts_power_rides_the_qso_logged_datagram() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let logged = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        {
+            let mut e = engine.lock().unwrap();
+            e.log_qso(logged(
+                "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>120000\
+                 <TX_PWR:2>50<EOR>",
+            ));
+            e.log_qso(logged(
+                "<CALL:5>K1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>121000<EOR>",
+            ));
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let mut powers = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = listener.recv_from(&mut buf) {
+            if let Some(WsjtxInbound::QsoLogged { qso, .. }) =
+                tempo_net::wsjtx::parse_inbound(&buf[..n])
+            {
+                powers.push((qso.dx_call, qso.tx_power));
+            }
+        }
+        assert_eq!(
+            powers,
+            vec![
+                ("W1AW".to_string(), "50".to_string()),
+                ("K1ABC".to_string(), String::new()),
+            ],
+            "the recorded power, and nothing where none was recorded"
+        );
+    }
+
     #[test]
     fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
         // Disabled → no socket regardless of address (the state before a toggle-on).
@@ -19146,146 +19862,6 @@ mod tests {
         assert!(
             note.contains("rig rejected PKTUSB"),
             "rejection note: {note}"
-        );
-    }
-
-    /// The accepted-but-ignored width (ve3wej, #114 on 1.7.0 — AFTER the rung fix shipped).
-    /// A backend can answer `M PKTUSB 3000` with RPRT 0 and leave the filter at 6 kHz; the
-    /// command succeeded, so the escalation path never runs. This is the judgement that
-    /// decides whether the read-back is a defect or the radio picking its nearest filter.
-    #[test]
-    fn a_rig_that_ignored_the_width_is_told_apart_from_one_that_rounded_it() {
-        // THE DEFECT: the Flex 6400 of #82/#114 — FT8 on an SSB filter.
-        assert!(
-            !width_is_close_enough(6000, 3000),
-            "6 kHz for a 3 kHz ask is the bug"
-        );
-        // THE RADIO DOING ITS JOB: discrete filters, nearest wins. Must stay silent, because
-        // re-asserting buys nothing and a warning here is one the operator cannot act on.
-        assert!(
-            width_is_close_enough(2700, 3000),
-            "2.7 kHz is the nearest filter, not a fault"
-        );
-        assert!(width_is_close_enough(3000, 3000), "exact");
-        assert!(
-            width_is_close_enough(2400, 3000),
-            "2.4 kHz is 20% under — inside the slack"
-        );
-        // NARROWER COUNTS TOO: a filter well under the mode's passband clips the audio the
-        // decoder needs. Same harm, arriving from the other side.
-        assert!(
-            !width_is_close_enough(1800, 3000),
-            "1.8 kHz clips FT8's passband"
-        );
-        // Boundaries, stated so a later change to the slack has to move them deliberately.
-        assert!(
-            width_is_close_enough(3750, 3000),
-            "exactly a quarter over is still close"
-        );
-        assert!(
-            !width_is_close_enough(3751, 3000),
-            "one Hz past the quarter is not"
-        );
-    }
-
-    /// A logging rigctld stub that ACCEPTS every `M` and then reports whatever width it feels
-    /// like — the Flex 6400 of #82/#114 as a socket. `width` is what `m` answers.
-    fn mock_rigctld_with_width(
-        mode: &'static str,
-        width: u32,
-    ) -> (String, Arc<Mutex<Vec<String>>>) {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-        let log = Arc::new(Mutex::new(Vec::<String>::new()));
-        let log2 = Arc::clone(&log);
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
-                let mut reader = BufReader::new(match stream.try_clone() {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                });
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let l = line.trim().to_string();
-                    log2.lock().unwrap().push(l.clone());
-                    let m = format!("{mode}\n{width}\n");
-                    let reply = if l == "m" { m.as_str() } else { "RPRT 0\n" };
-                    if stream.write_all(reply.as_bytes()).is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-        (addr, log)
-    }
-
-    /// ⭐ ISSUE #82: THE ESCALATION RUNG MUST NEVER LEAVE THE RIG ON A 6 kHz FILTER IN SILENCE.
-    ///
-    /// After [`MODE_SET_PASSBAND0_AFTER`] failures the ladder sends `M PKTUSB 0` —
-    /// `RIG_PASSBAND_NORMAL`, "use YOUR own default width" — which on a Flex is 6000 Hz. That
-    /// rung stays: it is what gets the MODE accepted from a backend choking on the width→DATA-
-    /// filter mapping rather than on the mode, and removing it drops the ladder to plain USB,
-    /// which on an Icom means TX audio from the mic jack and no RF at all.
-    ///
-    /// What was missing is the CHECK. The `sent_pb != 0` path reads the width back and says so
-    /// when the rig ignored it; this rung believed a bare `RPRT 0` — and ve3wej's Flex answers
-    /// `RPRT 0` and keeps its own filter, which is the whole of #114. So the escalation could
-    /// still land FT8 on a 6 kHz SSB filter with the app reporting success.
-    #[test]
-    fn the_escalation_rung_never_leaves_a_six_kilohertz_filter_unsaid() {
-        // THE DEFECT: the rig takes the mode, answers RPRT 0 to the width, and stays at 6 kHz.
-        let (addr, log) = mock_rigctld_with_width("PKTUSB", 6000);
-        let mut rig = Rig::rigctld(&addr);
-        let note = width_reassert_after_default_rung(&mut rig, "PKTUSB", 0);
-        let seen = log.lock().unwrap().clone();
-        assert!(
-            seen.iter().any(|l| l == "M PKTUSB 3000"),
-            "control: the rung re-asserts the width it wanted: {seen:?}"
-        );
-        assert!(
-            seen.iter().any(|l| l == "m"),
-            "…and READS BACK what the rig took — believing RPRT 0 is the bug: {seen:?}"
-        );
-        let note = note.expect("a rig left on 6 kHz must be reported, not silently accepted");
-        assert!(
-            note.contains("6000") && note.contains("3000"),
-            "the note has to name both widths or the operator cannot act on it: {note}"
-        );
-
-        // CONTROL: a rig that actually TAKES the width says nothing at all. Without this the
-        // assertion above would pass for a function that complains unconditionally.
-        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 3000);
-        let mut rig = Rig::rigctld(&addr);
-        assert_eq!(
-            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
-            None,
-            "a width that landed is not a complaint"
-        );
-
-        // CONTROL: the rig picking its nearest filter is the radio doing its job, not a fault.
-        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 2700);
-        let mut rig = Rig::rigctld(&addr);
-        assert_eq!(
-            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
-            None,
-            "2.7 kHz for a 3 kHz ask must stay silent"
-        );
-
-        // CONTROL: a rig that will not report its width is IGNORANCE, not evidence of a fault —
-        // the same rule the accepted-but-ignored path already applies.
-        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 0);
-        let mut rig = Rig::rigctld(&addr);
-        assert_eq!(
-            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
-            None,
-            "no width read back is not a 6 kHz filter"
         );
     }
 
@@ -19361,49 +19937,50 @@ mod tests {
     }
 
     #[test]
-    fn retry_passband_goes_filter_agnostic_only_for_data_modes() {
-        // Rung 1 of the ladder: DATA modes open with the full 3 kHz passband…
-        assert_eq!(retry_passband("PKTUSB", 0), 3000);
-        assert_eq!(retry_passband("PKTLSB", MODE_SET_PASSBAND0_AFTER - 1), 3000);
-        // Rung 2: …then drop to 0 (the rig's own default width) once the run keeps
-        // failing — a backend that rejects the width→DATA-filter mapping (not the
-        // mode itself) still gets the MODE set.
-        assert_eq!(retry_passband("PKTUSB", MODE_SET_PASSBAND0_AFTER), 0);
-        assert_eq!(retry_passband("PKTLSB", MODE_SET_MAX_TRIES - 1), 0);
+    fn retry_passband_never_asks_a_width_for_a_data_mode() {
+        // #82 / #107, operator ruling "match WSJT-X": a DATA mode is asked with
+        // RIG_PASSBAND_NOCHANGE on every try — never 3000, and never the `0` rung ("use your
+        // default width") that put a Flex on 6 kHz.
+        for tries in [0, MODE_SET_PASSBAND0_AFTER, MODE_SET_MAX_TRIES - 1] {
+            assert_eq!(retry_passband("PKTUSB", tries), -1);
+            assert_eq!(retry_passband("PKTLSB", tries), -1);
+        }
+        // AM keeps its ladder: its 6 kHz first, then the filter-agnostic rung.
+        assert_eq!(retry_passband("AM", 0), 6000);
+        assert_eq!(retry_passband("AM", MODE_SET_PASSBAND0_AFTER), 0);
         // Voice/CW never leave -1 (NOCHANGE): 0 would actively re-command the default
-        // width and pop the rig's Width display — the bug passband_for exists to avoid.
+        // width and pop the rig's Width display.
         assert_eq!(retry_passband("USB", 0), -1);
         assert_eq!(retry_passband("CW", MODE_SET_MAX_TRIES), -1);
     }
 
-    /// #67 at the decision itself. The wire test pins the behaviour end to end; this pins the
-    /// three inputs the gate is made of, including the two that must NOT relax it.
+    /// #67 at the decision itself, on the one mode that still carries a width (AM's 6 kHz), and
+    /// the DATA modes that no longer do (#82 / #107).
     #[test]
     fn a_force_retune_re_commands_the_width_only_on_a_mode_or_band_change() {
-        const A: u64 = 14_074_000; // 20 m
-        const B: u64 = 14_090_000; // 20 m, a dial move away
-        const C: u64 = 21_074_000; // 15 m
+        const A: u64 = 7_200_000; // 40 m
+        const B: u64 = 7_250_000; // 40 m, a dial move away
+        const C: u64 = 3_885_000; // 80 m
 
-        // THE BUG: an in-band dial move with the mode unchanged used to re-send 3000.
-        assert_eq!(retune_passband("PKTUSB", false, A, B), -1);
-        assert_eq!(retune_passband("PKTUSB", false, A, A), -1);
-        // A mode change re-commands the width — the FTDX10 600 Hz DATA filter this exists for.
-        assert_eq!(retune_passband("PKTUSB", true, A, B), 3000);
-        // …and so does a BAND change with the mode UNCHANGED, which is the case a
-        // `mode_changed`-only gate would have missed: the rig recalls a per-band DATA filter.
-        assert_eq!(retune_passband("PKTUSB", false, A, C), 3000);
-        assert_eq!(retune_passband("PKTLSB", false, 3_580_000, 7_040_000), 3000);
-        // No dial pushed yet (the `last_dial` sentinel) is not "same band" — force the width.
-        assert_eq!(retune_passband("PKTUSB", false, 0, A), 3000);
-        // Two dials the band plan cannot name are NOT in-band together: they may sit on
-        // different band registers inside the rig. `None == None` must not relax the gate.
+        // An in-band dial move with the mode unchanged leaves the filter alone.
+        assert_eq!(retune_passband("AM", false, A, B), -1);
+        assert_eq!(retune_passband("AM", false, A, A), -1);
+        // A mode change re-commands the width…
+        assert_eq!(retune_passband("AM", true, A, B), 6000);
+        // …and so does a BAND change with the mode UNCHANGED.
+        assert_eq!(retune_passband("AM", false, A, C), 6000);
+        // No dial pushed yet (the `last_dial` sentinel) is not "same band".
+        assert_eq!(retune_passband("AM", false, 0, A), 6000);
+        // Two dials the band plan cannot name are NOT in-band together.
         assert_eq!(
-            retune_passband("PKTUSB", false, 47_000_000_000, 47_100_000_000),
-            3000
+            retune_passband("AM", false, 47_000_000_000, 47_100_000_000),
+            6000
         );
-        // Voice/CW never had a width to re-command — every combination stays NOCHANGE.
-        for (changed, from, to) in [(false, A, B), (true, A, B), (false, A, C)] {
-            assert_eq!(retune_passband("USB", changed, from, to), -1);
+        // DATA modes, voice and CW never command a width — every combination is NOCHANGE.
+        for md in ["PKTUSB", "PKTLSB", "USB", "CW"] {
+            for (changed, from, to) in [(false, A, B), (true, A, B), (false, A, C), (false, 0, A)] {
+                assert_eq!(retune_passband(md, changed, from, to), -1, "{md}");
+            }
         }
     }
 
@@ -21845,6 +22422,76 @@ mod tests {
         assert!(!base.audio_differs(&Transport::from_settings(&s)));
     }
 
+    /// A voice-keyer message or an APRS frame the loop is still playing, on its own deadline,
+    /// reaches the engine: a log change that holds the Engine lock for a long time waits for it,
+    /// and stops waiting when the over ends. The loop tells each deadline once.
+    #[test]
+    fn the_loops_own_over_is_told_to_the_engine_and_its_end_too() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            !engine_lock(&engine).transmit_needs_the_lock(),
+            "the control: idle"
+        );
+
+        s.tx_until_ms = Some(now + 5_000.0); // a voice message's deadline
+        s.tell_tx_hold(&engine, now);
+        assert!(engine_lock(&engine).transmit_needs_the_lock());
+        assert!(
+            !engine_lock(&engine).on_air(),
+            "the clock-repair interlock is not changed by it"
+        );
+
+        s.tx_until_ms = None; // played out, unkeyed
+        s.tell_tx_hold(&engine, now + 5_000.0);
+        assert!(!engine_lock(&engine).transmit_needs_the_lock());
+    }
+
+    /// The loop takes the Engine lock to tell a deadline once, not on every tick: a second tick
+    /// on the same deadline tells nothing (the engine's copy, cleared behind the loop's back,
+    /// stays cleared).
+    #[test]
+    fn the_loop_tells_each_deadline_once() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tx_until_ms = Some(now + 5_000.0);
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            engine_lock(&engine).transmit_needs_the_lock(),
+            "the control"
+        );
+        engine_lock(&engine).observe_loop_tx_hold(None);
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            !engine_lock(&engine).transmit_needs_the_lock(),
+            "the same deadline was told again"
+        );
+    }
+
+    /// The engine keeps the loop's deadline on its own monotonic clock; the loop's unkey is on the
+    /// wall clock. A wall clock stepped back while a long message plays moves the loop's end later
+    /// and not the engine's copy, so the loop tells it again: steps too small for the clock-jump
+    /// interlock that add up past the margin never end the engine's hold before the loop unkeys.
+    #[test]
+    fn a_wall_clock_stepped_back_mid_message_is_told_again() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tx_until_ms = Some(now + 100.0);
+        s.tell_tx_hold(&engine, now);
+        // Two backward steps of 200 ms: the loop now has 500 ms to go, the engine's copy 100.
+        s.tell_tx_hold(&engine, now - 200.0);
+        s.tell_tx_hold(&engine, now - 400.0);
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        assert!(
+            engine_lock(&engine).transmit_needs_the_lock(),
+            "the loop still holds the key for 50 ms and its margin"
+        );
+    }
+
     // ---- the full loop core (RadioLoop::step), driven hardware-free ----
 
     fn loop_state() -> RadioLoop {
@@ -21854,6 +22501,136 @@ mod tests {
             &RadioConfig::default(),
         )
     }
+    /// ⛔ NEXUS'S OWN KEY HOLDS THE SPLIT READING'S AGE, AND THE POLL AFTER IT READS THE SPLIT AGAIN.
+    /// The heavy poll, the only reader of the rig's split, is held off while Nexus is keyed; the
+    /// loop tells the engine so on every tick (`Engine::hold_observed_split_age`), and on the
+    /// first tick after the key the split read is owed, so it is the next poll's. CONTROL: an
+    /// unkeyed tick owes nothing.
+    #[test]
+    fn nexus_keyed_holds_the_split_reading_and_the_tick_after_owes_a_split_read() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = Sinks {
+            wsjtx: None,
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let split = 1u32 << HeavyRead::Split as u32;
+        let mut tick = |state: &mut RadioLoop, now: f64| {
+            state.read_turns.owed = 0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            state.read_turns.owed & split != 0
+        };
+        assert!(
+            !tick(&mut state, 100.0),
+            "control: an unkeyed tick owes nothing"
+        );
+        state.manual_ptt_applied = true;
+        assert!(
+            !tick(&mut state, 200.0),
+            "a keyed tick holds, and owes nothing"
+        );
+        state.manual_ptt_applied = false;
+        assert!(
+            tick(&mut state, 300.0),
+            "the tick after the key owes the split read"
+        );
+        assert!(
+            state.read_turns.pressing & split != 0,
+            "…ahead of the lap, so a slow link reads it between overs"
+        );
+        assert!(!tick(&mut state, 400.0), "once");
+    }
+
+    /// ⛔ A KEY FROM THE RADIO'S OWN MICROPHONE HOLDS NOTHING. It holds the heavy poll off like
+    /// Nexus's keys, but Nexus did not apply it, so a front-panel split reading ages through it
+    /// and refuses after the TTL as it always did, and its end owes no split read. CONTROL: the
+    /// same ageing under a key Nexus applies keeps the reading fresh.
+    #[test]
+    fn a_key_from_the_radios_own_microphone_holds_no_split_reading() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            let mut settings = e.settings().clone();
+            settings.split_detect_enabled = true;
+            e.apply_settings(settings);
+        }
+        let fresh_split = || {
+            let mut e = engine.lock().unwrap();
+            e.observe_rig_split(true, Some(14_075_000));
+            assert!(e.tx_allowed(), "precondition: a fresh rig split keys");
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let split = 1u32 << HeavyRead::Split as u32;
+        let mut tick = |state: &mut RadioLoop, now: f64, rig_keyed: bool, nexus_keyed: bool| {
+            state.rig_keyed = rig_keyed;
+            state.manual_ptt_applied = nexus_keyed;
+            state.read_turns.owed = 0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            state.read_turns.owed & split != 0
+        };
+        let age = |secs| engine.lock().unwrap().age_observed_split_for_test(secs);
+        // Past the engine's 6 s TTL for a rig's split reading.
+        let stale = 7;
+        let allowed = || engine.lock().unwrap().tx_allowed();
+
+        fresh_split();
+        tick(&mut state, 100.0, false, true);
+        age(stale);
+        tick(&mut state, 200.0, false, true);
+        assert!(allowed(), "control: a key Nexus applies holds the reading");
+        assert!(tick(&mut state, 300.0, false, false), "control: released");
+
+        fresh_split();
+        assert!(
+            !tick(&mut state, 400.0, true, false),
+            "the radio's mic keys"
+        );
+        age(stale);
+        assert!(!tick(&mut state, 500.0, true, false), "still keyed");
+        assert!(
+            !allowed(),
+            "the reading aged through the radio's own key and refuses"
+        );
+        assert!(
+            !tick(&mut state, 600.0, false, false),
+            "its end owes no split read: there was no hold"
+        );
+    }
+
     /// [`loop_state`] pinned to the ENGINE's rig model.
     ///
     /// Load-bearing, not tidiness: the sat scenes below run on the FIELD-REPORT
@@ -22966,6 +23743,42 @@ mod tests {
             "still owed after its tick"
         );
         assert!(!t.take_owed(HeavyRead::Mode, true), "paid");
+    }
+
+    /// An owed read made pressing ([`ReadTurns::owe_now`]) is read on the next poll with budget
+    /// even though that poll's lap resumes past it; it still waits for budget. CONTROL: the
+    /// same read owed the ordinary way waits for the lap.
+    #[test]
+    fn a_pressing_read_does_not_wait_for_the_lap() {
+        let lap_past_split = |t: &mut ReadTurns| {
+            t.start_poll();
+            assert!(
+                !t.take(HeavyRead::Vfo, false),
+                "this poll stops at the VFO read"
+            );
+            t.start_poll();
+        };
+        let mut t = ReadTurns::default();
+        t.owe(HeavyRead::Split);
+        lap_past_split(&mut t);
+        assert!(
+            !t.take_owed(HeavyRead::Split, true),
+            "control: an ordinary owed read waits for the lap"
+        );
+
+        let mut t = ReadTurns::default();
+        t.owe_now(HeavyRead::Split);
+        lap_past_split(&mut t);
+        assert!(
+            !t.take_owed(HeavyRead::Split, false),
+            "pressing, but the budget is spent"
+        );
+        assert!(
+            t.take_owed(HeavyRead::Split, true),
+            "pressing: read on this poll, past the lap"
+        );
+        assert!(!t.take_owed(HeavyRead::Split, true), "paid");
+        assert_eq!(t.pressing, 0, "and no longer pressing");
     }
 
     /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
@@ -25396,9 +26209,7 @@ mod tests {
         });
         let sent = yaesu_log.lock().unwrap()[before..].to_vec();
         assert!(
-            !sent
-                .iter()
-                .any(|l| l.starts_with("w SS05") && l != "w SS05;"),
+            !sent.iter().any(|l| l.contains("SS05") && l != "w SS05;"),
             "no scope span is set on the radio being left: {sent:?}"
         );
         assert_eq!(
@@ -26272,6 +27083,79 @@ mod tests {
             pool.lock().unwrap().is_empty(),
             "an unwanted non-active conn is still reaped as before"
         );
+    }
+
+    /// ★ A DISABLED RADIO'S PORT IS FREE. The monitor holds every other enabled radio's CAT port
+    /// through its daemon, which is what kept a second rig out of another program on the same
+    /// computer. Disabling the radio must close that daemon on the monitor's next pass, and no
+    /// pass after it may open the radio again until it is enabled. The stand-in daemon is a live
+    /// process, as the real one is: the port is free when that process is gone.
+    #[cfg(unix)]
+    #[test]
+    fn disabling_a_radio_closes_its_monitor_daemon_and_never_reopens_it() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let r1 = s.add_radio_profile();
+        s.radios.iter_mut().find(|p| p.id == r1).unwrap().rig_model = 1035;
+        let engine = Arc::new(Mutex::new(Engine::with_settings(s)));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let pids = std::cell::RefCell::new(Vec::new());
+        let open = |_: &Transport| {
+            let child = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            pids.borrow_mut().push(child.id());
+            (
+                Rig::vox(),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(child),
+                )),
+                Some(true),
+            )
+        };
+        let alive = |pid: u32| {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        let pass = || {
+            let (active, want) = monitor_want(engine.lock().unwrap().settings(), None);
+            reconcile_pool_with_open(&pool, &want, active, &engine, 0.0, &open);
+        };
+
+        pass();
+        let daemon = pids.borrow()[0];
+        assert!(
+            alive(daemon),
+            "premise: the monitor holds radio {r1} through a live daemon"
+        );
+
+        assert!(engine.lock().unwrap().set_radio_enabled(r1, false));
+        pass();
+        assert!(
+            pool.lock().unwrap().is_empty(),
+            "the disabled radio left the pool"
+        );
+        assert!(!alive(daemon), "its daemon is gone, so its port is free");
+        pass();
+        assert_eq!(
+            pids.borrow().len(),
+            1,
+            "a disabled radio is never opened again"
+        );
+
+        assert!(engine.lock().unwrap().set_radio_enabled(r1, true));
+        pass();
+        assert_eq!(
+            pids.borrow().len(),
+            2,
+            "enabled again, it is monitored again"
+        );
+        pool.lock().unwrap().clear();
     }
 
     #[test]
@@ -27588,6 +28472,116 @@ mod tests {
         );
     }
 
+    /// ⛔ A voice-keyer message the loop is playing reaches the engine's transmit check through
+    /// the loop's own tick, from the tick that keys it to the tick after it ends. The engine
+    /// handed the message over whole and keeps nothing of it, so without the loop's word a long
+    /// log change would take the Engine lock mid-message and hold up its unkey.
+    #[test]
+    fn a_voice_message_the_loop_plays_holds_the_engines_transmit_check() {
+        let (addr, _seen, _live_mode) = band_stacking_rigctld_stub(14_250_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            e.set_tx_enabled(true);
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        let t0 = now_unix_ms();
+        run(&mut state, &mut rig, &mut backend, t0);
+        assert!(
+            !engine.lock().unwrap().transmit_needs_the_lock(),
+            "the control: Phone, nothing playing"
+        );
+        // Two seconds of message.
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.0; 24_000])
+            .expect("the voice keyer takes it");
+        run(&mut state, &mut rig, &mut backend, t0 + 100.0);
+        assert!(
+            state.tx_until_ms.is_some(),
+            "scene guard: the loop keyed it"
+        );
+        {
+            let e = engine.lock().unwrap();
+            // The engine sees the playing message too since the transmit arbiter counts the one
+            // the loop reports on the air (`tx_owner`), so `on_air` holds the check as well.
+            assert!(
+                e.on_air(),
+                "scene guard: the arbiter sees the playing message"
+            );
+            assert!(e.transmit_needs_the_lock(), "…and the check holds");
+        }
+        run(&mut state, &mut rig, &mut backend, t0 + 5_000.0);
+        assert!(
+            !engine.lock().unwrap().transmit_needs_the_lock(),
+            "played out: the check lets a long change go ahead again"
+        );
+    }
+
+    /// A voice-keyer message in Phone on a Hamlib CAT radio (a Flex on SmartSDR CAT is one) keys
+    /// with the same rigctld `T 1` an FT8 over keys with, before its audio is played, and the
+    /// over ends with `T 0`. A field report had a Flex on SmartSDR CAT play the message without
+    /// transmitting while FT8 keyed: this pins that Nexus's half of the key is the same for both.
+    #[test]
+    fn a_voice_message_keys_a_hamlib_cat_rig_with_the_ft8_key_and_unkeys_after() {
+        let (addr, seen, _live_mode) = band_stacking_rigctld_stub(14_250_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            e.set_tx_enabled(true);
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        let t0 = now_unix_ms();
+        run(&mut state, &mut rig, &mut backend, t0);
+        seen.lock().unwrap().clear();
+        assert!(backend.played.is_empty(), "the control: nothing played yet");
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .expect("the voice keyer takes it");
+        run(&mut state, &mut rig, &mut backend, t0 + 100.0);
+        let wire = seen.lock().unwrap().clone();
+        assert!(
+            wire.iter().any(|l| l == "T 1"),
+            "the message keys the radio with T 1, as an FT8 over does. wire={wire:?}"
+        );
+        assert_eq!(backend.played.len(), 12_000, "…and its audio is played");
+        run(&mut state, &mut rig, &mut backend, t0 + 3_000.0);
+        let wire = seen.lock().unwrap().clone();
+        let key = wire.iter().position(|l| l == "T 1").unwrap();
+        assert!(
+            wire[key..].iter().any(|l| l == "T 0"),
+            "the over ends with T 0, never left keyed. wire={wire:?}"
+        );
+        assert!(state.tx_until_ms.is_none(), "the loop believes idle");
+    }
+
     /// ⭐ THE INVARIANT THAT OUTRANKS THE FIX (same 2026-09 report): a mode the OPERATOR set on
     /// the rig's own front panel MUST STAND. The periodic read-back is display-only by design
     /// (`observe_rig_mode`, and the loop's `// display-only; never adopted into operating_mode`
@@ -27814,7 +28808,7 @@ mod tests {
     /// Measured for the 2026-09 FT-710 report ("it tuned but selected DATA-U, not CW-U") as the
     /// BEFORE half of a proposed narrowing of the soundcard keyer's DATA submode to the keyed
     /// window — receive in `CW`/`CWR`, command `PKTUSB`/`PKTLSB` only while keying. That
-    /// narrowing was investigated and NOT built (`tasks/cw-data-window.md`): Nexus carries ONE
+    /// narrowing was investigated and NOT built: Nexus carries ONE
     /// dial number, a frequency written over CAT is a number in the CURRENT mode's convention,
     /// and on a Yaesu with CW FREQ DISPLAY = PITCH OFFSET the CW convention differs from the
     /// SSB/DATA one by the rig's CW pitch (the ±650 Hz field report the mode-before-dial fix
@@ -27891,8 +28885,8 @@ mod tests {
             // band (`Settings::cw_reverse` is the opt-in that brings `CWR` back, everywhere).
             // The DATA column is unchanged — that arm KEEPS the 10 MHz rule, which is why the
             // two columns now differ in shape rather than matching.
-            (7.030, "40m", "M CW -1", "M PKTLSB 3000"),
-            (14.030, "20m", "M CW -1", "M PKTUSB 3000"),
+            (7.030, "40m", "M CW -1", "M PKTLSB -1"),
+            (14.030, "20m", "M CW -1", "M PKTUSB -1"),
         ] {
             // The three TRUE-CW backends: the rig keys itself in CW, so the section commands
             // the rig's own CW mode at its own default width (`-1`).
@@ -27921,9 +28915,8 @@ mod tests {
 
             // The SOUNDCARD keyer: a keyed audio tone has to reach the modulator rather than the
             // mic jack, so the section commands the DATA submode — for the WHOLE session,
-            // receive included. That is the FT-710 report ("it tuned but it didn't switch"), and
-            // the `3000` is its other half: a 3 kHz SSB filter where a CW operator wants a
-            // narrow one. Both are deliberate today, and both are what a narrowing would change.
+            // receive included. That is the FT-710 report ("it tuned but it didn't switch"). It asks
+            // for no width (`-1`, #82/#107), so the CW operator's narrow DATA filter stands.
             let (rx, over, wire) = probe(CwKeyerBackend::Soundcard, dial, band);
             assert_eq!(
                 rx,
@@ -27988,12 +28981,12 @@ mod tests {
         for (dial, band) in [(7.080, "40m"), (14.083, "20m")] {
             assert_eq!(
                 probe("lsb", dial, band),
-                vec!["M PKTLSB 3000"],
+                vec!["M PKTLSB -1"],
                 "LSB on {band}"
             );
             assert_eq!(
                 probe("usb", dial, band),
-                vec!["M PKTUSB 3000"],
+                vec!["M PKTUSB -1"],
                 "USB on {band}"
             );
         }
@@ -29305,6 +30298,165 @@ mod tests {
         );
     }
 
+    /// A station double-clicked in the receive period, before this station's own period: the call
+    /// asks for the snappy first over, which waits for the right parity and keys on the first tick
+    /// of the next period, ahead of that boundary's own TX decision. The full pass of the period
+    /// just heard (dispatched at 14.40 s) is still decoding then, and when it drains, that is the
+    /// boundary's housekeeping only: the over already went out. One over, one `mine` row in the
+    /// Rx Frequency pane, one wave on the air — never the same message planned, recorded and
+    /// handed to the sound card again ~2 s into the period.
+    #[test]
+    fn a_call_made_before_the_slot_keys_one_over_when_the_full_pass_drains_after_it() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+        {
+            // The double-click on the Call Roster, 5 s into their period: call + grid only.
+            let mut e = engine.lock().unwrap();
+            e.call_station_ctx("K1ABC", Some("FN42"), None, None, None)
+                .unwrap();
+            e.set_tx_even(true);
+            assert!(
+                e.peek_immediate_tx(),
+                "scene: the call asks for the snappy over"
+            );
+        }
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 20_000.0);
+        assert!(!r.keyed, "odd slot: not ours, the request waits");
+
+        // Slot 1's first 14.4 s on the band; its full pass dispatches at 14.40 s.
+        b.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "CQ K1ABC FN42", 172_800));
+        state.early_done_slot = Some(1);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "scene: the full pass is running"
+        );
+
+        // Slot 2, ours: the call keys at once, the full pass still decoding.
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert!(r.keyed, "the call keyed at the start of our period");
+        assert!(
+            state.decode_in_flight,
+            "scene: the full pass is still decoding at the key"
+        );
+        let played_at_key = b.played.len();
+        assert!(
+            played_at_key > 0,
+            "scene: the over was handed to the sound card"
+        );
+        b.tx_unplayed = played_at_key; // the card has only begun the over
+
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 30_001.0, 45_000.0),
+            "the full pass drained"
+        );
+        let mine: Vec<String> = engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .filter(|d| d.from.as_deref() == Some("W9XYZ"))
+            .map(|d| d.message)
+            .collect();
+        // One comparison, so a red names both ways the drain sent the over again: the own rows,
+        // and the samples handed to the sound card after the key (a slot over is played only once
+        // the transmitter is keyed for it).
+        assert_eq!(
+            (mine, b.played.len() - played_at_key),
+            (vec!["K1ABC W9XYZ EN37".to_string()], 0),
+            "one over: the drain recorded, keyed and played no second one"
+        );
+    }
+
+    /// `k` samples of one LSB, each + or -, at seeded places in `len` samples of silence: a receive
+    /// path gone dead (a muted rig, a pulled cable) but for the odd stray bit.
+    fn lsb_clicks(seed: u64, k: usize, len: usize) -> Vec<f32> {
+        let mut x = vec![0f32; len];
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        for _ in 0..k {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let lsb: f32 = if (s >> 33) & 1 == 0 { 1.0 } else { -1.0 };
+            x[(s % len as u64) as usize] = lsb / 32767.0;
+        }
+        x
+    }
+
+    /// FT8 in a QSO, the partner's period near-silent: three stray LSBs, 0.004 LSB rms. WSJT-X
+    /// decodes nothing under 0.5 LSB rms (`lib/decoder.f90:92-93`), so nothing moves the QSO: the
+    /// R-report goes out again and no contact is logged. Before that floor the full pass's a7
+    /// replay found "W9XYZ K1ABC RR73" in this audio, and the boundary keyed the 73 and logged a
+    /// contact the partner never finished. The early and the full pass each take their part of
+    /// the period, as the loop does.
+    #[test]
+    fn ft8_a_near_silent_period_moves_no_qso() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        // On the band a while: past WSJT-X's a7 hide after the tier change.
+        engine.lock().unwrap().age_a7_hide(Duration::from_secs(60));
+        let logged = engine.lock().unwrap().snapshot().logged_tick;
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+
+        let quiet = lsb_clicks(156, 3, 172_800);
+        let early = 41 * 3456;
+        b.queue_capture(quiet[..early].to_vec());
+        tick(&mut state, &engine, b, r, s, 26_807.0);
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(
+            state.decode_in_flight && state.early_done_slot == Some(1),
+            "the early pass dispatches at 11.808 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 26_809.0, 29_000.0),
+            "the early pass drained"
+        );
+        b.queue_capture(quiet[early..].to_vec());
+        tick(&mut state, &engine, b, r, s, 29_399.0);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the full pass dispatches at 14.40 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 29_401.0, 29_990.0),
+            "the full pass drained before the boundary"
+        );
+
+        tick(&mut state, &engine, b, r, s, 30_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ R-10".to_string()],
+            "nothing was heard: the R-report again, not a 73"
+        );
+        let snap = engine.lock().unwrap().snapshot();
+        assert_eq!(snap.logged_tick, logged, "no contact logged");
+        assert_eq!(
+            snap.qso.and_then(|q| q.tx_now).as_deref(),
+            Some("K1ABC W9XYZ R-10"),
+            "still waiting for the RR73"
+        );
+    }
+
     /// A full pass parked for its boundary is only that boundary's. When the clock skips that
     /// boundary (a stall, a clock step), the next one must not take the TX decision from a
     /// decode two periods old: it decodes the period that just ended, as any boundary does.
@@ -29441,6 +30593,80 @@ mod tests {
         ));
     }
 
+    /// A period dropped because the decoder was still busy reaches the diagnostic log, not only
+    /// stderr: a Windows build has no console, and this line is how an operator sees that the
+    /// decoder cannot keep up. The scene runs in a child process of this test binary, because the
+    /// diagnostic log is one per process (`applog::init` is a one-shot) and would otherwise open
+    /// for every other test here.
+    #[test]
+    fn a_dropped_period_reaches_the_diagnostic_log() {
+        const CHILD: &str = "NEXUS_TEST_DROPPED_PERIOD_LOG";
+        if let Some(path) = std::env::var_os(CHILD) {
+            tempo_core::applog::init(path.into());
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            engine.lock().unwrap().set_tier(Tier::Ft8);
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            // The early pass is dispatched and never comes back: the worker is still busy at the
+            // boundary, every time.
+            let _held = ft_midover::HeldWorker::install(&mut state);
+            let mut station = StationSinks::new();
+            let (b, r, s) = (&mut backend, &mut rig, &mut station);
+            tick(&mut state, &engine, b, r, s, 100.0);
+            tick(&mut state, &engine, b, r, s, 15_020.0);
+            backend.queue_capture(vec![0.001f32; 120_000]);
+            let (b, r, s) = (&mut backend, &mut rig, &mut station);
+            tick(&mut state, &engine, b, r, s, 26_808.0);
+            assert!(state.decode_in_flight, "premise: the early pass is out");
+            tick(&mut state, &engine, b, r, s, 30_000.0);
+            assert_eq!(state.dropped_decodes, 1, "premise: the period was dropped");
+            tempo_core::applog::flush();
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-dropped-period-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nexus-diag.log");
+        let me = format!(
+            "{}::a_dropped_period_reaches_the_diagnostic_log",
+            module_path!().split_once("::").map_or("", |(_, rest)| rest)
+        );
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([me.as_str(), "--exact", "--test-threads=1"])
+            .env(CHILD, &path)
+            .output()
+            .expect("run the child");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            shown.contains("running 1 test"),
+            "control: the child ran no test, so it proved nothing:\n{shown}"
+        );
+        assert!(out.status.success(), "the child failed:\n{shown}");
+        let log = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            log.contains("diagnostic log opened"),
+            "control: the child wrote this log:\n{log}"
+        );
+        assert!(
+            log.contains(
+                "decode: worker still busy at the slot 2 boundary — period dropped (total 1)"
+            ),
+            "the dropped period reached the diagnostic log:\n{log}"
+        );
+    }
+
     /// THE 2026-08-17 FIELD INCIDENT (KF4YHC, FTX-1, 1.6.1): a boundary decode that
     /// overruns the T/R period drains AFTER the next boundary has re-stamped
     /// `boundary_keyed`. The same-slot guard no longer covers the job's slot, and
@@ -29543,7 +30769,7 @@ mod tests {
         let stolen = {
             let mut got = None;
             for _ in 0..500 {
-                if let Some(r) = state.decode.try_recv() {
+                if let Some(WorkerOut::Done(r)) = state.decode.try_recv() {
                     got = Some(r);
                     break;
                 }
@@ -29552,7 +30778,7 @@ mod tests {
             got.expect("the straggler decode finished and was intercepted")
         };
         // Replace the worker with a hand-held channel so the test controls delivery.
-        let (late_tx, late_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let (late_tx, late_rx) = std::sync::mpsc::channel::<WorkerOut>();
         state.decode = DecodeWorker {
             job_tx: None,
             result_rx: late_rx,
@@ -29588,7 +30814,7 @@ mod tests {
 
         // NOW the stale result lands — 1.1 s into the odd slot, the field shape
         // (:45+1 s). THE assertion: it must never key a new over.
-        late_tx.send(stolen).unwrap();
+        late_tx.send(WorkerOut::Done(stolen)).unwrap();
         state
             .step(
                 &engine,
@@ -31615,6 +32841,134 @@ mod tests {
         }
     }
 
+    /// A press of the streamed operator's PTT, `id`, held and fed from `from` to `to` ms: whether
+    /// it armed the microphone at any tick.
+    fn press_during(s: &mut MicScene, id: &str, from: f64, to: f64) -> bool {
+        let mut armed = false;
+        let mut t = from;
+        while t <= to {
+            s.hold.hold(id, s.mono(t));
+            let _ = s.frame(t, 0.5);
+            s.step(t);
+            armed |= s.engine.lock().unwrap().mic_armed();
+            t += 20.0;
+        }
+        armed
+    }
+
+    /// ⛔ ONE OWNER WHILE A VOICE MESSAGE PLAYS. The radio loop takes the voice keyer's message
+    /// from the engine at its key; the streamed operator's press is still refused for as long as
+    /// the message's over lasts, so the two never key together. CONTROL: a press after the over
+    /// has ended arms and keys.
+    #[test]
+    fn a_remote_mic_press_is_refused_while_a_voice_message_plays() {
+        let mut s = MicScene::new();
+        s.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .unwrap();
+        s.step(0.0);
+        assert!(s.rig.keyed, "premise: the message keyed the rig");
+        let message = s.backend.played.len();
+        assert!(
+            !press_during(&mut s, MIC_PRESS, 20.0, 1_000.0),
+            "a press armed the microphone under a playing voice message"
+        );
+        assert_eq!(
+            s.backend.played.len(),
+            message,
+            "the operator's voice went out with the message"
+        );
+        // The message's over ends (its second, plus the tail); a fresh press then keys.
+        let mut t = 1_020.0;
+        while s.state.tx_until_ms.is_some() {
+            s.step(t);
+            t += 20.0;
+        }
+        assert!(!s.rig.keyed, "premise: the message's over ended");
+        let again = "10000000-0000-4000-8000-00000000000b";
+        assert!(
+            press_during(&mut s, again, t, t + 400.0),
+            "control: a press after the message did not arm"
+        );
+        assert!(s.rig.keyed, "control: the press did not key");
+    }
+
+    /// ★ Stop still ends a playing voice message at once: the keyer's own Stop and Stop TX each
+    /// flush and unkey it within a tick. The keyer's Stop frees the transmitter in that same tick,
+    /// so a press right after it arms; Stop TX turns transmit off, as it always has.
+    #[test]
+    fn stop_ends_a_playing_voice_message_within_a_tick() {
+        for (name, keyer) in [("the keyer's Stop", true), ("Stop TX", false)] {
+            let mut s = MicScene::new();
+            s.engine
+                .lock()
+                .unwrap()
+                .send_voice(vec![0.05; 12_000])
+                .unwrap();
+            s.step(0.0);
+            s.step(200.0);
+            assert!(s.rig.keyed, "{name}: premise: the message is on the air");
+            s.backend.flush_calls = 0;
+            {
+                let mut e = s.engine.lock().unwrap();
+                if keyer {
+                    e.stop_voice();
+                } else {
+                    e.halt_tx();
+                }
+            }
+            s.step(220.0);
+            assert!(!s.rig.keyed, "{name}: still keyed a tick later");
+            assert!(
+                s.backend.flush_calls > 0,
+                "{name}: the message was not flushed"
+            );
+            assert!(
+                s.state.tx_until_ms.is_none(),
+                "{name}: the PTT hold survived"
+            );
+            if keyer {
+                let snap = s.engine.lock().unwrap().snapshot();
+                assert!(!snap.radio.voice_playing, "{name}: still reads as playing");
+                assert_eq!(snap.radio.tx_busy_reason, None, "{name}: still owns TX");
+                assert!(
+                    press_during(&mut s, MIC_PRESS, 240.0, 600.0),
+                    "{name}: a press after the stop did not arm"
+                );
+            } else {
+                // Stop TX ends the over by the hard-stop, after the tick's voice report: the
+                // message reads as ended one tick later, not at its own deadline.
+                s.step(240.0);
+                let snap = s.engine.lock().unwrap().snapshot();
+                assert!(!snap.radio.voice_playing, "{name}: still reads as playing");
+                assert_eq!(snap.radio.tx_busy_reason, None, "{name}: still owns TX");
+            }
+        }
+    }
+
+    /// A wall-clock step mid-message expires the message's own deadline with the PTT hold's, so
+    /// the message reads as ended in the tick the step is seen, not on the old timebase.
+    #[test]
+    fn a_wall_clock_step_ends_a_playing_voice_message_in_that_tick() {
+        let mut s = MicScene::new();
+        s.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .unwrap();
+        s.step(0.0);
+        s.step(200.0);
+        assert!(s.rig.keyed, "premise: the message is on the air");
+        let playing = |s: &MicScene| s.engine.lock().unwrap().snapshot().radio.voice_playing;
+        assert!(playing(&s), "premise: it reads as playing");
+        stage_clock_step(&mut s.state, -3_600_000.0);
+        s.step(220.0);
+        assert!(!s.rig.keyed, "the transmitter is unkeyed, not held");
+        assert!(!playing(&s), "the message still reads as playing");
+    }
+
     /// ★ R4 (the operator's ruling of 2026-09-27, "Top up to 40 ms"): each tick tops the ring up to
     /// the look-ahead with what is due, so an over plays WITHOUT A GAP at the loop's real tick
     /// lengths (31 ms is `sleep(20)` on Windows' default timer; 40 ms is the longest the
@@ -32396,7 +33750,7 @@ mod tests {
         );
     }
 
-    /// What the SSTV view reads to say how a picture ended (N57b, 2026-09-30: "finished" only for
+    /// What the SSTV view reads to say how a picture ended ("finished" only for
     /// one that played out). A picture that played out still has its whole key-down elapsed when
     /// it stops sending; every early end leaves it short of that. The view says "finished" on the
     /// first and "stopped", or shows the warning line, on the rest, from the progress the Remote
@@ -32692,6 +34046,361 @@ mod tests {
             "the operator's ATU press reaches the radio as a TUNE-UP (2 = Yaesu AC002), not as \
              \"switch the tuner in\" (1 = AC001, the dead-button bug) — saw {:?}",
             log.lock().unwrap()
+        );
+    }
+
+    /// A rig whose tuner REMEMBERS: `u TUNER` answers what the last `U TUNER` left (a tune-up, `2`,
+    /// leaves it in line; `0` takes it out). Starts in line. The returned cell is the radio's own
+    /// state — `Some(in_line)`, set by a test to model a switch made at the radio's front panel —
+    /// and `None` makes `u TUNER` answer `RPRT -11`, a radio that stopped answering the read.
+    #[allow(clippy::type_complexity)]
+    fn mock_rigctld_with_a_tuner_that_remembers(
+        dial_hz: u64,
+    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<Option<bool>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        let tuner = Arc::new(Mutex::new(Some(true)));
+        let tuner2 = Arc::clone(&tuner);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let mut tuner_in = tuner2.lock().unwrap();
+                    let reply = match (l.as_str(), *tuner_in) {
+                        ("f", _) => format!("{dial_hz}\n"),
+                        ("u TUNER", Some(on)) => format!("{}\n", u8::from(on)),
+                        ("u TUNER", None) => "RPRT -11\n".to_string(),
+                        // …and a radio in that state refuses the switch-out too.
+                        ("U TUNER 0", None) => "RPRT -11\n".to_string(),
+                        ("U TUNER 0", _) => {
+                            *tuner_in = Some(false);
+                            "RPRT 0\n".to_string()
+                        }
+                        ("U TUNER 2", _) => {
+                            *tuner_in = Some(true);
+                            "RPRT 0\n".to_string()
+                        }
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    drop(tuner_in);
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, tuner)
+    }
+
+    /// ⭐ #344 ON THE WIRE: the click on ATU ON sends `U TUNER 0` and the button then shows what the
+    /// RADIO says — ATU, the tuner out. A tune-up puts it back in line, and the button reads ATU ON
+    /// again once the cycle is over (`ATU_REPROBE_AFTER_TUNE_MS`), from the radio's answer, not
+    /// from the click.
+    #[test]
+    fn atu_on_switches_the_tuner_out_and_the_button_follows_the_radio() {
+        let engine = atu_engine();
+        let (addr, log, _radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let atu = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.atu;
+
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        assert_eq!(
+            atu(&engine),
+            Some(true),
+            "scene guard: the tuner reads in line"
+        );
+
+        engine
+            .lock()
+            .unwrap()
+            .atu_bypass()
+            .expect("the tuner is in: ATU ON switches it out");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 0"),
+            "the switch-out reaches the radio: {:?}",
+            log.lock().unwrap()
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
+            "a switch-out never runs a tune-up"
+        );
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "the button follows the radio: tuner out"
+        );
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        let reprobes = (ATU_REPROBE_AFTER_TUNE_MS / 400.0) as usize + 3;
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, reprobes);
+        assert!(log.lock().unwrap().iter().any(|l| l == "U TUNER 2"));
+        assert_eq!(
+            atu(&engine),
+            Some(true),
+            "after the tune-up the radio's tuner reads in line again: ATU ON"
+        );
+    }
+
+    /// ⭐ #344, THE RADIO'S OWN HAND: a tuner switched at the front panel shows within a slow
+    /// re-read ([`TUNER_REFRESH_MS`]), and a re-read the radio stops answering keeps what is shown
+    /// — never hides the ATU button — and gives up after [`TUNER_MISS_LIMIT`] misses, so a radio
+    /// that will not answer is not asked forever (a read that times out drops the CAT socket).
+    #[test]
+    fn the_atu_button_follows_a_switch_made_at_the_radio_and_a_silent_radio_is_not_asked_forever() {
+        let engine = atu_engine();
+        let (addr, log, radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let atu = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.atu;
+        let reads = |log: &Arc<Mutex<Vec<String>>>| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "u TUNER")
+                .count()
+        };
+        // Heavy polls on ONE clock, 400 ms apart (`run_heavy_polls` restarts its clock at every
+        // call, which would hide a re-read owed further out than one call reaches).
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut polls = |state: &mut RadioLoop, rig: &mut Rig, ms: f64| {
+            let end = tick + ms;
+            while tick < end {
+                state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
+                tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        polls(&mut state, &mut rig, 800.0);
+        assert_eq!(atu(&engine), Some(true), "scene guard: in line");
+
+        *radio.lock().unwrap() = Some(false); // switched out at the radio
+        polls(&mut state, &mut rig, TUNER_REFRESH_MS + 800.0);
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "the button follows the radio: ATU"
+        );
+
+        *radio.lock().unwrap() = None; // the radio stops answering the read
+        let before = reads(&log);
+        polls(
+            &mut state,
+            &mut rig,
+            TUNER_REFRESH_MS * f64::from(TUNER_MISS_LIMIT + 2),
+        );
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "a missed re-read keeps the state and the button"
+        );
+        assert_eq!(
+            reads(&log) - before,
+            usize::from(TUNER_MISS_LIMIT),
+            "the radio is asked until the miss limit and no more"
+        );
+        let asked = reads(&log);
+        polls(&mut state, &mut rig, TUNER_REFRESH_MS * 5.0);
+        assert_eq!(reads(&log), asked, "…not until the next CAT confirmation");
+    }
+
+    /// Heavy polls on ONE clock, 400 ms apart, from `*tick` (`run_heavy_polls` restarts its clock
+    /// at every call, which would hide a read owed further out than one call reaches).
+    fn heavy_polls_on(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        rig: &mut Rig,
+        tick: &mut f64,
+        ms: f64,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut backend = MockBackend::new();
+        let end = *tick + ms;
+        while *tick < end {
+            state.last_rig_poll = *tick - RIG_POLL_MS - 1.0;
+            *tick += 400.0;
+            state
+                .step(
+                    engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    *tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+    }
+
+    fn tuner_reads(log: &Arc<Mutex<Vec<String>>>) -> usize {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| *l == "u TUNER")
+            .count()
+    }
+
+    /// ⭐ #344, NO LABEL FLICKER: while a tune-up runs, the tuner is not read at all — not by the
+    /// slow refresh, and not by the first probe after a CAT re-confirmation — because mid-cycle a
+    /// Yaesu reads as "off" and the button would drop to ATU. The read comes once the cycle is over.
+    #[test]
+    fn the_tuner_is_never_read_while_a_tune_up_runs() {
+        let engine = atu_engine();
+        let (addr, log, _radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let mut tick = 0.0;
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.atu, Some(true));
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert!(log.lock().unwrap().iter().any(|l| l == "U TUNER 2"));
+        let at_start = tuner_reads(&log);
+        // Mid-cycle, everything that would ask: a CAT re-confirmation and a re-read come due.
+        state.tuner_probed = false;
+        state.tuner_reprobe_at = Some(tick);
+        heavy_polls_on(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut tick,
+            ATU_REPROBE_AFTER_TUNE_MS - 2_000.0,
+        );
+        assert_eq!(
+            tuner_reads(&log),
+            at_start,
+            "no tuner read while the tune-up runs"
+        );
+        // CONTROL: once the cycle is over the read comes, so the silence above was the window.
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 3_000.0);
+        assert!(
+            tuner_reads(&log) > at_start,
+            "…and it is read once the cycle is over"
+        );
+        assert_eq!(engine.lock().unwrap().snapshot().radio.atu, Some(true));
+    }
+
+    /// ⭐ #344, A TIMED-OUT RE-READ DOES NOT HIDE THE BUTTON: a re-read that times out drops the CAT
+    /// socket, and the link comes back through a re-confirmation whose first probe used to count as
+    /// "this radio has no tuner" when it missed too. A radio that has answered keeps its ATU button;
+    /// only one that never answered is "no tuner".
+    #[test]
+    fn a_missed_tuner_probe_after_a_reconfirmation_keeps_the_atu_button() {
+        let engine = atu_engine();
+        let (addr, _log, radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let mut tick = 0.0;
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.atu, Some(true));
+
+        *radio.lock().unwrap() = None; // the radio misses the read…
+        state.tuner_probed = false; // …on the first probe of a re-confirmation
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.atu,
+            Some(true),
+            "a miss keeps the button and its state"
+        );
+
+        // CONTROL: a radio that has never answered is "no tuner" — no button, as before.
+        let fresh = atu_engine();
+        let mut state2 = loop_state();
+        let mut rig2 = Rig::rigctld(&addr);
+        let mut tick2 = 0.0;
+        heavy_polls_on(&fresh, &mut state2, &mut rig2, &mut tick2, 800.0);
+        assert_eq!(fresh.lock().unwrap().snapshot().radio.atu, None);
+    }
+
+    /// ⭐ #344: a switch-out waits out a moment this loop may not drive the radio (a CAT hold, a
+    /// handoff) instead of being thrown away, and one the radio refuses is SAID on the CAT line —
+    /// the menu already answered, so a silent drop would leave the operator guessing.
+    #[test]
+    fn a_held_switch_out_waits_and_a_refused_one_is_said() {
+        let engine = atu_engine();
+        let (addr, log, radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let mut tick = 0.0;
+        let sent = |log: &Arc<Mutex<Vec<String>>>| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "U TUNER 0")
+                .count()
+        };
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert!(
+            engine.lock().unwrap().snapshot().radio.atu_switch_out,
+            "offered on Hamlib"
+        );
+
+        engine.lock().unwrap().atu_bypass().unwrap();
+        state.handoff_deferred = true; // `may_key()` is false
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(
+            sent(&log),
+            0,
+            "not sent while the loop may not drive the radio"
+        );
+        state.handoff_deferred = false;
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(sent(&log), 1, "…and sent once it may, not thrown away");
+
+        // The radio refuses it: the CAT line says so.
+        *radio.lock().unwrap() = Some(true);
+        heavy_polls_on(
+            &engine,
+            &mut state,
+            &mut rig,
+            &mut tick,
+            TUNER_REFRESH_MS + 800.0,
+        );
+        assert_eq!(engine.lock().unwrap().snapshot().radio.atu, Some(true));
+        engine.lock().unwrap().atu_bypass().unwrap();
+        *radio.lock().unwrap() = None;
+        heavy_polls_on(&engine, &mut state, &mut rig, &mut tick, 800.0);
+        assert_eq!(sent(&log), 2);
+        let detail = engine.lock().unwrap().snapshot().radio.cat_detail;
+        assert!(
+            detail.contains("not switched out"),
+            "the refusal is said on the CAT line: {detail:?}"
         );
     }
 
@@ -33250,6 +34959,76 @@ mod tests {
             1,
             "the rig accepted it, so the tracker holds and the tone is never re-sent — {:?}",
             log.lock().unwrap()
+        );
+    }
+
+    /// The SSTV screen's ISS downlink picked after a repeater, AT THE WIRE. The app's own FM
+    /// channels are simplex with no tone (`Engine::fm_repeater_config`), so the radio is TOLD so,
+    /// and a machine tuned after the channel is told its own shift and tone again. The pick used
+    /// to send none of it: the configuration the loop pushes had not changed, so the radio kept
+    /// the machine's shift and tone on the channel.
+    #[test]
+    fn the_sstv_iss_downlink_after_a_repeater_tells_the_radio_simplex_and_no_tone() {
+        let engine = repeater_engine();
+        // Remembers its dial, so the loop's read-back never takes a QSY for a knob move.
+        let (addr, log) = mock_stateful_rigctld(145_310_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend| {
+            for _ in 0..4 {
+                t += 500.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        // The shift, offset and tone lines the radio was sent from `from` on.
+        let fm_lines = |from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| ["R ", "O ", "C "].iter().any(|p| l.starts_with(p)))
+                .cloned()
+                .collect()
+        };
+        let machine = ["R -", "O 600000", "C 1035"].map(String::from).to_vec();
+
+        run(&mut state, &mut rig, &mut backend);
+        // CONTROL: the machine reached the radio, or the lines below prove nothing.
+        assert_eq!(fm_lines(0), machine, "the machine");
+
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().sstv_tune(145.800, "2m", "FM");
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            ["R None", "C 0"].map(String::from).to_vec(),
+            "the ISS downlink: simplex, no tone"
+        );
+
+        let mark = log.lock().unwrap().len();
+        engine
+            .lock()
+            .unwrap()
+            .repeater_tune(145.310, "minus", 600_000, 103.5)
+            .unwrap();
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            machine,
+            "the machine again after the channel"
         );
     }
 
@@ -37533,7 +39312,7 @@ mod tests {
 
         assert_eq!(
             split_verbs(&seen),
-            vec!["S 1 VFOB", "I 145965000", "X PKTLSB 3000"],
+            vec!["S 1 VFOB", "I 145965000", "X PKTLSB -1"],
             "the uplink rides VFO B in the mirrored data submode"
         );
         let lines = seen.lock().unwrap().clone();
@@ -38135,12 +39914,12 @@ mod tests {
     }
 
     #[test]
-    fn mode_retry_ladder_tries_passband0_then_falls_back_to_plain_usb() {
+    fn mode_retry_ladder_asks_no_width_then_falls_back_to_plain_usb() {
         // A rig whose CAT actively refuses the DATA submode (RPRT -1 to every `M PKT*`,
-        // the IC-7610-report shape). The bounded retry must walk the resilience ladder:
-        //   rung 1: `M PKTUSB 3000` (the full DATA passband),
-        //   rung 2: `M PKTUSB 0` (filter-agnostic) past MODE_SET_PASSBAND0_AFTER fails,
-        //   rung 3: at the budget, ONE plain `M USB -1` — landing the operator a single
+        // the IC-7610-report shape). The bounded retry walks the ladder:
+        //   every try: `M PKTUSB -1` — no width, as WSJT-X asks (#82: the old `M PKTUSB 0`
+        //           rung, "use your default width", is what put a Flex on 6 kHz),
+        //   at the budget, ONE plain `M USB -1` — landing the operator a single
         //           front-panel DATA press from working, not on a dead-end note.
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let mut backend = MockBackend::new();
@@ -38168,14 +39947,11 @@ mod tests {
 
         let cmds = log.lock().unwrap().clone();
         let modes: Vec<&String> = cmds.iter().filter(|c| c.starts_with("M ")).collect();
-        assert_eq!(
-            modes.first().map(|s| s.as_str()),
-            Some("M PKTUSB 3000"),
-            "rung 1 — the normal DATA passband: {modes:?}"
-        );
         assert!(
-            modes.iter().any(|c| c.as_str() == "M PKTUSB 0"),
-            "rung 2 — the filter-agnostic retry was sent: {modes:?}"
+            modes[..modes.len() - 1]
+                .iter()
+                .all(|c| c.as_str() == "M PKTUSB -1"),
+            "every try asks for the DATA mode with no width: {modes:?}"
         );
         assert_eq!(
             modes.last().map(|s| s.as_str()),
@@ -38257,18 +40033,16 @@ mod tests {
         (addr, log)
     }
 
+    /// ⭐ ISSUE #82 (ve3wej, Flex 6400): a radio that refuses a DATA mode WITH a width
+    /// (`M PKTUSB 3000` → `RPRT -1`) walked the ladder to `M PKTUSB 0` — "use YOUR default width",
+    /// 6 kHz on a Flex — and then argued with it. With no width asked (WSJT-X's
+    /// `RIG_PASSBAND_NOCHANGE`) there is nothing to refuse: the first `M PKTUSB -1` lands, and the
+    /// filter-agnostic rung that handed the Flex its 6 kHz is never reached.
     #[test]
-    fn the_default_width_rung_puts_the_intended_width_back() {
-        // ISSUE #82 (ve3wej, Flex 6400): "the filter lands at 6000 Hz on a mode/band change."
-        // Rung 2 of the ladder commands `M PKTUSB 0` — RIG_PASSBAND_NORMAL, i.e. "use YOUR
-        // default width" — and a Flex's default is the full 6 kHz SSB filter. The rung is
-        // there to get the MODE accepted, and it must keep doing that; what it must not do is
-        // hand the operator a filter they never asked for. So once the mode is in, the
-        // intended 3 kHz is asserted again on its own. Here the rig was merely settling, so
-        // the width lands and the operator ends on PKTUSB at 3000 — never 6000.
+    fn a_radio_that_refuses_a_width_takes_its_digital_mode_at_the_first_ask() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let mut backend = MockBackend::new();
-        let (addr, log) = mock_width_rejecting_rigctld(MODE_SET_PASSBAND0_AFTER as usize);
+        let (addr, log) = mock_width_rejecting_rigctld(usize::MAX);
         let mut rig = Rig::rigctld(&addr);
         let mut state = loop_state();
         state.last_mode = String::new();
@@ -38288,106 +40062,17 @@ mod tests {
                 )
                 .unwrap();
         }
-
-        let cmds = log.lock().unwrap().clone();
-        let modes: Vec<String> = cmds
+        let modes: Vec<String> = log
+            .lock()
+            .unwrap()
             .iter()
             .filter(|c| c.starts_with("M "))
             .cloned()
             .collect();
-        let rung2 = modes
-            .iter()
-            .position(|c| c == "M PKTUSB 0")
-            .unwrap_or_else(|| {
-                panic!("rung 2 (the filter-agnostic retry) must be reached: {modes:?}")
-            });
-        assert_eq!(
-            modes.get(rung2 + 1).map(String::as_str),
-            Some("M PKTUSB 3000"),
-            "the width the operator's mode needs is asserted again right after the mode \
-             landed at the rig's own default: {modes:?}"
-        );
-        assert_eq!(
-            modes.last().map(String::as_str),
-            Some("M PKTUSB 3000"),
-            "the rig is left on the intended width, not on its 6 kHz default: {modes:?}"
-        );
+        assert_eq!(modes, ["M PKTUSB -1"], "one ask, no width");
         assert_eq!(state.last_mode, "PKTUSB", "the mode is applied");
         assert_eq!(state.mode_giveup, None, "nothing was given up");
-        assert_eq!(
-            state.mode_fail_count, 0,
-            "the width re-assert must not re-enter the retry ladder"
-        );
-    }
-
-    #[test]
-    fn a_rig_that_keeps_refusing_the_width_is_told_on_once() {
-        // The other half: a rig that genuinely will not take the width→DATA-filter mapping.
-        // The mode still has to land (that is what the rung is for), the width is attempted
-        // ONCE — not on every tick — and the operator is TOLD, so a 6 kHz filter is
-        // explainable instead of mysterious.
-        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
-        let mut backend = MockBackend::new();
-        let (addr, log) = mock_width_rejecting_rigctld(usize::MAX);
-        let mut rig = Rig::rigctld(&addr);
-        let mut state = loop_state();
-        state.last_mode = String::new();
-        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
-        let mut station = StationSinks::new();
-        let mut detail_after_rung2 = None;
-        for i in 0..(MODE_SET_PASSBAND0_AFTER + 6) {
-            state
-                .step(
-                    &engine,
-                    &mut backend,
-                    &mut rig,
-                    &sinks,
-                    f64::from(i),
-                    &mut ra,
-                    &mut rr,
-                    &mut station,
-                )
-                .unwrap();
-            if state.last_mode == "PKTUSB" && detail_after_rung2.is_none() {
-                detail_after_rung2 = Some(engine.lock().unwrap().snapshot().radio.cat_detail);
-            }
-        }
-
-        let cmds = log.lock().unwrap().clone();
-        let modes: Vec<String> = cmds
-            .iter()
-            .filter(|c| c.starts_with("M "))
-            .cloned()
-            .collect();
-        let rung2 = modes
-            .iter()
-            .position(|c| c == "M PKTUSB 0")
-            .unwrap_or_else(|| {
-                panic!("rung 2 (the filter-agnostic retry) must be reached: {modes:?}")
-            });
-        let after: Vec<&String> = modes[rung2 + 1..].iter().collect();
-        assert_eq!(
-            after
-                .iter()
-                .filter(|c| c.as_str() == "M PKTUSB 3000")
-                .count(),
-            1,
-            "the width is re-asserted exactly once — a refusal must not spam the CAT link \
-             every tick: {modes:?}"
-        );
-        let detail = detail_after_rung2.expect("the mode must land on the filter-agnostic rung");
-        assert!(
-            detail.contains("filter width") && detail.contains("3000"),
-            "the operator is told the rig kept its own filter width: {detail:?}"
-        );
-        assert_eq!(
-            state.last_mode, "PKTUSB",
-            "the mode still landed — the rung's whole purpose"
-        );
-        assert_eq!(
-            state.mode_giveup, None,
-            "a refused WIDTH is not a refused MODE: the give-up loop must not come back"
-        );
+        assert_eq!(state.mode_fail_count, 0, "and nothing was retried");
     }
 
     /// A Flex over SmartSDR CAT: it ACCEPTS `M <mode> <width>` with a cheerful `RPRT 0` and
@@ -38488,60 +40173,35 @@ mod tests {
         said
     }
 
-    /// ⭐ ISSUE #349 (ve3wej, Flex 6400 over SmartSDR DAX, 1.14.0 — the THIRD report of this
-    /// filter): "whenever the mode is selected as a digital mode, coming from cw or phone, the
-    /// radio goes to 6000 Hz", and, asked what the app said: "it said nothing."
+    /// ⭐ ISSUES #82 / #349 / #107 — A DIGITAL MODE NEVER COMMANDS A FILTER WIDTH (operator ruling:
+    /// match WSJT-X). ve3wej's Flex 6400 over SmartSDR CAT: "whenever the mode is selected as a
+    /// digital mode, coming from cw or phone, the radio goes to 6000 Hz." Nexus asked for 3 kHz with
+    /// every DATA mode (`M PKTUSB 3000`), read the width back, asked again, and told the operator
+    /// when the radio kept its own; SmartSDR answered by landing on its own 6 kHz default. An FTdx10
+    /// (#107) was clipped the other way, held to 3 kHz when its operator wanted 4.
     ///
-    /// #114's fix — command the width, then READ BACK what the rig actually took, because this
-    /// radio answers `RPRT 0` and keeps its own filter — went in on the STEADY-STATE retune
-    /// only. Clicking a section raises `immediate_retune`
-    /// (`Engine::set_operating_mode_with_reset`), which is the FORCE path, and that path asked
-    /// only whether the MODE had landed. So the one gesture in his report was the one gesture
-    /// with no width check, and the app reported success over a 6 kHz filter — which is
-    /// precisely what "it said nothing" describes.
-    ///
-    /// ⚠️ NEEDS BENCH, exactly as #114 is: what is pinned here is that the read-back is ISSUED
-    /// and that the operator is TOLD when the rig keeps its own filter. Whether a Flex then
-    /// TAKES the second width is hardware, and no mock can answer it.
+    /// WSJT-X never sends a width: every `rig_set_mode` it makes passes `RIG_PASSBAND_NOCHANGE`
+    /// (`HamlibTransceiver.cpp:929`, `:1009`, `:1087`). So the click is `M PKTUSB -1`, nothing reads
+    /// the width back to argue with the radio, and the operator is told nothing about a filter they
+    /// set themselves. The mock is the Flex of the report (it takes the mode and stays on 6 kHz).
     #[test]
-    fn an_operator_mode_click_reads_back_the_width_the_rig_took() {
+    fn a_digital_mode_click_asks_for_no_width_and_leaves_the_radios_filter() {
         let (addr, log) = mock_flex_keeping_its_own_filter(14_250_000);
         let detail = detail_after_clicking_digital(&addr);
 
         let cmds = log.lock().unwrap().clone();
-        let widths: Vec<&String> = cmds
-            .iter()
-            .filter(|c| c.as_str() == "M PKTUSB 3000")
-            .collect();
+        let data_modes: Vec<&String> = cmds.iter().filter(|c| c.starts_with("M PKT")).collect();
         assert!(
-            !widths.is_empty(),
-            "control: the click itself must command the DATA width, or nothing below is about \
-             this bug at all: {cmds:?}"
+            !data_modes.is_empty(),
+            "control: the click must command the DATA mode, or nothing below is about it: {cmds:?}"
         );
         assert!(
-            cmds.iter().any(|c| c == "m"),
-            "the width the rig TOOK has to be read back — a bare RPRT 0 is not evidence that a \
-             filter moved: {cmds:?}"
+            data_modes.iter().all(|c| c.ends_with(" -1")),
+            "every DATA mode goes out with RIG_PASSBAND_NOCHANGE, as WSJT-X sends it: {data_modes:?}"
         );
         assert!(
-            widths.len() >= 2,
-            "…and once the read-back shows 6 kHz, the width the mode needs is asserted again: \
-             {cmds:?}"
-        );
-        assert!(
-            detail.contains("6000") && detail.contains("3000"),
-            "the operator is TOLD which filter the rig is on and which one FT8 needs — 'it said \
-             nothing' is the report: {detail:?}"
-        );
-
-        // CONTROL, and it is the whole reason this is two scenes: a radio that answers the same
-        // gesture with a filter near the one asked for must say NOTHING. Without it the
-        // assertions above would pass for a check that complains unconditionally.
-        let (ok_addr, _ok_log) = mock_stateful_rigctld(14_250_000, false);
-        let quiet = detail_after_clicking_digital(&ok_addr);
-        assert!(
-            !quiet.contains("filter"),
-            "a rig on a sane filter is not a fault to report: {quiet:?}"
+            !detail.contains("filter"),
+            "the radio's own filter is not a fault to report: {detail:?}"
         );
     }
 
@@ -39078,24 +40738,18 @@ mod tests {
         );
     }
 
-    /// ⭐ ISSUE #67: *the rig's RX filter is re-commanded on every frequency change.*
+    /// ⭐ ISSUES #67 / #82 / #107: *the rig's RX filter is re-commanded on a frequency change.*
     ///
-    /// `passband_for` forces 3 kHz on the DATA submodes on purpose (an FTDX10 recalls a
-    /// 600 Hz DATA filter and clips FT8), but the force retune sent that width on EVERY
-    /// retune — gated on nothing but "the mode word is non-empty". In FT8 the mode word never
-    /// changes, so every spot click, Needed pick and in-band QSY re-commanded the filter:
-    /// a DATA-filter switch and a Width-display pop per frequency change, on a radio already
-    /// set exactly the way the operator set it.
+    /// #67 stopped the in-band re-send of the 3 kHz DATA width; a mode or band change still sent
+    /// it. The operator's ruling since is to match WSJT-X, which never commands a width, so now
+    /// no leg of the scene does: the mode change onto the digital section, two in-band QSYs, and
+    /// a band change with the mode unchanged each go out as `M PKTUSB -1` (`RIG_PASSBAND_NOCHANGE`),
+    /// and the radio keeps the DATA filter its operator set.
     ///
     /// Measured as the `M` lines WITH their passband, because the width IS the subject —
     /// asserting mode words alone would pass either way.
-    ///
-    /// The band-crossing leg is not decoration, it is why this is NOT gated on `mode_changed`
-    /// alone: a band change routinely arrives with the mode unchanged, and a band change is
-    /// exactly when the rig recalls its narrow per-band DATA filter. Drop that leg and the
-    /// FT8-clipping bug the 3 kHz force exists for comes straight back.
     #[test]
-    fn an_in_band_qsy_leaves_the_rig_filter_alone_but_a_band_change_still_forces_3_khz() {
+    fn no_retune_in_a_digital_mode_re_commands_the_filter_width() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         {
             let mut e = engine.lock().unwrap();
@@ -39128,7 +40782,7 @@ mod tests {
         };
 
         // Settle onto the digital section: the mode really does change here (the loop opens
-        // on plain USB), so the width must go out.
+        // on plain USB).
         run(&mut state, &mut rig, &mut backend, t);
         // Two in-band QSYs — a spot click and a Needed pick inside 20 m. Same mode, same band.
         for hz in [14.080, 14.090] {
@@ -39136,7 +40790,7 @@ mod tests {
             engine.lock().unwrap().set_frequency(hz, "20m", "USB");
             run(&mut state, &mut rig, &mut backend, t);
         }
-        // …then 20 m → 15 m with the mode UNCHANGED: the band-stack case the force exists for.
+        // …then 20 m → 15 m with the mode UNCHANGED: the band-stack case.
         t += 20.0;
         engine.lock().unwrap().set_frequency(21.074, "15m", "USB");
         run(&mut state, &mut rig, &mut backend, t);
@@ -39151,12 +40805,12 @@ mod tests {
         assert_eq!(
             modes,
             vec![
-                "M PKTUSB 3000", // the mode change onto the digital section
-                "M PKTUSB -1",   // in-band dial move — NOCHANGE, hands off the operator's filter
+                "M PKTUSB -1", // the mode change onto the digital section
+                "M PKTUSB -1", // in-band dial moves
                 "M PKTUSB -1",
-                "M PKTUSB 3000", // band change: the rig may have just recalled a 600 Hz DATA filter
+                "M PKTUSB -1", // a band change: the radio's own DATA filter for that band stands
             ],
-            "the width may only be re-commanded when the mode or the band moved"
+            "a digital mode never re-commands the width"
         );
     }
 
@@ -40059,7 +41713,7 @@ mod tests {
         // leaves the rig in USB would decode nothing while looking perfectly tuned.
         //
         // ⚠️ SCOPE: this proves what we SEND, not what a rig accepts — a rigctld dummy accepts
-        // bogus mode tokens (see reference-build-verify-limits), so only the radio can confirm
+        // bogus mode tokens, so only the radio can confirm
         // the far end. KD9TAW confirmed on the real IC-9700 that APRS Tune sets FM.
         let modes: Vec<String> = log
             .lock()
@@ -41711,6 +43365,85 @@ mod tests {
             "(reporter held, upload applied): inside Winter Field Day's window, an hour before \
              it, at its end, with the master switch off, inside ARRL Field Day's window; then \
              (held during the event, held after it, the switch)"
+        );
+    }
+
+    /// JTTY's spots reach PSK Reporter's batch from the engine's queue, in mode JTTY with the
+    /// sender, RF frequency, SNR and start the receive side gave them, and are taken once. While
+    /// uploading is off they are still taken, and dropped, so the queue cannot grow.
+    #[test]
+    fn jtty_spots_join_the_psk_reporter_batch_as_mode_jtty() {
+        use tempo_app::engine::jtty_rx::{JttyTerminal, JttyUpdate};
+        let queued = || {
+            let mut e = Engine::with_settings(tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                dial_mhz: 14.090,
+                pskreporter: true,
+                ..tempo_app::settings::Settings::default()
+            });
+            e.set_jtty_armed(true);
+            e.feed_rx_audio(&[0.0; 1200]);
+            let session = e.take_jtty_audio()[0].session;
+            let cq = |id: i64, start_s: f64| JttyUpdate {
+                message_id: id,
+                text: "CQ W1AW CQ".into(),
+                freq_hz: 1500.0,
+                start_s,
+                latest_s: start_s,
+                terminal: JttyTerminal::Complete,
+                snr_db: -7,
+            };
+            e.apply_jtty_updates(session, &[cq(1, 2.0), cq(2, 12.0)]);
+            e
+        };
+        let mut e = queued();
+        let got = jtty_psk_reports(&mut e, true);
+        assert_eq!(
+            got.iter()
+                .map(|s| (s.call.as_str(), s.freq_hz, s.snr, s.mode.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("W1AW", 14_091_500, -7, "JTTY"); 2]
+        );
+        assert_eq!(
+            got[1].time_secs - got[0].time_secs,
+            10,
+            "each at its message's start"
+        );
+        assert!(
+            got.iter().all(|s| s.grid.is_empty()),
+            "no grid in the message, none sent"
+        );
+        assert!(jtty_psk_reports(&mut e, true).is_empty(), "taken once");
+        // With a grid in the message, the spot carries it, as WSJT-X's does.
+        let mut g = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            dial_mhz: 14.090,
+            pskreporter: true,
+            ..tempo_app::settings::Settings::default()
+        });
+        g.set_jtty_armed(true);
+        g.feed_rx_audio(&[0.0; 1200]);
+        let session = g.take_jtty_audio()[0].session;
+        let cq = |id: i64, start_s: f64| JttyUpdate {
+            message_id: id,
+            text: "CQ W1AW FN31".into(),
+            freq_hz: 1500.0,
+            start_s,
+            latest_s: start_s,
+            terminal: JttyTerminal::Complete,
+            snr_db: -7,
+        };
+        g.apply_jtty_updates(session, &[cq(1, 2.0), cq(2, 12.0)]);
+        let grids: Vec<String> = jtty_psk_reports(&mut g, true)
+            .into_iter()
+            .map(|s| s.grid)
+            .collect();
+        assert_eq!(grids, ["FN31", "FN31"]);
+        let mut off = queued();
+        assert!(jtty_psk_reports(&mut off, false).is_empty());
+        assert!(
+            off.take_jtty_spots().is_empty(),
+            "taken, and dropped, while uploading is off"
         );
     }
 

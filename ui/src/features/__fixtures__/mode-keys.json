@@ -36,7 +36,9 @@
     { "mode": "QPSK31", "submode": null, "stored": "QPSK31", "key": "QPSK31", "note": "the PSK cockpit's QPSK31, and an ADIF 2 log's" },
     { "mode": "PSK", "submode": null, "stored": "PSK", "key": "PSK", "note": "a bare PSK names no PSK mode and is never guessed into one" },
     { "mode": "MSK144", "submode": null, "stored": "MSK144", "key": "MSK144" },
-    { "mode": "JT65", "submode": null, "stored": "JT65", "key": "JT65" }
+    { "mode": "JT65", "submode": null, "stored": "JT65", "key": "JT65" },
+    { "mode": "JTTY", "submode": null, "stored": "JTTY", "key": "JTTY", "note": "how WSJT-X logs JTTY, and how a JTTY contact logged here is written" },
+    { "mode": "MFSK", "submode": "JTTY", "stored": "JTTY", "key": "JTTY", "note": "JTTY filed under its family; the export writes it back the same way" }
   ],
   "spellings": [
     { "stored": " ft8 ", "key": "FT8", "note": "surrounding space and case" },
@@ -96,6 +98,28 @@
       "heard": { "call": "C5R", "band": "20m", "mode": "SSB" },
       "alert": { "tags": ["NewMode"], "mode": "Phone", "exactMode": "SSB", "headline": "New mode — SSB The Gambia (any band)" },
       "cardNewMode": true
+    },
+    {
+      "name": "heard on JTTY, worked only on FT8 and RTTY: a new mode",
+      "entity": "The Gambia",
+      "log": [
+        { "call": "C56YK", "band": "20m", "mode": "FT8", "confirmed": true },
+        { "call": "C5AAA", "band": "40m", "mode": "RTTY", "confirmed": false }
+      ],
+      "heard": { "call": "C5R", "band": "20m", "mode": "JTTY" },
+      "alert": { "tags": ["NewMode"], "mode": "JTTY", "exactMode": "JTTY", "headline": "New mode — JTTY The Gambia (any band)" },
+      "cardNewMode": true
+    },
+    {
+      "name": "a JTTY contact on another band: nothing new",
+      "entity": "The Gambia",
+      "log": [
+        { "call": "C56YK", "band": "20m", "mode": "FT8", "confirmed": true },
+        { "call": "C5AAA", "band": "40m", "mode": "JTTY", "confirmed": false }
+      ],
+      "heard": { "call": "C5R", "band": "20m", "mode": "JTTY" },
+      "alert": null,
+      "cardNewMode": false
     },
     {
       "name": "a bare MFSK is not guessed to be FT4",

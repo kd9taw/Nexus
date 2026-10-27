@@ -372,8 +372,9 @@ const NOT_IMPLEMENTED: &str = "RPRT -11\n";
 /// this module.
 ///
 /// A real rigctld client never sends this. Hamlib's own protocol has no line ending in
-/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class.
-fn looks_like_http(line: &str) -> bool {
+/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class. The PstRotatorAz link's
+/// rotctld port asks the same question ([`crate::pstrotator`]).
+pub(crate) fn looks_like_http(line: &str) -> bool {
     let l = line.trim_end();
     // "GET / HTTP/1.1", "POST /x HTTP/1.0" — the version token is the tell, and it is what a
     // browser must send. Matching the METHOD alone would be wrong: `G` is a real rigctld verb.
@@ -389,6 +390,18 @@ fn looks_like_http(line: &str) -> bool {
 /// ClientHello, a port scanner — and continuing to read it is what let a web page walk its
 /// payload past the parser one line at a time.
 const MAX_CONSECUTIVE_UNKNOWN: u32 = 3;
+
+/// The most bytes one request line may hold before the connection is dropped ([`read_capped_line`]).
+///
+/// A rigctld request line is a verb and a few arguments — tens of bytes; the longest Nexus serves
+/// (`\set_split_freq_mode`, `L Sub <level> <value>`) is well under a hundred. Hamlib bounds every
+/// field it reads rather than a whole line — `MAXARGSZ` is 511 bytes per argument and the command
+/// name is capped at 31 (`tests/rigctl_parse.c`, 4.7.1) — so it never grows one allocation to a
+/// line's length. This server reads a whole line, so it caps the line: generously above any real
+/// one, and far below a size that a peer could use to make a single connection buffer without
+/// bound (one line and no newline, forever). A line past this is not rigctld, and is refused whole
+/// before any of it is parsed or relayed to the radio.
+const MAX_LINE_BYTES: usize = 4 * 1024;
 
 /// Every verb Hamlib's rigctld knows, as its one-letter form (where it has one) and its long
 /// name: Hamlib 4.7.1's own command table (`test_list[]` in `tests/rigctl_parse.c`), row for row.
@@ -847,6 +860,52 @@ fn parse_ptt_set(line: &str) -> Option<bool> {
     }
 }
 
+/// What [`read_capped_line`] found.
+enum CappedLine {
+    /// One request line, its trailing newline (and a preceding `\r`) stripped, within the cap.
+    Line(String),
+    /// The line reached [`MAX_LINE_BYTES`] with no newline: no rigctld client sends one, so the
+    /// caller drops the connection rather than buffer the rest.
+    TooLong,
+    /// End of stream, a read error, or bytes that were not UTF-8 — the caller ends the loop,
+    /// exactly as it did when it read through [`std::io::BufRead::lines`] (whose iterator stops on
+    /// the first of each).
+    Done,
+}
+
+/// Read one request line from `reader`, holding at most `cap` bytes of it in memory.
+///
+/// The broker read every line through [`std::io::BufRead::lines`], which grows one allocation to
+/// the next `\n` with no bound — so a client that sends a line and no newline makes a single
+/// connection buffer without limit. This reads a line's worth and no further: `take(cap + 1)`
+/// yields the first `\n` within the cap (the line, newline stripped as `lines` strips it), or one
+/// byte past the cap with no newline — proof the line is too long, and the most it ever holds.
+/// A line body of exactly `cap` bytes is still a line; `cap + 1` with no newline is not.
+fn read_capped_line<R: BufRead>(reader: &mut R, cap: usize) -> CappedLine {
+    let mut buf: Vec<u8> = Vec::new();
+    // A reborrow so `take` limits THIS read without consuming the caller's reader.
+    let mut limited = std::io::Read::take(&mut *reader, cap as u64 + 1);
+    match limited.read_until(b'\n', &mut buf) {
+        Ok(0) => CappedLine::Done,
+        Ok(_) => {
+            if buf.last() != Some(&b'\n') && buf.len() > cap {
+                return CappedLine::TooLong;
+            }
+            if buf.last() == Some(&b'\n') {
+                buf.pop();
+                if buf.last() == Some(&b'\r') {
+                    buf.pop();
+                }
+            }
+            match String::from_utf8(buf) {
+                Ok(line) => CappedLine::Line(line),
+                Err(_) => CappedLine::Done,
+            }
+        }
+        Err(_) => CappedLine::Done,
+    }
+}
+
 /// Serve one client connection until EOF or `q`. Each line is one request.
 pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     let mut writer = match stream.try_clone() {
@@ -858,7 +917,7 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "?".into());
     backend.client_event(&peer, true);
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
     // Track this connection's PTT so a dropped/EOF'd broker client (WSJT-X or N1MM
     // crashing / closing mid-transmit) can't leave the rig keyed forever — the
     // original code only ever unkeyed on an explicit `T 0`.
@@ -867,8 +926,17 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     // protocol must be hung up on, not patiently answered line after line while its payload
     // walks past the parser.
     let mut unknown_run: u32 = 0;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    loop {
+        let line = match read_capped_line(&mut reader, MAX_LINE_BYTES) {
+            CappedLine::Line(line) => line,
+            CappedLine::TooLong => {
+                crate::civ::diag::note(
+                    "rigctld_server: a request line past the length cap — dropping the connection (not a rig client)",
+                );
+                break;
+            }
+            CappedLine::Done => break,
+        };
         if looks_like_http(&line) {
             crate::civ::diag::note(
                 "rigctld_server: HTTP request line on the broker port — dropping (a web page, not a rig client)",
@@ -2628,9 +2696,9 @@ mod browser_smuggling_tests {
         assert_eq!(rig.freq_hz(), 14_074_000, "the line after it never ran");
     }
 
-    /// CONTROL: a long line is judged by its first word like any other. Each of these is 64 KiB
-    /// and begins with a verb's letter or the long form's backslash, and none of them is a verb;
-    /// the third is hung up on before anything after it runs.
+    /// CONTROL: a 64 KiB line is past the length cap, so the FIRST of these ends the connection
+    /// before its first word is ever judged — a line this long is not rigctld whatever it begins
+    /// with, and none of these begins with a verb anyway. Nothing after it runs.
     #[test]
     fn three_long_lines_in_no_rigctld_vocabulary_are_hung_up_on() {
         let rig = Arc::new(super::tests::MockRig::default());
@@ -2645,6 +2713,148 @@ mod browser_smuggling_tests {
         assert!(
             !said.contains("RPRT 0"),
             "nothing after them answered: {said:?}"
+        );
+    }
+
+    /// Drip `total` to the server in `chunk`-sized writes with a flush between each, so one line
+    /// arrives split across many small reads the way a slow (or deliberate) peer sends it. Returns
+    /// whether the server hung up and what it answered — [`hung_up_on`]'s shape, one writer apart.
+    fn hung_up_on_dripped(
+        total: &[u8],
+        chunk: usize,
+        rig: &Arc<super::tests::MockRig>,
+    ) -> (bool, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        // One line, split at write boundaries that mean nothing to the server: it must decide on
+        // the bytes it has accumulated, never on where a write happened to end.
+        for part in total.chunks(chunk.max(1)) {
+            if c.write_all(part).is_err() {
+                break; // the server hung up mid-line — the rest of the line is moot
+            }
+            let _ = c.flush();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let mut said = Vec::new();
+        let mut buf = [0u8; 256];
+        let closed = loop {
+            match c.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => said.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break false
+                }
+                Err(_) => break true,
+            }
+        };
+        drop(c);
+        let _ = h.join();
+        (closed, String::from_utf8_lossy(&said).into_owned())
+    }
+
+    /// A single line longer than the cap is refused whole: the connection ends and nothing in that
+    /// line reaches the radio — even though the line BEGINS exactly like a command that would
+    /// retune the rig to 21.074 MHz. Read as one line (as the broker did before the cap), it would
+    /// have set the dial; the good line after it would never be read.
+    #[test]
+    fn a_line_past_the_length_cap_never_reaches_the_radio() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(bytes.len() + MAX_LINE_BYTES, b'x');
+        bytes.extend_from_slice(b"\nF 18100000\n");
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(closed, "a line past the cap hangs up: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the over-long line reached the radio"
+        );
+        assert!(
+            !said.contains("RPRT 0"),
+            "the over-long line answered nothing: {said:?}"
+        );
+    }
+
+    /// A client that sends a line and never a newline is bounded and dropped, not buffered without
+    /// end. The whole write (far past the cap, no `\n`) holds the write side open, so an end of
+    /// stream is the server's own doing — before the cap it would read on forever waiting for a
+    /// newline that never comes, and nothing in the line reaches the radio.
+    #[test]
+    fn a_connection_that_sends_a_line_and_never_a_newline_is_dropped() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 512, b'x'); // past the cap, and not a newline in it
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(
+            closed,
+            "a line that never ends is dropped by the server: {said:?}"
+        );
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the never-ending line reached the radio"
+        );
+    }
+
+    /// The decision is on the accumulated bytes, not a write boundary: the same over-cap line, no
+    /// newline, dripped 64 bytes at a time, is dropped exactly as one write is.
+    #[test]
+    fn a_line_past_the_cap_split_across_many_writes_is_still_dropped() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 512, b'x');
+        let (closed, said) = hung_up_on_dripped(&bytes, 64, &rig);
+        assert!(closed, "a dripped over-cap line is dropped too: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the dripped over-long line reached the radio"
+        );
+    }
+
+    /// CONTROL: the cap does not cut legal traffic. A real dial-set command whose line is exactly
+    /// the cap in length is served normally — answered `RPRT 0`, the radio retuned, the connection
+    /// left up.
+    #[test]
+    fn a_command_whose_line_is_exactly_the_cap_is_served() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES, b'x'); // line body is exactly MAX_LINE_BYTES
+        bytes.push(b'\n');
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(!closed, "a legal line at exactly the cap is not dropped");
+        assert!(said.contains("RPRT 0"), "it was answered: {said:?}");
+        assert_eq!(rig.freq_hz(), 21_074_000, "it reached the radio");
+    }
+
+    /// The boundary is one byte: a line body ONE byte past the cap is refused, where the same line
+    /// one byte shorter (the test above) is served. Pins the cap against an off-by-one.
+    #[test]
+    fn a_line_one_byte_over_the_cap_is_refused() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 1, b'x'); // line body is MAX_LINE_BYTES + 1
+        bytes.push(b'\n');
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(closed, "a line one byte over the cap hangs up: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "the one-byte-over line never reached the radio"
         );
     }
 

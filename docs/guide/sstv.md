@@ -263,7 +263,10 @@ sanctioned ARISS uplink event. Send anyway?"
    so an FT8 or CW session is never retuned; open SSTV during the pass and it
    arms then. If your only radio cannot receive 145.800 MHz (an HF rig, say), it
    tells you so once per session, with where to turn the auto-arm off, and does
-   nothing else on any screen.
+   nothing else on any screen. While you are working a satellite (a transponder
+   picked on the Satellites screen), it moves nothing on any screen and tells you
+   the ISS is up; on the SSTV screen it says the satellite pass has the radio. It
+   arms if you release the satellite while the ISS is still up.
 3. ARISS transmits PD-120, which decodes here like anything else.
 
    ![The SSTV header on 145.8000 MHz with a "2 m · ISS downlink" channel pick, a 2m band chip, USB and FM chips with FM selected, the Slant trim, and an Armed button.](../img/manual/sstv-iss-preset.webp)

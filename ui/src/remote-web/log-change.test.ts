@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
-import { logChange, logChangeCapabilities, logChangeCapability, logRowCanonical, logTarget, operationRequest, operationValue, type OperationState } from './operation-protocol'
+import { logChange, logChangeCapabilities, logChangeCapability, logRowCanonical, logTarget, operationRequest, operationValue } from './operation-protocol'
 
 const id = () => crypto.randomUUID()
 const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
@@ -10,10 +9,6 @@ const record = { call: 'W1AW', grid: 'FN31', country: null, state: null, band: '
   confirmed: false as const, awardConfirmed: false as const }
 const envelope = (change: unknown) => ({ type: 'logChange', requestId: id(), stationBootId: id(), leaseId: id(),
   expectedRevision: 1, commandWindowId: id(), clientSequence: 1, change })
-const state = (capabilities: string[]): OperationState => ({ stationBootId: id(), allowed: true, phase: 'controlling',
-  leaseId: id(), revision: 1, commandWindowId: id(), nextSequence: 1, leaseRemainingMs: 5000, actions: ['log.manual'],
-  txArmed: false, transmitEpoch: null,
-  controls: { context: { radioId: 1, radioConnection: null, ampConnection: null, ampReadSequence: null }, capabilities } as OperationState['controls'] })
 afterEach(() => vi.useRealTimers())
 
 it('closes the log change grammar around a row key and a complete edit', () => {
@@ -200,56 +195,4 @@ it('relays a change only as a versioned v4 mutation', () => {
   // Positive control: an unversioned change is a malformed peer.
   relay.receiveBrowser(sessionId, { type: 'operationRequest', request: envelope({ kind: 'delete', target }) }, 202)
   expect(browser.close).toHaveBeenCalledWith(1008, 'invalidOperation')
-})
-
-function client(version: 3 | 4 = 4) {
-  vi.useFakeTimers()
-  const sent: Record<string, any>[] = [], saved: { id: string | null } = { id: null }
-  let now = 1000
-  const c = new OperationClient(s => sent.push(JSON.parse(s)), true, () => now,
-    { read: () => saved.id, write: id => { saved.id = id } }, version)
-  c.open()
-  const reply = (value: unknown) => c.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, value })
-  const poll = async (value: unknown) => { now += 1000; await vi.advanceTimersByTimeAsync(250); reply(value) }
-  return { c, sent, saved, reply, poll }
-}
-
-it('sends a change only with the station capability and keeps its receipt until checked', async () => {
-  const { c, sent, saved, reply, poll } = client()
-  reply(state(['qsoLogging']))
-  await expect(c.change({ kind: 'delete', target })).rejects.toThrow('notController')
-  expect(sent.filter(m => m.request.type === 'logChange')).toHaveLength(0)
-  await poll(state(['qsoLogging', 'logEdit']))
-  const result = c.change({ kind: 'delete', target }), request = sent[sent.length - 1]!.request
-  expect(request).toMatchObject({ type: 'logChange', change: { kind: 'delete', target } })
-  expect(saved.id).toBe(request.requestId)
-  await expect(c.change({ kind: 'delete', target })).rejects.toThrow('operationUnknown')
-  await expect(c.log({ ...record, whenUnix: null })).rejects.toThrow('operationUnknown')
-  reply({ operation: 'logChange', operationId: request.requestId, outcome: 'unknown', reason: 'persistenceUnconfirmed' })
-  expect((await result).outcome).toBe('unknown')
-  expect(c.getSnapshot().unresolved).toBe(request.requestId)
-  expect(c.getSnapshot().pendingDraft).toBeNull()
-  const checked = c.resolve(), check = sent[sent.length - 1]!.request
-  expect(check).toMatchObject({ type: 'result', operationId: request.requestId })
-  reply({ operation: 'logChange', operationId: request.requestId, outcome: 'applied', evidence: 'fileSynced' })
-  expect((await checked).outcome).toBe('applied')
-  expect(saved.id).toBeNull()
-  expect(sent.filter(m => m.request.type === 'logChange')).toHaveLength(1)
-  c.disconnected()
-})
-
-it('never sends a change to a station older than v4, and a dropped reply stays unknown', async () => {
-  const old = client(3)
-  old.reply(state(['logEdit']))
-  await expect(old.c.change({ kind: 'delete', target })).rejects.toThrow('stationUnsupported')
-  expect(old.sent.filter(m => m.request.type === 'logChange')).toHaveLength(0)
-  old.c.disconnected()
-  vi.useRealTimers()
-  const { c, sent, saved, reply } = client()
-  reply(state(['logEdit']))
-  const result = c.change({ kind: 'edit', target, record }).catch(e => e.message)
-  const request = sent[sent.length - 1]!.request
-  c.disconnected()
-  expect(await result).toBe('operationUnknown')
-  expect(saved.id).toBe(request.requestId)
 })

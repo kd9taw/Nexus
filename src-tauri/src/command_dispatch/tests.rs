@@ -205,15 +205,42 @@ fn a_command_that_runs_here_runs_here_and_never_at_the_shack() {
     }
 }
 
+/// The Redo of one change's undo is no riskier than the undo a computer driving the station may
+/// already ask for, so it runs at the shack from afar, as there; it refuses a run over more than
+/// one contact itself (`undo_contact_run`), which stays `undo_history_run`'s, at the shack.
+#[test]
+fn one_contacts_redo_runs_from_afar_and_a_whole_runs_undo_does_not() {
+    let shack = shack();
+    for (id, name) in ["undo_qso_change", "redo_qso_change"]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(class_of(name), Some(Class::RunsAtShack), "{name}");
+        let args = json!({ "run": "r" });
+        assert_eq!(route(name, &args), Route::Shack, "{name} here");
+        let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
+        assert_eq!(kind(&admission), "run", "{name} at the shack");
+    }
+    let args = json!({ "run": "r" });
+    assert_eq!(
+        route("undo_history_run", &args),
+        Route::Refused(Refusal::ShackOnly)
+    );
+    let admission = shack.admit(&controller(), call(9, "undo_history_run", args));
+    assert_eq!(kind(&admission), refused(Refusal::ShackOnly));
+}
+
 #[test]
 fn a_shack_only_command_is_refused_at_both_ends() {
     // The operator's rulings of 2026-10-07 by name: a settings restore and a factory reset, a
     // whole-log purge and the Connections log stay at the shack. The clock's repair waits on an
-    // administrator prompt on the shack's own screen.
+    // administrator prompt on the shack's own screen. A whole run's undo can delete as much of the
+    // log as a purge (an import's undo), so it stays at the shack with it.
     for name in [
         "import_settings_bundle",
         "reset_settings",
         "purge_log",
+        "undo_history_run",
         "get_connection_log",
         "repair_clock",
     ] {
@@ -289,6 +316,16 @@ const RTTY_STARTS: [&str; 5] = [
 /// [`FT_STARTS`] is.
 const PSK_STARTS: [&str; 3] = ["psk_send", "psk_set_latched", "psk_type"];
 
+/// The JTTY cockpit's starts: a send, an F-key, live entry started and typed into, and the
+/// sign-off. Written here, as [`FT_STARTS`] is.
+const JTTY_STARTS: [&str; 5] = [
+    "jtty_fkey",
+    "jtty_live_commit",
+    "jtty_live_start",
+    "jtty_send",
+    "jtty_sign_off",
+];
+
 /// APRS's starts, as at the shack: Monitor armed by hand, which lets the automatic ack key, a
 /// beacon, and a message. Written here, as [`FT_STARTS`] is.
 const APRS_STARTS: [&str; 3] = ["aprs_arm", "aprs_send_beacon", "aprs_send_message"];
@@ -308,8 +345,8 @@ const CHAT_STARTS: [&str; 6] = [
 ];
 
 /// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`],
-/// [`TUNE_STARTS`], [`RTTY_STARTS`], [`PSK_STARTS`], [`APRS_STARTS`], [`SSTV_STARTS`],
-/// [`CHAT_STARTS`] and the voice keyer's play.
+/// [`TUNE_STARTS`], [`RTTY_STARTS`], [`PSK_STARTS`], [`JTTY_STARTS`], [`APRS_STARTS`],
+/// [`SSTV_STARTS`], [`CHAT_STARTS`] and the voice keyer's play.
 fn starts_run_from_afar() -> Vec<&'static str> {
     FT_STARTS
         .into_iter()
@@ -318,6 +355,7 @@ fn starts_run_from_afar() -> Vec<&'static str> {
         .chain(TUNE_STARTS)
         .chain(RTTY_STARTS)
         .chain(PSK_STARTS)
+        .chain(JTTY_STARTS)
         .chain(APRS_STARTS)
         .chain(SSTV_STARTS)
         .chain(CHAT_STARTS)
@@ -346,7 +384,7 @@ const FT_KEYING_NOTHING: [&str; 14] = [
 ];
 
 /// ★ The starts wired from afar are exactly the FT buttons' starts, the JS8 sends, keyboard CW and
-/// its macros, the tune carrier and the rig's tuner, the RTTY and PSK starts, the voice keyer's
+/// its macros, the tune carrier and the rig's tuner, the RTTY, PSK and JTTY starts, the voice keyer's
 /// play, and the PTT as a held press; the table says so by value.
 /// CONTROL: the table holds no row that is not a start.
 #[test]
@@ -359,6 +397,7 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     expected.extend(TUNE_STARTS.iter().map(|n| (*n, Wired::Tune)));
     expected.extend(RTTY_STARTS.iter().map(|n| (*n, Wired::Rtty)));
     expected.extend(PSK_STARTS.iter().map(|n| (*n, Wired::Psk)));
+    expected.extend(JTTY_STARTS.iter().map(|n| (*n, Wired::Jtty)));
     expected.extend(APRS_STARTS.iter().map(|n| (*n, Wired::Aprs)));
     expected.extend(SSTV_STARTS.iter().map(|n| (*n, Wired::Sstv)));
     expected.extend(CHAT_STARTS.iter().map(|n| (*n, Wired::Chat)));
@@ -414,6 +453,50 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         let admission = shack.admit(&controller(), call(id as u64 + 500, name, json!({})));
         assert_eq!(kind(&admission), expected, "{name}");
     }
+}
+
+/// "Still activating" from afar goes to the shack as Stop does: the activation is the shack's,
+/// taken up there paused at launch, and the operator may be at the park driving it from a laptop.
+/// It keys nothing, so it is never a start.
+#[test]
+fn still_activating_from_afar_reaches_the_shack_as_stop_does() {
+    let shack = shack();
+    assert_eq!(class_of("clear_activation"), Some(Class::RunsAtShack));
+    assert_eq!(class_of("resume_activation"), class_of("clear_activation"));
+    for (id, name) in [(1, "clear_activation"), (2, "resume_activation")] {
+        assert_eq!(route(name, &json!({})), Route::Shack, "{name}");
+        match shack.admit(&controller(), call(id, name, json!({}))) {
+            Admission::Run { .. } => {}
+            other => panic!("{name}: {}", kind(&other)),
+        }
+    }
+}
+
+/// Skip Tx1 from afar is the station's own setting: the other computer sends the change on to the
+/// shack, and the shack runs it with the value the operator picked, on and off alike, so the box
+/// the client draws from the station's snapshot follows the click. It keys nothing, so it is never a
+/// start. CONTROL: a refusal (no lease) is said by name, not dropped.
+#[test]
+fn skip_tx1_from_afar_reaches_the_stations_setting_with_its_value() {
+    let shack = shack();
+    assert_eq!(class_of("set_skip_tx1"), Some(Class::RunsAtShack));
+    for (id, enabled) in [(1, true), (2, false)] {
+        let args = json!({ "enabled": enabled });
+        assert_eq!(route("set_skip_tx1", &args), Route::Shack, "{enabled}");
+        match shack.admit(&controller(), call(id, "set_skip_tx1", args.clone())) {
+            Admission::Run { args: ran, .. } => assert_eq!(ran, args, "the value is the click's"),
+            other => panic!("{enabled}: {}", kind(&other)),
+        }
+    }
+    let watcher = caller(2, false);
+    assert!(
+        kind(&shack.admit(
+            &watcher,
+            call(3, "set_skip_tx1", json!({ "enabled": true }))
+        ))
+        .starts_with("refused"),
+        "a computer without the lease is refused"
+    );
 }
 
 /// ⛔ From afar `js8_arm` turns on every switch the shack's own screen does: the automatic
@@ -590,6 +673,7 @@ fn no_ft_command_from_afar_carries_a_time() {
         .chain(TUNE_STARTS)
         .chain(RTTY_STARTS)
         .chain(PSK_STARTS)
+        .chain(JTTY_STARTS)
         .chain(APRS_STARTS)
         .chain(SSTV_STARTS)
         .chain(CHAT_STARTS)
@@ -630,7 +714,10 @@ fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
     asked.js8_aprs_relay = true;
     asked.beacon_tx_percent = 20;
     asked.cw_wpm = 31;
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = asked.clone();
     keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
     assert!(
@@ -784,7 +871,10 @@ fn moved(a: &tempo_app::settings::Settings, b: &tempo_app::settings::Settings) -
 #[test]
 fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() {
     let shack = tempo_app::settings::Settings::default();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     for (name, change) in TRANSMITS_BY_ITSELF
         .iter()
         .chain(TX_GUARDS)
@@ -815,7 +905,10 @@ fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() 
 #[test]
 fn a_settings_save_from_afar_takes_what_neither_transmits_nor_guards() {
     let shack = tempo_app::settings::Settings::default();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     for (name, change) in NEITHER {
         let mut asked = shack.clone();
         change(&mut asked);
@@ -860,7 +953,10 @@ fn two_radio_shack() -> tempo_app::settings::Settings {
 #[test]
 fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
     let shack = two_radio_shack();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = shack.clone();
     save.active_radio = 1;
     save.ptt_method = "rts".into();
@@ -888,7 +984,10 @@ fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
 #[test]
 fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     let shack = two_radio_shack();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked: tempo_app::settings::RadioProfilePatch =
         serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
     asked.ptt_method = "rts".into();
@@ -911,6 +1010,214 @@ fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     );
 }
 
+/// What `read` finds in a whole save made from `shack` with `change` alone: as the shack has it,
+/// once the save from afar has gone through the keeps, and once the shack's own screen's has.
+fn kept_from_afar<T>(
+    shack: &tempo_app::settings::Settings,
+    change: impl Fn(&mut tempo_app::settings::Settings),
+    read: impl Fn(&tempo_app::settings::Settings) -> T,
+) -> [T; 3] {
+    let mut asked = shack.clone();
+    change(&mut asked);
+    let mut from_afar = asked.clone();
+    keep_the_shacks_settings(
+        shack,
+        &mut from_afar,
+        Some(&Afar {
+            stand_down: 3,
+            starts_voided: 0,
+        }),
+    );
+    let mut at_the_shack = asked;
+    keep_the_shacks_settings(shack, &mut at_the_shack, None);
+    [read(shack), read(&from_afar), read(&at_the_shack)]
+}
+
+/// The shack's own keying lines: a serial keyline for CW on its own port, and true FSK for RTTY on
+/// its own port and line, beside a CAT radio on COM4.
+fn shack_that_keys_by_lines() -> tempo_app::settings::Settings {
+    tempo_app::settings::Settings {
+        serial_port: "COM4".into(),
+        cw_keyer: tempo_app::settings::CwKeyerBackend::Serial,
+        cw_key_port: "COM7".into(),
+        cw_key_line: "dtr".into(),
+        winkeyer_port: "COM6".into(),
+        rtty_backend: "fsk".into(),
+        rtty_fsk_port: "COM8".into(),
+        rtty_fsk_line: "dtr".into(),
+        ..Default::default()
+    }
+}
+
+/// ⛔ How CW keys the transmitter is set at the station only: a save from afar keeps the shack's
+/// keyer. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_keyer() {
+    use tempo_app::settings::CwKeyerBackend;
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_keyer = CwKeyerBackend::Soundcard,
+            |s| s.cw_keyer
+        ),
+        [
+            CwKeyerBackend::Serial,
+            CwKeyerBackend::Serial,
+            CwKeyerBackend::Soundcard
+        ]
+    );
+}
+
+/// ⛔ The CW keyline's port is set at the station only: a save from afar cannot point it at the CAT
+/// port. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_key_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_key_port = "COM4".into(),
+            |s| s.cw_key_port.clone()
+        ),
+        ["COM7", "COM7", "COM4"]
+    );
+}
+
+/// ⛔ Which line of that port keys CW is set at the station only. CONTROL: the shack's own save
+/// takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_key_line() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_key_line = "rts".into(),
+            |s| s.cw_key_line.clone()
+        ),
+        ["dtr", "dtr", "rts"]
+    );
+}
+
+/// ⛔ The WinKeyer's port is set at the station only. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_winkeyer_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.winkeyer_port = "COM4".into(),
+            |s| s.winkeyer_port.clone()
+        ),
+        ["COM6", "COM6", "COM4"]
+    );
+}
+
+/// ⛔ How RTTY keys the transmitter (AFSK, or true FSK on a serial line) is set at the station
+/// only. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_keying() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_backend = "afsk".into(),
+            |s| s.rtty_backend.clone()
+        ),
+        ["fsk", "fsk", "afsk"]
+    );
+}
+
+/// ⛔ The FSK keyline's port is set at the station only: a save from afar cannot point it at the
+/// CAT port. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_fsk_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_fsk_port = "COM4".into(),
+            |s| s.rtty_fsk_port.clone()
+        ),
+        ["COM8", "COM8", "COM4"]
+    );
+}
+
+/// ⛔ Which line of that port carries the FSK data is set at the station only. CONTROL: the shack's
+/// own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_fsk_line() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_fsk_line = "rts".into(),
+            |s| s.rtty_fsk_line.clone()
+        ),
+        ["dtr", "dtr", "rts"]
+    );
+}
+
+/// The two-radio shack with the Flex client's Beta for CW, Tune and the ATU on for radio 1 alone.
+fn shack_with_one_flex_beta() -> tempo_app::settings::Settings {
+    let mut shack = two_radio_shack();
+    shack.radios[1].flex_native_unbenched = true;
+    shack.sync_flat_from_active();
+    shack
+}
+
+/// ⛔ The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed is set at
+/// the station only, and it is the radio's own, as its PTT is: a save from afar keeps the shack's
+/// value for the radio its form was editing, either way. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_flex_beta_of_the_radio_its_form_edited() {
+    let shack = shack_with_one_flex_beta();
+    assert!(!shack.flex_native_unbenched, "premise: radio 0 is live");
+    assert_eq!(
+        kept_from_afar(
+            &shack,
+            |s| s.flex_native_unbenched = true,
+            |s| s.flex_native_unbenched
+        ),
+        [false, false, true],
+        "radio 0's form, turned on"
+    );
+    assert_eq!(
+        kept_from_afar(
+            &shack,
+            |s| {
+                s.active_radio = 1;
+                s.flex_native_unbenched = false;
+            },
+            |s| s.flex_native_unbenched
+        ),
+        [false, true, false],
+        "radio 1's form, turned off"
+    );
+}
+
+/// ⛔ …and a radio's edit from afar keeps that radio's Beta as the shack has it. CONTROL: the
+/// shack's own edit takes it, and the rest of the edit is taken from afar.
+#[test]
+fn a_radio_edit_from_afar_keeps_that_radios_flex_beta() {
+    let shack = shack_with_one_flex_beta();
+    let mut asked: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
+    asked.flex_native_unbenched = false;
+    asked.tx_level = 0.25;
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(
+        &shack,
+        1,
+        &mut patch,
+        Some(&Afar {
+            stand_down: 3,
+            starts_voided: 0,
+        }),
+    );
+    assert!(patch.flex_native_unbenched, "from afar, radio 1's Beta");
+    assert_eq!(patch.tx_level, 0.25, "CONTROL: the rest of the edit");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, None);
+    assert!(
+        !patch.flex_native_unbenched,
+        "CONTROL: the shack's own edit"
+    );
+}
+
 /// ⛔ "PROGRAMS ON TCI MAY TRANSMIT" IS SET AT THE SHACK ONLY. A whole save from afar neither
 /// turns it on nor off, nor the server under it; a radio's edit from afar cannot name it, since it
 /// is the station's and no radio's; and the read from afar says it is set at the station.
@@ -920,7 +1227,10 @@ fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
 fn a_save_from_afar_never_lets_programs_on_tci_transmit() {
     let shack = two_radio_shack();
     assert!(!shack.tci_server && !shack.tci_server_tx, "premise: off");
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let on = |s: &tempo_app::settings::Settings| (s.tci_server, s.tci_server_tx);
     let mut asked = shack.clone();
     asked.tci_server = true;
@@ -1011,7 +1321,10 @@ fn key_destinations(s: &tempo_app::settings::Settings) -> (String, String, Strin
 #[test]
 fn a_settings_save_from_afar_keeps_where_the_shack_sends_its_keys() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = save_pointing_elsewhere(&shack, 1);
     keep_the_shacks_credential_addresses(&shack, &mut save, Some(&afar));
     assert_eq!(
@@ -1055,7 +1368,10 @@ fn a_settings_save_from_afar_keeps_where_the_shack_sends_its_keys() {
 #[test]
 fn a_settings_save_from_afar_takes_the_addresses_that_carry_no_key() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked = shack.clone();
     asked.cloudlog_station_id = "7".into();
     asked.cloudlog_upload = !shack.cloudlog_upload;
@@ -1086,7 +1402,10 @@ fn a_settings_save_from_afar_takes_the_addresses_that_carry_no_key() {
 #[test]
 fn a_radio_edit_from_afar_keeps_that_radios_icom_address() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked: tempo_app::settings::RadioProfilePatch =
         serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
     asked.icom_lan_host = "203.0.113.7".into();
@@ -1206,7 +1525,7 @@ fn admitted_as_a_stop_whatever_else(cmd: &str, args: &[Value]) {
 #[test]
 fn every_stop_is_admitted_whatever_else() {
     let stops = of_class(Class::StopsTx);
-    assert_eq!(stops.len(), 8, "the table's own count: {stops:?}");
+    assert_eq!(stops.len(), 9, "the table's own count: {stops:?}");
     for name in stops {
         assert_eq!(route(name, &json!({})), Route::Shack, "{name}");
         // A stop takes no arguments the dispatcher reads, so even malformed ones do not refuse it.
@@ -2023,6 +2342,37 @@ fn the_alert_is_the_one_event_that_crosses_and_both_screens_use_its_name() {
         include_str!("../../../ui/src/usePounce.ts").contains("listen<RaisedAlert>('alert'"),
         "the screen listens for it by this name"
     );
+    // The station's decode alerts and its new parks are raised the same way, and heard by name.
+    let lib = include_str!("../lib.rs");
+    assert!(
+        lib.contains(r#"app.emit(alert::EVENT, &alert::raised("needed", one))"#),
+        "the needed-station alerts"
+    );
+    assert!(
+        lib.contains(r#"alert::raised("parks", "#),
+        "the parks newly on the air"
+    );
+    assert!(
+        include_str!("../../../ui/src/useStationAlerts.ts").contains("listen<RaisedAlert>('alert'"),
+        "the screen listens for them by this name"
+    );
+}
+
+/// The station decides the needed-station alerts on each look at the decode window it serves,
+/// under the Engine lock, and raises them after the lock is released, so no window's listener ever
+/// runs under it.
+#[test]
+fn every_snapshot_served_decides_the_needed_alerts_and_raises_them_unlocked() {
+    let lib = include_str!("../lib.rs");
+    let start = lib.find("async fn get_snapshot(").expect("get_snapshot");
+    let body = &lib[start..start + lib[start..].find("\n}\n").expect("its end")];
+    let at = |what: &str| {
+        body.find(what)
+            .unwrap_or_else(|| panic!("{what} in get_snapshot"))
+    };
+    assert!(at("let snap = eng.snapshot();") < at("eng.needed_alerts(&snap,"));
+    assert!(at("eng.needed_alerts(&snap,") < at("drop(eng);"));
+    assert!(at("drop(eng);") < at("raise_needed(&app, &needed);"));
 }
 
 #[test]
@@ -2176,6 +2526,11 @@ const NO_OFF_HALF: &[(&str, &str)] = &[
     (
         "js8_answer_reply",
         "Its No declines a reply that only a Yes would queue: nothing is on the air to stop.",
+    ),
+    (
+        "jtty_live_commit",
+        "Its `flush` says whether everything typed goes now or only the words already complete, \
+         not a switch: a live session is stopped by `jtty_stop`.",
     ),
     (
         "send_cw",
@@ -2384,6 +2739,107 @@ fn an_unseen_id_at_or_below_a_forgotten_one_is_refused_and_above_it_runs() {
     );
 }
 
+/// ⛔ An unkey is told from a Stop the same way at both ends ([`is_unkey`]): the off half of every
+/// transmit switch is an unkey; every command that stops a transmission (the voice keyer's own
+/// Stop and `release_stream_mic` included) is a Stop, by both roads, which halts everything at the
+/// shack; and the on half of a switch is neither. CONTROL: each unkey runs under Stop's rules, so
+/// it is never refused.
+#[test]
+fn an_unkey_is_the_off_half_of_a_switch_and_nothing_else() {
+    for (cmd, ..) in OFF_HALVES {
+        for off in off_args(cmd) {
+            assert!(is_unkey(cmd, &off), "{cmd} {off}");
+            assert!(
+                is_stop(cmd, &off),
+                "CONTROL: {cmd} {off} runs under Stop's rules"
+            );
+        }
+    }
+    for (cmd, args) in [
+        ("set_ptt", json!({"on": true})),
+        ("set_tune", json!({"on": true})),
+        ("set_tx_enabled", json!({"enabled": true})),
+        ("set_mode", json!({"mode": "fieldday-run"})),
+        ("set_ptt", json!({})),
+    ] {
+        assert!(!is_unkey(cmd, &args), "{cmd} {args}");
+    }
+    let stops: Vec<&str> = CLASSES
+        .iter()
+        .filter(|(_, class, _)| *class == Class::StopsTx)
+        .map(|(cmd, ..)| *cmd)
+        .collect();
+    assert_eq!(stops.len(), 9, "{stops:?}");
+    for cmd in &stops {
+        assert!(!is_unkey(cmd, &json!({})), "{cmd} is a Stop");
+    }
+    assert!(stops.contains(&"stop_voice") && stops.contains(&"release_stream_mic"));
+}
+
+/// ⛔ A start from afar runs only while BOTH generations it was read under stand
+/// ([`still_bound`]): an unkey moves the starts-voided generation and voids it; a Stop or any halt
+/// moves the stand-down and voids it. Only the stand-down is what a start that ran is ended by: an
+/// unkey taken after a start from afar ran leaves what it began on the radio loop's next tick, and
+/// a stand-down revoked with no halt ends it. CONTROL: under the generations as they stand it runs,
+/// and from the shack's own screen (`None`) it always runs.
+#[test]
+fn a_start_from_afar_is_voided_by_an_unkey_or_a_stop_and_ended_only_by_a_stop() {
+    use tempo_app::remote_control::transmit::TransmitAuthority;
+    let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+    let transmit = TransmitAuthority::default();
+    e.set_remote_transmit_revocation(transmit.revocation());
+    let read = |e: &tempo_app::engine::Engine| Afar {
+        stand_down: e.remote_transmit_stand_down_generation(),
+        starts_voided: e.remote_starts_voided_generation(),
+    };
+    let stopped = Err(STOPPED_SINCE.to_string());
+
+    let before_an_unkey = read(&e);
+    assert_eq!(still_bound(&e, Some(&before_an_unkey)), Ok(()), "CONTROL");
+    e.remote_starts_voided().revoke();
+    assert_eq!(
+        still_bound(&e, Some(&before_an_unkey)),
+        stopped,
+        "after an unkey"
+    );
+    assert_eq!(still_bound(&e, None), Ok(()), "CONTROL: the shack's own");
+
+    let before_a_stop = read(&e);
+    assert_eq!(still_bound(&e, Some(&before_a_stop)), Ok(()), "CONTROL");
+    e.halt_tx();
+    assert_eq!(
+        still_bound(&e, Some(&before_a_stop)),
+        stopped,
+        "after a halt"
+    );
+    let before_a_revocation = read(&e);
+    transmit.revoke();
+    assert_eq!(
+        still_bound(&e, Some(&before_a_revocation)),
+        stopped,
+        "after a Stop"
+    );
+
+    // TX On from afar, then an unkey: TX stays on, tick after tick.
+    let afar = read(&e);
+    still_bound(&e, Some(&afar)).unwrap();
+    e.set_tx_enabled_by_operator(true);
+    started_from_afar(&mut e, Some(&afar));
+    e.remote_starts_voided().revoke();
+    e.set_ptt(false);
+    let now = Instant::now();
+    assert!(!e.poll_remote_transmit(now), "an unkey halted the station");
+    assert!(
+        !e.poll_remote_transmit(now),
+        "an unkey halted the station later"
+    );
+    assert!(e.tx_enabled(), "an unkey from afar turned TX off");
+    // …and a revocation with no halt ends it.
+    transmit.revoke();
+    assert!(e.poll_remote_transmit(now), "a revoked stand-down halts");
+    assert!(!e.tx_enabled(), "a revoked stand-down left TX on");
+}
+
 /// ★ The link's Stop admission: every command that stops a transmission, and the off half of every
 /// transmit switch, is taken as it came, and agrees with [`is_stop`]; anything else, the on half of
 /// the same switches included, is handed back untouched for the dispatcher.
@@ -2439,7 +2895,8 @@ fn every_refusal_reads_back_from_its_code() {
 }
 
 /// ★ The one profile this build serves is the desktop's (the mobile addendum's hook: a phone is a
-/// later build's). CONTROL: a phone's name is none of this build's.
+/// later build's). A phone is known by name and admitted nothing: a call the desktop runs is
+/// refused it, whatever its class. CONTROL: the same call from the desktop runs.
 #[test]
 fn the_desktop_is_the_only_profile_served() {
     assert_eq!(Profile::named("desktop"), Some(Profile::Desktop));
@@ -2447,7 +2904,26 @@ fn the_desktop_is_the_only_profile_served() {
         Profile::named(Profile::Desktop.name()),
         Some(Profile::Desktop)
     );
-    assert_eq!(Profile::named("mobile"), None);
+    assert_eq!(Profile::named("mobile"), Some(Profile::Mobile));
+    assert!(!Profile::Mobile.served());
+    let shack = shack();
+    let phone = Caller {
+        profile: Profile::Mobile,
+        ..caller(2, true)
+    };
+    for (id, name) in ["get_snapshot", "get_band_plan"].into_iter().enumerate() {
+        let id = id as u64 + 1;
+        assert_eq!(
+            kind(&shack.admit(&phone, call(id, name, json!({})))),
+            refused(Refusal::Unclassed),
+            "{name} from a phone"
+        );
+        assert_eq!(
+            kind(&shack.admit(&controller(), call(id, name, json!({})))),
+            "run",
+            "{name} from the desktop"
+        );
+    }
 }
 
 // --- The shack's own handler, on Tauri's own dispatch --------------------------------------------
@@ -2789,7 +3265,10 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
     let mut asked = shack.clone();
     asked.tqsl_path = r"C:\Users\Public\evil.exe".to_string();
     asked.lotw_station_location = "Home".to_string();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
 
     let mut save = asked.clone();
     keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
@@ -2822,7 +3301,10 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
 /// into the file (at the shack: `a_shack_save_of_a_form_read_without_its_keys_keeps_them`).
 #[test]
 fn a_settings_save_from_afar_cannot_change_blank_or_plant_a_stored_key() {
-    let afar = Afar { stand_down: 2 };
+    let afar = Afar {
+        stand_down: 2,
+        starts_voided: 0,
+    };
     for (name, field) in SECRET_SETTINGS {
         // (what the shack holds, what the save asks for)
         for (held, asked) in [
@@ -2924,7 +3406,10 @@ fn a_shack_read_while_a_stream_watches_blanks_each_stored_key() {
 /// it saved; the shack's own read blanks nothing and says nothing.
 #[test]
 fn a_settings_read_from_afar_blanks_each_stored_key_and_says_whether_it_is_saved() {
-    let afar = Afar { stand_down: 0 };
+    let afar = Afar {
+        stand_down: 0,
+        starts_voided: 0,
+    };
     for (name, field) in SECRET_SETTINGS {
         for held in ["FAKE-SHACK-KEY-0001", "", "   "] {
             let mut shack = tempo_app::settings::Settings::default();
@@ -3042,7 +3527,14 @@ fn a_whole_save_from_afar_goes_through_every_keep() {
         )
     };
     let mut save = asked.clone();
-    keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 4 }));
+    keep_the_shacks_settings(
+        &shack,
+        &mut save,
+        Some(&Afar {
+            stand_down: 4,
+            starts_voided: 0,
+        }),
+    );
     assert_eq!(
         shown(&save),
         (
@@ -3115,6 +3607,311 @@ fn a_saved_profile_carries_no_stored_key_toward_afar() {
     );
 }
 
+/// The saved profiles of a `ui_state_save` admitted from afar onto a shack whose `ui-state.json`
+/// holds `shack_profiles`: what the shack's file is then written with.
+fn profiles_saved_from_afar(shack_profiles: &Value, sent_profiles: &Value) -> Value {
+    let shack = shack();
+    let text = shack_profiles.to_string();
+    ui_now(&shack, &[("nexus.profiles", text.as_str())]);
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let sent = json!({ "state": { "nexus.profiles": sent_profiles.to_string() } });
+    match shack.admit(&controller(), save(1, "ui_state_save", sent, base.as_str())) {
+        Admission::Run { args, .. } => serde_json::from_str(
+            args["state"]["nexus.profiles"]
+                .as_str()
+                .expect("the profiles are saved"),
+        )
+        .unwrap(),
+        other => panic!("{}", kind(&other)),
+    }
+}
+
+/// ⛔ A SAVED PROFILE CARRIES NO STATION-ONLY SETTING IN FROM AFAR. A profile is a whole Settings,
+/// and the shack's own screen applies what it holds when it is loaded there, as if typed there. A
+/// profile saved from afar keeps the TX watchdog as the shack's own profile of that name holds it,
+/// and one new from afar carries none, so loading it keeps the station's own (an absent key keeps
+/// the current value, `mergeProfile`). The same for the program the shack runs to sign a LoTW
+/// upload and the address its Cloudlog key goes to. CONTROL: the rest of each profile is the save's.
+#[test]
+fn a_profile_saved_from_afar_keeps_the_shacks_watchdog() {
+    let home = serde_json::to_value(tempo_app::settings::Settings {
+        tx_watchdog_min: 3,
+        mygrid: "EN52".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut planted = home.clone();
+    planted["txWatchdogMin"] = json!(0);
+    planted["tqslPath"] = json!("C:\\Users\\Public\\not-tqsl.exe");
+    planted["cloudlogUrl"] = json!("https://collector.example");
+    planted["mygrid"] = json!("EN53");
+    let saved = profiles_saved_from_afar(
+        &json!([{ "name": "Home", "settings": home, "schema": 2 }]),
+        &json!([
+            { "name": "Home", "settings": planted, "schema": 2 },
+            { "name": "New", "settings": { "txWatchdogMin": 0, "mygrid": "EN54" } },
+        ]),
+    );
+    let home = &saved[0]["settings"];
+    assert_eq!(
+        (
+            &home["txWatchdogMin"],
+            &home["tqslPath"],
+            &home["cloudlogUrl"]
+        ),
+        (&json!(3), &json!(""), &json!("")),
+        "from afar: the shack's Home"
+    );
+    assert_eq!(
+        saved[1]["settings"].get("txWatchdogMin"),
+        None,
+        "from afar: a new profile names no watchdog"
+    );
+    assert_eq!(
+        (&home["mygrid"], &saved[1]["settings"]["mygrid"]),
+        (&json!("EN53"), &json!("EN54")),
+        "CONTROL: the rest of the save"
+    );
+}
+
+/// ⛔ Every setting a save from afar keeps as the shack has it ([`STATION_ONLY_SETTINGS`]), inside a
+/// saved profile, by value: one the shack's profile of that name holds comes back as the shack's,
+/// one it does not hold is left out, and a profile new from afar carries none of them. CONTROL: the
+/// rest of each profile is the save's.
+#[test]
+fn a_profile_saved_from_afar_keeps_every_station_only_setting() {
+    let tagged = |tag: &str, keys: &[&str]| -> serde_json::Map<String, Value> {
+        keys.iter()
+            .map(|key| (key.to_string(), json!(format!("{tag} {key}"))))
+            .chain([("mygrid".to_string(), json!(format!("{tag} grid")))])
+            .collect()
+    };
+    // The shack's Home holds every station-only setting but the first, which it predates.
+    let (predated, held) = STATION_ONLY_SETTINGS.split_first().unwrap();
+    let saved = profiles_saved_from_afar(
+        &json!([{ "name": "Home", "settings": tagged("shack", held) }]),
+        &json!([
+            { "name": "Home", "settings": tagged("afar", &STATION_ONLY_SETTINGS) },
+            { "name": "New", "settings": tagged("afar", &STATION_ONLY_SETTINGS) },
+        ]),
+    );
+    for key in held {
+        assert_eq!(
+            saved[0]["settings"][key],
+            json!(format!("shack {key}")),
+            "from afar: {key}"
+        );
+    }
+    assert_eq!(saved[0]["settings"].get(predated), None, "{predated}");
+    for key in STATION_ONLY_SETTINGS {
+        assert_eq!(saved[1]["settings"].get(key), None, "a new profile: {key}");
+    }
+    assert_eq!(
+        [
+            &saved[0]["settings"]["mygrid"],
+            &saved[1]["settings"]["mygrid"]
+        ],
+        [&json!("afar grid"), &json!("afar grid")],
+        "CONTROL: the rest of the save"
+    );
+}
+
+/// A profile saved at the shack is read from afar and saved back as it was read: it comes back
+/// whole, every field of a whole Settings, its stored key and its station-only settings included.
+/// What the shack's own screen saves never passes here (`ui_state_save`, at the shack, writes the
+/// map as it came).
+#[test]
+fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
+    let home = serde_json::to_value(tempo_app::settings::Settings {
+        tx_watchdog_min: 3,
+        clublog_api_key: "FAKE-HOME-KEY-0003".into(),
+        tqsl_path: "C:\\TrustedQSL\\tqsl.exe".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let shack_profiles = json!([{ "name": "Home", "settings": home, "schema": 2 }]);
+    let shack_map = map(&[("nexus.profiles", shack_profiles.to_string().as_str())]);
+    let read = station_answer(serde_json::to_value(&shack_map).unwrap());
+    let read: Value = serde_json::from_str(read["nexus.profiles"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        read[0]["settings"]["clublogApiKey"], "",
+        "premise: read blank"
+    );
+    let saved = profiles_saved_from_afar(&shack_profiles, &read);
+    assert_eq!(saved, shack_profiles);
+}
+
+/// Values the shack's screen reads in a saved profile list (`JSON.parse`) and the station does not
+/// (serde_json).
+fn values_only_the_screen_reads() -> [(&'static str, String); 3] {
+    [
+        ("a number past the largest float", "1e400".to_string()),
+        ("a lone half of a surrogate pair", r#""\ud800""#.to_string()),
+        (
+            "nesting deeper than 128",
+            format!("{}{}", "[".repeat(129), "]".repeat(129)),
+        ),
+    ]
+}
+
+/// A saved profile list of one profile, "Home", holding `settings`, with `pad` beside its name.
+fn profile_list_with(pad: &str, settings: &Value) -> String {
+    format!(r#"[{{"name":"Home","pad":{pad},"settings":{settings}}}]"#)
+}
+
+/// ⛔ A saved profile list from afar that the station cannot read is refused, and with it the whole
+/// save, so nothing of it is written. The shack's screen reads more than the station does: a list
+/// kept as sent would load there with every setting it holds, the station-only ones included.
+/// CONTROL: the same list, readable, is saved with the shack's own watchdog and the rest of the save.
+#[test]
+fn a_profile_list_from_afar_the_station_cannot_read_is_refused() {
+    let shack = shack();
+    let own = json!([{ "name": "Home", "settings": { "txWatchdogMin": 6, "mygrid": "EN52" } }]);
+    ui_now(
+        &shack,
+        &[
+            ("nexus.profiles", own.to_string().as_str()),
+            ("nexus.watchlist", "old"),
+        ],
+    );
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let planted = json!({
+        "txWatchdogMin": 0,
+        "tqslPath": "C:\\Users\\Public\\not-tqsl.exe",
+        "cloudlogUrl": "https://collector.example",
+        "mygrid": "EN53",
+    });
+    let sent = |profiles: String| json!({ "state": { "nexus.profiles": profiles, "nexus.watchlist": "new" } });
+    for (id, (shape, pad)) in (1..).zip(values_only_the_screen_reads()) {
+        let profiles = profile_list_with(&pad, &planted);
+        assert!(
+            serde_json::from_str::<Value>(&profiles).is_err(),
+            "premise: the station cannot read {shape}"
+        );
+        assert_eq!(
+            kind(&shack.admit(
+                &controller(),
+                save(id, "ui_state_save", sent(profiles), base.as_str())
+            )),
+            refused(Refusal::BadArguments),
+            "{shape}"
+        );
+    }
+    let readable = sent(profile_list_with("1", &planted));
+    match shack.admit(
+        &controller(),
+        save(9, "ui_state_save", readable, base.as_str()),
+    ) {
+        Admission::Run { args, .. } => {
+            let saved: Value =
+                serde_json::from_str(args["state"]["nexus.profiles"].as_str().unwrap()).unwrap();
+            let home = &saved[0]["settings"];
+            assert_eq!(
+                (
+                    &home["txWatchdogMin"],
+                    home.get("tqslPath"),
+                    &home["mygrid"],
+                    &args["state"]["nexus.watchlist"]
+                ),
+                (&json!(6), None, &json!("EN53"), &json!("new")),
+                "CONTROL: the shack's watchdog, and the rest of the save"
+            );
+        }
+        other => panic!("{}", kind(&other)),
+    }
+}
+
+/// ⛔ The shack's own saved profile list, when the station cannot read it, is never replaced from
+/// afar: the station could keep neither its stored keys nor its station-only settings, so a save
+/// carrying another list is refused. CONTROL: the shack's own list, sent back as it is, is written
+/// as it is, byte for byte, with the rest of the save.
+#[test]
+fn a_shack_profile_list_the_station_cannot_read_is_not_replaced_from_afar() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let shack = shack();
+        let own = profile_list_with(
+            &pad,
+            &json!({ "txWatchdogMin": 6, "clublogApiKey": "FAKE-HOME-KEY-0004" }),
+        );
+        ui_now(
+            &shack,
+            &[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")],
+        );
+        let base = shack.inner.stores.revision(Store::UiState).unwrap();
+        let sent = |profiles: &str| json!({ "state": { "nexus.profiles": profiles, "nexus.watchlist": "new" } });
+        let other = json!([{ "name": "Home", "settings": { "txWatchdogMin": 0 } }]).to_string();
+        assert_eq!(
+            kind(&shack.admit(
+                &controller(),
+                save(1, "ui_state_save", sent(&other), base.as_str())
+            )),
+            refused(Refusal::BadArguments),
+            "{shape}"
+        );
+        match shack.admit(
+            &controller(),
+            save(2, "ui_state_save", sent(&own), base.as_str()),
+        ) {
+            Admission::Run { args, .. } => assert_eq!(
+                args,
+                json!({ "state": { "nexus.profiles": own, "nexus.watchlist": "new" } }),
+                "CONTROL, {shape}"
+            ),
+            other => panic!("{shape}: {}", kind(&other)),
+        }
+    }
+}
+
+/// ⛔ A saved profile list the station cannot read stays at the shack: its stored keys cannot be
+/// blanked, so a read from afar answers without it. CONTROL: the station's other keys are read.
+#[test]
+fn a_profile_list_the_station_cannot_read_is_not_sent_afar() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let own = profile_list_with(&pad, &json!({ "clublogApiKey": "FAKE-HOME-KEY-0005" }));
+        let shack = map(&[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")]);
+        let read = station_answer(serde_json::to_value(&shack).unwrap());
+        assert!(
+            !read.to_string().contains("FAKE-HOME-KEY-0005"),
+            "{shape}: {read}"
+        );
+        assert_eq!(
+            read,
+            json!({ "nexus.watchlist": "old" }),
+            "CONTROL, {shape}"
+        );
+    }
+}
+
+/// ⛔ …and a save from afar made from that read, which then carries no profile list, leaves the
+/// shack's as it is, byte for byte: the other computer never had it, so its save can neither remove
+/// nor rewrite it. CONTROL: the rest of the save is the other computer's.
+#[test]
+fn a_save_from_afar_keeps_a_profile_list_its_read_left_out() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let shack = shack();
+        let own = profile_list_with(&pad, &json!({ "clublogApiKey": "FAKE-HOME-KEY-0006" }));
+        ui_now(
+            &shack,
+            &[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")],
+        );
+        let base = shack.inner.stores.revision(Store::UiState).unwrap();
+        let mut sent =
+            station_answer(serde_json::to_value(lock(&shack.inner.stores.ui).clone()).unwrap());
+        sent["nexus.watchlist"] = json!("new");
+        match shack.admit(
+            &controller(),
+            save(1, "ui_state_save", json!({ "state": sent }), base.as_str()),
+        ) {
+            Admission::Run { args, .. } => assert_eq!(
+                args,
+                json!({ "state": { "nexus.profiles": own, "nexus.watchlist": "new" } }),
+                "{shape}"
+            ),
+            other => panic!("{shape}: {}", kind(&other)),
+        }
+    }
+}
+
 /// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).
@@ -3178,7 +3975,14 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
             untried.push(name.clone());
             continue;
         };
-        keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 1 }));
+        keep_the_shacks_settings(
+            &shack,
+            &mut save,
+            Some(&Afar {
+                stand_down: 1,
+                starts_voided: 0,
+            }),
+        );
         if serde_json::to_value(&save).unwrap()[name] == *value {
             kept.insert(name.clone());
         }
@@ -3193,12 +3997,14 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
 #[test]
 fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
     let (kept, untried) = what_a_save_from_afar_keeps();
-    let flagged: std::collections::BTreeSet<String> =
-        station_only_settings(Some(&Afar { stand_down: 1 }))
-            .unwrap()
-            .into_iter()
-            .map(String::from)
-            .collect();
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    }))
+    .unwrap()
+    .into_iter()
+    .map(String::from)
+    .collect();
     assert_eq!(
         kept.difference(&flagged).collect::<Vec<_>>(),
         Vec::<&String>::new(),
@@ -3238,11 +4044,14 @@ fn the_ui_fixture_carries_the_station_only_list() {
         "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
     ))
     .unwrap();
-    let sent: Vec<String> = station_only_settings(Some(&Afar { stand_down: 1 }))
-        .unwrap()
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let sent: Vec<String> = station_only_settings(Some(&Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    }))
+    .unwrap()
+    .into_iter()
+    .map(String::from)
+    .collect();
     assert_eq!(fixture, sent);
 }
 
@@ -3250,7 +4059,13 @@ fn the_ui_fixture_carries_the_station_only_list() {
 /// the file, from afar or at the shack.
 #[test]
 fn a_save_never_writes_the_set_at_the_station_list() {
-    for afar in [Some(Afar { stand_down: 2 }), None] {
+    for afar in [
+        Some(Afar {
+            stand_down: 2,
+            starts_voided: 0,
+        }),
+        None,
+    ] {
         let shack = tempo_app::settings::Settings::default();
         let mut save = shack.clone();
         save.unknown
@@ -3258,4 +4073,40 @@ fn a_save_never_writes_the_set_at_the_station_list() {
         keep_the_shacks_settings(&shack, &mut save, afar.as_ref());
         assert!(save.unknown.get(SET_AT_THE_STATION).is_none(), "{afar:?}");
     }
+}
+
+#[test]
+fn allow_to_transmit_is_refused_from_afar_so_a_held_device_never_allows_itself() {
+    // A device added by its own sign-in is held from transmit until the operator allows it at the
+    // shack. That press is `remote_station_action` with this action: from another computer it is
+    // refused at both ends, by the controller too, so the held device can never lift its own hold.
+    let args = json!({ "action": { "type": "allowTransmit", "deviceId": "dev-held" } });
+    let action: crate::remote_service::Action =
+        serde_json::from_value(args["action"].clone()).expect("the press as the screen sends it");
+    assert!(
+        matches!(&action, crate::remote_service::Action::AllowTransmit { device_id } if device_id == "dev-held"),
+        "premise: these are the arguments of Allow to transmit"
+    );
+    assert_eq!(class_of("remote_station_action"), Some(Class::RefusedHere));
+    assert_eq!(
+        route("remote_station_action", &args),
+        Route::Refused(Refusal::ShackOnly),
+        "it is never sent"
+    );
+    assert_eq!(
+        crate::client_mode::way("remote_station_action", &args),
+        crate::client_mode::Way::Refused(Refusal::ShackOnly),
+        "client mode refuses it on the other computer"
+    );
+    let shack = shack();
+    let admission = shack.admit(&controller(), call(1, "remote_station_action", args));
+    assert_eq!(
+        kind(&admission),
+        refused(Refusal::ShackOnly),
+        "the controlling device at the shack"
+    );
+    // The control: the same controller is admitted for a command that runs at the shack, so the
+    // refusal above is the class's, not a caller the dispatcher turns away anyway.
+    let control = shack.admit(&controller(), call(2, "get_snapshot", json!({})));
+    assert_eq!(kind(&control), "run");
 }

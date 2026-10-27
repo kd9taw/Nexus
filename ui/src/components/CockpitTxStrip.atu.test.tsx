@@ -15,8 +15,9 @@
 // Since 2026-10-01 the button is the TX strip's (CockpitTxStrip, FT's cluster
 // under the scope on every screen), no longer the cockpit header's; these cases moved with it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { ATU_LONG_PRESS_MS } from './AtuSwitchOutMenu'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({ haltTx: vi.fn(() => Promise.resolve(null)) }))
@@ -36,17 +37,23 @@ const snapWith = (over: Record<string, unknown> = {}) =>
     },
   }) as unknown as AppSnapshot
 
-function mount(snap: AppSnapshot, onAtuTune: (() => void) | undefined = () => {}) {
+function mount(
+  snap: AppSnapshot,
+  onAtuTune: (() => void) | undefined = () => {},
+  onAtuBypass?: () => void,
+) {
   return render(
     <CockpitTxStrip
       radio={snap.radio}
       onTune={() => {}}
       onAtuTune={onAtuTune}
+      onAtuBypass={onAtuBypass}
     />,
   )
 }
 
-const atuButton = () => screen.queryByRole('button', { name: 'ATU' })
+// "ATU", or "ATU ON" while the radio reports its tuner in line (#344).
+const atuButton = () => screen.queryByRole('button', { name: /^ATU( ON)?$/ })
 
 afterEach(cleanup)
 
@@ -125,6 +132,133 @@ describe("the rig's own ATU control", () => {
   // Kenwood backends the start-tune command is clamped to "switch the tuner in line", so the
   // press tunes nothing. The button STAYS — the tuner and its in-line state are real, and this
   // is where the operator reads them — and says what to do instead.
+  // ⭐ #344 (RaptorFlight): "after running ATU maybe have it change to ATU ON (and then you could
+  // click to turn it off)". Operator ruling: the label follows the radio's tuner, a CLICK always
+  // runs a tune-up (exactly as before, whatever the tuner state), and switching the tuner out is a
+  // separate action in the button's menu — right-click, or a long press on touch — offered only
+  // where Nexus can switch it out (`atuSwitchOut`: never its own Flex client, never native Icom).
+  it('reads ATU ON while the tuner is in line, and ATU while it is out', () => {
+    mount(snapWith({ atu: true }), () => {}, () => {})
+    expect(screen.getByRole('button', { name: 'ATU ON' }).getAttribute('aria-pressed')).toBe('true')
+    cleanup()
+    mount(snapWith({ atu: false }), () => {}, () => {})
+    expect(screen.getByRole('button', { name: 'ATU' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('a click runs a tune-up in both states and never switches the tuner out', () => {
+    const tune = vi.fn()
+    const out = vi.fn()
+    mount(snapWith({ atu: true, atuSwitchOut: true }), tune, out)
+    fireEvent.click(screen.getByRole('button', { name: 'ATU ON' }))
+    expect([tune.mock.calls.length, out.mock.calls.length]).toEqual([1, 0])
+    cleanup()
+    mount(snapWith({ atu: false, atuSwitchOut: true }), tune, out)
+    fireEvent.click(screen.getByRole('button', { name: 'ATU' }))
+    expect([tune.mock.calls.length, out.mock.calls.length]).toEqual([2, 0])
+  })
+
+  it('a right-click offers "Switch tuner out", which switches it out and runs no tune-up', async () => {
+    const tune = vi.fn()
+    const out = vi.fn()
+    mount(snapWith({ atu: true, atuSwitchOut: true }), tune, out)
+    const btn = screen.getByRole('button', { name: 'ATU ON' })
+    expect(btn.getAttribute('aria-haspopup')).toBe('menu')
+    fireEvent.contextMenu(btn)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Switch tuner out' }))
+    expect([out.mock.calls.length, tune.mock.calls.length]).toEqual([1, 0])
+  })
+
+  it('a long press on touch opens the same menu, and the press does not tune', () => {
+    vi.useFakeTimers()
+    try {
+      const tune = vi.fn()
+      const out = vi.fn()
+      mount(snapWith({ atu: true, atuSwitchOut: true }), tune, out)
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(btn, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(ATU_LONG_PRESS_MS + 50)
+      })
+      fireEvent.pointerUp(btn, { pointerType: 'touch' })
+      fireEvent.click(btn) // the click a touch press ends with
+      expect(screen.getByRole('menuitem', { name: 'Switch tuner out' })).toBeTruthy()
+      expect(tune).not.toHaveBeenCalled()
+      // CONTROL: a short tap is a click, and tunes.
+      cleanup()
+      mount(snapWith({ atu: true, atuSwitchOut: true }), tune, out)
+      const tap = screen.getByRole('button', { name: 'ATU ON' })
+      fireEvent.pointerDown(tap, { pointerType: 'touch' })
+      act(() => {
+        vi.advanceTimersByTime(100)
+      })
+      fireEvent.pointerUp(tap, { pointerType: 'touch' })
+      fireEvent.click(tap)
+      expect(tune).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('menuitem')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the menu is offered only where the tuner can be switched out, and only while it is in', () => {
+    const cases: [Record<string, unknown>, boolean, boolean][] = [
+      [{ atu: true, atuSwitchOut: true }, true, true], // POSITIVE
+      [{ atu: true, atuSwitchOut: false }, true, false], // the path cannot (Flex client, old station)
+      [{ atu: true }, true, false], // a station older than the field
+      [{ atu: false, atuSwitchOut: true }, true, false], // the tuner is already out
+      [{ atu: true, atuSwitchOut: true }, false, false], // no switch-out wired on this screen
+    ]
+    for (const [over, wired, offered] of cases) {
+      mount(snapWith(over), () => {}, wired ? () => {} : undefined)
+      const btn = atuButton()!
+      fireEvent.contextMenu(btn)
+      expect(
+        [btn.getAttribute('aria-haspopup'), screen.queryByRole('menuitem') != null],
+        JSON.stringify({ over, wired }),
+      ).toEqual([offered ? 'menu' : null, offered])
+      cleanup()
+    }
+  })
+
+  it('on a Flex run by Nexus after a matched cycle: ATU ON, a click still tunes, no switch-out', () => {
+    // M1: the Flex client reports its tuner in line after a cycle that matched. The button must keep
+    // running tune-ups (an antenna change, a stale band memory) and offer no switch-out it has not got.
+    const tune = vi.fn()
+    const out = vi.fn()
+    mount(
+      snapWith({ atu: true, atuSwitchOut: false, flexAtu: { tune: {}, status: 'TUNE_SUCCESSFUL', refused: null } }),
+      tune,
+      out,
+    )
+    const btn = screen.getByRole('button', { name: 'ATU ON' })
+    fireEvent.click(btn)
+    fireEvent.contextMenu(btn)
+    expect([tune.mock.calls.length, out.mock.calls.length]).toEqual([1, 0])
+    expect(screen.queryByRole('menuitem')).toBeNull()
+  })
+
+  it('the switch-out keys nothing, so a locked-out tune-up still leaves the menu reachable', async () => {
+    // Outside privileges, or on a CAT path that cannot START a tune: the tune-up stays locked (the
+    // click does nothing), and switching the tuner OUT is still offered — it puts nothing on the air.
+    for (const over of [{ txAllowed: false }, { atuStartTuneUnsupported: true }]) {
+      const tune = vi.fn()
+      const out = vi.fn()
+      mount(snapWith({ atu: true, atuSwitchOut: true, ...over }), tune, out)
+      const btn = screen.getByRole('button', { name: 'ATU ON' })
+      expect([btn.hasAttribute('disabled'), btn.getAttribute('aria-disabled')]).toEqual([false, 'true'])
+      fireEvent.click(btn)
+      expect(tune, JSON.stringify(over)).not.toHaveBeenCalled()
+      fireEvent.contextMenu(btn)
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Switch tuner out' }))
+      expect(out).toHaveBeenCalledTimes(1)
+      cleanup()
+      // CONTROL: with no menu to offer the button is disabled outright, as before.
+      mount(snapWith({ atu: false, atuSwitchOut: true, ...over }), tune, out)
+      expect(screen.getByRole('button', { name: 'ATU' }).hasAttribute('disabled')).toBe(true)
+      cleanup()
+    }
+  })
+
   it('stays, disabled and explaining itself, where the CAT path cannot start a tune', () => {
     mount(snapWith({ atu: true, atuStartTuneUnsupported: true }))
     const atu = atuButton()

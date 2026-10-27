@@ -225,8 +225,13 @@ fn build_cross_windows(libtempo_src: &std::path::Path, out: &std::path::Path) {
         PathBuf::from(&fftw_prefix).join("lib/libfftw3f.a").exists(),
         "cross build needs MinGW FFTW3f at {fftw_prefix}/lib/libfftw3f.a — build it with \
          ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-         --disable-shared --prefix={fftw_prefix}",
+         --disable-shared --enable-sse2 --enable-avx --enable-avx2 --with-our-malloc \
+         --prefix={fftw_prefix}",
     );
+    // Cargo tracks no native library by itself: without these, a rebuilt FFTW (new configure
+    // flags, or another prefix) never reaches a target that already linked the old one.
+    println!("cargo:rerun-if-env-changed=FFTW_MINGW_PREFIX");
+    println!("cargo:rerun-if-changed={fftw_prefix}/lib/libfftw3f.a");
 
     // Configure with the toolchain file. Prefer Ninja (matches the native path),
     // falling back to Unix Makefiles (the cross compilers are unsuffixed MinGW

@@ -294,6 +294,16 @@ impl NodePool {
         })
     }
 
+    /// A greeting-only check found `host` still answering. That attempt did not fail, so it breaks
+    /// any run of failures the skip rule is counting (the rule is failures on EVERY attempt). It
+    /// proves no login, so the node's last working session, its recorded failure and any skip
+    /// already running are left as they are.
+    pub fn greeted(&mut self, host: &str) {
+        if let Some(h) = self.nodes.get_mut(&key(host)) {
+            h.streak = None;
+        }
+    }
+
     /// The nodes to keep connected, best first: at most [`CONNECTED_AT_ONCE`] of `nodes`.
     ///
     /// `callsign` is the operator's own — the bare call, without the cluster SSID, so choosing an
@@ -948,6 +958,32 @@ mod tests {
         // Control: without the reload the same report completes the streak.
         assert!(pool
             .record(host, &Outcome::NoGreeting, true, T0 + 5 * MIN)
+            .is_some());
+    }
+
+    #[test]
+    fn a_good_greeting_between_failures_breaks_the_streak() {
+        // The skip rule is failures on every attempt: a node that answered in between has not
+        // failed every attempt, however many separate failures it collected.
+        let host = "a.example.net:7300";
+        let mut pool = NodePool::default();
+        pool.record(host, &Outcome::NoGreeting, true, T0);
+        pool.record(host, &Outcome::NoGreeting, true, T0 + 3 * MIN);
+        pool.greeted(host);
+        assert_eq!(
+            pool.record(host, &Outcome::NoGreeting, true, T0 + 6 * MIN),
+            None,
+            "the greeting reset the run, so a third failure starts a new one"
+        );
+        assert_eq!(pool.skipped_until(host, T0 + 6 * MIN), None);
+        // The greeting proves no login: it leaves the last working session unset.
+        assert_eq!(pool.health(host).and_then(|h| h.last_ok_unix), None);
+        // Control: the same three failures with no greeting between them do skip it.
+        let mut control = NodePool::default();
+        control.record(host, &Outcome::NoGreeting, true, T0);
+        control.record(host, &Outcome::NoGreeting, true, T0 + 3 * MIN);
+        assert!(control
+            .record(host, &Outcome::NoGreeting, true, T0 + 6 * MIN)
             .is_some());
     }
 

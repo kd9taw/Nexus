@@ -21,7 +21,6 @@
 // are invariant tokens.
 import { dismissTxAlarm } from '../api'
 import { withErrorToast } from '../toast'
-import { useStationControl } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, TxAlarm } from '../types'
 
@@ -36,7 +35,6 @@ export function TxAlarmBanner({
   /** Takes the snapshot the dismissal answers with. */
   onSnap?: (s: AppSnapshot) => void
 }) {
-  const control = useStationControl()
   const shown = alarms?.[0]
   if (!alarms || !shown) return null
   const time = utc(shown.atMs)
@@ -52,20 +50,18 @@ export function TxAlarmBanner({
       {alarms.length > 1 && (
         <span className="ch-txalarm-queue">{t('cockpit.txAlarm.queue', { total: alarms.length })}</span>
       )}
-      {control && (
-        <button
-          type="button"
-          className="np-chip"
-          title={t('cockpit.txAlarm.dismiss.title')}
-          onClick={() =>
-            void withErrorToast(() => dismissTxAlarm(shown.id), t('cockpit.txAlarm.dismiss.failed')).then((s) => {
-              if (s) onSnap?.(s)
-            })
-          }
-        >
-          {t('common.dismiss')}
-        </button>
-      )}
+      <button
+        type="button"
+        className="np-chip"
+        title={t('cockpit.txAlarm.dismiss.title')}
+        onClick={() =>
+          void withErrorToast(() => dismissTxAlarm(shown.id), t('cockpit.txAlarm.dismiss.failed')).then((s) => {
+            if (s) onSnap?.(s)
+          })
+        }
+      >
+        {t('common.dismiss')}
+      </button>
     </div>
   )
 }

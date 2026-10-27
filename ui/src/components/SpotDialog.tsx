@@ -3,7 +3,6 @@ import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { parseOperatorNumber } from '../numInput'
-import { useStationControl } from '../stationAccess'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
@@ -36,7 +35,6 @@ export function SpotDialog({
   const [freq, setFreq] = useState('')
   const [comment, setComment] = useState(defaultComment)
   const [busy, setBusy] = useState(false)
-  const local = useStationControl()
 
   // THE KEYBOARD GOES BACK TO WHERE THE DIALOG WAS OPENED FROM when it closes — cancelled, escaped
   // or posted. It was left on the page itself.
@@ -71,7 +69,7 @@ export function SpotDialog({
   // happy about it. The `canSpot` guard below is what turns an unreadable entry into a
   // greyed-out button instead of a wrong spot in front of everyone.
   const freqNum = parseOperatorNumber(freq)
-  const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0 && local
+  const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0
 
   const submit = async () => {
     if (!canSpot || busy) return
@@ -140,7 +138,6 @@ export function SpotDialog({
             className="settings-input"
             value={comment}
             maxLength={30}
-            placeholder={t('spots.post.comment.placeholder')}
             onChange={(e) => setComment(e.target.value)}
             onKeyDown={onKey}
             autoComplete="off"

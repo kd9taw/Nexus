@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn wave_is_slot_positioned_and_fits_every_period() {
-        // Spec TX-safety invariant 6: len == delay + 79·nsps < period·12000, leading silence exact.
+        // Bounded airtime: len == delay + 79·nsps < period·12000, leading silence exact.
         for speed in Speed::ALL {
             let wave = modulate(&encode_word(&word(), speed), speed, 1000.0, 12_000.0);
             let delay = speed.delay_ms() as usize * 12;

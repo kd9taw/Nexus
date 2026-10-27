@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 //
-// TX-cluster position stability (the panic-control rule): Call CQ / S&P / TX
-// On / Tune / Stop TX / Hold Tx must keep FIXED positions across every QSO/TX
+// TX-cluster position stability (the panic-control rule): TX On / Tune / Stop
+// TX / Hold Tx / Call CQ / S&P must keep FIXED positions across every QSO/TX
 // state — a Stop TX that drifts as the DX call appears or the rig keys is a
 // mis-click on the one control that must never be missed. Measured before the
 // fix (real Chrome, the tree's sheet): Stop TX x = 376 idle → 648 with a DX
 // call → 688 while transmitting.
 //
 // jsdom computes no layout, so the pin is structural and split in two:
+// The TX cluster OPENS the strip, as it opens every other screen's TX strip
+// (CockpitTxStrip): the latch, then Tune, so Tune is in the same spot on the FT
+// screen as on the other seven. It used to come after Call CQ / S&P, so on FT
+// alone it sat one cluster further right.
 //   1. HERE: nothing renders before the two button clusters, in any state —
 //      every state-variable readout member (state cap, AUTO-CQ pill, sequencer
 //      state, DX call, report) lives strictly AFTER the TX cluster;
@@ -85,33 +89,40 @@ function leadingCensus(container: HTMLElement): string[] {
   const out: string[] = []
   for (const child of Array.from(strip!.children)) {
     out.push(child.className)
-    if (child.classList.contains('cq-txctl')) return out
+    if (child.classList.contains('cq-roles')) return out
   }
-  throw new Error('no .cq-txctl cluster inside the strip')
+  throw new Error('no .cq-roles cluster inside the strip')
 }
 
 describe('the TX cluster is start-anchored: state-variable content never precedes it', () => {
   for (const state of STATES) {
-    it(`${state}: the strip opens with Call CQ/S&P then the TX cluster`, () => {
+    it(`${state}: the strip opens with the TX cluster then Call CQ/S&P`, () => {
       const { container } = renderStrip(state)
       const census = leadingCensus(container)
       expect(
         census,
         `children before/at the TX cluster in state '${state}' — any state-variable member ` +
           'here moves Stop TX mid-QSO',
-      ).toEqual(['cq-roles', 'op-controls cq-txctl'])
+      ).toEqual(['op-controls cq-txctl', 'cq-roles'])
     })
   }
 
-  it('every state-variable readout member renders AFTER the TX cluster', () => {
+  it('Tune is the second control of the strip, right after the TX On/Off latch, as on every other screen', () => {
+    const { container } = renderStrip('idle')
+    const first = container.querySelector('.cockpit-qso')!.firstElementChild!
+    expect(first.classList.contains('cq-txctl'), 'the TX cluster must open the strip').toBe(true)
+    expect([...first.children].slice(0, 2).map((e) => e.textContent!.trim())).toEqual(['TX Off', 'Tune'])
+  })
+
+  it('every state-variable readout member renders AFTER both button clusters', () => {
     const { container } = renderStrip('tx') // the state where all five exist
-    const txctl = container.querySelector('.cq-txctl')!
+    const lastCluster = container.querySelector('.cq-roles')!
     for (const cls of ['cq-statecap', 'cq-autocq', 'cq-state', 'cq-dx', 'cq-rpt']) {
       const m = container.querySelector(`.${cls}`)
       expect(m, `.${cls} missing in the TX state`).not.toBeNull()
       expect(
-        txctl.compareDocumentPosition(m!) & Node.DOCUMENT_POSITION_FOLLOWING,
-        `.${cls} renders before the TX cluster — its width would shift the panic controls`,
+        lastCluster.compareDocumentPosition(m!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `.${cls} renders before the button clusters — its width would shift the panic controls`,
       ).toBeTruthy()
     }
   })

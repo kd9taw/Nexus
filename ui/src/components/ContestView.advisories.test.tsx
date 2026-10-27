@@ -182,6 +182,23 @@ describe('the banned-mode chip names the mode the station is on', () => {
     expect(chip()!.getAttribute('title')).toBe(said('QPSK31'))
   })
 
+  it('on the JTTY screen the chip names JTTY, the keyboard mode the station reports, never the PSK cockpit’s', async () => {
+    render(
+      <ContestView
+        fieldDay={ilqp()}
+        onSetMode={() => {}}
+        fdActive
+        fdRuleset={{ ...ILQP_RULES, bannedModes: ['JTTY', 'PSK31', 'QPSK31'] }}
+        tier="Ft8"
+        section="keyboard"
+        keyboardMode="JTTY"
+      />,
+    )
+    await settle()
+    expect(afterWindow()?.textContent).toBe('JTTY · no credit')
+    expect(chip()!.getAttribute('title')).toBe(said('JTTY'))
+  })
+
   it('with no section (the Remote page’s observation carries none) the chip reads the tier, as it always did', async () => {
     render(<ContestView fieldDay={ilqp()} onSetMode={() => {}} fdActive fdRuleset={ILQP_RULES} tier="Ft8" />)
     await settle()

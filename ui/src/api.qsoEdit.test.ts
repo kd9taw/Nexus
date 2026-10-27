@@ -32,7 +32,7 @@ describe('QsoEdit', () => {
     txPower: null,
     whenUnix: 1_788_000_000,
     timeOffUnix: null,
-    ota: { myProgram: null, myRef: null, theirProgram: null, theirRef: null },
+    ota: { myProgram: null, myRef: null, theirProgram: null, theirRef: null, iota: null },
     myGrid: null,
     myRig: null,
     qslSentVia: null,

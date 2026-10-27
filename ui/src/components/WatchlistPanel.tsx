@@ -1,7 +1,5 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
-// string comes from the catalog. What does NOT: the prefixes, grid squares and entity names the
-// placeholders offer as EXAMPLES — they are technical tokens, so they live below as
-// WATCH_EXAMPLES (the rule is in `i18n/index.ts`) — and `DXCC`, a programme's name.
+// string comes from the catalog. What does NOT: `DXCC`, a programme's name.
 import { useEffect, useState } from 'react'
 import {
   loadWatchlist,
@@ -13,17 +11,6 @@ import {
 } from '../watchlist'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
-
-/** Example values, every one a token: two callsign wildcards, two grid wildcards, and a
- * DXCC entity name. A locale may swap the entity for one its operators chase; the wildcards
- * are syntax and never change. */
-const WATCH_EXAMPLES = {
-  callPrefix: 'VP8*',
-  call: '3Y0J',
-  grid: 'FN31',
-  gridPrefix: 'EM7*',
-  entity: 'Bouvet',
-}
 
 /** The award programme's name — three letters in every language. */
 const DXCC_PROGRAM = 'DXCC'
@@ -158,19 +145,6 @@ export function WatchlistPanel() {
         <input
           className="settings-input"
           value={value}
-          placeholder={
-            kind === 'call'
-              ? t('watchlist.add.value.placeholder.call', {
-                  first: WATCH_EXAMPLES.callPrefix,
-                  second: WATCH_EXAMPLES.call,
-                })
-              : kind === 'grid'
-                ? t('watchlist.add.value.placeholder.grid', {
-                    first: WATCH_EXAMPLES.grid,
-                    second: WATCH_EXAMPLES.gridPrefix,
-                  })
-                : t('watchlist.add.value.placeholder.dxcc', { entity: WATCH_EXAMPLES.entity })
-          }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') add()

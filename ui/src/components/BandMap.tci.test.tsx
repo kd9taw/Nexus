@@ -3,7 +3,8 @@
 //
 // A program on the station's TCI server (a logger, a skimmer) sends spots; the band map draws each
 // as it draws a cluster spot, dotted, with its source ("TCI 2", the program's connection number)
-// before the call and in the tooltip. What a program sends is data: its text reaches the tooltip
+// before the call, and a tooltip of its own: "from TCI connection 2", and "click to tune" where a
+// cluster spot's says "click to work". What a program sends is data: its text reaches the tooltip
 // as the characters it is, never as markup. ⛔ A click on a program's spot goes to `onTciSpot`,
 // which only tunes, and never to `onWorkSpot`, whose Work can change the section and arm; with no
 // `onTciSpot` it does nothing at all. Every case has its control: the cluster spot beside it.
@@ -66,12 +67,15 @@ describe("a program's spot on the band map", () => {
     expect(ours, 'the program spot is drawn').toBeTruthy()
     expect(ours!.querySelector('.spot-type-badge.type-tci')?.textContent).toBe('TCI 2')
     expect(ours!.className).toContain('from-tci')
-    expect(ours!.title).toContain('TCI · Connection 2')
+    // Its tooltip names the source in one phrase and says the click only tunes.
+    expect(ours!.title).toContain('from TCI connection 2')
+    expect(ours!.title).toMatch(/ — click to tune$/)
     const cluster = label(container, 'W1AW')
     expect(cluster, 'control: the cluster spot is drawn').toBeTruthy()
     expect(cluster!.querySelector('.type-tci')).toBeNull()
     expect(cluster!.className).not.toContain('from-tci')
     expect(cluster!.title).not.toContain('TCI')
+    expect(cluster!.title).toMatch(/ — click to work$/)
     expect(container.querySelectorAll('.bandmap-tick.from-tci')).toHaveLength(1)
   })
 

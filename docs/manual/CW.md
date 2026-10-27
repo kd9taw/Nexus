@@ -235,6 +235,59 @@ Type any free-form text in the text box and press `Enter` or click **Send**. The
 
 ---
 
+## Turn Cue
+
+If you copy CW with the decoder rather than by ear, it is hard to hear when the other station has
+finished and it is your turn. The **turn cue** says so. It is a small lamp at the start of the send
+row, in front of His Call, and it lights the F-key that fits:
+
+| Lamp | What it means |
+|---|---|
+| `◌ Listening` | Nothing heard lately. |
+| `≋ W1ABC sending` | The other station is sending. |
+| `≋ W1ABC finishing…` | Their over has just ended on K, KN or a call. The key that fits gets a dashed outline. |
+| `▶ Your turn · F3` | Your turn to send. The key that fits glows: F2 to answer a CQ, F3 when a station has come back to you, F5 for your call once. With no key that fits (in a ragchew), it says `Your turn · type`. |
+| `▶ Probably you · F5 once` | The other station sent part of a call that matches yours, like `KD9?`. |
+| `⏸ Hold · W2XYZ` | Not your turn: the over was for another station. |
+| `⇡ UP · split off` | The DX listens above his frequency and your split is off. |
+| `? Not sure · F7` | A long silence, and nothing said whose turn it is. F7 (AGN) gets a dotted outline. |
+| `● You're sending` | You are keying. |
+| `◔ Listening for a reply` | Your over has ended. After a CQ or a call the ring empties while you wait, then the lamp says `No reply`. |
+| `✓ 73 · log it` | They are signing. F4 (73) glows. |
+
+**Your turn needs silence AND an end marker** — K, KN, BK, QRZ, AGN, a `?` after part of a call,
+UP, a CQ ending on the caller's call, or TU in a contest. Silence alone only gives `Not sure`. The
+lamp waits for what the decoder has actually heard, and it takes the turn back the moment the
+classic decoder hears keying again at your pitch. Your own over is never read as theirs: letters
+heard while you are keying (a radio that feeds its sidetone back) are ignored.
+
+When a DX station comes back to you in a pileup (`KD9TAW 5NN`), no key glows: F3 would send a whole
+ragchew reply. The lamp says `Your turn · send 5NN TU`. In a contest the keys are the contest set's
+(F4 your call, F6 your exchange, F3 TU), and with **Enter Sends Message** on, ESM lights its own
+keys and the lamp says `Your turn · Enter`.
+
+**It never transmits.** It only lights a key and says what fits. Every send is still your own key
+press, and nothing is held back: a key pressed while the lamp says the other station is sending
+still sends.
+
+**Pace.** With the turn cue on, the Decode pane's speed readout reads `them 18 · you 25 WPM`, with a `⇣`
+and an amber outline when you are 3 WPM or more faster. Click it to send at their speed for this
+contact; your saved speed does not change.
+
+**When it shows.** Only with the AI decoder on and the Decode pane shown, and never in an
+unassisted contest entry (no CW decoder output shows there). To hide it for good, untick
+**Turn Cue** in ⊞ Panels. A screen reader hears "Your turn" and "Hold" once per over through the
+announcements in **Settings → Appearance ▸ Accessibility & eyes-free** ("Not sure" and "No reply"
+only at the fullest setting). A sound is there too, off until you turn on **CW turn sound** in the
+same section: a short rising chirp, never while you transmit.
+
+**Timing.** The AI decoder's copy lands about a second after a letter is sent, so the cue comes about
+a second after the other station stops. That is in time for a ragchew or an answer to a CQ, tight
+for a contest's search and pounce, and too slow to win a pileup race. There its value is telling you
+when *not* to call.
+
+---
+
 ## Tune
 
 Click **Tune** to key a steady, unmodulated carrier for tuning an antenna tuner (ATU) or setting an amplifier. It shows **TUNING…** while the carrier is on; click again to stop. The Transmit Watchdog also drops it automatically, and it's disabled when the current frequency is outside your license privileges.
@@ -344,6 +397,10 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
   speed, and the Decode pane says why.
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
+- **Turn cue limits:** it reads the one signal you are copying, about a second behind the air. A
+  run-together prosign the AI decoder prints as other letters is no end marker to it, so such an
+  over ends in `Not sure` rather than `Your turn`; and a second station inside the decoder's window
+  can hold `sending` up or look like the end of the over.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.
 - **Soundcard PTT tail:** 250 ms, fixed; not configurable.
 - **Desktop-only:** Tauri v2; no web or mobile build.

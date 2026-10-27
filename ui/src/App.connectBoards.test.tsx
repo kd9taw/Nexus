@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// A WORK FROM A CONNECT BOX IS ITS BOARD'S OWN WORK — proven on the real App (plan piece H8).
+// A WORK FROM A CONNECT BOX IS ITS BOARD'S OWN WORK — proven on the real App.
 //
 // THIS MOUNTS THE REAL APP, the real ConnectView, the real Spots board and the real POTA/SOTA board,
 // and stubs only the backend (api) and the waterfall canvas. Each case works the same station twice —
@@ -116,6 +116,7 @@ vi.mock('./api', async (importOriginal) => {
     getPca: vi.fn(async () => null),
     getSatellites: vi.fn(async () => null),
     getOtaMapSpots: vi.fn(async () => []),
+    getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
     getLogStats: vi.fn(async () => null),
     getContests: vi.fn(async () => []),
     getSatSchedule: vi.fn(async () => []),

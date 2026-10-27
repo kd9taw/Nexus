@@ -17,6 +17,7 @@ import type { SpotRow } from '../types'
 // cty.dat name verbatim — the centroid lookup is an exact-string join.
 vi.mock('../api', () => ({
   openQrzPage: vi.fn(),
+  setPounceSpotterFilter: vi.fn(async () => {}),
   getDxccEntityLocations: vi.fn(async () => [['United States', 39.8, -98.6]]),
 }))
 

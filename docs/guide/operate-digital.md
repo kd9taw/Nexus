@@ -62,6 +62,13 @@ a cursor or not. WSPR, MSK144, FT2 and the Tempo modes keep a single line.
 
 ![The waterfall pane's header and the top of the waterfall below it. The header reads WATERFALL, followed by the gesture legend "left = RX · right / Shift = TX · Ctrl = both". Under it FT8 traces scroll across the passband, the frequency ruler running 500, 1000 and 1500 Hz along the bottom edge, with two cursors standing separately in the band: a green line labelled RX low in the pane, and a red line labelled TX a few hundred hertz above it.](../img/manual/operate-waterfall.webp)
 
+**Callsigns on the waterfall.** Each station decoded in the last period is labelled along the top
+of the waterfall, over its own audio frequency. The station in the DX Call box is shown in red.
+When the labels crowd, they stack in up to three rows: the DX Call station first, then a station
+calling you, then the strongest. A count says how many had no room. Clicking a label moves your
+RX cursor there, as a left-click on the waterfall does. The **Calls** button in the pane header
+turns the labels off and on, and Nexus remembers the choice.
+
 **Band Activity** scrolls chronologically, bottom-pinned, with a reviewing pause
 when you scroll up and period separators between T/R cycles. Every row carries
 annotations stock WSJT-X never had:
@@ -87,6 +94,12 @@ Rows worked before carry **B4**; **L** and **LoTW** mark calls known to upload t
 LoTW; **POTA** flags a park activation; the entity name and bearing sit at the
 right of every row.*
 
+**−B4** hides the stations you have worked before. The small menu beside it picks which ones:
+**Any band** (the default) hides every station worked before, on any band. **This band** hides
+only the stations worked on the band you are on, so a station you have worked only on another
+band stays on screen and you can work it for a new band. The Rx Frequency pane follows the same
+choice, and Nexus remembers it.
+
 **Classic ↔ Roster.** A single toggle switches the layout:
 
 - **Classic** is the stock-style Band Activity view, with the Tx1–Tx6 message
@@ -96,7 +109,11 @@ right of every row.*
   stations within a distance of your grid square (**Within 1000 mi**, say, in the
   units set in [Settings ▸ Station ▸ Operator & Radio](settings-reference.md#operator--radio)).
   A station that has not sent a grid yet stays on the list, because its distance
-  is not known, and so does the station you are working.
+  is not known, and so does the station you are working. Beside **Hide worked** is the
+  same window picker the Spots panel has: **Any time** (the default), **Until 0000Z**, **1 h**,
+  **4 h**, **24 h** or **7 days**. A station you last worked before the window shows again,
+  which suits special-event calls that are on the air all week. A station you still need for
+  something always shows. Nexus remembers the choice.
 
 Use Classic when you want the familiar WSJT-X message-by-message control; use
 Roster when you're scanning a busy band for the one call worth working.
@@ -187,6 +204,12 @@ not as 59.*
    after N calls" ends an unanswered run; "Auto-CQ: drop a silent caller after N
    overs" abandons a station that answered then went quiet.
 
+A call nobody answers goes on until the TX watchdog
+([Settings ▸ Digital](settings-reference.md#digital-ft8ft4) ▸ **Tx Watchdog (min)**) turns
+transmit off. The QSO strip then shows **TX watchdog stopped the call** in red in place of the
+sequencer state, and the window's taskbar button flashes once (the dock icon bounces on macOS),
+as WSJT-X does. **TX On** calls again.
+
 Remember to pick your **transmit period** (Tx 1st / even, or Tx 2nd / odd) —
 the two stations in a QSO must be on opposite periods. The choice is on the top
 bar and in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
@@ -231,6 +254,12 @@ end) is not implemented.
   the status line says the over was dropped and how late the radio was. However
   many are dropped in a row, TX stays on, as in WSJT-X: the TX watchdog ends a
   run that never gets an over out. A faster CAT baud rate keys sooner.
+- **A late reply switches the over on the air**, as in WSJT-X. FT8's full
+  decode runs 14.4 s into the period and FT4's at 6.05 s, so a weak R-report or
+  RR73 that only the full decode finds can arrive after your over has started.
+  The rest of that over becomes the new message; the over keeps its start and
+  end, and ALL.TXT gets a second Tx line. Once an over carries your RR73 or 73,
+  no reply changes it. A Tx button clicked during an over switches it too.
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).

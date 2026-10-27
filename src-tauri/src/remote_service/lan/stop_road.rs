@@ -35,7 +35,7 @@
 //! over's state with its holes on the air so far (display only) when it changes and again after
 //! each renewal, and presence's deadline at each renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
 //! computer has spoken: the shack answers the address of the last datagram that verified. The
-//! messages' format has its own number, in the build's contract. Both ends read and write them with
+//! messages' format is frozen across builds, outside the build's contract. Both ends read and write them with
 //! the client core's (`tempo_client::stop_road::wire`), with the state echo's clock ([`StateClock`]).
 //!
 //! ## Stop is never refused here
@@ -63,7 +63,8 @@
 //!   two seconds old, and to have begun after every Stop this connection has had taken, on either
 //!   road: a hold the network delivers after the Stop pressed after it never keys. Refused, it is said at each hold and never keys later; taken, it goes to the
 //!   held PTT the engine decides (`PttHold`), and each of its reports comes back here for this
-//!   computer alone. A hold for a press that will never key (refused there, or ended) is answered
+//!   computer alone. Held, it ends at [`PRESS_CAP`] on this station's own clock however long its
+//!   computer goes on holding it, and is never held again. A hold for a press that will never key (refused there, or ended) is answered
 //!   with why, one datagram for each hold, so the one report that said it can be lost. A release
 //!   is always taken.
 //! - **What a start on the command link needs** is read off [`Ready`]: the presence this road holds,
@@ -87,10 +88,10 @@ use crate::command_dispatch::Refusal;
 use super::super::operations::{RoadPresence, RoadStop};
 use super::datagram::{self, End, Keys, Tag, EXPORTED};
 
-// What the road carries, its keys' afterlife, the state echo's clock, how fresh a state must be
-// and the format's text: the client core's, which both ends read.
+// What the road carries, its keys' afterlife, the state echo's clock and how fresh a state must
+// be: the client core's, which both ends read.
 #[cfg(test)]
-pub(crate) use tempo_client::stop_road::wire::{contract_text, FRESH};
+pub(crate) use tempo_client::stop_road::wire::FRESH;
 pub(crate) use tempo_client::stop_road::wire::{Down, StateClock, Up, AFTERLIFE};
 
 /// The road's port, past the listener's TCP port: 42077 beside 42075, the audio road's 42076 between.
@@ -99,6 +100,17 @@ pub(crate) const PORT_AFTER: u16 = 2;
 pub(crate) const TICK: Duration = Duration::from_millis(20);
 /// Presses remembered as refused per road, so a refused press never keys later.
 const REFUSED_KEPT: usize = 64;
+/// The longest one press from afar is held here, from the hold that began it, by this station's own
+/// clock: Phone's Lock cap. The road cannot tell a Lock from a finger, so it bounds every press;
+/// a computer whose operator answers "Still talking?" goes on under a new press.
+pub(crate) const PRESS_CAP: Duration = tempo_client::phone_lock::CAP;
+
+/// Each Stop's acknowledgement as it left the shack, by its road's tag and its number, for the
+/// tests: a Stop's acknowledgement is timed here, never by when a test's own end of the road, its
+/// thread starved on a loaded machine, gets round to reading it. Noted after the answer has gone,
+/// so it holds up no Stop.
+#[cfg(test)]
+pub(crate) static ANSWERED: Mutex<Vec<(Tag, u64, Instant)>> = Mutex::new(Vec::new());
 
 // --- What a start on the command link needs ------------------------------------------------------
 
@@ -279,8 +291,9 @@ struct Road {
     unpublished: bool,
     /// The snapshot its newest heartbeat named.
     named: u64,
-    /// The press this road last handed to the held PTT, until its release.
-    pressing: Option<u64>,
+    /// The press this road last handed to the held PTT, and when its first hold came, until its
+    /// release.
+    pressing: Option<(u64, Instant)>,
     /// A renewal minted while the Engine was busy, with its deadline: handed over at the next look.
     pending: Option<(TransmitPermit, Instant)>,
     /// The microphone over as this computer was last told it.
@@ -306,6 +319,8 @@ pub(crate) struct StopRoad {
     powers: Arc<Powers>,
     stopping: Arc<AtomicBool>,
     afterlife: Duration,
+    /// [`PRESS_CAP`], or a test's own.
+    cap: Duration,
 }
 
 /// The road's socket and thread, as the listener holds them until it stops.
@@ -333,7 +348,7 @@ impl StopRoad {
     /// its thread. `None` if no socket could be had or no thread started: the listener then runs
     /// without it, and Stop has the command link alone.
     pub(crate) fn start(at: SocketAddrV4, hears: Hears, powers: Powers) -> Option<Running> {
-        Self::start_with(at, hears, powers, AFTERLIFE)
+        Self::start_with(at, hears, powers, AFTERLIFE, PRESS_CAP)
     }
 
     pub(crate) fn start_with(
@@ -341,6 +356,7 @@ impl StopRoad {
         hears: Hears,
         powers: Powers,
         afterlife: Duration,
+        cap: Duration,
     ) -> Option<Running> {
         let socket = UdpSocket::bind(at)
             .or_else(|_| UdpSocket::bind(SocketAddrV4::new(*at.ip(), 0)))
@@ -362,6 +378,7 @@ impl StopRoad {
                         changed,
                         stopping,
                         afterlife,
+                        cap,
                         pairings,
                         roads: HashMap::new(),
                     }
@@ -377,6 +394,7 @@ impl StopRoad {
                 powers,
                 stopping: stopping.clone(),
                 afterlife,
+                cap,
             },
             stopping,
             thread,
@@ -395,6 +413,7 @@ impl StopRoad {
             powers: Arc::new(powers),
             stopping: Arc::new(AtomicBool::new(false)),
             afterlife: AFTERLIFE,
+            cap: PRESS_CAP,
         }
     }
 
@@ -452,6 +471,7 @@ impl StopRoad {
             changed,
             stopping: self.stopping.clone(),
             afterlife: self.afterlife,
+            cap: self.cap,
             pairings: (self.powers.pairings)(),
             roads: HashMap::from([(tag, road)]),
         };
@@ -629,6 +649,7 @@ struct Thread {
     changed: mpsc::Receiver<Change>,
     stopping: Arc<AtomicBool>,
     afterlife: Duration,
+    cap: Duration,
     /// `Powers::pairings` when the roads' computers were last asked about.
     pairings: u64,
     roads: HashMap<Tag, Road>,
@@ -731,6 +752,11 @@ impl Thread {
                 road.ready.took_stop(stop);
                 self.powers.stop.stop();
                 answer(&self.carrier, road, &Down::Stopped { stop });
+                #[cfg(test)]
+                ANSWERED
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((tag, stop, Instant::now()));
             }
             Up::Hold { press, stops } => {
                 if road.closed.is_some() {
@@ -742,7 +768,7 @@ impl Thread {
                 // fetched under two seconds old and no Stop of its computer's taken since it began. Said at each hold, one datagram for each, and a
                 // press refused never keys later. A press whose freshness cannot be read this moment
                 // is neither: its next hold asks again.
-                let new = road.pressing != Some(press);
+                let new = road.pressing.map(|(pressing, _)| pressing) != Some(press);
                 let fresh = if new {
                     match road.clock.freshness(road.named, now) {
                         Some(fresh) => fresh,
@@ -771,9 +797,20 @@ impl Thread {
                     answer(&self.carrier, road, &said);
                     return;
                 }
-                road.pressing = Some(press);
+                let began = match road.pressing {
+                    Some((pressing, began)) if pressing == press => began,
+                    _ => now,
+                };
+                road.pressing = Some((press, began));
                 let id = press_id(&tag, press);
-                self.powers.ptt.hold(&id, now);
+                // ⛔ A PRESS FROM AFAR ENDS AT ITS CAP, on this station's own clock from the hold
+                // that began it here: let go, and never held again, however long its computer goes
+                // on holding it. Its holds are then answered with how it ended, below.
+                if now.saturating_duration_since(began) >= self.cap {
+                    self.powers.ptt.release(&id);
+                } else {
+                    self.powers.ptt.hold(&id, now);
+                }
                 // ⛔ A hold for a press that will never key is answered with why, one datagram for
                 // each hold: the one report that said it may have been lost, and its computer would
                 // go on holding an over that is not on the air, its microphone open and the
@@ -789,7 +826,7 @@ impl Thread {
             }
             // The off half: always taken.
             Up::Release { press } => {
-                if road.pressing == Some(press) {
+                if road.pressing.is_some_and(|(pressing, _)| pressing == press) {
                     road.pressing = None;
                 }
                 self.powers.ptt.release(&press_id(&tag, press));

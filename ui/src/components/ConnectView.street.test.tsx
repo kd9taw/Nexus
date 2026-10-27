@@ -35,6 +35,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   streetMapInfo: vi.fn(async () => ({ folder: '/home/op/.local/share/Nexus/maps', bench: bench.on })),
   streetMapPacks: vi.fn(async () => bench.packs),
   streetMapUnfinished: vi.fn(async () => []),

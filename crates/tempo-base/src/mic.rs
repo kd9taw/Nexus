@@ -2,7 +2,7 @@
 //! stream shows it to the page and Stop's road carries it to a computer driving the shack. The
 //! engine's microphone path, which decides both, is tempo-app's `mic`.
 
-/// Why an over ended, as the operator is told (the audio design's §7).
+/// Why an over ended, as the operator is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicEnded {
     /// The operator let go.
@@ -11,7 +11,7 @@ pub enum MicEnded {
     Stopped,
     /// No audio for the engine's `MicMode::gap_ms` (M2).
     AudioGap,
-    /// The stream's transmit presence lapsed (M7).
+    /// The stream's transmit presence lapsed.
     Presence,
     /// The per-over ceiling (C1).
     Ceiling,

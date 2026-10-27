@@ -8,7 +8,7 @@
 //! decide** — the entry strip's boxes, the dupe verdict, the score, and the Cabrillo the
 //! operator submits.
 //!
-//! Every expected number in here comes from `tasks/contest-sources-verified.md`, which
+//! Every expected number in here comes from a check that
 //! read each sponsor's current page in full on 2026-09-09; the quotes are reproduced at
 //! each assertion so a rules change is a red test with the sentence it contradicts
 //! attached, not a silent rescore.

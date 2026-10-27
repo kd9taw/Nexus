@@ -17,7 +17,7 @@ const READY = 'Ready. Start the stream to see and operate Nexus at the shack.'
 const WAITING = 'Waiting for the station…'
 const STARTING = 'Starting the stream…'
 const REFUSED = "The station couldn't start the stream just now. Start the stream again."
-const PERMISSION = 'Station control is off for this browser. Allow it in Nexus at the shack (Settings → Station → Remote access → Advanced), then try again.'
+const PERMISSION = 'Station control is off for this browser. Allow it in Nexus at the shack (Settings → Remote → Advanced), then try again.'
 const OCCUPIED = 'Another browser is using this station. You can start once it lets go.'
 
 const clients: OperationClient[] = []
@@ -27,7 +27,7 @@ function fixture() {
   vi.useFakeTimers()
   let now = 1000
   const sent: { request: { type: string; requestId: string; stationBootId?: string } }[] = []
-  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined, 4)
+  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, 4)
   clients.push(client)
   const h = harness()
   let revision = 1

@@ -7,7 +7,6 @@
 // readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
 // stay in the code.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useStationCapability, useStationControl } from '../stationAccess'
 import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
@@ -55,6 +54,7 @@ import { normalizeOverlayText } from '../sstvOverlayFont'
 import { SSTV_PANEL_IDS, SSTV_PANELS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import { setViewerPicture, SSTV_VIEWER_PANEL } from './SstvViewer'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getSstvState,
@@ -75,6 +75,7 @@ import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
 import { drivesAnotherStation } from '../features/durableStore'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { stationPictureBytes, useStationPicture } from '../features/shackFiles'
 import { ShackFilesSave } from './ShackFilesSave'
 import { pollSingleFlight } from '../singleFlight'
@@ -573,11 +574,8 @@ function ReceivedThumb({entry}: {entry:SstvGalleryEntry}) {
  * txState=false: nothing here transmits.
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings, holdDataSubmode }: Props) {
-  const canControl=useStationControl(), receiverControl=useStationCapability('decoder')
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
-  const galleryControl=useStationCapability('sstvGallery')
-  const rotatorControl=useStationCapability('rotator')
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -659,7 +657,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
   const armed = sstv?.armed === true
   const toggleArm = () => {
-    if (!receiverControl) return
     void sstvArm(!armed)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
@@ -682,7 +679,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       : 0
 
   const manualStart = () => {
-    if (!receiverControl) return
     void sstvManualRx(manualMode)
       .then(setSstv)
       .catch(() => pushToast(t('sstv.manualRx.failed'), 'error'))
@@ -716,7 +712,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Commit a typed dial from the shared header readout; rejects out-of-plan
   // frequencies with a toast (same as the other cockpits).
   const commitDial = (mhz: number) => {
-    if (!canControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -877,7 +872,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
     // Destructive, so it takes the same confirm on both sides; a browser needs the station's own
     // gallery hint on top of that, and without it the ✕ is dead rather than refused at the station.
-    if (!galleryControl) return
     if (
       !(await confirmDialog({
         title: t('sstv.gallery.delete.confirm.title', {
@@ -1454,7 +1448,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // causes is not announced a second time when the engine reports it. A new picture clears it.
   const ownStop = useRef(false)
   const sendImage = async () => {
-    if (!canControl) return
     if (!packed || sending) return
     // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
     // empty call is not a cosmetic gap. The backend refuses the same way and is the
@@ -1559,7 +1552,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   const stopTx = () => {
-    if (!canControl) return
     ownStop.current = true
     void sstvStop()
       .then((s) => {
@@ -1574,7 +1566,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   // ⛔ HOW A PICTURE ENDED, SAID ONCE as it stops sending: "finished" only for a picture that
-  // played out (N57b, 2026-09-30: one that did not was never finished).
+  // played out (one that did not was never finished).
   //  • This dock's Stop has already said "stopped", the moment it fired.
   //  • A picture the engine dropped or cut short shows its warning line, an alert that says why.
   //  • A picture that played out still shows its whole key-down elapsed: the radio loop stamps
@@ -1684,12 +1676,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             value: txPower,
             unit: '%',
             onChange: (pct: number) => {
-              if (!canControl) return
               // The drag IS the operator's latest word on drive, and it has already reached
               // the rig — Send must not overwrite it with the Settings default.
               powerTouched.current = true
               setTxPower(pct)
-              void setRfPower(pct / 100)
+              void setRfPower(pct / 100).catch(showWhenDriving)
             },
             label: t('sstv.header.power.label'),
             title: t('sstv.header.power.title'),
@@ -1760,7 +1751,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className={`sstv-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
-            disabled={!receiverControl}
             onClick={toggleArm}
             title={armed ? t('sstv.arm.on.title') : t('sstv.arm.off.title')}
           >
@@ -1775,7 +1765,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <span>{t('sstv.manualRx.label')}</span>
             <select
               value={manualMode}
-              disabled={!receiverControl}
               aria-label={t('sstv.manualRx.mode.aria')}
               onChange={(e) => setManualMode(e.target.value)}
             >
@@ -1796,7 +1785,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           <button
             type="button"
             className="cw-macro sstv-manual-rx"
-            disabled={!receiverControl}
             onClick={manualStart}
             title={t('sstv.manualRx.start.title')}
           >
@@ -1806,12 +1794,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               box: the station it answers is the one the Reply preset uses, the newest FSK ID heard.
               `active`, because this cockpit stays mounted while hidden (its VIS receiver never
               sleeps). Its ■ stops the rotator, never a transmission. */}
-          {canControl || rotatorControl ? <RotorStrip
+          <RotorStrip
             active={active}
             onOpenSettings={onOpenSettings}
             targetCall={lastHeardCall}
-            onPointAt={rotorPointAt(canControl)}
-          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+            onPointAt={rotorPointAt()}
+          />
         </CockpitHeader>
       )}
 
@@ -1960,15 +1948,19 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       {snap && (
         <CockpitTxStrip
           radio={snap.radio}
-          onSnap={onSnap}
           onSetTxEnabled={onSetTxEnabled}
-          onTune={(on) => { if(canControl) void setTune(on).then((st) => onSnap?.(st)) }}
+          onTune={(on) => { void setTune(on).then((st) => onSnap?.(st)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
-            canControl && void atuTune()
+            void atuTune()
               .then((st) => onSnap?.(st))
               .catch((e) => pushToast(String(e), 'error'))
           }
-          onStopTx={() => { if(canControl) void haltTx() }}
+          onAtuBypass={() =>
+            void atuBypass()
+              .then((st) => onSnap?.(st))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onStopTx={() => { void haltTx() }}
         />
       )}
 
@@ -2337,7 +2329,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                       when: fmtUtc(g.finishedUtc),
                     })}
                     title={t('sstv.gallery.delete.title')}
-                    disabled={!galleryControl}
                     onClick={() => void deleteImage(g)}
                   >
                     ✕
@@ -2380,7 +2371,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           stay parked — mid-column it scrolled off the TOP on the way to the gallery. */}
       {/* ⚠️ THE BAR'S OWN ACCESSIBLE NAME IS NOT MIGRATED — it names the stop control it
           holds, and it moves with the stop line in the transmit-path batch. */}
-      <div className={`sstv-tx-bar${!canControl ? ' remote-observer-dock' : ''}`} aria-label="SSTV transmit controls">
+      <div className="sstv-tx-bar" aria-label="SSTV transmit controls">
         <label className="sstv-tx-mode">
           <span>{t('sstv.tx.mode.label')}</span>
           <select
@@ -2405,7 +2396,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className="sstv-tx-send"
             onClick={() => void sendImage()}
-            disabled={!canControl || !packed || sending || !callsign}
+            disabled={!packed || sending || !callsign}
             title={
               !packed
                 ? t('sstv.tx.send.noImage.title')
@@ -2423,7 +2414,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             type="button"
             className="sstv-tx-stop"
             onClick={stopTx}
-            disabled={!canControl || !sending}
+            disabled={!sending}
             title="Stop the transmission in progress and unkey"
           >
             Stop

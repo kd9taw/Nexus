@@ -157,6 +157,7 @@ Selectable in the Rig Model dropdown (Hamlib model number in parentheses).
 | IC-7300 | 3073 |
 | IC-705 | 3085 |
 | IC-7610 | 3078 |
+| IC-7850 / IC-7851 | 3075 |
 | IC-9700 | 3081 |
 | IC-7100 | 3070 |
 | IC-718 | 3013 |

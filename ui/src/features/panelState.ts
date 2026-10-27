@@ -38,7 +38,7 @@
 //                which ends the tune carrier and only that. · the Space bar (window keyup) →
 //                the same setPtt(false) as PTT-release, and ONLY while `lock` is off: both
 //                Space handlers early-return in Lock (hands-free) mode. · Esc (App's window
-//                keydown while Phone is shown, N71) → the same halt_tx as Stop TX; the voice
+//                keydown while Phone is shown) → the same halt_tx as Stop TX; the voice
 //                keyer's own Esc still stops its playback.
 //     · CW     — Stop TX (CockpitHeader) → stopCw + haltTx. · Tune → set_tune (the carrier
 //                only). · Esc (window keydown) → the same abort() Stop TX calls.
@@ -76,11 +76,11 @@
 //                a real stop here for the same reason as RTTY: set_tx_enabled(false) drops
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
-//                · Esc (App's window keydown while SSTV is shown, N71) → halt_tx, the halt the
+//                · Esc (App's window keydown while SSTV is shown) → halt_tx, the halt the
 //                TX strip's Stop TX sends.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Its one stop control is the TX On/Off
-//                latch, and from N71 Esc (App's window keydown while APRS is shown → halt_tx)
+//                latch, and Esc (App's window keydown while APRS is shown → halt_tx)
 //                is a stop there too. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
 //                cut (service.rs `tx_off_cut`) unkeys and flushes a beacon on the air once the
 //                latch is down (measured 2026-09-30), and set_tx_enabled(false) also drops
@@ -1313,7 +1313,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // which would stop its over and discard its recording. Below three tracks the feeds follow the rig
   // strips (`stockMerged`).
   // THE LEFT SIDE (operator's pick, 2026-10-03): Band Activity, Spots and Needed may stand in a
-  // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
+  // column beside the region, under the scope (2026-10-26). Never the voice keyer or the log form: the side comes and
   // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
   // would cut off a voice message or a half-typed contact. The rig strips stay in the region.
   // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere,
@@ -1344,7 +1344,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
  *  the rig's own panadapter, in the region below), and both keep their own box.
  *
  *  `spots` AND `needed` are Phone's two feeds (#345) in CW, the same boards with the same wiring
- *  (plan piece H8, operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
+ *  (operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
  *  way: HIDDEN (`defaultRemoved`), one tick in ⊞ Panels, so nobody's CW screen changes on update.
  *  Under THE STOP LINE they are Phone's plainest entries again: neither holds a stop control,
  *  neither sends (a row QSYs through the board's own handler and keys nothing), and a hide ends
@@ -1354,6 +1354,10 @@ export const CW_PANEL_IDS = [
   'scopeCtl',
   'dsp',
   'txmeters',
+  // THE TURN CUE: the lamp at the head of the dock's send row and the F-key glow it brings. A
+  // READOUT like the TX meters above it: it lights a key and never sends, so a tick may hide it for
+  // good; the macros and the send bar beside it keep no id. Shown as it ships.
+  'turnCue',
   'rxdsp',
   'bandActivity',
   'copilot',
@@ -1418,8 +1422,9 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header.
  *
- *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, a square column LEFT of the decoded
- *  text, shown by default. Display plus two nudges that net the decoder (and with it the AFSK
+ *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, shown by default: since 2026-10-26 it
+ *  stands RIGHT of the waterfall in the waterfall's strip (it stood left of the decoded text before).
+ *  Hidden, the waterfall takes the strip's width; with the waterfall hidden, it holds the strip alone. Display plus two nudges that net the decoder (and with it the AFSK
  *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
  *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
  *  carries no ⊞ note and THE STOP LINE is untouched by it. */
@@ -1457,6 +1462,28 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   view: 'psk',
   panelIds: PSK_PANEL_IDS,
   defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
+}
+
+/** JTTY cockpit's removable panels (WSJT-X's keyboard mode, the Keyboard section's other modem).
+ *  PSK's region-less shape: `scope` is the band waterfall (see SCOPE_PANEL_ID), `all` WSJT-X's
+ *  All Decodes pane, `rx` its QSO Frequency pane (the messages first heard within F Tol of Rx).
+ *  The CockpitHeader, the TX strip, the log strip and the TX dock are not panels.
+ *
+ *  THE STOP LINE holds here by the TX strip alone, because this build of the cockpit transmits
+ *  nothing of its own: the census — every holder OUTSIDE every ⊞-removable pane, none with an id
+ *  in this vocabulary — is Stop TX (TX strip → halt_tx, never disabled), Tune (TX strip; the
+ *  carrier it started), the TX-enable latch (TX strip; `set_tx_enabled(false)` drops PSK's queue
+ *  and arms `psk_abort`, the stop for a PSK over still on the air after the operator moved here
+ *  from the PSK cockpit, the same section) and Esc (bound only while JTTY is the visible view → the same halt; keyboard-only ⇒
+ *  census-only). No pane hosts a stop or a sender, and no hide ends anything in flight, so no
+ *  entry carries a note. Swept in stop-line.test.tsx's JTTY case, rendered with App's props. */
+export const JTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'all', 'rx'] as const
+export type JttyPanelId = (typeof JTTY_PANEL_IDS)[number]
+
+export const JTTY_PANELS: PanelVocabulary<JttyPanelId> = {
+  view: 'jtty',
+  panelIds: JTTY_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
 }
 
 /** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
@@ -1566,6 +1593,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   CW_PANELS,
   RTTY_PANELS,
   PSK_PANELS,
+  JTTY_PANELS,
   JS8_PANELS,
   CONNECT_PANELS,
   DASH_PANELS,

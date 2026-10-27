@@ -6,6 +6,7 @@
 //! unit-testable offline.
 
 pub mod aurora;
+pub mod callook;
 pub mod cloudlog;
 pub mod clublog;
 pub mod contests;
@@ -108,6 +109,9 @@ pub fn snapshot_with_spots(
     let wx = wx_opt.unwrap_or_default();
     let mut snap =
         PropagationEngine::new(mycall, mygrid).snapshot(now_unix(), &spots, &wx, &plans, needs);
+    // Whether the space weather is SWPC's, not the neutral stand-ins above: only a real reading
+    // may reach a logged contact.
+    snap.space_wx.fetched = wx_opt.is_some();
     // "live" only when BOTH primary feeds answered; otherwise we served partial data.
     snap.source = if wx_opt.is_some() && xml_ok {
         "live"

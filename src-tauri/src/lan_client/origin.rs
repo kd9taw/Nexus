@@ -18,17 +18,23 @@
 //! 3. `Origin`, exactly `http://127.0.0.1:<port>` on the WebSocket, and never another origin on
 //!    anything else (refused: 403).
 //!
-//! **The page's words** (JSON text frames). From the page: `stations`, `find`, `pair` (`address`,
-//! `code`, `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address` the operator
-//! typed, if any), `disconnect`, `operate` (`stationId`, and an `address` the operator typed, if any), `addInternet`
-//! (`stationId`), `keepAddress` (`stationId`, and the `address` Operate tries first, or none to
-//! clear it), `chooseStation`
-//! (`stationId`, or none to cancel), and on an open road the station's own `operationRequest` and
+//! **The page's words** (JSON text frames). From the page: `stations`, `find`, `signIn` (the
+//! `stationId` of a station on this computer, or none to add one: `super::account`), `pair`
+//! (`address`, `code`, `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address`
+//! the operator typed, if any), `disconnect`, `operate` (`stationId`, and an `address` the
+//! operator typed, if any), `keepAddress` (`stationId`, and the `address` Operate tries first, or
+//! none to clear it), `chooseStation` (`stationId`, or none to cancel), `stationAddress` (where the
+//! station is, or none to cancel), and on an open road the station's own `operationRequest` and
 //! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`: each station the
 //! internet road has been added to, by `id`, with this computer's `key` for the road as the station
-//! shows it, and after a forget the service could not be told of, `forgetUnreached`), `signingIn`,
-//! `chooseStation` (`stations`: each `id` and `name`), `internetAdded` (`stationId`, `waiting` and
-//! that `key`) or `internetRefused`, `found` (`shacks`,
+//! shows it; `account`: for each station added with the account, until when it admits this
+//! computer on its network and whether to sign in again now; `away`: each station kept by its
+//! service id until this computer first reaches it on its network, its `id`, `name` and LAN key's
+//! fingerprint `key`; and after a forget the service could not be told of, `forgetUnreached`),
+//! `signingIn`, `chooseStation` (`stations`: each `id` and `name`), `stationAddress` (`name`, and
+//! the `reason` the last address did not take this computer, if one was tried), `signedIn`
+//! (`stationId`, `waiting`, `away` for a station kept by its service id, and this computer's `key`
+//! for the station's internet road as the station shows it) or `signInRefused`, `found` (`shacks`,
 //! `available`), `paired` (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`,
 //! `sessionId`, `stationKey`, `address`) or `connectRefused`, `closed` (`stationLeft`,
 //! `connectionLost`), `answerRefused`, and the station's own `operationResponse`, `streamSignal`,
@@ -64,7 +70,8 @@ use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use super::internet::{Added, Choice, Choose, CHOOSE_WAIT};
+use super::account::{Ask, Signed};
+use super::internet::{Choice, Choose, CHOOSE_WAIT};
 use super::road::{self, Road, ToPage};
 use super::{code, hex, pairing, StationView, Stations, MAX_STATIONS};
 use crate::remote_service::lan::valid_name;
@@ -119,13 +126,28 @@ pub(crate) struct Reach {
     /// Operate from this computer: Nexus quits as itself and starts again driving the paired
     /// station this id names (`client_mode`), at the address the operator typed first, if any.
     pub operate: Arc<dyn Fn(String, Option<Typed>) + Send + Sync>,
-    /// Add the internet road to the paired station this id names (`internet::add`): the sign-in
-    /// in the system browser, and this computer registered with the Remote service.
-    pub add_internet: super::internet::AddInternet,
+    /// Sign in with the station's account (`super::account::sign_in`): for a new station (none),
+    /// or for the station on this computer this id names. The sign-in waits in the system browser.
+    pub sign_in: SignIn,
     /// End a station's internet road at the service (`internet::Service::forget`), as Forget here
     /// does before it forgets the road's key.
     pub forget_internet: super::internet::ForgetInternet,
+    /// The clock a sign-in's age is read by: seconds since 1970.
+    pub now_s: fn() -> u64,
 }
+
+/// Signing in, as the window asks it: the station on this computer, or none; where the operator
+/// picks one of the account's stations; and where they say where the station is.
+pub(crate) type SignIn = Arc<
+    dyn Fn(
+            Option<String>,
+            Choose,
+            Ask,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Signed, &'static str>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 /// One request's head, read whole before anything is answered. Header names in lowercase.
 #[derive(Debug)]
@@ -517,7 +539,22 @@ enum FromPage {
         #[serde(default)]
         address: Option<String>,
     },
-    AddInternet {
+    /// Sign in with the station's account: for the station on this computer this id names, or
+    /// none to add one.
+    SignIn {
+        #[serde(rename = "stationId")]
+        station_id: Option<String>,
+    },
+    /// The operator compared the station's key with the station's own screen and it matches: its
+    /// internet road is no longer held.
+    KeyMatches {
+        #[serde(rename = "stationId")]
+        station_id: String,
+    },
+    /// The operator compared the station's key with the station's own screen and it does not
+    /// match: for a station paired here with a code, its internet road goes and its pairing on its
+    /// network stays; any other is forgotten, as Forget does (`Stations::code_paired`).
+    KeyDiffers {
         #[serde(rename = "stationId")]
         station_id: String,
     },
@@ -527,10 +564,14 @@ enum FromPage {
         station_id: String,
         address: Option<String>,
     },
-    /// The station the operator picked while the internet road is added, or none (cancelled).
+    /// The station the operator picked while signing in, or none (cancelled).
     ChooseStation {
         #[serde(rename = "stationId")]
         station_id: Option<String>,
+    },
+    /// Where the station is, as the operator typed it while signing in, or none (cancelled).
+    StationAddress {
+        address: Option<String>,
     },
     OperationRequest {
         #[serde(rename = "operationVersion", default)]
@@ -561,8 +602,12 @@ async fn store<T: Send + 'static>(
         .unwrap_or(Err("storeUnavailable"))
 }
 
-/// The stations, as the page shows them, and which of them have the internet road, each with this
-/// computer's key for it as the station shows it (`internet::shown_key`): its public half only.
+/// The stations, as the page shows them, which of them have the internet road (each with this
+/// computer's key for it as the station shows it, `internet::shown_key`: its public half only), for
+/// each added with the account until when it admits this computer on its network, and those kept by
+/// their service id until this computer first reaches them there. And for every internet road, the
+/// station's key it is pinned to, as the station shows its own (`remote_service::fingerprint`), and
+/// why it is held, when it is (`Stations::road_held`).
 async fn stations(reach: &Reach) -> String {
     listed(reach).await.to_string()
 }
@@ -578,11 +623,44 @@ async fn listed(reach: &Reach) -> serde_json::Value {
                 Some(json!({"id":station.id,"key":super::internet::shown_key(&road)?}))
             })
             .collect();
-        Ok((list, internet))
+        let signed: Vec<(String, u64)> = list
+            .iter()
+            .filter_map(|station| Some((station.id.clone(), kept.signed(&station.id)?)))
+            .collect();
+        let away = kept.list_away()?;
+        let mut keys = Vec::new();
+        for id in list.iter().map(|s| &s.id).chain(away.iter().map(|a| &a.id)) {
+            let Some(road) = kept.internet(id)? else {
+                continue;
+            };
+            let Some(key) = crate::remote_service::fingerprint(&road.station_key) else {
+                continue;
+            };
+            let mut shown = json!({"id":id,"key":key});
+            if let Some(why) = kept.road_held(id)? {
+                shown["held"] = json!(why);
+            }
+            // Whether It doesn't match drops this road alone, keeping the pairing.
+            if kept.code_paired(id)? {
+                shown["codePaired"] = json!(true);
+            }
+            keys.push(shown);
+        }
+        Ok((list, internet, signed, away, keys))
     });
     match listed.await {
-        Ok((list, internet)) => {
-            json!({"type":"stations","stations":list,"internet":internet,"computer":reach.name})
+        Ok((list, internet, signed, away, keys)) => {
+            let now = (reach.now_s)();
+            let account: Vec<serde_json::Value> = signed
+                .into_iter()
+                .map(|(id, issued_at)| {
+                    json!({"stationId":id,
+                        "until":tempo_client::account::admitted_until(issued_at),
+                        "renew":tempo_client::account::renew_due(issued_at, now)})
+                })
+                .collect();
+            json!({"type":"stations","stations":list,"internet":internet,"account":account,
+                "away":away,"stationKeys":keys,"computer":reach.name})
         }
         Err(reason) => {
             json!({"type":"stations","stations":[],"computer":reach.name,"error":reason})
@@ -626,7 +704,7 @@ async fn pair(
     let record = pairing::pair(at, code, name, &known).await?;
     let view = StationView::of(&record).ok_or("notStation")?;
     let kept = reach.stations.clone();
-    store(move || kept.keep(&record)).await?;
+    store(move || kept.keep_coded(&record)).await?;
     Ok(view)
 }
 
@@ -641,13 +719,22 @@ async fn page(
     let mut road: Option<Road> = None;
     // A look by name under way, on a thread that may wait: a second `find` has its answer.
     let mut finding: Option<tokio::task::JoinHandle<Result<Vec<Found>, Unavailable>>> = None;
-    // The internet road being added, while the sign-in waits for the browser: one at a time.
-    let mut adding: Option<tokio::task::JoinHandle<(String, Result<Added, &'static str>)>> = None;
-    // An account with more than one station: the stations the add offers the page, and where the
-    // operator's pick goes back to it.
+    // A sign-in, while it waits for the browser and for the operator: one at a time.
+    let mut signing: Option<tokio::task::JoinHandle<Result<Signed, &'static str>>> = None;
+    // An account with more than one station: the stations the sign-in offers the page, and where
+    // the operator's pick goes back to it.
     let (offering, mut offered) =
         tokio::sync::mpsc::channel::<(Vec<Choice>, tokio::sync::oneshot::Sender<String>)>(1);
     let mut choosing: Option<tokio::sync::oneshot::Sender<String>> = None;
+    // A station found nowhere on this network: the sign-in asks where it is, and where the
+    // operator's answer goes back to it.
+    type Asked = (
+        String,
+        Option<&'static str>,
+        tokio::sync::oneshot::Sender<String>,
+    );
+    let (asking, mut asked) = tokio::sync::mpsc::channel::<Asked>(1);
+    let mut placing: Option<tokio::sync::oneshot::Sender<String>> = None;
     loop {
         let told = tokio::select! {
             biased;
@@ -671,21 +758,32 @@ async fn page(
                 finding = None;
                 found(looked.unwrap_or(Err(Unavailable)))
             }
-            added = async { adding.as_mut().expect("guarded add").await }, if adding.is_some() => {
-                adding = None;
-                match added {
-                    Ok((id, Ok((waiting, key)))) => {
-                        json!({"type":"internetAdded","stationId":id,"waiting":waiting,"key":key})
+            done = async { signing.as_mut().expect("guarded sign-in").await }, if signing.is_some() => {
+                signing = None;
+                (choosing, placing) = (None, None);
+                match done {
+                    Ok(Ok(Signed { station, waiting, away, key })) => {
+                        json!({"type":"signedIn","stationId":station,"waiting":waiting,
+                            "away":away,"key":key})
                     }
-                    Ok((_, Err(reason))) => json!({"type":"internetRefused","reason":reason}),
-                    Err(_) => json!({"type":"internetRefused","reason":"signInFailed"}),
+                    Ok(Err(reason)) => json!({"type":"signInRefused","reason":reason}),
+                    Err(_) => json!({"type":"signInRefused","reason":"signInFailed"}),
                 }
                 .to_string()
             }
-            asked = offered.recv(), if adding.is_some() => {
-                let Some((stations, answer)) = asked else { continue };
+            offer = offered.recv(), if signing.is_some() => {
+                let Some((stations, answer)) = offer else { continue };
                 choosing = Some(answer);
                 json!({"type":"chooseStation","stations":stations}).to_string()
+            }
+            where_ = asked.recv(), if signing.is_some() => {
+                let Some((name, reason, answer)) = where_ else { continue };
+                placing = Some(answer);
+                let mut told = json!({"type":"stationAddress","name":name});
+                if let Some(reason) = reason {
+                    told["reason"] = json!(reason);
+                }
+                told.to_string()
             }
             message = from_page.next() => {
                 let text = match message {
@@ -713,23 +811,23 @@ async fn page(
                     }
                     FromPage::Forget { station_id } => {
                         if let Some(open) = road.take() { open.close().await }
-                        // The internet road's approval at the service ends first, while this
-                        // computer still holds the key that signs for it. The service out of reach
-                        // is said, and never keeps the forget here from going on.
+                        forget(&reach, station_id, false).await
+                    }
+                    FromPage::KeyDiffers { station_id } => {
                         let kept = reach.stations.clone();
                         let wanted = station_id.clone();
-                        let unreached = match store(move || kept.internet(&wanted)).await {
-                            Ok(Some(internet)) => (reach.forget_internet)(internet).await.err(),
-                            Ok(None) => None,
-                            Err(reason) => Some(reason),
-                        };
-                        let kept = reach.stations.clone();
-                        let _ = store(move || kept.forget(&station_id)).await;
-                        let mut told = listed(&reach).await;
-                        if let Some(reason) = unreached {
-                            told["forgetUnreached"] = json!(reason);
+                        let road_only = store(move || kept.code_paired(&wanted)).await == Ok(true);
+                        if !road_only {
+                            if let Some(open) = road.take() { open.close().await }
                         }
-                        told.to_string()
+                        forget(&reach, station_id, road_only).await
+                    }
+                    FromPage::KeyMatches { station_id } => {
+                        let kept = reach.stations.clone();
+                        match store(move || kept.confirm_road(&station_id)).await {
+                            Ok(()) => listed(&reach).await.to_string(),
+                            Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
+                        }
                     }
                     FromPage::KeepAddress { station_id, address } => {
                         let typed = match address.as_deref().map(Typed::read) {
@@ -764,11 +862,11 @@ async fn page(
                             Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
                         }
                     }
-                    FromPage::AddInternet { station_id } => {
-                        if adding.is_some() {
-                            json!({"type":"internetRefused","reason":"signInUnderWay"}).to_string()
+                    FromPage::SignIn { station_id } => {
+                        if signing.is_some() {
+                            json!({"type":"signInRefused","reason":"signInUnderWay"}).to_string()
                         } else {
-                            let add = reach.add_internet.clone();
+                            let sign_in = reach.sign_in.clone();
                             let offering = offering.clone();
                             let choose: Choose = Arc::new(move |stations| {
                                 let offering = offering.clone();
@@ -778,17 +876,32 @@ async fn page(
                                     tokio::time::timeout(CHOOSE_WAIT, picked).await.ok()?.ok()
                                 })
                             });
-                            adding = Some(tokio::spawn(async move {
-                                let added = add(station_id.clone(), choose).await;
-                                (station_id, added)
-                            }));
+                            let asking = asking.clone();
+                            let ask: Ask = Arc::new(move |name, reason| {
+                                let asking = asking.clone();
+                                Box::pin(async move {
+                                    let (answer, typed) = tokio::sync::oneshot::channel();
+                                    asking.send((name, reason, answer)).await.ok()?;
+                                    tokio::time::timeout(CHOOSE_WAIT, typed).await.ok()?.ok()
+                                })
+                            });
+                            signing = Some(tokio::spawn(sign_in(station_id, choose, ask)));
                             json!({"type":"signingIn"}).to_string()
                         }
                     }
                     FromPage::ChooseStation { station_id } => {
-                        // None, or nothing being chosen: the pick is dropped, and the add told so.
+                        // None, or nothing being chosen: the pick is dropped, and the sign-in told
+                        // so.
                         if let (Some(answer), Some(id)) = (choosing.take(), station_id) {
                             let _ = answer.send(id);
+                        }
+                        continue
+                    }
+                    FromPage::StationAddress { address } => {
+                        // None, or nothing being asked: the answer is dropped, and the sign-in told
+                        // so.
+                        if let (Some(answer), Some(address)) = (placing.take(), address) {
+                            let _ = answer.send(address);
                         }
                         continue
                     }
@@ -819,14 +932,48 @@ async fn page(
     if let Some(open) = road.take() {
         open.close().await;
     }
-    if let Some(add) = adding.take() {
-        add.abort();
+    if let Some(signing) = signing.take() {
+        signing.abort();
     }
 }
 
-/// Operate from this computer: Nexus starts again driving station `id`, at the address the
-/// operator typed first, if any, read as [`connect`] reads one. The launch proves the key pinned
-/// for the station wherever it reaches it, so a typed address is never taken as the station.
+/// Forget station `id` on this computer, or with `road_only` its internet road alone
+/// (`Stations::drop_road`), and the stations as the page then shows them. The internet road's
+/// approval at the service ends first, while this computer still holds the key that signs for it.
+/// The service out of reach is said, and never keeps the forget here from going on.
+async fn forget(reach: &Reach, id: String, road_only: bool) -> String {
+    let kept = reach.stations.clone();
+    let wanted = id.clone();
+    let unreached = match store(move || kept.internet(&wanted)).await {
+        Ok(Some(internet)) => (reach.forget_internet)(internet).await.err(),
+        Ok(None) => None,
+        Err(reason) => Some(reason),
+    };
+    let kept = reach.stations.clone();
+    let _ = store(move || {
+        if road_only {
+            kept.drop_road(&id)
+        } else {
+            kept.forget(&id)
+        }
+    })
+    .await;
+    let mut told = listed(reach).await;
+    if let Some(reason) = unreached {
+        let said = if road_only {
+            "dropUnreached"
+        } else {
+            "forgetUnreached"
+        };
+        told[said] = json!(reason);
+    }
+    told.to_string()
+}
+
+/// Operate from this computer: Nexus starts again driving station `id` (one on this network, or
+/// one kept by its service id, which it drives over the internet road), at the address the operator
+/// typed first, if any, read as [`connect`] reads one. The launch proves the key pinned for the
+/// station wherever it reaches it, so a typed address is never taken as the station.
 async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &'static str> {
     let typed = match typed {
         Some(text) => Some(resolved(reach, text).await?.0),
@@ -834,9 +981,10 @@ async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &
     };
     let kept = reach.stations.clone();
     let wanted = id.clone();
-    store(move || kept.get(&wanted))
-        .await?
-        .ok_or("unknownStation")?;
+    let here = store(move || Ok(kept.get(&wanted)?.is_some() || kept.away(&wanted)?.is_some()));
+    if !here.await? {
+        return Err("unknownStation");
+    }
     (reach.operate)(id, typed);
     Ok(())
 }

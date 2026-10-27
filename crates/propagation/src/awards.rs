@@ -10,12 +10,19 @@
 //! Online LoTW/eQSL/QRZ/ClubLog sync (which would flip a QSO's `confirmed`) is a
 //! separate, later increment; this computes everything from what's already in the
 //! log, so it is fully testable with no network.
+//!
+//! CQ WPX, DARC's WAE, WWFF, the whole-log DXCC chart and What-to-QSL ride the same fold
+//! ([`crate::awards_more`]): each is fed exactly the slots this fold credits a contact with.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::achievements::{self, Achievement, AchievementStats};
+use crate::awards_more::{
+    Contact, Credited, DxccChart, MoreAwards, QslWant, SlotView, WaeProgress, WpxProgress,
+    WpxWaeWorked, WwffProgress,
+};
 use crate::callstats::CallStatsIndex;
 use crate::dxcc;
 use crate::model::{Band, ModeClass};
@@ -66,6 +73,27 @@ const CHALLENGE_BANDS: &[Band] = &[
 /// *recommend* one, and those are the same fact stated once, not two lists that drift apart.
 pub(crate) fn earns_dxcc_credit(b: Band) -> bool {
     !matches!(b, Band::B60 | Band::B4)
+}
+
+/// Whether a contact on `b` fills a DXCC BAND slot (the per-band rows, the Challenge and the
+/// needed-by-band lists), not merely the entity.
+///
+/// **70 cm, 33 cm and 23 cm count toward the entity and no band:** they earn Mixed and mode
+/// credit like any band, but the ARRL keeps no DXCC award on them, so a slot there would claim
+/// a "new band" nobody can apply for. That is exactly how these contacts counted before the
+/// bands had a [`Band`] variant, when their label did not parse.
+pub(crate) fn fills_dxcc_band_slot(b: Band) -> bool {
+    earns_dxcc_credit(b) && !b.is_uhf()
+}
+
+/// Whether `b` is one of the DXCC Challenge bands.
+pub(crate) fn is_challenge_band(b: Band) -> bool {
+    CHALLENGE_BANDS.contains(&b)
+}
+
+/// Whether a normalised band label is a VUCC award band (50 MHz and up).
+pub(crate) fn is_vucc_band(label: &str) -> bool {
+    VUCC_THRESHOLDS.iter().any(|(b, _)| *b == label)
 }
 
 /// DXCC mode classes, in display order (separate CW/Phone/Digital DXCC awards).
@@ -269,18 +297,37 @@ const VUCC_THRESHOLDS: &[(&str, usize)] = &[
 ];
 
 /// Canonical listing order for the per-band grid table (HF tracker bands first,
-/// then the VUCC bands the DXCC [`Band`] enum does not carry).
+/// then the VUCC bands above 2 m).
 const GRID_BAND_ORDER: &[&str] = &[
     "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m",
     "1.25m", "70cm", "33cm", "23cm", "13cm", "9cm", "6cm", "3cm", "1.25cm",
 ];
 
 /// Normalise a band label for grid keying: lowercase, trimmed. Grids key on the LABEL,
-/// not the DXCC [`Band`] enum — the enum tops out at 2 m, which silently dropped every
-/// terrestrial 70 cm grid from a page whose caption said "all bands" (N9UM audit).
+/// not the DXCC [`Band`] enum — the enum once topped out at 2 m, which silently dropped every
+/// terrestrial 70 cm grid from a page whose caption said "all bands" (N9UM audit), and it
+/// still names no band above 23 cm.
 fn grid_band(label: &str) -> Option<String> {
     let l = label.trim().to_ascii_lowercase();
     (!l.is_empty()).then_some(l)
+}
+
+/// ARRL Fred Fish Memorial Award progress: the 488 grid squares of the 48 contiguous states
+/// ([`crate::ffma`]), worked and confirmed on 6 m. Read from the same per-band grid sets as
+/// VUCC, so it confirms the way VUCC does (LoTW or a paper card) and a satellite contact never
+/// reaches it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmaProgress {
+    /// FFMA squares worked / confirmed on 6 m.
+    pub worked: usize,
+    pub confirmed: usize,
+    /// The squares the award needs: 488.
+    pub total: usize,
+    /// Squares never worked on 6 m, in the ARRL list's order.
+    pub unworked: Vec<String>,
+    /// Squares worked on 6 m but not confirmed, in the ARRL list's order.
+    pub unconfirmed: Vec<String>,
 }
 
 /// IOTA (Islands On The Air) progress — distinct island-group references worked /
@@ -495,8 +542,20 @@ pub struct AwardSummary {
     pub wap: WapProgress,
     /// VUCC — Maidenhead grid squares worked / confirmed, overall and per band.
     pub vucc: VuccProgress,
+    /// FFMA — the 488 squares of the 48 contiguous states, on 6 m.
+    #[serde(default)]
+    pub ffma: FfmaProgress,
     /// IOTA — island-group references worked / confirmed.
     pub iota: IotaProgress,
+    /// CQ WPX — prefixes worked / confirmed ([`crate::wpx`]).
+    #[serde(default)]
+    pub wpx: WpxProgress,
+    /// DARC's WAE — countries and band points ([`crate::wae`]).
+    #[serde(default)]
+    pub wae: WaeProgress,
+    /// WWFF — references worked ([`crate::wwff`]).
+    #[serde(default)]
+    pub wwff: WwffProgress,
     /// The WORK chase (elite "every-band" tracker): entities already worked on
     /// most award bands but NOT yet on a few — the bands listed are ones to WORK
     /// (a new contact, not just a confirmation). Closest-to-complete first.
@@ -564,6 +623,18 @@ pub struct Awards {
     /// ([`with_call_stats`](Self::with_call_stats)): each slot filled exactly where the fold
     /// below credits one, so the pane's grids are the awards' own counts.
     call_stats: Option<CallStatsIndex>,
+    /// WPX, WAE, WWFF, the DXCC chart and What-to-QSL, fed what this fold credits each contact.
+    more: MoreAwards,
+}
+
+/// What a contact's record carries for the awards counted beside DXCC ([`Awards::add_contact`]):
+/// its WWFF reference and its QSL route. `Default` carries neither.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ContactExtras<'a> {
+    /// The WWFF reference worked (ADIF `WWFF_REF`, or `SIG_INFO` beside `SIG`=WWFF).
+    pub wwff: Option<&'a str>,
+    /// ADIF `QSL_VIA`.
+    pub qsl_via: Option<&'a str>,
 }
 
 /// The DXCC entity a contact counts toward ([`counted_entity`]).
@@ -735,6 +806,89 @@ impl Awards {
         sat: bool,
         rec: RecordFields,
     ) {
+        self.add_contact(
+            call,
+            band,
+            mode,
+            confirmed,
+            credited,
+            card_confirmed,
+            state,
+            grid,
+            iota,
+            sat,
+            rec,
+            ContactExtras::default(),
+        )
+    }
+
+    /// [`add_qso`](Self::add_qso), plus what the record carries for the awards counted beside
+    /// DXCC ([`ContactExtras`]): WPX, WAE, WWFF, the DXCC chart and What-to-QSL are fed exactly
+    /// the slots the fold below credits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_contact(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+        card_confirmed: bool,
+        state: Option<&str>,
+        grid: Option<&str>,
+        iota: Option<&str>,
+        sat: bool,
+        rec: RecordFields,
+        extras: ContactExtras<'_>,
+    ) {
+        let mut cr = Credited::default();
+        self.fold(
+            call,
+            band,
+            mode,
+            confirmed,
+            credited,
+            card_confirmed,
+            state,
+            grid,
+            iota,
+            sat,
+            rec,
+            &mut cr,
+        );
+        self.more.add(
+            &Contact {
+                call,
+                band,
+                on_band: Band::from_label(band),
+                mode,
+                class: ModeClass::from_adif(mode),
+                confirmed,
+                when_unix: rec.when_unix,
+                wwff: extras.wwff,
+                qsl_via: extras.qsl_via,
+            },
+            &cr,
+        );
+    }
+
+    /// The fold itself; `cr` collects each slot it credits, confirmed or not.
+    #[allow(clippy::too_many_arguments)]
+    fn fold(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+        card_confirmed: bool,
+        state: Option<&str>,
+        grid: Option<&str>,
+        iota: Option<&str>,
+        sat: bool,
+        rec: RecordFields,
+        cr: &mut Credited,
+    ) {
         self.qsos += 1;
         if confirmed {
             self.confirmed_qsos += 1;
@@ -742,8 +896,8 @@ impl Awards {
         // VUCC — grid squares, independent of DXCC (a grid is a grid, on any
         // entity). A SATELLITE contact's grid credits Satellite VUCC only —
         // ARRL excludes satellite QSOs from the per-band grid awards — and the
-        // satellite bucket is band-independent, so it counts even when the band
-        // label has no per-band slot (70cm). Terrestrial grids keep the
+        // satellite bucket is band-independent, so it counts whatever the band
+        // label says. Terrestrial grids keep the
         // per-band slots (valid 4-char locator + parseable band).
         if let Some(g) = grid.and_then(valid_grid4) {
             if sat {
@@ -752,6 +906,7 @@ impl Awards {
                     self.confirmed_grid_sat.insert(g);
                 }
             } else if let Some(b) = grid_band(band) {
+                cr.grid = Some((g.clone(), b.clone()));
                 self.worked_grid_band.insert((g.clone(), b.clone()));
                 if confirmed {
                     self.confirmed_grid_band.insert((g, b));
@@ -780,6 +935,8 @@ impl Awards {
         if let Some(stats) = &mut self.call_stats {
             stats.note_qsl(call, counted.map(|c| c.name), rec.qsl);
         }
+        cr.any_entity = counted.filter(|c| !c.deleted).map(|c| c.name);
+        cr.wae = crate::wae::wae_country(resolved.as_ref(), &rec);
         if let (Some(lotw_dxcc), Some(logged_dxcc)) = (rec.lotw_dxcc, rec.dxcc) {
             if lotw_dxcc != logged_dxcc {
                 let name = |code| dxcc::entity_by_dxcc(code).map(|e| e.name.to_string());
@@ -804,6 +961,7 @@ impl Awards {
         let is_us_state = counted.is_some_and(|c| c.is_us_state());
         if is_us_state {
             if let Some(code) = state.and_then(valid_state) {
+                cr.state = Some(code);
                 self.worked_states.insert(code);
                 if confirmed {
                     self.confirmed_states.insert(code);
@@ -832,6 +990,7 @@ impl Awards {
         let is_canada = counted.is_some_and(|c| c.name == "Canada");
         if is_canada {
             if let Some(code) = state.and_then(valid_province) {
+                cr.province = Some(code);
                 self.worked_provinces.insert(code);
                 if confirmed {
                     self.confirmed_provinces.insert(code);
@@ -845,6 +1004,7 @@ impl Awards {
         // eQSL from an Authenticity-Guaranteed member as well.
         if let Some(zone) = counted_zone(resolved.as_ref(), &rec) {
             let zone_confirmed = confirmed || rec.qsl.eqsl_ag_confirmed();
+            cr.zone = Some((zone, zone_confirmed));
             self.worked_zones.insert(zone);
             if zone_confirmed {
                 self.confirmed_zones.insert(zone);
@@ -901,6 +1061,7 @@ impl Awards {
             return;
         }
         let entity = counted.name; // &'static str (cty.dat is leaked once)
+        cr.entity = Some(entity);
         self.worked_entity.insert(entity);
         if confirmed {
             self.confirmed_entity.insert(entity);
@@ -918,9 +1079,12 @@ impl Awards {
         if confirmed {
             pm.1.insert(entity);
         }
+        // The band slot, where the band has one: a UHF contact is entity and mode credit only.
+        let on_band = on_band.filter(|b| fills_dxcc_band_slot(*b));
         if let Some(stats) = &mut self.call_stats {
             stats.note_dxcc(entity, on_band, mode, confirmed);
         }
+        cr.dxcc_band = on_band;
         if let Some(b) = on_band {
             self.worked_slot.insert((entity, b));
             let pb = self.per_band.entry(b).or_default();
@@ -1081,6 +1245,26 @@ impl Awards {
                 })
                 .collect(),
         };
+        // FFMA — the ARRL's 488 squares, on 6 m only. The per-band grid sets already hold only
+        // terrestrial contacts, keyed by the normalised band label.
+        let six_w = vucc_wb.get("6m");
+        let six_c = vucc_cb.get("6m");
+        let mut ffma = FfmaProgress {
+            total: crate::ffma::FFMA_GRID_COUNT,
+            ..FfmaProgress::default()
+        };
+        for g in crate::ffma::ffma_grids() {
+            let g = g.as_str();
+            if six_c.is_some_and(|c| c.contains(g)) {
+                ffma.worked += 1;
+                ffma.confirmed += 1;
+            } else if six_w.is_some_and(|w| w.contains(g)) {
+                ffma.worked += 1;
+                ffma.unconfirmed.push(g.to_string());
+            } else {
+                ffma.unworked.push(g.to_string());
+            }
+        }
         let iota = IotaProgress {
             worked: self.worked_iota.len(),
             confirmed: self.confirmed_iota.len(),
@@ -1263,10 +1447,42 @@ impl Awards {
             was,
             wap,
             vucc,
+            ffma,
             iota,
+            wpx: self.more.wpx(),
+            wae: self.more.wae(),
+            wwff: self.more.wwff(),
             band_targets,
             band_needs,
         }
+    }
+
+    /// The WPX prefixes and WAE countries worked on each band in each mode class, for the Needed
+    /// board's opt-in chips ([`crate::awards_more::mark_award_needs`]).
+    pub fn wpx_wae_worked(&self) -> WpxWaeWorked {
+        self.more.slots_worked.clone()
+    }
+
+    /// The whole-log DXCC chart: every current entity × every DXCC band, by mode class
+    /// ([`DxccChart`]), from the same slots the DXCC counts above are made of.
+    pub fn dxcc_chart(&self) -> DxccChart {
+        self.more.chart()
+    }
+
+    /// What to QSL ([`QslWant`]): the unconfirmed contacts whose confirmation would fill a slot
+    /// an award still needs, most valuable first. Each slot keeps its newest
+    /// [`WANTS_PER_SLOT`](crate::awards_more::WANTS_PER_SLOT) contacts.
+    pub fn what_to_qsl(&self) -> Vec<QslWant> {
+        self.more.wants(|slot| match slot {
+            SlotView::Entity(e) => self.confirmed_entity.contains(e),
+            SlotView::EntityBand(e, b) => self.confirmed_slot.contains(&(*e, *b)),
+            SlotView::Zone(z) => self.confirmed_zones.contains(z),
+            SlotView::State(s) => self.confirmed_states.contains(s),
+            SlotView::Province(p) => self.confirmed_provinces.contains(p),
+            SlotView::Grid(g, b) => self
+                .confirmed_grid_band
+                .contains(&((*g).to_string(), (*b).to_string())),
+        })
     }
 
     /// DXCC, WAS and WAZ band by band ([`AwardBandNeeds`]): each band's never-worked and
@@ -1299,7 +1515,7 @@ impl Awards {
         AwardBandNeeds {
             dxcc: Band::ALL
                 .into_iter()
-                .filter(|b| earns_dxcc_credit(*b))
+                .filter(|b| fills_dxcc_band_slot(*b))
                 .map(|b| {
                     let (w, c) = self.per_band.get(&b).unwrap_or(&none);
                     need(
@@ -1770,10 +1986,100 @@ mod tests {
         );
     }
 
+    /// A terrestrial 70/33/23 cm contact counts toward the DXCC entity and its mode, as it did
+    /// before those bands had a [`Band`] variant, and fills no DXCC band slot: no per-band row,
+    /// no Challenge slot, no needed-by-band row — the ARRL keeps no DXCC award there.
+    #[test]
+    fn a_uhf_contact_counts_the_entity_and_fills_no_dxcc_band_slot() {
+        for band in ["70cm", "33cm", "23cm"] {
+            let mut a = Awards::new();
+            a.add("DL1ABC", band, "FT8", true);
+            let s = a.summary();
+            assert_eq!(
+                (s.dxcc_worked, s.dxcc_confirmed),
+                (1, 1),
+                "{band}: the entity counts"
+            );
+            assert_eq!(s.modes.len(), 1, "{band}: the mode counts");
+            assert!(
+                s.bands.is_empty(),
+                "{band}: no DXCC band row: {:?}",
+                s.bands
+            );
+            assert_eq!((s.slots_worked, s.slots_confirmed), (0, 0), "{band}");
+            assert!(
+                !s.band_needs.dxcc.iter().any(|n| n.band == band),
+                "{band}: no DXCC needed-by-band row"
+            );
+            assert!(
+                s.band_needs.waz.iter().any(|n| n.band == band),
+                "{band}: WAZ lists every band Nexus names"
+            );
+        }
+    }
+
+    /// The Fred Fish Memorial Award counts the 488 squares of the 48 states on 6 m only:
+    /// worked and confirmed apart, a 2 m or 20 m contact in one of them earns nothing, a 6 m
+    /// contact outside them (Hawaii, Alaska, Puerto Rico) earns nothing, a satellite contact
+    /// earns nothing, and the needed lists say which squares are left and why.
+    #[test]
+    fn ffma_counts_the_488_squares_on_6m_only() {
+        let mut a = Awards::new();
+        let mut qso = |call: &str, band: &str, grid: &str, confirmed: bool, sat: bool| {
+            a.add_qso(
+                call,
+                band,
+                "FT8",
+                confirmed,
+                false,
+                false,
+                None,
+                Some(grid),
+                None,
+                sat,
+                RecordFields::default(),
+            )
+        };
+        qso("W1AW", "6m", "FN31pr", true, false); // confirmed, subsquare dropped
+        qso("K1ABC", "6m", "FN31", false, false); // same square again, unconfirmed
+        qso("W9XYZ", "6m", "EN52", false, false); // worked, not confirmed
+        qso("K2ABC", "2m", "FN20", true, false); // on the list, wrong band
+        qso("K3ABC", "20m", "FN21", true, false); // on the list, wrong band
+        qso("KH6ABC", "6m", "BL11", true, false); // 6 m, outside the 48
+        qso("KP4ABC", "6m", "FK68", true, false); // 6 m, outside the 48
+        qso("K4ABC", "6m", "EM73", true, true); // via satellite
+        let f = a.summary().ffma;
+        assert_eq!(f.total, 488);
+        assert_eq!(
+            (f.worked, f.confirmed),
+            (2, 1),
+            "FN31 confirmed, EN52 worked"
+        );
+        assert_eq!(f.unconfirmed, ["EN52"]);
+        assert_eq!(f.unworked.len(), 488 - 2);
+        for g in ["FN20", "FN21", "EM73"] {
+            assert!(
+                f.unworked.iter().any(|u| u == g),
+                "{g} is still unworked on 6 m"
+            );
+        }
+        assert!(!f.unworked.iter().any(|u| u == "FN31" || u == "EN52"));
+        assert!(!f.unworked.iter().any(|u| u == "BL11" || u == "FK68"));
+    }
+
+    /// An empty log still lists all 488 as needed, so the operator sees the whole chase.
+    #[test]
+    fn ffma_with_no_6m_contacts_needs_every_square() {
+        let f = Awards::new().summary().ffma;
+        assert_eq!((f.worked, f.confirmed, f.total), (0, 0, 488));
+        assert_eq!(f.unworked.len(), 488);
+        assert!(f.unconfirmed.is_empty());
+    }
+
     /// A terrestrial 70cm grid is a real ARRL VUCC band (threshold 50) — it must count
-    /// in the per-band listing and the all-band total, even though the DXCC Band enum
-    /// has no 70cm. (It still earns no DXCC slot; DXCC doesn't credit 70cm hunting the
-    /// same way, and that fold is separate.)
+    /// in the per-band listing and the all-band total. (It earns no DXCC band slot — the
+    /// ARRL keeps no DXCC award on 70 cm, see [`fills_dxcc_band_slot`] — and that fold is
+    /// separate.)
     #[test]
     fn terrestrial_uhf_grids_count_for_vucc() {
         let mut a = Awards::new();
@@ -1880,7 +2186,7 @@ mod tests {
     fn satellite_qsos_feed_satellite_vucc_only() {
         let mut a = Awards::new();
         // Satellite QSOs (PROP_MODE=SAT): grids count toward Satellite VUCC —
-        // even on 70cm, which has no per-band bucket at all — and NOT toward
+        // on 70cm too, band-independent — and NOT toward
         // the per-band awards (ARRL counts satellite contacts toward the
         // Satellite VUCC only).
         a.add_qso(

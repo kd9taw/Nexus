@@ -287,7 +287,7 @@ fn a_lock_from_afar_keys_by_its_voice_and_each_guard_ends_it() {
     let _alone = alone();
     for end in ENDS {
         let app = App::new();
-        let mut r = roadside(&app);
+        let mut r = roadside_capped(&app, CAP);
         let _record = on_the_engine(&mut r, gate(false));
         let t = Locked::on(&r, &format!("lock-{end}"));
         let keyed = Instant::now();
@@ -377,7 +377,7 @@ fn a_lock_from_afar_keys_by_its_voice_and_each_guard_ends_it() {
 fn an_answered_lock_from_afar_stays_on_past_its_first_cap() {
     let _alone = alone();
     let app = App::new();
-    let mut r = roadside(&app);
+    let mut r = roadside_capped(&app, CAP);
     let _record = on_the_engine(&mut r, gate(false));
     let t = Locked::on(&r, "lock-answered");
     let pressed = lock_of(&t.said).first().unwrap().0;

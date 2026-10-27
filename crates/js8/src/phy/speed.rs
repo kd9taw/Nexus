@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn every_transmission_fits_inside_its_period_with_margin() {
-        // The slot-fit invariant (spec TX safety 6): tx_deadline_ms clamps PTT at the period
+        // The slot-fit invariant: tx_deadline_ms clamps PTT at the period
         // boundary, so an over-length wave would be truncated silently. Margin ≥ 1.8 s at the
         // four 2.3 speeds; JS8 60's is its own, 4 − 2.628 = 1.372 s (3.0.3 commons.h:45-47),
         // pinned by value.

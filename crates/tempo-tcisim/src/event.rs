@@ -163,10 +163,10 @@ pub enum Event {
     /// The transmitter unkeyed. `by` held the key.
     Unkeyed { trx: u32, by: Keyer, cause: Cause },
     /// The keying client left and the radio stays keyed: the dialect does not unkey a lost client
-    /// (U1, U2), or a fault kept it.
+    /// or a fault kept it.
     Orphaned { trx: u32, conn: usize },
     /// A `tci` key took the microphone because the client's audio stream was not running (spec
-    /// §4.2): the hazard §6.1 item 3 guards against.
+    /// §4.2): the hazard the client's audio rule guards against.
     MicFallback { conn: usize, trx: u32 },
     /// A key, CW macro, stream or unkey the radio refused. `conn` is `None` for the operator.
     Refused {

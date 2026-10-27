@@ -108,8 +108,8 @@ const RADIO = {
 /** The radio, keyed or not. REQUIRED, never defaulted: the keyed state is what is under test. */
 const radioKeyed = (keyed: boolean) => ({ ...RADIO, transmitting: keyed }) as unknown as RadioStatus
 
-/** The TX strip's state caption — the ON AIR sign of every screen but FT's since operator
- *  batch 60 (it was the cockpit header's TX pill, which moved into the strip with the latch). */
+/** The TX strip's state caption — the ON AIR sign of every screen but FT's since the operator's
+ *  pick (it was the cockpit header's TX pill, which moved into the strip with the latch). */
 function txStripCaption(keyed: boolean): Element {
   const { container } = render(createElement(CockpitTxStrip, { radio: radioKeyed(keyed), onStopTx: () => {} }))
   return container.querySelector('.cq-statecap')!

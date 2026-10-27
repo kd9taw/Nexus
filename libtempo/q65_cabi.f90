@@ -47,7 +47,7 @@
 !   fixed nutc=0 below every call would land on slice 0 and frame N would be
 !   decoded partly from frames 1..N-1. That is precisely the cross-frame
 !   contamination that cost a calibration round on the FT8 side (batched jt9
-!   replay; see reference-decode-parity-lab). Pinning lclearave=.true. calls
+!   replay). Pinning lclearave=.true. calls
 !   q65_clravg (q65_decode.f90:168) at the top of every decode, so each frame
 !   stands alone. Real multi-period averaging needs a stateful session API plus
 !   the per-chain swap the manifest specifies, not a flag flip here.

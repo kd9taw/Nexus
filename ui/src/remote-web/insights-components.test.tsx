@@ -9,6 +9,11 @@ import type { DiagnosticsReport } from '../types'
 import fixture from './__fixtures__/insights.json'
 
 vi.mock('../api', () => ({
+  // The Awards view's own panels (AwardsMore) read these; left reading, they change nothing here.
+  getDxccChart: vi.fn(() => new Promise(() => {})),
+  getWhatToQsl: vi.fn(() => new Promise(() => {})),
+  getPotaActivator: vi.fn(() => new Promise(() => {})),
+  getCustomAwards: vi.fn(() => new Promise(() => {})),
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
   getLogStats: vi.fn(async () => fixture.geography),

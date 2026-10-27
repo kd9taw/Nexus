@@ -194,6 +194,12 @@ describe('planRecall (auto-switch routing)', () => {
     expect(planRecall(mem({ mode: 'FM' })).view).toBe('phone')
   })
 
+  it('a JTTY memory (saved from the JTTY cockpit) recalls as digital, never as phone', () => {
+    const plan = planRecall(mem({ mode: 'JTTY' }))
+    expect(plan.view).toBe('operate')
+    expect(plan.settingsPatch, 'no phone plumbing on a data frequency').toBeNull()
+  })
+
   it('an FM repeater recall carries the full rig plumbing (shift + tone + offset)', () => {
     const plan = planRecall(
       mem({

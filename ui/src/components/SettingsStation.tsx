@@ -8,11 +8,8 @@
 // deep-link anchor, the width guards and the registry guard all still find it.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST. Every operator-visible string here comes from the
-// catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from the catalog is
-// listed in STATION_EXAMPLES and in the <option> values below — see the invariant-token rule
-// in `i18n/index.ts`. `KD9TAW` is a callsign, `EN52xa` is a grid, `WI` is a section/state
-// code; they are the same characters in every language, and a translator who "localises" one
-// has broken an example of a wire format.
+// catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from the catalog is the
+// <option> values below — see the invariant-token rule in `i18n/index.ts`.
 
 import type { ReactNode } from 'react'
 import { t } from '../i18n'
@@ -22,51 +19,30 @@ import { FrequencyControl } from './FrequencyControl'
 
 type FieldKey = keyof Settings
 
-/**
- * The example shown in an empty field. The two cases are NOT interchangeable and the union
- * exists to make an author choose:
- *   `token` — a value from a technical namespace (callsign, grid, section code). Invariant.
- *   `prose` — a human example (a first name, an instruction). A catalog key.
- */
-type Example = { token: string } | { prose: MessageKey }
-
 interface StationField {
   key: FieldKey
   labelKey: MessageKey
   hintKey: MessageKey
-  example: Example
+  /** What an empty box says, when it says anything: words about what goes in it, never a
+   *  sample value — a sample in grey reads as a value already filled in. */
+  placeholderKey?: MessageKey
 }
-
-/**
- * The invariant example values this surface shows, gathered so the guard can prove they never
- * became catalog entries. Do not inline them — a bare string in a `placeholder=` is exactly
- * what the guard refuses, and rightly: it is the moment someone has to decide which category
- * the value is in.
- */
-export const STATION_EXAMPLES = {
-  callsign: 'KD9TAW',
-  grid: 'EN52xa',
-  state: 'WI',
-} as const
 
 const STATION_FIELDS: StationField[] = [
   {
     key: 'mycall',
     labelKey: 'settings.station.callsign.label',
     hintKey: 'settings.station.callsign.hint',
-    example: { token: STATION_EXAMPLES.callsign },
   },
   {
     key: 'mygrid',
     labelKey: 'settings.station.grid.label',
     hintKey: 'settings.station.grid.hint',
-    example: { token: STATION_EXAMPLES.grid },
   },
   {
     key: 'opName',
     labelKey: 'settings.station.opName.label',
     hintKey: 'settings.station.opName.hint',
-    example: { prose: 'settings.station.opName.placeholder' },
   },
   // #25 — who is AT THE KEY, as opposed to whose station it is. Two different questions, and
   // ADIF has two fields because the answers differ: STATION_CALLSIGN is the callsign above,
@@ -78,25 +54,24 @@ const STATION_FIELDS: StationField[] = [
     key: 'fdOperator',
     labelKey: 'settings.station.fdOperator.label',
     hintKey: 'settings.station.fdOperator.hint',
-    example: { prose: 'settings.station.fdOperator.placeholder' },
+    placeholderKey: 'settings.station.fdOperator.placeholder',
   },
   {
     key: 'opState',
     labelKey: 'settings.station.opState.label',
     hintKey: 'settings.station.opState.hint',
-    example: { token: STATION_EXAMPLES.state },
   },
 ]
 
 /** The persisted licence-class VALUES are tokens; only the labels are prose. */
 const LICENSE_CLASSES: { value: string; labelKey: MessageKey }[] = [
+  { value: 'novice', labelKey: 'settings.station.licenseClass.novice' },
   { value: 'technician', labelKey: 'settings.station.licenseClass.technician' },
   { value: 'general', labelKey: 'settings.station.licenseClass.general' },
+  { value: 'advanced', labelKey: 'settings.station.licenseClass.advanced' },
   { value: 'extra', labelKey: 'settings.station.licenseClass.extra' },
   { value: 'open', labelKey: 'settings.station.licenseClass.open' },
 ]
-
-const placeholderFor = (e: Example): string => ('token' in e ? e.token : t(e.prose))
 
 interface Props {
   readOnly?: boolean
@@ -137,7 +112,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
                 className={`settings-input${invalid && error ? ' invalid' : ''}`}
                 type="text"
                 value={String(value)}
-                placeholder={placeholderFor(f.example)}
+                placeholder={f.placeholderKey ? t(f.placeholderKey) : undefined}
                 onChange={(e) => onUpdate(f.key, e.target.value)}
                 aria-invalid={invalid && !!error}
                 autoComplete="off"

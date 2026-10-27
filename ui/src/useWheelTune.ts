@@ -4,7 +4,7 @@ import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
 import { bandLabelForMhz } from './band'
 import { clampWheelTarget, stepFrom } from './wheelTuningPolicy'
-import { useStationControl } from './stationAccess'
+import { showWhenDriving } from './features/drivingRefusal'
 
 /** Trailing-flush window: at most one CAT write per this many ms while the wheel spins. */
 const FLUSH_MS = 120
@@ -80,10 +80,9 @@ export function useWheelTune(
   ref: RefObject<HTMLElement | null>,
   opts: WheelTuneOpts,
 ): (deltaHz: number) => void {
-  const control = useStationControl()
   // The listener attaches once; a ref keeps it reading the latest props each event.
   const stateRef = useRef<WheelTuneOpts>(opts)
-  stateRef.current = { ...opts, enabled: opts.enabled && control }
+  stateRef.current = opts
   const targetHzRef = useRef<number | null>(null) // optimistic dial while a burst is in flight
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)
   /** The step `accumRef` was filled AT. One accumulator serves every decade, so without this a
@@ -124,7 +123,7 @@ export function useWheelTune(
     // own knob. What still bounds a burst is `clampToBand`, not this.
     void setFrequency(mhz, bandLabelForMhz(mhz), sideband || 'USB')
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }, [])
 
   /** Seed the optimistic target for a fresh burst (or one resumed after a pause) from the live

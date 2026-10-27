@@ -13,9 +13,24 @@ import { render, cleanup, act, fireEvent, screen, within } from '@testing-librar
 import { DetachedPanel } from './DetachedPanel'
 import { ContestView } from './components/ContestView'
 import { t } from './i18n'
-import { CONTEST_WORK_IN_HINT_KEY, CONTEST_WORK_IN_KEY, workInRequest } from './features/contestWorkIn'
+import { CONTEST_WORK_IN_HINT_KEY, CONTEST_WORK_IN_KEY, workInRequest, workInViewsFor } from './features/contestWorkIn'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from './types'
+import type { FdRulesetDto } from './api'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+/** A contest's banned modes, as the rules seed ships them. */
+const SEED = JSON.parse(readFileSync(resolve(process.cwd(), '../crates/tempo-core/src/fd_rules.seed.json'), 'utf8')) as {
+  rulesets: { event: string; banned_modes: string[] }[]
+}
+const bannedIn = (event: string): string[] => {
+  const rs = SEED.rulesets.find((r) => r.event === event)
+  if (!rs) throw new Error(`${event} is not in the seed`)
+  return rs.banned_modes
+}
+const rulesetDto = (event: string): FdRulesetDto =>
+  ({ event, rulesYear: 2026, bannedModes: bannedIn(event), spottingAllowed: true, clusterAllowed: true, enforcement: 'warn' }) as FdRulesetDto
 
 const T0 = 1_792_342_800
 
@@ -65,7 +80,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'get_window_on_top') return { supported: true, on: false }
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls|get_freq_markers)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history|get_sat_transponder|contest_logged_qth)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history|get_sat_transponder|contest_logged_qth)$/.test(cmd)) return null
   return {}
 }
 
@@ -168,10 +183,46 @@ describe('in the contest logger window', () => {
   })
 })
 
+describe('a contest that takes RTTY alone (the ARRL RTTY Roundup)', () => {
+  it('offers RTTY, not the CW and Phone it does not allow, and a press is the switch to RTTY', async () => {
+    const onWorkIn = vi.fn()
+    const rru = { ...fd, event: 'arrlrtty' } as FieldDayStatus
+    render(<ContestView fieldDay={rru} fdActive fdRuleset={rulesetDto('arrlrtty')} onWorkIn={onWorkIn} />)
+    await settle()
+    const buttons = within(group()).getAllByRole('button')
+    expect(buttons.map((b) => b.textContent)).toEqual([t('fieldDay.workIn.rtty')])
+    expect(buttons[0].getAttribute('title')).toBe(t('fieldDay.workIn.rtty.title'))
+    fireEvent.click(buttons[0])
+    expect(onWorkIn.mock.calls).toEqual([['rtty']])
+  })
+
+  it('CONTROL: a contest that bans FT8 and FT4 still offers CW and Phone, and no RTTY', async () => {
+    render(<ContestView fieldDay={fd} fdActive fdRuleset={rulesetDto('ilqp')} onWorkIn={() => {}} />)
+    await settle()
+    expect(within(group()).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      t('fieldDay.workIn.cw'),
+      t('fieldDay.workIn.phone'),
+    ])
+  })
+
+  it('the choice, by the banned list: CW and Phone where allowed, else RTTY where allowed, and only cockpits shown', () => {
+    expect(workInViewsFor(bannedIn('arrlrtty'))).toEqual(['rtty'])
+    expect(workInViewsFor(bannedIn('wfd'))).toEqual(['cw', 'phone'])
+    expect(workInViewsFor([])).toEqual(['cw', 'phone'])
+    expect(workInViewsFor(undefined)).toEqual(['cw', 'phone'])
+    expect(workInViewsFor(['CW'])).toEqual(['phone'])
+    // RTTY switched off in Features: nothing to offer, rather than a banned cockpit.
+    expect(workInViewsFor(bannedIn('arrlrtty'), (v) => v !== 'rtty')).toEqual([])
+    // CW and Phone switched off in Features is not "banned": RTTY is not offered in their place.
+    expect(workInViewsFor([], (v) => v === 'rtty')).toEqual([])
+  })
+})
+
 describe('a request as stored', () => {
-  it('names CW or Phone, and nothing else', () => {
+  it('names CW, Phone or RTTY, and nothing else', () => {
     expect(workInRequest(JSON.stringify({ view: 'cw', at: 1 }))).toBe('cw')
     expect(workInRequest(JSON.stringify({ view: 'phone', at: 2 }))).toBe('phone')
+    expect(workInRequest(JSON.stringify({ view: 'rtty', at: 4 }))).toBe('rtty')
     expect(workInRequest(JSON.stringify({ view: 'operate', at: 3 }))).toBeNull()
     expect(workInRequest('not json')).toBeNull()
     expect(workInRequest(null)).toBeNull()

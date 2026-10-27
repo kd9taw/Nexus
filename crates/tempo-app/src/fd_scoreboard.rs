@@ -1418,7 +1418,14 @@ fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
                             .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
                             .map(|v| v.raw.trim().to_ascii_uppercase())
                     }
-                    tempo_core::contest::MultSource::DxccEntity => q.entity.clone(),
+                    tempo_core::contest::MultSource::DxccEntity => q
+                        .entity
+                        .as_deref()
+                        .map(|e| tempo_core::contest::counted_country(e, false).to_string()),
+                    tempo_core::contest::MultSource::WaeCountry => q
+                        .entity
+                        .as_deref()
+                        .map(|e| tempo_core::contest::counted_country(e, true).to_string()),
                     tempo_core::contest::MultSource::Prefix => None,
                 };
                 if let Some(v) = value.filter(|v| !v.is_empty()) {
@@ -1559,7 +1566,8 @@ fn build_contest_meta(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
                         })
                         .unwrap_or_default(),
                 ),
-                tempo_core::contest::MultSource::DxccEntity => ("dxcc", Vec::new()),
+                tempo_core::contest::MultSource::DxccEntity
+                | tempo_core::contest::MultSource::WaeCountry => ("dxcc", Vec::new()),
                 tempo_core::contest::MultSource::Prefix => ("prefix", Vec::new()),
             };
             MetaMult {

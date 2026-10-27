@@ -1,4 +1,3 @@
-import { useStationCapability, useStationControl } from '../stationAccess'
 // The manual split control — SPLIT toggle, ±1 kHz steps, and the live offset readout.
 //
 // ⭐ ONE COPY, USED BY THREE COCKPITS. It shipped in Phone only, so a CW operator working a
@@ -49,9 +48,7 @@ interface Props {
 }
 
 export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
-  const control = useStationControl()
-  // A browser needs the station's splitTuning hint; it is off while that browser's TX is armed.
-  const allowed = (useStationCapability('splitTuning') || control) && unavailable == null
+  const allowed = unavailable == null
   const failed = (local: string) => () => onError?.(local)
   // The desired TX dial lives in the snapshot; a plain retune clears it (backend).
   // Offset is kHz off the RX dial; default +5, the common pileup.

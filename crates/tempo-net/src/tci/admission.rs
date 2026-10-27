@@ -3,8 +3,8 @@
 //! This is not Nexus's transmit gate. The engine decides whether a transmission may happen at all
 //! (the TX-enable latch, the stop hold, licence privileges on the emitted RF, identity at the
 //! keying boundary, the wall-clock watchdog), and every one of those holds before a key reaches
-//! this module (plan §6.1 item 1). Admission adds what only the server's own reports can say, and
-//! every check is a reason to refuse (§6.1 items 2 and 3):
+//! this module. Admission adds what only the server's own reports can say, and
+//! every check is a reason to refuse:
 //!
 //! - the session has reached `ready;` and is not closing;
 //! - nothing of ours is keyed already, as the session believes;
@@ -19,9 +19,9 @@
 //!   With no ceiling written, the drive is the SDR operator's and is not held to one; a report of
 //!   it that could not be read still refuses, as every unreadable report admission reads does;
 //! - and for a key that takes **Nexus's audio** ([`TxStart::Audio`], `trx:<trx>,true,tci;`), never
-//!   a digital over on the SDR's microphone (§6.1 item 3, TCI 2.0 §4.2: "otherwise the microphone
+//!   a digital over on the SDR's microphone (TCI 2.0 §4.2: "otherwise the microphone
 //!   signal is taken"): Nexus's audio is on for this radio; the dialect's `trx` takes a source
-//!   (T1 choice 3: on a dialect whose `trx` takes none, a plain key's source is not known until a
+//!   (on a dialect whose `trx` takes none, a plain key's source is not known until a
 //!   bench shows it, so Nexus's audio is refused there and a microphone key stays possible); the
 //!   server has acknowledged `audio_start:<trx>;` on this connection; and a receive block for this
 //!   transceiver arrived within the last second ([`RX_FRESH_MS`]). After the key, the session
@@ -33,9 +33,9 @@
 //! reported does not: the spec's servers report each one in their init burst, and an older server
 //! that omits one is not refused for the omission.
 //!
-//! There is no list of benched kinds (plan §6.1 item 2's `BENCHED`, with its per-radio Beta switch):
-//! operator ruling 551 holds the release until a TCI bench has proven transmit in every mode, FT
-//! and JS8 included, and the settings carry no such switch (T4, the same ruling).
+//! There is no list of benched kinds, and no per-radio Beta switch:
+//! the operator's rule holds the release until a TCI bench has proven transmit in every mode, FT
+//! and JS8 included, and the settings carry no such switch.
 //!
 //! [`Admitted`] is the value a key must carry to be rendered ([`Admitted::render`]). Its fields
 //! are private to this module and [`admit`] is the only constructor, so the text of a key cannot
@@ -50,7 +50,7 @@ use super::model::{Model, Reading};
 use super::wire::{ClientText, Source, Start, Unrenderable};
 use super::{Dialect, Trx};
 
-/// How recent a receive block must be for a key that takes Nexus's audio (plan §6.1 item 3).
+/// How recent a receive block must be for a key that takes Nexus's audio.
 pub const RX_FRESH_MS: u64 = 1_000;
 
 /// What a key starts.
@@ -385,7 +385,7 @@ mod tests {
             case(READY, Facts { keyed: true, ..f }, TxStart::Tune),
             Err(Refusal::AlreadyKeyed)
         );
-        // M14: receive-only and tx_enable, said or unreadable.
+        // Receive-only and tx_enable, said or unreadable.
         for (text, refusal) in [
             (
                 "receive_only:true;",
@@ -418,7 +418,7 @@ mod tests {
                 );
             }
         }
-        // M7: the drive by readback, against the last drive Nexus wrote.
+        // The drive by readback, against the last drive Nexus wrote.
         assert_eq!(
             case(&format!("{READY}drive:0,100;"), f, TxStart::Audio),
             Err(Refusal::DriveAboveCeiling {

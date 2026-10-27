@@ -177,12 +177,6 @@ impl Engine {
         self.remote_radio_context_check(retune)
     }
 
-    /// Shared context checks. An owned FT operation may keep its own slot
-    /// transmission, but still cannot borrow another pending radio transition.
-    pub(super) fn remote_radio_context_idle(&self) -> Result<(), Reason> {
-        self.remote_radio_context_check(false)
-    }
-
     fn remote_radio_context_check(&self, retune: bool) -> Result<(), Reason> {
         if self.remote_settings_path.is_none() {
             return Err(Reason::UnsupportedAction);

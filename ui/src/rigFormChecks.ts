@@ -333,6 +333,14 @@ export function blocks(checks: RigCheck[]): boolean {
  */
 export const NATIVE_CIV_MODELS: readonly number[] = [3073, 3078, 3081, 3085, 3090]
 
+/**
+ * The radios offered "APRS uses DATA-FM" (#393): a 2 m DATA-FM mode Hamlib reaches with `PKTFM`.
+ * Today the FT-991/991A (Hamlib 1035, both share it). ⚠️ MIRRORS `aprs_data_fm_available` in
+ * crates/tempo-app/src/settings.rs — the engine obeys the switch only there — and
+ * `rigFormChecks.test.ts` reads that file and fails if the two drift.
+ */
+export const APRS_DATA_FM_MODELS: readonly number[] = [1035]
+
 /** Can this radio's CI-V be driven natively, and if not, why not? `null` = yes. */
 export function nativeCivBlockedReason(rigModel: number, rigConn: string): string | null {
   if (!NATIVE_CIV_MODELS.includes(rigModel)) return 'not-supported'

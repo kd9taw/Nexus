@@ -82,8 +82,12 @@ function issPass() {
 /** The snapshot every radio verb answers with: `snapshot`, unless a test puts another station in. */
 let station: AppSnapshot = snapshot
 
+/** The transponder a satellite pass holds: none, as the backend answers, unless a test holds one. */
+let held: unknown = null
+
 function respond(cmd: string): unknown {
   if (/^(get_snapshot|set_tx_enabled|set_operating_mode|set_area|tune_channel|set_frequency)$/.test(cmd)) return station
+  if (cmd === 'get_sat_transponder') return held
   if (cmd === 'get_settings') return { ...defaultSettings, issSstvAutoArm: true }
   if (cmd === 'get_propagation') return propagation
   if (cmd === 'get_iss_pass') return issPass()
@@ -137,6 +141,7 @@ beforeEach(() => {
   resetIssAutoArm()
   bridgeCalls.length = 0
   station = snapshot
+  held = null
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
       bridgeCalls.push({ cmd, args })
@@ -189,6 +194,36 @@ describe('the ISS SSTV auto-arm and the screen in use', () => {
     ])
     expect(sent.some((c) => c.cmd === 'sstv_arm' && c.args?.on === true)).toBe(true)
     expect(document.body.textContent).toContain(t('sat.iss.armed', { dial: '145.800', mode: 'FM' }))
+  })
+})
+
+// A SATELLITE PASS HOLDING THE DIAL: a transponder held, as a pick on the Satellites screen leaves it.
+// Doppler steers the dial back to that bird, so the ISS pass is announced on the SSTV screen too and
+// nothing that moves the radio leaves the UI. The SSTV-screen control above is the same scene with no
+// hold, and it tunes.
+describe('the ISS SSTV auto-arm under a held satellite pass', () => {
+  // The toast store outlives a test: the announcements and the arm above would still be on screen.
+  beforeEach(() => {
+    let left: Toast[] = []
+    subscribeToasts((ts) => {
+      left = ts
+    })()
+    for (const x of left) dismissToast(x.id)
+  })
+
+  it('on the SSTV screen announces the pass and sends nothing that moves the radio', async () => {
+    held = { name: 'RS-44', index: 0, description: 'Linear transponder', binding: null }
+    await mountOn('sstv')
+    const sent = await nextPoll()
+    // The stored opt-in reached the pass tick: without this the silence below proves nothing.
+    expect(sent.map((c) => c.cmd)).toContain('get_iss_pass')
+    expect(sent.filter((c) => MOVES_THE_RADIO.has(c.cmd))).toEqual([])
+    // SSTV is already open: the notice says why the radio stayed, not to open SSTV.
+    expect(document.body.textContent).toContain(
+      'ISS overhead: SSTV on 145.800 FM. A satellite pass has the radio, so it was not retuned.',
+    )
+    expect(document.body.textContent).not.toContain(t('sat.iss.overhead', { dial: '145.800', mode: 'FM' }))
+    expect(document.body.textContent).not.toContain(t('sat.iss.armed', { dial: '145.800', mode: 'FM' }))
   })
 })
 

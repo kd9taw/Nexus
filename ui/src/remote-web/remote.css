@@ -61,6 +61,18 @@
 .remote-native-advanced > summary { gap: 8px; font-weight: 600; }
 .remote-native-advanced > summary::before { content: '▸'; display: inline-block; }
 .remote-native-advanced[open] > summary::before { transform: rotate(90deg); }
+/* Settings ▸ Remote access ▸ Devices: one list, a group per person, a row per device with how it
+   connects as badges and its technical details folded under it (the row's whole width). */
+.remote-devices { display: grid; gap: 8px; min-width: 0; }
+.remote-device-person { display: grid; gap: 4px; min-width: 0; }
+.remote-device-person-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.remote-device-person-role { color: var(--text-dim); font-weight: 400; }
+.remote-device-person-name .remote-actions { margin-top: 0; }
+.remote-device-roads { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.remote-device-road { padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: .85em; white-space: nowrap; }
+.remote-device-details { flex: 1 0 100%; min-width: 0; color: var(--text-dim); }
+.remote-device-facts { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.remote-device-facts > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; overflow-wrap: anywhere; }
 
 /* The question at the shack: the key large enough to compare group by group with the browser's. */
 .remote-approval-key { margin: 12px 0; }

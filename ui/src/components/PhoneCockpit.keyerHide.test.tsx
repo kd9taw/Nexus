@@ -17,8 +17,10 @@
 // as a dropout. Courtesy, not safety — but courtesy worth computing, because a warning that
 // goes missing is invisible and one that cries wolf trains the operator to ignore the next.
 // Two properties at the real site:
-//   (1) the keyer's hide really does end things — unmounting it calls stopVoice, and also
-//       cancels a recording in progress;
+//   (1) the keyer's hide really does end things — unmounting it with a message it started
+//       still playing calls stopVoice (and with nothing playing sends nothing: on a computer
+//       driving a station, stopVoice is a Stop of everything there), and it also cancels a
+//       recording in progress;
 //   (2) its ⊞ entry says so before the tick, and an entry whose hide ends nothing does not.
 //
 // (1) is why the suite renders the REAL VoiceKeyer (every other Phone suite stubs it)
@@ -57,12 +59,14 @@ vi.setConfig({ testTimeout: 30_000 })
 // top-level binding, so a plain const would be in its temporal dead zone when it runs.
 // These are the WIRE calls that end or destroy something — the sweep below treats a hide
 // that touches any of them as a hide with a consequence.
-const { stopVoice, cancelVoiceRecording, startVoiceRecording, pushToast } = vi.hoisted(() => ({
-  stopVoice: vi.fn(async () => ({})),
-  cancelVoiceRecording: vi.fn(async () => ({})),
-  startVoiceRecording: vi.fn(async () => ({})),
-  pushToast: vi.fn(),
-}))
+const { stopVoice, playVoiceMessage, cancelVoiceRecording, startVoiceRecording, pushToast } =
+  vi.hoisted(() => ({
+    stopVoice: vi.fn(async () => ({})),
+    playVoiceMessage: vi.fn(async () => ({})),
+    cancelVoiceRecording: vi.fn(async () => ({})),
+    startVoiceRecording: vi.fn(async () => ({})),
+    pushToast: vi.fn(),
+  }))
 
 vi.mock('../api', () => ({
   // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
@@ -90,7 +94,7 @@ vi.mock('../api', () => ({
   // The voice keyer's own wire. `stopVoice` and `cancelVoiceRecording` are the two under
   // test — the sweep below asks the wire, not the component, what a hide did.
   getVoiceMessages: vi.fn(async () => [{ slot: 1, label: 'CQ', file: '/tmp/cq.wav' }]),
-  playVoiceMessage: vi.fn(async () => ({})),
+  playVoiceMessage,
   stopVoice,
   startVoiceRecording,
   stopVoiceRecording: vi.fn(async () => []),
@@ -136,6 +140,7 @@ afterEach(() => {
   // handing its successor a phantom stop.
   cleanup()
   stopVoice.mockClear()
+  playVoiceMessage.mockClear()
   cancelVoiceRecording.mockClear()
   cancelVoiceRecording.mockImplementation(async () => ({}))
   startVoiceRecording.mockClear()
@@ -145,7 +150,7 @@ afterEach(() => {
   localStorage.clear()
 })
 
-function makeSnap(transmitting = false): AppSnapshot {
+function makeSnap(voicePlaying = false, transmitting = false): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     radio: {
@@ -156,6 +161,7 @@ function makeSnap(transmitting = false): AppSnapshot {
       sidebandOverride: null,
       rigMode: 'USB',
       transmitting,
+      voicePlaying,
       txEnabled: true,
       txAllowed: true,
       qsoRecording: false,
@@ -193,9 +199,9 @@ function fakePanels(removed: PhonePanelId[] = []): PanelLayoutApi<PhonePanelId> 
   }
 }
 
-const view = (removed: PhonePanelId[] = [], transmitting = false) => (
+const view = (removed: PhonePanelId[] = [], voicePlaying = false) => (
   <PhoneCockpit
-    snap={makeSnap(transmitting)}
+    snap={makeSnap(voicePlaying)}
     theme="dark"
     onWorkSpot={() => {}}
     spots={[]}
@@ -210,17 +216,34 @@ const view = (removed: PhonePanelId[] = [], transmitting = false) => (
  * are history operations, and a stub with `undo: () => {}` makes every claim about them
  * vacuous. Storage is per-test (cleared in afterEach), so each case starts at stock.
  */
-function LivePanels({ transmitting = false }: { transmitting?: boolean }) {
+function LivePanels({
+  voicePlaying = false,
+  transmitting = false,
+}: {
+  voicePlaying?: boolean
+  transmitting?: boolean
+}) {
   const panels = usePanelLayout(PHONE_PANELS)
   return (
     <PhoneCockpit
-      snap={makeSnap(transmitting)}
+      snap={makeSnap(voicePlaying, transmitting)}
       theme="dark"
       onWorkSpot={() => {}}
       spots={[]}
       panels={panels}
     />
   )
+}
+
+/** Play the keyer's F1 through its own slot button: a message in flight, which is what a hide
+ *  of the keyer ends. */
+async function playF1() {
+  const slot = document.querySelector<HTMLButtonElement>('[data-pane="voiceKeyer"] .vk-play')
+  expect(slot, 'precondition: the keyer shows F1').not.toBeNull()
+  await act(async () => {
+    fireEvent.click(slot!)
+  })
+  expect(playVoiceMessage, 'precondition: F1 is playing').toHaveBeenCalledWith(1)
 }
 
 /** Open ⊞ Panels (idempotent — the trigger TOGGLES) and return the popover. */
@@ -249,6 +272,7 @@ describe('hiding the Phone voice keyer', () => {
     await act(async () => {})
     // The real keyer is mounted (its slot grid rendered from the stubbed engine list).
     expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()
+    await playF1()
     expect(stopVoice).not.toHaveBeenCalled()
 
     // The operator unticks Voice Keyer: the pane goes, and the transmission goes with it.
@@ -328,14 +352,15 @@ describe('hiding the Phone voice keyer', () => {
     // The argument that made the discard speak up ("a stop the operator did not ask for is
     // indistinguishable from a dropout") applies at least as hard to a transmission cut
     // short, and that one used to end in silence. The keyer knows a message is on the air
-    // from two things at once: it started one, and the rig is keyed — so drive both.
+    // from two things at once: it started one, and the station says a voice message is
+    // playing (`radio.voicePlaying`) — so drive both.
     // Red at the real site by deleting the pushToast from VoiceKeyer's cleanup.
     const r = render(<LivePanels />)
     await act(async () => {})
     fireEvent.click(screen.getByTitle('Play F1 (CQ)'))
     await act(async () => {})
-    // The rig keys — the snapshot lags the send by a poll, which is why the pane waits for it.
-    r.rerender(<LivePanels transmitting />)
+    // The station plays it — the snapshot lags the send by a poll, which is why the pane waits.
+    r.rerender(<LivePanels voicePlaying />)
     await act(async () => {})
 
     toggle(/Voice Keyer/, false)
@@ -344,6 +369,22 @@ describe('hiding the Phone voice keyer', () => {
     const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
     expect(said, 'the over was cut off in silence').toMatch(/on the air/i)
     expect(said).toMatch(/F1/)
+  })
+
+  it('an FT over on the air is not a voice over: it says nothing of one', async () => {
+    // `radio.transmitting` is the FT slot path's flag and never a voice message's: the cockpit
+    // hands the keyer `radio.voicePlaying`, so a slot over alone announces nothing.
+    const r = render(<LivePanels />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTitle('Play F1 (CQ)'))
+    await act(async () => {})
+    r.rerender(<LivePanels transmitting />)
+    await act(async () => {})
+    toggle(/Voice Keyer/, false)
+    await act(async () => {})
+    expect(stopVoice, 'not known to have ended, so it is stopped').toHaveBeenCalledTimes(1)
+    const said = pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
+    expect(said, 'an FT over was announced as the voice over').not.toMatch(/on the air/i)
   })
 
   it('says nothing about an over when the rig was never keyed', async () => {
@@ -494,6 +535,8 @@ describe('hiding the Phone voice keyer', () => {
     const stopsOnHide = async (id: PhonePanelId) => {
       const r = render(view())
       await act(async () => {})
+      // The keyer's hide ends a message in flight, so one is playing when each id is hidden.
+      await playF1()
       stopVoice.mockClear()
       cancelVoiceRecording.mockClear()
       r.rerender(view([id]))

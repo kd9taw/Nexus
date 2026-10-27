@@ -55,6 +55,14 @@ const AFTER_THE_CUT: bool = true;
 /// §4.11's bound on an Engine-lock hold in any log path.
 const HOLD_BOUND: Duration = Duration::from_millis(5);
 
+/// The one path held to no hold bound, reported only: a whole run's undo of more than
+/// `CHUNK_ROWS` contacts is one transaction, and its hot index follows every contact it puts back
+/// under the lock — O(run), 0.3 s at 150,000. It is refused, before any of that work, while the
+/// radio transmits or the FT sequencer is armed (`loghistory::MUST_WAIT_FOR_TX`, asserted above
+/// as the refused line, which IS held to the bound), so the radio loop never waits it out to key
+/// or to unkey. The commit is not split across holds: that would undo the run in pieces.
+const WAITS_FOR_TX: &str = "the purge undone (one transaction)";
+
 /// C13's bound on the snapshot the radio loop takes after a contact is logged: the median of 41,
 /// as C13's bench took it.
 const SNAPSHOT_BOUND: Duration = Duration::from_millis(1);
@@ -262,6 +270,28 @@ fn restating(rows: &[QsoRecord], extra: &str) -> String {
         s.push_str(&adif_record(r).replace("<EOR>", &format!("{extra}<EOR>")));
     }
     s
+}
+
+/// The process's resident memory now, in bytes, with its peak set back to it (Linux; 0 where
+/// `/proc` has no answer). [`peak_above`] then reads how far the peak rose past it.
+fn resident() -> u64 {
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    proc_status("VmRSS:")
+}
+
+/// How far the process's peak resident memory has risen above `rss` ([`resident`]).
+fn peak_above(rss: u64) -> u64 {
+    proc_status("VmHWM:").saturating_sub(rss)
+}
+
+fn proc_status(key: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            let line = s.lines().find(|l| l.starts_with(key))?.to_string();
+            line.split_whitespace().nth(1)?.parse::<u64>().ok()
+        })
+        .map_or(0, |kib| kib * 1024)
 }
 
 fn ms(d: Duration) -> f64 {
@@ -525,6 +555,37 @@ fn bench(n: usize) -> Vec<String> {
     settle(&shared);
     hold("the fill job's chunk", &watcher);
 
+    // The history: one change undone by its entry, and the fill chunk's run undone whole.
+    let edited = picked[16].id.expect("an id");
+    let last = tempo_app::loghistory::history_of(&shared, edited)
+        .expect("the history reads")
+        .last()
+        .expect("the edit above is recorded")
+        .seq;
+    let (undone, d) = tempo_app::loghistory::undo_entry(&shared, last);
+    undone.expect("undone");
+    wait(d);
+    hold("an undo of one change", &watcher);
+    let run = tempo_app::loghistory::latest_run(
+        &shared,
+        Some(tempo_core::logbook::history::Source::Fill),
+    )
+    .expect("reads")
+    .expect("the fill chunk's run");
+    let started = Instant::now();
+    let (undone, d) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    let undone = undone.expect("undone");
+    wait(d);
+    println!(
+        "  the fill chunk's run undone whole: {} contacts in {:.2} s, until on disk",
+        undone.changed,
+        started.elapsed().as_secs_f64()
+    );
+    hold(
+        "an undo of a run (the fill job's chunk, one transaction)",
+        &watcher,
+    );
+
     // The bulk changes, on the rows of the calls they bring.
     let some = rows_every(&shared, (n / 100).max(1));
     let text = restating(&some, "<QSL_RCVD:1>Y") + &adif_record(&fresh(9_000));
@@ -592,22 +653,68 @@ fn bench(n: usize) -> Vec<String> {
         &watcher,
     );
 
+    // What the store holds on disk by now, its history included.
+    let size = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |m| m.len());
+    println!(
+        "  the store on disk before the purge: {:.1} MiB (and {:.1} MiB of write-ahead log)",
+        size("log.sqlite3") as f64 / 1_048_576.0,
+        size("log.sqlite3-wal") as f64 / 1_048_576.0,
+    );
+
     // Last, since it ends the log: the purge, through the command's own entry point — made
     // under the lock with its changes' tickets collected, and waited for with the lock released —
     // and what the engine's log holds once it is done.
+    let rss = resident();
     let started = Instant::now();
     let (removed, d) = engine_lock(&shared).with_log_tickets(|e| e.clear_logbook());
     wait(d);
     settle(&shared);
     let purged = started.elapsed();
+    let purge_peak = peak_above(rss);
     hold("the purge", &watcher);
-    drop(watcher);
     println!(
         "  purged {removed} contacts in {:.1} s, until on disk; the engine's log then holds {:.1} \
-         MiB of Rust heap",
+         MiB of Rust heap; the process's peak resident memory rose {:.0} MB",
         purged.as_secs_f64(),
-        mib(LIVE.load(Ordering::SeqCst) - base)
+        mib(LIVE.load(Ordering::SeqCst) - base),
+        purge_peak as f64 / 1e6
     );
+
+    // And the purge undone: every contact put back from its history, in one transaction.
+    let run = tempo_app::loghistory::latest_run(
+        &shared,
+        Some(tempo_core::logbook::history::Source::Operator),
+    )
+    .expect("reads")
+    .expect("the purge's run");
+    // The QSO started above armed transmit: an undo this large waits until it is off, and is
+    // refused, changing nothing, while it is on — the radio loop needs the lock to key and unkey.
+    let (refused, _) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    assert_eq!(
+        refused,
+        Err(tempo_app::loghistory::MUST_WAIT_FOR_TX.to_string()),
+        "refused while transmit is armed"
+    );
+    hold(
+        "the purge's undo, refused while transmit is armed",
+        &watcher,
+    );
+    engine_lock(&shared).set_tx_enabled(false);
+    let rss = resident();
+    let started = Instant::now();
+    let (undone, d) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    let undone = undone.expect("undone");
+    wait(d);
+    settle(&shared);
+    println!(
+        "  the purge undone: {} contacts back in {:.1} s, until on disk; the process's peak \
+         resident memory rose {:.0} MB",
+        undone.changed,
+        started.elapsed().as_secs_f64(),
+        peak_above(rss) as f64 / 1e6
+    );
+    hold(WAITS_FOR_TX, &watcher);
+    drop(watcher);
 
     println!(
         "  longest Engine-lock hold, by path (the bound is {:.0} ms), with how many holds the \
@@ -616,11 +723,17 @@ fn bench(n: usize) -> Vec<String> {
         ms(HOLD_BOUND)
     );
     for (path, h) in &holds {
-        let over = h.longest > HOLD_BOUND;
+        let over = h.longest > HOLD_BOUND && *path != WAITS_FOR_TX;
         println!(
             "    {:>9.3} ms  {path}{}  [{} holds, a look every {:.0} ns, blind at most {:.3} ms]",
             ms(h.longest),
-            if over { "  ← over" } else { "" },
+            if over {
+                "  ← over"
+            } else if *path == WAITS_FOR_TX {
+                "  (waits for transmit off: not bounded)"
+            } else {
+                ""
+            },
             h.holds,
             h.period.as_nanos(),
             ms(h.blind)

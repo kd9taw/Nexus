@@ -25,14 +25,17 @@ use std::sync::Mutex;
 use super::contest_removal::{holders, ContestSentTo};
 use super::{engine_lock, Engine, Mode};
 use crate::dto::FieldDayQso;
-use tempo_core::fieldday::{ContactEdit, EditRefusal, LoggedQso};
+use tempo_core::fieldday::{ContactEdit, EditRefusal, FieldDayLog, LoggedQso};
 
 /// Why an edit changed nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContestEditRefusal {
-    /// No contact in the log has that call and time: it was removed or edited since it was
-    /// shown.
+    /// The contact no longer reads as the edit opened it: it was edited since it was shown (its
+    /// call too, so no contact has that call and time now).
     Changed,
+    /// No contact in the log has that time any more: it was removed since it was shown. Every
+    /// edit keeps a contact's time, so one whose call was changed still has it and is `Changed`.
+    Gone,
     /// The edit names no call, or a band no contest file can carry.
     Incomplete,
     /// The edit gives another number of rows than the contact has (a county line's counties).
@@ -48,6 +51,7 @@ impl ContestEditRefusal {
     pub fn code(self) -> &'static str {
         match self {
             ContestEditRefusal::Changed => "changed",
+            ContestEditRefusal::Gone => "gone",
             ContestEditRefusal::Incomplete => "incomplete",
             ContestEditRefusal::Rows => "rows",
             ContestEditRefusal::Satellite => "satellite",
@@ -95,10 +99,17 @@ impl Engine {
     /// ⭐ **Edit a contest contact in place** — the one the screen named (`call`, `when_unix`,
     /// what its log table and the strip show), a county line as one contact. Refused at a club
     /// (see the module). `Err` only when no contest runs.
+    ///
+    /// ⛔ **Only while it is still the contact the edit opened.** `opened` is its rows as the
+    /// form was filled from them. Another window can edit the same contact meanwhile, and a form
+    /// filled before that would write its old values back over the change, so a contact whose
+    /// call, band, mode or received exchange no longer reads as `opened` is refused as `Changed`,
+    /// and nothing changes — or as `Gone` when no contact has its time any more.
     pub fn contest_edit(
         &mut self,
         call: &str,
         when_unix: u64,
+        opened: &[FieldDayQso],
         edit: &ContactEdit,
     ) -> Result<Result<ContestEdit, ContestEditRefusal>, String> {
         let club = self.fd_sync_enabled();
@@ -107,6 +118,12 @@ impl Engine {
         };
         if club {
             return Ok(Err(ContestEditRefusal::Club));
+        }
+        if when_unix != 0 && !station.log.qsos().iter().any(|q| q.when_unix == when_unix) {
+            return Ok(Err(ContestEditRefusal::Gone));
+        }
+        if !reads_as(&station.log, call, when_unix, opened) {
+            return Ok(Err(ContestEditRefusal::Changed));
         }
         let before = match station.log.edit_contact(call, when_unix, edit) {
             Ok(rows) => rows,
@@ -129,19 +146,14 @@ impl Engine {
             };
         };
         let log = &station.log;
-        let (rs, spec, role) = (log.ruleset(), log.session.exchange, log.session.role());
-        let numbers = log.qso_numbers();
-        let shown = |q: &LoggedQso| {
-            let nr = numbers.get(&q.seq).copied();
-            super::field_day_display::field_day_qso(q, rs, spec, role, nr)
-        };
+        let shown = shown_of(log);
         let after: Vec<&LoggedQso> = log
             .qsos()
             .iter()
             .filter(|q| before.iter().any(|b| b.seq == q.seq))
             .collect();
         ContestEdit {
-            before: before.iter().map(shown).collect(),
+            before: before.iter().map(&shown).collect(),
             after: after.iter().map(|q| shown(q)).collect(),
             sent,
             qids: after
@@ -154,6 +166,37 @@ impl Engine {
     }
 }
 
+/// A row of the log as the log table shows it.
+fn shown_of(log: &FieldDayLog) -> impl Fn(&LoggedQso) -> FieldDayQso + '_ {
+    let (rs, spec, role) = (log.ruleset(), log.session.exchange, log.session.role());
+    let numbers = log.qso_numbers();
+    move |q| {
+        let nr = numbers.get(&q.seq).copied();
+        super::field_day_display::field_day_qso(q, rs, spec, role, nr)
+    }
+}
+
+/// Does the contact `call` at `when_unix` still read as `opened`, the rows its edit was filled
+/// from? Only what an edit can change is compared (`edited`).
+fn reads_as(log: &FieldDayLog, call: &str, when_unix: u64, opened: &[FieldDayQso]) -> bool {
+    let shown = shown_of(log);
+    let now: Vec<FieldDayQso> = log
+        .contact_at(call, when_unix)
+        .iter()
+        .map(|&i| shown(&log.qsos()[i]))
+        .collect();
+    now.iter().map(edited).eq(opened.iter().map(edited))
+}
+
+/// What an edit can change on a row, as the log table shows it: the call, the band, the mode
+/// and what was received. The rest of a shown row moves with other contacts (its dupe mark) or
+/// is kept by every edit (its time, number and sent exchange).
+fn edited(q: &FieldDayQso) -> (&str, &str, &str, &str, &str, &str, &[String]) {
+    (
+        &q.call, &q.band, &q.mode, &q.submode, &q.class, &q.section, &q.rcvd,
+    )
+}
+
 /// ★ [`Engine::contest_edit`] as a command makes it: the edit under the lock, its journal on
 /// disk before the answer (the journal is the contact's only copy on disk until it is merged),
 /// and a merged copy's upload marks read after — or, when the logbook cannot be read, the copy
@@ -164,11 +207,12 @@ pub fn edit(
     engine: &Mutex<Engine>,
     call: &str,
     when_unix: u64,
+    opened: &[FieldDayQso],
     edit: &ContactEdit,
 ) -> Result<Result<ContestEdited, ContestEditRefusal>, String> {
     let (answer, written) = {
         let mut e = engine_lock(engine);
-        let answer = e.contest_edit(call, when_unix, edit)?;
+        let answer = e.contest_edit(call, when_unix, opened, edit)?;
         (answer, e.journal_mark())
     };
     written.wait();

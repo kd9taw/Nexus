@@ -452,6 +452,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(keptKey),signer.publicKey,'S3-L1: Accept kept the listed key')
     }
     for(const [w,h] of [[360,740],[390,844],[844,390],[1024,768],[1280,800],[1366,768],[3440,1440]])for(const theme of ['dark','light'])await geometry(w,h,1,theme)
+    // Your account: Delete account opened and its word typed, at a phone's size and a desktop's. Real clicks
+    // reach the summary and the box; the delete button is hit-tested where it lies and never pressed.
+    const deleteSummary=`[...document.querySelectorAll('summary')].find(e=>e.textContent==='Delete account')`
+    await click(deleteSummary)
+    await click(`document.querySelector('.remote-account-data input')`)
+    await browser.call('Input.insertText',{text:'DELETE'},session)
+    await until(`!${button('Delete my account')}.disabled`)
+    for(const [w,h] of [[360,740],[1280,800]]){
+      await geometry(w,h,1,'dark')
+      const reach=await evaluate(`(()=>{const e=${button('Delete my account')};e.scrollIntoView({block:'center',behavior:'instant'});const r=e.getBoundingClientRect();return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
+      assert.ok(reach.inside&&reach.hit,'Delete my account must be on screen and on top: '+JSON.stringify({w,h,reach}))
+    }
+    await click(deleteSummary)
+    await geometry(3440,1440,1,'light')
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0
@@ -1425,7 +1439,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return !!c.stream.audioState;f=f.return}return false})()`,10000)
         const said=await atShack('__shack.said')
         if(said>1)console.log(`Station stand-in: Chrome did not send "audio started" until it was said ${said} times`)
-        assert.deepEqual(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const a=document.querySelector('.remote-stream-app .remote-audio');return {heard:c.stream.audioState,button:a?.querySelector('button')?.textContent,state:a?.querySelector('.remote-audio-state')?.textContent??null}}f=f.return}return null})()`),{heard:{type:'audioState',listening:true},button:'Listen',state:null},'nobody asked to listen: the station\'s word arrived and turned nothing on')
+        // Listen is drawn only while the station's operation state offers it and the stream's control channel is open. This
+        // went red once (2026-10-20, under load) with the station's word read and no Listen drawn, and did not come back in 14
+        // runs, quiet, pinned or loaded; so a mismatch says what the page held at that moment, and the next one names its cause.
+        const listenRead=await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const a=document.querySelector('.remote-stream-app .remote-audio');return {heard:c.stream.audioState,button:a?.querySelector('button')?.textContent,state:a?.querySelector('.remote-audio-state')?.textContent??null}}f=f.return}return null})()`)
+        try{assert.deepEqual(listenRead,{heard:{type:'audioState',listening:true},button:'Listen',state:null},'nobody asked to listen: the station\'s word arrived and turned nothing on')}catch(error){console.log('Listen diagnostic',JSON.stringify({read:listenRead,page:await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){const o=c.operations.getSnapshot(),s=c.stream.getSnapshot();return {at:performance.now(),hidden:document.hidden,operations:{connected:o.connected,error:o.error,busy:o.busy,fresh:o.fresh,phase:o.state?.phase??null,capabilities:o.state?.controls?.capabilities??null},stream:{phase:s.phase,control:s.control,reason:s.reason}}}f=f.return}return null})()`).catch(e=>String(e)),closures:await evaluate('window.__socketClosures').catch(()=>null),wire:operationWire.slice(-12)}));throw error}
         await click(audioButton('Listen'))
         await until(`window.__worklets.length>0&&window.__worklets.every(w=>'ok' in w)`,10000)
         const worklets=await evaluate(`window.__worklets.map(w=>{const u=new URL(w.url,location.href);return {ok:w.ok,error:w.error??null,scheme:u.protocol,sameOrigin:u.origin===location.origin,asset:u.pathname.startsWith('/assets/')&&u.pathname.endsWith('.js')}})`)
@@ -1759,6 +1777,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const sentOperations=operationWire.filter(v=>v.direction==='out')
         assert.ok(sentOperations.some(v=>v.type==='acquire')&&sentOperations.some(v=>v.type==='release'),'premise: the page took and released control')
         assert.deepEqual(sentOperations.filter(v=>v.signed!==!['state','stopTransmit'].includes(v.type)).map(v=>v.type),[],'a proof on every request but state and Stop, and none on those')
+        // The wire count above is the page's frame as Chrome sent it, before the relay hands it to the
+        // stand-in station, so the station's own lease is what has to be waited for.
+        for(let i=0;i<30&&loggingLease!==null;i++)await sleep(100)
         assert.equal(loggingLease,null,'the station holds no lease for this browser')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
         // A REAL STATION'S ANSWER. The stand-in above answers with Chrome's own SDP; the shack answers with

@@ -1,5 +1,5 @@
 //! The recorder: what a tester runs to capture a session from their SDR program for a report, so
-//! the simulator can be checked against a real server (plan §7.1, §9 B2).
+//! the simulator can be checked against a real server.
 //!
 //! **Observe-only, by construction.** The recorder connects to a real TCI server as one more
 //! client. It can send nothing that keys a transmitter or changes the radio:

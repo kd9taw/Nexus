@@ -5,8 +5,8 @@
 // An operator rehearsing the Illinois QSO Party could not find where the other station's county
 // goes. The box was there, captioned with its rules-file slot id, "QTH", which he did not read as
 // "their county". Every received box in a contest line now says in words what it holds for THIS
-// station's role ("County / State" inside Illinois, "IL county" outside it), and shows an example
-// from its own list while it is empty.
+// station's role ("County / State" inside Illinois, "IL county" outside it), and is blank while
+// it is empty: no sample value from its list.
 //
 // The fixtures are the rules seed itself, put in the strip's wire shape the way
 // `FdFieldDto::from_spec` puts it, so every caption below is the caption of a shipped contest in a
@@ -31,7 +31,7 @@ vi.mock('../api', () => ({
   contestWorking: vi.fn(() => Promise.resolve(true)),
   contestEntryReset: vi.fn(() => Promise.resolve(true)),
   contestIMoved: vi.fn(() => Promise.resolve({})),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   contestEdit: vi.fn(() => Promise.resolve({ outcome: 'edited' })),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
@@ -130,17 +130,17 @@ afterEach(() => {
 // ── the operator's report ────────────────────────────────────────────────────────────────────
 
 describe('the Illinois QSO Party: the county box says it is the county box', () => {
-  it('in Illinois it reads County / State, not QTH, and shows a county while empty', () => {
+  it('in Illinois it reads County / State, not QTH, and shows no sample county while empty', () => {
     render(strip(contest('ilqp', 'in_state')))
     expect(captions(), 'an Illinois station hears counties and everyone else’s state').toEqual(['RST', 'County / State'])
-    expect(examples()).toEqual(['', 'COOK'])
+    expect(examples()).toEqual(['', ''])
   })
 
   it('outside Illinois it reads IL county, whichever outside role the station is in', () => {
     for (const role of ['w_ve', 'dx']) {
       render(strip(contest('ilqp', role)))
       expect(captions(), role).toEqual(['RST', 'IL county'])
-      expect(examples(), role).toEqual(['', 'COOK'])
+      expect(examples(), role).toEqual(['', ''])
       cleanup()
     }
   })
@@ -150,36 +150,40 @@ describe('the Illinois QSO Party: the county box says it is the county box', () 
 
 /** [event, role, the captions after Call, the placeholders ('' = none)]. */
 const TABLE: [string, string, string[], string[]][] = [
-  ['arrlfd', '', ['Class', 'Section'], ['1D', 'WI']],
-  ['wfd', '', ['Class', 'Section'], ['1D', 'WI']],
-  ['tnqp', 'in_state', ['RST', 'County / State'], ['', 'SHEL']],
-  ['tnqp', 'out_of_state', ['RST', 'TN county'], ['', 'SHEL']],
-  ['ohqp', 'in_state', ['RST', 'County / State'], ['', 'FRAN']],
-  ['ohqp', 'w_ve', ['RST', 'OH county'], ['', 'FRAN']],
-  ['ohqp', 'dx', ['RST', 'OH county'], ['', 'FRAN']],
-  ['cqp', 'in_state', ['Serial', 'County / State'], ['', 'LANG']],
-  ['cqp', 'out_of_state', ['Serial', 'CA county'], ['', 'LANG']],
-  ['txqp', 'in_state', ['RST', 'County / State'], ['', 'HARR']],
-  ['txqp', 'out_of_state', ['RST', 'TX county'], ['', 'HARR']],
-  ['ilqp', 'in_state', ['RST', 'County / State'], ['', 'COOK']],
-  ['ilqp', 'w_ve', ['RST', 'IL county'], ['', 'COOK']],
-  ['ilqp', 'dx', ['RST', 'IL county'], ['', 'COOK']],
-  ['nyqp', 'in_state', ['RST', 'County / State'], ['', 'KIN']],
-  ['nyqp', 'w_ve', ['RST', 'NY county'], ['', 'KIN']],
-  ['nyqp', 'dx', ['RST', 'NY county'], ['', 'KIN']],
-  ['arrlss_cw', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', 'WI']],
-  ['arrlss_ssb', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', 'WI']],
-  // CONTROL: CQ WW's zone box already said Zone, and its placeholder stays the country file's
-  // hint for the call typed and nothing else: a fixed example there would read as that hint.
+  ['arrlfd', '', ['Class', 'Section'], ['', '']],
+  ['wfd', '', ['Class', 'Section'], ['', '']],
+  ['tnqp', 'in_state', ['RST', 'County / State'], ['', '']],
+  ['tnqp', 'out_of_state', ['RST', 'TN county'], ['', '']],
+  ['ohqp', 'in_state', ['RST', 'County / State'], ['', '']],
+  ['ohqp', 'w_ve', ['RST', 'OH county'], ['', '']],
+  ['ohqp', 'dx', ['RST', 'OH county'], ['', '']],
+  ['cqp', 'in_state', ['Serial', 'County / State'], ['', '']],
+  ['cqp', 'out_of_state', ['Serial', 'CA county'], ['', '']],
+  ['txqp', 'in_state', ['RST', 'County / State'], ['', '']],
+  ['txqp', 'out_of_state', ['RST', 'TX county'], ['', '']],
+  ['ilqp', 'in_state', ['RST', 'County / State'], ['', '']],
+  ['ilqp', 'w_ve', ['RST', 'IL county'], ['', '']],
+  ['ilqp', 'dx', ['RST', 'IL county'], ['', '']],
+  ['nyqp', 'in_state', ['RST', 'County / State'], ['', '']],
+  ['nyqp', 'w_ve', ['RST', 'NY county'], ['', '']],
+  ['nyqp', 'dx', ['RST', 'NY county'], ['', '']],
+  ['arrlss_cw', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', '']],
+  ['arrlss_ssb', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', '']],
+  // CQ WW's zone box is blank too until a call is typed; then its placeholder is the country
+  // file's hint for that call, the one hint a received box shows.
   ['cqww_cw', '', ['RST', 'Zone'], ['', '']],
   ['cqww_ssb', '', ['RST', 'Zone'], ['', '']],
-  ['cqww_rtty', 'w_ve', ['RST', 'Zone', 'State'], ['', '', 'WI']],
-  ['cqww_rtty', 'dx', ['RST', 'Zone', 'State'], ['', '', 'WI']],
+  ['cqww_rtty', 'w_ve', ['RST', 'Zone', 'State'], ['', '', '']],
+  ['cqww_rtty', 'dx', ['RST', 'Zone', 'State'], ['', '', '']],
   ['cqwpx_cw', '', ['RST', 'Serial'], ['', '']],
   ['cqwpx_ssb', '', ['RST', 'Serial'], ['', '']],
   ['arrlvhf_jan', '', ['Grid'], ['']],
   ['arrlvhf_jun', '', ['Grid'], ['']],
   ['arrlvhf_sep', '', ['Grid'], ['']],
+  // The RTTY Roundup's two received boxes, either of which a contact fills: a W/VE station's state
+  // or province, a DX station's serial.
+  ['arrlrtty', 'w_ve', ['RST', 'State', 'Serial'], ['', '', '']],
+  ['arrlrtty', 'dx', ['RST', 'State', 'Serial'], ['', '', '']],
 ]
 
 describe('every received box in every shipped contest says what it holds', () => {
@@ -215,11 +219,15 @@ describe('controls', () => {
     expect([...document.querySelectorAll<HTMLInputElement>('input')].map((i) => i.placeholder)).toEqual(
       NON_CONTEST_PLACEHOLDERS,
     )
+    // The shared comment is the line's one multi-line box, in a row of its own.
+    expect([...document.querySelectorAll<HTMLTextAreaElement>('textarea')].map((i) => i.placeholder)).toContain(
+      t('logEntry.comment.placeholder'),
+    )
   })
 
   it('what is logged is the slot ids and the typed values, as it was', async () => {
     render(strip(contest('ilqp', 'in_state')))
-    fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: 'W9ABC' } })
+    fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'W9ABC' } })
     // By place, not by caption or example: this control has to read the same before the change.
     const [, county] = document.querySelectorAll<HTMLInputElement>('.le-fd-big .le-fd-field:not(.le-fd-field-call) input')
     fireEvent.change(county, { target: { value: 'cook' } })
@@ -240,7 +248,7 @@ describe('controls', () => {
 
   it('the line under the boxes names the box by its caption', () => {
     render(strip(contest('ilqp', 'w_ve')))
-    fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: 'W9ABC' } })
+    fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'W9ABC' } })
     expect(screen.getByRole('alert').textContent).toBe(t('logEntry.fd.needField', { field: 'IL county' }))
   })
 })
@@ -254,8 +262,7 @@ const NON_CONTEST_PLACEHOLDERS: string[] = [
   t('logEntry.qth.placeholder'),
   t('logEntry.state.placeholder'),
   t('logEntry.country.placeholder'),
-  t('logEntry.comment.placeholder'),
-  t('logEntry.park.ref.placeholderPota', { example: 'K-1234' }),
+  t('logEntry.park.ref.placeholderPota'),
 ]
 
 // ── the contest screen's column and the edit of a logged contact ─────────────────────────────

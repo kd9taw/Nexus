@@ -11,6 +11,7 @@ import {
   subscribeToasts,
   subscribePopups,
   setPopupNotifications,
+  setPopupMinSeconds,
   popsUpWhenOff,
   ERROR_MIN_TTL_MS,
   type Toast,
@@ -125,5 +126,56 @@ describe('pop-ups off (#391)', () => {
     expect(inCorner(saved)).toBe(false)
     vi.advanceTimersByTime(2100)
     expect(visible(saved), 'a hidden toast outlived its ttl').toBe(false)
+  })
+})
+
+describe('pop-up dwell (#321)', () => {
+  afterEach(() => setPopupMinSeconds(0))
+
+  it('0 (the default) leaves every pop-up its own time', () => {
+    setPopupMinSeconds(0)
+    const id = pushToast('Logged W9XYZ', 'success', 4000)
+    vi.advanceTimersByTime(4001)
+    expect(visible(id)).toBe(false)
+  })
+
+  it('a dwell keeps a short pop-up up that long, then lets it go', () => {
+    setPopupMinSeconds(30)
+    const info = pushToast('QSY 14.074', 'info')
+    const ok = pushToast('Logged W9XYZ', 'success', 3000)
+    vi.advanceTimersByTime(29_900)
+    expect(visible(info), 'the 4 s default was not lengthened').toBe(true)
+    expect(visible(ok), 'an explicit 3 s was not lengthened').toBe(true)
+    vi.advanceTimersByTime(200)
+    expect(visible(info)).toBe(false)
+    expect(visible(ok)).toBe(false)
+  })
+
+  it('never shortens: a longer pop-up, the error floor and "until dismissed" all stand', () => {
+    setPopupMinSeconds(8)
+    const opening = pushToast('6m is open', 'info', 20_000)
+    const err = pushToast('QRZ upload failed', 'error')
+    const sticky = pushToast('Update ready', 'info', 0)
+    vi.advanceTimersByTime(11_900)
+    expect(visible(err), 'the error floor was cut to the dwell').toBe(true)
+    vi.advanceTimersByTime(8_000)
+    expect(visible(opening), 'a 20 s pop-up was cut to the dwell').toBe(true)
+    vi.advanceTimersByTime(600_000)
+    expect(visible(sticky), 'a sticky pop-up got a timer').toBe(true)
+    dismissToast(sticky)
+  })
+
+  it('a pop-up already up keeps the time it was raised with', () => {
+    const id = pushToast('Logged W9XYZ', 'success', 4000)
+    setPopupMinSeconds(60)
+    vi.advanceTimersByTime(4001)
+    expect(visible(id)).toBe(false)
+  })
+
+  it('a nonsense value reads as 0', () => {
+    setPopupMinSeconds(Number.NaN)
+    const id = pushToast('Logged W9XYZ', 'success', 4000)
+    vi.advanceTimersByTime(4001)
+    expect(visible(id)).toBe(false)
   })
 })

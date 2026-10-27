@@ -22,7 +22,7 @@
 //! Runs BLIND (empty mycall/hiscall, nqso_progress 0) so the stock comparison is
 //! fair — jt9 must be run with AP off to match, or AP is armed on one side only
 //! and the numbers are meaningless. That mistake cost a whole calibration round
-//! on the FT8 side; see reference-decode-parity-lab.
+//! on the FT8 side.
 //!
 //! ⭐ BLIND MATTERS MORE FOR Q65 THAN FOR FT8. Q65's q3 decode does not recover a
 //! message independently: it matches against a candidate list pre-built from

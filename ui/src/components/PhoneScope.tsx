@@ -36,7 +36,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
-import { useStationControl } from '../stationAccess'
 import {
   applyGainZero,
   bakeLut,
@@ -155,6 +154,19 @@ type RowCadence = 'smooth' | 'sweep'
 /** Rows of history kept for pause and scrollback: 51 s at 20 rows a second, as before. */
 const HISTORY_ROWS = 1024
 
+/** The phone scope's trace peak-hold time constant (ms). Below the `normal` preset (250 ms, which
+ *  the RF panadapter pane still takes) so the voice trace falls back faster after a signal drops —
+ *  less "sticky" against a live Flex-like passband — while staying above CW's `fast` 120 ms, short
+ *  enough that it would flicker on every syllable (operator ruling 2026-10-23). The window
+ *  and averaging are the onset levers; this is the decay one. */
+const PHONE_TRACE_HOLD_MS = 150
+
+/** The trace peak-hold a scope takes when its caller passes none: phone 150 ms, every other
+ *  cockpit (the RF pane) the `normal` preset. CW always passes `fast` itself. */
+export function defaultTraceHoldMs(cockpit: 'phone' | 'cw' | 'rfpan' | undefined): number {
+  return cockpit === 'phone' ? PHONE_TRACE_HOLD_MS : TRACE_HOLD_MS.normal
+}
+
 /** A frame drawn on an axis that runs against its row (LSB on the carrier-centred axis): bins
  *  reversed, span negated, so the frame says what it means on the axis it is drawn on. */
 function mirrorFrame(f: SpectrumFrame): SpectrumFrame {
@@ -249,7 +261,8 @@ interface Props {
   /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
    * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
-   * phone takes the `normal` default (a hold short enough for CW flickers on every syllable). */
+   * when unset, phone defaults to PHONE_TRACE_HOLD_MS (150 ms) and the RF pane to `normal`
+   * (250 ms) — both above `fast`, which flickers on every voice syllable. */
   traceHoldMs?: number
   /** The mouse wheel moves the G and Z sliders, one of their steps a notch (#384), rather than
    *  tuning the rig through them. Phone passes it; CW keeps its scope's wheel as it was. */
@@ -332,7 +345,7 @@ export function PhoneScope({
   pitchHz = 600,
   cwPitchRefDial = true,
   interactive = false,
-  traceHoldMs = TRACE_HOLD_MS.normal,
+  traceHoldMs,
   wheelSliders = false,
   cockpit = 'phone',
   feed = 'scope',
@@ -341,11 +354,10 @@ export function PhoneScope({
   privilegeMode = null,
   ft = null,
 }: Props) {
-  const control = useStationControl()
   // The licence-class spans for the band edges: the gate's own table, for the live section.
   const privSpans = usePrivilegeSpans(privilegeMode, active)
   // The RF pane starts out saying the radio's scope is not there yet: it is only once a sweep lands.
-  const [scopeAvailable, setScopeAvailable] = useState(control && feed !== 'rf')
+  const [scopeAvailable, setScopeAvailable] = useState(feed !== 'rf')
   const rfOnly = feed === 'rf'
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven, and Amber
   // CRT at night — useNight.ts).
@@ -448,7 +460,9 @@ export function PhoneScope({
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
-  const traceHoldRef = useRef(traceHoldMs)
+  // Phone defaults to PHONE_TRACE_HOLD_MS (150 ms); the RF pane keeps `normal` (250 ms); CW passes `fast`.
+  const effTraceHoldMs = traceHoldMs ?? defaultTraceHoldMs(cockpit)
+  const traceHoldRef = useRef(effTraceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
   // `mirrored` = the drawn axis runs against the row (LSB on a carrier-centered axis), so
   // every pixel↔Hz conversion here negates: axis Hz is RF offset, row Hz is receiver audio.
@@ -515,7 +529,7 @@ export function PhoneScope({
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
   interactiveRef.current = interactive && (!onBeginClick || scopeAvailable)
-  traceHoldRef.current = traceHoldMs
+  traceHoldRef.current = effTraceHoldMs
 
   // ---- The receiver marker's state, read by the overlay and the gestures alike (refs only) ----
   /** The width the marker shows: an edge being dragged, else a width just commanded (until the
@@ -588,10 +602,14 @@ export function PhoneScope({
     const latch = new RowFetchLatch('scope')
     let acc = 0
     let last = performance.now()
-    // ~20 Hz — plenty smooth for a scope, and the row is now cached engine-side (computed once per
-    // audio feed in the radio loop) so each poll is a cheap read, not a Goertzel recompute under
-    // the lock. Fewer + lighter polls = no more contention stutter (the "choppy" report).
-    const ROW_MS = 50
+    // ~30 Hz (operator ruling 2026-10-23). The row is cached engine-side (computed once per audio
+    // feed in the radio loop) so each poll is a cheap read, not a Goertzel recompute under the lock,
+    // and the draw itself is cheap: the per-frame commit+draw was measured at the scope's sizes in a
+    // real browser under 4×/8× CPU throttling (the weak-hardware canvas-2D path — WebKitGTK routes
+    // Linux/Pi there), p95 ≤ ~8 ms and worst case ≤ ~13 ms at the supported 1024–1920 widths, well
+    // inside the 33 ms frame budget; WebGL2 is ~0. So the faster poll is free at the sizes that
+    // matter. (The FT waterfall keeps its own slower cadence; this is the rig scope's loop only.)
+    const ROW_MS = 33
     const ROW_MS_REDUCED = 120 // gentler under reduced-motion
     const AGC_ALPHA = 0.4 // snappy attack/release — a rig scope, not a slow FT8 noise floor
     const TRACE_FRAC = 0.45 // top fraction = panadapter trace; rest = waterfall
@@ -1209,7 +1227,7 @@ export function PhoneScope({
           ? await getRfFrame(lastSeq)
           : await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
       } catch {
-        if ((!control || rfOnly) && latch.owns(myGen)) setScopeAvailable(false)
+        if (rfOnly && latch.owns(myGen)) setScopeAvailable(false)
         return
       }
       // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
@@ -1219,10 +1237,10 @@ export function PhoneScope({
         // An empty frame: the source went quiet — or, for the RF pane, no panadapter is streaming.
         // The RF pane says so on every window; the rig scope only on a remote one, as before.
         if (!wire.bins || wire.bins.length === 0) {
-          if (!control || rfOnly) setScopeAvailable(false)
+          if (rfOnly) setScopeAvailable(false)
           return
         }
-        if (!control || rfOnly) setScopeAvailable(true)
+        if (rfOnly) setScopeAvailable(true)
         accept(wire)
       } else if (newest) {
         // The source has not swept since the last row. The view still follows the dial and the
@@ -1934,7 +1952,7 @@ export function PhoneScope({
       {gear && (
         <div className="ph-scope-gear" id={gearId}>
           {/* No analysis window on the RF pane: its rows are the radio's own sweep, not an FFT here. */}
-          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} control={control} />
+          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} />
           <button
             type="button"
             className={`ph-scope-btn${rowCadence === 'sweep' ? ' on' : ''}`}

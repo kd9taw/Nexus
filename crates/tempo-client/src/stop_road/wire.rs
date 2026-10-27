@@ -1,10 +1,18 @@
 //! What Stop's second road carries, as both ends read and write it: [`Up`] from the computer
-//! driving the shack, [`Down`] back, each one datagram ([`crate::datagram`]) of at most 128 bytes,
-//! and the format's number in the build's contract ([`contract_text`]). And the state echo's clock
+//! driving the shack, [`Down`] back, each one datagram ([`crate::datagram`]) of at most 128 bytes.
+//! And the state echo's clock
 //! ([`StateClock`]): when the shack took each snapshot it numbered on one connection, as the command
 //! link's writer records it ([`crate::outbox`]) and the shack's road judges a heartbeat by. What the
 //! shack takes, refuses and answers is its road's (src-tauri's `remote_service::lan::stop_road`);
 //! this computer's end is [`crate::stop_road`].
+//!
+//! ## The format is frozen
+//!
+//! Every message's kind and body are fixed as 1.20.0 sends and reads them, recorded byte for byte in
+//! the tests below, and they are not part of the build's contract (`crate::wire::contract`): a
+//! computer of another build, a phone among them, can rely on them across versions. A message's
+//! body is read only at its exact length, so a change to any of them is a new datagram version
+//! (`datagram::VERSION`), never a new reading of these bytes.
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -12,11 +20,6 @@ use std::time::{Duration, Instant};
 use tempo_base::mic::{MicEnded, MicStatus};
 use tempo_base::ptt_hold::HoldEnd;
 
-use crate::datagram;
-
-/// The format of the road's messages: 2 since the microphone over's state carries its holes, 3
-/// since a hold names the Stops pressed before its press began.
-const FORMAT: u8 = 3;
 /// How long a road's keys outlive its connection, for a Stop sent as the link drops or after it.
 pub const AFTERLIFE: Duration = Duration::from_secs(60);
 /// How old the state a heartbeat names may be and still renew presence: the stream's two seconds
@@ -236,18 +239,6 @@ impl Down {
     }
 }
 
-/// The road's format, for the build's contract ([`crate::wire::contract`]): two builds that read
-/// these datagrams differently are not the same build.
-pub fn contract_text() -> String {
-    format!(
-        "stop road {} {} format {FORMAT} up stop={STOP} hold={HOLD}(press,stops) \
-         release={RELEASE} heartbeat={HEARTBEAT} down stopped={STOPPED} press={PRESS} \
-         mic={MIC}(armed,keyed,noPowerOut,ended,holes,holeMs) presence={PRESENCE}\n",
-        datagram::VERSION,
-        String::from_utf8_lossy(datagram::STOP_LABEL),
-    )
-}
-
 // --- The state echo's clock ----------------------------------------------------------------------
 
 /// When the shack took each snapshot it numbered on one connection: the state echo's clock, as the
@@ -310,4 +301,235 @@ fn fresh_in(sent: &VecDeque<(u64, Instant)>, number: u64, now: Instant) -> bool 
         .rev()
         .find(|(sent, _)| *sent == number)
         .is_some_and(|(_, taken)| now.saturating_duration_since(*taken) <= FRESH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datagram::{End, Keys, EXPORTED};
+
+    fn bytes(hex: &str) -> Vec<u8> {
+        let hex: String = hex.split_whitespace().collect();
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    const LEASE: &str = "0f1e2d3c-4b5a-4968-8778-a6b5c4d3e2f1";
+
+    /// Each message from the computer, its kind and its body as 1.20.0 writes them.
+    fn ups() -> Vec<(Up, u8, Vec<u8>)> {
+        vec![
+            (
+                Up::Stop {
+                    stop: 0x0102_0304_0506_0708,
+                },
+                1,
+                bytes("0102030405060708"),
+            ),
+            (
+                Up::Hold { press: 7, stops: 3 },
+                2,
+                bytes("0000000000000007 0000000000000003"),
+            ),
+            (Up::Release { press: 9 }, 3, bytes("0000000000000009")),
+            (
+                Up::Heartbeat {
+                    lease: LEASE.to_string(),
+                    state: 42,
+                },
+                4,
+                [LEASE.as_bytes(), &bytes("000000000000002a")].concat(),
+            ),
+        ]
+    }
+
+    /// Each message from the shack, its kind and its body as 1.20.0 writes them: every end of a
+    /// press and every end of a microphone over, each by its own code.
+    fn downs() -> Vec<(Down, u8, Vec<u8>)> {
+        let mut downs = vec![
+            (Down::Stopped { stop: 5 }, 16, bytes("0000000000000005")),
+            (
+                Down::Press {
+                    press: 7,
+                    keyed: true,
+                    end: None,
+                },
+                17,
+                bytes("0000000000000007 01 00"),
+            ),
+            (Down::Presence { left_ms: 5_000 }, 19, bytes("00001388")),
+        ];
+        for (end, code) in [
+            (HoldEnd::Refused, "01"),
+            (HoldEnd::Lapsed, "02"),
+            (HoldEnd::Released, "03"),
+            (HoldEnd::Stopped, "04"),
+        ] {
+            downs.push((
+                Down::Press {
+                    press: 8,
+                    keyed: false,
+                    end: Some(end),
+                },
+                17,
+                bytes(&format!("0000000000000008 00 {code}")),
+            ));
+        }
+        for (ended, code) in [
+            (None, "00"),
+            (Some(MicEnded::Released), "01"),
+            (Some(MicEnded::Stopped), "02"),
+            (Some(MicEnded::AudioGap), "03"),
+            (Some(MicEnded::Presence), "04"),
+            (Some(MicEnded::Ceiling), "05"),
+            (Some(MicEnded::Watchdog), "06"),
+            (Some(MicEnded::RouteChanged), "07"),
+        ] {
+            downs.push((
+                Down::Mic(MicStatus {
+                    armed: true,
+                    keyed: false,
+                    no_power_out: true,
+                    ended,
+                    holes: 2,
+                    hole_ms: 0x0102_0304,
+                }),
+                18,
+                bytes(&format!("01 00 01 {code} 00000002 01020304")),
+            ));
+        }
+        downs
+    }
+
+    /// ★ The format is frozen: every message either way is written as the bytes 1.20.0 writes,
+    /// recorded here, and those bytes read back as the same message.
+    /// CONTROL: the tables hold every kind of message the road carries, both ways.
+    #[test]
+    fn every_message_is_the_bytes_1_20_0_writes_and_reads() {
+        for (up, kind, body) in ups() {
+            assert_eq!(up.kind(), kind, "{up:?}");
+            assert_eq!(up.body(), body, "{up:?}");
+            assert_eq!(Up::read(kind, &body), Some(up));
+        }
+        for (down, kind, body) in downs() {
+            assert_eq!(down.kind(), kind, "{down:?}");
+            assert_eq!(down.body(), body, "{down:?}");
+            assert_eq!(Down::read(kind, &body), Some(down));
+        }
+        let kinds = |mut kinds: Vec<u8>| {
+            kinds.sort_unstable();
+            kinds.dedup();
+            kinds
+        };
+        assert_eq!(kinds(ups().iter().map(|u| u.1).collect()), [1, 2, 3, 4]);
+        assert_eq!(
+            kinds(downs().iter().map(|d| d.1).collect()),
+            [16, 17, 18, 19]
+        );
+    }
+
+    /// ★ A whole datagram is frozen too: a Stop sealed by a computer, and a press's report sealed
+    /// by the shack, are the bytes 1.20.0 seals from the same export, tag and sequence (recorded
+    /// from an independent AES-128-GCM over the layout in `crate::datagram`), and each opens at the
+    /// other end as the message it carries.
+    #[test]
+    fn a_sealed_stop_and_its_answer_are_the_bytes_1_20_0_seals() {
+        let exported: [u8; EXPORTED] = std::array::from_fn(|n| n as u8);
+        let tag = [1, 2, 3, 4, 5, 6, 7, 8];
+        let mut computer = Keys::new(&exported, tag, End::Computer).unwrap();
+        let mut shack = Keys::new(&exported, tag, End::Shack).unwrap();
+
+        let stop = Up::Stop { stop: 3 };
+        let sealed = computer.send.seal(stop.kind(), &stop.body()).unwrap();
+        assert_eq!(
+            sealed,
+            bytes(
+                "01 01 0102030405060708 0000000000000001 \
+                 20d9732fa30a27a6 fb964146f8989de4 095d0b801bbe4acf"
+            )
+        );
+        let (kind, body) = shack.receive.open(&sealed).unwrap();
+        assert_eq!(Up::read(kind, &body), Some(stop));
+
+        let press = Down::Press {
+            press: 7,
+            keyed: true,
+            end: None,
+        };
+        let sealed = shack.send.seal(press.kind(), &press.body()).unwrap();
+        assert_eq!(
+            sealed,
+            bytes(
+                "01 11 0102030405060708 0000000000000001 \
+                 b45341df9a47c43edb66 8b44e8dd92245e756aeb3c7ed76bc517"
+            )
+        );
+        let (kind, body) = computer.receive.open(&sealed).unwrap();
+        assert_eq!(Down::read(kind, &body), Some(press));
+    }
+
+    /// ★ A body that verified but is not one the format writes reads as nothing: each kind cut
+    /// short and run long by a byte, every kind the road does not take (a direction's kinds read
+    /// the other way among them), a flag or an end code outside the format, and a heartbeat whose
+    /// lease the station could not have issued. CONTROL: the untouched bodies read (above).
+    #[test]
+    fn a_body_the_format_does_not_write_reads_as_nothing() {
+        for (up, kind, body) in ups() {
+            assert_eq!(Up::read(kind, &body[..body.len() - 1]), None, "{up:?}");
+            assert_eq!(Up::read(kind, &[&body[..], &[0]].concat()), None, "{up:?}");
+            assert_eq!(Down::read(kind, &body), None, "{up:?} read as the shack's");
+        }
+        for (down, kind, body) in downs() {
+            assert_eq!(Down::read(kind, &body[..body.len() - 1]), None, "{down:?}");
+            assert_eq!(
+                Down::read(kind, &[&body[..], &[0]].concat()),
+                None,
+                "{down:?}"
+            );
+            assert_eq!(Up::read(kind, &body), None, "{down:?} read as a computer's");
+        }
+        for kind in (0..=u8::MAX).filter(|k| ![1, 2, 3, 4, 16, 17, 18, 19].contains(k)) {
+            for len in [0, 4, 8, 10, 12, 16, 44] {
+                assert_eq!(Up::read(kind, &vec![0; len]), None, "up kind {kind}");
+                assert_eq!(Down::read(kind, &vec![0; len]), None, "down kind {kind}");
+            }
+        }
+        assert_eq!(
+            Down::read(17, &bytes("0000000000000007 02 00")),
+            None,
+            "keyed 2"
+        );
+        assert_eq!(
+            Down::read(17, &bytes("0000000000000007 00 05")),
+            None,
+            "end 5"
+        );
+        assert_eq!(
+            Down::read(18, &bytes("02 00 00 00 00000000 00000000")),
+            None,
+            "armed 2"
+        );
+        assert_eq!(
+            Down::read(18, &bytes("00 00 00 08 00000000 00000000")),
+            None,
+            "ended 8"
+        );
+        let state = bytes("000000000000002a");
+        for lease in [
+            LEASE.to_uppercase(),
+            LEASE.replace('-', "x"),
+            "z".repeat(36),
+        ] {
+            assert_eq!(
+                Up::read(4, &[lease.as_bytes(), &state].concat()),
+                None,
+                "{lease}"
+            );
+        }
+        let mut not_text = [LEASE.as_bytes(), &state].concat();
+        not_text[0] = 0xff;
+        assert_eq!(Up::read(4, &not_text), None, "a lease that is not text");
+    }
 }

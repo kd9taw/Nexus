@@ -16,11 +16,26 @@ const params = new URLSearchParams(location.search)
 /** `?rstsent=1`: the entry's optional "RST sent" box turned on (Settings `contestRstSentBox`), which the
  *  engine reports as the session's own report. */
 const rstSent = params.get('rstsent') === '1'
+/** `?edit=club`: twelve contacts, more than the last contacts show, at a club, where a last contact's
+ *  Edit is refused with the line the list leaves under it. */
+const editClub = params.get('edit') === 'club'
+const more = editClub
+  ? Array.from({ length: 11 }, (_, i) => ({
+      call: `N9A${String.fromCharCode(65 + i)}A`,
+      class: '',
+      section: '',
+      band: '20m',
+      mode: 'PH',
+      submode: 'SSB',
+      whenUnix: T0 + 60 * (i + 1),
+      rcvd: ['59', 'KANE'],
+    }))
+  : []
 /** An Illinois QSO Party with one contact, K9AAA on 20 m phone, and the same call in the entry: a dupe. */
 const fieldDay = {
   running: false,
   state: 'Idle',
-  qsoCount: 1,
+  qsoCount: 1 + more.length,
   sections: 0,
   points: 1,
   multCount: 1,
@@ -28,7 +43,9 @@ const fieldDay = {
   role: 'in_state',
   log: [
     { call: 'K9AAA', class: '', section: '', band: '20m', mode: 'PH', submode: 'SSB', whenUnix: T0, rcvd: ['59', 'COOK'] },
+    ...more,
   ],
+  ...(editClub ? { club: { syncState: 'synced', queued: 0, hosting: false, dupes: [], board: [] } } : {}),
   receives: [
     { key: 'RST', kind: 'rst', required: true },
     { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
@@ -73,7 +90,7 @@ const answers: Record<string, () => unknown> = {
   get_propagation: () => null,
   get_fd_ruleset: () => null,
   resolve_entity: () => null,
-  contest_zone_hint: () => null,
+  contest_place: () => null,
   get_call_history: () => null,
   get_sat_transponder: () => null,
 }

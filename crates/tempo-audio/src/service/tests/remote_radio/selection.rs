@@ -5,9 +5,11 @@ use std::sync::atomic::AtomicBool;
 
 // Each case owns a synthetic station, but the native modem mutex is process-wide.
 // Isolate those stations so a success case is not implicitly a busy-decoder case.
-// The explicit contention test below still exercises the real refusing guard.
+// The explicit contention test below still exercises the real refusing guard. The radio loop's
+// JTTY tests hold it too: their sends render under the modem mutex back to back, and a case here
+// lost every one of its attempts to them.
 static SELECTION_TESTS: Mutex<()> = Mutex::new(());
-fn selection_test_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(in crate::service::tests) fn selection_test_lock() -> std::sync::MutexGuard<'static, ()> {
     SELECTION_TESTS
         .lock()
         .unwrap_or_else(|error| error.into_inner())

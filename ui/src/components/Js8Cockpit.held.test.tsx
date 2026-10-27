@@ -202,7 +202,6 @@ describe('each reason in its own words', () => {
           drop('count', { id: 3, state: 'read' }),
           drop('bytes', { id: 4, state: 'unread' }),
         ]}
-        canControl={false}
         onClear={() => {}}
       />,
     )
@@ -213,6 +212,5 @@ describe('each reason in its own words', () => {
       t('js8.inbox.dropped.count.mine'),
       t('js8.inbox.dropped.bytes.mine'),
     ])
-    expect((screen.getByRole('button', { name: t('js8.inbox.dropped.clear.label') }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

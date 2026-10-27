@@ -13,7 +13,7 @@
 use super::decode_in_flight::ft8_frame;
 use super::*;
 use crate::rig::remote_tests::{retuning_peer, writes, Peer};
-use tempo_app::engine::{run_decode_job, DecodePass};
+use tempo_app::engine::{run_decode_job_streaming, DecodePass, DecodeProgress, StreamedDecode};
 
 const TX2: &str = "W1AW KD9TAW -10";
 const RR73: &str = "W1AW KD9TAW RR73";
@@ -62,7 +62,7 @@ struct Qso<B: AudioBackend> {
     t0: f64,
     period_ms: f64,
     /// Hands the loop a decode as its worker does.
-    worker: Option<std::sync::mpsc::Sender<DecodeResult>>,
+    worker: Option<std::sync::mpsc::Sender<WorkerOut>>,
     /// A logger on the WSJT-X UDP feed, when the scene has one.
     logger: Option<Logger>,
 }
@@ -235,15 +235,16 @@ impl<B: AudioBackend + Default> Qso<B> {
     }
 
     /// Hand the loop the decode of W1AW's `msg` for the boundary of `slot`, as the decode worker
-    /// hands its result over: the next tick drains it.
+    /// hands it over — each decode as the pass found it, then the pass's result: the next tick
+    /// drains them.
     fn decoded(&mut self, msg: &str, slot: u64) {
+        let mut found = Found::default();
         let result = {
             let e = self.engine.lock().unwrap();
-            run_decode_job(e.build_decode_job(
-                capture_of(self.tier, msg),
-                slot,
-                DecodePass::Boundary,
-            ))
+            run_decode_job_streaming(
+                e.build_decode_job(capture_of(self.tier, msg), slot, DecodePass::Boundary),
+                &mut found,
+            )
         };
         assert!(
             result.decodes().iter().any(|d| d.message.trim() == msg),
@@ -251,7 +252,7 @@ impl<B: AudioBackend + Default> Qso<B> {
             result.decodes()
         );
         if self.worker.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel::<DecodeResult>();
+            let (tx, rx) = std::sync::mpsc::channel::<WorkerOut>();
             self.state.decode = DecodeWorker {
                 job_tx: None,
                 result_rx: rx,
@@ -259,7 +260,11 @@ impl<B: AudioBackend + Default> Qso<B> {
             };
             self.worker = Some(tx);
         }
-        self.worker.as_ref().unwrap().send(result).unwrap();
+        let worker = self.worker.as_ref().unwrap();
+        for d in found.0 {
+            worker.send(WorkerOut::Found(d)).unwrap();
+        }
+        worker.send(WorkerOut::Done(result)).unwrap();
     }
 
     fn ptt_lines(&self) -> Vec<String> {
@@ -547,39 +552,102 @@ fn a_tx_slot_click_during_the_over_switches_it_on_the_next_tick() {
     );
 }
 
-/// The loop's decode worker, held by the test: a job the loop dispatches waits here, and its
-/// result reaches the loop only when the test hands it back, so a scene says when a decode lands.
-/// The decode is the worker's own (`run_worker_job`), on the frame the loop built.
+/// The decodes a pass streamed, kept in the order it found them.
+#[derive(Default)]
+struct Found(Vec<StreamedDecode>);
+
+impl DecodeProgress for Found {
+    fn found(&mut self, d: StreamedDecode) {
+        self.0.push(d);
+    }
+}
+
+/// The loop's decode worker, held by the test: a job the loop dispatches waits here, and what it
+/// hands back reaches the loop only when the test says, so a scene says when a decode lands. The
+/// decode is the worker's own (`run_worker_job`), on the frame the loop built.
 pub(super) struct HeldWorker {
     jobs: std::sync::mpsc::Receiver<WorkerJob>,
-    results: std::sync::mpsc::Sender<DecodeResult>,
+    results: std::sync::mpsc::Sender<WorkerOut>,
+    /// The decodes the pass found, not yet handed to the loop.
+    found: std::cell::RefCell<Vec<StreamedDecode>>,
+    /// The last decoded job's pass and rescue deadline ([`DecodeJob::rescue_give_up_at`]).
+    pub(super) last_job: std::cell::Cell<Option<(DecodePass, Option<std::time::Instant>)>>,
 }
 
 impl HeldWorker {
     pub(super) fn install(state: &mut RadioLoop) -> HeldWorker {
         let (job_tx, jobs) = std::sync::mpsc::channel::<WorkerJob>();
-        let (results, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let (results, result_rx) = std::sync::mpsc::channel::<WorkerOut>();
         state.decode = DecodeWorker {
             job_tx: Some(job_tx),
             result_rx,
             handle: None,
         };
-        HeldWorker { jobs, results }
+        HeldWorker {
+            jobs,
+            results,
+            found: Default::default(),
+            last_job: Default::default(),
+        }
     }
 
-    /// The one decode the loop has dispatched, decoded as its worker decodes it. The loop does not
-    /// have the result yet.
+    /// The one decode the loop has dispatched, decoded as its worker decodes it. The loop has
+    /// neither the decodes the pass found nor its result yet.
     pub(super) fn decode(&self) -> DecodeResult {
         let job = self.jobs.try_recv().expect("the loop dispatched a decode");
         assert!(self.jobs.try_recv().is_err(), "one decode at a time");
-        let mut results = run_worker_job(job);
+        self.note(&job);
+        let mut results = Vec::new();
+        run_worker_job(job, &mut |out| match out {
+            WorkerOut::Found(d) => self.found.borrow_mut().push(d),
+            WorkerOut::Done(r) => results.push(r),
+        });
         assert_eq!(results.len(), 1, "a slot decode yields one result");
         results.remove(0)
     }
 
-    /// Hand `result` to the loop: its next tick drains it.
+    /// [`HeldWorker::decode`], when the loop has dispatched a decode.
+    pub(super) fn try_decode(&self) -> Option<DecodeResult> {
+        let job = self.jobs.try_recv().ok()?;
+        assert!(self.jobs.try_recv().is_err(), "one decode at a time");
+        self.note(&job);
+        let mut results = Vec::new();
+        run_worker_job(job, &mut |out| match out {
+            WorkerOut::Found(d) => self.found.borrow_mut().push(d),
+            WorkerOut::Done(r) => results.push(r),
+        });
+        assert_eq!(results.len(), 1, "a slot decode yields one result");
+        Some(results.remove(0))
+    }
+
+    fn note(&self, job: &WorkerJob) {
+        if let WorkerJob::Slot(j) = job {
+            self.last_job.set(Some((j.pass(), j.rescue_give_up_at())));
+        }
+    }
+
+    /// The messages the pass found and has not handed to the loop yet, in the order it found them.
+    pub(super) fn found_messages(&self) -> Vec<String> {
+        self.found
+            .borrow()
+            .iter()
+            .map(|d| d.decode().message.trim().to_string())
+            .collect()
+    }
+
+    /// Hand the loop the decodes the pass found, as the worker hands each on the moment it finds
+    /// it; the pass's end is still to land.
+    pub(super) fn stream(&self) {
+        for d in self.found.borrow_mut().drain(..) {
+            self.results.send(WorkerOut::Found(d)).unwrap();
+        }
+    }
+
+    /// Hand `result` to the loop, after any decode of its pass not yet handed over: its next tick
+    /// drains them.
     pub(super) fn land(&self, result: DecodeResult) {
-        self.results.send(result).unwrap();
+        self.stream();
+        self.results.send(WorkerOut::Done(result)).unwrap();
     }
 }
 

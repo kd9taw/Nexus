@@ -37,7 +37,9 @@ export function resolveBootView(
 }
 
 /** Clamp the persisted `nexus.workspace` operate mode. Unknown values — including
- * the retired 'connect' area (Connect is a global view now) — open on FT8/FT4. */
-export function coerceArea(v: string | null): 'dx' | 'msg' {
-  return v === 'dx' || v === 'msg' ? v : 'dx'
+ * the retired 'connect' area (Connect is a global view now) — open on FT8/FT4, and so does
+ * Tempo while its section is switched off (#402): its rail item is gone, so a Tempo mode would
+ * have no way back to it. */
+export function coerceArea(v: string | null, tempoOn = true): 'dx' | 'msg' {
+  return v === 'dx' || (v === 'msg' && tempoOn) ? v : 'dx'
 }

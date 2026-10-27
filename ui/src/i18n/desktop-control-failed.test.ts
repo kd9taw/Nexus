@@ -21,7 +21,6 @@ describe('the desktop’s own control failures', () => {
     (_lang, key, cat) => {
       const text = cat[key]
       expect(typeof text === 'string' && text.trim().length > 0, String(text)).toBe(true)
-      expect(text).not.toBe(cat['remote.controlRequestFailed'])
       expect(String(text).includes('{{plate}}'), String(text)).toBe(key === 'phone.chain.failed')
     },
   )

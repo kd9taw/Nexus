@@ -28,8 +28,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use tempo_core::logbook::history::Source;
 use tempo_core::logbook::{
-    LogOp, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService, UploadStatus,
+    FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId, UploadService, UploadStatus,
 };
 
 use crate::engine::{engine_lock, Engine};
@@ -195,20 +196,38 @@ pub fn edit_row(
     Result<Result<Arc<QsoRecord>, RowRefusal>, String>,
     Durability,
 ) {
+    edit_row_with_fields(engine, id, edit_key, edit, &[])
+}
+
+/// [`edit_row`], with the contact card's changes to fields kept as written ([`FieldEdit`]) made
+/// in the same change ([`StationCore::edit_ops`]).
+pub fn edit_row_with_fields(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    edit: &QsoEdit,
+    fields: &[FieldEdit],
+) -> (
+    Result<Result<Arc<QsoRecord>, RowRefusal>, String>,
+    Durability,
+) {
     let mut bad = None;
-    // The row as the field edit alone leaves it: what a corrected call goes back out to the
-    // connectors as, as it did when the marks were commands of their own.
+    // The row as the field edit and the card's fields leave it: what a corrected call goes back
+    // out to the connectors as — with the card's changes, which the store holds too, but without
+    // the QSL marks, as it did when the marks were commands of their own.
     let edited: std::cell::RefCell<Option<QsoRecord>> = std::cell::RefCell::new(None);
     let (made, durability) = change_row(
         engine,
         id,
         "edit_qso",
-        |e, stored| match e.station().edit_ops(id, edit_key, edit, stored) {
+        |e, stored| match e.station().edit_ops(id, edit_key, edit, fields, stored) {
             Ok(Ok(ops)) => {
-                *edited.borrow_mut() = ops.first().and_then(|op| match op.apply_to(stored) {
-                    RowAfter::Now(row) => Some(*row),
-                    RowAfter::Gone | RowAfter::Unchanged => None,
-                });
+                let fields = ops
+                    .iter()
+                    .take_while(|op| matches!(op, LogOp::Edit { .. } | LogOp::SetFields { .. }))
+                    .count();
+                *edited.borrow_mut() =
+                    station::ops_on(stored, &ops[..fields]).and_then(|(_, row)| row);
                 Ok(station::ops_on(stored, &ops))
             }
             Ok(Err(refusal)) => Err(refusal),
@@ -258,7 +277,10 @@ pub fn update_row<T>(
         "update_qso",
         |e, row| {
             StationCore::fresh_row(row, edit_key)?;
-            Ok(station::ops_on(row, &[e.station().edit_op(id, edit(row))]))
+            Ok(station::ops_on(
+                row,
+                &[e.station().edit_op(id, edit(row), row)],
+            ))
         },
         |e, made| {
             if let (before, Some(after)) = &made {
@@ -295,9 +317,10 @@ pub fn stamp_push(
     service: UploadService,
     status: UploadStatus,
 ) -> (bool, Durability) {
+    let settings_call = settings_call(engine);
     for _ in 0..PLANS {
         let plan = crate::engine::log_plan(engine);
-        let target = match station::push_target(&plan, pushed) {
+        let target = match station::push_target(&plan, pushed, Some(&settings_call)) {
             Ok(Some(row)) => row,
             Ok(None) => return (false, Durability::default()),
             Err(e) => {
@@ -524,6 +547,18 @@ fn stopped(stamped: usize, total: usize, why: Option<String>) -> String {
 fn bulk<R, T>(
     engine: &Mutex<Engine>,
     context: &str,
+    plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
+    then: impl FnOnce(&mut Engine, R) -> T,
+) -> (Result<T, String>, Durability) {
+    bulk_as(engine, context, None, plan_it, then)
+}
+
+/// [`bulk`], recorded in the history as `origin` says when it says ([`crate::loghistory::Origin`]):
+/// a change whose run its maker names before it is made, so the maker can hand that run back.
+fn bulk_as<R, T>(
+    engine: &Mutex<Engine>,
+    context: &str,
+    origin: Option<crate::loghistory::Origin>,
     mut plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
     then: impl FnOnce(&mut Engine, R) -> T,
 ) -> (Result<T, String>, Durability) {
@@ -539,7 +574,11 @@ fn bulk<R, T>(
         let mut out = Some(out);
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
             if !planned.is_empty() {
-                e.station_mut().commit_bulk(&plan, planned, context).ok()?;
+                e.station_mut().origin = origin.clone();
+                let made = e.station_mut().commit_bulk(&plan, planned, context);
+                // Taken by the change it was set for — or by none, when the plan went stale.
+                e.station_mut().origin = None;
+                made.ok()?;
             }
             let then = then.take()?;
             Some(then(e, out.take()?))
@@ -561,15 +600,35 @@ fn log_len(engine: &Mutex<Engine>) -> Result<usize, String> {
 }
 
 /// An ADIF import ([`StationCore::import_adif`]), planned with the Engine lock released:
-/// `(added, skipped, merged)`.
+/// `(added, skipped, merged)`. Recorded under `run` when one is named, else a run of its own.
 fn import(
     engine: &Mutex<Engine>,
     text: &str,
+    run: Option<&str>,
 ) -> (Result<(usize, usize, usize), String>, Durability) {
-    bulk(
+    import_as(engine, text, run, false)
+}
+
+/// [`import`], with "Import new only" when `new_only` ([`station::plan_import_new_only`]).
+fn import_as(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+    new_only: bool,
+) -> (Result<(usize, usize, usize), String>, Durability) {
+    bulk_as(
         engine,
         "import_adif",
-        |plan| station::plan_import(plan, text),
+        run.map(|run| {
+            crate::loghistory::Origin::in_run(tempo_core::logbook::history::Source::Import, run)
+        }),
+        |plan| {
+            if new_only {
+                station::plan_import_new_only(plan, text)
+            } else {
+                station::plan_import(plan, text)
+            }
+        },
         |_, counts| counts,
     )
 }
@@ -584,7 +643,51 @@ pub fn import_adif(
     engine: &Mutex<Engine>,
     text: &str,
 ) -> (Result<ImportCounts, String>, Durability) {
-    let (made, durability) = import(engine, text);
+    import_adif_in(engine, text, None)
+}
+
+/// [`import_adif`], recorded in the history under `run` ([`crate::loghistory::new_run`]) — the
+/// run the import's Undo undoes, and only that: a contact another program logs meanwhile is in a
+/// run of its own. The caller names the run before the import, so an import made again after the
+/// store turned it back ([`until_written`]) is still that one run.
+pub fn import_adif_in_run(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: &str,
+) -> (Result<ImportCounts, String>, Durability) {
+    import_adif_in(engine, text, Some(run))
+}
+
+/// [`import_adif_in_run`] with "Import new only": a contact the log already holds is left exactly
+/// as it is, nothing the file restates about it merged in. Its own run, undone as one.
+pub fn import_adif_new_only_in_run(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: &str,
+) -> (Result<ImportCounts, String>, Durability) {
+    let (made, durability) = import_as(engine, text, Some(run), true);
+    let made =
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+    (made, durability)
+}
+
+/// What an import of `text` would do, planned on the log as it stands and then let go: nothing
+/// is written. `(added, skipped, merged)` — the contacts the log lacks, the ones it holds by its
+/// own duplicate rule, and how many of those the import would upgrade — the very plan
+/// [`import_adif_in_run`] makes, so the preview's counts are the import's.
+///
+/// ⚠️ It reads the store: never call it under the Engine lock.
+pub fn preview_import(engine: &Mutex<Engine>, text: &str) -> Result<(usize, usize, usize), String> {
+    let plan = crate::engine::log_plan(engine);
+    station::plan_import(&plan, text).map(|(counts, _)| counts)
+}
+
+fn import_adif_in(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+) -> (Result<ImportCounts, String>, Durability) {
+    let (made, durability) = import(engine, text, run);
     let made =
         made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
     (made, durability)
@@ -597,13 +700,13 @@ pub fn import_logged_contact(
     engine: &Mutex<Engine>,
     adif: &str,
 ) -> (Result<usize, String>, Durability) {
-    let (made, durability) = import(engine, adif);
+    let (made, durability) = import(engine, adif, None);
     (made.map(|(added, _, _)| added), durability)
 }
 
 /// The call in Settings: the one a LoTW merge takes a contact or a row naming no call of its own
 /// to be under (`tempo_core::reconcile::lotw_own_call`).
-fn settings_call(engine: &Mutex<Engine>) -> String {
+pub(crate) fn settings_call(engine: &Mutex<Engine>) -> String {
     engine_lock(engine).settings().mycall.clone()
 }
 
@@ -763,10 +866,68 @@ fn fill_in_chunks(
     fill_ver: i64,
     chunk: usize,
 ) -> Result<usize, String> {
-    let chunks: Vec<&[LogFill]> = if fills.is_empty() {
+    let meta = (crate::logfill::FILL_VER, fill_ver);
+    // Every chunk's fills are one run in the history, undone together.
+    let run = crate::loghistory::new_run();
+    let source = (Source::Fill, run.as_str());
+    in_chunks(
+        engine,
+        fills,
+        |f| f.id,
+        station::fill_pairs,
+        meta,
+        source,
+        chunk,
+    )
+}
+
+/// ★ The one-time copy of merged contest contacts' received grid, name and QTH into their own
+/// fields ([`tempo_core::logbook::with_contest_columns_copied`]), for the contacts `ids` — as the
+/// fill job's fills are written ([`fill`]): `chunk` contacts at a time, each row read whole and
+/// copied into only as it now stands (a field the operator filled meanwhile is theirs), all of it
+/// in the history's run `run` ([`Source::ContestColumns`]), undone together, and
+/// [`crate::logfill::CONTEST_COLUMNS_COPIED`] set with the last chunk. No upload stamp moves and
+/// nothing is queued to a service: the contacts' ADIF carries the same tags and values as before.
+/// How many contacts changed.
+///
+/// ⚠️ It reads the store and waits for it: call it on a thread of its own, with no lock held.
+pub fn copy_contest_columns(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    run: &str,
+    chunk: usize,
+) -> Result<usize, String> {
+    let pairs = |rows: &std::collections::HashMap<RecordId, Arc<QsoRecord>>, ids: &[RecordId]| {
+        ids.iter()
+            .filter_map(|id| {
+                let row = rows.get(id)?;
+                let copied = tempo_core::logbook::with_contest_columns_copied(row)?;
+                Some((Arc::clone(row), Some(Arc::new(copied))))
+            })
+            .collect()
+    };
+    let meta = (crate::logfill::CONTEST_COLUMNS_COPIED, 1);
+    let source = (Source::ContestColumns, run);
+    in_chunks(engine, ids, |id| *id, pairs, meta, source, chunk)
+}
+
+/// The writing of [`fill`] and [`copy_contest_columns`]: `items` a `chunk` at a time, each chunk's
+/// rows read whole with the Engine lock released and `pairs` made of them under it, every chunk
+/// in the one history run `source` names, and `meta` set with the last chunk only once every
+/// earlier one is on disk. How many contacts changed.
+fn in_chunks<T>(
+    engine: &Mutex<Engine>,
+    items: &[T],
+    id: impl Fn(&T) -> RecordId,
+    pairs: impl Fn(&std::collections::HashMap<RecordId, Arc<QsoRecord>>, &[T]) -> Vec<MadeRow>,
+    meta: (&'static str, i64),
+    (source, run): (Source, &str),
+    chunk: usize,
+) -> Result<usize, String> {
+    let chunks: Vec<&[T]> = if items.is_empty() {
         vec![&[]]
     } else {
-        fills.chunks(chunk).collect()
+        items.chunks(chunk).collect()
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
@@ -777,22 +938,20 @@ fn fill_in_chunks(
             // `fill_ver` only once every earlier fill is on disk.
             previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
         }
-        let meta = if k == last {
-            vec![(crate::logfill::FILL_VER, fill_ver)]
-        } else {
-            Vec::new()
-        };
-        let ids: Vec<RecordId> = chunk.iter().map(|f| f.id).collect();
+        let meta = if k == last { vec![meta] } else { Vec::new() };
+        let ids: Vec<RecordId> = chunk.iter().map(&id).collect();
         let mut made = None;
         for _ in 0..PLANS {
             let plan = crate::engine::log_plan(engine);
             let rows = plan.rows(&ids)?;
             #[cfg(test)]
             tests::race();
-            let pairs = station::fill_pairs(&rows, chunk);
+            let pairs = pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
-                e.station_mut()
+                e.station_mut().origin = Some(crate::loghistory::Origin::in_run(source, run));
+                let ok = e
+                    .station_mut()
                     .commit_planned(
                         &plan,
                         station::fill_class(n),
@@ -801,7 +960,9 @@ fn fill_in_chunks(
                         meta.clone(),
                         "fill",
                     )
-                    .is_ok()
+                    .is_ok();
+                e.station_mut().origin = None;
+                ok
             });
             if ok {
                 made = Some((n, durability));
@@ -1168,3 +1329,6 @@ fn write_before_file(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_tests;

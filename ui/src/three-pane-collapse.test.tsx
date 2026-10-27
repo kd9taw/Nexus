@@ -105,11 +105,13 @@ function mount(vp: string, header: boolean) {
     '<div class="app"><div class="shell">' +
     `<main class="layout${header ? ' has-tempo-header' : ''}" data-three-pane>` +
     (header ? '<div class="grid-header"></div>' : '') +
+    // The waterfall strip and its divider (2026-10-26): the Waterfall's own root, and the divider in its cell.
+    '<div class="waterfall-wrap"></div><div class="pane-splitter horizontal tempo-wf-seam"></div>' +
     '<div class="grid-stations"></div><div class="pane-splitter left"></div><div class="grid-center"></div>' +
     '<div class="pane-splitter right"></div><div class="grid-waterfall"></div>' +
     '</main></div></div>'
   const layout = document.querySelector('main')!
-  const cells = [...layout.children].filter((c) => /^grid-/.test(c.className))
+  const cells = [...layout.children].filter((c) => /^grid-|^waterfall-wrap$|tempo-wf-seam/.test(c.className))
   return { layout, cells }
 }
 
@@ -119,7 +121,7 @@ const NARROW = new Set(['xs', 'sm'])
 describe("the three-pane workspace's collapse leaves every cell a place of its own", () => {
   it('still mounts the class list this file models (App.tsx threePane)', () => {
     const app = src('App.tsx')
-    for (const s of ['<main className={`layout${header ? \' has-tempo-header\' : \'\'}`} data-three-pane>', '<div className="grid-header">', '<div className="grid-stations">', '<div className="grid-center">', '<div className="grid-waterfall">']) {
+    for (const s of ['<main className={`layout${header ? \' has-tempo-header\' : \'\'}`} data-three-pane>', '<div className="grid-header">', '<div className="grid-stations">', '<div className="grid-center">', '<div className="grid-waterfall">', 'stripRef={tempoWfRef}', 'className="tempo-wf-seam"']) {
       expect(app, `App.tsx no longer renders \`${s}\` — this guard models a workspace that is not mounted any more`).toContain(s)
     }
   })
@@ -142,6 +144,26 @@ describe("the three-pane workspace's collapse leaves every cell a place of its o
               'so the cell lands on the implicit lines every other such cell lands on — on top of them.',
           ).toBe(true)
         }
+      })
+    }
+  }
+
+  // THE WATERFALL STRIP (2026-10-26): across every track on the wide tiers, and carrying its own height in the
+  // collapse, where its row is content-height and its divider is hidden.
+  for (const header of [true, false]) {
+    for (const vp of TIERS) {
+      it(`[data-viewport='${vp}']${header ? ' with Tempo\'s header' : ''}: the waterfall strip spans the workspace, or carries its height in the stack`, () => {
+        const { layout } = mount(vp, header)
+        const strip = layout.querySelector('.waterfall-wrap')!
+        if (NARROW.has(vp)) {
+          const h = declWinner(strip, 'height')
+          expect(h?.value, `[data-viewport='${vp}']: the stacked strip has no height of its own — it collapses to its header`).toMatch(/0\.25 \* var\(--vh-eff/)
+          return
+        }
+        expect(declWinner(strip, 'grid-area')?.value).toBe('wf')
+        const rows = [...declWinner(layout, 'grid-template-areas')!.value.matchAll(/["']([^"']*)["']/g)].map((m) => m[1].trim().split(/\s+/))
+        expect(rows.find((r) => r.includes('wf')), 'the strip is not a row of its own across all five tracks').toEqual(['wf', 'wf', 'wf', 'wf', 'wf'])
+        expect(declWinner(layout, 'grid-template-rows')?.value, 'the strip\'s row is not the divider\'s variable').toContain('var(--tempo-wf-h, 25%)')
       })
     }
   }

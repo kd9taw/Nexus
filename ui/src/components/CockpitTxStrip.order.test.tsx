@@ -5,7 +5,7 @@
 // screens").
 //
 // It replaced #287's rule, which pinned Tune beside the band picker in the cockpit HEADER. That
-// header wrapped, and everything in it moved with the wrap: N66 measured Stop TX in four places
+// header wrapped, and everything in it moved with the wrap: Stop TX was measured in four places
 // on the eight operating screens, Tune in seven, and the header Stop TX under the dock at the
 // 150–175 % pins. Now the header draws no transmit control at all and the strip draws them all.
 //
@@ -39,13 +39,13 @@ describe("the TX strip is FT's cluster", () => {
     const { container } = render(
       <CockpitTxStrip radio={snap.radio} onSetTxEnabled={() => {}} onTune={() => {}} onAtuTune={() => {}} onStopTx={() => {}} />,
     )
-    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU', 'Stop TX'])
+    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU ON', 'Stop TX'])
     expect(screen.getByRole('button', { name: 'TX On' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('Phone and CW (no latch here): the read-only twin holds the first slot, so Tune does not move', () => {
     const { container } = render(<CockpitTxStrip radio={snap.radio} onTune={() => {}} onAtuTune={() => {}} onStopTx={() => {}} />)
-    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU', 'Stop TX'])
+    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU ON', 'Stop TX'])
     const first = container.querySelector('.cq-txctl')!.firstElementChild!
     expect(first.tagName, 'the read-only latch must not be a button').toBe('SPAN')
     expect(first.className).toContain('op-btn monitor')
@@ -60,7 +60,7 @@ describe("the TX strip is FT's cluster", () => {
       <CockpitTxStrip radio={snap.radio} onSetTxEnabled={() => {}} onTune={() => {}} onAtuTune={() => {}} onStopTx={() => {}}
         hold={{ on: false, onChange: () => {} }} />,
     )
-    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU', 'Stop TX', 'Hold Tx'])
+    expect(cluster(container)).toEqual(['TX On', 'Tune', 'ATU ON', 'Stop TX', 'Hold Tx'])
   })
 
   it('the TX state reads after the cluster, never inside it', () => {
@@ -85,7 +85,7 @@ describe('the cockpit header draws no transmit control', () => {
         <button type="button">Mode extra</button>
       </CockpitHeader>,
     )
-    for (const name of [/^stop tx$/i, /^tune$|^tuning…$/i, /^atu$/i, /^(▼ |■ )?tx (on|off)$/i]) {
+    for (const name of [/^stop tx$/i, /^tune$|^tuning…$/i, /^atu( on)?$/i, /^(▼ |■ )?tx (on|off)$/i]) {
       expect(screen.queryByRole('button', { name }), `the header still draws ${name}`).toBeNull()
     }
     expect(container.querySelector('.ch-tune, .cockpit-txstate, .cockpit-stoptx')).toBeNull()

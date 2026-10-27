@@ -367,7 +367,7 @@ export type StreamKey = { type: 'key'; action: 'down' | 'up'; key: string; code:
 export type StreamText = { type: 'text'; text: string }
 export type StreamInput = StreamPointer | StreamWheel | StreamKey | StreamText
 /** What the page holds down over the picture, re-asserted on `ptt` every STREAM_HELD_REASSERT_MS
- *  while anything is (the lead's dead-man ruling): each key by its DOM `code`, and the pointer
+ *  while anything is (the dead-man rule): each key by its DOM `code`, and the pointer
  *  buttons as the same mask a pointer event carries. Nexus's window lets go of whatever stops being
  *  re-asserted for STREAM_HELD_GAP_MS - the held PTT's own numbers (S7) - so nothing held over the
  *  stream, a Space that keys PTT in Phone included, outlives a dead link by more than that. It never

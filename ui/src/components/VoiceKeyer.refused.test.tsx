@@ -49,7 +49,7 @@ afterEach(() => {
 
 /** Render the keyer with TX on, let its slot list load, and press F1's slot. */
 async function playF1() {
-  const { container } = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+  const { container } = render(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
   await act(async () => {})
   const slot = container.querySelector<HTMLButtonElement>('.vk-play')
   expect(slot, 'precondition: F1 holds a message').not.toBeNull()
@@ -81,7 +81,7 @@ const RECORD_REFUSAL = 'The PTT is held on this computer. Let go of PTT, then re
 describe('a recording that is refused', () => {
   it("shows the reason in the keyer's toast, and records nothing", async () => {
     startVoiceRecording.mockRejectedValue(RECORD_REFUSAL)
-    const { container } = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    const { container } = render(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
     await act(async () => {})
     const record = container.querySelector<HTMLButtonElement>('.vk-tool')
     expect(record?.textContent, 'precondition: the slot offers Record').toBe('●')

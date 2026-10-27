@@ -22,7 +22,7 @@ pub const INFO_CLASS: u16 = 0x534C;
 /// The header length every packet here carries.
 pub const HEADER_BYTES: usize = 28;
 
-/// Packet classes (A, `PanadapterStream.h`; port plan §4.4).
+/// Packet classes (A, `PanadapterStream.h`).
 pub mod class {
     /// Meter values: `(u16 id, i16 raw)` pairs.
     pub const METER: u16 = 0x8002;
@@ -45,7 +45,7 @@ pub const TYPE_EXT_DATA: u8 = 3;
 /// serves; this one is only a recognisable placeholder.
 pub const METER_STREAM_ID: u32 = 0x0000_0700;
 
-/// DAX audio sample rate (port plan §4.4).
+/// DAX audio sample rate.
 pub const DAX_RATE: u32 = 24_000;
 /// Stereo frames per DAX packet: the size the plan records for DAX TX, used for RX here too.
 pub const DAX_FRAMES: usize = 128;
@@ -119,7 +119,7 @@ pub fn meter_payload(values: &[(u16, i16)]) -> Vec<u8> {
 }
 
 /// An FFT fragment payload: the 12-byte sub-header (`start_bin`, `num_bins`, `bin_size` = 2,
-/// `total_bins`, then `frame_index`) and the bins (A; port plan §4.7). Each bin is a pixel row
+/// `total_bins`, then `frame_index`) and the bins (A). Each bin is a pixel row
 /// counted from the top of the display, not a magnitude.
 pub fn fft_payload(start_bin: u16, total_bins: u16, frame_index: u32, bins: &[u16]) -> Vec<u8> {
     let mut p = Vec::with_capacity(12 + bins.len() * 2);
@@ -136,7 +136,7 @@ pub fn fft_payload(start_bin: u16, total_bins: u16, frame_index: u32, bins: &[u1
 
 /// A one-row waterfall tile payload: the 36-byte sub-header (frame low frequency and bin
 /// bandwidth as `i64` Hz × 2²⁰, line duration, width, height, timecode, auto-black level, total
-/// bins, first bin) and the row as `i16` (an intensity ×128, not dBm) (A; port plan §4.7).
+/// bins, first bin) and the row as `i16` (an intensity ×128, not dBm) (A).
 pub fn waterfall_payload(
     low_hz: f64,
     bin_hz: f64,

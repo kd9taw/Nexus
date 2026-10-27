@@ -79,8 +79,8 @@ pub use cabrillo::{
 };
 
 pub use callsign::{
-    call_resolver_installed, install_call_resolver, resolve_call, wpx_prefix, CallLocation,
-    CallResolver, Relation,
+    call_resolver_installed, counted_country, install_call_resolver, install_wae_parent,
+    resolve_call, wpx_prefix, CallLocation, CallResolver, Relation, WaeParent,
 };
 
 pub use constant_sent::ConstantSentMismatch;

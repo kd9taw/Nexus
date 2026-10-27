@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
 // WHERE THE TUNING SCOPE STANDS IN THE RTTY COCKPIT, rendered rather than read off a sheet:
-//   · ticked with `stream`, it is the first thing in the RX row, LEFT of the decoded text, inside
-//     the stream pane and below its head (so it covers and displaces none of the head's controls);
-//   · with `stream` hidden it stands in its own content-height frame, `tuning`;
-//   · hidden itself, the transcript is untouched — the same element, so its scroll pin survives;
+//   · RIGHT of the waterfall, in the waterfall's own strip (the strip its height divider sizes), so the
+//     waterfall keeps the common height and the scope keeps its size; the waterfall gives up the width;
+//   · showing or hiding it never re-parents or remounts the waterfall (the strip is always there);
+//   · it is the same with the decoded text hidden, and with the waterfall hidden it holds the strip alone;
+//   · the decoded text carries nothing of it (no floor, no row): the transcript is the stream's own child;
 //   · its only controls are the two nudges and its ✕. It hosts no stop and no sender (THE STOP LINE).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
@@ -81,16 +82,27 @@ async function show(removed: RttyPanelId[]) {
 afterEach(cleanup)
 
 describe('the RTTY tuning scope in its cockpit', () => {
-  it('stands left of the decoded text, inside the stream pane and below its head', async () => {
+  it('stands right of the waterfall, in the strip its divider sizes', async () => {
     const { container } = await show([])
-    const stream = container.querySelector('[data-pane="stream"]') as HTMLElement
-    const row = stream.querySelector('.rtty-rx-row') as HTMLElement
-    expect(row, 'no RX row in the stream pane').not.toBeNull()
-    const kids = [...row.children]
-    expect(kids.map((k) => k.className)).toEqual(['rtty-tuning', 'cw-decode-text'])
-    // Below the head, never in it: the head's controls (Arm, Auto, Clear) keep their places.
-    expect(stream.querySelector('.cw-decode-head .rtty-tuning')).toBeNull()
-    expect(container.querySelector('[data-pane="tuning"]'), 'no second frame while stream is shown').toBeNull()
+    const strip = container.querySelector('main.rtty-cockpit > .rtty-wf-row') as HTMLElement
+    expect(strip, 'no waterfall strip under the shell').not.toBeNull()
+    expect([...strip.children].map((k) => k.className)).toEqual(['waterfall-wrap', 'rtty-tuning'])
+    // The divider under the strip sizes the strip (it is the strip's next sibling).
+    expect(strip.nextElementSibling?.matches('.pane-splitter.horizontal')).toBe(true)
+    expect(container.querySelector('[data-pane="stream"] .rtty-tuning'), 'a second scope in the text pane').toBeNull()
+    expect(container.querySelector('[data-pane="tuning"]'), 'no frame of its own').toBeNull()
+  })
+
+  it('showing and hiding it keeps the same waterfall element', async () => {
+    const { container, rerender } = await show([])
+    const wf = container.querySelector('.waterfall-wrap')
+    const strip = container.querySelector('.rtty-wf-row')
+    for (const removed of [['tuning'], [], ['tuning']] as RttyPanelId[][]) {
+      rerender(<RttyCockpit snap={snap} panels={panels(removed)} onSetTxEnabled={() => {}} />)
+      expect(container.querySelector('.waterfall-wrap'), `the waterfall remounted (hidden: ${removed})`).toBe(wf)
+      expect(container.querySelector('.rtty-wf-row'), 'the strip remounted').toBe(strip)
+      expect([...strip!.children].map((k) => k.className)).toEqual(removed.length ? ['waterfall-wrap'] : ['waterfall-wrap', 'rtty-tuning'])
+    }
   })
 
   it('hosts the two nudges and its ✕, and nothing that starts or stops a transmission', async () => {
@@ -102,33 +114,34 @@ describe('the RTTY tuning scope in its cockpit', () => {
     expect(names).toEqual(['Hide Tuning', 'Tune down 5 Hz', 'Tune up 5 Hz'])
   })
 
-  it('with the text hidden, stands in its own content-height frame', async () => {
+  it('with the text hidden, stays in the strip', async () => {
     const { container } = await show(['stream'])
-    const frame = container.querySelector('[data-pane="tuning"]') as HTMLElement
-    expect(frame, 'the scope vanished with a pane the operator did not hide').not.toBeNull()
-    expect(frame.getAttribute('data-fit')).toBe('content')
-    expect(within(frame).getAllByRole('button', { name: 'Hide Tuning' })).toHaveLength(1)
-    expect(container.querySelector('.rtty-rx-row')).toBeNull()
+    const strip = container.querySelector('main.rtty-cockpit > .rtty-wf-row') as HTMLElement
+    expect([...strip.children].map((k) => k.className)).toEqual(['waterfall-wrap', 'rtty-tuning'])
+    expect(within(strip).getAllByRole('button', { name: 'Hide Tuning' })).toHaveLength(1)
+    expect(container.querySelector('[data-pane="tuning"]')).toBeNull()
   })
 
-  it('floors the text pane at the scope (the guarantee), and only while the scope is shown', async () => {
+  it('with the waterfall hidden, holds the strip alone', async () => {
+    const { container } = await show(['scope'])
+    const strip = container.querySelector('main.rtty-cockpit > .rtty-wf-row') as HTMLElement
+    expect(strip, 'the scope vanished with a waterfall the operator hid').not.toBeNull()
+    expect([...strip.children].map((k) => k.className)).toEqual(['rtty-tuning'])
+  })
+
+  it('asks nothing of the decoded text: no floor, no row, the transcript is the stream\'s own child', async () => {
     const { container } = await show([])
     const shell = container.querySelector('main.rtty-cockpit') as HTMLElement
     const stream = container.querySelector('[data-pane="stream"]') as HTMLElement
-    expect(shell.classList.contains('rtty-tuning-on')).toBe(true)
-    expect(stream.style.minHeight).toContain('var(--rtty-stream-floor, 0px)')
-    // The log strip does not read the knob: the text pane is what gives way.
-    const log = [...container.querySelectorAll('.pane-frame')].find((f) => f.getAttribute('aria-label') === 'Log') as HTMLElement
-    expect(log.style.minHeight).not.toContain('--rtty-stream-floor')
-    cleanup()
-    const hidden = await show(['tuning'])
-    expect(hidden.container.querySelector('main.rtty-cockpit')!.classList.contains('rtty-tuning-on')).toBe(false)
+    expect(shell.classList.contains('rtty-tuning-on')).toBe(false)
+    expect(stream.style.minHeight).not.toContain('--rtty-stream-floor')
+    expect(container.querySelector('.rtty-rx-row')).toBeNull()
+    expect(stream.querySelector('.rtty-stream > .cw-decode-text')).not.toBeNull()
   })
 
-  it('hidden itself, leaves the transcript where it was', async () => {
-    const { container } = await show(['tuning'])
+  it('with both hidden, there is no strip and no divider', async () => {
+    const { container } = await show(['scope', 'tuning'])
+    expect(container.querySelector('.rtty-wf-row')).toBeNull()
     expect(container.querySelector('.rtty-tuning')).toBeNull()
-    const row = container.querySelector('[data-pane="stream"] .rtty-rx-row') as HTMLElement
-    expect([...row.children].map((k) => k.className)).toEqual(['cw-decode-text'])
   })
 })

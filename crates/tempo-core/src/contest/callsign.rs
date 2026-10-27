@@ -87,6 +87,39 @@ pub fn call_resolver_installed() -> bool {
     RESOLVER.get().is_some()
 }
 
+/// A function that names the DXCC entity a WAE area belongs to (Sicily → Italy), and
+/// answers `None` for every name that is not a WAE area. Installed once, beside the
+/// [`CallResolver`], out of the same country file.
+pub type WaeParent = fn(&str) -> Option<&'static str>;
+
+static WAE_PARENT: OnceLock<WaeParent> = OnceLock::new();
+
+/// Install the WAE-area fold. `Err` when one is already installed — the same once-only
+/// contract as [`install_call_resolver`].
+pub fn install_wae_parent(f: WaeParent) -> Result<(), &'static str> {
+    WAE_PARENT
+        .set(f)
+        .map_err(|_| "a WAE-area fold is already installed")
+}
+
+/// ⭐ **The country a contest counts a placed `entity` as.**
+///
+/// A row keeps the country file's own entity, and a WAE area is an entity of its own there
+/// (IT9 is Sicily). Only CQ WW and WAE DX count those areas as countries (CQ WW's IV.C.2:
+/// *"The DXCC entity list, Worked All Europe (WAE) multiplier list plus IG9/IH9, and
+/// continental boundaries are the standards for defining country multipliers"*); every
+/// other contest counts DXCC entities, where Sicily is Italy. `wae` says which list this
+/// contest counts ([`Scoring::counts_wae_areas`](super::Scoring::counts_wae_areas)).
+///
+/// The scorer, the multiplier board and the entry strip's country line all ask this, so
+/// none of them can name a country another does not count.
+pub fn counted_country(entity: &str, wae: bool) -> &str {
+    if wae {
+        return entity;
+    }
+    WAE_PARENT.get().and_then(|f| f(entity)).unwrap_or(entity)
+}
+
 /// Place a callsign, or `None` when no resolver is installed or the country file cannot
 /// place it.
 pub fn resolve_call(call: &str) -> Option<CallLocation> {

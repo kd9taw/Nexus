@@ -27,7 +27,7 @@
 // size them by position, so a swap has to move the widths and the dividers with it first.
 //
 // THE LEFT SIDE (operator's pick, 2026-10-03: "Arrange gets a third place, 'Left side'"; Phone only):
-// a full-height column beside the scope, outside the pane region, for the panes an ArrangeSpec lists in
+// a column beside the pane region and under the scope (2026-10-26), outside the region, for the panes an ArrangeSpec lists in
 // `leftSide` (Phone: Band Activity, Spots and Needed). The record keeps it APART from the placement
 // (PanelLayout.leftSide, the panes there top to bottom): a pane on the left side keeps its place in
 // the three columns, which is where it stands whenever the side does not show — a window under about

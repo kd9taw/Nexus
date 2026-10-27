@@ -717,6 +717,8 @@ fn the_golden_log_exercises_what_it_claims() {
         asc: false,
         search: search.to_string(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let none = |_: &QsoRecord| None;
     assert_eq!(reference::order(&log, &q("z"), &none).len(), 24);
@@ -733,6 +735,8 @@ fn the_golden_log_exercises_what_it_claims() {
                 asc,
                 search: String::new(),
                 needs_confirm_only: false,
+                then: Vec::new(),
+                filter: Default::default(),
             },
             &none,
         );
@@ -794,6 +798,8 @@ fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
             asc,
             search: String::new(),
             needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
         };
         reference::order(&log, &query, &entity)
             .into_iter()
@@ -838,6 +844,8 @@ fn the_country_column_sorts_each_row_on_its_own_entity() {
         asc: true,
         search: String::new(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let sorted: Vec<(&str, Option<u32>)> = reference::order(&log, &query, &entity)
         .into_iter()
@@ -1134,6 +1142,8 @@ fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
             asc: true,
             search: search.to_string(),
             needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
         };
         reference::order(&log, &query, &entity)
             .into_iter()
@@ -1175,10 +1185,35 @@ fn a_search_finds_a_contact_by_the_entity_its_record_names() {
         asc: true,
         search: "navassa".to_string(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let found: Vec<Option<u32>> = reference::order(&log, &query, &entity)
         .into_iter()
         .map(|i| log[i].dxcc)
         .collect();
     assert_eq!(found, [Some(182)]);
+}
+
+/// ★ The statistics' states count a merged contest contact under the state its exchange carried
+/// — the one its upload carries and WAS counts — not the one looked up from its call beside it.
+#[test]
+fn the_statistics_count_a_merged_contacts_exchange_state() {
+    let mut merged =
+        parse_adif("<CALL:5>K2ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW<EOR>")
+            .remove(0);
+    merged.state = Some("NJ".into());
+    merged.contest = Some(Box::new(crate::logbook::ContestFields {
+        contest_id: "NAQP-CW".into(),
+        adif: vec![("STATE".into(), "NY".into())],
+        ..Default::default()
+    }));
+    let entity = |_: &QsoRecord| Some("United States".to_string());
+    let counts = reference::fold(&[merged], LogStatCounter::new(&entity));
+    let states: Vec<(&str, usize)> = counts
+        .by_state
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(states, [("NY", 1)]);
 }

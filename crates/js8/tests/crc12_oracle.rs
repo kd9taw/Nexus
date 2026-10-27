@@ -1,8 +1,7 @@
 //! CRC-12 oracle: an INDEPENDENT implementation — modulo-2 polynomial long division over a
 //! u128 holding the whole 88-bit word — compared with `js8::phy::crc12` on 10 000
 //! LCG-random words, plus the six boost-computed vectors as the positive control that the
-//! oracle itself is right (an oracle that merely mirrors the implementation proves nothing —
-//! feedback-negative-results-need-a-positive-control).
+//! oracle itself is right (an oracle that merely mirrors the implementation proves nothing).
 //!
 //! The two agree only if the bit order (MSB-first), the register width (12), the polynomial
 //! (0xC06), the augmentation (88 bits divided, not 75 + implicit zeros) and the `^ 42` all

@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
-import { dismissToast, subscribePopups, type Toast, type ToastKind } from '../toast'
+import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 
 const KIND_CLASS: Record<ToastKind, string> = {
   error: 'kind-error',
@@ -27,6 +27,8 @@ export function Toasts() {
   // that one path (never out of ✕ or swipe) until its action either succeeds — it is dismissed
   // explicitly then — or fails, when the toast must stay so the operator can act again.
   const held = useRef(new Set<number>())
+  // `held` changed: its buttons are drawn disabled while their action is in flight.
+  const [, redraw] = useState(0)
 
   return (
     <RToast.Provider swipeDirection="right" duration={Infinity}>
@@ -45,12 +47,20 @@ export function Toasts() {
             if (!o && !held.current.has(toast.id)) dismissToast(toast.id)
           }}
         >
-          <RToast.Description className="ui-toast-msg">{toast.message}</RToast.Description>
+          <RToast.Description className="ui-toast-msg">
+            {toast.message}
+            {/* Why its action did not happen: the toast stays so the operator can act and press
+                again, and this says what to do first. Announced as it appears. */}
+            {toast.note && <span role="alert" className="ui-toast-note">{toast.note}</span>}
+          </RToast.Description>
           {toast.action && (
             <RToast.Action asChild altText={toast.actionLabel ?? t('toast.action.default')}>
               <button
                 type="button"
                 className="ui-toast-action"
+                // In flight, it cannot be sent again (a second Undo of a large purge, pressed by an
+                // operator who saw nothing happen for the seconds it takes).
+                disabled={held.current.has(toast.id)}
                 // ⚠️ AN ACTION THAT FAILS MUST NOT RETIRE ITS TOAST (R3). This used to run the
                 // action and dismiss unconditionally and synchronously, so the update toast's
                 // Download button closed the notice whether or not a browser ever opened — and
@@ -59,23 +69,32 @@ export function Toasts() {
                 // it; reject = it did not happen, leave the toast so the operator can act again.
                 // Sync actions (every other toast in the app — Work, Answer, QSY) are untouched.
                 onClick={() => {
+                  // Two presses before the redraw that disables it: the second sends nothing.
+                  if (held.current.has(toast.id)) return
                   const result: unknown = toast.action?.()
                   if (typeof (result as PromiseLike<unknown> | undefined)?.then !== 'function') {
                     dismissToast(toast.id)
                     return
                   }
                   // Runs BEFORE Radix's own close handler (Slot composes the child's onClick
-                  // first), so the id is parked by the time `onOpenChange` asks.
+                  // first), so the id is parked by the time `onOpenChange` asks. Its expiry is
+                  // called off too: an action can outlast it, and one that fails must not take
+                  // its toast with it (an Undo refused while transmitting is pressed again later).
                   held.current.add(toast.id)
+                  redraw((n) => n + 1)
+                  keepToast(toast.id)
                   void Promise.resolve(result).then(
                     () => {
                       held.current.delete(toast.id)
                       dismissToast(toast.id)
                     },
-                    () => {
+                    (err: unknown) => {
                       // The action reported its own failure. Release the hold so ✕ works again,
-                      // and leave the toast up.
+                      // and the button, and leave the toast up, saying why.
                       held.current.delete(toast.id)
+                      redraw((n) => n + 1)
+                      const why = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+                      keepToast(toast.id, why || undefined)
                     },
                   )
                 }}

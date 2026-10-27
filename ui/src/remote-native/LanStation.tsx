@@ -1,6 +1,8 @@
 // Settings ▸ Station ▸ Remote access ▸ Remote over this network: this station's own listener, for
 // Nexus on another computer on the same network, with no internet (src-tauri/src/remote_service/lan).
-// The switch, then where it listens, the pairing window, the paired computers, and the reset.
+// The switch, then where it listens, the pairing window, and the reset. The paired computers are listed
+// with every other device under Devices (`DevicesList`), each with its Remove, refused through a stream there
+// as it was here.
 //
 // ONE PRESS (the operator's ruling of 2026-10-04): Pair a computer shows a code, and that press is
 // the approval. Whoever types the code within ten minutes is paired at once, and stays paired until
@@ -67,11 +69,14 @@ function firewallLine(firewall: LanStatus['firewall']): string | null {
   return null
 }
 
-function errorLine(error: string): string {
+/** What a refused press on this network's list says: the card's own, and a Remove under Devices. */
+export function lanErrorLine(error: string): string {
   switch (error) {
     case 'credentialStoreUnavailable': return t('remote.lan.vaultFailed')
     case 'lanFull': return t('remote.lan.full')
     case 'noKey': return t('remote.lan.reason.noKey')
+    // Out of this list, and of every road the station could link it to: the other list may still hold it.
+    case 'removeElsewhere': return t('remote.removeElsewhere')
   }
   return t('remote.lan.failed')
 }
@@ -123,7 +128,6 @@ export function LanStation() {
     return () => clearInterval(timer)
   }, [closesAt])
   const on = lan?.on === true
-  const devices = lan?.devices ?? []
   const networks = lan?.networks ?? []
   // A pick this computer does not have right now stays in the list, so it is seen and can be undone.
   const pickedGone = lan?.picked && !networks.some(network => network.address === lan.picked) ? lan.picked : null
@@ -156,7 +160,7 @@ export function LanStation() {
       </div>}
       <p role="status">{statusLine(lan)}</p>
       {refused && <p role="alert">{t('remote.lan.atShackOnly')}</p>}
-      {error && <p role="alert">{errorLine(error)}</p>}
+      {error && <p role="alert">{lanErrorLine(error)}</p>}
       {on && (networks.length > 1 || pickedGone) && <label className="settings-field">
         <span className="settings-label">{t('remote.lan.network')}</span>
         <select className="settings-input" value={lan?.picked ?? ''} disabled={busy}
@@ -174,16 +178,6 @@ export function LanStation() {
       {on && !lan?.pairing && <div className="remote-actions">
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanPair' })}>{t('remote.lan.pair')}</button>
       </div>}
-      <h3>{t('remote.lan.computers')}</h3>
-      {devices.length === 0 ? <p>{t('remote.lan.noComputers')}</p> : <ul className="remote-native-browsers">
-        {devices.map(device => <li key={device.id} className="remote-native-browser">
-          <span className="remote-native-browser-name">{device.name}</span>
-          <span className="remote-native-browser-key">{t('remote.browserKey', { key: fingerprint(device.key) })}</span>
-          <span className="remote-actions">
-            <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'lanRevoke', deviceId: device.id })}>{t('remote.native.remove')}</button>
-          </span>
-        </li>)}
-      </ul>}
       <details className="remote-native-advanced"><summary>{t('remote.lan.resetTitle')}</summary>
         <p>{t('remote.lan.resetHint')}</p>
         <div className="remote-actions">

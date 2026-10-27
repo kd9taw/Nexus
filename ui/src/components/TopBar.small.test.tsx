@@ -27,7 +27,6 @@ import { render, cleanup, screen, fireEvent, within } from '@testing-library/rea
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { TopBar } from './TopBar'
-import { StationControlContext } from '../stationAccess'
 import type { RadioStatus, Tier } from '../types'
 
 // THE BUDGET (2026-10-08). The top bar renders for real at each size, and the FT-only case's time scales with the CPU it
@@ -411,24 +410,5 @@ describe('the mode button', () => {
     const menu = one(container, '.tier-menu-btn')
     expect(menu.textContent).toBe('RXJT65')
     expect(menu.classList.contains('rx-only')).toBe(true)
-  })
-
-  it('is disabled exactly when the pills are: a browser without tier control cannot open it', () => {
-    const { container } = render(
-      <StationControlContext.Provider value={false}>
-        <TopBar
-          mycall="KD9TAW" mygrid="EN52xa" radio={radio} link={{ tier: 'FT8', dtSec: 0 } as never} bandPlan={[]}
-          onSetFrequency={noop} onSetTxEnabled={noop} onSetTune={noop} onHaltTx={noop} onSetTxEven={noop}
-          onSetTxCycleAuto={noop} onSetHoldTxFreq={noop} tier="FT8" onTierChange={noop} onOpenGuide={noop}
-          hideTxControls hideFrequencyControl ftScreen
-        />
-      </StationControlContext.Provider>,
-    )
-    const pills = q(container, '.tier-toggle:not(.tx-period) > .tier-btn') as HTMLButtonElement[]
-    expect(pills).toHaveLength(12)
-    expect(pills.every((p) => p.disabled), 'control: the pills are refused too').toBe(true)
-    const menu = one(container, '.tier-menu-btn') as HTMLButtonElement
-    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false })
-    expect(screen.queryAllByRole('menuitem')).toEqual([])
   })
 })

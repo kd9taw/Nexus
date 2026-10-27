@@ -1,5 +1,5 @@
 //! Which [`Dialect`] a server speaks: learned from what it sends before `ready;`, then pinned for
-//! the session's life (plan §2.5).
+//! the session's life.
 //!
 //! A server is never identified by its `protocol:` line alone: piHPSDR announces `ExpertSDR3,2.0`,
 //! AetherSDR `ExpertSDR3,1.5`, and Thetis has emulated ExpertSDR3 by default since v2.10.3.14. So
@@ -11,7 +11,7 @@
 //! | `drive` | the arity of the server's first `drive` notice: `drive:<trx>,<v>;` is per receiver (TCI 2.0), `drive:<v>;` global (TCI 1.x). With none, the base's. |
 //! | `trx_source` | the program on the protocol line. `ExpertSDR3`, the spec's server (and what piHPSDR, AetherSDR and Thetis's emulation announce), keys with a source; any other program does not, because nothing a server sends before a key shows whether its `trx` takes one, and a key whose source is dropped takes the SDR's microphone (TCI 2.0 §4.2). WSJT-X 3.0.2 decides the same way (`Transceiver/TCITransceiver.cpp:1084-1090`). The session refuses Nexus's audio on a dialect without a source (T1 choice 3). |
 //! | `smeter` | the program: `ExpertSDR3` pushes `rx_channel_sensors` once asked (§4.5); any other is polled with `rx_smeter`, as WSJT-X does (`:469`, `:1278`). Meters arrive only after the session asks, so which ones did is recorded ([`Evidence`]), not used. |
-//! | `chrono_length` | values, for every server (T1 choice 1A): a TX_CHRONO has no payload to tell by. A stereo receive block shows which reading the server uses for its own audio ([`Block::reading`]); that is recorded as evidence for the bench (plan U4), never acted on. |
+//! | `chrono_length` | values, for every server: a TX_CHRONO has no payload to tell by. A stereo receive block shows which reading the server uses for its own audio ([`Block::reading`]); that is recorded as evidence for the bench, never acted on. |
 //!
 //! The operator's dialect setting ([`Preference`], the radio profile's `tci_dialect` in tempo-app)
 //! can name the server instead of its protocol line: a server named `ExpertSDR3` or `piHPSDR` keys
@@ -50,7 +50,7 @@ pub enum Preference {
 }
 
 /// What the server has shown about itself: what the dialect is pinned from, and what the bench
-/// reads back (plan §2.6).
+/// reads back.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Evidence {
     /// The protocol line's program and version, as sent.
@@ -63,7 +63,7 @@ pub struct Evidence {
     pub rx_sensors: bool,
     pub rx_smeter: bool,
     /// The reading of `length` the last stereo receive block fitted: the server's meaning for its
-    /// own audio (plan U4). Evidence about TX_CHRONO, not proof.
+    /// own audio. Evidence about TX_CHRONO, not proof.
     pub stereo_reading: Option<LengthMeaning>,
 }
 
@@ -122,7 +122,7 @@ impl Evidence {
             THETIS_NATIVE
         } else if program.eq_ignore_ascii_case("ExpertSDR2") || program.eq_ignore_ascii_case("esdr")
         {
-            // `esdr,1.2` is WSJT-X's example of an ExpertSDR2 line (plan U13: unverified).
+            // `esdr,1.2` is WSJT-X's example of an ExpertSDR2 line (unverified).
             EXPERT_SDR2
         } else {
             UNKNOWN
@@ -240,6 +240,6 @@ mod tests {
             SMeter::Channel,
             "the program's, not what arrived"
         );
-        assert_eq!(pinned.chrono_length, LengthMeaning::Values, "T1 choice 1A");
+        assert_eq!(pinned.chrono_length, LengthMeaning::Values, "every server");
     }
 }

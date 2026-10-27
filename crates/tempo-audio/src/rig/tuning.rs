@@ -1,8 +1,16 @@
 //! Shared native passband and band-boundary decisions for CAT retuning.
 
+/// The width (Hz) to send with a mode, or `-1` (`RIG_PASSBAND_NOCHANGE`): the rig keeps its own.
+///
+/// ⛔ THE DATA MODES SEND NO WIDTH (#82, #107; operator ruling: match WSJT-X). Every
+/// `rig_set_mode` WSJT-X makes passes `RIG_PASSBAND_NOCHANGE` (`HamlibTransceiver.cpp:929`,
+/// `:1009`, `:1087`), so the DATA filter is the operator's, set at the radio. Nexus used to force
+/// 3 kHz here (a radio recalling a 600 Hz DATA filter clips FT8), and it cost more than it saved:
+/// a Flex over SmartSDR CAT answered with its own 6 kHz default (#82), and an FTdx10 operator who
+/// wanted 4 kHz was held to 3 (#107). A width the OPERATOR commands (the cockpit's passband
+/// control, `Rig::set_passband`) is a separate path and still goes out.
 pub(crate) fn passband_for(md: &str) -> i32 {
     match md.trim().to_ascii_uppercase().as_str() {
-        "PKTUSB" | "PKTLSB" => 3000,
         // AM is DOUBLE-sideband: the carrier sits in the middle with a sideband either side, so
         // an SSB-width filter cuts half the signal off and the audio comes out thin and distorted.
         // 6 kHz is the AM filter every HF rig that has one offers. Rigs that round to their
@@ -31,14 +39,12 @@ pub(crate) fn same_named_band(a: u64, b: u64) -> bool {
 ///
 /// THE BUG (#67). The force path sent [`passband_for`]'s width on EVERY retune — it consulted
 /// only "is `md` non-empty", never whether anything about the mode or the band had actually
-/// changed. So in FT8, where `passband_for` deliberately forces 3 kHz, every plain dial move
-/// (a spot click, a Needed pick, a section QSY) re-sent `M PKTUSB 3000`: a DATA-filter switch
-/// and a Width-display pop per QSY, on a rig that was already exactly where we wanted it.
+/// changed — so every plain dial move re-sent the width: a filter switch and a Width-display pop
+/// per QSY, on a rig that was already exactly where we wanted it. (The DATA modes it was found
+/// in carry no width at all now — see [`passband_for`]; AM's 6 kHz is what this still gates.)
 ///
-/// The 3 kHz force itself is NOT removable and this must not be gated on `mode_changed` alone.
-/// It exists because a rig recalls a narrow per-band DATA filter — 600 Hz on the FTDX10 that
-/// prompted it, which clips FT8 — and it recalls it on a BAND change, which routinely arrives
-/// with the mode UNCHANGED. So the gate is "in-band, dial-only": send `-1`
+/// Not gated on `mode_changed` alone: a rig recalls a per-band filter on a BAND change, which
+/// routinely arrives with the mode UNCHANGED. So the gate is "in-band, dial-only": send `-1`
 /// (`RIG_PASSBAND_NOCHANGE`) only when the mode did not change AND the band did not change;
 /// keep the width in every other case.
 pub(crate) fn retune_passband(md: &str, mode_changed: bool, prev_dial: u64, dial: u64) -> i32 {

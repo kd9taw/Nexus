@@ -6,7 +6,7 @@
 // New DXCC, New grid and Rare grid 💎 each store one band choice (`alertDxccBands`,
 // `alertGridBands`, `alertRareGridBands`). The Needed boards and the need icons follow those three
 // (`needScopeOk`, features/needs.ts). The decode alert's on/off is a fourth key, `alertNew`, and
-// it gates the sound and the pop-up only (`processDecodes`, alerts.ts).
+// it gates the sound and the pop-up only (decided at the station, `needed_alert.rs`).
 //
 // The panel used to fold the four together. Every menu read Off while `alertNew` was false, though
 // the boards went on following the stored choices, so a station with the alert off saw Off, Off,

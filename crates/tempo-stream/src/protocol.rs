@@ -703,7 +703,7 @@ pub enum ControlOut {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<PttReason>,
     },
-    /// The operator's microphone over, as the station holds it (plan S6, the audio design's M1).
+    /// The operator's microphone over, as the station holds it (armed by the hold, keyed by audio).
     /// Sent when any field changes. `armed`: a press (the page's PTT, or one made through the
     /// picture) armed an over; `keyed`: the operator's voice has keyed the rig; `noPowerOut`: the
     /// voice has been arriving for about two seconds and the rig reports no power out, which is
@@ -719,7 +719,7 @@ pub enum ControlOut {
     },
 }
 
-/// Why a microphone over ended, as the page is told (the audio design's §7 captions).
+/// Why a microphone over ended, as the page is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MicEnded {

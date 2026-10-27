@@ -36,7 +36,6 @@ const base: Props = {
   active: true,
   armed: true,
   keyed: false,
-  control: true,
   markHz: 2125,
   spaceHz: 2295,
   onNet: () => {},
@@ -132,14 +131,12 @@ describe('the nudges', () => {
     expect(onNet).toHaveBeenCalledTimes(3)
   })
 
-  it('are disabled while keyed and without decoder control or an armed decoder', () => {
+  it('are disabled while keyed and without an armed decoder', () => {
     const { rerender } = render(<RttyTuningScope {...base} keyed />)
     const buttons = () => [
       screen.getByRole('button', { name: 'Tune down 5 Hz' }),
       screen.getByRole('button', { name: 'Tune up 5 Hz' }),
     ]
-    for (const b of buttons()) expect((b as HTMLButtonElement).disabled).toBe(true)
-    rerender(<RttyTuningScope {...base} control={false} />)
     for (const b of buttons()) expect((b as HTMLButtonElement).disabled).toBe(true)
     rerender(<RttyTuningScope {...base} armed={false} />)
     for (const b of buttons()) expect((b as HTMLButtonElement).disabled).toBe(true)

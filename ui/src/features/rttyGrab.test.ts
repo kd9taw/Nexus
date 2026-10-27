@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classifyGrab, grabAt, tokenAt } from './rttyGrab'
+import { contestDomain } from './contestDomains'
 
 // Only example callsigns here (W1AW, K1ABC, W9XYZ, N0CALL and compounds of them) — this is
 // the table a public repo publishes.
@@ -180,6 +181,34 @@ describe('classifyGrab — a contest exchange, from the session\'s own received 
     for (const token of ['5', '05', 'PT', 'IL', 'ON']) expect(classifyGrab(token)).toBeNull()
     // …and WI outside a contest is neither a state nor a number nor a two-letter call.
     expect(classifyGrab('WI')).toBeNull()
+  })
+})
+
+describe('the ARRL RTTY Roundup: a state or a serial, into its own box', () => {
+  // The session's receives for either role (the rules seed): RST, then QTH (a W/VE station's state
+  // or province) and NR (a DX station's serial). The cockpit's own `knownCode`: the domain registry.
+  const rru = {
+    slots: [
+      { key: 'RST', kind: 'rst' },
+      { key: 'QTH', kind: 'enum', domain: 'arrl_rtty_qth' },
+      { key: 'NR', kind: 'serial' },
+    ],
+    knownCode: (domain: string | undefined, v: string) => contestDomain(domain)?.codes.has(v) ?? false,
+  }
+  it('a state or province fills QTH, a serial fills NR, and a call is a call', () => {
+    expect(classifyGrab('IL', rru)).toEqual({ kind: 'exchange', slot: 'QTH', value: 'IL' })
+    expect(classifyGrab('LB', rru)).toEqual({ kind: 'exchange', slot: 'QTH', value: 'LB' })
+    expect(classifyGrab('12', rru)).toEqual({ kind: 'exchange', slot: 'NR', value: '12' })
+    expect(classifyGrab('1001', rru)).toEqual({ kind: 'exchange', slot: 'NR', value: '1001' })
+    // ⚠️ A three-digit serial that reads as a report (the rules' own example, "WK6I 599 428") is
+    // left to the operator, as in every serial contest: the grab cannot tell it from an RST.
+    expect(classifyGrab('428', rru)).toBeNull()
+    expect(classifyGrab('K9CT', rru)).toEqual({ kind: 'call', value: 'K9CT' })
+    expect(classifyGrab('599', rru)).toBeNull()
+  })
+  it('Alaska and Hawaii are not on its list (they are DXCC entities here), so they are not grabbed as a state', () => {
+    expect(classifyGrab('AK', rru)).toBeNull()
+    expect(classifyGrab('HI', rru)).toBeNull()
   })
 })
 

@@ -1,6 +1,7 @@
 //! A separate process-local authority for transmitting. Receiver/CAT write
 //! permits cannot be converted into this type. Only the native host may issue
-//! it after its distinct local transmit grant and controller checks.
+//! it, after its controller checks, and the one permit it issues is a streamed
+//! session's presence, which keys nothing: lapsed, it stops every transmission.
 use super::{Permit, Revocation};
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,7 +28,7 @@ impl TransmitAuthority {
     /// inside, so both sides move the same counter.
     ///
     /// ⛔ It revokes; it cannot issue. A permit still comes only from the native host after its
-    /// own local transmit-grant and controller checks.
+    /// own controller checks.
     pub fn revocation(&self) -> super::Revocation {
         self.0.clone()
     }

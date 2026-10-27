@@ -16,7 +16,7 @@
 //! ## What a lost packet becomes
 //!
 //! Nothing. A packet that never arrived is not concealed here: the microphone's playout fills its
-//! moment with silence. Concealment can burst loud into a gap (the audio design's §7 measured a
+//! moment with silence. Concealment can burst loud into a gap (an earlier measurement found a
 //! full-scale burst at 10% loss), and on the transmit path a burst goes out on the air.
 use crate::receive_encode::FRAME_MS;
 

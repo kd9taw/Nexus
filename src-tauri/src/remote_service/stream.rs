@@ -1012,7 +1012,7 @@ impl Streaming {
 }
 
 /// Why an over ended, in the contract's words: each end under its own name, so the page can say
-/// the right thing (the audio design's §7).
+/// the right thing.
 /// What the held PTT says of the page's own presses since the last call, taken: a computer's press
 /// on Stop's road (`super::lan::stop_road`) is left for that road to tell, and never told here.
 pub(crate) fn page_reports(

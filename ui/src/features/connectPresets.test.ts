@@ -100,7 +100,7 @@ describe('the presets are well formed', () => {
   })
 })
 
-// FRAME + BAR — the default view to try (the operator's batch 60, 2026-10-01: "A: Frame + bar"; release
+// FRAME + BAR — the default view to try (the operator's pick, 2026-10-01: "A: Frame + bar"; release
 // step 4: a layout to pick, NOT yet the default). The default-view survey's candidate A as the
 // side-by-side renders measured it: Frame's shape with Bands for you over Openings on the left and Chase
 // over Getting Out on the right, the clock-and-indices bar across the top, and the tab plan behind every
@@ -137,9 +137,10 @@ describe('Frame + bar — the default view to try', () => {
     })
     expect(A().slots.bottom3).toBe('scope')
     // Placed, shown or behind a tab: all but the three boards, which are whole screens of their own, and
-    // the Operators box, which has something to show only while a contest runs.
+    // the Operators box, which has something to show only while a contest runs, and the Activation box,
+    // which has something to show only while a park activation runs.
     const placed = SLOT_IDS.flatMap((s) => slotBoxes({ slots: A().slots, tabs: A().tabs as Partial<Record<SlotId, PaneId[]>> }, s))
-    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota', 'needed', 'operators'])
+    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota', 'needed', 'operators', 'activation'])
   })
 
   it('reads back as itself whichever tab a slot shows: showing a tab is not an arrangement change', () => {

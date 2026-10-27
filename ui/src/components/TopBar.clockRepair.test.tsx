@@ -11,13 +11,18 @@ import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { TopBar } from './TopBar'
 import type { RadioStatus } from '../types'
 import { EN } from '../i18n'
-import { StationControlContext } from '../stationAccess'
 import { repairClock } from '../api'
 import { pushToast } from '../toast'
 
 vi.mock('../api', () => ({
   appVersion: vi.fn(() => Promise.resolve('0.0.0')),
   repairClock: vi.fn(),
+}))
+// A computer driving a station (client mode): off unless a case turns it on.
+const driving = vi.hoisted(() => ({ on: false }))
+vi.mock('../features/durableStore', async (actual) => ({
+  ...(await actual<typeof import('../features/durableStore')>()),
+  drivesAnotherStation: () => driving.on,
 }))
 vi.mock('../toast', async (original) => ({
   ...(await original<typeof import('../toast')>()),
@@ -57,30 +62,28 @@ const base = {
   clockRepairAvailable: true,
 } as unknown as RadioStatus
 
-function renderBar(radio: Record<string, unknown> = {}, control = true) {
+function renderBar(radio: Record<string, unknown> = {}) {
   const noop = () => {}
   return render(
-    <StationControlContext.Provider value={control}>
-      <TopBar
-        mycall="KD9TAW"
-        mygrid="EN52xa"
-        radio={{ ...base, ...radio } as RadioStatus}
-        link={{ tier: 'FT8' } as never}
-        bandPlan={[]}
-        onSetFrequency={noop}
-        onSetTxEnabled={noop}
-        onSetTune={noop}
-        onHaltTx={noop}
-        onSetTxEven={noop}
-        onSetTxCycleAuto={noop}
-        onSetHoldTxFreq={noop}
-        tier="FT8"
-        onTierChange={noop}
-        onOpenGuide={noop}
-        field={false}
-        onFieldChange={noop}
-      />
-    </StationControlContext.Provider>,
+    <TopBar
+      mycall="KD9TAW"
+      mygrid="EN52xa"
+      radio={{ ...base, ...radio } as RadioStatus}
+      link={{ tier: 'FT8' } as never}
+      bandPlan={[]}
+      onSetFrequency={noop}
+      onSetTxEnabled={noop}
+      onSetTune={noop}
+      onHaltTx={noop}
+      onSetTxEven={noop}
+      onSetTxCycleAuto={noop}
+      onSetHoldTxFreq={noop}
+      tier="FT8"
+      onTierChange={noop}
+      onOpenGuide={noop}
+      field={false}
+      onFieldChange={noop}
+    />,
   )
 }
 
@@ -105,15 +108,6 @@ describe('when Repair clock is drawn', () => {
     cleanup()
     renderBar({ clockRepairAvailable: undefined })
     expect(button()).toBeNull()
-  })
-
-  it('not for a browser without station control: the prompt would wait on the station screen', () => {
-    renderBar({}, false)
-    expect(button()).toBeNull()
-    // The control: the same bar with control draws it.
-    cleanup()
-    renderBar({}, true)
-    expect(button()).not.toBeNull()
   })
 })
 
@@ -151,6 +145,22 @@ describe('a press', () => {
     renderBar()
     await act(async () => fireEvent.click(button()!))
     expect(toast).toHaveBeenCalledWith(EN[key], 'error')
+  })
+})
+
+// On a computer driving a station the repair is the station's: client mode refuses it in words
+// (`client.refused.shackOnly`), and those are what the toast says. It used to say the repair did
+// not take, which read as a declined administrator prompt.
+describe('on a computer driving a station', () => {
+  afterEach(() => {
+    driving.on = false
+  })
+  it('says it is only at the station, in the words the refusal came with', async () => {
+    driving.on = true
+    repair.mockRejectedValue(EN['client.refused.shackOnly'])
+    renderBar()
+    await act(async () => fireEvent.click(button()!))
+    expect(toast).toHaveBeenCalledWith(EN['client.refused.shackOnly'], 'error')
   })
 })
 

@@ -91,7 +91,10 @@ vi.mock('./toast', async (importOriginal) => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
 }))
-vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
+// The stub keeps the real root's class and ref: Tempo's strip divider sizes the Waterfall's own root (2026-10-26).
+vi.mock('./components/Waterfall', () => ({
+  Waterfall: ({ stripRef }: { stripRef?: import('react').Ref<HTMLDivElement> }) => <div className="waterfall-wrap" ref={stripRef} data-testid="waterfall" />,
+}))
 
 import App from './App'
 
@@ -144,7 +147,8 @@ describe('the Tempo rail dividers answer the keyboard (PaneSeam)', () => {
     expect(sep('left').tabIndex, 'a divider only a mouse can reach').toBe(0)
     expect(sep('right').tabIndex, 'a divider only a mouse can reach').toBe(0)
     expect(sep('left').getAttribute('aria-label')).toBe('stations panel width')
-    expect(sep('right').getAttribute('aria-label')).toBe('waterfall panel width')
+    // The right rail holds Band Activity since the waterfall became a strip across the top (2026-10-26).
+    expect(sep('right').getAttribute('aria-label')).toBe('band activity panel width')
     // Each ceiling is its own share of the window or the room beside the other rail, whichever is less.
     expect(aria(sep('left'))).toEqual(['346', '220', '768'])
     expect(aria(sep('right'))).toEqual(['422', '260', '1054'])
@@ -221,5 +225,54 @@ describe('the Tempo rail dividers answer the keyboard (PaneSeam)', () => {
     expect(railWrites()).toBe(1)
     expect(localStorage.getItem('tempo-left-rail-w')).toBe('396')
     writes.mockRestore()
+  })
+})
+
+// ── THE WATERFALL STRIP (2026-10-26: "width and height to be consistent") ───────────────────────────
+// Every mode's waterfall starts at the same full width and 25 % of its shell; Tempo's left the right rail
+// for a strip across the top of the workspace, sized by its own divider as FT's is, stored per surface.
+describe('Tempo’s waterfall is a full-width strip with a height divider', () => {
+  const grid = () => document.querySelector<HTMLElement>('.layout[data-three-pane]')!
+  // The keep-alive cockpits (hidden hosts) draw waterfalls of their own: Tempo's is the one in its grid.
+  const strip = () => grid().querySelector<HTMLElement>('[data-testid="waterfall"]')!
+  const wfSep = () => document.querySelector<HTMLElement>('.layout[data-three-pane] > .pane-splitter.tempo-wf-seam')!
+  function layOut(height: number) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('.layout[data-three-pane]')) return { top: 0, left: 0, width: 1600, height, right: 1600, bottom: height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      return real.call(this)
+    })
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  it('the waterfall is the grid’s own strip, not in the right rail — Band Activity is', async () => {
+    await mountTempo()
+    expect(strip().parentElement, 'the waterfall is not a strip of the workspace').toBe(grid())
+    expect(document.querySelector('.right-rail [data-testid="waterfall"]'), 'the waterfall is still in the right rail').toBeNull()
+    expect(grid().querySelectorAll('[data-testid="waterfall"]'), 'one waterfall on Tempo').toHaveLength(1)
+    expect(document.querySelector('.right-rail')!.textContent, 'Band Activity left the right rail').toMatch(/Band Activity/)
+    expect(wfSep().getAttribute('aria-label')).toBe('waterfall height')
+    expect(wfSep().getAttribute('role')).toBe('separator')
+  })
+
+  it('starts at 25 % of the workspace, the common default, and a step is stored as the operator’s', async () => {
+    layOut(1000)
+    await mountTempo()
+    expect(aria(wfSep())).toEqual(['250', '128', '346'])
+    expect(grid().style.getPropertyValue('--tempo-wf-h')).toBe('25%')
+    expect(localStorage.getItem('nexus.split.tempo.waterfall'), 'an untouched default writes nothing').toBeNull()
+    fireEvent.keyDown(wfSep(), { key: 'ArrowDown' })
+    expect(localStorage.getItem('nexus.split.tempo.waterfall')).toBe(String((266 / 1000) * 100))
+    fireEvent.keyDown(wfSep(), { key: 'Backspace' })
+    expect(grid().style.getPropertyValue('--tempo-wf-h')).toBe('25%')
+  })
+
+  it('a height the operator stored wins over the default, and loading never rewrites it', async () => {
+    localStorage.setItem('nexus.split.tempo.waterfall', '30')
+    layOut(1000)
+    await mountTempo()
+    expect(wfSep().getAttribute('aria-valuenow')).toBe('300')
+    expect(grid().style.getPropertyValue('--tempo-wf-h')).toBe('30%')
+    expect(localStorage.getItem('nexus.split.tempo.waterfall')).toBe('30')
   })
 })

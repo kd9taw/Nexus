@@ -273,11 +273,92 @@ int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      ft8_decode_t *out, int max_out);
 
 /*
+ * What ft8_decode_frame_cb / ft4_decode_frame_cb call while a pass runs. `rec` points at a copy
+ * of a decode the pass has just accepted (the same record `out` holds), or is NULL after each FT8
+ * sync candidate is tried. A nonzero answer to a NULL `rec` stops the pass there; the answer to a
+ * decode is ignored. Runs on the decoding thread with the modem busy: it must not call back into
+ * the modem.
+ */
+typedef int (*tempo_decode_cb)(void *user, const ft8_decode_t *rec);
+
+/*
+ * ft8_decode_frame, handing each decode to `cb` the moment the pass accepts it, as WSJT-X's
+ * decoder hands each to its callback (ft8_decode.f90:233-238) for jt9 to write and flush at once.
+ * The decodes come in the pass's own order: the sync candidates within 10 Hz of nfqso first
+ * (sync8.f90:155-163), then by sync; the a7 replay's after the passes. After every sync candidate
+ * of the direct passes `cb` is asked (with NULL) whether to stop, where WSJT-X asks its early
+ * pass's give-up (ft8_decode.f90:240-242); stopping skips the remaining candidates, passes and the
+ * a7 replay, and `out` holds what was found. `cb` NULL is exactly ft8_decode_frame.
+ */
+int ft8_decode_frame_cb(const int16_t *iwave /*[FT8_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso, int nftx, int nzhsym,
+                        int nutc, int la7final,
+                        int lft8apon, int lapcqonly,
+                        ft8_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user);
+
+/*
+ * What WSJT-X's FT8 decoder keeps of each early decode to subtract it from the full pass's audio
+ * (ft8_decode.f90 itone_save/f1_save/xdt_save/lsubtracted). Matches the Fortran bind(C) type
+ * ft8_sub_t: 332 bytes.
+ */
+typedef struct {
+    int   itone[79]; /* the decode's channel tones */
+    float f1;        /* carrier, Hz */
+    float xdt0;      /* ft8b's start time, s (the record's dt + 0.5) */
+    int   ok;        /* 1 = a direct decode, tones known; 0 = not subtractable (a7) */
+    int   done;      /* 1 = already subtracted from the residual */
+} ft8_sub_t;
+
+/*
+ * ft8_decode_frame_cb plus WSJT-X's carry between the passes of one period. `subs` (NULL, or
+ * max_out records) receives each decode's ft8_sub_t. With 1..200 `nearly` early decodes, `early`,
+ * `early_subs` and `resid` non-NULL, nzhsym 50 and depth >= 2, the pass starts from `resid` (the
+ * 47 step's residual) over the first 47*3456 samples, subtracts the early decodes not yet
+ * subtracted, and dedupes against them without handing them to `cb` (ft8_decode.f90:121,
+ * :152-162); the early records open `out`. Anything else is ft8_decode_frame_cb. The caller must
+ * only carry a residual made from the same first 47*3456 samples as `iwave`.
+ *
+ * la7final 2 is the rescue pass after it: the raw audio again, `early` holding the 1..200
+ * (<= max_out) records already reported and `early_subs`/`resid` NULL. They open `out`, are
+ * deduped against, never handed to `cb` and never saved into the a7 table again (one found again
+ * gives its entry this pass's dt and frequency); new decodes are saved once and the a7 replay
+ * runs. Without such records, 2 is 1.
+ */
+int ft8_decode_frame_dp(const int16_t *iwave /*[FT8_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso, int nftx, int nzhsym,
+                        int nutc, int la7final,
+                        int lft8apon, int lapcqonly,
+                        ft8_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user,
+                        ft8_sub_t *subs, int nearly,
+                        const ft8_decode_t *early, const ft8_sub_t *early_subs,
+                        const float *resid /*[FT8_NMAX]*/);
+
+/*
+ * WSJT-X's FT8 47 step (ft8_decode.f90:124-149): from the first 47*3456 samples of `iwave` (the
+ * rest taken as zero), subtract each early decode with dt < 0.396 s (DT-refined at depth 3), set
+ * its `done`, and write the residual to `resid`. `cb` (may be NULL) is asked with NULL after each
+ * early decode; nonzero stops there (the 14.3 s bail-out). Returns the decodes reached, or -1 when
+ * `nearly` is not 1..200.
+ */
+int ft8_subtract_early(const int16_t *iwave /*[FT8_NMAX]*/, int ndepth, int nearly,
+                       ft8_sub_t *early_subs, float *resid /*[FT8_NMAX]*/,
+                       tempo_decode_cb cb, void *user);
+
+/*
  * Clear the a7 cross-cycle decode table (prior-slot call pairs + slot tracker).
  * Call on band change / QSO change so stale prior-cycle pairs are not replayed
  * as AP hypotheses against the new band's audio. Mirrors ft1_harq_reset.
  */
 void ft8_a7_reset(void);
+
+/* How many decodes the slot decoded last has saved into the a7 table. Read only. */
+int ft8_a7_saved(void);
 
 /*===========================================================================
  * FT4: native decode/encode of the standard WSJT-X FT4 mode (7.5 s T/R,
@@ -349,6 +430,21 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      int nqso_progress, int nfqso,
                      int lapcqonly,
                      ft4_decode_t *out, int max_out);
+
+/*
+ * ft4_decode_frame, handing each decode to `cb` the moment the decoder finds it, as WSJT-X's FT4
+ * decoder hands each to its callback (ft4_decode.f90:456). The candidates within 20 Hz of nfqso
+ * are tried first (getcandidates4.f90:70-81). `cb` is never called with NULL (FT4 has no
+ * give-up) and its answer is ignored; ft4_decode_t has ft8_decode_t's layout. `cb` NULL is
+ * exactly ft4_decode_frame.
+ */
+int ft4_decode_frame_cb(const int16_t *iwave /*[FT4_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso,
+                        int lapcqonly,
+                        ft4_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user);
 
 /*===========================================================================
  * FST4: WSJT-X slow weak-signal mode. Decode, and transmit (see below).
@@ -691,6 +787,120 @@ int ft2_encode_msg(const char *msg, int msg_len, int *itone_out /*[FT2_NN]*/);
  */
 int ft2_gen_wave(const int *itone, int nsym, float f0,
                  float *wave_out, int nwave_cap);
+
+/*===========================================================================
+ * JTTY: WSJT-X's untimed keyboard mode. ENCODE, WAVEFORM AND RECEIVE ONLY:
+ * nothing here keys a transmitter. Not offered in any release: the modem is
+ * from a WSJT-X pre-release (see NOTICE).
+ *===========================================================================*/
+
+/* 4-GFSK at 31.25 baud, 59-symbol frames (13 sync + 46 code, 1.888 s), each one
+ * 34-bit atom under a CRC-12 and a K=10 tail-biting convolutional code; 1..16
+ * frames per message, no slot clock. jtty_cabi.f90 is Nexus's marshalling over
+ * upstream's genjtty/gen_jttywave; the jtty_rx_* functions further down are
+ * upstream's own C ABI (jtty_receive_context.f90), used as they are. */
+#define JTTY_NSPS          384    /* samples/symbol at 12 kHz: 31.25 baud     */
+#define JTTY_FRAME_SYMBOLS 59     /* 13 sync + 46 code symbols                */
+#define JTTY_MAX_FRAMES    16
+#define JTTY_MAX_TONES     944    /* JTTY_FRAME_SYMBOLS * JTTY_MAX_FRAMES     */
+#define JTTY_TEXT_LEN      80     /* longest message text, bytes              */
+#define JTTY_ERR_ARGS      (-1)   /* a length, count, tone or capacity refused */
+#define JTTY_ERR_ENCODE    (-2)   /* the modem cannot encode the text         */
+
+/* One receive update. 120 bytes, 8-byte aligned, no padding. Times are seconds
+ * on the caller's sample timeline (sample index / 12000). */
+typedef struct {
+    int64_t message_id;  /* stable across a message's growing updates       */
+    double  start_s;     /* the message's first frame                        */
+    double  latest_s;    /* its latest frame                                 */
+    float   freq;        /* audio frequency of tone 0, Hz                    */
+    int     terminal;    /* 0 growing, 1 complete, 2 expired, 3 rx ended     */
+    int     snr;         /* dB, the first frame                              */
+    char    text[84];    /* the text so far, NUL-filled                      */
+} jtty_update_t;
+
+/* Upstream's structured-atom descriptor (jtty_source_codec.f90), 20 bytes. */
+typedef struct {
+    int8_t  kind;        /* 0 call, 1 exch number, 2 exch location,
+                            3 class+section, 5 control, 6 grid              */
+    int8_t  subtype;
+    int8_t  role;
+    int8_t  reserved;    /* must be 0                                        */
+    int32_t value;
+    char    text[9];     /* up to 8 bytes + NUL                              */
+} jtty_source_atom_c;
+
+/*
+ * Text -> channel tones (0..3). profile: 0 unknown, 1 Field Day, 2 RTTY
+ * Roundup. is_final: 1 sets end-of-message on the last frame, 0 leaves it
+ * clear (a segment still being typed); anything else is refused. sent
+ * (capacity >= JTTY_TEXT_LEN+1) receives the normalised text. Returns the tone
+ * count (whole frames), 0 for an empty message, JTTY_ERR_ARGS (nothing
+ * written) or JTTY_ERR_ENCODE. NOT thread-safe.
+ */
+int jtty_encode_text(const char *msg, int msg_len, int profile, int is_final,
+                     int *itone_out, int max_tones, char *sent, int sent_cap);
+
+/*
+ * 1..16 atoms -> channel tones, one frame each. status: 0 ok, 1 invalid
+ * descriptor, 2 unknown ARRL/RAC section. Returns the tone count, 0 when the
+ * atoms are refused, JTTY_ERR_ARGS when max_tones is too small.
+ */
+int jtty_encode_atoms(const jtty_source_atom_c *atoms, int natoms,
+                      int *itone_out, int max_tones, int *status);
+
+/*
+ * Text -> one 34-bit source word per frame: what jtty_encode_text sends,
+ * before the CRC and the code. Source bit 1 is the most significant of the 34,
+ * bit 33 reserved (0), bit 34 end-of-message, set on the last frame only when
+ * is_final is 1 (0 leaves it clear; anything else is refused). Returns the
+ * frame count, 0 for an empty message, JTTY_ERR_ARGS (nothing written) or
+ * JTTY_ERR_ENCODE, as jtty_encode_text.
+ */
+int jtty_pack_text(const char *msg, int msg_len, int profile, int is_final,
+                   int64_t *frames_out, int max_frames, char *sent, int sent_cap);
+
+/*
+ * 1..16 source words -> the text as the receiver shows it (text_cap >=
+ * JTTY_TEXT_LEN+1, NUL-terminated). A word the receiver would discard
+ * (reserved bit, unassigned form, field out of range) is left out. eom: 1 when
+ * every word is valid and the last carries end-of-message. Returns 0 when every
+ * word is valid, 1 when one or more are not, JTTY_ERR_ARGS for a refused count,
+ * word (2**34 or more) or capacity (nothing written).
+ */
+int jtty_unpack_frames(const int64_t *frames, int nframes, char *text_out,
+                       int text_cap, int *eom);
+
+/*
+ * Tones -> real audio at 12 kHz, amplitude 1: nsym*JTTY_NSPS samples. nsym
+ * must be whole frames up to JTTY_MAX_TONES, every tone 0..3, nwave_cap at
+ * least nsym*JTTY_NSPS. Returns the sample count or JTTY_ERR_ARGS.
+ */
+int jtty_gen_wave(const int *itone, int nsym, float f0,
+                  float *wave_out, int nwave_cap);
+
+/* Drain up to max_out pending updates of a receive handle; returns how many. */
+int jtty_take_updates(int handle, jtty_update_t *out, int max_out);
+
+/* Upstream's receive API. Eight contexts; each keeps its own reception state
+ * and upstream swaps it in around every call, but the DSP scratch is shared:
+ * call every one of these under the same modem lock. */
+int32_t jtty_rx_create(void);           /* 1..8, or 0 when all are taken     */
+void    jtty_rx_destroy(int32_t handle);
+void    jtty_rx_begin(int32_t handle, int64_t session_id, int64_t grid_origin,
+                      int64_t first_search, int32_t nsps /* 240/320/384/480 */);
+/* Up to max_steps quarter-frame searches over pcm[0..count), whose first
+ * element is sample first_sample, never at or past stop_sample. Searches
+ * center +- tolerance always, and 1200-1500 / 1500-1800 Hz where they fall
+ * inside low..high. Returns the steps run (0: more audio needed), -1 for an
+ * invalid or stopped handle, -2 when pcm does not reach back far enough. */
+int32_t jtty_rx_process(int32_t handle, const int16_t *pcm, int32_t count,
+                        int64_t first_sample, int64_t stop_sample,
+                        int32_t max_steps, int32_t low, int32_t high,
+                        float center, float tolerance);
+int64_t jtty_rx_next_required_sample(int32_t handle);
+int64_t jtty_rx_next_search_sample(int32_t handle);
+void    jtty_rx_end(int32_t handle, int32_t reason /* 2 expired, 3 ended */);
 
 /*===========================================================================
  * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.

@@ -7,14 +7,12 @@
 // way that view does, so the tag and the banner go at once. The park the hunt's prefill put in the box
 // goes with it; a park the operator typed, or one a Needed click handed over, is theirs and stays.
 //
-// Not on the hosted Remote page: there the form's one station write is Log, and a browser ends a hunt
-// on the POTA / SOTA view, through its own change under the logging grant (RemoteOta).
+// Not on the hosted Remote page, which cannot make that call.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import { clearHuntTarget, logQso } from '../api'
 import { pushToast } from '../toast'
-import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, LoggedQso } from '../types'
 
@@ -222,25 +220,4 @@ describe('the hunted park goes with the hunt', () => {
     expect(chip()).toBeNull()
     expect(screen.queryByRole('button', { name: t('ota.hunt.clear') })).toBeNull()
   })
-})
-
-// The hosted page provides `StationControlContext` false for the whole application
-// (BrowserApplication). Its log line comes with the hosted adapter in the cockpits (RemoteLogEntry)
-// and without it in the Satellites view; neither offers the ✕, whose call the page cannot make.
-describe('on the hosted Remote page', () => {
-  const adapter = { submit: vi.fn(async () => {}), canSubmit: true, busy: false, resetKey: 0, recall: () => null }
-  for (const [name, remote, exchange] of [
-    ['with the hosted adapter', adapter, 'terrestrial'],
-    ['without it (Satellites)', undefined, 'satellite'],
-  ] as const) {
-    it(`shows the tag with no ✕, ${name}`, () => {
-      render(
-        <StationControlContext.Provider value={false}>
-          <LogEntry snap={snapWith(HUNT)} mode="SSB" defaultRst="59" exchange={exchange} remote={remote} onSnap={vi.fn()} />
-        </StationControlContext.Provider>,
-      )
-      expect(chip()?.textContent).toContain('US-1000')
-      expect(within(chip()!).queryByRole('button'), 'the hosted page offers a clear it cannot make').toBeNull()
-    })
-  }
 })

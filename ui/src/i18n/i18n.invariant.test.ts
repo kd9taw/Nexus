@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { EN, interpolate, invariantNumber, t } from './index'
-import { STATION_EXAMPLES } from '../components/SettingsStation'
+import { GUIDE_EXAMPLES } from '../components/GettingStartedGuide'
 
 // A locale with a comma decimal separator AND dot grouping — the shape that makes a frequency
 // unreadable and a parse silently wrong.
@@ -58,7 +58,7 @@ describe('technical tokens never enter the catalog', () => {
   })
 
   it('no message is one of the invariant example values', () => {
-    const tokens = Object.values(STATION_EXAMPLES)
+    const tokens: string[] = Object.values(GUIDE_EXAMPLES)
     expect(tokens.length, 'the example table is empty — this check proves nothing').toBeGreaterThan(0)
     const leaked = strings.filter(([, v]) => tokens.some((tok) => v === tok)).map(([k]) => k)
     expect(
@@ -67,12 +67,11 @@ describe('technical tokens never enter the catalog', () => {
     ).toEqual([])
   })
 
-  it('the example values really are the ones the panel shows', () => {
-    // Ties the table above to the surface, so deleting a placeholder does not silently make
-    // the previous check vacuous.
-    expect(STATION_EXAMPLES.callsign).toBe('KD9TAW')
-    expect(STATION_EXAMPLES.grid).toBe('EN52xa')
-    expect(STATION_EXAMPLES.state).toBe('WI')
+  it('the example values really are the ones the guide shows', () => {
+    // Ties the table above to the surface, so emptying it does not silently make the previous
+    // check vacuous.
+    expect(GUIDE_EXAMPLES.callsign).toBe('KD9TAW')
+    expect(GUIDE_EXAMPLES.grid).toBe('EN52xa')
   })
 })
 

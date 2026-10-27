@@ -24,9 +24,8 @@ vi.mock('../toast', async (importOriginal) => ({
 }))
 
 import { SpotsPanel } from './SpotsPanel'
-import { StationControlContext } from '../stationAccess'
 
-type Station = { section?: string; sideband?: string; tier?: string }
+type Station = { section?: string; keyboardMode?: string; sideband?: string; tier?: string }
 
 const board = (spotMe?: Station) => (
   <SpotsPanel spots={[]} bandPlan={[]} selectedCall={null} onSelect={() => {}} onWork={() => {}} pane={{ scope: 'phone' }} spotMe={spotMe} />
@@ -79,6 +78,10 @@ describe('Spot me on the Spots board', () => {
     rerender(board({ section: 'keyboard', sideband: 'PKTUSB' }))
     await settle()
     expect(comment().value).toBe('CQ QPSK31')
+    // PSK and JTTY are one section: the station's own word for the mode on the air wins.
+    rerender(board({ section: 'keyboard', sideband: 'PKTUSB', keyboardMode: 'JTTY' }))
+    await settle()
+    expect(comment().value).toBe('CQ JTTY')
   })
 
   it('keeps the last comment typed for each mode, and an emptied box gives the default back', () => {
@@ -232,11 +235,7 @@ describe('Spot me on the Spots board', () => {
     })
   })
 
-  it('is not on a page that only watches, nor on a board its host gave no station', () => {
-    render(<StationControlContext.Provider value={false}>{board({ section: 'cw' })}</StationControlContext.Provider>)
-    expect(screen.queryByRole('button', { name: 'Spot me' })).toBeNull()
-    expect(screen.queryByRole('textbox', { name: 'Spot comment' })).toBeNull()
-    cleanup()
+  it('is not on a board its host gave no station', () => {
     render(board(undefined))
     expect(screen.queryByRole('button', { name: 'Spot me' })).toBeNull()
     // Positive control: the same board with control and a station shows it.

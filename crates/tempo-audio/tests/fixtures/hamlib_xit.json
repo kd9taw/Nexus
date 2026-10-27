@@ -1,6 +1,6 @@
 {
   "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
-  "catalog": 119,
+  "catalog": 120,
   "rigs": [
     {
       "model": 1,
@@ -677,6 +677,13 @@
     {
       "model": 3073,
       "name": "Icom IC-7300",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3075,
+      "name": "Icom IC-7850/7851",
       "setXit": true,
       "getXit": true,
       "xitFunc": true

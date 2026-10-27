@@ -7,7 +7,7 @@
 //! WHY overrun panics instead of returning zeros: every JS8 layout is a FIXED 72-bit field
 //! (`[3][50][11] , [5][3]`, `[3][28][28][5] , [1][1][6]`, …), so a read past the end is a
 //! layout bug in this crate, never something the air can cause. A zero would be a sentinel
-//! that forces the consumer to guess (feedback-sentinels-force-consumers-to-guess).
+//! that forces the consumer to guess.
 
 /// Accumulates bits MSB-first; [`BitWriter::finish`] pads the final byte with zeros.
 #[derive(Debug, Default, Clone)]

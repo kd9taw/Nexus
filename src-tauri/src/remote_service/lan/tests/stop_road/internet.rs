@@ -9,6 +9,7 @@
 //! select is dropped unread, the same bytes taken from the selected pair.
 use super::super::super::channel::InternetRoads;
 use super::super::computer::paired_record;
+use super::relayed::{a_press_keys_on, keyed_once_answered};
 use super::stop_count::turned_on;
 use super::*;
 use crate::lan_client::audio_road::{Headset, StandIn as Earphones};
@@ -352,13 +353,9 @@ async fn over_the_internet_a_hold_the_relay_delivers_after_the_stop_never_keys_o
     assert_eq!(word(&armed), "ran set_tx_enabled", "premise: armed again");
     assert!(!t.turn.held().is_empty(), "premise: the hold was held back");
     t.turn.release();
-    let late = t.keyed_within(Duration::from_millis(400)).await;
+    let late = keyed_once_answered(&t.road, &t.r, 7).await;
     t.present().await;
-    t.road.press(8, 1);
-    let holding = t.reassert(8, 5);
-    let after = t.keyed_within(Duration::from_millis(500)).await;
-    let _ = holding.await;
-    t.road.release(8);
+    let after = a_press_keys_on(&t.road, 8, 1).await;
     t.end().await;
     assert_eq!(
         (late, after),

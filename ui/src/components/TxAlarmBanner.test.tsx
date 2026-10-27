@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 import { CockpitHeader } from './CockpitHeader'
-import { StationControlContext } from '../stationAccess'
 import { css, loadSheets } from '../cssCascade.testkit'
 import { dismissTxAlarm } from '../api'
 import type { AppSnapshot, TxAlarm } from '../types'
@@ -55,11 +54,9 @@ const snapWith = (txAlarms?: TxAlarm[]) =>
     txAlarms,
   }) as unknown as AppSnapshot
 
-const mount = (snap: AppSnapshot, onSnap = vi.fn(), control = true) =>
+const mount = (snap: AppSnapshot, onSnap = vi.fn()) =>
   render(
-    <StationControlContext.Provider value={control}>
-      <CockpitHeader snap={snap} onSnap={onSnap} modeIndicator={<span>USB</span>} bandControl={<span>20m</span>} />
-    </StationControlContext.Provider>,
+    <CockpitHeader snap={snap} onSnap={onSnap} modeIndicator={<span>USB</span>} bandControl={<span>20m</span>} />,
   )
 const banner = () => document.querySelector<HTMLElement>('.ch-txalarm')
 
@@ -103,12 +100,6 @@ describe('the transmitter alarm in the cockpit header', () => {
     expect(dismissTxAlarm).toHaveBeenCalledTimes(1)
     expect(dismissTxAlarm).toHaveBeenCalledWith(7)
     expect(onSnap).toHaveBeenCalledWith(after)
-  })
-
-  it('the Remote shows it without the button: the dismissal is the station’s', () => {
-    mount(snapWith([alarm(7, UNCONFIRMED, AT)]), vi.fn(), false)
-    expect(banner()!.textContent).toContain(UNCONFIRMED)
-    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
   })
 
   it('locks nothing: the dial and the CAT verdict render exactly as without it', () => {

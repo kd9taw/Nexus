@@ -21,12 +21,15 @@
 
 use crate::{conn_log, is_real_call, now_unix, SharedHealth, SharedSpots};
 use serde::Serialize;
+use std::io::Read;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 use tempo_app::settings::Settings;
-use tempo_net::cluster::pool::{self as node_pool, Failure, NodePool, Skip, Software};
-use tempo_net::cluster::Outcome;
+use tempo_net::cluster::pool::{self as node_pool, Failure, Node, NodePool, Skip, Software};
+use tempo_net::cluster::{Action, ClusterSession, Outcome};
 
 /// The settings the node feeds run under, mirrored so a feed thread never needs the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +296,188 @@ fn now_secs() -> u64 {
     u64::try_from(now_unix()).unwrap_or(0)
 }
 
+// ── Proactive greeting re-check ───────────────────────────────────────────────────────
+//
+// `on_outcome` only ever hears from a node a live feed is actually dialling, and in automatic mode
+// that is only the two nodes the pool picked. The other built-in nodes sit idle: a node that
+// silently goes mute (ve7cc.net:23 was measured doing exactly that) keeps whatever standing it
+// last had until it is PROMOTED into the pick and dialled for real, so a failed node is promoted
+// into the pair and leaves a hole until it too is skipped. This closes that gap with a slow
+// background re-check that re-runs the 2026-09-17 curation method — connect, read the greeting,
+// send NOTHING — against one idle node at a time and feeds the result through the SAME
+// [`on_outcome`]/[`NodePool::record`] path, so ranking stays fresh for idle nodes too.
+//
+// It only ever DEMOTES. The probe never logs in (it sends no callsign), so it can prove a node has
+// gone mute but never that a login would hold — it must not fabricate a working session the pool
+// would read as `last_ok`. A node that still greets is therefore left exactly as it was.
+
+/// How long between re-check probes — ONE idle node per tick. Deliberately slow: with ~6 idle
+/// built-in nodes (two of the eight are the live pick) each node is re-checked about every
+/// 90 minutes, far inside both the 24 h skip window and the 7-day recent-OK window the pool ranks
+/// on, and a node that goes mute is confirmed down (three failing probes) and skipped within a few
+/// hours. A healthy probe is one sub-second connection; a mute one costs a single greeting timeout.
+/// Lighter than the live feeds' own reconnects (up to one every 600 s for a node that never
+/// prompts), so re-checking never hammers a node.
+const RECHECK_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// Per-address connect budget — mirrors `tempo_net::cluster`'s own `CONNECT_TIMEOUT`.
+const RECHECK_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// Socket read timeout: wakes the read loop often enough to honour [`RECHECK_GREETING_DEADLINE`].
+const RECHECK_READ_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a node has to send a greeting that reaches a login prompt — mirrors
+/// `tempo_net::cluster`'s own `GREETING_DEADLINE` (every healthy node measured in 2026-09-17 sent
+/// its whole greeting inside the first read; 30 s sits far above that and inside DXSpider's own
+/// 60 s login timeout).
+const RECHECK_GREETING_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The next built-in node the background re-check should probe, or `None` if none is eligible right
+/// now. Eligible = a built-in node that is NOT running a live feed (those are watched by their own
+/// socket, and probing one would be a second connection to a node we already hold) and is NOT
+/// currently skipped (respect the skip window — a skipped node is being left alone, not hammered).
+/// `cursor` rotates the choice so every idle node is revisited in turn rather than always the first.
+fn next_recheck_target(
+    pool: &NodePool,
+    running: impl Fn(&str) -> bool,
+    now: u64,
+    cursor: usize,
+) -> Option<Node> {
+    let eligible: Vec<Node> = node_pool::NODES
+        .iter()
+        .copied()
+        .filter(|n| !running(n.host) && pool.skipped_until(n.host, now).is_none())
+        .collect();
+    (!eligible.is_empty()).then(|| eligible[cursor % eligible.len()])
+}
+
+/// What a greeting-only probe amounts to, given whether the node sent any byte (`heard`) and
+/// whether its greeting reached a login prompt Nexus recognises (`prompt_seen`). The probe sends
+/// nothing, so it can only ever report a FAILURE the pool skips on, never a working session:
+/// - still greeting (a login prompt was reached) → `None`: leave the node's standing untouched;
+/// - sent bytes but never a prompt → [`Outcome::NoPrompt`];
+/// - sent nothing at all before the deadline → [`Outcome::NoGreeting`].
+///
+/// `Unreachable` is reported by the socket path when the connection itself fails; `DroppedAfterLogin`
+/// and `LoggedIn` cannot occur here because the probe never logs in.
+fn greeting_probe_outcome(heard: bool, prompt_seen: bool) -> Option<Outcome> {
+    if prompt_seen {
+        None
+    } else if heard {
+        Some(Outcome::NoPrompt)
+    } else {
+        Some(Outcome::NoGreeting)
+    }
+}
+
+/// Connect to one idle node, read its greeting (or time out), send NOTHING, and say what the
+/// attempt came to — the input to [`on_outcome`]. The live-socket half of the re-check; the byte →
+/// outcome decision is [`greeting_probe_outcome`], the node choice [`next_recheck_target`].
+fn probe_greeting(host: &str) -> Option<Outcome> {
+    let addrs: Vec<SocketAddr> = match host.to_socket_addrs() {
+        Ok(it) => it.collect(),
+        Err(e) => return Some(Outcome::Unreachable(format!("cannot resolve {host}: {e}"))),
+    };
+    // Every resolved address gets a turn (an AAAA with no v6 route must not mask a working A),
+    // each bounded by its own connect timeout — the same reasoning as the live connector.
+    let mut tried: Vec<String> = Vec::with_capacity(addrs.len());
+    let mut stream = None;
+    for sa in &addrs {
+        match TcpStream::connect_timeout(sa, RECHECK_CONNECT_TIMEOUT) {
+            Ok(s) => match s.set_read_timeout(Some(RECHECK_READ_TIMEOUT)) {
+                Ok(()) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(e) => tried.push(format!("{sa}: {e}")),
+            },
+            Err(e) => tried.push(format!("{sa}: {e}")),
+        }
+    }
+    let Some(mut s) = stream else {
+        return Some(Outcome::Unreachable(format!(
+            "cannot reach {host}: {}",
+            tried.join("; ")
+        )));
+    };
+    // An empty callsign: the session is only used to detect the login prompt through the exact
+    // same reader the live path uses; its `Send` action is never written, so nothing is sent.
+    let mut session = ClusterSession::new("");
+    let mut buf = [0u8; 4096];
+    let started = Instant::now();
+    let (mut heard, mut prompt_seen) = (false, false);
+    while started.elapsed() < RECHECK_GREETING_DEADLINE {
+        match s.read(&mut buf) {
+            Ok(0) => break, // closed
+            Ok(n) => {
+                heard = true;
+                let chunk = String::from_utf8_lossy(&buf[..n]);
+                if session
+                    .feed(&chunk)
+                    .iter()
+                    .any(|a| matches!(a, Action::Send(_)))
+                {
+                    // The greeting reached a login prompt — the node is answering. Enough: send
+                    // nothing and close.
+                    prompt_seen = true;
+                    break;
+                }
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue
+            }
+            Err(_) => break,
+        }
+    }
+    greeting_probe_outcome(heard, prompt_seen)
+}
+
+/// Start the background greeting re-check, once per process. Driven from [`reconcile`] (which holds
+/// the shared spot/health handles) the first time the cluster is genuinely active, so it never runs
+/// before settings are published and never spawns in tests (which never call [`reconcile`]).
+fn start_recheck(spots: &SharedSpots, health: &SharedHealth) {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spots = spots.clone();
+    let health = health.clone();
+    std::thread::spawn(move || {
+        let mut cursor = 0usize;
+        loop {
+            std::thread::sleep(RECHECK_INTERVAL);
+            let config = lock(&CONFIG).clone();
+            // Only automatic mode ranks nodes: in a hand-written list every node runs as written,
+            // so there is no idle built-in node whose freshness changes anything.
+            if !config.active || !config.auto || !is_real_call(&config.mycall) {
+                continue;
+            }
+            let now = now_secs();
+            // Lock order FEEDS → HEALTH (CONFIG already released); both dropped before the probe,
+            // which must never hold a lock across a socket, and before `on_outcome` takes them again.
+            let target = {
+                let feeds = lock(&FEEDS);
+                let health_g = lock(&HEALTH);
+                next_recheck_target(&health_g.pool, |h| feeds.is_running(h), now, cursor)
+            };
+            cursor = cursor.wrapping_add(1);
+            let Some(node) = target else { continue };
+            match probe_greeting(node.host) {
+                // The same path a live feed's attempt takes: the offline guard still applies (a
+                // failure with nothing else delivering says nothing about the node), the skip is
+                // recorded and persisted, and a demotion of an idle node changes no live feed.
+                Some(outcome) => on_outcome(&spots, &health, node.host, &outcome),
+                // Still greeting: not a failure, so it breaks any run the skip rule is counting,
+                // and it proves no login, so nothing else about the node changes.
+                None => lock(&HEALTH).pool.greeted(node.host),
+            }
+        }
+    });
+}
+
 /// What should be running: the pool's pick in automatic mode, the operator's list otherwise —
 /// less blanks, RBN endpoints (wired separately) and repeats, and otherwise as written.
 fn desired(config: &NodeConfig, pool: &NodePool, feeds: &Feeds, now: u64) -> Vec<String> {
@@ -343,6 +528,8 @@ pub(crate) fn reconcile(
     if !config.active || !is_real_call(&config.mycall) {
         return Default::default();
     }
+    // The cluster is live: begin the slow background greeting re-check of idle nodes (once).
+    start_recheck(spots, health);
     let want = desired(&config, &lock(&HEALTH).pool, &feeds, now_secs());
     let call = tempo_net::cluster::login_call(&config.mycall, &config.ssid);
     feeds.reconcile(&want, |host| {
@@ -815,6 +1002,101 @@ mod tests {
                 true,
                 Some(Failure::NoGreeting)
             )
+        );
+    }
+
+    /// The background greeting re-check demotes an IDLE node that greeted before but has
+    /// gone mute — by recording the probe's failures through the ordinary pool path, without ever
+    /// logging in — and leaves a node that still greets exactly as it was.
+    #[test]
+    fn the_greeting_recheck_demotes_an_idle_node_that_went_mute() {
+        // 1. The byte → outcome mapping, by value. A probe sends nothing, so a node that still
+        //    reaches a login prompt is NOT recorded (it never proved a login); only silence and a
+        //    promptless greeting are failures.
+        assert_eq!(
+            greeting_probe_outcome(false, false),
+            Some(Outcome::NoGreeting),
+            "connected, not a byte → NoGreeting"
+        );
+        assert_eq!(
+            greeting_probe_outcome(true, false),
+            Some(Outcome::NoPrompt),
+            "spoke but never prompted → NoPrompt"
+        );
+        assert_eq!(
+            greeting_probe_outcome(true, true),
+            None,
+            "still greets with a login prompt → left untouched, never a fabricated login"
+        );
+
+        // 2. Target selection: a running node (live-watched) and a skipped node (inside its window)
+        //    are never probed; the rest are revisited in turn as the cursor rotates.
+        let nodes = node_pool::NODES;
+        let running = nodes[0].host;
+        let skipped = nodes[1].host;
+        let mut pool = NodePool::default();
+        for minute in 0..=5 {
+            pool.record(skipped, &Outcome::NoGreeting, true, T0 + minute * 60);
+        }
+        assert!(
+            pool.skipped_until(skipped, T0 + 300).is_some(),
+            "set up skip"
+        );
+        let is_running = |h: &str| h.eq_ignore_ascii_case(running);
+        let mut seen = std::collections::BTreeSet::new();
+        for cursor in 0..nodes.len() * 2 {
+            let target = next_recheck_target(&pool, is_running, T0 + 300, cursor)
+                .expect("idle nodes remain eligible");
+            assert_ne!(target.host, running, "never re-probe a running node");
+            assert_ne!(
+                target.host, skipped,
+                "never re-probe a node inside its skip window"
+            );
+            seen.insert(target.host);
+        }
+        assert_eq!(
+            seen.len(),
+            nodes.len() - 2,
+            "every idle, unskipped node is revisited as the cursor rotates"
+        );
+
+        // 3. End to end for one idle node. It greeted at the last probe (recorded nothing), then
+        //    goes mute: three re-check rounds, one RECHECK_INTERVAL apart, with another feed
+        //    delivering, map to NoGreeting and are recorded — enough to skip it.
+        let step = RECHECK_INTERVAL.as_secs();
+        let mute = nodes[2].host;
+        let mut pool = NodePool::default();
+        assert!(
+            greeting_probe_outcome(true, true).is_none(),
+            "a prior good greeting records nothing"
+        );
+        assert_eq!(pool.skipped_until(mute, T0), None, "starts clean");
+        for round in 0..3 {
+            if let Some(outcome) = greeting_probe_outcome(false, false) {
+                pool.record(mute, &outcome, true, T0 + round * step);
+            }
+        }
+        assert!(
+            pool.skipped_until(mute, T0 + 3 * step).is_some(),
+            "a node that went mute is skipped by the re-check, with no live dial"
+        );
+
+        // POSITIVE CONTROL: a node that keeps greeting is recorded nothing across the same rounds,
+        // so the re-check never demotes a healthy idle node.
+        let steady = nodes[3].host;
+        for round in 0..3 {
+            if let Some(outcome) = greeting_probe_outcome(true, true) {
+                pool.record(steady, &outcome, true, T0 + round * step);
+            }
+        }
+        assert_eq!(
+            pool.skipped_until(steady, T0 + 3 * step),
+            None,
+            "a still-greeting node is never demoted by the re-check"
+        );
+        assert!(
+            pool.health(steady).is_none(),
+            "and nothing at all is written for it"
         );
     }
 }

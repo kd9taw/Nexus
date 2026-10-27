@@ -50,7 +50,7 @@
 //!    its challenge first, and `greeting_order_does_not_change_the_session` pins it.
 //!    ⚠️ A peer that sends a SID, never challenges, and then waits silently would hang this
 //!    session. No CMS or RMS gateway does that (both challenge); the ARDOP P2P peer that could is
-//!    Batch 11's, and the fix there is one condition in this function.
+//!    later work, and the fix there is one condition in this function.
 //! 2. **What the challenge *is*** ([`pq_challenge`]). `;PQ:` then the token, ASCII-whitespace
 //!    trimmed off both ends. [`super::secure`] warns that any normalisation on the way into the
 //!    digest is a silent wrong answer, so this is the one place that decides, and it decides the

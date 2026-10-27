@@ -101,7 +101,7 @@ pub fn mirror_header(body_len: usize) -> String {
     format!(
         "Nexus logbook — GENERATED. This file is written from the Nexus logbook database.\n\
          Changes made here are replaced the next time Nexus saves; edit the log in Nexus.\n\
-         <ADIF_VER:5>3.1.4\n<PROGRAMID:5>Nexus\n<{MIRROR_FIELD}:{}>{len}\n<EOH>",
+         <ADIF_VER:5>3.1.8\n<PROGRAMID:5>Nexus\n<{MIRROR_FIELD}:{}>{len}\n<EOH>",
         len.len()
     )
 }

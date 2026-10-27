@@ -9,7 +9,7 @@ import { PSK_MODE_BY_SLUG } from '../pskModes'
 
 /** What a contest log line off the cockpits logs under: the station's operating section as the
  *  cockpit there logs it — Phone as PH, CW as CW, RTTY and the keyboard modes as DIG with the mode on
- *  the air, and the digital section as DIG with the tier it runs (`tier`, the snapshot's, which is
+ *  the air (`keyboardMode`, from `useKeyboardMode`: PSK31, QPSK31 or JTTY), and the digital section as DIG with the tier it runs (`tier`, the snapshot's, which is
  *  the engine's own log-mode name, as the Satellites strip reads it). A station too old to say logs
  *  as Phone, the voice logging the large log line exists for.
  *
@@ -22,7 +22,7 @@ import { PSK_MODE_BY_SLUG } from '../pskModes'
  *  claims Phone, and APRS and Satellites claim none, so the station stays on the one it was on. */
 export function contestLogMode(
   section: string | undefined,
-  pskName: string | null,
+  keyboardMode: string | null,
   tier?: string,
 ): { fdMode: 'CW' | 'PH' | 'DIG'; fdSubmode?: string; mode: string; defaultRst: string } {
   switch (section) {
@@ -31,8 +31,10 @@ export function contestLogMode(
     case 'rtty':
       return { fdMode: 'DIG', fdSubmode: 'RTTY', mode: 'RTTY', defaultRst: '599' }
     case 'keyboard': {
-      // The PSK cockpit's own fallback when its state has not arrived: PSK31.
-      const name = pskName ?? PSK_MODE_BY_SLUG.psk31.name
+      // ⚠️ PSK AND JTTY ARE ONE SECTION: the mode on the air is `keyboardMode`, never the section.
+      // Read off the section alone, a JTTY contact was logged as PSK31. The PSK cockpit's own
+      // fallback when nothing has arrived yet: PSK31.
+      const name = keyboardMode || PSK_MODE_BY_SLUG.psk31.name
       return { fdMode: 'DIG', fdSubmode: name, mode: name, defaultRst: '599' }
     }
     case 'digital': {
@@ -48,8 +50,15 @@ export function contestLogMode(
 
 /** The mode the station is on now, named as a contest's `bannedModes` names modes: on the digital
  *  section the FT tier it runs, on every other the mode its contacts log under. */
-export function stationMode(section: string | undefined, tier: string | undefined, pskName: string | null): string {
-  return section === 'digital' ? (tier ?? '') : contestLogMode(section, pskName).mode
+export function stationMode(section: string | undefined, tier: string | undefined, keyboardMode: string | null): string {
+  return section === 'digital' ? (tier ?? '') : contestLogMode(section, keyboardMode).mode
+}
+
+/** The Keyboard section's mode on the air: the snapshot's own (`radio.keyboardMode`: PSK31, QPSK31
+ *  or JTTY), and from a station too old to report it, the PSK cockpit's state as before. */
+export function useKeyboardMode(section: string | undefined, keyboardMode: string | undefined): string | null {
+  const pskName = usePskName(keyboardMode ? undefined : section)
+  return keyboardMode || pskName
 }
 
 /** The keyboard modes' sub-mode, which is the PSK cockpit's state rather than the snapshot's: read

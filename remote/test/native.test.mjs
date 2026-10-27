@@ -33,29 +33,33 @@ async function deviceKey() {
   }
 }
 
-for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`actual cloud ${tier} QSO exchange finishes with durable ${prompt ? 'confirmed' : 'current'} logging`, { timeout: 90000 }, async () => {
+// The old Remote page's FT8/FT4 and held-contact actions are gone from the station. A browser that
+// still holds station control and a lease and sends one
+// anyway, as a stale page could, is answered `stationUnsupported` through the real relay and the real
+// station: nothing keys, nothing is logged, and its lease, its socket and its Stop are untouched.
+test('actual native: the old page\'s FT8/FT4 and held-contact actions are refused, and the lease and Stop stay', { timeout: 60000 }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
   const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
   let socket
   try {
     await probe.ready()
-    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'FT QSO synthetic bench' })
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Old page bench' })
     const stationId = begin.status.pairingId
     await browser.post('pair/claim', { code: begin.status.pairingCode }); await browser.post('pair/confirm', { id: stationId }); await probe.send({ type: 'refresh' })
     assert.equal((await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })).ok, true)
     // The browser's key, shown at the radio and pinned with the approval (A5, S1-M1).
     const key = await deviceKey()
-    const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser', publicKey: key.publicKey })
+    const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'Old page browser', publicKey: key.publicKey })
     browser.setCookie(response.headers.get('set-cookie')); await probe.send({ type: 'refresh' })
     await probe.send({ type: 'device', deviceId: device.deviceId, approve: true, key: key.fingerprint, kind: 'browser' }); await probe.send({ type: 'enable' })
     const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
     for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
     assert.equal((await roomStatus(room)).online, true)
     await probe.send({ type: 'refresh' })
-    for (const type of ['loggingPermission', 'stationPermission', 'transmitPermission']) {
-      const result = await probe.send({ type, deviceId: device.deviceId, allow: true })
-      assert.equal(result.ok, true, `${type}: ${result.error}`)
-    }
+    const result = await probe.send({ type: 'stationPermission', deviceId: device.deviceId, allow: true })
+    assert.equal(result.ok, true, `stationPermission: ${result.error}`)
+    assert.deepEqual(await probe.send({ type: 'seedLogging' }), { count: 0, adif: '', txEnabled: false })
+    assert.equal((await probe.send({ type: 'seedFt', tier: 'FT8' })).txEnabled, false)
     const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
     socket = await browser.open(stationId, ticket.ticket); socket.ackObservations()
     const { sessionId } = await socket.take(v => v.type === 'session')
@@ -65,76 +69,42 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
       socket.send(await key.prove({ type: 'operationRequest', operationVersion: 4, request }, { stationId, deviceId: device.deviceId, sessionId }))
       return { request, response: await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId) }
     }
-    // stationBusy means the request was refused before anything changed, so an operator clicks
-    // again: retry once (each attempt re-reads its state). Any other refusal, or a second
-    // stationBusy, still fails the case.
-    // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim.
-    // TWO unrelated producers send the same string: `operations.rs` when the Engine `try_lock`
-    // fails, and `transport.rs` when another operation is already in flight on this connection —
-    // which never touches the Engine at all. Nothing on the wire tells them apart, so a log
-    // naming this error names neither.
-    const settle = async attempt => {
-      let sent = await attempt()
-      if (sent.response.error === 'stationBusy') {
-        console.log('stationBusy, retrying once:', sent.request.type, sent.request.action?.action ?? '')
-        await delay(300)
-        sent = await attempt()
-      }
-      assert.equal(sent.response.error, undefined, JSON.stringify(sent.response))
-      return { request: sent.request, value: sent.response.value }
+    // stationBusy means the request was refused before anything changed: retry once.
+    const operation = async args => {
+      let sent = await send(args)
+      if (sent.response.error === 'stationBusy') { await delay(300); sent = await send(args) }
+      return sent.response
     }
-    const operation = args => settle(() => send(args))
     const initial = (await operation({ type: 'state' })).value
     const owner = (await operation({ type: 'acquire', stationBootId: initial.stationBootId })).value
-    const action = a => settle(async () => {
+    assert.equal(owner.phase, 'controlling', 'premise: the browser holds the lease')
+    assert.match(owner.transmitEpoch, /^[0-9a-f]{16}$/, 'premise: station control holds the stop token')
+    assert.equal(owner.controls.capabilities.some(c => c.startsWith('ft') || c === 'qsoLogging'), false,
+      `no FT8/FT4 or held-contact capability is offered: ${owner.controls.capabilities}`)
+    const qso = { dxcall: 'W1AW', state: 'idle', txNow: null, cqRunning: false }
+    for (const action of [
+      { action: 'ft.cq', expectedTier: 'FT8', direction: null },
+      { action: 'ft.txEnabled', expectedTier: 'FT8', on: true },
+      { action: 'ft.cq', expectedTier: 'FT8', direction: 'DX' },
+      { action: 'qso.logCurrent', expectedKey: '0123456789abcdef0123456789abcdef', expectedTier: 'FT8', expectedQso: qso },
+      { action: 'qso.discard', expectedKey: '0123456789abcdef' },
+    ]) {
       const state = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
-      assert.equal(state.phase, 'controlling')
-      return send({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
+      assert.equal(state.phase, 'controlling', `${action.action}: the lease is held`)
+      const answer = await operation({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
         expectedRevision: state.revision, commandWindowId: state.commandWindowId, clientSequence: state.nextSequence,
-        context: state.controls.context, action: a.action.startsWith('ft.') ? { ...a, transmitEpoch: state.transmitEpoch } : a })
-    })
-    let count = 0
-    {
-      await probe.send({ type: 'seedFtQso', tier, prompt })
-      const selection = await probe.send({ type: 'ftCallDecode' })
-      const called = await action({ action: 'ft.call', expectedTier: tier, selection })
-      assert.equal(called.value.outcome, 'applied')
-      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 10 })).samples > 0)
-      const report = await probe.send({ type: 'ftQsoStep', slot: 13, message: 'K2DEF W1AW -12' })
-      assert.equal(report.qso.dxcall, 'W1AW')
-      assert.equal(report.qso.rxReport, -12)
-      assert.match(report.qso.txNow, /R[+-][0-9]{2}/)
-      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 14 })).samples > 0)
-      const roger = await probe.send({ type: 'ftQsoStep', slot: 17, message: 'K2DEF W1AW RR73' })
-      assert.match(roger.qso.txNow, /73/)
-      assert.ok((await probe.send({ type: 'ftQsoStep', slot: 18 })).samples > 0)
-      const before = await probe.send({ type: 'ftQsoEvidence' }), q = before.qso
-      const logged = await action({ action: 'qso.logCurrent', expectedKey: before.currentQsoLogKey, expectedTier: tier,
-        expectedQso: { dxcall: q.dxcall, state: q.state, txNow: q.txNow, cqRunning: q.cqRunning } })
-      assert.equal(logged.value.outcome, 'applied', JSON.stringify(logged.value))
-      assert.equal(logged.value.evidence, prompt ? 'pendingConfirmationSynced' : 'fileSynced')
-      let after = await probe.send({ type: 'ftQsoEvidence' })
-      if (prompt) {
-        assert.equal(after.journal, true)
-        assert.equal(after.records.length, count)
-        assert.equal(after.pendingLog.call, 'W1AW')
-        const record = after.pendingLog
-        const confirmed = await action({ action: 'qso.confirm', expectedKey: after.pendingQsoLogKey,
-          edits: { call: record.call, grid: record.grid, rstSent: record.rstSent, rstRcvd: record.rstRcvd } })
-        assert.equal(confirmed.value.outcome, 'applied', JSON.stringify(confirmed.value))
-        assert.equal(confirmed.value.evidence, 'fileSynced')
-        assert.deepEqual((await operation({ type: 'result', operationId: confirmed.request.requestId })).value, confirmed.value)
-        after = await probe.send({ type: 'ftQsoEvidence' })
-      }
-      count++
-      assert.equal(after.records.length, count)
-      assert.equal(after.journal, false)
-      assert.equal(after.pendingLog, null)
-      assert.match(after.adif, /W1AW/)
-      assert.match(after.adif, /-12/)
-      assert.deepEqual((await operation({ type: 'result', operationId: logged.request.requestId })).value, logged.value)
-      assert.equal((await probe.send({ type: 'ftQsoEvidence' })).adif, after.adif)
+        context: state.controls.context, action: action.action.startsWith('ft.') ? { ...action, transmitEpoch: state.transmitEpoch } : action })
+      assert.equal(answer.error, 'stationUnsupported', `${action.action}: ${JSON.stringify(answer)}`)
     }
+    assert.equal((await operation({ type: 'result', operationId: crypto.randomUUID() })).error, 'stationUnsupported')
+    const evidence = await probe.send({ type: 'ftEvidence' })
+    assert.equal(evidence.txEnabled, false, 'nothing armed'); assert.equal(evidence.owned, false)
+    assert.deepEqual(await probe.send({ type: 'loggingEvidence' }), { count: 0, adif: '', txEnabled: false }, 'nothing logged')
+    // CONTROL: the same socket and lease still work, and Stop is still taken.
+    const after = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
+    assert.equal(after.phase, 'controlling', 'the refusals left the lease alone')
+    const stop = await operation({ type: 'stopTransmit', stationBootId: after.stationBootId, leaseId: after.leaseId, transmitEpoch: after.transmitEpoch })
+    assert.deepEqual(stop.value, { stop: 'accepted' }, JSON.stringify(stop))
     assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     socket?.close()
@@ -143,10 +113,9 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
 })
 
 // One approval through workerd (operator decisions 2026-09-13 and 2026-09-14): approving the pairing
-// turns Remote on and grants the browser that confirmed it station control, logging and, when ticked,
-// FT8/FT4 transmit. All three come back after a restart with the TX-enable latch still off, and a
-// later Turn off Remote is remembered.
-test('actual native one approval: pairing turns Remote on, grants the pairing browser, keeps transmit across a restart with TX off', { timeout: 60000 }, async () => {
+// turns Remote on and grants the browser that confirmed it station control. It comes back
+// after a restart with the TX-enable latch still off, and a later Turn off Remote is remembered.
+test('actual native one approval: pairing turns Remote on, grants the pairing browser, keeps its grants across a restart with TX off', { timeout: 60000 }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
   const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
   try {
@@ -157,7 +126,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     const { response } = await browser.post('pair/confirm', { id: stationId })
     browser.setCookie(response.headers.get('set-cookie'))
     await probe.send({ type: 'refresh' })
-    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId, transmit: true })
+    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
     assert.equal(paired.ok, true, paired.error)
     assert.ok(['connecting', 'connected', 'reconnecting'].includes(paired.status.phase), paired.status.phase)
     const { value: device } = await browser.post(`stations/${stationId}/device`, { name: 'Not asked for' })
@@ -165,7 +134,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     const granted = async label => {
       for (let i = 0; i < 100; i++) {
         const { status } = await probe.send({ type: 'status' })
-        if ([status.stationPermissions, status.loggingPermissions, status.transmitPermissions].every(p => p?.includes(device.deviceId))) return status
+        if (status.stationPermissions?.includes(device.deviceId)) return status
         await delay(100)
       }
       assert.fail(`${label}: the pairing browser's grants never appeared`)
@@ -174,7 +143,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     assert.equal((await probe.send({ type: 'ftEvidence' })).txEnabled, false)
     // An approval lasts until removed (operator decision 2026-10-10). One given under the old thirty-day
     // rule is kept on use: the service moves the expiry but never the generation, so the restart below
-    // still restores control, logging and transmit, with the latch off.
+    // still restores control, with the latch off.
     const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
     const deviceRow = () => app.db.prepare('SELECT generation,approved_at,expires_at FROM devices WHERE id=?').bind(device.deviceId).first()
     const approval = await deviceRow()
@@ -200,7 +169,8 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     let status
     for (let i = 0; i < 50 && !status?.stationId; i++) { status = (await probe.send({ type: 'status' })).status; if (!status.stationId) await delay(100) }
     assert.equal(status.phase, 'disabled', 'Turn off Remote is remembered')
-    assert.deepEqual(status.transmitPermissions, [])
+    assert.equal(status.transmitPermissions, undefined, 'no FT8/FT4 transmit permission is kept or shown')
+    assert.equal(status.loggingPermissions, undefined, 'no remote logging permission is kept or shown')
     assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -326,12 +296,10 @@ test('actual native: a computer running Nexus is listed to the station as one, a
     assert.deepEqual(listed.status.devices.filter(d => d.id !== registered.deviceId).map(d => d.kind), ['browser'],
       'control: the pairing\'s browser beside it, as a browser')
     // The shack's press, as its screen sends it: the key shown, and the kind it was shown as.
-    const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, transmit: true, key: fingerprint, kind: 'computer' })
+    const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, key: fingerprint, kind: 'computer' })
     assert.equal(approved.ok, true, approved.error)
     assert.deepEqual(approved.status.pinnedDevices, [registered.deviceId], 'its key is pinned, as a browser\'s is')
-    for (const lane of ['loggingPermissions', 'stationPermissions', 'transmitPermissions']) {
-      assert.equal(approved.status[lane]?.includes(registered.deviceId), false, `nothing on the relay's lanes: ${lane}`)
-    }
+    assert.equal(approved.status.stationPermissions?.includes(registered.deviceId), false, 'nothing on the relay\'s lanes')
     assert.ok(approved.status.stationPermissions?.length, 'control: the pairing\'s browser holds station control')
     assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
@@ -524,7 +492,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 })
 
 
-// v4 gets a bigger clock than the rest, and it is a BUDGET, not a slackened assertion. v1-v3 run
+// v4 gets a bigger clock than the rest, and it is a BUDGET, not a slackened assertion. v2-v3 run
 // 4-6 s; v4 runs the stop-anything section (three local keyings, each behind the relay's 1.1 s Stop
 // window), the preference save, and the whole FT8+FT4 settings/CQ/runtime sweep. MEASURED on an
 // idle box (load 2.55): 61.9 s against the old 60 s — it was failing by 3%. That clock was set when
@@ -541,7 +509,9 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 // it on the live client's own 30 s wall clock, which puts the budget on the GAP between renewals
 // (measured max 30.3 s against 60 s) instead of on the length of the block, so adding operations
 // here no longer walks toward that cliff. The node clock above still bounds the whole run.
-for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} hold the lease, take Stop and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
+// v1 is not run: it carries no station control, and with the remote logging permission gone nothing
+// admits a v1 browser to a lease.
+for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operations v${operationVersion} hold the lease, take Stop and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
@@ -585,21 +555,21 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   // back from its receipt, and as of the fix in `operations.rs` that no longer needs the Engine at all.
   const allowed=async(first,again=first)=>{let sent=await first();if(sent.response.error==='stationBusy'){console.log('stationBusy, retrying once:',sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
 
-  // The approval granted station control and logging; Turn on restores them once the service lists
-  // the browser. Then RESTRICT the browser with the switches at the shack: that is what must still
+  // The approval granted station control; Turn on restores it once the service lists
+  // the browser. Then RESTRICT the browser with the switch at the shack: that is what must still
   // refuse it a lease, exactly as a browser without permission always was.
-  for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId)&&status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
+  for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
   let state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
-  for(const type of ['loggingPermission','stationPermission']){const restricted=await probe.send({type,deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)}
+  const restricted=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)
   state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
-  await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
+  await probe.send({type:'refresh'});const permission=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.stationPermissions,[device.deviceId])
   state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
   const evidence=await probe.send({type:'loggingEvidence'});assert.deepEqual(evidence,{count:0,adif:'',txEnabled:false})
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion===4?['qsoLogging','audioListen']:[])
+   assert.deepEqual(controls.controls.capabilities,operationVersion===4?['audioListen']:[])
    if (operationVersion === 4) {
      // Stop anything (operator decision 2026-09-14): station control alone holds the stop token, and a
      // browser's Stop unkeys a transmission started at the shack. Key locally through the probe (the
@@ -629,14 +599,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      await stopWindow()
      await heartbeat()
      // Stop anything (operator decision 2026-09-14): from v4 the stop token goes to any browser
-     // holding station control, before and without any transmit permission; versions 1-3 carry no
-     // token at all. This line used to assert null unconditionally, which contradicted the same
-     // object's assertion above.
+     // holding station control; versions 1-3 carry no token at all. This line used to assert null
+     // unconditionally, which contradicted the same object's assertion above.
      if (operationVersion >= 4) assert.match(controls.transmitEpoch, /^[0-9a-f]{16}$/)
      else assert.equal(controls.transmitEpoch, null)
-     const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
-     assert.equal(grant.ok,true,grant.error)
-     assert.deepEqual(grant.status.transmitPermissions,[device.deviceId])
      const owner = (await allowed(()=>operation({type:'state'}))).response.value
      assert.match(owner.transmitEpoch,/^[0-9a-f]{16}$/)
      const stop = {type:'stopTransmit',stationBootId:owner.stationBootId,leaseId:owner.leaseId,transmitEpoch:owner.transmitEpoch}
@@ -647,121 +613,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      const after = (await allowed(()=>operation({type:'state'}))).response.value
      assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
      assert.equal(after.phase,'controlling')
-     await stopLocal('ptt','with transmit permission')
      assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-     const command = (state, action) => operation({type:'stationControl',
-       stationBootId:state.stationBootId,leaseId:state.leaseId,expectedRevision:state.revision,
-       commandWindowId:state.commandWindowId,clientSequence:state.nextSequence,
-       context:state.controls.context,action:{...action,transmitEpoch:state.transmitEpoch}})
-     const action = (state, change) => allowed(() => command(state, change), async () => command(await ftState(), change))
-     const ftState = async () => {
-       const {response} = await heartbeat()
-       assert.ok(response.value, `the FT lease heartbeat was refused: ${JSON.stringify(response)}`)
-       return response.value
-     }
-     for (const tier of ['FT8','FT4']) {
-       assert.equal((await probe.send({type:'seedFt',tier})).txEnabled,false)
-       let ft = await ftState()
-       assert.ok(ft.controls.capabilities.includes('ftOperate'))
-       assert.ok(ft.controls.capabilities.includes('ftSettings'))
-       for (const change of [{kind:'txOffset',hz:1800},{kind:'bothOffsets',hz:2200},{kind:'hold',on:true},{kind:'even',even:false},{kind:'auto',auto:true}]) {
-         const before=await probe.send({type:'ftSettingsEvidence'})
-         ft=await ftState()
-         const changed=await action(ft,{action:'ft.setting',expectedTier:tier,expected:before.settings,change})
-         assert.equal(changed.response.value?.outcome,'applied',JSON.stringify(changed.response))
-         assert.equal(changed.response.value?.evidence,change.kind==='auto'?'stationState':'settingsSaved')
-         const after=await probe.send({type:'ftSettingsEvidence'})
-         assert.equal(after.txEnabled,false);assert.equal(after.owned,false)
-         assert.notEqual(after.settings.key,before.settings.key)
-         if(change.kind==='txOffset'||change.kind==='bothOffsets')assert.equal(after.settings.txOffsetHz,change.hz)
-         if(change.kind==='bothOffsets')assert.equal(after.settings.rxOffsetHz,change.hz)
-         if(change.kind==='hold')assert.equal(after.settings.holdTxFreq,true)
-         if(change.kind==='even'){assert.equal(after.settings.txEven,false);assert.equal(after.settings.txCycleAuto,false)}
-         if(change.kind==='auto')assert.equal(after.settings.txCycleAuto,true)
-       }
-       ft=await ftState()
-       const cq = await action(ft,{action:'ft.cq',expectedTier:tier,direction:'DX'})
-       assert.equal(cq.response.value?.outcome,'applied',JSON.stringify(cq.response))
-       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:0})
-       // Live RX and Skip Tx1 use the active FT owner without acquiring a new
-       // transmitter or moving the TX marker. Exercise the actual cloud/host path.
-       for(const change of [{kind:'rxOffset',hz:900},{kind:'skipTx1',on:true},{kind:'skipTx1',on:false}]){
-         const before=await probe.send({type:'ftRuntimeEvidence'})
-         ft=await ftState();assert.equal(ft.txArmed,true)
-         assert.ok(ft.controls.capabilities.includes('ftRuntime'))
-         const changed=await action(ft,{action:'ft.runtime',expectedTier:tier,expected:before.runtime,change})
-         assert.equal(changed.response.value?.outcome,'applied',JSON.stringify(changed.response))
-         assert.equal(changed.response.value?.evidence,change.kind==='rxOffset'?'settingsSaved':'stationState')
-         const after=await probe.send({type:'ftRuntimeEvidence'})
-         assert.equal(after.txEnabled,true);assert.equal(after.owned,true)
-         assert.equal(after.runtime.settings.txOffsetHz,before.runtime.settings.txOffsetHz)
-         assert.notEqual(after.runtime.settings.key,before.runtime.settings.key)
-         if(change.kind==='rxOffset')assert.equal(after.runtime.settings.rxOffsetHz,900)
-         else assert.equal(after.runtime.skipTx1,change.on)
-       }
-       ft = await ftState()
-       assert.equal(ft.txArmed,true)
-       assert.equal((await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:false})).response.value?.outcome,'applied')
-       assert.equal((await probe.send({type:'ftEvidence'})).txEnabled,false)
-       ft = await ftState()
-       const enabled = await action(ft,{action:'ft.txEnabled',expectedTier:tier,on:true})
-       assert.equal(enabled.response.value?.outcome,'applied',JSON.stringify(enabled.response))
-       assert.equal((await probe.send({type:'ftEvidence'})).txEnabled,true)
-       ft = await ftState()
-       const stop = {type:'stopTransmit',stationBootId:ft.stationBootId,leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch}
-       assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
-       // The acknowledgement alone is not evidence of the native engine stopping.
-       for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
-       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:0})
-       // The Stop retired this state's transmit epoch, so the command is stale on purpose. A busy answer is asked
-       // again with the same command, never through `action`, whose retry builds it from a state read afresh.
-       assert.equal((await allowed(()=>command(ft,{action:'ft.cq',expectedTier:tier,direction:null}))).response.error,'staleContext')
-       assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-       const selection = await probe.send({type:'ftCallDecode'})
-       assert.match(selection.message,/CQ W1AW FN31/)
-       ft = await ftState()
-       assert.ok(ft.controls.capabilities.includes('ftCall'))
-       const called = await action(ft,{action:'ft.call',expectedTier:tier,selection})
-       assert.equal(called.response.value?.outcome,'applied',JSON.stringify(called.response))
-       const contact = await probe.send({type:'ftCallEvidence'})
-       assert.equal(contact.qso.dxcall,'W1AW');assert.equal(contact.qso.dxgrid,'FN31')
-       // N0CALL has a nonstandard FT suffix: preserve the native hashed-call form.
-       assert.equal(contact.owned,true);assert.equal(contact.qso.txNow,'<W1AW> N0CALL')
-       for(const change of [{kind:'resend'},{kind:'freeText',text:'TNX 73'},{kind:'monitor'}]){
-         const before=(await probe.send({type:'ftCallEvidence'})).qso
-         ft=await ftState();assert.ok(ft.controls.capabilities.includes('ftExchange'))
-         const expectedQso={dxcall:before.dxcall,state:before.state,txNow:before.txNow,cqRunning:before.cqRunning}
-         const result=await action(ft,{action:'ft.exchange',expectedTier:tier,expectedQso,change})
-         assert.equal(result.response.value?.outcome,'applied',JSON.stringify(result.response))
-         const after=await probe.send({type:'ftCallEvidence'})
-         assert.equal(after.owned,true)
-         if(change.kind==='freeText')assert.equal(after.qso.txNow,'W1AW N0CALL TNX 73')
-         if(change.kind==='monitor'){assert.equal(after.qso.dxcall,null);assert.equal(after.qso.cqRunning,false)}
-         assert.deepEqual(await probe.send({type:'loggingEvidence'}),{...evidence,txEnabled:true})
-       }
-       // N0CALL is nonstandard: native hashed_form drops its grid, and beside a plain
-       // call hashes its OWN call so the report and R-report ride (WSJT-X's t0b).
-       // Preserve those on-air forms in readback.
-       for(const [text,expectedText] of [
-         ['K2ABC N0CALL AA00','<K2ABC> N0CALL'],['K2ABC N0CALL -12','K2ABC <N0CALL> -12'],
-         ['K2ABC N0CALL R-12','K2ABC <N0CALL> R-12'],['K2ABC N0CALL RR73','<K2ABC> N0CALL RR73'],['TNX 73','TNX 73']]){
-         const before=(await probe.send({type:'ftCallEvidence'})).qso
-         ft=await ftState();assert.ok(ft.controls.capabilities.includes('ftMessages'))
-         const expectedQso={dxcall:before.dxcall,state:before.state,txNow:before.txNow,cqRunning:before.cqRunning}
-         const result=await action(ft,{action:'ft.message',expectedTier:tier,expectedQso,call:'K2ABC',grid:'FN42',text})
-         assert.equal(result.response.value?.outcome,'applied',JSON.stringify(result.response))
-         const after=await probe.send({type:'ftCallEvidence'})
-         assert.equal(after.owned,true);assert.equal(after.qso.dxcall,'K2ABC');assert.equal(after.qso.txNow,expectedText)
-         assert.deepEqual(await probe.send({type:'loggingEvidence'}),{...evidence,txEnabled:true})
-       }
-       ft = await ftState()
-       assert.deepEqual((await operation({type:'stopTransmit',stationBootId:ft.stationBootId,
-         leaseId:ft.leaseId,transmitEpoch:ft.transmitEpoch})).response.value,{stop:'accepted'})
-       for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
-       assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-     }
    }
-  }else assert.equal(Object.hasOwn(state,'controls'),false)
+  }
   const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
   // End remote control (operator decision 2026-10-10) drops everyone and holds until Remote is turned on
   // again: the browser's socket is closed by the station going offline, and nothing reaches the log.
@@ -773,25 +627,21 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   leaving(socket)
   // Turned on again, the approved browser has what its approval gave, with no approval again.
   await probe.send({type:'enable'});for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
-  let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
-  assert.ok(restored,'the browser\'s logging did not come back at Turn on')
+  let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.stationPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
+  assert.ok(restored,'the browser\'s station control did not come back at Turn on')
   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
   leaving(socket);socket=null
-  // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
-  // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
-  // back on and gives remote logging, station control (v4) and FT8/FT4 transmit (v4, where it was
-  // granted) back to a browser the actual service still lists at the same approval. No lease survives
-  // the restart, the TX-enable latch is off, and a restored grant arms nothing on a fresh lease.
+  // Remote remembers being on (operator decision 2026-09-13). Restarting the actual native controller
+  // turns Remote back on and gives station control back to a browser the
+  // actual service still lists at the same approval. No lease survives the restart, the TX-enable
+  // latch is off, and a restored grant arms nothing on a fresh lease.
   if(operationVersion===4){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
-   const held=await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
-   assert.deepEqual(held.status.transmitPermissions,[device.deviceId],'positive control: transmit permission was held before the restart')
   }
   await delay(200)
   let restarted=await probe.send({type:'restart'});assert.notEqual(restarted.status.phase,'disabled');assert.ok(restarted.status.observationGeneration)
-  for(let i=0;i<50&&!restarted.status.loggingPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
-  assert.deepEqual(restarted.status.loggingPermissions,[device.deviceId]);assert.equal(restarted.status.loggingController,null)
-  assert.deepEqual(restarted.status.transmitPermissions,operationVersion===4?[device.deviceId]:[],'transmit comes back only where it was granted')
+  for(let i=0;i<50&&!restarted.status.stationPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
+  assert.deepEqual(restarted.status.stationPermissions,[device.deviceId]);assert.equal(restarted.status.controller,null)
   const idle=await probe.send({type:'ftEvidence'});assert.equal(idle.txEnabled,false,'the TX-enable latch is off after the restart');assert.equal(idle.owned,false)
   if(operationVersion===4){
    assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
@@ -802,7 +652,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const fresh=(await allowed(()=>operation({type:'state'}))).response.value
    const leased=(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId}))).response.value;assert.equal(leased.phase,'controlling')
    const beat=(await allowed(()=>operation({type:'heartbeat',leaseId:leased.leaseId}))).response.value
-   assert.ok(beat.controls.capabilities.includes('ftOperate'),'positive control: the restored transmit grant is real')
+   assert.deepEqual(beat.controls.capabilities,['audioListen'],'the restored grant is station control, and offers no FT8/FT4')
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
   }

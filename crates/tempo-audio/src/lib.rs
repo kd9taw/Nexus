@@ -84,6 +84,10 @@ pub mod icomlan;
 /// A JS8 frame keyed as JS8Call keys one: its TX delay before its period, its wave on the slot
 /// clock, nothing once its last tone has gone.
 mod js8_slot;
+/// JTTY RX decode thread (armed-decoder-on-the-RX-path, the `pskrx` pattern) over the engine's
+/// `jtty_rx` driver. RX ONLY — no TX path.
+#[cfg(feature = "device")]
+pub mod jttyrx;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.
@@ -111,6 +115,10 @@ pub mod rttyrx;
 pub mod runtime;
 pub mod rxdsp;
 pub mod rxtap;
+/// An SDRplay receiver in the RF scope through SDRplay's SDRconnect, over its WebSocket API.
+/// Receive only. Needs tempo-net, so it rides the `device` feature like the TCI client.
+#[cfg(feature = "device")]
+pub mod sdrconnect;
 pub mod serial_keyer;
 pub mod slot;
 /// SSTV image/gallery persistence helpers (BMP writer, preview downscale,

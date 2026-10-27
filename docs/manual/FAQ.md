@@ -87,7 +87,7 @@ No. The engine starts passive on every launch regardless of saved settings. For 
 
 ### I am a non-US operator. Does the license lockout block me?
 
-The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments, including the 2026 60 m subband). Non-US operators should leave the class set to Open or select Open in Settings → Station. No other national band plans are currently modelled in the privilege engine.
+The default license class is **Open** (no lockout), so Nexus does not restrict transmit on a fresh install. The lockout enforces US FCC Part 97 Region 2 sub-band rules only (Technician / General / Amateur Extra segments and the grandfathered Novice and Advanced ones, including the 2026 60 m subband; transmitter power limits are not checked). Non-US operators should leave the class set to Open or select Open in Settings → Station. No other national band plans are currently modelled in the privilege engine.
 
 ---
 
@@ -121,7 +121,7 @@ The desktop shell is packaged for **Windows, macOS (Apple Silicon), Linux and Ra
 
 ### Where is my log file?
 
-Nexus stores the logbook as an **ADIF v3.1.4** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi`). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
+Nexus stores the logbook as an **ADIF v3.1.8** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi`). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
 
 QSO recordings (if started in the Phone cockpit) are written to timestamped WAV files in a `recordings/` subdirectory alongside the settings file. The WAV header is checkpointed approximately every second so an abnormal exit leaves a readable file; recording auto-stops after 2 hours to prevent unbounded disk fill.
 

@@ -1,9 +1,9 @@
-//! What differs between TCI servers, as data: one [`Dialect`] per server the plan targets.
+//! What differs between TCI servers, as data: one [`Dialect`] per server Nexus targets.
 //!
 //! Every field is a behaviour a client can observe on the wire. The profiles are built from the
-//! evidence the plan cites (§2.5) and say where that evidence stops; a field marked UNVERIFIED is
-//! the profile's choice until a tester's recording (`tcirecord`) or a bench settles it, and its
-//! number in the plan's list (§2.6) is given. A test that depends on one such choice should set the
+//! evidence below and say where that evidence stops; a field marked UNVERIFIED is
+//! the profile's choice until a tester's recording (`tcirecord`) or a bench settles it.
+//! A test that depends on one such choice should set the
 //! field itself rather than rely on the profile.
 //!
 //! | Profile | Evidence |
@@ -274,14 +274,14 @@ pub struct Dialect {
     /// The server ignores the client's interval and uses its own (piHPSDR: once a second).
     pub fixed_sensor_interval: bool,
     /// From an accepted `trx:<n>,true` to the `trx:<n>,true;` echo (AetherSDR: once the radio
-    /// transmits). UNVERIFIED for ExpertSDR3 and Thetis (U11).
+    /// transmits). UNVERIFIED for ExpertSDR3 and Thetis.
     pub trx_echo_delay: Duration,
-    /// From the echo to the first TX_CHRONO. UNVERIFIED for ExpertSDR3 and Thetis (U3).
+    /// From the echo to the first TX_CHRONO. UNVERIFIED for ExpertSDR3 and Thetis.
     pub first_chrono: Duration,
     pub chrono_length: ChronoLength,
     pub ownership: Ownership,
-    /// A client whose TCP connection dies while it keys is unkeyed. UNVERIFIED for ExpertSDR3 (U1)
-    /// and Thetis (U2), whose profiles take the worse answer.
+    /// A client whose TCP connection dies while it keys is unkeyed. UNVERIFIED for ExpertSDR3
+    /// and Thetis, whose profiles take the worse answer.
     pub unkey_on_drop: bool,
     /// A client that closes its WebSocket cleanly while it keys is unkeyed.
     pub unkey_on_close: bool,
@@ -314,8 +314,8 @@ pub struct Dialect {
 
 impl Dialect {
     /// ExpertSDR3 speaking TCI 2.0, from the spec. Where the spec says nothing the profile takes
-    /// the answer that is harder on a client: no unkey on a lost client (U1), echo and first
-    /// chrono at once (U3, U11).
+    /// the answer that is harder on a client: no unkey on a lost client, echo and first
+    /// chrono at once.
     pub fn expert_sdr3() -> Dialect {
         Dialect {
             name: "ExpertSDR3 (TCI 2.0)".into(),
@@ -506,8 +506,8 @@ impl Dialect {
 
     /// An ExpertSDR2-era server speaking TCI 1.x, as WSJT-X 3.0.2's client treats any server that
     /// does not announce ExpertSDR3 or Thetis: `drive:<v>;` with no transceiver, the receive
-    /// level polled with `rx_smeter`, no source argument on `trx`. The identity is UNVERIFIED
-    /// (U13): `esdr,1.2` is the example in a comment of WSJT-X's client.
+    /// level polled with `rx_smeter`, no source argument on `trx`. The identity is UNVERIFIED:
+    /// `esdr,1.2` is the example in a comment of WSJT-X's client.
     pub fn expert_sdr2() -> Dialect {
         Dialect {
             name: "ExpertSDR2 (TCI 1.x)".into(),

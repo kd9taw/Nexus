@@ -30,6 +30,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   getContests: vi.fn(async () => []),
   // NOAA's daily indices, which the dashboard bar asks for itself (Frame + bar draws it).
   getSolarIndices: vi.fn(async () => ({ days: [] })),
@@ -916,7 +917,7 @@ describe('a UTC clock on Connect, in every layout', () => {
 
 })
 
-// FRAME + BAR — THE DEFAULT (the operator's batch 60, 2026-10-01: "A: Frame + bar"). Every surface opens in
+// FRAME + BAR — THE DEFAULT (the operator's pick, 2026-10-01: "A: Frame + bar"). Every surface opens in
 // it once (step 5; ConnectView.switch.test.tsx holds that switch); these tests start past it, on Standard,
 // where an operator who has gone back to Standard is, so a tap is what applies it. Its bar is the dashboard window's clock
 // and indices, call and grid included (the operator's Q2: "Yes, the full bar"), across the top of the
@@ -1069,7 +1070,7 @@ describe('Frame + bar — the default view to try', () => {
 
 })
 
-// STANDARD IS A CHOICE (the operator's batch 63). It used to only read back, so the way from a layout
+// STANDARD IS A CHOICE (the operator's pick). It used to only read back, so the way from a layout
 // being tried back to Standard was Undo or Reset layout. Now it is the picker's first choice, behind
 // both doors, and a tap applies it the way any layout applies: one undoable step, so trying Frame + bar
 // and going back is one tap each way. It is not a Reset: like every layout it keeps the panes' own text

@@ -49,6 +49,7 @@ export function BoxBody({ pane, source, selection }: { pane: PaneId; source: Box
     otaBoard: source.otaBoard,
     neededBoard,
     fieldDay: source.fieldDay,
+    activation: source.activation,
     entryCall: source.entryCall,
   })
   return <PaneBody pane={pane} ctx={ctx} />

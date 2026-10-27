@@ -42,7 +42,8 @@ export function logColRange(contentW: number, fontPx: number): { min: number; ma
 }
 
 // ── THE LEFT SIDE (operator's pick, 2026-10-03; Phone) ─────────────────────────────────────────────
-// A full-height column beside the scope that ⊞ Panels ▸ Arrange fills (features/panelPlace). Its width
+// A column beside the pane region, under the scope and the TX strip (2026-10-26), that ⊞ Panels ▸ Arrange
+// fills (features/panelPlace). Its width
 // is the operator's (the record's `cols.leftSide`, CSS px, written on the side as `--cockpit-left-w`),
 // and the SHEET clamps it — `clamp(<floor>em, the width, <share>)` of the row (cockpit-panes.css
 // `.cockpit-left`) — so a width stored on a wide window is clamped by the layout itself on load, on

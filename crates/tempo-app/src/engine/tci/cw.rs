@@ -1,4 +1,4 @@
-//! A program's CW on Nexus's TCI server (the TCI server design §3.5): a logger's CW text,
+//! A program's CW on Nexus's TCI server: a logger's CW text,
 //! `cw_macros:0,<text>;` or `cw_msg:0,<prefix>,<call>,<suffix>;`, keyed by Nexus's own CW keyer,
 //! behind every gate in front of Nexus's own transmissions, in the CW section only.
 //!
@@ -24,8 +24,7 @@
 //!   repair before every word (`poll_cw_word`). Each queued message names its program, so a
 //!   program's stops end its own CW and nobody else's.
 //!
-//! ## How it ends (design §3.4: "A program's CW ends on `cw_macros_stop;` from anyone and on every
-//! stop")
+//! ## How it ends: on `cw_macros_stop;` from anyone, and on every stop
 //!
 //! - Stop TX, Esc, TX Off and every `halt_tx`: the CW stop they already make for all CW (the queue
 //!   dropped, the word on the air cut mid-word by the radio loop), and the stop holds programs off
@@ -44,8 +43,8 @@ use std::time::Duration;
 use tempo_net::tci::server::{Cw, CwSpeed};
 use tempo_net::tci::wire::Text;
 
-/// The most characters one program command keys (design §3.5: "at most 256 characters a
-/// command"), its marks and a `cw_msg`'s repeated call counted.
+/// The most characters one program command keys, its marks and a `cw_msg`'s repeated call
+/// counted.
 const CW_TEXT_MAX: usize = 256;
 /// The most of programs' CW that may wait in the queue at once, in characters: four whole
 /// commands. TCI queues a macro behind the one being sent; a program that keeps sending is refused
@@ -127,8 +126,8 @@ impl Engine {
         Ok(())
     }
 
-    /// `cw_macros_stop` from any program: CW stops, from any origin, Nexus's own included (design
-    /// §3.5), as the CW keyer's own stop stops it: what is queued is dropped and the word on the
+    /// `cw_macros_stop` from any program: CW stops, from any origin, Nexus's own included,
+    /// as the CW keyer's own stop stops it: what is queued is dropped and the word on the
     /// air is cut mid-word. Never gated, and nothing but CW: with anything else on the air it does
     /// nothing, because the CW stop also cuts a slot over in flight. No hold: it is not the
     /// operator's Stop.
@@ -223,7 +222,7 @@ impl Engine {
 
     // ── Ending ───────────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ THE CW THAT `whose` NAMES ENDS, HARD, NOW (design §3.4): its words still queued are
+    /// ⛔ THE CW THAT `whose` NAMES ENDS, HARD, NOW: its words still queued are
     /// dropped, and its word the keyer is sending, or may be, is cut mid-word (the radio loop stops
     /// every keyer on its next tick: the radio's own, a WinKeyer, the keyline, the soundcard tone).
     /// Anyone else's CW queued behind it keys as it would have. With none of its CW queued or on
@@ -452,7 +451,7 @@ mod tests {
     // ── The verdict ──────────────────────────────────────────────────────────────────────────
 
     /// ⛔ A PROGRAM'S CW IS REFUSED UNLESS "PROGRAMS ON TCI MAY TRANSMIT", THE CW SECTION AND EVERY
-    /// TX GATE ALLOW IT (design §3.2, §3.5), one row a gate, each breaking only its own from a
+    /// TX GATE ALLOW IT, one row a gate, each breaking only its own from a
     /// station that admits it, for a macro and a message alike, by value; a refused command queues
     /// nothing. CONTROLS: both are admitted in the CW section, their words queued as P1's.
     #[test]
@@ -599,7 +598,7 @@ mod tests {
 
     // ── The text ─────────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ THE TEXT FILTER REFUSES WHAT THE KEYER CANNOT SEND, WHOLE (design §3.5), by value: a
+    /// ⛔ THE TEXT FILTER REFUSES WHAT THE KEYER CANNOT SEND, WHOLE, by value: a
     /// character with no Morse in Nexus's keyers, a `;` (inside the radio keyer's own `KY …;` it is
     /// a second CAT command: Hamlib 4.5.5 sent `KY TEST;` then `FA00007000000 ;` to a TS-2000 for
     /// `b TEST;FA00007000000`), an unpaired prosign bar, a bad repeat, over 256 characters; and a
@@ -755,7 +754,7 @@ mod tests {
 
     // ── Every stop ───────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ STOP IN NEXUS ENDS A PROGRAM'S CW MID-WORD AND HOLDS (design §3.1 item 3): with P1's macro
+    /// ⛔ STOP IN NEXUS ENDS A PROGRAM'S CW MID-WORD AND HOLDS: with P1's macro
     /// on the air (its first word handed to the keyer and keying), Stop TX, Esc (the CW cockpit's:
     /// the CW stop and Stop TX), TX Off, "Programs on TCI may transmit" switched off and the CW
     /// tier switched off each arm the radio loop's CW cut (the keyer stopped mid-word on its next
@@ -823,7 +822,7 @@ mod tests {
         }
     }
 
-    /// ⛔ `cw_macros_stop` FROM ANY PROGRAM ENDS CW MID-WORD, FROM ANY ORIGIN (design §3.5): P1's
+    /// ⛔ `cw_macros_stop` FROM ANY PROGRAM ENDS CW MID-WORD, FROM ANY ORIGIN: P1's
     /// macro on the air is stopped by P2's, and the operator's own message by P1's: the cut armed,
     /// nothing left to key, nothing owned. It is not the operator's Stop, so P1 may send again.
     /// CONTROL: with no CW on the air it cuts nothing, the slot over's cut included.
@@ -857,8 +856,8 @@ mod tests {
         );
     }
 
-    /// ⛔ A PROGRAM'S LOST CONNECTION AND ITS `stop;` END ITS CW, AND NO ONE ELSE'S (design §3.1
-    /// item 4, §3.5): mid-word, the cut armed and nothing left; queued and not yet started, dropped
+    /// ⛔ A PROGRAM'S LOST CONNECTION AND ITS `stop;` END ITS CW, AND NO ONE ELSE'S:
+    /// mid-word, the cut armed and nothing left; queued and not yet started, dropped
     /// with nothing to cut; its last word handed to the keyer and not yet reported keying by the
     /// radio loop (the arbiter cannot see it yet), cut too, with no slot cut. CONTROLS: another
     /// program's loss or `stop;` ends nothing of P1's.

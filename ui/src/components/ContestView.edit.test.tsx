@@ -140,7 +140,7 @@ describe('Edit opens a contact in place', () => {
       rows: [[['RST', '599'], ['QTH', 'DUPG']]],
       band: '20m',
       mode: '',
-    })
+    }, [LOG[0]])
     expect(editor()).toBeNull()
     expect(note()).toBe('Edited K9AAA: now K9AAB · 20m CW · 17:00 · 599 DUPG.')
   })
@@ -165,9 +165,9 @@ describe('Edit opens a contact in place', () => {
       ],
       band: '20m',
       mode: '',
-    })
+    }, line.slice(0, 2))
     expect(note(), 'a refusal is said').toBe(
-      'That contact changed in the contest log since it was shown, so nothing was edited.',
+      'That contact changed in the contest log since its edit opened, so nothing was edited. To edit it as it is now, open it again.',
     )
   })
 
@@ -195,7 +195,7 @@ describe('Edit opens a contact in place', () => {
       rows: [[['RST', '599'], ['QTH', 'LAKE']]],
       band: '40m',
       mode: 'USB',
-    })
+    }, [LOG[1]])
   })
 
   it('closes when its contact leaves the log meanwhile', async () => {
@@ -263,7 +263,7 @@ describe('Edit opens a contact in place', () => {
         rows: [[['RST', '599'], ['QTH', 'GERMANY']]],
         band: '20m',
         mode: '',
-      })
+      }, [LOG[0]])
     } finally {
       api.resolveEntity.mockImplementation(async () => null)
     }

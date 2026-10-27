@@ -478,6 +478,43 @@ fn a_six_character_grid_is_cut_to_four_and_a_non_grid_is_refused() {
 // The two registries, and the three weekends
 // ---------------------------------------------------------------------------
 
+/// ⭐ **LOCATION is the entrant's ARRL section, in all three runnings.** ARRL's log upload
+/// (<https://contest-log-submission.arrl.org/>, read 2026-10-26) asks *"Location During Contest:
+/// Select ARRL/RAC sections or DX Outside US/Canada"*, and the Cabrillo header specification
+/// (<https://wwrof.org/cabrillo/cabrillo-v3-header/>, read 2026-10-26): *"For USA and Canada
+/// stations LOCATION must be the ARRL section abbreviation. … This information is required for
+/// IARU-HF and for all ARRL and CQ contests."* The rules' awards are by section too (§7.1.1
+/// *"Top Single Operator entrant in each ARRL/RAC Section"*). The control: a blank section still
+/// writes the state, as before, so an entrant who never set one loses nothing.
+#[test]
+fn location_is_the_arrl_section_in_every_running() {
+    for event in ["arrlvhf_jan", "arrlvhf_jun", "arrlvhf_sep"] {
+        let mut st = station("EN52");
+        st.fd_section = "WWA".to_string();
+        let s = select(event, &st);
+        let start = ruleset_by_id(event, CURRENT_RULES_YEAR)
+            .expect("shipped")
+            .event_window(2026)
+            .start_unix;
+        let mut log = FieldDayLog::new("W9XYZ", s, "6m");
+        assert!(work(&mut log, "6m", "K2DEF", "FN31", "CW", start + 60));
+        let cab = log.cabrillo(50_125).expect("one entry");
+        assert!(cab.lines().any(|l| l == "LOCATION: WWA"), "{event}: {cab}");
+        assert!(
+            cab.contains("QSO: 50 CW "),
+            "{event}: the QSO line is unchanged: {cab}"
+        );
+
+        let mut log = FieldDayLog::new("W9XYZ", select(event, &station("EN52")), "6m");
+        assert!(work(&mut log, "6m", "K2DEF", "FN31", "CW", start + 60));
+        let cab = log.cabrillo(50_125).expect("one entry");
+        assert!(
+            cab.lines().any(|l| l == "LOCATION: WI"),
+            "{event}, no section set: {cab}"
+        );
+    }
+}
+
 /// ⭐ **Three runnings, three ADIF ids, three Cabrillo tokens, three weekends.**
 ///
 /// ADIF 3.1.7's `Contest_ID` enumeration (<https://adif.org/317/ADIF_317.htm>, page

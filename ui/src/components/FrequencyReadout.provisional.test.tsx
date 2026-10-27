@@ -10,8 +10,8 @@
 // below are mostly about what the provisional value does NOT do.
 //
 // The other half is honesty: while the station has not read it back the number must never look
-// like the radio's. Dimmed, trailed by an ellipsis, `aria-busy` for a reader who sees neither —
-// and `WheelTuning` reverts it, and says so, if the confirmation never comes (optimistic-dial.test).
+// like the radio's. Dimmed, trailed by an ellipsis, `aria-busy` for a reader who sees neither.
+// optimistic-dial.test keeps it out of every `dialMhz` in the tree.
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'

@@ -5,11 +5,11 @@
 //! # The transmit rule
 //!
 //! Every call that can put the transmitter on the air is a verdict: [`TciBackend::key`],
-//! [`TciBackend::tune_on`] and [`TciBackend::cw`] run the station's gates (design §3.2, every
+//! [`TciBackend::tune_on`] and [`TciBackend::cw`] run the station's gates (every
 //! Nexus gate first, then TCI's own) and answer `Ok` or the first [`Refusal`]. The server never
 //! decides that a program may transmit; it only refuses more (a receiver other than 0, a source it
-//! does not know, the forms §3.5 refuses outright). A program's refused key is answered on the wire
-//! as the spec answers any key that did not take, `trx:0,false;`.
+//! does not know, the forms its command table refuses outright). A program's refused key is
+//! answered on the wire as the spec answers any key that did not take, `trx:0,false;`.
 //!
 //! Every call that ends a transmission is required, with no default, so an implementation cannot
 //! leave one out: [`TciBackend::release`], [`TciBackend::tune_off`], [`TciBackend::end_own`],
@@ -30,9 +30,10 @@
 //!
 //! A program's [`TciBackend::disconnected`] waits for that program's calls in flight that can
 //! transmit ([`TciBackend::key`], [`TciBackend::tune_on`], [`TciBackend::cw`],
-//! [`TciBackend::tx_audio`]), and for a [`TciBackend::spot`] in flight, and none of them is made
-//! for it afterwards: what such a call admitted just before the end is ended by it, nothing the
-//! program sends transmits after it, and no spot of its outlives it. So the
+//! [`TciBackend::tx_audio`]), and for a [`TciBackend::spot`] or [`TciBackend::set_mode`] in flight,
+//! and none of them is made for it afterwards: what such a call admitted just before the end is
+//! ended by it, nothing the program sends transmits after it, and no spot or mode ask of its
+//! outlives it. So the
 //! app must never call [`Handle::disconnect`](super::Handle::disconnect) or
 //! [`Server::stop`](super::Server::stop) while holding the lock its backend takes, nor from inside
 //! a backend call.
@@ -67,12 +68,11 @@ impl fmt::Display for ClientId {
 /// Where a program's key takes its audio (`trx:0,true[,<source>];`, §4.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyKind {
-    /// `trx:0,true,tci;`: an over carrying the program's own TCI audio (design §3.3). Admitted only
-    /// while that program's audio stream is started (§3.2 item 9); it never falls back to the
-    /// microphone.
+    /// `trx:0,true,tci;`: an over carrying the program's own TCI audio. Admitted only
+    /// while that program's audio stream is started (the verdict's item 9); it never falls back
+    /// to the microphone.
     Tci,
-    /// The radio's microphone: `trx:0,true;` with no source, or a microphone source. Phone only
-    /// (§3.1 item 7).
+    /// The radio's microphone: `trx:0,true;` with no source, or a microphone source. Phone only.
     Mic(Mic),
 }
 
@@ -88,12 +88,12 @@ pub enum Mic {
     Ecoder2,
 }
 
-/// Why the backend refused a program's command: the first gate that failed (design §3.2), or the
-/// rule of §2.4 that applies. The server names it in the connection log; on the wire a refusal
-/// looks like the command's own answer (`trx:0,false;`, the value in force).
+/// Why the backend refused a program's command: the first gate that failed, in the verdict's
+/// order, or the dial or mode rule that applies. The server names it in the connection log; on the
+/// wire a refusal looks like the command's own answer (`trx:0,false;`, the value in force).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Refusal {
-    /// "Programs on TCI may transmit" is off (§3.2 item 2).
+    /// "Programs on TCI may transmit" is off (item 2).
     Switch,
     /// Transmit is not enabled in Nexus (item 3).
     Disarmed,
@@ -108,12 +108,19 @@ pub enum Refusal {
     /// A `tci` key while the radio takes its transmit audio from its own microphone (item 4): the
     /// program's audio would not reach the air, and the microphone would carry the over.
     RadioMic,
-    /// Outside the licence: for an audio over, the whole transmit passband (item 5, §3.6).
+    /// Outside the licence: for an audio over, the whole transmit passband (item 5).
     Licence,
+    /// A key where the licence allows only CW and single-sideband voice (a Novice or a
+    /// Technician from 28.3 to 28.5 MHz), whatever the radio's mode (item 5): a program's audio
+    /// may be a picture or data, which Nexus cannot tell from voice.
+    VoiceOnly,
     /// Something else owns the transmitter (item 6).
     Owner,
     /// The clock repair holds transmit (item 7).
     ClockRepair,
+    /// A device signed in moments ago holds transmit until it is approved at the station (item 7,
+    /// the 2026-10-23 sign-in decision).
+    OnHold,
     /// Not a section this command may use (item 8).
     Section,
     /// A `tci` key in the Digital section (item 8): FT8, FT4 and the other slot-timed modes go out
@@ -129,24 +136,24 @@ pub enum Refusal {
     VoiceMode,
     /// A `tci` key with no audio stream started (item 9).
     AudioStream,
-    /// CW text Nexus will not key (§3.5 `cw_macros`): a character its keyer cannot send, a `;`,
+    /// CW text Nexus will not key (`cw_macros`): a character its keyer cannot send, a `;`,
     /// over 256 characters, or more than Nexus queues for programs at once. Refused whole.
     CwText,
-    /// A dial or mode change while anything is on the air (§2.4).
+    /// A dial or mode change while anything is on the air.
     OnAir,
-    /// Within 200 ms of the operator's own change (§2.4).
+    /// Within 200 ms of the operator's own change.
     OperatorChange,
-    /// Outside the radio's range (§2.4).
+    /// Outside the radio's range.
     Limits,
-    /// Power raised: a program may lower it, never raise it (§2.4).
+    /// Power raised: a program may lower it, never raise it.
     Raise,
-    /// A mode outside the section's family (§2.4).
+    /// A mode outside the section's family.
     Family,
     /// The tier is off or not offered (CW, spots).
     Tier,
     /// A spot whose callsign is not one: 1 to 16 letters, digits and `/`, shaped like a callsign.
     SpotCall,
-    /// No receive source for programs' audio (§3.5 `audio_start`).
+    /// No receive source for programs' audio (`audio_start`).
     NoSource,
 }
 
@@ -162,8 +169,13 @@ impl Refusal {
             Refusal::Connection => "this radio's connection cannot transmit",
             Refusal::RadioMic => "the radio takes its transmit audio from its own microphone",
             Refusal::Licence => "outside the licence",
+            Refusal::VoiceOnly => {
+                "on 28.3–28.5 MHz a Novice or Technician license allows only CW and \
+                 single-sideband voice, so Nexus does not let other programs key the radio there"
+            }
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",
+            Refusal::OnHold => "a device just signed in and holds transmit",
             Refusal::Section => "not in this section",
             Refusal::SlotTimed => {
                 "FT8, FT4 and other slot-timed modes may not transmit through TCI yet, and a \
@@ -171,7 +183,9 @@ impl Refusal {
             }
             Refusal::VoiceMode => {
                 "a program may transmit its own audio only after it asks for a voice mode (USB, \
-                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8"
+                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8; some \
+                 programs, WSJT-X and JTDX among them, ask for their mode only when it differs \
+                 from Nexus's"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {
@@ -212,7 +226,7 @@ impl AudioFormat {
 
 impl Default for AudioFormat {
     /// 48 kHz float32 stereo, 2048 values a frame: the spec's defaults (§4.3), and what the init
-    /// burst tells a program (§5).
+    /// burst tells a program.
     fn default() -> Self {
         AudioFormat {
             rate: AudioRate::new(48_000).unwrap_or_else(|| unreachable!("48 kHz is a TCI rate")),
@@ -249,7 +263,7 @@ pub enum CwSpeed {
 }
 
 /// A spot from a program (`spot:<call>,<mode>,<hz>,<argb>,<text>;`, §4.3), as the codec read it.
-/// The store's own rules (design §3.7) are the backend's.
+/// The store's own rules are the backend's.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spot {
     pub call: Call,
@@ -262,11 +276,11 @@ pub struct Spot {
 /// Why a connection was refused before it became a program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandshakeRefusal {
-    /// It carried an `Origin` header: a web page (design §4.2). The origin, cut to printable ASCII
+    /// It carried an `Origin` header: a web page. The origin, cut to printable ASCII
     /// and 100 characters.
     Origin(String),
     /// Its `Host` header was missing, repeated or not this computer's loopback name and port: DNS
-    /// rebinding (design §4.2). What it said, cut the same way.
+    /// rebinding. What it said, cut the same way.
     Host(String),
     /// Not WebSocket version 13 (answered 426).
     Version,
@@ -291,9 +305,9 @@ pub enum Closed {
     Program,
     /// The connection failed.
     Lost,
-    /// No answer to the server's pings in time (design §3.4).
+    /// No answer to the server's pings in time.
     Silent,
-    /// Over the command rate for too long (design §4.4).
+    /// Over the command rate for too long.
     Flood,
     /// A message over the size cap (closed 1009).
     TooBig,
@@ -301,7 +315,7 @@ pub enum Closed {
     Garbage,
     /// A WebSocket protocol error.
     Protocol,
-    /// It stopped reading what the server sent (design §4.4, the outbox).
+    /// It stopped reading what the server sent (the outbox).
     Backlog,
     /// The server stopped.
     Stopped,
@@ -309,7 +323,7 @@ pub enum Closed {
     Disconnected,
 }
 
-/// A command the server refuses outright (design §3.5), named in the connection log once per
+/// A command the server refuses outright, named in the connection log once per
 /// program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Refused {
@@ -414,7 +428,7 @@ pub enum Event {
     },
     /// A program's key, Tune, CW or change was refused by the backend's gate.
     Refusal { client: ClientId, refusal: Refusal },
-    /// A program's command was refused by the server (§3.5).
+    /// A program's command was refused by the server.
     CommandRefused { client: ClientId, what: Refused },
 }
 
@@ -424,11 +438,11 @@ pub trait TciBackend: Send + Sync {
     fn connected(&self, _client: ClientId, _peer: SocketAddr) {}
 
     /// The program is gone: it closed, the connection failed or went silent, or the server or the
-    /// operator ended it. Anything it keyed, tuned or sent as CW ends hard now (design §3.4, a lost
+    /// operator ended it. Anything it keyed, tuned or sent as CW ends hard now (a lost
     /// socket unkeys within one radio-loop tick). Called once a program, before its slot is freed,
-    /// after its transmit calls and its spot in flight have returned, and never followed by another
-    /// of them. No lock of the server's is held but that program's transmit gate, which only its
-    /// transmit calls and its spots take.
+    /// after its transmit calls, its spot and its mode ask in flight have returned, and never
+    /// followed by another of them. No lock of the server's is held but that program's transmit
+    /// gate, which only its transmit calls, its spots and its mode asks take.
     fn disconnected(&self, client: ClientId);
 
     /// A line for the connection log.
@@ -436,29 +450,31 @@ pub trait TciBackend: Send + Sync {
 
     /// `vfo:0,0,<hz>;`: retune. `Ok` with the dial now in force; the server has already refused a
     /// frequency outside the snapshot's `vfo_limits`. Refuse on air, within 200 ms of the
-    /// operator's own change, and as the CAT broker's dial rule does (design §2.4).
+    /// operator's own change, and as the CAT broker's dial rule does.
     fn set_dial(&self, client: ClientId, hz: Hz) -> Result<Hz, Refusal>;
 
     /// `modulation:0,<mode>;`, a word from [`super::MODULATIONS`]: `Ok` with the mode now in force.
-    /// Only the side inside the section's family (design §2.4).
+    /// Only the side inside the section's family. Asked through the program's gate,
+    /// as a spot is: never once its end has begun, and its end waits for one in flight, so a mode
+    /// kept as the program's ask never outlives it.
     fn set_mode(&self, client: ClientId, mode: &Word) -> Result<Word, Refusal>;
 
-    /// `drive:0,<level>;`: `Ok` with the level now in force. Lower only (design §2.4), under the
+    /// `drive:0,<level>;`: `Ok` with the level now in force. Lower only, under the
     /// operator's ceiling.
     fn set_drive(&self, client: ClientId, level: u32) -> Result<u32, Refusal>;
 
     /// `tune_drive:0,<level>;`, as [`TciBackend::set_drive`], against the Tune power.
     fn set_tune_drive(&self, client: ClientId, level: u32) -> Result<u32, Refusal>;
 
-    /// `trx:0,true[,<source>];`: the verdict of design §3.2, every Nexus gate first. `Ok` arms the
-    /// program's over (a [`KeyKind::Tci`] over keys on its first audio; design §3.3). A program
+    /// `trx:0,true[,<source>];`: the verdict, every Nexus gate first. `Ok` arms the
+    /// program's over (a [`KeyKind::Tci`] over keys on its first audio). A program
     /// re-asserting its own key is answered as before. `audio_started`: whether this program's
-    /// `audio_start` is in force (§3.2 item 9).
+    /// `audio_start` is in force (the verdict's item 9).
     fn key(&self, client: ClientId, kind: KeyKind, audio_started: bool) -> Result<(), Refusal>;
 
     /// `trx:0,false…;`. From the program that keyed: end its over gracefully (the queued audio
-    /// plays out, then unkey; design §3.4). From any other program: halt whatever is on the air,
-    /// as WSJT-X's UDP HaltTx does (the operator's default for design Q8); with nothing on the air,
+    /// plays out, then unkey). From any other program: halt whatever is on the air,
+    /// as WSJT-X's UDP HaltTx does (the operator's choice); with nothing on the air,
     /// nothing. Never gated.
     fn release(&self, client: ClientId);
 
@@ -500,7 +516,7 @@ pub trait TciBackend: Send + Sync {
         Err(Refusal::Tier)
     }
 
-    /// A spot from a program (design §3.7). It never tunes and never keys. Not offered unless
+    /// A spot from a program. It never tunes and never keys. Not offered unless
     /// implemented. Asked through the program's gate, as a transmit call is: never once its end has
     /// begun, and its end waits for one in flight, so the spots it drops at
     /// [`TciBackend::disconnected`] never come back.

@@ -232,7 +232,9 @@ describe('the TCI connection is offered for every radio', () => {
     })
     expect(hint).toMatch(/Beta/)
     expect(hint).toMatch(/It reads and sets the dial and mode and transmits through the program\./)
-    expect(hint).toMatch(/Not ready yet: CW through the program's own keyer \(use the Soundcard keyer\) and spots on its panadapter\./)
+    expect(hint).toMatch(/Not ready yet: CW through the program's own keyer \(use the Soundcard keyer\)\./)
+    // Nexus's spots on the program's panadapter work, so the hint no longer lists them.
+    expect(hint).not.toMatch(/panadapter/)
     expect(hint).not.toMatch(/does not transmit/)
   })
 })

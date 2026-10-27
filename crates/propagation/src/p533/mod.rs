@@ -7,7 +7,7 @@
 //! as cross-references; no foreign code is included. The embedded CCIR/ITU-R
 //! coefficient data are attributed in `data/itu/itu_copyright.txt` + NOTICE.
 //!
-//! Build-out is incremental and gated (see `tasks/todo.md`): the engine does
+//! Build-out is incremental and gated: the engine does
 //! NOT surface to the operator until its full chain validates against the ITU
 //! reference fixtures. Module map (mirrors the spec/reference decomposition):
 //! - [`coeffs`] — embedded CCIR/P.372 coefficient data + parsers.

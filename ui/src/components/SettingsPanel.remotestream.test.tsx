@@ -4,16 +4,13 @@
 // feature (operator, 2026-09-27, "Session permit"), OFF unless the operator turns it on. What is
 // pinned here is what the operator sees and what Save writes: the switch ships off, it writes
 // `remoteStream`, a station that cannot capture its window is told so instead of being offered a
-// switch that would do nothing, and the Remote page never shows it (no browser may turn it on).
+// switch that would do nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { navigationPages } from '../remote-web/__fixtures__/navigation-page'
-import configuration from '../remote-web/__fixtures__/configuration-settings.json'
 
 const platform = vi.hoisted(() => ({ windows: true }))
 vi.mock('../platform', async (importOriginal) => {
@@ -60,13 +57,7 @@ function station(extra: Record<string, unknown> = {}) {
   return { ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', ...extra } as never
 }
 
-function renderPanel(remote = false) {
-  // The Remote page is the panel inside a RemoteCollectionsContext (useNavigation's `remote`),
-  // reading the station's Settings document instead of the local settings.
-  const page = vi.fn(async () => {
-    const pages = navigationPages('settings', configuration)
-    return { ...pages[0], rows: pages.flatMap((p) => p.rows), nextCursor: null }
-  })
+function renderPanel() {
   const panel = (
     <SettingsPanel
       activeRadioId={0}
@@ -81,19 +72,11 @@ function renderPanel(remote = false) {
       features={features}
     />
   )
-  return render(
-    remote ? (
-      <RemoteCollectionsContext.Provider value={{ page } as unknown as RemoteCollections}>
-        {panel}
-      </RemoteCollectionsContext.Provider>
-    ) : (
-      panel
-    ),
-  )
+  return render(panel)
 }
 
-async function openStationTab() {
-  fireEvent.click(await screen.findByRole('tab', { name: 'Station' }))
+async function openRemoteTab() {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Remote' }))
   // The fieldset the switch lives in, so an absent switch is not an absent tab.
   await waitFor(() => expect(document.getElementById('settings-remote-access')).toBeTruthy())
 }
@@ -137,7 +120,7 @@ afterEach(cleanup)
 describe('on a Windows station', () => {
   it('offers the switch in Remote access, OFF, and says what it sends and what stops', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const sw = await waitFor(() => {
       const s = theSwitch()
       expect(s, 'the switch is not in Remote access').toBeTruthy()
@@ -150,7 +133,7 @@ describe('on a Windows station', () => {
 
   it('says beside the switch that the stream is this window as Windows draws it, so Nexus stays open and not minimized', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const sw = await waitFor(() => theSwitch()!)
     const note = screen.getByText(DISPLAY_NOTE)
     expect(note.closest('.settings-field')?.contains(sw) ?? false, 'the note is not beside the switch').toBe(true)
@@ -158,7 +141,7 @@ describe('on a Windows station', () => {
 
   it('writes remoteStream: true on Save once it is turned on', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const sw = await waitFor(() => theSwitch()!)
     fireEvent.click(sw)
     expect(sw.getAttribute('aria-checked')).toBe('true')
@@ -172,14 +155,14 @@ describe('on a Windows station', () => {
     delete settings.remoteStream
     api.get('getSettings').mockImplementation(() => Promise.resolve(settings))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() => expect(theSwitch()?.getAttribute('aria-checked')).toBe('false'))
   })
 
   it('shows a saved ON as on', async () => {
     api.get('getSettings').mockImplementation(() => Promise.resolve(station({ remoteStream: true })))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() => expect(theSwitch()?.getAttribute('aria-checked')).toBe('true'))
   })
 })
@@ -192,7 +175,7 @@ describe('the beta line', () => {
   const line = () => document.getElementById('settings-remote-access')?.querySelector('.remote-beta') ?? null
   it('is in the Remote access card, in words, just before the streaming switch', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const sw = await waitFor(() => theSwitch()!)
     expect(line()?.textContent).toBe(BETA)
     expect(line()!.compareDocumentPosition(sw) & Node.DOCUMENT_POSITION_FOLLOWING, 'the line comes before the switch').toBeTruthy()
@@ -202,7 +185,7 @@ describe('the beta line', () => {
   it('is there on a station that cannot stream yet, too', async () => {
     platform.windows = false
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() => expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy())
     expect(line()?.textContent).toBe(BETA)
   })
@@ -212,7 +195,7 @@ describe('where the switch is not offered', () => {
   it('explains on a station that cannot capture its window, instead of a dead switch', async () => {
     platform.windows = false
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() =>
       expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy(),
     )

@@ -488,6 +488,16 @@ pub(crate) mod tests_support {
         /// FM into FM-D. Separate from the mode byte on a real Icom, and separate here, which
         /// is the whole point: "FM" and "FM-D" differ ONLY in this bit.
         pub data_mode: bool,
+        /// THE SELECTED IF FILTER, FIL1–FIL3 (`01`–`03`), of Main's mode — the byte a `04` read,
+        /// a `1A 06` read and a by-name `26 00` read carry after the mode. A mode write that names
+        /// a filter selects it; one that skips the byte selects [`DEFAULT_FIL`], which is the
+        /// whole of issue #417: "Filter setting (2) can be skipped with command 01 and 06. In
+        /// that case, … the default filter setting of the operating mode is automatically
+        /// selected with command 06" (IC-7300 Full Manual A7292-4EX-12, p. 19-9; the IC-7610,
+        /// IC-9700 and IC-7300MK2 guides say the same of `06` and of a `26` with both bytes
+        /// skipped). ONE register, not one per mode or per band: a real Icom keeps a selection
+        /// per mode, and this fixture models only what a write leaves selected.
+        pub fil: u8,
         /// NAK `16 5A` like a single-band rig (IC-7300) — honest "no such mode".
         pub no_satmode: bool,
         /// Fault injection — NAK the next N Main selects (`07 D0`): the
@@ -551,6 +561,9 @@ pub(crate) mod tests_support {
         /// wrong receiver is visible by its number rather than by luck.
         pub smeter_raw: u16,
         pub sub_smeter_raw: u16,
+        /// Raw 0..255 Po (forward power) meter, `15 11`. Zero by default: a radio not
+        /// transmitting.
+        pub po_raw: u16,
         /// Does this radio answer Icom's BAND-DIRECTED command `29` ("regardless of
         /// active/inactive the Main or Sub band, you can directly specify the Main or Sub
         /// band", IC-7610 CI-V Reference Guide A7380-7EX-4, p. 9)? True only at the IC-7610's
@@ -561,8 +574,9 @@ pub(crate) mod tests_support {
         /// `26 <band>` with `00` = MAIN and `01` = SUB, whichever band is selected (IC-7610 CI-V
         /// Reference Guide A7380-7EX-4, p. 13)? True only at the IC-7610's address. The
         /// IC-9700's `25`/`26` name the SELECTED or UNSELECTED VFO instead (A7508-3EX-4,
-        /// p. 24): its reads are not modelled and are NAKed here, because nothing sends them to
-        /// that radio, and its `25 01` / `26 01` writes land in the unselected-VFO registers.
+        /// p. 24): of its reads only `26 00` (the selected VFO's mode) is modelled — the rest are
+        /// NAKed, because nothing sends them — and its `25 01` / `26 01` writes land in the
+        /// unselected-VFO registers.
         pub dial_by_band: bool,
         /// Does this radio send its dial in 12 digits (6 bytes) on its 10 GHz band — "When the
         /// 10 GHz band is selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz"
@@ -647,6 +661,11 @@ pub(crate) mod tests_support {
     /// ⚠️ Deliberately a SECOND transcription, typed separately from the broker's table in
     /// `commands`: a fixture that asked the code under test which commands it may wrap
     /// would agree with any mistake that code made.
+    /// The filter a mode write that skips its filter byte leaves selected ([`Regs::fil`]). Icom
+    /// says only "the default filter setting of the operating mode"; FIL2 is what issue #417's
+    /// IC-7300 landed on, so FIL2 is this fixture's model — not a bench measurement.
+    pub const DEFAULT_FIL: u8 = 0x02;
+
     const IC7610_CMD29: &[(u8, Option<u8>)] = &[
         (0x11, None),
         (0x12, Some(0x00)),
@@ -758,7 +777,7 @@ pub(crate) mod tests_support {
             }
             (0x04, _) => {
                 let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
-                Some((0x04, vec![m, 0x01]))
+                Some((0x04, vec![m, r.fil]))
             }
             (0x06, _) => {
                 let m = data[0];
@@ -767,6 +786,7 @@ pub(crate) mod tests_support {
                 } else {
                     r.main_mode = m;
                 }
+                r.fil = data.get(1).copied().unwrap_or(DEFAULT_FIL);
                 None
             }
             // [MAIN/SUB] band selection; the A/B forms just ack.
@@ -812,7 +832,7 @@ pub(crate) mod tests_support {
                     }
                     (0x26, 1) => {
                         let m = if sub { r.sub_mode } else { r.main_mode };
-                        Some((0x26, vec![band, m, u8::from(r.data_mode), 0x01]))
+                        Some((0x26, vec![band, m, u8::from(r.data_mode), r.fil]))
                     }
                     (0x25, n) if n >= 6 => {
                         let hz = bcd_to_freq(&data[1..6]);
@@ -825,7 +845,8 @@ pub(crate) mod tests_support {
                     }
                     // `26 <band> <mode> [<data> <filter>]`. A skipped DATA byte is "DATA OFF"
                     // (p. 13); the fixture keeps one DATA register, like the `1A 06` arm below,
-                    // and does not model the filter.
+                    // and one filter register ([`Regs::fil`]): a skipped filter byte is the
+                    // mode's default filter.
                     (0x26, _) => {
                         if sub {
                             r.sub_mode = data[1];
@@ -833,10 +854,19 @@ pub(crate) mod tests_support {
                             r.main_mode = data[1];
                         }
                         r.data_mode = data.get(2).is_some_and(|&d| d != 0);
+                        r.fil = data.get(3).copied().unwrap_or(DEFAULT_FIL);
                         None // ack
                     }
                     _ => Some((0xFA, Vec::new())), // a `25` with a short frequency
                 }
+            }
+            // `26 00` READ where `26` names the SELECTED VFO rather than a band (IC-7300, IC-705,
+            // IC-905, IC-7300MK2; the IC-9700's MAIN band): the selected band's mode, the DATA flag
+            // and the filter, `26 00 <mode> <data> <filter>` (IC-7300 Full Manual A7292-4EX-12
+            // p. 19-11). The daemon reads it to learn whether a mode write would change anything.
+            (0x26, Some(0x00)) if data.len() == 1 => {
+                let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
+                Some((0x26, vec![0x00, m, u8::from(r.data_mode), r.fil]))
             }
             // The unselected VFO of the CURRENT band — write-only here.
             (0x25, Some(0x01)) if data.len() >= 6 => {
@@ -879,9 +909,13 @@ pub(crate) mod tests_support {
             (0x1A, Some(0x06)) => match data.get(1) {
                 Some(&on) => {
                     r.data_mode = on != 0;
+                    // DATA on names its filter (`01`–`03`); DATA off carries `00`, no filter.
+                    if let Some(&f @ 0x01..=0x03) = data.get(2) {
+                        r.fil = f;
+                    }
                     None // ack
                 }
-                None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
+                None => Some((0x1A, vec![0x06, u8::from(r.data_mode), r.fil])),
             },
             // A MENU item (`1A 05 <item>` reads, `1A 05 <item> <value>` writes) — see
             // [`Regs::menus`].
@@ -930,6 +964,11 @@ pub(crate) mod tests_support {
                     r.smeter_raw
                 });
                 Some((0x15, vec![0x02, hi, lo]))
+            }
+            // The Po meter (`15 11`), one register for the radio: only Main transmits.
+            (0x15, Some(0x11)) => {
+                let [hi, lo] = bcd2(r.po_raw);
+                Some((0x15, vec![0x11, hi, lo]))
             }
             // THE `0x14` LEVEL FAMILY — see [`Regs::levels`]. A bare
             // sub-command reads; a sub-command plus two BCD bytes writes.
@@ -1132,6 +1171,7 @@ pub(crate) mod tests_support {
                         // left in LSB by an earlier inverting linear pass.
                         unselected_mode: 0x00,
                         data_mode: false,
+                        fil: 0x01,
                         no_satmode: false,
                         nak_main_select: 0,
                         nak_satmode_set: 0,
@@ -1145,6 +1185,7 @@ pub(crate) mod tests_support {
                         sub_att_raw: 0,
                         smeter_raw: 120, // S9 — what every existing reading expects
                         sub_smeter_raw: 60,
+                        po_raw: 0,
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
                         dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
                         ten_ghz_12_digits: addr == 0xAC, // the IC-905's 10 GHz band

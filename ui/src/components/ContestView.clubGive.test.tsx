@@ -20,6 +20,12 @@ import type { FdClubStatus, FieldDayStatus } from '../types'
 // screen once); a test that hangs still fails, after 15 s.
 vi.setConfig({ testTimeout: 15_000 })
 
+// A computer driving a station (client mode): off unless a case turns it on.
+const driving = vi.hoisted(() => ({ on: false }))
+vi.mock('../features/durableStore', async (actual) => ({
+  ...(await actual<typeof import('../features/durableStore')>()),
+  drivesAnotherStation: () => driving.on,
+}))
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
   contestUnmerged: vi.fn(async () => []),
@@ -238,5 +244,24 @@ describe('the club codes tell laptops apart, on the host’s screen alone', () =
     render(<ContestView fieldDay={fd(HOST)} observation={observation} />)
     expect(screen.getByText(/Turned away CW tent/)).toBeTruthy()
     expect(document.querySelector('[data-club-code]')).toBeNull()
+  })
+})
+
+// A computer driving a station: a club change is the host's alone. Give used to be sent, refused
+// there as station-only, and said "Press it again"; it now says the station-only line.
+describe('on a computer driving a station', () => {
+  afterEach(() => {
+    driving.on = false
+  })
+  it('Give says it is only at the host, and sends nothing; CONTROL: at the host it gives', async () => {
+    driving.on = true
+    render(<FdClubSection club={HOST} onGivePosition={give} />)
+    fireEvent.click(screen.getByRole('button', { name: LABEL }))
+    await act(async () => { await Promise.resolve() })
+    expect(give).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).toMatch(/Only at the host/)
+    driving.on = false
+    await giveAndConfirm(screen.getByRole('button', { name: LABEL }))
+    expect(give).toHaveBeenCalledWith(42)
   })
 })

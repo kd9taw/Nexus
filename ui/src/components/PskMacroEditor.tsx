@@ -45,7 +45,6 @@ export const isEmptyPskSlot = isEmptyMacroSlot
 
 interface ButtonProps {
   slot: PskMacroSlot
-  control: boolean
   editing: boolean
   title: string
   onSend: () => void
@@ -53,12 +52,11 @@ interface ButtonProps {
 }
 
 /** One F-key macro, captioned from PSK's catalog. */
-export function PskMacroButton({ slot, control, editing, title, onSend, onEdit }: ButtonProps) {
+export function PskMacroButton({ slot, editing, title, onSend, onEdit }: ButtonProps) {
   return (
     <MacroButton
       slot={slot}
       slotAttr={PSK_SLOT_ATTR}
-      control={control}
       editing={editing}
       title={title}
       emptyLabel={t('psk.macro.empty.label')}
@@ -119,7 +117,6 @@ export function PskMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, 
 
 interface SetSwitchProps {
   set: PskSetId
-  control: boolean
   customized: boolean
   confirming: boolean
   onConfirming: (on: boolean) => void
@@ -130,7 +127,6 @@ interface SetSwitchProps {
 /** Everyday / Contest and "Reset set", captioned from PSK's catalog. */
 export function PskMacroSetSwitch({
   set,
-  control,
   customized,
   confirming,
   onConfirming,
@@ -149,7 +145,6 @@ export function PskMacroSetSwitch({
   return (
     <MacroSetSwitch
       set={set}
-      control={control}
       customized={customized}
       confirming={confirming}
       labels={labels}

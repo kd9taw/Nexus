@@ -31,12 +31,10 @@ function reason(d: Js8InboxDrop): string {
 
 export function Js8InboxDropped({
   drops,
-  canControl,
   onClear,
 }: {
   /** `Js8State.inboxDropped`: absent while there are none. */
   drops: Js8InboxDrop[] | undefined
-  canControl: boolean
   onClear: () => void
 }) {
   if (!drops || drops.length === 0) return null
@@ -57,7 +55,6 @@ export function Js8InboxDropped({
       <button
         type="button"
         className="cw-macro js8-inbox-act"
-        disabled={!canControl}
         onClick={onClear}
         title={t('js8.inbox.dropped.clear.title')}
       >

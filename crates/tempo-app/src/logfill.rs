@@ -49,6 +49,7 @@
 use std::ops::ControlFlow;
 use std::sync::Mutex;
 
+use tempo_core::logbook::history::Source;
 use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
 
 use crate::engine::{engine_lock, Engine};
@@ -155,5 +156,114 @@ pub fn fill_log_store(
         current: false,
         lacking: found,
         filled,
+    })
+}
+
+/// The `log_meta` key that marks the one-time copy of merged contest contacts' received grid,
+/// name and QTH into their own fields ([`copy_contest_columns`]) done: `1`.
+pub const CONTEST_COLUMNS_COPIED: &str = "contest_columns_copied";
+
+/// What the copy reads of each contact: its own grid, name and QTH, and beside them the contest
+/// columns of the same names ([`CONTEST_COPIED_TAGS`](tempo_core::logbook::CONTEST_COPIED_TAGS)).
+const COPIES: Narrow = Narrow {
+    columns: &["call", "grid", "name", "qth"],
+    uploads: false,
+};
+
+/// What one run of the copy did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CopyOutcome {
+    /// The store was marked copied already: nothing read, nothing written.
+    pub current: bool,
+    /// Contacts that took a value into a field of their own.
+    pub copied: usize,
+    /// The history run that holds every change it made — one Undo of it puts each contact back
+    /// as it was. `None` when it changed nothing.
+    pub run: Option<String>,
+}
+
+/// ★ **Once per store: a contact merged from a contest before the merge wrote a received grid,
+/// name and QTH into the record's own fields gets them there** — each only where its own field is
+/// blank, copied from the contest column, which stays as it was
+/// ([`tempo_core::logbook::with_contest_columns_copied`]). Until then such a contact showed no
+/// grid in the Grid column and counted for no VUCC square, though its upload carried the grid.
+///
+/// Written as the fill job's fills are ([`crate::logwrite::copy_contest_columns`]): ONE run in
+/// the history, of its own source ([`Source::ContestColumns`]), which the Logbook lists for one
+/// Undo of the whole of it; no upload stamp moves and nothing is queued to a service, because
+/// every contact's ADIF carries the same tags and values as before. A copy a crash or a busy log
+/// cut short is taken up at the next launch in the SAME run (the one of that source the store
+/// holds), so it stays one Undo, for the contacts it had not reached: each contact is copied
+/// into at most once, so one the operator undid stays as they left it. Done once: [`CONTEST_COLUMNS_COPIED`] goes into the store with
+/// the last change, and a store marked so is not read again. On the 1.13 path it does nothing:
+/// that path reads its contacts from `log.adi`, which gives a contest column back in the record's
+/// own field already.
+///
+/// ⚠️ It reads the store and takes the Engine lock: call it on a thread of its own, with no lock
+/// held — never from the radio loop.
+pub fn copy_contest_columns(engine: &Mutex<Engine>) -> Result<CopyOutcome, String> {
+    copy_contest_columns_in_chunks(engine, crate::logwrite::FILL_CHUNK)
+}
+
+/// [`copy_contest_columns`], `chunk` contacts to a change.
+pub(crate) fn copy_contest_columns_in_chunks(
+    engine: &Mutex<Engine>,
+    chunk: usize,
+) -> Result<CopyOutcome, String> {
+    let rows = {
+        let eng = engine_lock(engine);
+        if eng.log_on_file() {
+            return Ok(CopyOutcome::default());
+        }
+        eng.log_rows()
+    };
+    let LogRows::Store(reads) = rows;
+    let ((current, ids, started), _) = reads
+        .read(READ_WAIT, |db| {
+            if db.meta(CONTEST_COLUMNS_COPIED)? == Some(1) {
+                return Ok((true, Vec::new(), None));
+            }
+            // Only this copy writes runs of its source: one in the store is this copy's, cut
+            // short before its last change.
+            let started = db
+                .history_latest_run(Some(Source::ContestColumns.code()))?
+                .map(|r| r.run);
+            // A contact it copied into already is never copied again — whether that change still
+            // stands or the operator undid it, which is theirs to keep.
+            let done: std::collections::HashSet<_> = match &started {
+                Some(run) => db.history_run(run)?.into_iter().map(|e| e.qso_id).collect(),
+                None => Default::default(),
+            };
+            let mut ids = Vec::new();
+            db.each_narrow_with(
+                COPIES,
+                &tempo_core::logbook::CONTEST_COPIED_TAGS,
+                Scope::All,
+                Order::Log,
+                &mut |r| {
+                    if let Some(id) = r.id.filter(|id| {
+                        !done.contains(id)
+                            && tempo_core::logbook::with_contest_columns_copied(r).is_some()
+                    }) {
+                        ids.push(id);
+                    }
+                    ControlFlow::Continue(())
+                },
+            )?;
+            Ok((false, ids, started))
+        })
+        .map_err(|e| e.to_string())?;
+    if current {
+        return Ok(CopyOutcome {
+            current: true,
+            ..CopyOutcome::default()
+        });
+    }
+    let run = started.unwrap_or_else(crate::loghistory::new_run);
+    let copied = crate::logwrite::copy_contest_columns(engine, &ids, &run, chunk)?;
+    Ok(CopyOutcome {
+        current: false,
+        copied,
+        run: (copied > 0).then_some(run),
     })
 }

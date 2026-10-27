@@ -7,7 +7,7 @@
 //!   `198.51.100.x`, `203.0.113.x`, the RFC 5737 documentation ranges) and IPv6 `2001:db8::x`
 //!   (RFC 3849). Two exceptions. The unspecified address (`0.0.0.0`, `::`) is kept: it is a
 //!   protocol marker, not an address (a stream with `client_handle=0` and `ip=0.0.0.0` is a dead
-//!   orphan, port plan §4.3). Values of version keys (`…version`, `…_ver`) are kept: firmware
+//!   orphan). Values of version keys (`…version`, `…_ver`) are kept: firmware
 //!   versions are dotted numbers too.
 //! - **MAC addresses** (the `mac` key, or any `hh:hh:hh:hh:hh:hh`): `02:00:00:00:xx:xx`.
 //! - **Serial numbers** (any key containing `serial`): `serial-N`.

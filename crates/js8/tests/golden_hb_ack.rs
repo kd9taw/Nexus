@@ -1,5 +1,5 @@
 //! Golden test of the heartbeat acknowledgement (`HEARTBEAT SNR`) against JS8Call's own ALL.TXT
-//! (sanitised, Task B4.1's fixture).
+//! (sanitised).
 //!
 //! The log holds the HB-ACKs JS8Call stations sent to the heartbeats they heard. JS8Call answers
 //! the station as it was heard (`sendHeartbeatAck(d.from, d.snr, extra)`, mainwindow.cpp:9098), so

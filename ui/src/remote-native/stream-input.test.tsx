@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { useState } from 'react'
 import { cleanup, render, screen, within } from '@testing-library/react'
-import { installStreamInput, STREAM_INPUT_EVENT, STREAM_POINTER_ID, StreamInputDispatcher } from './stream-input'
+import { installStreamInput, isStreamInput, STREAM_INPUT_EVENT, STREAM_POINTER_ID, StreamInputDispatcher } from './stream-input'
 
 // THE CONTRACT: what the station hands this window, from the files its Rust side is tested against.
 type Case = { name: string; message: Record<string, unknown> }
@@ -24,7 +24,7 @@ const bridge = () => (dispatcher = new StreamInputDispatcher(window))
 const pointer = (action: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'pointer', action, x: 0.5, y: 0.5, button: action === 'move' ? -1 : 0, buttons: action === 'down' || action === 'move' ? 1 : 0, modifiers: 0, pointerType: 'mouse', clicks: action === 'move' ? 0 : 1, ...extra })
 const key = (action: 'down' | 'up', keyValue: string, code: string, modifiers = 0) => ({ type: 'key', action, key: keyValue, code, modifiers, repeat: false })
-/** The page's re-assertion of what it holds down over the picture (the lead's dead-man ruling). */
+/** The page's re-assertion of what it holds down over the picture (the dead-man rule). */
 const held = (keys: string[], buttons: number, seq: number) => ({ type: 'held', keys, buttons, seq })
 const SPACE_DOWN = "key down, Space (an ordinary key: the window's own handlers decide what it does)", SPACE_UP = 'key up, Space'
 const click = (d: StreamInputDispatcher, extra: Record<string, unknown> = {}) => { d.handle(pointer('down', extra)); d.handle(pointer('up', extra)) }
@@ -104,9 +104,31 @@ it('moves focus to what was pressed, and away from a field when the press lands 
   expect(document.activeElement).toBe(document.body)
 })
 
-function Callsign({ onSubmit }: { onSubmit: () => void }) {
+it('the focus and blur a streamed press causes are the stream’s, so a save-on-blur handler sees it as one', () => {
+  const blurred = vi.fn(), focused = vi.fn()
+  render(<><input aria-label="Call" onFocus={() => focused(isStreamInput())} onBlur={() => blurred(isStreamInput())} /><input aria-label="Name" /><p>Band activity</p></>)
+  const d = bridge()
+  under = screen.getByLabelText('Call')
+  click(d)
+  expect(focused).toHaveBeenCalledWith(true)
+  // Focus moves to another field, and then away to nothing focusable: each blur is the stream's.
+  under = screen.getByLabelText('Name')
+  click(d)
+  expect(blurred).toHaveBeenLastCalledWith(true)
+  screen.getByLabelText('Call').focus()
+  under = screen.getByText('Band activity')
+  click(d)
+  expect(blurred).toHaveBeenCalledTimes(2)
+  expect(blurred).toHaveBeenLastCalledWith(true)
+  // Control: the shack's own focus change is not the stream's.
+  screen.getByLabelText('Call').focus()
+  screen.getByLabelText('Name').focus()
+  expect(blurred).toHaveBeenLastCalledWith(false)
+})
+
+function Callsign({ onSubmit }: { onSubmit: (streamed: boolean) => void }) {
   const [call, setCall] = useState('')
-  return <form onSubmit={event => { event.preventDefault(); onSubmit() }}>
+  return <form onSubmit={event => { event.preventDefault(); onSubmit(isStreamInput()) }}>
     <input aria-label="Call" value={call} onChange={event => setCall(event.target.value.toUpperCase())} />
     <output>{call}</output>
   </form>
@@ -127,6 +149,8 @@ it('types into a React-controlled field, deletes, and submits its form on Enter'
   expect(field.value).toBe('W1AX')
   d.handle(key('down', 'Enter', 'Enter'))
   expect(submitted).toHaveBeenCalledTimes(1)
+  // The submit is the stream's own press, so a guard on `isStreamInput` sees it as one.
+  expect(submitted).toHaveBeenCalledWith(true)
 })
 
 it('presses a focused button with Space on key-up, unless the page cancelled the key-down', () => {
@@ -280,7 +304,7 @@ it('reset releases what the stream was holding: Space comes up, the button comes
   } finally { window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) }
 })
 
-// THE DEAD-MAN (the lead's ruling): whatever the stream holds down here is a re-asserted state. The
+// THE DEAD-MAN: whatever the stream holds down here is a re-asserted state. The
 // page re-asserts the held set every 100 ms; anything not re-asserted for 200 ms comes up, as `reset`
 // would let it go. So a Space held over the stream in Phone - which keys PTT through the cockpit's own
 // window handler - cannot outlive a dead link by more than 200 ms.

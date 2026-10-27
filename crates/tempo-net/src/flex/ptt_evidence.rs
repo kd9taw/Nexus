@@ -18,7 +18,7 @@
 //! unkey. Any step out of order, a partial or malformed interlock line during the attempt, a
 //! foreign owner or a physical keying source, a failed reply or write, a second key, a clock that
 //! runs backwards or a missed deadline fails the attempt, and a failed attempt never yields
-//! evidence: the caller keeps treating the radio as keyed (spec §10.5; port plan §3.4).
+//! evidence: the caller keeps treating the radio as keyed.
 //!
 //! Before an attempt is armed, interlock lines only decide readiness: a whole idle sample makes
 //! the tracker [`Phase::Idle`], and a partial one withdraws that until a whole one returns

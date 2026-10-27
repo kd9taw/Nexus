@@ -54,13 +54,13 @@ impl RadioLoop {
         mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
         notify_host: impl FnOnce(),
     ) {
-        let (request, configuration) = {
+        let (request, configuration, serving) = {
             let mut eng = engine_lock(engine);
             let Some(request) = eng.take_remote_radio_selection() else {
                 return;
             };
             let ready = request.configuration(&eng).and_then(|configuration| {
-                let mut want = Transport::from_settings(eng.settings());
+                let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
                 self.apply_port_alias(&mut want);
                 let now = now_unix_ms();
                 if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
@@ -90,7 +90,9 @@ impl RadioLoop {
                 Ok(configuration)
             });
             match ready {
-                Ok(configuration) => (request, configuration),
+                // With where the CAT broker is serving, read under this lock, so the transports
+                // below are built as the loop's own (#165).
+                Ok(configuration) => (request, configuration, eng.cat_share_port()),
                 Err(reason) => {
                     request.refuse(reason);
                     return;
@@ -105,11 +107,12 @@ impl RadioLoop {
                 backend,
                 request,
                 configuration,
+                serving,
                 notify_host,
             );
             return;
         }
-        let want = Transport::from_settings(request.settings());
+        let want = Transport::from_station(request.settings(), serving);
         let target =
             match Position::new(request.settings().dial_hz(), &request.settings().rig_mode()) {
                 Ok(position) => position,
@@ -259,6 +262,7 @@ impl RadioLoop {
     /// Complete logical profile hops on the current physical owner. Only the
     /// final native target reaches CAT; intermediate profiles are banked by the
     /// shared Engine commit. Keep the actual capture and daemon resources alive.
+    #[allow(clippy::too_many_arguments)]
     fn apply_remote_selection_return<B: AudioBackend>(
         &mut self,
         engine: &Arc<Mutex<Engine>>,
@@ -266,10 +270,11 @@ impl RadioLoop {
         backend: &mut B,
         request: Request,
         configuration: Configuration,
+        serving: Option<u16>,
         notify_host: impl FnOnce(),
     ) {
         let prepared = (|| {
-            let mut want = Transport::from_settings(request.settings());
+            let mut want = Transport::from_station(request.settings(), serving);
             self.apply_port_alias(&mut want);
             if want != self.applied {
                 return Err(Reason::ContextChanged);

@@ -292,7 +292,7 @@ fn an_over_that_would_not_be_planned_now_is_never_rebuilt() {
         ("the TX offset moved", |e| e.set_tx_offset(1700.0)),
         ("the dial moved", |e| e.settings.dial_mhz = 14.0745),
         ("a licence that refuses it", |e| {
-            e.set_license_class("technician")
+            e.set_license_class("technician");
         }),
     ];
     for (what, change) in cases {
@@ -471,7 +471,7 @@ fn in_a_cq_run_rr73_folded_during_the_report_closes_with_73_and_the_run_calls_cq
     );
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`) still holds now that a QSO awaiting the
+/// ⛔ #236 still holds now that a QSO awaiting the
 /// roger answers RR73 with 73: a bystander Fox's multiplex whose sender-less first half is
 /// addressed to us never closes the contact or keys a 73, mid-over or at the next key.
 #[test]
@@ -655,7 +655,7 @@ fn after_our_rr73_the_partners_73_rr73_or_rrr_changes_nothing() {
     }
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`): only W1AW's own roger to us answers our
+/// ⛔ #236: only W1AW's own roger to us answers our
 /// RRR with 73. A bystander's RR73 to us, W1AW's RR73 to another station and a Fox's multiplex
 /// whose sender-less first half is addressed to us never key a 73, mid-over or at the next key.
 #[test]
@@ -756,7 +756,7 @@ fn a_cq_run_answers_the_callers_roger_to_our_rrr_with_one_73_then_calls_cq() {
 }
 
 /// The same roger, weak: only the full pass finds it, 2.5 s into the CQ the run keyed. The switch
-/// for an over owed to a partner the run has left (RX94) makes the rest of that CQ the 73, in place,
+/// for an over owed to a partner the run has left makes the rest of that CQ the 73, in place,
 /// with a second Tx row (WSJT-X restarts the over, :9446). The 73 is spent, TX stays on, and the
 /// next over is the CQ. Only the over keyed in the live slot is switched, and Stop TX ends the 73
 /// before it goes.
@@ -929,7 +929,7 @@ fn a_cq_run_with_auto_log_off_sends_the_73_then_waits_for_log_qso() {
     assert_eq!(e.stored_log().len(), 1, "logged once");
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`) in a CQ run after our RRR: only W1AW's own
+/// ⛔ #236 in a CQ run after our RRR: only W1AW's own
 /// roger to us earns the 73. A bystander's RR73 or RRR to us, W1AW's RR73 to another station and a
 /// Fox's multiplex whose sender-less first half is addressed to us change nothing. With the run back
 /// on CQ, the CQ goes out and is not switched; with the run still holding the contact, our RRR plays
@@ -1137,24 +1137,46 @@ fn a_field_day_run_switches_its_exchange_to_73_when_the_callers_rr73_folds() {
         panic!("premise: the contest");
     };
     assert_eq!(station.log.qsos().len(), 1, "logged");
-    assert!(!e.take_pending_tx_disable(), "a run keeps TX on");
+    assert!(
+        !e.take_pending_tx_disable(),
+        "TX stays on while the 73 plays"
+    );
     hear(&mut e, "CQ K2DEF FN31", -5, 6);
     assert_eq!(
-        key(&mut e, 6).as_deref(),
+        key(&mut e, 6),
+        None,
+        "no CQ: the run waits for the operator"
+    );
+    assert!(
+        e.take_pending_tx_disable(),
+        "TX goes off once the 73 has played"
+    );
+    e.set_tx_enabled(false);
+    e.set_tx_enabled(true);
+    assert_eq!(
+        key(&mut e, 8).as_deref(),
         Some(cq.as_str()),
-        "the run calls CQ"
+        "the operator's Enable TX calls CQ"
     );
 }
 
-/// S&P in the contest: our exchange is on the air when the runner's rogered exchange folds; the
-/// rest is our RR73 (WSJT-X's Tx4). Then S&P is listening again and picks the next CQ by itself,
-/// but that is a new contact: it never replaces the RR73 on the air.
+/// S&P in the contest: our exchange, to the CQ the operator double-clicked, is on the air when
+/// the runner's rogered exchange folds; the rest is our RR73 (WSJT-X's Tx4). Then S&P is
+/// listening again, and the next CQ it hears starts nothing: the RR73 on the air stays.
 #[test]
 fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
     let mut e = contest("arrlfd");
     e.set_mode("fieldday-sp").expect("S&P starts");
     e.set_tx_enabled(true);
     hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+    e.work_station(
+        "W9XYZ",
+        Some("EN37"),
+        Some("CQ FD W9XYZ EN37"),
+        Some(-12),
+        None,
+    )
+    .expect("premise: the double-click");
     let exch = key(&mut e, 2).expect("premise: our exchange");
     assert_eq!(exch, "W9XYZ K1ABC 2B EMA");
     assert_eq!(key(&mut e, 4).as_deref(), Some(exch.as_str()), "again");
@@ -1164,19 +1186,16 @@ fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
         route.switch(&mut e, 4, at(4, 1_500.0)),
         switched(&exch, "W9XYZ K1ABC RR73")
     );
-    // The next CQ heard in the same over: S&P returns to listening and answers it.
+    // The next CQ heard in the same over: S&P returns to listening and answers nothing.
     hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
     hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
-    assert_eq!(
-        e.ft_next_over(4).as_deref(),
-        Some("K2DEF K1ABC 2B EMA"),
-        "premise: S&P picked the next CQ"
-    );
+    assert_eq!(e.ft_next_over(4), None, "S&P picks no CQ by itself");
     assert_eq!(route.switch(&mut e, 4, at(4, 3_000.0)), None);
 }
 
 /// ⛔ THE OPERATOR STARTS EVERY CONTEST QSO: a CQ on the air is never switched to an answer, and
-/// a contact the run closes without a 73 (Winter Field Day) never becomes a CQ mid-over.
+/// a contact the run closes without a 73 (Winter Field Day) never becomes a CQ mid-over, nor at
+/// the next over: the run waits for the operator's next CQ.
 #[test]
 fn a_contest_never_switches_a_cq_or_switches_to_one() {
     let mut e = contest("arrlfd");
@@ -1211,40 +1230,37 @@ fn a_contest_never_switches_a_cq_or_switches_to_one() {
         None,
         "{exch} stays"
     );
-    assert_eq!(key(&mut e, 4), Some(cq_wfd), "the CQ at the next over");
+    assert_eq!(key(&mut e, 4), None, "no CQ at the next over");
 }
 
 /// A contest contact the operator picked (a double-click on the CQ) and closed by the switch: the
-/// RR73 that leaves mid-over arms "Disable Tx after sending 73" as at a key; S&P's own pounce
-/// does not.
+/// RR73 that leaves mid-over arms "Disable Tx after sending 73" as at a key.
 #[test]
 fn a_picked_contest_contact_closed_mid_over_turns_tx_off_once() {
-    for picked in [true, false] {
-        let mut e = contest("arrlfd");
-        e.set_mode("fieldday-sp").expect("S&P starts");
-        e.set_tx_enabled(true);
-        hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
-        if picked {
-            e.work_station(
-                "W9XYZ",
-                Some("EN37"),
-                Some("CQ FD W9XYZ EN37"),
-                Some(-12),
-                None,
-            )
-            .expect("premise: the double-click");
-        }
-        let exch = key(&mut e, 2).expect("premise: our exchange");
-        hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 2);
-        let mut route = Route::new(80_000);
-        assert_eq!(
-            route.switch(&mut e, 2, at(2, 1_500.0)),
-            switched(&exch, "W9XYZ K1ABC RR73"),
-            "picked {picked}"
-        );
-        assert_eq!(e.take_pending_tx_disable(), picked, "picked {picked}");
-        assert!(!e.take_pending_tx_disable(), "picked {picked}: once");
-    }
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-sp").expect("S&P starts");
+    e.set_tx_enabled(true);
+    hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+    e.work_station(
+        "W9XYZ",
+        Some("EN37"),
+        Some("CQ FD W9XYZ EN37"),
+        Some(-12),
+        None,
+    )
+    .expect("premise: the double-click");
+    let exch = key(&mut e, 2).expect("premise: our exchange");
+    hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 2);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 2, at(2, 1_500.0)),
+        switched(&exch, "W9XYZ K1ABC RR73")
+    );
+    assert!(
+        e.take_pending_tx_disable(),
+        "TX off after the picked contact"
+    );
+    assert!(!e.take_pending_tx_disable(), "once");
 }
 
 /// What a logger's WSJT-X Status says is being sent: its Tx Message ([`Engine::wsjtx_tx_status`]).
@@ -1261,7 +1277,7 @@ fn msgsent(text: &str) -> String {
 /// `msgsent` for the restart (`widgets/mainwindow.cpp:7880`), sets its Tx Message from it and sends
 /// a Status when that changed (`m_currentMessage = QString::fromLatin1 (msgsent)`, :8072-8077).
 /// Every way an over switches mid-air reports the new message as a key reports it: a decode, a
-/// Tx-slot click, the 73 a run owes the caller's roger to our RRR (ruling 544), our RRR answered
+/// Tx-slot click, the 73 a run owes the caller's roger to our RRR, our RRR answered
 /// with 73 while the run still holds the contact, the CQ after the partner's 73 to our RRR (Tx6)
 /// and a contest contact. A route that cannot replace its audio sends the over as keyed, and the
 /// Status goes on saying so.

@@ -18,7 +18,7 @@
 //! | 28 | `channels` | [`Channels`]: 1 or 2 |
 //! | 32 | `reserv[8]` | not read, written as 0 |
 //!
-//! # What the spec leaves loose (plan §2.3), decided here
+//! # What the spec leaves loose, decided here
 //!
 //! 1. **Byte order** is not stated. Every implementation read writes little-endian: WSJT-X and
 //!    AetherSDR copy the struct on x86, and the Go client (github.com/ftl/tci) says
@@ -589,7 +589,7 @@ pub fn decode(bytes: &[u8]) -> Result<Frame<'_>, FrameError> {
     }))
 }
 
-/// Which reading of `length` a payload of `payload` bytes fits (plan §2.3, item 2).
+/// Which reading of `length` a payload of `payload` bytes fits (item 2 in the module header).
 fn fit(
     length: u32,
     channels: Channels,
@@ -659,7 +659,7 @@ pub fn encode_block(
     Ok(out)
 }
 
-/// Counts what [`decode`] accepted and refused, for the session to report (plan §2.3: "reject a
+/// Counts what [`decode`] accepted and refused, for the session to report ("reject a
 /// frame that fits neither, and count it").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tally {
@@ -886,7 +886,7 @@ mod tests {
         assert_eq!((b.values(), b.reading), (0, None));
     }
 
-    /// M15 (plan §6.3): a frame of the wrong size is refused, counted, and never panics.
+    /// A frame of the wrong size is refused, counted, and never panics.
     #[test]
     fn a_frame_of_the_wrong_size_is_refused_counted_and_never_panics() {
         let mut tally = Tally::default();
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn a_chrono_asks_for_frames_by_the_dialects_reading_and_its_answer_fits_it() {
-        // AetherSDR's request (plan §2.3): 48 kHz float32 stereo, `length` 2048, header only.
+        // AetherSDR's request: 48 kHz float32 stereo, `length` 2048, header only.
         let request = header(0, 48_000, 3, 0, 2048, TX_CHRONO, 2);
         let chrono = match decode(&request) {
             Ok(Frame::Chrono(c)) => c,

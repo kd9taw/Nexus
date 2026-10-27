@@ -193,7 +193,7 @@ their FD behavior too.
 
 ## Logbook, awards, and connectors
 
-The logbook is a persistent ADIF 3.1.4 store with full round-trip fidelity: callsign, grid,
+The logbook is a persistent ADIF 3.1.8 store with full round-trip fidelity: callsign, grid,
 entity, state, band, frequency, mode, string RSTs (FT8's "-12" and CW's "599" both first-class),
 name/QTH, operator notes, POTA/SOTA references, and a per-QSO upload state machine
 (Pending / Accepted / Duplicate / Rejected / AuthFail per service) persisted in ADIF app-fields,

@@ -11,7 +11,7 @@
 //! `{MODE}_{DEPTH}_{COUNT}.wav` counts were committed ONCE in 2020 against a decoder
 //! that has since been rewritten; the a7ff1be0 oracle actually yields A_2_9 → 8 (name
 //! says 9), A_3_3 → 2 (name says 3), E_2_1 → 1 (name matches). The MEASURED counts are
-//! the lineage pin locked 2026-09-05 in paritylab/js8/stock_selftest.sh; this file uses
+//! the lineage pin locked 2026-09-05 by the lab's self-test; this file uses
 //! THEM (`UPSTREAM.min_count`), never the filename digit (established fact: decode-side
 //! parity A/Bs against THIS binary's actual output).
 //!
@@ -22,10 +22,10 @@
 //! What this file proves for B/C is INTERNAL consistency (our encoder → our
 //! decoder through AWGN at −20/−18 dB, a negative control that shows the
 //! sweep can fail) plus, in the lab, stock `js8` cross-decoding our synthetic
-//! B/C audio (Task B3.11, ~/work/twowayfd/paritylab/js8/results/). On-air
-//! interop at B/C is a NEEDS-BENCH item (B8); the first captured Fast/Turbo
+//! B/C audio. On-air
+//! interop at B/C is a NEEDS-BENCH item; the first captured Fast/Turbo
 //! WAV belongs in fixtures/ beside a count assertion the day it exists.
-//! Lab result 2026-09-06 (paritylab/js8/results/B3-2026-09-06.txt, 60-file
+//! Lab result 2026-09-06 (60-file
 //! corpus): stock js8 cross-decodes our synthetic B/C audio payload-identical
 //! — at −10 dB Fast 3/3 vs 3/3 and Turbo 3/3 vs 3/3, zero payload/dt
 //! mismatches, zero Nexus false decodes, mean SNR offset stock−Nexus −0.33 dB
@@ -33,8 +33,8 @@
 //! corpus points sit at/below the knee (0/3 both sides). One yield gap was
 //! named then: at Normal −20 dB stock decoded 2/3 and Nexus 0/3, read as
 //! "~2 dB less sensitive at Normal". Re-measured 2026-10-15 at 30 seeds a
-//! point, 1 dB apart, on one 1860-file corpus (paritylab/js8/js8call-3.0.3,
-//! results/ladder-2026-10-15.txt), the SNR at 50 % decode puts this decoder
+//! point, 1 dB apart, on one 1860-file corpus,
+//! the SNR at 50 % decode puts this decoder
 //! within 0.1 dB of JS8Call 3.0.3's own at every speed, JS8 60 included, and
 //! 0.4–0.9 dB behind the 2.x Fortran oracle (+0.5 dB at Normal): the 2 dB was
 //! three seeds. Reported, not gated. The same lab decodes JS8Call 3.0.3's
@@ -127,7 +127,7 @@ fn sixbit_of(w: &Word87) -> String {
 }
 
 /// `(file, depth, speed, min_count)` — `min_count` is the MEASURED stock count
-/// (paritylab/js8/stock_selftest.sh, locked 2026-09-05), NOT the stale filename
+/// (the lab's self-test, locked 2026-09-05), NOT the stale filename
 /// digit (A_2_9 → 8 not 9, A_3_3 → 2 not 3, E_2_1 → 1).
 const UPSTREAM: [(&str, u8, Speed, usize); 3] = [
     ("A_2_9.wav", 2, Speed::Normal, 8),
@@ -151,10 +151,10 @@ fn pinned_path(pins: &[(String, std::path::PathBuf)], name: &str) -> std::path::
 
 /// Regenerates fixtures/stock_decodes.txt from the stock `js8` CLI. Ignored by
 /// default (the binary is not in CI); run with
-///   JS8_STOCK_BIN=$HOME/work/twowayfd/paritylab/js8/stock/js8 \
+///   JS8_STOCK_BIN=/path/to/stock/js8 \
 ///   cargo test -p js8 --test decode_parity regenerate_stock_decodes_fixture -- --ignored
 /// Positive control: the parsed line count must equal the MEASURED count for the
-/// file (stock_selftest.sh's pin) — or the parser is not matching the CLI's lines.
+/// file (the self-test's pin) — or the parser is not matching the CLI's lines.
 #[test]
 #[ignore]
 fn regenerate_stock_decodes_fixture() {

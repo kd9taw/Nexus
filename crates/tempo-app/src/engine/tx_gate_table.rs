@@ -1321,7 +1321,7 @@ fn the_gate_table_is_not_uniform() {
 }
 
 /// ⛔ A TCI PROGRAM'S OVER IS JUDGED ACROSS ITS WHOLE TRANSMIT PASSBAND, AND THAT CAN ONLY EVER
-/// REFUSE MORE than the gate does (the TCI server design, §3.6: Nexus cannot know where in the
+/// REFUSE MORE than the gate does (Nexus cannot know where in the
 /// passband a program puts its audio). Over every station state of the table, the passband's
 /// verdict allows only where the gate allows. CONTROL: it parts from the gate somewhere (a Digital
 /// row by a segment edge), or the passband would be no more than the gate's own frame.
@@ -1879,7 +1879,7 @@ const UNKNOWN_SIDE_SECTIONS: [&str; 4] = [
 /// the native daemon carries a cross-band pass on (IC-9700, IC-905), every US class and Open,
 /// every section ([`SWEEP_SECTIONS`], CW and RTTY on both of their keyers), the [`SWEEP_PAIRS`]
 /// with a USB, LSB or FM downlink, the mode taken back mid-pass or not, and XIT off and on —
-/// 14,784 states, in well under a second.
+/// 3,696 states a class.
 ///
 /// In every one the gate after the switch never allows what the gate before it
 /// ([`Engine::tx_frequency_allowed`]) refused, never moves the judged frequency, and is what the
@@ -1904,7 +1904,12 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
     let mut by_the_word: BTreeMap<String, u32> = BTreeMap::new();
     let mut refused_by: BTreeMap<String, u32> = BTreeMap::new();
     for model in [3081u32, 3090] {
-        for class in ["technician", "general", "extra", "open"] {
+        for class in crate::privileges::US_CLASSES
+            .map(|class| format!("{class:?}").to_lowercase())
+            .into_iter()
+            .chain(["open".to_string()])
+        {
+            let class = class.as_str();
             for (section, keyer, rtty) in SWEEP_SECTIONS {
                 let label = format!("{section} {keyer:?} {rtty}");
                 by_the_word.entry(label.clone()).or_insert(0);
@@ -2012,7 +2017,7 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
         unbuilt, 0,
         "pass shapes the sweep could not build: re-check SWEEP_PAIRS"
     );
-    assert_eq!(states, 14_784);
+    assert_eq!(states, 3_696 * (crate::privileges::US_CLASSES.len() + 1));
     assert!(
         on_sub > 0 && on_main > 0,
         "both receivers: {on_sub} Sub, {on_main} Main"

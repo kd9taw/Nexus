@@ -1,0 +1,19 @@
+[package]
+publish = false
+name = "jtty"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Safe Rust wrapper over libtempo's JTTY modem (WSJT-X's keyboard mode): encode, waveform and streaming receive; no transmit path"
+
+[lints]
+workspace = true
+
+[dependencies]
+tempo-fast-sys = { path = "../tempo-fast-sys" }
+
+[dev-dependencies]
+# WAV in and out for the parity-lab CLIs in examples/. Already in Cargo.lock via
+# tempo-audio at this version, so naming it here adds no new code to the tree.
+hound = "3.5"

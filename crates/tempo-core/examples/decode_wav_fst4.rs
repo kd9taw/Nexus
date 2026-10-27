@@ -20,7 +20,7 @@
 //! Runs BLIND (empty mycall/hiscall, nqso_progress 0) so the stock comparison is
 //! fair — jt9 must be run `-Q 0 -c b -x b` to match, or AP is armed on one side
 //! only and the numbers are meaningless. That mistake cost a whole calibration
-//! round on the FT8 side; see reference-decode-parity-lab.
+//! round on the FT8 side.
 //!
 //! Output (stdout), one line per decode, same shape as the FT8/FT4 CLIs so one
 //! parser reads all three:

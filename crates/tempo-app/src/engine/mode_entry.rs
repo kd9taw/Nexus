@@ -12,11 +12,14 @@
 //! FM in Phone with it.
 
 use super::Engine;
-use crate::settings::OperatingMode;
+use crate::settings::{KeyboardModem, OperatingMode};
 
 #[derive(Debug, PartialEq)]
 pub(super) struct ModeEntry {
     pub mode: OperatingMode,
+    /// The Keyboard section's modem this entry selects: PSK for "keyboard", JTTY for "jtty", none
+    /// for any other section, which leaves the modem as it was.
+    pub modem: Option<KeyboardModem>,
     pub frequency: Option<(f64, String)>,
     /// The entry keeps the dial where it is (`frequency` is then `None`). The setter
     /// carries the operator's residency on that dial into the section entered, and the
@@ -26,13 +29,27 @@ pub(super) struct ModeEntry {
 
 impl Engine {
     pub(super) fn prepare_mode_entry(&self, mode: &str, follow_frequency: bool) -> ModeEntry {
-        let mode = match mode.to_ascii_lowercase().as_str() {
-            "phone" => OperatingMode::Phone,
-            "cw" => OperatingMode::Cw,
-            "rtty" => OperatingMode::Rtty,
-            "keyboard" => OperatingMode::Keyboard,
-            _ => OperatingMode::Digital,
+        let (mode, modem) = match mode.to_ascii_lowercase().as_str() {
+            "phone" => (OperatingMode::Phone, None),
+            "cw" => (OperatingMode::Cw, None),
+            "rtty" => (OperatingMode::Rtty, None),
+            "keyboard" => (OperatingMode::Keyboard, Some(KeyboardModem::Psk)),
+            "jtty" => (OperatingMode::Keyboard, Some(KeyboardModem::Jtty)),
+            _ => (OperatingMode::Digital, None),
         };
+        // JTTY keeps no dial memory: it lands on WSJT-X's JTTY frequency for the band, as
+        // WSJT-X does when the mode or band changes (see `jtty_channel`).
+        if modem == Some(KeyboardModem::Jtty) {
+            let frequency = (follow_frequency && self.sat_dial_owner.is_none())
+                .then(|| self.jtty_channel(&self.settings.band))
+                .flatten();
+            return ModeEntry {
+                mode,
+                modem,
+                frequency,
+                kept_dial: false,
+            };
+        }
         let frequency = if follow_frequency && self.sat_dial_owner.is_none() {
             let band = &self.settings.band;
             // The setter banks the outgoing residency before restoring a cell.
@@ -50,6 +67,7 @@ impl Engine {
         };
         ModeEntry {
             mode,
+            modem,
             frequency,
             kept_dial: false,
         }
@@ -86,6 +104,7 @@ impl Engine {
         }
         ModeEntry {
             mode: entry.mode,
+            modem: entry.modem,
             frequency: None,
             kept_dial: true,
         }
@@ -269,6 +288,135 @@ mod tests {
         assert!(!e
             .freq_memory
             .contains_key(&(String::new(), OperatingMode::Phone)));
+    }
+
+    /// ⭐ THE KEYBOARD SECTION'S MODEM PICKS ITS BAND PLAN. PSK and JTTY are one section, and
+    /// the modem the entry names is what differs: entering JTTY lands on WSJT-X's JTTY frequency
+    /// for the band (14.090 on 20 m), entering PSK on the PSK31 watering hole (14.070), and a
+    /// band picked by name lands on the plan of the modem it names (or, named by no mode, of the
+    /// section the station is in).
+    #[test]
+    fn the_keyboard_modem_picks_the_band_plan() {
+        let mut e = station();
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(
+            (e.settings().operating_mode, e.settings().keyboard_modem),
+            (OperatingMode::Keyboard, KeyboardModem::Jtty)
+        );
+        assert!(e.jtty_section());
+        assert_eq!(e.settings().dial_mhz, 14.090, "JTTY's 20 m frequency");
+        e.set_operating_mode("keyboard", true);
+        assert_eq!(e.settings().keyboard_modem, KeyboardModem::Psk);
+        assert!(!e.jtty_section());
+        assert_eq!(
+            e.settings().dial_mhz,
+            14.070,
+            "control: PSK31's 20 m watering hole"
+        );
+        e.set_operating_mode("jtty", true);
+        assert_eq!(e.settings().dial_mhz, 14.090);
+        e.pick_band("40m", Some("jtty"));
+        assert_eq!(e.settings().dial_mhz, 7.078, "a JTTY pick by name");
+        e.pick_band("15m", None);
+        assert_eq!(
+            e.settings().dial_mhz,
+            21.090,
+            "a pick naming no mode: the station's modem"
+        );
+        e.pick_band("20m", Some("keyboard"));
+        assert_eq!(e.settings().dial_mhz, 14.070, "a PSK pick by name");
+        e.set_operating_mode("phone", false);
+        assert_eq!(
+            e.settings().keyboard_modem,
+            KeyboardModem::Jtty,
+            "another section leaves the modem as it was"
+        );
+        assert!(!e.jtty_section());
+    }
+
+    /// ⭐ THE STATUS NAMES THE KEYBOARD SECTION'S MODE. PSK and JTTY are one section
+    /// ("keyboard"), so the section alone cannot say which is on the air: a surface reading it
+    /// named a JTTY station PSK31, and the contest logger window logged its contacts as PSK31.
+    /// `keyboard_mode` is the mode the section's contacts log under: JTTY on the JTTY modem, the
+    /// PSK sub-mode picked in the PSK cockpit on PSK.
+    #[test]
+    fn the_status_names_the_keyboard_mode_on_the_air() {
+        let mut e = station();
+        let mode = |e: &Engine| e.snapshot().radio.keyboard_mode;
+        e.set_operating_mode("jtty", true);
+        assert_eq!(e.snapshot().radio.operating_mode, "keyboard");
+        assert_eq!(mode(&e), "JTTY");
+        e.set_operating_mode("keyboard", true);
+        assert_eq!(mode(&e), "PSK31", "control: PSK, on its default sub-mode");
+        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .unwrap();
+        assert_eq!(mode(&e), "QPSK31");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(mode(&e), "JTTY", "the modem, not the PSK sub-mode");
+    }
+
+    /// JTTY keeps no dial memory, and above all never writes a JTTY dial into PSK's: both modems
+    /// are the Keyboard section, and its (band, section) cell is PSK's. PSK on 14.0712, JTTY
+    /// tuned off its frequency, then PSK again comes back to 14.0712, and JTTY to 14.090.
+    #[test]
+    fn a_jtty_dial_never_becomes_psks_memory() {
+        let mut e = station();
+        e.set_operating_mode("keyboard", true);
+        e.set_frequency(14.0712, "20m", "USB");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(e.settings().dial_mhz, 14.090);
+        e.set_frequency(14.0915, "20m", "USB");
+        e.set_operating_mode("keyboard", true);
+        assert_eq!(e.settings().dial_mhz, 14.0712, "PSK's own dial");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(
+            e.settings().dial_mhz,
+            14.090,
+            "WSJT-X's frequency, not a memory"
+        );
+        e.set_frequency(14.0915, "20m", "USB");
+        e.set_operating_mode("phone", true);
+        e.set_operating_mode("keyboard", true);
+        assert_eq!(
+            e.settings().dial_mhz,
+            14.0712,
+            "through another section too"
+        );
+    }
+
+    /// The JTTY frequency is taken only where the operator's class may run data there, judged
+    /// where WSJT-X puts JTTY's transmit offset (1500 Hz up): a Technician has no 20 m data, so
+    /// the dial stays put, and has 10 m data, so 28.090 is taken.
+    #[test]
+    fn a_jtty_frequency_outside_the_class_leaves_the_dial_put() {
+        use crate::settings::LicenseClass;
+        let mut e = station();
+        e.settings.license_class = LicenseClass::Technician;
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(e.settings().dial_mhz, 14.074, "no Technician data on 20 m");
+        e.set_frequency(28.074, "10m", "USB");
+        e.set_operating_mode("phone", false);
+        e.set_operating_mode("jtty", true);
+        assert_eq!(
+            e.settings().dial_mhz,
+            28.090,
+            "control: 10 m data is a Technician's"
+        );
+    }
+
+    /// The modem is section state, kept across a Settings save as the section is: a whole-struct
+    /// save from a panel loaded while the station was in PSK does not move it out of JTTY.
+    #[test]
+    fn a_settings_save_keeps_the_live_modem() {
+        let mut e = station();
+        e.set_operating_mode("keyboard", false);
+        let stale = e.settings().clone();
+        e.set_operating_mode("jtty", false);
+        e.apply_settings(stale);
+        assert_eq!(e.settings().keyboard_modem, KeyboardModem::Jtty);
+        assert!(e.jtty_section());
     }
 
     // ── The Phone tab on the SSTV screen ────────────────────────────────────────────────────

@@ -139,7 +139,7 @@ vi.mock('./api', async (importOriginal) => {
     rttySend,
     qrzLookup: vi.fn(async () => null),
     resolveEntity: vi.fn(async () => null),
-    contestZoneHint: vi.fn(async () => null),
+    contestPlace: vi.fn(async () => null),
     lookupPark: vi.fn(async () => null),
     searchParks: vi.fn(async () => []),
   }

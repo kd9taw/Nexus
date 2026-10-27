@@ -15,6 +15,7 @@
 pub mod alltxt;
 pub mod bandplan;
 pub mod call_history;
+pub mod callbook_update;
 pub mod clocksync;
 pub mod club_firewall;
 pub mod clubclock;
@@ -28,9 +29,13 @@ pub mod fdevent;
 pub mod keyboard;
 pub mod logexport;
 pub mod logfill;
+pub mod loghistory;
 pub mod logstore;
+pub mod logtools;
 pub mod logwrite;
 pub mod mic;
+pub mod needed_alert;
+pub mod pota_exports;
 pub mod presence;
 pub mod privileges;
 pub mod remote_control;
@@ -276,6 +281,8 @@ impl AppState {
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),
                 operating_mode: "digital".to_string(),
+                // The engine fills it from the Keyboard section's modem every snapshot.
+                keyboard_mode: String::new(),
                 rig_keyed: false,
                 hrd_link_up: None,
                 hrd_queued: 0,
@@ -287,6 +294,10 @@ impl AppState {
                 // from `tx_owner()` every snapshot.
                 tx_busy_reason: None,
                 stream_mic: None,
+                // The engine recomputes this from `ptt_refusal()` every snapshot.
+                ptt_refusal: None,
+                tx_hold: None,
+                voice_playing: false,
                 slot: 0,
                 next_slot_ms: 0,
                 // Optimistic until the engine has seen decodes to judge from
@@ -326,6 +337,7 @@ impl AppState {
                 notch_freq_hz: None,
                 atu: None, // engine fills from the CAT TUNER probe (None = no ATU on this rig)
                 atu_start_tune_unsupported: false, // …and with it, whether it can be STARTED
+                atu_switch_out: false, // …and whether it can be switched out
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
                 xit_hz: 0,
@@ -361,6 +373,7 @@ impl AppState {
                 audio_error: None,
                 audio_error_kind: None,
                 cat_share_error: None,
+                cat_share_port: None,
                 tci_server: None,
                 scope_error: None,
                 scope_span_refused: None,
@@ -376,6 +389,7 @@ impl AppState {
                 rx_offset_hz: 1500.0,
                 tx_offset_hz: 1500.0,
                 hold_tx_freq: false,
+                skip_tx1: false,
                 clock_offset_ms: None,
                 clock_age_secs: None,
                 clock_servers: None,
@@ -383,6 +397,7 @@ impl AppState {
                 clock_owner_note: String::new(),
                 clock_repair_available: false,
                 clock_repair_tx_held: false,
+                tx_on_held: false,
                 source: crate::dto::SourceKind::Native,
                 source_label: String::new(),
             },
@@ -963,6 +978,8 @@ impl AppState {
             // Set by the engine from the logbook (worked-before); default false here.
             worked: false,
             worked_band: false,
+            worked_ago_secs: None,
+            worked_today_utc: false,
             // Resolved by the engine from the DXCC resolver; None at this layer.
             country: None,
             tier: h.mode.map(Tier::from_mode_kind),
@@ -1023,8 +1040,11 @@ impl AppState {
             late_decodes: None,
             highlights: Vec::new(),
             clear_tick: 0,
+            udp_free_text: None,
+            rx_freq_clear_tick: 0,
             logged_tick: 0,
             hunt: None,
+            activation: None,
             // Filled by the engine while coordinated QSY is enabled; None here.
             qsy: None,
             // Filled by the engine from its session HARQ tally; 0 at this layer.

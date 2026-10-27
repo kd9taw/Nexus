@@ -25,7 +25,7 @@
 //! G6 is checked last because it is the only gate the arriving audio itself moves: this tick's
 //! frames count before it is judged.
 //!
-//! ## The rules this holds (the audio design's §6, M1–M12)
+//! ## The rules this holds
 //!
 //! - **M1: the hold arms, audio keys.** [`MicLatch::arm`] keys nothing. The first frame accepted
 //!   after the arm answers [`MicTick::Key`], and only then is PTT asserted; the audio follows a
@@ -50,7 +50,7 @@
 //!
 //! ## Where the transport moved the design (it was written for the relay's audio lane)
 //!
-//! The page's microphone reaches the station as a WebRTC Opus track (plan S6), not as `audioTx`
+//! The page's microphone reaches the station as a WebRTC Opus track, not as `audioTx`
 //! bundles on the relay. Three of the design's mechanics are therefore carried by something else,
 //! and the rule is kept in each case:
 //! - **Late (M4).** RTP carries no sender clock the station can trust, so there is no
@@ -60,14 +60,14 @@
 //! - **The over epoch (M12).** An RTP packet carries no over id. The epoch is the feed's: it moves
 //!   on every drop, and the feed refuses every frame until the next arm, so audio from a dead over
 //!   cannot reach a live one.
-//! - **The jitter buffer.** The design's 60 ms (§5.2) is the lead-in: audio is held until
+//! - **The jitter buffer.** The design's 60 ms is the lead-in: audio is held until
 //!   [`MicMode::lead_in_ms`] after the key, and the first [`MicMode::ahead_ms`] of the over is a
 //!   silent pre-roll that gives the output ring its cushion. A frame may therefore arrive up to the
 //!   lead-in late and still be played at its moment, and the voice reaches the air
 //!   `lead_in_ms + ahead_ms` after it reached the station: the design's 60 + 40.
 //!
 //! Silence is what fills a moment whose frame never came: no concealment, so a loss can never
-//! become a burst on the air (design §7), and nothing heard on the air was made up here.
+//! become a burst on the air, and nothing heard on the air was made up here.
 //!
 //! ## The holes, counted for the operator to see
 //!
@@ -135,13 +135,13 @@ impl MicMode {
     }
 }
 
-/// The browser microphone. 10 minutes matches RTTY and PSK31, one ceiling for every latched mode
-/// (design §9, decision 2); 200 ms is five 40 ms bundles, or ten 20 ms frames, and this codebase's
-/// meaning of "no longer current" (design M2).
+/// The browser microphone. 10 minutes matches RTTY and PSK31, one ceiling for every latched mode;
+/// 200 ms is five 40 ms bundles, or ten 20 ms frames, and this codebase's
+/// meaning of "no longer current" (M2).
 ///
 /// The worst case after a total link death, which these numbers are chosen for: the gap (200 ms)
 /// plus at most the look-ahead queued (40 ms), then the sound card's own buffer, about 280 ms of
-/// RF after the last audio the operator spoke (design M2).
+/// RF after the last audio the operator spoke (M2).
 pub const MIC: MicMode = MicMode {
     name: "Remote microphone",
     max_latch_ms: 10 * 60 * 1000,
@@ -155,7 +155,7 @@ pub const MIC: MicMode = MicMode {
 };
 
 /// A program's audio over through Nexus's TCI server (`engine/tci.rs`): the same machinery with a
-/// program's numbers (the TCI server design, §3.3). Everything is the microphone's but the gap:
+/// program's numbers. Everything is the microphone's but the gap:
 /// 300 ms against 200, because a program under decode load may answer the server's TX_CHRONO late
 /// (UNVERIFIED until the loop bench measures WSJT-X's worst answer). The ceiling is the same 10
 /// minutes and no setting raises it; it cuts FST4's and FST4W's longest periods and fits every other
@@ -503,8 +503,8 @@ impl MicLatch {
         keyed
     }
 
-    /// The over's owner let go of it, the GRACEFUL end (a TCI program's own `trx:0,false`, the
-    /// server design's §3.4): flushing there would cut the last of the audio it sent. A keyed over
+    /// The over's owner let go of it, the GRACEFUL end (a TCI program's own `trx:0,false`):
+    /// flushing there would cut the last of the audio it sent. A keyed over
     /// goes on playing what it has accepted, its gates still checked on every tick, and the tick
     /// after its last sample is fed answers [`MicDrop::Drained`]. The caller stops pushing at the
     /// release; what the feed already holds still plays. An over that never keyed has put nothing
@@ -590,7 +590,7 @@ impl MicLatch {
         if !gates.tx_enabled || !gates.tx_allowed || gates.tuning || !gates.in_section {
             return MicTickResult::dropped(MicDrop::GateDown);
         }
-        // G5: the permit for THIS over (M7). A lapse, or another session's presence, ends it.
+        // G5: the permit for THIS over. A lapse, or another session's presence, ends it.
         if !gates.presence {
             return MicTickResult::dropped(MicDrop::Presence);
         }

@@ -39,6 +39,7 @@ import {
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
 import type { AppSnapshot } from '../types'
+import { EN } from '../i18n'
 import type { CwPanelId, PanelLayoutApi, PanelState, PhonePanelId } from '../features/panelState'
 
 // THE BUDGET (2026-10-09). The slowest case here, "Phone, audio bandscope: listed, ticked, and it says…", takes
@@ -538,6 +539,37 @@ describe('⊞ Panels — TX Meters say when they have anything to show', () => {
     await openCw()
     const box = expectOperable('TX Meters')
     expect(box.getAttribute('aria-describedby')).toBe(screen.getByText(TX_METERS_WHEN).id)
+  })
+})
+
+describe('⊞ Panels — the CW Turn Cue says when it can show', () => {
+  // The cue reads the AI decoder's copy, so it shows only with that decoder on and the CW Decode
+  // pane shown (never in an unassisted entry). While it cannot, its entry says what brings it,
+  // and stays a tick the operator may answer either way.
+  const withAi = (state: Partial<Record<CwPanelId, PanelState>> = {}) =>
+    openMenu(
+      <CwCockpit
+        snap={{ ...cwSnap(), aiCw: { enabled: true, status: '', text: '' } } as unknown as AppSnapshot}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={fakePanels<CwPanelId>(state)}
+      />,
+    )
+
+  it('with the AI decoder off: listed, operable, and it says what brings it', async () => {
+    await openCw()
+    expectExplained('Turn Cue', EN['cw.panel.turnCue.note'])
+  })
+
+  it('with the AI decoder on but the Decode pane closed: the same line', async () => {
+    await withAi({ decode: 'removed' })
+    expectExplained('Turn Cue', EN['cw.panel.turnCue.note'])
+  })
+
+  it('with the AI decoder on and the Decode pane shown: no reason', async () => {
+    await withAi()
+    expectUnexplained('Turn Cue')
   })
 })
 

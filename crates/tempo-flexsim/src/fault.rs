@@ -48,8 +48,7 @@ pub enum Fault {
     /// **Reordered replies.** The reply to a command whose text equals `command` is held back
     /// and sent after the reply to the next command. Its statuses go out as usual.
     ///
-    /// *Guard:* replies matched by sequence number, never by arrival order (spec §10.5, the same
-    /// row as the split line).
+    /// *Guard:* replies matched by sequence number, never by arrival order.
     ReorderReply { command: String },
 
     /// **A dropped ping.** Pings `first` to `first + count - 1` on a connection (counted from 1)
@@ -58,9 +57,8 @@ pub enum Fault {
     /// [`crate::server::Config::keepalive_timeout`], as the radio does after 15 s
     /// (TCPIP-keepalive).
     ///
-    /// *Guard:* the client's keepalive. Five missed ping replies end the session and one does not
-    /// (port plan §4.5), and during an over a missed ping unkeys locally before anything else
-    /// (spec §6.3; §10.5, "A radio-side backstop").
+    /// *Guard:* the client's keepalive. Five missed ping replies end the session and one does not,
+    /// and during an over a missed ping unkeys locally before anything else.
     DropPings { first: usize, count: usize },
 
     /// **A command the radio does not answer.** Every command whose text starts with `starting`
@@ -79,11 +77,11 @@ pub enum Fault {
     /// under that handle. A later connection's `sub tx all` reports the transmitter still held by
     /// the old handle.
     ///
-    /// *Guard:* the unkey readback (port plan §3.4). Keyed is cleared only by the interlock
+    /// *Guard:* the unkey readback. Keyed is cleared only by the interlock
     /// sequence (UNKEY_REQUESTED, READY, then READY with `tx_client_handle=0x00000000`), never by
     /// the reply to `xmit 0`. When the 5-second transition deadline passes, the client sends
     /// `xmit 0` again, closes the session and tells the operator the radio did not confirm the
-    /// unkey (spec §10.5, "Wall-clock watchdog": "`tx=1` never clears → escalation").
+    /// unkey.
     StuckTransmit,
 
     /// **A tune carrier that never drops.** `transmit tune 0` is acknowledged with success, but
@@ -195,9 +193,9 @@ pub enum Fault {
     /// what [`Foreign`] says about the transmitter.
     ///
     /// *Guard:* ownership by `client_handle`. Another client's slice, pan and waterfall are shown
-    /// but never retuned, adopted or removed (the port's ownership policies, port plan §2.1), and
+    /// but never retuned, adopted or removed (the port's ownership policies), and
     /// Nexus keys only when the TX slice is its own and the interlock names no transmitting
-    /// client, or names Nexus (port plan §4.6; spec §10.5, "Whose transmitter"). The evidence is
+    /// client, or names Nexus. The evidence is
     /// the transcript: no command naming the foreign slice, pan or waterfall
     /// ([`Foreign::is_named_by`]), and no `xmit 1` while the transmitter is not ours to take.
     ForeignClient(Foreign),
@@ -205,14 +203,13 @@ pub enum Fault {
     /// **A disconnect mid-over.** The first time a client keys (`xmit 1`, or the radio's own tune
     /// carrier, `transmit tune 1`, answered with success), the simulator closes that TCP session
     /// `after` the interlock reports TRANSMITTING. Whether a real radio unkeys a client whose
-    /// connection drops is not established (port plan §3.4 leaves it to the bench);
+    /// connection drops is not established (it is left to the bench);
     /// `radio_stays_keyed` plays the worse answer, and the next connection then sees the
     /// transmitter, or the tune carrier, held by the dropped handle.
     ///
     /// *Guard:* losing the session while keyed. The client unkeys locally before anything else,
     /// stops feeding DAX TX, reconnects on its ladder without swapping the connection under a
-    /// keyed transmitter, and restores the audio routing at the next connect (spec §10.5, "No
-    /// connection swap while keyed" and "Audio routing").
+    /// keyed transmitter, and restores the audio routing at the next connect.
     DisconnectMidOver {
         after: Duration,
         radio_stays_keyed: bool,
@@ -227,7 +224,7 @@ pub enum Fault {
     /// *Guard:* coexistence (operator ruling, 2026-10-03: "when SmartSDR's DAX is also
     /// connected, never write the flag"). Nexus never writes `transmit set dax`, never creates
     /// its own DAX transmit stream and never sends a DAX TX packet beside it; its transmit audio
-    /// stays on the sound card route (port plan §3.2, the DAX TX and `transmit set dax` rows).
+    /// stays on the sound card route.
     ForeignDaxTx(ForeignDax),
 
     /// **A refused DAX transmit stream.** `stream create type=dax_tx` is answered with an error
@@ -245,7 +242,7 @@ pub enum Fault {
     /// does this on a real radio, as AetherSDR records).
     ///
     /// *Guard:* the refcounted DAX broker. A stream removed while a slice still holds its channel
-    /// is created again after the recreate delay (port plan §2.1, the broker row).
+    /// is created again after the recreate delay.
     DropDaxRx { stream_id: u32, after: Duration },
 }
 

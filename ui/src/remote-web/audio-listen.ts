@@ -139,8 +139,8 @@ export class AudioLink {
   }
 
   /** Ask the station to start feeding this browser. `leaseId` is the browser's claim to
-   *  station control; the station re-checks it against its own authority and refuses a
-   *  logging-only lease, so this is a request and never an assertion. */
+   *  station control; the station re-checks it against its own authority, so this is a
+   *  request and never an assertion. */
   listen(leaseId: string): void {
     if (this.closed) return
     if (!this.view.supported) { this.set('unsupported', 'audioUnsupported'); return }

@@ -23,8 +23,6 @@ export interface Js8SavedShown {
 }
 
 interface Props {
-  /** May this window send (the Remote observes). */
-  canControl: boolean
   /** A message waits to go or the key is down (JS8Call's `isMessageQueuedForTransmit()`, the
    *  cockpit's `queued`): JS8Call greys these out until it has gone, on the predicate it greys CQ
    *  and HB on (`updateButtonDisplay`, mainwindow.cpp:5675-5689). */
@@ -81,22 +79,22 @@ export function Js8ComposeActions(p: Props) {
   const statusTitle = p.sendAtOnce ? t('js8.dock.quick.status.send') : t('js8.dock.quick.status.fill')
   return (
     <span className="js8-quick-group" role="group" aria-label={t('js8.dock.quick.aria')}>
-      <button type="button" className="cw-macro js8-quick js8-reply" disabled={!p.canControl || p.busy || noCall} onClick={p.onReply} title={replyTitle}>
+      <button type="button" className="cw-macro js8-quick js8-reply" disabled={p.busy || noCall} onClick={p.onReply} title={replyTitle}>
         <span className="cw-macro-label">{REPLY}</span>
       </button>
       <button
         type="button"
         className="cw-macro js8-quick js8-snr-send"
-        disabled={!p.canControl || p.busy || noCall || !p.heard}
+        disabled={p.busy || noCall || !p.heard}
         onClick={p.onSnr}
         title={snrTitle}
       >
         <span className="cw-macro-label">{SNR_WORD}</span>
       </button>
-      <button type="button" className="cw-macro js8-quick js8-info" disabled={!p.canControl || p.busy || !p.infoSet} onClick={p.onInfo} title={infoTitle}>
+      <button type="button" className="cw-macro js8-quick js8-info" disabled={p.busy || !p.infoSet} onClick={p.onInfo} title={infoTitle}>
         <span className="cw-macro-label">{INFO_WORD}</span>
       </button>
-      <button type="button" className="cw-macro js8-quick js8-status" disabled={!p.canControl || p.busy} onClick={p.onStatus} title={statusTitle}>
+      <button type="button" className="cw-macro js8-quick js8-status" disabled={p.busy} onClick={p.onStatus} title={statusTitle}>
         <span className="cw-macro-label">{STATUS_WORD}</span>
       </button>
       <RM.Root modal={false}>
@@ -104,7 +102,7 @@ export function Js8ComposeActions(p: Props) {
           <button
             type="button"
             className="cw-macro js8-quick js8-saved"
-            disabled={!p.canControl || p.busy}
+            disabled={p.busy}
             title={p.sendAtOnce ? t('js8.dock.saved.title.send') : t('js8.dock.saved.title.fill')}
           >
             {/* One label, the ▾ inside it: a macro key stacks its children. */}

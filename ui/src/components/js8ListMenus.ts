@@ -168,8 +168,6 @@ export interface Js8Jump {
   /** JS8Call's "Center filter at …Hz": the decode filter centred on the row's offset, offered only
    *  while the filter is on (`js8CentreFilterItem`); null for none. */
   centreFilter: MenuItem | null
-  canJump: boolean
-  canChangeSpeed: boolean
   onJump: (hz: number) => void
   onSpeed: (speed: Js8Speed) => void
 }
@@ -180,13 +178,13 @@ export function js8JumpEntries(j: Js8Jump): Js8MenuEntry[] {
   const out: Js8MenuEntry[] = []
   if (j.hz != null) {
     const hz = j.hz
-    out.push({ kind: 'item', label: t('js8.lists.jumpOffset', { offset: hz }), onSelect: () => j.onJump(hz), disabled: j.offsetLocked || !j.canJump })
+    out.push({ kind: 'item', label: t('js8.lists.jumpOffset', { offset: hz }), onSelect: () => j.onJump(hz), disabled: j.offsetLocked })
     const f = j.centreFilter
     if (f) out.push({ kind: 'item', label: f.label, onSelect: f.onSelect, disabled: f.disabled })
   }
   if (j.speed && j.current && j.speed !== j.current) {
     const speed = j.speed
-    out.push({ kind: 'item', label: t('js8.lists.jumpSpeed', { speed: speedName(speed) }), onSelect: () => j.onSpeed(speed), disabled: !j.canChangeSpeed })
+    out.push({ kind: 'item', label: t('js8.lists.jumpSpeed', { speed: speedName(speed) }), onSelect: () => j.onSpeed(speed) })
   }
   return out
 }

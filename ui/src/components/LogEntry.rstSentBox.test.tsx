@@ -27,7 +27,7 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
   setLogFormGrid: vi.fn(() => Promise.resolve()),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -83,7 +83,7 @@ function renderStrip(exchange: 'terrestrial' | 'satellite' = 'terrestrial', fd: 
 
 const on = (): FieldDayStatus => ({ ...ilqp(), rstSentBox: '599' }) as FieldDayStatus
 const sentBox = () => screen.queryByLabelText(t('logEntry.fd.rstSent.label')) as HTMLInputElement | null
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const qthBox = () => screen.getByLabelText('County / State') as HTMLInputElement
 
 afterEach(() => {

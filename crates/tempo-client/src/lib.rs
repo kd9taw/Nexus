@@ -53,6 +53,8 @@ pub mod alert {
     /// The event every alert is raised as, on each window and on the command link.
     pub const EVENT: &str = "alert";
 }
+/// The account, as a station checks it: the built-in sign-in, proofs, the issuer's keys, devices.
+pub mod account;
 /// The audio road, beside the command link, and this computer's headset.
 pub mod audio_road;
 /// Test builds only (the `bench-road-switch` feature): the switch this computer's roads to the shack
@@ -67,6 +69,8 @@ pub mod datagram;
 pub mod dispatch;
 /// An internet road's way across: its socket, ICE, and the relay.
 pub mod ice;
+/// An ID token from the account's issuer, checked here: signature, issuer, audience, life, nonce.
+pub mod id_token;
 /// The command link, protocol 2, which client mode drives.
 pub mod link;
 /// The internet road's account side: signed requests and the first sign-in.

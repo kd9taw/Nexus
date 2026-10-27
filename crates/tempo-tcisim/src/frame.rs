@@ -3,7 +3,7 @@
 //!
 //! Written for the simulator from the spec, independently of Nexus's client codec.
 //!
-//! **What the spec leaves loose, and what the simulator does** (plan §2.3):
+//! **What the spec leaves loose, and what the simulator does**:
 //! 1. **Byte order** is not stated. Every implementation read writes little-endian; so does this.
 //! 2. **`length`** is "the number of samples". WSJT-X, AetherSDR and the Go client read it as
 //!    sample values (frames × channels); the spec's own advice on minimum sizes only fits frames.

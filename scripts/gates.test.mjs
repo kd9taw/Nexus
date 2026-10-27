@@ -402,6 +402,26 @@ test('`if:` is shown, and one that cannot be evaluated blocks the step instead o
   assert.ok(always.out.includes('alpha-ran'));
 });
 
+test('`if: ${{ !cancelled() }}` runs here, where nothing cancels a run, and every neighbour still blocks', () => {
+  const at = (name, expr) =>
+    scratch(name, MINIMAL.replace('      - name: alpha gate\n', `      - name: alpha gate\n        if: ${expr}\n`));
+  const run = gates(['--workflow', at('not-cancelled.yml', '${{ !cancelled() }}')]);
+  assert.equal(run.code, 0, run.out);
+  assert.ok(run.out.includes('alpha-ran'), '`!cancelled()` was not run');
+
+  // CONTROL: the near misses are not this expression, and are refused as before.
+  for (const expr of [
+    '${{ !failure() }}',
+    "${{ !cancelled() && github.event_name == 'push' }}",
+    '${{ !cancelled() || failure() }}',
+    '${{ cancelled() }}',
+  ]) {
+    const near = gates(['--workflow', at('near-miss.yml', expr)]);
+    assert.notEqual(near.code, 0, `${expr} left a green exit:\n${near.out}`);
+    assert.ok(!near.out.includes('alpha-ran'), `${expr} was guessed as true`);
+  }
+});
+
 test('a step key this script does not implement is reported, not ignored', () => {
   const file = scratch(
     'strange-key.yml',

@@ -142,7 +142,7 @@ function makeSnap(over: Record<string, unknown> = {}): AppSnapshot {
 
 
 let api: PanelLayoutApi<CwPanelId> | null = null
-// The two feeds (plan H8) render only with their boards lent, as App lends them; they ship hidden.
+// The two feeds render only with their boards lent, as App lends them; they ship hidden.
 const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
 const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
 function Live() {

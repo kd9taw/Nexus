@@ -96,11 +96,16 @@ afterEach(() => {
 })
 
 /** Settings that show each conditional control: the CAT broker's PTT, the TCI server's own
- *  controls, the Icom network address or the serial PTT port and lines, the SWR threshold. Two, as
- *  one radio connects one way. */
+ *  controls, the Icom network address or the serial PTT port and lines, the Flex client's Beta, the
+ *  SWR threshold, the CW keyline's port and line or the WinKeyer's port, and true FSK's port and
+ *  line. Three, as one radio connects one way and CW keys one way. */
 const SHOWING = [
-  { rigConn: 'icomlan', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
-  { rigConn: 'serial', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
+  { rigConn: 'icomlan', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts',
+    cwKeyer: 'serial', rttyBackend: 'fsk' },
+  { rigConn: 'serial', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts',
+    cwKeyer: 'winkeyer', rttyBackend: 'fsk' },
+  { rigConn: 'network', rigModel: 2036, flexNativeCat: true, flexRadioIp: '192.168.1.20', catBroker: true, tciServer: true,
+    wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
 ]
 
 /** Each station-only control on every tab, by setting, with the settings `read` answers; and each

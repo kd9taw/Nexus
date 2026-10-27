@@ -25,6 +25,8 @@ const T0 = 1_792_342_800
 
 /** The station's operating section, as its snapshots say (`radio.operatingMode`). */
 let section = 'phone'
+/** The Keyboard section's mode on the air, as its snapshots say (`radio.keyboardMode`). */
+let keyboardMode: string | undefined
 /** The contest log, as the engine holds it. */
 let log: Record<string, unknown>[] = []
 /** The shared entry while this window is open (`contest_entry.rs`): a put replaces it, a log moves
@@ -32,6 +34,8 @@ let log: Record<string, unknown>[] = []
 let entry = { rev: 1, call: '', fields: {} as Record<string, string>, marks: null as unknown }
 /** Every contact the window asked the engine to log: call, received vector, mode class. */
 let logged: { call: string; fields: [string, string][]; mode: string }[] = []
+/** The sub-mode each of those contacts was logged under (`submode`), in the same order. */
+let submodes: (string | null)[] = []
 /** What the window's poll reads: the station as it stood at the last `poll()`. */
 let published: unknown = null
 
@@ -41,7 +45,7 @@ const snapshot = () => ({
   mycall: 'KD9TAW',
   mygrid: 'EN52',
   mode: 'FieldDay',
-  radio: { dialMhz: 7.04, band: '40m', sideband: 'USB', operatingMode: section, txEnabled: false, txAllowed: true },
+  radio: { dialMhz: 7.04, band: '40m', sideband: 'USB', operatingMode: section, keyboardMode, txEnabled: false, txAllowed: true },
   link: { tier: 'Ft8' },
   stations: [],
   conversations: [],
@@ -86,6 +90,7 @@ function respond(cmd: string, args: Record<string, unknown> | undefined): unknow
     const fields = args!.fields as [string, string][]
     const mode = args!.mode as string
     logged.push({ call: args!.call as string, fields, mode })
+    submodes.push((args!.submode as string | null) ?? null)
     log = [
       ...log,
       { call: args!.call, class: '', section: '', band: '40m', mode, submode: mode === 'PH' ? 'SSB' : '', whenUnix: T0 + log.length * 60, rcvd: fields.map(([, v]) => v) },
@@ -95,13 +100,15 @@ function respond(cmd: string, args: Record<string, unknown> | undefined): unknow
   }
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
 beforeEach(() => {
   localStorage.clear()
   section = 'phone'
+  keyboardMode = undefined
+  submodes = []
   log = []
   entry = { rev: 1, call: '', fields: {}, marks: null }
   logged = []
@@ -130,7 +137,7 @@ const poll = () => {
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 const strip = () => screen.getByRole('region', { name: t('contestLogger.entry.aria') })
 const box = (caption: string) => within(strip()).getByLabelText(caption) as HTMLInputElement
-const callBox = () => within(strip()).getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => within(strip()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const sending = () => strip().querySelector('.le-fd-sent-val')?.textContent
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const lastLogged = () => logged[logged.length - 1]
@@ -214,5 +221,30 @@ describe('the contest logger window: the report follows the mode', () => {
     section = 'phone'
     await poll()
     expect(sending(), 'back on phone').toBe('59 MCHE')
+  })
+})
+
+// ⭐ A JTTY CONTACT IS LOGGED AS JTTY. PSK and JTTY are one operating section ('keyboard'), and the
+// window logged under the section alone, so with the JTTY screen as the station's section a contact
+// went into the log as PSK31 — a stored mode the operator never worked. The snapshot now names the
+// Keyboard section's mode (`radio.keyboardMode`), and the window logs under it.
+describe('the contest logger window: the keyboard modes log under the mode on the air', () => {
+  it('logs a contact as JTTY on JTTY, and as PSK31 / QPSK31 on PSK', async () => {
+    section = 'keyboard'
+    keyboardMode = 'JTTY'
+    render(<DetachedPanel panel="contestlog" />)
+    await poll()
+    await logContact('K9AAA', 'COOK')
+    expect([lastLogged().mode, submodes[submodes.length - 1]], 'the JTTY contact').toEqual(['DIG', 'JTTY'])
+
+    keyboardMode = 'QPSK31'
+    await poll()
+    await logContact('K9BBB', 'WILL')
+    expect([lastLogged().mode, submodes[submodes.length - 1]], 'control: QPSK31 on PSK').toEqual(['DIG', 'QPSK31'])
+
+    keyboardMode = 'PSK31'
+    await poll()
+    await logContact('K9CCC', 'LAKE')
+    expect([lastLogged().mode, submodes[submodes.length - 1]], 'control: PSK31 on PSK').toEqual(['DIG', 'PSK31'])
   })
 })

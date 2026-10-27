@@ -7,8 +7,8 @@
 //! inbound spot on the RBN/cluster firehose, and scoring needs the operator's worked sets — which
 //! means the engine lock, and rebuilding `LogNeeds` over the whole logbook. Doing that on the
 //! ingest path would put expensive, lock-taking work on a hot producer. That is exactly the shape
-//! that made the waterfall stall (see tempo-audio `rxtap.rs`, and
-//! [[feedback-root-cause-not-bandaids]]): the callback's only job is a non-blocking handoff.
+//! that made the waterfall stall (see tempo-audio `rxtap.rs`):
+//! the callback's only job is a non-blocking handoff.
 //!
 //! THE COST MODEL. `LogNeeds` is derived from every logged QSO — at 11k contacts that is far too
 //! expensive per spot. It is re-read on a slow cadence from the model every other reader shares
@@ -68,6 +68,67 @@ pub struct SpotHint {
     pub freq_mhz: f64,
     pub mode: String,
     pub spotted_unix: i64,
+    /// Who reported it: the spotter, then any corroborators the spot already carries. Read only
+    /// by the "Spotted from" filter ([`SpotterFilter`]).
+    pub voices: Vec<String>,
+}
+
+/// THE SPOTS BOARD'S "SPOTTED FROM" CHIPS, WHICH POUNCE FOLLOWS (#174). The operator who has
+/// narrowed the board to spots heard from France should not be called to the radio by a spot only
+/// a US skimmer heard. The board sends its chips here whenever they change (`set_pounce_spotter_filter`);
+/// nothing is saved, as the chips themselves are kept for the session only.
+///
+/// The board's own rule, so the two cannot disagree: both lists empty admits everything; otherwise
+/// a spot is kept when ANY of its voices is on a chosen continent (if any is chosen) and in a
+/// chosen country (if any is chosen), each voice placed by `spotter_origin`, the resolver that
+/// made the chips. A spot none of whose voices can be placed matches nothing. Applied BEFORE the
+/// gate, so a filtered-out spot spends none of the station's cooldown: when the same station is
+/// then heard from France, Pounce fires.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct SpotterFilter {
+    /// Continent codes as the chips carry them (`EU`, `NA`, ...).
+    #[serde(default)]
+    pub conts: Vec<String>,
+    /// DXCC entity names as the chips carry them.
+    #[serde(default)]
+    pub entities: Vec<String>,
+}
+
+impl SpotterFilter {
+    pub fn admits(&self, voices: &[String]) -> bool {
+        if self.conts.is_empty() && self.entities.is_empty() {
+            return true;
+        }
+        let origins: Vec<(&str, &str)> = voices
+            .iter()
+            .filter_map(|v| propagation::needalert::spotter_origin(v))
+            .collect();
+        (self.conts.is_empty()
+            || origins
+                .iter()
+                .any(|(c, _)| self.conts.iter().any(|x| x == c)))
+            && (self.entities.is_empty()
+                || origins
+                    .iter()
+                    .any(|(_, e)| self.entities.iter().any(|x| x == e)))
+    }
+}
+
+/// The filter the detector reads per spot and the board's command writes. Its own type, so
+/// Tauri's managed state can tell it apart.
+#[derive(Clone, Default)]
+pub struct SharedSpotterFilter(pub Arc<Mutex<SpotterFilter>>);
+
+impl SharedSpotterFilter {
+    pub fn set(&self, filter: SpotterFilter) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = filter;
+    }
+    fn admits(&self, voices: &[String]) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .admits(voices)
+    }
 }
 
 /// The producer half, cloned into each cluster feed callback.
@@ -129,13 +190,15 @@ fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
 /// Run the detector. `on_fire` is called for each alert that clears the gate — the caller wires
 /// that to the UI (a Tauri event). The same alert is first appended to `recent`, so a Remote
 /// browser reads exactly what the desktop was told. `ota` is the hunter feed's cache, which puts
-/// a live activator in its park's state. Blocks; spawn it.
+/// a live activator in its park's state. `spotted_from` is the Spots board's "Spotted from"
+/// chips. Blocks; spawn it.
 pub fn run(
     engine: Arc<Mutex<Engine>>,
     needs_kept: crate::NeedsKept,
     ota: crate::SharedOtaSpots,
     rx: Receiver<SpotHint>,
     recent: SharedRecent,
+    spotted_from: SharedSpotterFilter,
     mut on_fire: impl FnMut(Pounce),
 ) {
     let mut gate = PounceGate::new();
@@ -148,6 +211,9 @@ pub fn run(
         let threshold = threshold_of(&engine);
         if threshold == PounceThreshold::Off {
             continue; // still drain, so a re-enable starts from live traffic
+        }
+        if !spotted_from.admits(&hint.voices) {
+            continue; // heard only from where the operator chose not to look
         }
         // Refresh the worked sets on the slow cadence, never per spot.
         if needs.is_none() || now.saturating_sub(needs_at) > NEEDS_REFRESH_SECS {
@@ -266,6 +332,7 @@ mod tests {
                 freq_mhz: 14.025,
                 mode: "CW".into(),
                 spotted_unix: 0,
+                voices: Vec::new(),
             });
         }
         // Reaching here at all is the assertion: `offer` never blocked despite the queue being
@@ -304,6 +371,19 @@ mod tests {
         feed: &[propagation::OtaSpot],
         calls: &[&str],
     ) -> Vec<(String, Vec<propagation::NeedTag>, String)> {
+        let spots: Vec<(&str, &str)> = calls.iter().map(|c| (*c, "W3LPL-#")).collect();
+        raised_with(adif, threshold, feed, &spots, SpotterFilter::default())
+    }
+
+    /// [`raised`], with each spot's spotter given (`(call, spotter)`) and the Spots board's
+    /// "Spotted from" chips set to `spotted_from`.
+    fn raised_with(
+        adif: &str,
+        threshold: SettingThreshold,
+        feed: &[propagation::OtaSpot],
+        spots: &[(&str, &str)],
+        spotted_from: SpotterFilter,
+    ) -> Vec<(String, Vec<propagation::NeedTag>, String)> {
         let mut engine = Engine::new("KD9TAW", "EN52", 0);
         engine.import_adif(adif);
         let mut settings = engine.settings().clone();
@@ -314,15 +394,18 @@ mod tests {
             .unwrap()
             .insert("POTA".into(), (crate::now_unix(), feed.to_vec()));
         let (tx, rx) = channel();
-        for call in calls {
+        for (call, spotter) in spots {
             tx.offer(SpotHint {
                 call: (*call).into(),
                 freq_mhz: 14.025,
                 mode: "CW".into(),
                 spotted_unix: crate::now_unix(),
+                voices: vec![(*spotter).into()],
             });
         }
         drop(tx);
+        let filter = SharedSpotterFilter::default();
+        filter.set(spotted_from);
         let mut fired = Vec::new();
         run(
             Arc::new(Mutex::new(engine)),
@@ -330,9 +413,82 @@ mod tests {
             ota,
             rx,
             Default::default(),
+            filter,
             |p| fired.push((p.call, p.tags, p.entity)),
         );
         fired
+    }
+
+    /// #174: POUNCE FOLLOWS THE SPOTS BOARD'S "SPOTTED FROM" CHIPS. With France chosen, an
+    /// all-time new one heard only by a US skimmer raises nothing, and the same station heard
+    /// from France then does: the filtered spot spent none of the gate's cooldown. A continent
+    /// chip works the same way, a spotter nobody can place matches nothing, and with no chip
+    /// chosen every spot is scored as before.
+    #[test]
+    fn pounce_fires_only_on_spots_heard_from_where_the_spots_board_is_narrowed() {
+        let calls = |fired: Vec<(String, Vec<propagation::NeedTag>, String)>| -> Vec<String> {
+            fired.into_iter().map(|(c, ..)| c).collect()
+        };
+        let france = SpotterFilter {
+            conts: Vec::new(),
+            entities: vec!["France".into()],
+        };
+        let spots = [("3Y0J", "W3LPL-#"), ("3Y0J", "F5ABC-#")];
+        let fired = raised_with("", SettingThreshold::Atno, &[], &spots, france.clone());
+        assert_eq!(calls(fired), vec!["3Y0J"], "fires once, on the French spot");
+        let us_only = raised_with("", SettingThreshold::Atno, &[], &spots[..1], france.clone());
+        assert!(
+            us_only.is_empty(),
+            "a US-only spot must not fire: {us_only:?}"
+        );
+
+        let europe = SpotterFilter {
+            conts: vec!["EU".into()],
+            entities: Vec::new(),
+        };
+        let eu = raised_with(
+            "",
+            SettingThreshold::Atno,
+            &[],
+            &[("3Y0J", "DL1ABC")],
+            europe.clone(),
+        );
+        assert_eq!(calls(eu), vec!["3Y0J"]);
+        let na = raised_with(
+            "",
+            SettingThreshold::Atno,
+            &[],
+            &[("3Y0J", "W3LPL")],
+            europe,
+        );
+        assert!(na.is_empty(), "{na:?}");
+
+        let unplaced = raised_with("", SettingThreshold::Atno, &[], &[("3Y0J", "???")], france);
+        assert!(unplaced.is_empty(), "{unplaced:?}");
+
+        // CONTROL: no chip chosen — the US-only spot fires, as it always has.
+        let open = raised_with(
+            "",
+            SettingThreshold::Atno,
+            &[],
+            &spots[..1],
+            SpotterFilter::default(),
+        );
+        assert_eq!(calls(open), vec!["3Y0J"]);
+    }
+
+    /// The filter's rule is the board's: ANY voice placed on a chosen continent AND in a chosen
+    /// country, each list ignored while empty.
+    #[test]
+    fn the_spotter_filter_admits_on_any_voice_as_the_board_does() {
+        let f = SpotterFilter {
+            conts: vec!["EU".into()],
+            entities: vec!["Fed. Rep. of Germany".into()],
+        };
+        assert!(f.admits(&["W3LPL".into(), "DL1ABC-#".into()]));
+        assert!(!f.admits(&["F5ABC".into()]), "EU but not Germany");
+        assert!(!f.admits(&[]), "nobody to place");
+        assert!(SpotterFilter::default().admits(&[]));
     }
 
     /// ⭐ "NEW ENTITY, ZONE, OR US STATE" FIRES ON A NEEDED STATE, AND ON NOTHING ELSE. A spot

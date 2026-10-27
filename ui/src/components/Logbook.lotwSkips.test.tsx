@@ -129,3 +129,13 @@ describe('LoTW upload — contacts that changed while TQSL was signing', () => {
     expect(skipToasts()).toHaveLength(0)
   })
 })
+
+// A JTTY contact the station held back from TQSL (it would drop the record and fail the batch):
+// the report's `heldMode` reaches the screen as the connection log's own sentence.
+describe('LoTW upload — contacts held back because TQSL does not know their mode yet', () => {
+  it('says how many were held back and why', async () => {
+    await upload({ dispatched: 4, outcome: 'pending', heldMode: 1 })
+    expect(await screen.findByText(t('logbook.lotw.held', { count: 1 }))).toBeTruthy()
+    expect(skipToasts(), 'nothing changed while TQSL signed, so no such sentence').toHaveLength(0)
+  })
+})

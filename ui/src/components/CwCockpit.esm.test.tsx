@@ -118,7 +118,7 @@ vi.mock('../api', async (importOriginal) => {
     }),
     contestLogManualRows: vi.fn(async (_call: string, rows: unknown[]) => rows.map(() => true)),
     contestWorking: vi.fn(async () => ({})),
-    contestZoneHint: vi.fn(async () => null),
+    contestPlace: vi.fn(async () => null),
     logQso: vi.fn(async () => ({})),
     lookupPark: vi.fn(async () => null),
     lookupParkLive: vi.fn(async () => null),

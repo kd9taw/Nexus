@@ -189,6 +189,7 @@ const PICKER_NAMES: &[(&str, &str)] = &[
     ("arrlvhf_jan", "ARRL January VHF Contest"),
     ("arrlvhf_jun", "ARRL June VHF Contest"),
     ("arrlvhf_sep", "ARRL September VHF Contest"),
+    ("arrlrtty", "ARRL RTTY Roundup"),
     ("cqww_cw", "CQ World-Wide DX Contest (CW)"),
     ("cqww_ssb", "CQ World-Wide DX Contest (SSB)"),
     ("cqww_rtty", "CQ World-Wide RTTY DX Contest"),
@@ -6092,6 +6093,8 @@ mod tests {
             ("arrlss_ssb", Some(Serial)),
             ("cqwpx_cw", Some(Serial)),
             ("cqwpx_ssb", Some(Serial)),
+            // The RTTY Roundup's DX role sends a serial (Special Rules 4.2.2).
+            ("arrlrtty", Some(Serial)),
             ("cqww_cw", Some(TransmitterColumn)),
             ("cqww_ssb", Some(TransmitterColumn)),
             ("cqww_rtty", Some(TransmitterColumn)),

@@ -10,7 +10,7 @@
 //!
 //! **UDP.** One socket stands in for both of the radio's UDP ports (4991 for VITA-49, 4992 for
 //! the client's registration datagram). The client's address becomes known when it sends the
-//! one-byte registration datagram (the plan's §4.2, from AetherSDR's behaviour) or
+//! one-byte registration datagram (from AetherSDR's behaviour) or
 //! `client udpport <port>`, whichever is latest. Synthetic [`Stream`]s and a session's `vita`
 //! items are sent there; every datagram a client sends (DAX TX audio included) is logged.
 //!

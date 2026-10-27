@@ -49,21 +49,21 @@
 // covered below; the third is not, and stays uncovered:
 //   · KEYBOARD-ONLY STOPS — COVERED. Phone's Space and every screen's Esc are `window` listeners,
 //     and a real App mount has a real `window`: Operate's, CW's, RTTY's, PSK's and JS8's are the
-//     cockpits' own; Tempo's, Phone's, SSTV's, APRS's and Satellites' are App's (N71). They are
+//     cockpits' own; Tempo's, Phone's, SSTV's, APRS's and Satellites' are App's. They are
 //     census-only for stop-line.test.tsx because that file finds BUTTONS BY ACCESSIBLE NAME;
 //     nothing about them resists a bridge-level check, and the Esc census near the end of this
 //     file presses Esc on every section in the registry.
 //   · CONDITIONALLY RENDERED — COVERED. RTTY's sequencer Abort renders only inside
 //     `{auto && seqState !== 'idle'}`; both flags come from the `get_rtty_state` poll, so the
 //     bridge fixture puts the cockpit in that state and the button is on screen.
-//   · SSTV's keyboard stop is App's Esc (N71); the only Escape in SstvView itself is a React
+//   · SSTV's keyboard stop is App's Esc; the only Escape in SstvView itself is a React
 //     `onKeyDown` on the preview that deselects an overlay item, and it still does.
 // Genuinely out of reach: nothing on the census. Two deliberate omissions, both OFF it: APRS
-// renders no stop BUTTON (its stops are the TX latch and, from N71, Esc), and the header's ATU —
+// renders no stop BUTTON (its stops are the TX latch and Esc), and the header's ATU —
 // which keys the RIG's own tuning carrier, bounded by the rig — is not a stop control and renders
 // only when `radio.atu != null`, which this fixture does not set.
 // What this file still does NOT prove is what the BACKEND does with the command — `halt_tx`
-// reaching the bridge is not `halt_tx` unkeying a rig. That is `reference-tx-safety-invariants`
+// reaching the bridge is not `halt_tx` unkeying a rig. That is the transmit-safety invariants'
 // territory and belongs to the Rust suites.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react'
@@ -218,6 +218,8 @@ const cwDecodeResult = {
   workedCall: null as string | null,
 }
 const sstvState = { sending: true, rxLine: 0, txLine: 0 }
+// JTTY's receive state, whole: the cockpit reads its lines and Rx/F Tol on every render.
+const jttyState = { armed: true, rxHz: 1500, ftolHz: 20, lowHz: 200, highHz: 3000, lines: [], heard: [], notice: null }
 const js8State = {
   speed: 'normal',
   rxSpeeds: 15,
@@ -251,6 +253,7 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   }
   if (/^(get_rtty_state|rtty_)/.test(cmd)) return rttyState
   if (/^(get_psk_state|psk_)/.test(cmd)) return pskState
+  if (/^(get_jtty_state|jtty_)/.test(cmd)) return jttyState
   if (/^(get_sstv_state|sstv_)/.test(cmd)) return sstvState
   if (/^(get_js8_state|js8_)/.test(cmd)) return js8State
   if (/^(cw_decode|get_cw_state)$/.test(cmd)) return cwDecodeResult
@@ -453,7 +456,7 @@ describe('Phone', () => {
   // Space does everywhere else in a browser: ⊞ Arrange is a grid of buttons, with Undo and Reset
   // beside it. ONLY THE PRESS is exempt. The release still asks one question, "are we keyed?", so
   // an over keyed from outside the menu unkeys wherever focus has gone by the release
-  // (reference-tx-safety-invariants: an unkey a guard can swallow is a stuck transmitter).
+  // (an unkey a guard can swallow is a stuck transmitter).
   describe('Space inside the ⊞ menu presses the menu, never the transmitter', () => {
     it('an Arrange move, Undo and Reset each act, and nothing reaches the transmit path', async () => {
       const pop = await openPanels()
@@ -695,7 +698,7 @@ describe('JS8', () => {
 //
 // Remote as a stream: a streamed operator's input reaches this window as DOM events that the input
 // bridge dispatches (remote-native/stream-input.ts), fed here through the Tauri event the station
-// emits. Held against the REAL cockpit and the real api module, the lead's rules for it: a key or a
+// emits. Held against the REAL cockpit and the real api module, the rules for it: a key or a
 // click travels as itself and the cockpit decides what it means (a Space outside a field is PTT, in
 // a field it types); and whatever the stream holds down is a re-asserted state that comes up
 // within 200 ms of the page going quiet (the dead-man), with the station's `reset` as the backstop.
@@ -758,7 +761,7 @@ describe('Phone, over the stream', () => {
   })
 
   it('a streamed space typed into a field is typed there, and keys nothing', async () => {
-    const comment = [...document.querySelectorAll<HTMLInputElement>('input.le-comment')].find((el) => el.closest('[hidden]') == null)
+    const comment = [...document.querySelectorAll<HTMLTextAreaElement>('textarea.le-comment')].find((el) => el.closest('[hidden]') == null)
     expect(comment, 'the log strip\'s comment field is not on screen').toBeTruthy()
     at(comment!)
     const m = mark()
@@ -813,7 +816,7 @@ describe('Phone, over the stream', () => {
 
 // ── Esc stops transmit on every operating screen and on Satellites ─────────────────────────
 //
-// Measured with real keys in a real browser (N66, 2026-09-28): Esc stopped transmit on FT, CW,
+// Measured with real keys in a real browser (2026-09-28): Esc stopped transmit on FT, CW,
 // RTTY, PSK and JS8, each of which binds its own Esc while it is on show. It did NOTHING on Tempo,
 // SSTV and APRS; on Phone it stopped only the voice keyer; and on Satellites, where App hides the
 // top bar's transmit controls, there was no stop of any kind, by key or by button. On those five
@@ -863,9 +866,11 @@ const ESC_SCREENS: EscScreen[] = [
   // The halt first, then the voice keyer's own stop (its listener, unchanged, ignores Esc in a field).
   { view: 'phone', area: 'dx', drawn: () => shown('.ph-ptt'), esc: ['halt_tx', 'stop_voice'] },
   { view: 'sstv', area: 'dx', drawn: () => shown('.sstv-tx-bar'), esc: ['halt_tx'] },
+  // JTTY transmits nothing of its own yet: its TX strip's Stop TX is the halt, and App binds Esc to it.
+  { view: 'jtty', area: 'dx', drawn: () => shown('main.jtty-cockpit'), esc: ['halt_tx'] },
   { view: 'aprs', area: 'dx', drawn: () => shown('main.aprs-cockpit'), esc: ['halt_tx'] },
   { view: 'sats', area: 'dx', drawn: () => shown('.sats-view'), esc: ['halt_tx'] },
-  // Connect draws no top bar, so no Stop TX of its own (N65): App's halt is its stop.
+  // Connect draws no top bar, so no Stop TX of its own: App's halt is its stop.
   { view: 'connect', area: 'dx', drawn: () => shown('main .connect-shell'), esc: ['halt_tx'] },
 ]
 
@@ -941,6 +946,7 @@ describe('a menu or panel that Esc closes still closes, and the halt is sent on 
     ['cw (the reference)', 'cw', ['stop_cw', 'halt_tx']],
     ['rtty', 'rtty', ['rtty_stop', 'halt_tx']],
     ['psk', 'psk', ['psk_stop', 'halt_tx']],
+    ['jtty', 'jtty', ['halt_tx']],
     ['js8', 'js8', ['halt_tx']],
     ['phone', 'phone', ['halt_tx', 'stop_voice']],
     ['sstv', 'sstv', ['halt_tx']],
@@ -1236,7 +1242,7 @@ describe('every command this file sends exists in the Rust command surface', () 
 // the mark. The CSS half (no rule in either sheet hides the cluster at any size) is
 // TopBar.small.test.tsx; the geometry is the real-browser sweep's.
 describe("the top bar's Stop TX on every screen without a cockpit", () => {
-  const COCKPITS: View[] = ['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'sstv', 'aprs', 'js8', 'sats']
+  const COCKPITS: View[] = ['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'sstv', 'aprs', 'js8', 'sats']
   const BAR_STOP = sectionFeatures()
     .map((f) => f.id as View)
     // Conditions (code id 'connect') draws no top bar since 2026-10-01 — the operator's ruled exception, held in "Connect — no radio

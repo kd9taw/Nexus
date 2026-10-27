@@ -126,6 +126,15 @@ pub enum LogOp {
         dxcc: Option<u32>,
         country: Option<String>,
     },
+    /// The operator sets — or removes, `None` — fields the log keeps as written
+    /// ([`QsoRecord::extra`]: a county, a zone, a tag another program wrote), from the contact
+    /// card. Its own op beside [`Edit`](LogOp::Edit), for [`SetSatTag`](LogOp::SetSatTag)'s
+    /// reason: an edit's empty passthrough means "leave it", so removing the last such field
+    /// could not be said there. Only fields that are nothing else ([`super::FieldEdit::check`]).
+    SetFields {
+        id: RecordId,
+        fields: Vec<(String, Option<String>)>,
+    },
     /// What happened the last time we pushed this contact to one connector.
     Stamp {
         id: RecordId,
@@ -160,6 +169,7 @@ impl LogOp {
             | LogOp::MarkQslCard { id, .. }
             | LogOp::SetSatTag { id, .. }
             | LogOp::SetDxcc { id, .. }
+            | LogOp::SetFields { id, .. }
             | LogOp::Stamp { id, .. }
             | LogOp::Delete(id) => Some(*id),
             LogOp::AppendOne(_) | LogOp::AppendRows(_) | LogOp::Clear => None,
@@ -171,7 +181,8 @@ impl LogOp {
     /// ([`Logbook::apply`]); the station runs it on the row it read from the store, off the
     /// Engine lock, and commits what it answers under the lock. The rules of each change live in
     /// the function it calls, and nowhere else: [`super::edited`], [`super::qsl_sent_marked`],
-    /// [`super::qsl_card_marked`], [`super::sat_tagged`], [`super::dxcc_set`], [`super::stamped`].
+    /// [`super::qsl_card_marked`], [`super::sat_tagged`], [`super::dxcc_set`], [`super::fields_set`],
+    /// [`super::stamped`].
     ///
     /// It never looks at `row`'s id: the caller found the row by it.
     pub fn apply_to(&self, row: &QsoRecord) -> RowAfter {
@@ -192,6 +203,7 @@ impl LogOp {
             LogOp::SetDxcc { dxcc, country, .. } => {
                 super::dxcc_set(&mut now, *dxcc, country.as_deref())
             }
+            LogOp::SetFields { fields, .. } => super::fields_set(&mut now, fields),
             LogOp::Stamp {
                 service, status, ..
             } => super::stamped(&mut now, *service, status.clone()),
@@ -222,6 +234,9 @@ impl LogOp {
             // entity reads `DXCC` — the awards, the needs, the statistics, the Logbook's country
             // column and its order — so a narrower class would serve them a stale entity.
             LogOp::SetDxcc { .. } => OpClass::Key,
+            // `Key` for the same reason: a field can be removed, and the passthrough holds what
+            // the awards read (the zones, a county, LoTW's own DXCC).
+            LogOp::SetFields { .. } => OpClass::Key,
             LogOp::Delete(_) | LogOp::Clear => OpClass::Structural,
         }
     }
@@ -242,6 +257,7 @@ impl Logbook {
             | LogOp::MarkQslCard { .. }
             | LogOp::SetSatTag { .. }
             | LogOp::SetDxcc { .. }
+            | LogOp::SetFields { .. }
             | LogOp::Stamp { .. }
             | LogOp::Delete(_) => {
                 let Some(id) = op.target() else {
@@ -651,5 +667,46 @@ mod tests {
         assert_eq!(effects.added.len(), 2);
         let held: Vec<RecordId> = lb.records().iter().map(|r| r.id.unwrap()).collect();
         assert_eq!(effects.added, held, "in the order they were appended");
+    }
+
+    /// ★ `SetFields`: sets, corrects and removes fields kept as written, in name order, touching
+    /// nothing else on the row — and can take off the last one, which an edit's empty
+    /// passthrough ("leave it") cannot say.
+    #[test]
+    fn set_fields_changes_exactly_the_named_passthrough_fields() {
+        let (_, ids) = seeded(&["K1ABC"]);
+        let id = ids[0];
+        let mut row = rec_of("K1ABC", 1_700_000_000);
+        row.extra = vec![
+            ("CNTY".into(), "MA,MIDDLESEX".into()),
+            ("CQZ".into(), "5".into()),
+        ];
+        let op = LogOp::SetFields {
+            id,
+            fields: vec![
+                ("CNTY".into(), Some("MA,ESSEX".into())),
+                ("CQZ".into(), None),
+                ("ITUZ".into(), Some("8".into())),
+            ],
+        };
+        let RowAfter::Now(now) = op.apply_to(&row) else {
+            panic!("a change")
+        };
+        let mut want = row.clone();
+        want.extra = vec![
+            ("CNTY".into(), "MA,ESSEX".into()),
+            ("ITUZ".into(), "8".into()),
+        ];
+        assert_eq!(*now, want);
+        assert_eq!(op.class(), OpClass::Key);
+
+        let last = LogOp::SetFields {
+            id,
+            fields: vec![("CNTY".into(), None), ("ITUZ".into(), None)],
+        };
+        let RowAfter::Now(empty) = last.apply_to(&now) else {
+            panic!("a change")
+        };
+        assert!(empty.extra.is_empty(), "the last field goes too");
     }
 }

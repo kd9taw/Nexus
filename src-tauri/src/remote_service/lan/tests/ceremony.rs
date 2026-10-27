@@ -17,7 +17,7 @@ pub(super) fn nonce() -> [u8; 32] {
 }
 
 /// The code the shack shows while its window is open, as the operator reads it off the screen.
-fn shown_code(book: &Book) -> [u8; 8] {
+pub(super) fn shown_code(book: &Book) -> [u8; 8] {
     let code = book
         .view(Instant::now())
         .pairing
@@ -67,7 +67,7 @@ pub(super) async fn open_pairing(
 }
 
 /// The station's `connection` for a computer at `peer`, pairing with `key`.
-async fn dial_pairing(
+pub(super) async fn dial_pairing(
     s: &Shack,
     key: &str,
     peer: &str,
@@ -86,7 +86,12 @@ async fn dial_pairing(
 /// The computer's half with `typed` as the code it was given: it asks to pair, checks the shack's
 /// proof, and only then sends its own. `{"shackProofFailed":true}` if the shack's did not hold,
 /// as a computer that stops there says; otherwise the shack's last word.
-async fn prove_code(p: &mut Pairing, computer: &Computer, typed: &[u8; 8], name: &str) -> Value {
+pub(super) async fn prove_code(
+    p: &mut Pairing,
+    computer: &Computer,
+    typed: &[u8; 8],
+    name: &str,
+) -> Value {
     let ours = nonce();
     send(
         &mut p.socket,

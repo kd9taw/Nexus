@@ -182,7 +182,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** Let the real rAF loop run long enough to draw several rows (ROW_MS = 50). */
+/** Let the real rAF loop run long enough to draw several rows (ROW_MS = 33). */
 const runFrames = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('rig scope per-row work', () => {

@@ -12,6 +12,8 @@ fn remote_dsp_uses_the_actual_owner_and_does_not_reconcile_back_to_old_native_ch
         });
         let canonical_mode = s.state.last_mode.clone();
         assert_ne!(canonical_mode, "LSB");
+        engine_lock(&s.engine).settings().save(&s.path).unwrap();
+        s.read_now();
         let read = s.state.remote_read(&s.engine).unwrap();
         let (before, after) = if agc {
             (
@@ -32,7 +34,6 @@ fn remote_dsp_uses_the_actual_owner_and_does_not_reconcile_back_to_old_native_ch
         };
         let receipt = {
             let mut e = engine_lock(&s.engine);
-            e.settings().save(&s.path).unwrap();
             e.set_agc("fast");
             e.agc_to_command();
             s.state.last_agc = Some("fast".into());
@@ -117,9 +118,10 @@ fn remote_dsp_unknown_write_never_enters_the_native_retry_path() {
                 },
             )
         };
+        engine_lock(&s.engine).settings().save(&s.path).unwrap();
+        s.read_now();
         let receipt = {
             let mut e = engine_lock(&s.engine);
-            e.settings().save(&s.path).unwrap();
             e.set_agc("fast");
             e.agc_to_command();
             s.state.last_agc = Some("fast".into());

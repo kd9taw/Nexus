@@ -178,8 +178,9 @@ describe('RttyCockpit pane shell', () => {
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
     // `.pane-splitter`: the divider between the transcript and the log strip (layout L6), a shell
     // child between the two frames when there is a record to keep the split in — the census with a
-    // record is in the divider's own block below.
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
+    // record is in the divider's own block below. `.rtty-wf-row`: the waterfall's strip, which holds the
+    // waterfall and, right of it, the tuning scope (2026-10-26); the waterfall is never a shell child.
+    const ALLOWED = ['.cockpit-header', '.rtty-wf-row', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txstrip', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -437,7 +438,9 @@ describe('the RTTY waterfall divider', () => {
     layOut(1000)
     await renderCockpit()
     const sep = screen.getByRole('separator', { name: 'waterfall height' })
-    expect(sep.previousElementSibling?.classList.contains('waterfall-wrap'), 'the divider is not under the strip').toBe(true)
+    // The strip is the row holding the waterfall (and the tuning scope right of it).
+    expect(sep.previousElementSibling?.classList.contains('rtty-wf-row'), 'the divider is not under the strip').toBe(true)
+    expect(sep.previousElementSibling?.querySelector(':scope > .waterfall-wrap'), 'the waterfall is not in the strip').not.toBeNull()
     expect(sep.tabIndex).toBe(0)
     // 25 % of the shell; 8em at 16 px (under 28 % of the window); 45 % of the 768 px window.
     expect(aria(sep)).toEqual(['250', '128', '346'])
@@ -459,9 +462,15 @@ describe('the RTTY waterfall divider', () => {
     expect(localStorage.getItem(KEY), 'the clamp is apply-side only').toBe('75')
   })
 
-  it('goes with the waterfall when the operator hides it', async () => {
+  it('goes with the strip: it stays while the tuning scope holds the strip alone, and goes with both', async () => {
     await renderCockpit({ panels: fakePanels(['scope']) })
+    const sep = screen.getByRole('separator', { name: 'waterfall height' })
+    expect(sep.previousElementSibling?.matches('.rtty-wf-row')).toBe(true)
+    expect(document.querySelector('.waterfall-wrap'), 'the waterfall survived its own hide').toBeNull()
+    cleanup()
+    await renderCockpit({ panels: fakePanels(['scope', 'tuning']) })
     expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
+    expect(document.querySelector('.rtty-wf-row')).toBeNull()
   })
 })
 

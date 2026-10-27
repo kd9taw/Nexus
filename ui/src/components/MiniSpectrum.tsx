@@ -13,8 +13,6 @@ import { getSpectrumRow } from '../api'
 import { agcRange, dbToSpan, WF_DB_SPAN } from '../waterfall'
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
 import type { Spectrum } from '../types'
-import { remoteApplicationTransport, applicationSessionGeneration, onApplicationSessionChange } from '../applicationTransport'
-import { t } from '../i18n'
 
 interface Props {
   /** Poll cadence (ms). The row is a cheap cached clone backend-side. */
@@ -60,7 +58,6 @@ function fmtHz(hz: number): string {
 }
 
 export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
-  const remote=!!remoteApplicationTransport()
   // The renderer's box: it puts its own canvas in here and fills it.
   const hostRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<SpectrumRenderer | null>(null)
@@ -71,13 +68,10 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
 
   useEffect(() => {
     let mounted = true
-    const clear=()=>{if(mounted){setSpec(null);setAlive(false)}}
-    const unsubscribe=remote?onApplicationSessionChange(clear):()=>{}
     const tick = () => {
-      const generation=applicationSessionGeneration()
       getSpectrumRow(false)
         .then((s) => {
-          if (!mounted || generation!==applicationSessionGeneration()) return
+          if (!mounted) return
           setSpec(s)
           // "Alive" = visible dynamic range in the row (a silent/wrong device is flat).
           // On the dB axis the 0.05 threshold reads as ~6 dB of spread across the band,
@@ -92,16 +86,15 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
           }
           setAlive(row.length > 0 && max - min > 0.05)
         })
-        .catch(() => {if(remote && generation===applicationSessionGeneration())clear()})
+        .catch(() => {})
     }
     tick()
     const iv = setInterval(tick, pollMs)
     return () => {
       mounted = false
-      unsubscribe()
       clearInterval(iv)
     }
-  }, [pollMs,remote])
+  }, [pollMs])
 
   // The renderer lives as long as the strip: a trace only, so it keeps two rows, not a history.
   useEffect(() => {
@@ -141,12 +134,8 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
       offsetRows: 0,
       newestAtTop: true,
     }
-    if (!spec?.row?.length) {
-      // A remote reading that failed clears the trace (the band is left the bare face); a local
-      // one keeps the last picture until the next row.
-      if (remote) renderer.draw({ ...base, view: { loHz: 0, hiHz: 1 }, trace: null })
-      return
-    }
+    // No row: the last picture stays until the next one.
+    if (!spec?.row?.length) return
     const w = host.clientWidth
     const h = host.clientHeight
     if (w <= 0 || h <= 0) return
@@ -175,10 +164,10 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
       view: { loHz, hiHz },
       trace: { frame: { seq: 0, tMs: 0, loHz, hiHz, bins: row, dbPerUnit: WF_DB_SPAN }, range: { floor, ceil: top } },
     })
-  }, [spec,remote])
+  }, [spec])
 
   const srcBadge =
-    remote&&!spec?'—':spec?.source === 'flex' ? 'FLEX RF' : spec?.source === 'civ' ? 'CI-V RF' : 'AUDIO'
+    spec?.source === 'flex' ? 'FLEX RF' : spec?.source === 'civ' ? 'CI-V RF' : 'AUDIO'
 
   return (
     <div className="mini-spectrum">
@@ -194,7 +183,7 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
           this box, so the trace is drawn in the dark theme's inks on a face dark in both. The
           renderer's canvas fills it. */}
       <div ref={hostRef} className="mini-spectrum-canvas well" style={{ height }} />
-      {!alive && idleHint && <div className="mini-spectrum-idle">{remote&&!spec?t('remote.collectionUnavailable'):idleHint}</div>}
+      {!alive && idleHint && <div className="mini-spectrum-idle">{idleHint}</div>}
     </div>
   )
 }

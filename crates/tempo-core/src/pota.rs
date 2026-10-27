@@ -77,7 +77,7 @@ pub fn normalize_ref(program: OtaProgram, s: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// A park directory entry (from the POTA all-parks export or an operator-imported CSV).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Park {
     /// Park reference, e.g. "K-1234" (uppercased).
     pub reference: String,
@@ -87,6 +87,10 @@ pub struct Park {
     pub grid: String,
     /// Location descriptor, e.g. "US-CA" ("" otherwise).
     pub location: String,
+    /// The park's pin, decimal degrees, when the source has one in range: what the map places
+    /// the park by, rather than the ~100 km square its 4-character grid would round it into.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 /// An in-memory, locally-searchable park index. Built from a CSV (imported file or downloaded
@@ -162,6 +166,16 @@ impl ParkIndex {
         } else {
             find(&["locationdesc", "location", "loc", "state"])
         };
+        let lat_col = if positional {
+            None
+        } else {
+            find(&["latitude", "lat"])
+        };
+        let lon_col = if positional {
+            None
+        } else {
+            find(&["longitude", "lon", "lng"])
+        };
         let get = |row: &[String], col: Option<usize>| -> String {
             col.and_then(|c| row.get(c))
                 .map(|s| s.trim().to_string())
@@ -173,11 +187,24 @@ impl ParkIndex {
             if reference.is_empty() || !reference.contains('-') {
                 return;
             }
+            let degrees = |col, limit: f64| {
+                get(&row, col)
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite() && v.abs() <= limit)
+            };
+            // A pin is both halves or neither.
+            let (latitude, longitude) = match (degrees(lat_col, 90.0), degrees(lon_col, 180.0)) {
+                (Some(lat), Some(lon)) => (Some(lat), Some(lon)),
+                _ => (None, None),
+            };
             parks.push(Park {
                 reference,
                 name: get(&row, name_col),
                 grid: get(&row, grid_col),
                 location: get(&row, loc_col),
+                latitude,
+                longitude,
             });
         };
         if positional {
@@ -307,6 +334,29 @@ K-5678,Yellowstone National Park,1,US-WY,44.6,-110.5,DN44\n";
         assert_eq!(p[0].name, "Big Bend, Texas"); // quoted comma survived
         assert_eq!(p[0].location, "US-TX");
         assert_eq!(p[0].grid, "DL89");
+        assert_eq!(
+            (p[0].latitude, p[0].longitude),
+            (Some(29.25), Some(-103.25))
+        );
+    }
+
+    /// A pin is kept only whole and in range: a park with half a pin, or none, has none.
+    #[test]
+    fn a_park_pin_is_kept_whole_or_not_at_all() {
+        let csv = "reference,name,latitude,longitude\n\
+US-0001,A,44.35,-68.21\n\
+US-0002,B,44.35,\n\
+US-0003,C,95,10\n\
+US-0004,D,,\n";
+        let idx = ParkIndex::parse_csv(csv);
+        let pin = |r: &str| {
+            let p = idx.lookup(r).unwrap();
+            (p.latitude, p.longitude)
+        };
+        assert_eq!(pin("US-0001"), (Some(44.35), Some(-68.21)));
+        assert_eq!(pin("US-0002"), (None, None));
+        assert_eq!(pin("US-0003"), (None, None), "latitude out of range");
+        assert_eq!(pin("US-0004"), (None, None));
     }
 
     #[test]

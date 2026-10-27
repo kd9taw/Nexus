@@ -27,7 +27,7 @@ vi.mock('../api', () => ({
   contestEntryReset: vi.fn(() => Promise.resolve({})),
   contestIMoved: vi.fn(() => Promise.resolve({})),
   contestRemoveLast: vi.fn(() => Promise.resolve({ outcome: 'refused', refusal: 'changed' })),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -140,7 +140,7 @@ function Windows({ snap, section, logger = true }: { snap: AppSnapshot; section:
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 const inWindow = (w: string) => within(screen.getByTestId(w))
-const callIn = (w: string) => inWindow(w).getByPlaceholderText('W1AW') as HTMLInputElement
+const callIn = (w: string) => inWindow(w).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const rstIn = (w: string) => inWindow(w).getByLabelText('RST') as HTMLInputElement
 const qthIn = (w: string) => inWindow(w).getByLabelText('County / State') as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })

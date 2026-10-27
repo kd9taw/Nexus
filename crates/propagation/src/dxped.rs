@@ -178,8 +178,8 @@ pub struct LogNeeds {
     /// — the Satellite-VUCC slot set the pass-earn ranking ([`crate::satneeds`])
     /// consults. Kept apart from the per-band `worked_grids`: ARRL counts a
     /// satellite contact toward Satellite VUCC only, so it must not suppress a
-    /// terrestrial per-band NewGrid need (and, band-independent, a 70cm sat QSO
-    /// counts here even though 70cm has no [`Band`] variant).
+    /// terrestrial per-band NewGrid need (and, band-independent, a sat QSO counts
+    /// here whatever band its label names).
     worked_grids_sat: HashSet<String>,
     confirmed_grids_sat: HashSet<String>,
 }
@@ -879,8 +879,7 @@ mod tests {
         // A satellite QSO (PROP_MODE=SAT): the grid is a Satellite-VUCC slot,
         // NOT a per-band one — ARRL counts satellite contacts toward Satellite
         // VUCC only, so a sat QSO must not suppress a genuine terrestrial
-        // per-band NewGrid need. Band-independent: the 70cm one (no Band
-        // variant) still counts.
+        // per-band NewGrid need. Band-independent: the 70cm one counts the same.
         n.add_qso(
             "K1ABC",
             "2m",

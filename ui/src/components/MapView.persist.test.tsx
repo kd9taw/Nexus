@@ -23,6 +23,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 
 // jsdom has no ResizeObserver; MapView installs one on its wrap ref. A no-op keeps `size` at

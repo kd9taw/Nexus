@@ -1,0 +1,144 @@
+/* THE STATION CARD (CallCard.tsx). Portaled to <body>, like .ui-dialog and .ui-tooltip: the BOX is
+   placed and capped in real window pixels by placeCallCard (left, top, max-width, max-height are set
+   inline from the measured window), and its body re-applies --ui-zoom. So this box is the layout
+   contract's portaled exception and no cockpit pane is sized by it: it floats over the screen and
+   cannot grow anything under it.
+
+   One size whatever it says: a fixed width, and a ceiling past which the card scrolls inside itself
+   (overflow: auto on the box), never a taller box. The width is a reading width (34em, about 400 px
+   at 100%): long names, addresses and e-mail lines wrap on it instead of running the card across the
+   screen. It was 24em with the head's three buttons beside the text, which left the text the
+   callsign's width (reported 2026-10-26); the buttons now sit on their own line (.callcard-actions).
+
+   Below the tooltip (60) and the dialogs (90); above the app. Its height never meets a transmit
+   control at all: placeCallCard keeps it off every one. */
+.callcard {
+  position: fixed;
+  z-index: 55;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elev-3);
+}
+.callcard:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.callcard-body {
+  box-sizing: border-box;
+  width: 34em;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-label);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.callcard-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.callcard-avatar {
+  position: relative;
+  flex: none;
+  width: 3.5em;
+  height: 3.5em;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 800;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.callcard-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.callcard-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.callcard-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+}
+.callcard-call {
+  font-weight: 700;
+  font-size: 1.25em;
+}
+.callcard-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.callcard-where,
+.callcard-contact span {
+  overflow-wrap: anywhere;
+}
+.callcard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-top: 2px;
+}
+.callcard-dim,
+.callcard-tokens {
+  color: var(--text-dim);
+}
+.callcard-qrz,
+.callcard-lookup,
+.callcard-close {
+  flex: none;
+  padding: 0 var(--space-2);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  font: inherit;
+  line-height: 1.6;
+}
+.callcard-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+}
+.callcard-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+.callcard-section-head {
+  font-weight: 600;
+}
+.callcard-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.callcard-flag {
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  color: var(--accent-ink);
+  background: var(--status-new-entity);
+  font-weight: 700;
+}
+.callcard-grid {
+  align-self: flex-start;
+}

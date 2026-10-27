@@ -10,7 +10,7 @@
 //! - **Wait for the operator** after the radio refuses registration (a full radio is not fixed by
 //!   asking again), and do nothing after an intentional close.
 //! - **Remember our handles.** A radio can keep transmitting under a handle whose connection is
-//!   gone (whether a disconnect unkeys a client is not established; port plan §3.4). The ladder
+//!   gone (whether a disconnect unkeys a client is not established). The ladder
 //!   keeps the handles of recent sessions, and the next session is given them, so it can recognise
 //!   "our previous session still holds the transmitter", report it, and send its unkey, instead
 //!   of taking it for another client.

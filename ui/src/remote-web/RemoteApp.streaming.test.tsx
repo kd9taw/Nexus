@@ -144,6 +144,6 @@ it('signed out and with no station, the page says the one next step: sign in, th
   cleanup()
   client(account('none'))
   render(<RemoteApp />)
-  expect(await screen.findByText(/open Settings → Station → Remote access and start pairing/)).toBeTruthy()
+  expect(await screen.findByText(/open Settings → Remote and press “Pair a station”/)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Link to my account' })).toBeTruthy()
 })

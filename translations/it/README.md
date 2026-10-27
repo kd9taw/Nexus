@@ -150,7 +150,7 @@ spot one, tell me. That one is my job, not yours.
 
 ## Sending it back
 
-Email the filled CSV to **kd9taw@protonmail.com**. Any amount is welcome, a hundred rows or all of
+Email the filled CSV to **contact@hamradiotools.io**. Any amount is welcome, a hundred rows or all of
 them. If it is easier to send in pieces as you go, send in pieces. If something in the English
 does not make sense, or a string is impossible to translate without seeing the screen, put a
 question in the `notes` cell of that row and I will answer it rather than guess.

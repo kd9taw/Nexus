@@ -1,11 +1,11 @@
-//! The handshake gate (design §4.2, §4.4): what may become a program.
+//! The handshake gate: what may become a program.
 //!
 //! # Web pages
 //!
 //! A browser does not apply the same-origin rule to WebSockets: any page the operator visits can
 //! open `ws://127.0.0.1:40001`, and the server sees the page's `Origin` header. Native TCI clients
 //! send none (Qt adds it only when the program set an origin, python-websockets and
-//! gorilla/websocket only when the caller passes one; design §4.2 has the source lines), while a
+//! gorilla/websocket only when the caller passes one), while a
 //! browser must. So a handshake that carries `Origin` (or the old drafts' `Sec-WebSocket-Origin`)
 //! is refused, 403, whatever else it says.
 //!
@@ -104,7 +104,7 @@ fn refusal(status: StatusCode) -> ErrorResponse {
     response
 }
 
-/// tungstenite's limits for a program's messages (design §4.4). Text has its own, smaller cap,
+/// tungstenite's limits for a program's messages. Text has its own, smaller cap,
 /// checked by the reader; tungstenite has one cap for both kinds.
 pub(super) fn config(limits: &Limits) -> WebSocketConfig {
     WebSocketConfig::default()

@@ -612,3 +612,63 @@ export function tokensAt(rules: Rule[], mode: Mode, chain: El[]): Map<string, st
   }
   return tokens
 }
+
+// ── Cutting the rules a sweep hands the resolvers (test support, 2026-10-21) ─────────────────
+//
+// winnerAt and tokensAt test every rule they are handed against the chain, once per mode and per chain
+// prefix, and nearly every rule fails at its subject compound: reachesChain's first test, which reads
+// neither the mode nor the ancestors. A sweep over every mode spends almost all of its time there (the
+// club grid's first case took ~33 s alone, the dashboard bar's ~11 s). These cut the rules once, by what
+// those two read: winnerAt needs only a rule declaring one of the props, tokensAt only one declaring a
+// custom property, and either only one whose subject compound (split as reachesChain splits it) matches
+// the element, or for tokensAt one rootTokensFrom takes under the mode. Every rule cut away is one they
+// reject, and the rest keep the sheet's order, so every winner and token is the same. Each cut is
+// memoized by the rule list it was handed (by identity), so a different list is cut afresh.
+
+const WITH_PROPS = new WeakMap<Rule[], Map<string, Rule[]>>()
+/** The rules that declare one of `props`: the only ones winnerAt can take a value from. */
+export function withProps(rules: Rule[], props: readonly string[]): Rule[] {
+  let byProps = WITH_PROPS.get(rules)
+  if (!byProps) WITH_PROPS.set(rules, (byProps = new Map()))
+  const key = props.join()
+  let out = byProps.get(key)
+  if (!out) byProps.set(key, (out = rules.filter((r) => r.decls.some((d) => props.includes(d.prop)))))
+  return out
+}
+
+const WITH_TOKENS = new WeakMap<Rule[], Rule[]>()
+/** The rules that declare a custom property: the only ones tokensAt and rootTokensFrom read. */
+export function withTokens(rules: Rule[]): Rule[] {
+  let out = WITH_TOKENS.get(rules)
+  if (!out) WITH_TOKENS.set(rules, (out = rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--')))))
+  return out
+}
+
+const SUBJECT = new WeakMap<Rule[], Map<string, Rule[]>>()
+/** The rules whose subject compound, split as reachesChain splits it, matches `el`: the only ones that
+ *  can reach a chain ending in it. */
+export function subjectCut(rules: Rule[], el: El): Rule[] {
+  let byEl = SUBJECT.get(rules)
+  if (!byEl) SUBJECT.set(rules, (byEl = new Map()))
+  const key = JSON.stringify(el)
+  let out = byEl.get(key)
+  if (!out) {
+    const subject = (r: Rule) => r.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop()
+    byEl.set(key, (out = rules.filter((r) => { const s = subject(r); return s !== undefined && compoundMatches(s, el) })))
+  }
+  return out
+}
+
+const AT_ROOT = new WeakMap<Rule[], Map<Mode, Rule[]>>()
+/** The rules tokensAt can read for `chain` under `mode`: those declaring a custom property that
+ *  rootTokensFrom takes under the mode, or whose subject matches an element of the chain, in the
+ *  sheet's order. `tokensAt(tokenCut(rules, mode, chain), mode, chain)` is `tokensAt(rules, mode, chain)`. */
+export function tokenCut(rules: Rule[], mode: Mode, chain: El[]): Rule[] {
+  const all = withTokens(rules)
+  let byMode = AT_ROOT.get(rules)
+  if (!byMode) AT_ROOT.set(rules, (byMode = new Map()))
+  let root = byMode.get(mode)
+  if (!root) byMode.set(mode, (root = all.filter((r) => matchesRoot(r.selector, mode))))
+  const keep = new Set([...root, ...chain.flatMap((el) => subjectCut(all, el))])
+  return all.filter((r) => keep.has(r))
+}

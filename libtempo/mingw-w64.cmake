@@ -9,7 +9,8 @@
 # FFTW3f is expected as a static MinGW build at FFTW_MINGW_PREFIX
 # (default /tmp/fftw-mingw), produced with:
 #   ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-#               --disable-shared --prefix=/tmp/fftw-mingw && make && make install
+#               --disable-shared --enable-sse2 --enable-avx --enable-avx2 \
+#               --with-our-malloc --prefix=/tmp/fftw-mingw && make && make install
 #
 # Threading: the default (unsuffixed) x86_64-w64-mingw32-* compilers on this box
 # are the win32 thread model, matching the win32 libgfortran.a and Rust's

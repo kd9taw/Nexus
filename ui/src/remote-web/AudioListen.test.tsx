@@ -6,7 +6,6 @@ import { AudioLink, browserAudio } from './audio-listen'
 import type { AudioEnvironment } from './audio-listen'
 import { AUDIO_VOLUME_DB } from './audio-worklet'
 import { OperationClient } from './operation-client'
-import { pendingControlStorage } from './control-storage'
 import type { ControlCapability } from './station-operation'
 import type { OperationState } from './operation-protocol'
 
@@ -28,12 +27,8 @@ function environment(supported = true): AudioEnvironment {
 function fixture(options: { capabilities?: ControlCapability[]; supported?: boolean; phase?: 'controlling' | 'available' } = {}) {
   vi.useFakeTimers()
   const sent: { request: { type: string; requestId: string } }[] = []
-  const values = new Map<string, string>()
-  const storage = { getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } }
   let now = 1000
-  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined,
-    4, pendingControlStorage(() => storage, 'audio-test', async (_key, run) => run()))
+  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, 4)
   clients.push(client)
   const phase = options.phase ?? 'controlling'
   const state: OperationState = {

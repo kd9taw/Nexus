@@ -23,8 +23,29 @@ use crate::{hex, ComputerKey};
 pub const NATIVE_REQUEST: &str = "nexus-native-request/1";
 /// The path this computer's loopback listener takes the browser's redirect on.
 pub const CALLBACK_PATH: &str = "/callback";
-/// What the first sign-in asks for: who the operator is, and the Remote service's API.
-const SCOPE: &str = "openid profile email";
+
+/// What a sign-in asks the issuer to say about whoever signs in: its `scope`. Never `profile`, so no
+/// proof carries a name, a nickname or a picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The shack binding its station, or proving it again: who signed in, and nothing more. Its
+    /// proof is listed to every computer of the account and of each person the station invites, so
+    /// it carries no address.
+    Station,
+    /// A computer's or a phone's: who signed in, and the address the issuer verified, which is how
+    /// a station knows a person it invited.
+    Device,
+}
+
+impl Scope {
+    /// The `scope` the authorize address carries.
+    fn value(self) -> &'static str {
+        match self {
+            Self::Station => "openid",
+            Self::Device => "openid email",
+        }
+    }
+}
 
 /// What a native request's signature covers: the label, the challenge, the method, the path, and
 /// SHA-256 of the body exactly as sent, lowercase hex, one to a line.
@@ -174,19 +195,28 @@ impl SignIn {
 }
 
 /// The address the system browser opens for the first sign-in: the issuer's authorize endpoint,
-/// with the code returned to `redirect` (this computer's loopback listener) under `pkce`.
-pub fn authorize_url(sign_in: &SignIn, redirect: &str, pkce: &Pkce) -> String {
+/// asking for `scope`, with the code returned to `redirect` (this computer's loopback listener)
+/// under `pkce`. With a `nonce` (what the sign-in vouches for, `crate::account`), the ID token the
+/// issuer gives back carries it; without one the address has no nonce.
+pub fn authorize_url(
+    sign_in: &SignIn,
+    redirect: &str,
+    pkce: &Pkce,
+    scope: Scope,
+    nonce: Option<&str>,
+) -> String {
     let query = [
         ("response_type", "code"),
         ("client_id", &sign_in.client_id),
         ("redirect_uri", redirect),
-        ("scope", SCOPE),
+        ("scope", scope.value()),
         ("audience", &sign_in.audience),
         ("code_challenge", &pkce.challenge),
         ("code_challenge_method", "S256"),
         ("state", &pkce.state),
     ]
-    .iter()
+    .into_iter()
+    .chain(nonce.map(|nonce| ("nonce", nonce)))
     .map(|(name, value)| format!("{name}={}", encoded(value)))
     .collect::<Vec<_>>()
     .join("&");
@@ -209,35 +239,75 @@ pub fn token_form(sign_in: &SignIn, redirect: &str, pkce: &Pkce, code: &str) -> 
 }
 
 /// The redirect's request target as the loopback listener read it (`/callback?code=…&state=…`): the
-/// code, when it came back with this sign-in's state. `signInRefused` when the issuer said no (the
-/// operator cancelled, or the application refused them), `signInFailed` for anything else: another
-/// path, another state, no code.
+/// code, when it came back with this sign-in's state. When the issuer said no instead
+/// ([`issuer_said`]): `signInRefused` for the operator's own cancel at the consent screen,
+/// `emailUnverified` for an address not confirmed yet (the tenant's login Action denies those, the
+/// rule the web page's `client.ts` reads the same way), and `signInFailed` for any other error.
+/// `signInFailed` too for a redirect that is not this sign-in's: another path, another state, no
+/// code.
 pub fn callback(target: &str, state: &str) -> Result<String, &'static str> {
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path != CALLBACK_PATH {
+    let Some(query) = ours(target, state) else {
         return Err("signInFailed");
+    };
+    if let Some((error, description)) = said_in(query) {
+        return Err(refusal(&error, &description));
     }
-    let mut code = None;
-    let mut came_back = None;
-    let mut refused = false;
-    for pair in query.split('&') {
-        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        match name {
-            "code" => code = decoded(value),
-            "state" => came_back = decoded(value),
-            "error" => refused = true,
-            _ => {}
-        }
-    }
-    // The state first: a redirect this sign-in did not start says nothing, refusal or code.
-    if came_back.as_deref() != Some(state) {
-        return Err("signInFailed");
-    }
-    if refused {
-        return Err("signInRefused");
-    }
-    code.filter(|code| !code.is_empty() && code.len() <= 2048)
+    query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("code="))
+        .find_map(decoded)
+        .filter(|code| !code.is_empty() && code.len() <= 2048)
         .ok_or("signInFailed")
+}
+
+/// The issuer's `error` and `error_description` (empty when it gave none) when the redirect is this
+/// sign-in's and says no, for the diagnostic log: never the code, which a refusal does not carry.
+/// `None` for a redirect that brought a code, or that this sign-in did not start.
+pub fn issuer_said(target: &str, state: &str) -> Option<(String, String)> {
+    said_in(ours(target, state)?)
+}
+
+/// The query of a redirect to [`CALLBACK_PATH`] that carries this sign-in's state, else `None`: a
+/// redirect this sign-in did not start says nothing, refusal or code.
+fn ours<'a>(target: &'a str, state: &str) -> Option<&'a str> {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let came_back = query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("state="))
+        .find_map(decoded);
+    (path == CALLBACK_PATH && came_back.as_deref() == Some(state)).then_some(query)
+}
+
+/// The `error` a query carries and its `error_description`, when it carries an error.
+fn said_in(query: &str) -> Option<(String, String)> {
+    let value = |name: &str| {
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('=').filter(|(key, _)| *key == name))
+            .find_map(|(_, value)| decoded(value))
+    };
+    let error = query
+        .split('&')
+        .any(|pair| pair == "error" || pair.starts_with("error="))
+        .then(|| value("error").unwrap_or_default())?;
+    Some((error, value("error_description").unwrap_or_default()))
+}
+
+/// What the issuer's no means for the operator. Its consent screen's Decline is `access_denied`
+/// with "User did not authorize the request" (or no description): a cancel. The tenant's login
+/// Action denying an unconfirmed address is `access_denied` with its own sentence about verifying
+/// the email: confirm it, then sign in again. Anything else is a sign-in that did not finish.
+fn refusal(error: &str, description: &str) -> &'static str {
+    let text = description.to_ascii_lowercase();
+    let unverified = text == "email_unverified"
+        || (text.contains("verif") && (text.contains("email") || text.contains("e-mail")));
+    match error {
+        "access_denied" if unverified => "emailUnverified",
+        "access_denied" if text.is_empty() || text == "user did not authorize the request" => {
+            "signInRefused"
+        }
+        _ => "signInFailed",
+    }
 }
 
 /// The token the issuer's answer carries, and how long it lasts (seconds, at most an hour, as the
@@ -256,6 +326,22 @@ pub fn token(answer: &serde_json::Value) -> Option<(String, u64)> {
             .all(|b| b.is_ascii_alphanumeric() || b"-_.~+/=".contains(&b));
     let lasts = answer.get("expires_in")?.as_u64()?.min(3600);
     (shaped && lasts > 0).then(|| (token.to_string(), lasts))
+}
+
+/// The ID token the issuer's answer carries (the sign-in asks for `openid`), or `None` when it has
+/// none or one that is not three base64url parts of a token's size. Taken as it came: whoever keeps
+/// it checks it (`crate::account::verify_proof`).
+pub fn id_token(answer: &serde_json::Value) -> Option<String> {
+    let token = answer.get("id_token")?.as_str()?;
+    let shaped = token.len() <= 4096
+        && token.split('.').count() == 3
+        && token.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+    shaped.then(|| token.to_string())
 }
 
 /// One TURN server the service's `turn` route named: the host and port of a plain `turn:` URL over
@@ -421,6 +507,51 @@ mod tests {
         }
     }
 
+    /// ★ The issuer's no is told by what it said. The tenant's login Action refusing an unconfirmed
+    /// address comes back as `access_denied` with its own sentence; it is never a cancel. Nor is any
+    /// other issuer error. CONTROL: the operator's own Decline at the consent screen stays a cancel.
+    #[test]
+    fn an_unverified_address_is_not_told_as_a_cancel() {
+        let denied = "/callback?error=access_denied&error_description=Please%20verify%20your%20email%20address%20using%20the%20link%20we%20sent%2C%20then%20sign%20in%20again.&state=xyz";
+        assert_eq!(callback(denied, "xyz"), Err("emailUnverified"));
+        let coded = "/callback?error=access_denied&error_description=email_unverified&state=xyz";
+        assert_eq!(callback(coded, "xyz"), Err("emailUnverified"));
+        // Nor any other issuer error that is not the operator's own cancel.
+        let audience = "/callback?error=access_denied&error_description=Service%20not%20found%3A%20https%3A%2F%2Fexample&state=xyz";
+        assert_eq!(callback(audience, "xyz"), Err("signInFailed"));
+        let client = "/callback?error=unauthorized_client&error_description=Grant%20type%20not%20allowed&state=xyz";
+        assert_eq!(callback(client, "xyz"), Err("signInFailed"));
+        // CONTROL: the operator's own cancel at the consent screen stays a cancel.
+        let declined = "/callback?error=access_denied&error_description=User%20did%20not%20authorize%20the%20request&state=xyz";
+        assert_eq!(callback(declined, "xyz"), Err("signInRefused"));
+        // An unverified address under ANOTHER state says nothing.
+        assert_eq!(
+            callback(&denied.replace("xyz", "other"), "xyz"),
+            Err("signInFailed")
+        );
+    }
+
+    /// What the issuer said, for the log: only under this sign-in's state, and only for a no.
+    #[test]
+    fn the_issuers_no_is_read_for_the_log_only_under_this_state() {
+        assert_eq!(
+            issuer_said(
+                "/callback?error=unauthorized_client&error_description=Grant%20type&state=xyz",
+                "xyz"
+            ),
+            Some(("unauthorized_client".into(), "Grant type".into()))
+        );
+        assert_eq!(
+            issuer_said("/callback?error=access_denied&state=xyz", "xyz"),
+            Some(("access_denied".into(), String::new()))
+        );
+        assert_eq!(
+            issuer_said("/callback?error=access_denied&state=other", "xyz"),
+            None
+        );
+        assert_eq!(issuer_said("/callback?code=c&state=xyz", "xyz"), None);
+    }
+
     /// ★ The redirect's code is taken only with this sign-in's state; a refusal is told as one,
     /// and only under the same state. CONTROL: the same redirect with another state is refused.
     #[test]
@@ -466,13 +597,19 @@ mod tests {
         }))
         .unwrap();
         let pkce = Pkce::of("verifier-verifier-verifier-verifier-verifi", "st".into());
-        let url = authorize_url(&sign_in, "http://127.0.0.1:5123/callback", &pkce);
+        let url = authorize_url(
+            &sign_in,
+            "http://127.0.0.1:5123/callback",
+            &pkce,
+            Scope::Device,
+            None,
+        );
         assert!(url.starts_with(
             "https://login.example/authorize?response_type=code&client_id=native-id&"
         ));
         assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5123%2Fcallback"));
         assert!(url.contains("audience=https%3A%2F%2Fapi.example%2Fremote"));
-        assert!(url.contains("scope=openid%20profile%20email"));
+        assert!(url.contains("&scope=openid%20email&"));
         assert!(url.contains(&format!("code_challenge={}", pkce.challenge)));
         assert!(url.contains("code_challenge_method=S256&state=st"));
         assert!(!url.contains("spa-id"));
@@ -524,6 +661,70 @@ mod tests {
         assert_eq!(answer("", "Bearer", 60), None);
         assert_eq!(answer("a b", "Bearer", 60), None);
         assert_eq!(answer("a.b.c", "Bearer", 0), None);
+    }
+
+    /// The authorize address carries a nonce only when the sign-in has one, and is otherwise the same.
+    #[test]
+    fn the_authorize_address_carries_the_nonce_it_is_given() {
+        let sign = SignIn {
+            issuer: "https://login.example/".into(),
+            client_id: "native".into(),
+            audience: "https://api.example/".into(),
+        };
+        let pkce = Pkce::of("verifier", "state-1".into());
+        let redirect = "http://127.0.0.1:42078/callback";
+        let plain = authorize_url(&sign, redirect, &pkce, Scope::Device, None);
+        assert_eq!(
+            plain,
+            format!(
+                "https://login.example/authorize?response_type=code&client_id=native&redirect_uri=\
+                 http%3A%2F%2F127.0.0.1%3A42078%2Fcallback&scope=openid%20email&audience=\
+                 https%3A%2F%2Fapi.example%2F&code_challenge={}&code_challenge_method=S256&\
+                 state=state-1",
+                pkce.challenge
+            )
+        );
+        let with = authorize_url(&sign, redirect, &pkce, Scope::Device, Some("n-1_x"));
+        assert_eq!(with, format!("{plain}&nonce=n-1_x"));
+    }
+
+    /// ★ Rulings 547 and 548: no sign-in asks for the profile (a name, a nickname, a picture), and the
+    /// station's asks for no address either, since its proof is listed to every computer of the
+    /// account and of each person the station invites. A device's asks for the address the issuer
+    /// verified: how a station knows a person it invited. Each read off the address by value.
+    #[test]
+    fn a_station_asks_only_who_signed_in_and_a_device_its_address_too() {
+        let sign = SignIn {
+            issuer: "https://login.example/".into(),
+            client_id: "native".into(),
+            audience: "https://api.example/".into(),
+        };
+        let pkce = Pkce::of("verifier", "state-1".into());
+        let scope_of = |scope: Scope| {
+            let url = authorize_url(&sign, "http://127.0.0.1:42078/callback", &pkce, scope, None);
+            url.split(['?', '&'])
+                .filter_map(|pair| pair.strip_prefix("scope="))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(scope_of(Scope::Station), ["openid"]);
+        assert_eq!(scope_of(Scope::Device), ["openid%20email"]);
+    }
+
+    /// The ID token is taken only in a token's shape; nothing about it is trusted here.
+    #[test]
+    fn the_id_token_is_kept_in_a_tokens_shape() {
+        let of = |v: serde_json::Value| id_token(&v);
+        assert_eq!(
+            of(serde_json::json!({"id_token": "aA0-_.bB.c"})),
+            Some("aA0-_.bB.c".into())
+        );
+        assert_eq!(of(serde_json::json!({"access_token": "a.b.c"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a.b"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a..c"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a.b=.c"})), None);
+        let long = format!("a.{}.c", "b".repeat(4096));
+        assert_eq!(of(serde_json::json!({ "id_token": long })), None);
     }
 
     /// ★ The `turn` route's answer read as the TURN servers this computer's client can use: plain

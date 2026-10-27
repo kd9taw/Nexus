@@ -561,7 +561,7 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
 /// nothing is found by name throughout. Skipped, saying so, on a box with no private address.
 #[test]
 fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_launch() {
-    use crate::client_mode::{operate_args, start_driving};
+    use crate::client_mode::{operate_args, start_driving, typed_in};
     use crate::lan_client::tests::{shack_pc_at, typed_file, where_nothing_listens, StationStore};
     use crate::lan_client::Stations;
     use tempo_stream::lan::Typed;
@@ -597,7 +597,7 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
             screens.main.app_handle().clone(),
             Arc::new(stations(store)),
             Arc::new(|_| Ok(Vec::new())),
-            args.into_iter().skip(1),
+            typed_in(args.into_iter().skip(1)),
         );
         (client, screens, driving, dir)
     };

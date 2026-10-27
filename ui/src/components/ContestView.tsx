@@ -18,9 +18,12 @@ import type {
 import { openContestLogger } from '../features/contestLoggerLayout'
 import { contestClear, contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
+import { drivesAnotherStation } from '../features/durableStore'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { ContestSetupWizard, ContestSoonLine } from './ContestSetupWizard'
+import { blockerTarget, blockerText, cabrilloLineWords, READ_AS_THE_SESSION_STARTS, startBlocker, type StartBlocker } from '../features/contestStart'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
@@ -34,14 +37,16 @@ import { contestDomain, multCode, multTotal, type DomainGroup } from '../feature
 import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
 import { contestUnsavedText } from '../features/contestUnsaved'
+import { closedText } from '../features/contestEdit'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
-import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/contestOpTime'
+import { formatOpTime, OFF_TIME_MIN_SEC, offTimeRule, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
-import { stationMode, usePskName } from '../features/contestMode'
+import { stationMode, useKeyboardMode } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
-import { ContestContactEdit, type EditNote } from './ContestContactEdit'
+import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { ContestSpotMe } from './ContestSpotMe'
+import { ContestStats } from './ContestStats'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -64,8 +69,9 @@ import { modeClassOf } from '../features/needs'
 import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
 import { PaneSeam } from './PaneSeam'
 import { UtcClock } from './UtcClock'
-import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, type WorkInView } from '../features/contestWorkIn'
+import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, workInLabel, workInTitle, workInViewsFor, type WorkInView } from '../features/contestWorkIn'
 import { useFeatures } from '../useFeatures'
+import { upperTyped } from '../typedInput'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -198,6 +204,9 @@ interface Props {
    *  the others (`stationMode`) — so a station on phone at a contest that bans FT8 is not told FT8 is
    *  not permitted. Absent (the Remote page, whose observation carries no section), it reads `tier`. */
   section?: string
+  /** The Keyboard section's mode on the air (`snap.radio.keyboardMode`: PSK31, QPSK31 or JTTY), which
+   *  the chip names on that section: PSK and JTTY are one section, so `section` cannot say which. */
+  keyboardMode?: string
   /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
    *  operator whose contest cannot start yet. */
   onOpenSettings?: (target: string) => void
@@ -235,72 +244,6 @@ interface Props {
    *  `handleView`). Absent in every other window, where a press asks the main window instead
    *  (`askMainToWorkIn`, features/contestWorkIn). */
   onWorkIn?: (view: WorkInView) => void
-}
-
-/**
- * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
- * turn on while there is something, and says what it is.
- *
- * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
- * both events need a class (WFD calls it a category) and a section before the station enters
- * them, and naming both when both are blank says more than the session constructor, which
- * stops at the first. Every other reason is that constructor's own sentence off the preview
- * (`FdRulesetDto.problem`), which names the slot: "Your COUNTY is empty…".
- */
-export type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
-
-export function startBlocker(
-  s: Pick<Settings, 'fdEvent' | 'fdClass' | 'fdSection'> | null,
-  preview: FdRulesetDto | null | undefined,
-): StartBlocker | null {
-  const event = s?.fdEvent?.trim()
-  if (s && isFieldDay(event)) {
-    const fields: ('class' | 'category' | 'section')[] = []
-    if (!(s.fdClass ?? '').trim()) fields.push(event === 'wfd' ? 'category' : 'class')
-    if (!(s.fdSection ?? '').trim()) fields.push('section')
-    if (fields.length > 0) return { fields }
-  }
-  return preview?.problem ? { problem: preview.problem } : null
-}
-
-/** The Settings section that fixes a blocker: Field Day for Field Day's class and section, the
- *  station data for any other contest's slots. Section ids, never tab names. */
-function blockerTarget(b: StartBlocker): string {
-  return 'fields' in b ? 'field-day' : 'contest-station'
-}
-
-/** A Field Day exchange field by the name Settings gives it, so the sentence names the box. */
-function fieldLabel(f: 'class' | 'category' | 'section'): string {
-  if (f === 'class') return t('settings.fieldDay.class.label')
-  if (f === 'category') return t('settings.fieldDay.category.label')
-  return t('settings.fieldDay.section.label')
-}
-
-/** The Cabrillo lines a running session reads as it starts, so a declaration made while it runs
- *  reaches the file only after Contest mode is turned off and on. */
-const READ_AS_THE_SESSION_STARTS = ['CATEGORY-ASSISTED', 'CATEGORY-POWER']
-
-/** One Cabrillo line the export would leave out, in words: the Settings control that fills it and
- *  the line itself (an invariant token). A line no control fills is named by itself. */
-function cabrilloLineWords(line: string): string {
-  const control: Record<string, string> = {
-    'CATEGORY-ASSISTED': t('settings.contestPick.assisted.label'),
-    'CATEGORY-BAND': t('settings.contestPick.band.label'),
-    'CATEGORY-POWER': t('settings.contestPick.power.label'),
-    'CATEGORY-TRANSMITTER': t('settings.contestPick.transmitter.label'),
-    OPERATORS: t('settings.contestPick.operators.label'),
-    'ENTRY-CLASS': t('settings.contestPick.entryClass.label'),
-    EMAIL: t('settings.contestPick.email.label'),
-  }
-  return control[line] ? `${control[line]} (${line})` : line
-}
-
-function blockerText(b: StartBlocker, contest: string): string {
-  if ('problem' in b) return b.problem
-  const [first, second] = b.fields
-  return second
-    ? t('fieldDay.mode.needs.two', { contest, first: fieldLabel(first), second: fieldLabel(second) })
-    : t('fieldDay.mode.needs.one', { contest, field: fieldLabel(first) })
 }
 
 interface LogRowMeta {
@@ -633,6 +576,8 @@ interface SummaryArgs {
   /** Winter Field Day's completed objectives and the multiplier they earn, when the station
    *  scores by them — `totalScore` is then QSO points × (om + 1). */
   objectives?: { om: number; done: WfdObjective[] }
+  /** The break that counts as off time in this contest (`offTimeRule`); 30 minutes when absent. */
+  minOffSec?: number
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
@@ -644,6 +589,57 @@ interface SummaryArgs {
   fieldDaySheet?: boolean
   /** Per-operator statistics (FieldDayStatus.operators); absent from an older station. */
   operators?: FdOperatorStat[]
+}
+
+/** ⭐ **The Summary export's text, as the Contest screen's Summary button writes it**, for `event` (the
+ *  running session's contest): the end-of-contest checklist offers the same file from the same
+ *  inputs, so the two cannot differ. */
+export function contestSummaryText(
+  fieldDay: FieldDayStatus | null,
+  settings: FdDisplaySettings | null,
+  event: string | undefined,
+): string {
+  const isWfd = event === 'wfd'
+  const fdEventIsFieldDay = isFieldDay(event)
+  const log = fieldDay?.log ?? []
+  const { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds, bonusPoints, totalScore } = computeFdScore(
+    fieldDay,
+    settings,
+  )
+  const wfdOm = isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? fieldDay.objectiveMultiplier : null
+  return buildSummaryText({
+    eventName: fdEventIsFieldDay ? FD_EVENT_NAMES[isWfd ? 'wfd' : 'arrlfd'] : contestName(event),
+    isWfd,
+    minOffSec: offTimeRule(event).minOffSec,
+    rulesYear: fieldDay?.rulesYear ?? 0,
+    rulesGenerated: fieldDay?.rulesGenerated ?? '',
+    myClass: composingSlot(fieldDay?.composing, 'CLASS'),
+    mySection: composingSlot(fieldDay?.composing, 'SECTION'),
+    log,
+    modes: modeCounts(log),
+    workedSet: workedSectionSet(fieldDay),
+    powerMult: fdPowerMult,
+    qsoPts,
+    poweredPoints,
+    bonusPoints,
+    totalScore,
+    claimedBonuses: FD_BONUSES.filter((b) => claimedBonusIds.includes(b.id)),
+    objectives:
+      wfdOm === null
+        ? undefined
+        : {
+            om: wfdOm,
+            done: WFD_OBJECTIVES.filter((o) => wfdEarnedIds(settings?.fdObjectives ?? []).has(o.id)),
+          },
+    // What the station sends, as it renders it: the issued serial, never the composing
+    // vector's "0" placeholder, which a serial contest's summary used to print.
+    contest: fdEventIsFieldDay
+      ? undefined
+      : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
+    dupeRule: fieldDay?.dupeRule,
+    fieldDaySheet: fdEventIsFieldDay && !isWfd,
+    operators: fieldDay?.operators,
+  })
 }
 
 /**
@@ -673,10 +669,11 @@ export function buildSummaryText(a: SummaryArgs): string {
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
   // How long the station was on, by the sponsors' off-time rule (features/contestOpTime).
-  const op = operatingTime(a.log)
+  const minOff = a.minOffSec ?? OFF_TIME_MIN_SEC
+  const op = operatingTime(a.log, minOff)
   if (op) {
     L.push(
-      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${OFF_TIME_MIN_SEC / 60} min or more)`,
+      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${minOff / 60} min or more)`,
     )
   }
   L.push('')
@@ -1987,9 +1984,10 @@ export function FdClubSection({
   // The codes are this laptop's screen's and the host's, never the pop-out's or Remote's.
   const showCodes = !detached && !readOnly
   function ask(handle: number, r: { posName: string; call: string; clubCode?: string }) {
-    // Only at the host: a press that comes through a stream gives no position. Read before
-    // anything awaits, while the stream's dispatch is still the one running.
-    if (isStreamInput()) {
+    // Only at the host: a press that comes through a stream gives no position, nor one from a
+    // computer driving the station (the station refuses it there). Read before anything awaits,
+    // while the stream's dispatch is still the one running.
+    if (isStreamInput() || drivesAnotherStation()) {
       setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
       return
     }
@@ -1997,7 +1995,7 @@ export function FdClubSection({
     setAsking({ handle, name: r.posName, call: r.call, code: r.clubCode ?? '' })
   }
   function give() {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
       return
     }
@@ -2046,7 +2044,7 @@ export function FdClubSection({
   }
   function askRemove(row: FdClubBoardRow) {
     // Only at the host, as Give is: read before anything awaits.
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -2054,7 +2052,7 @@ export function FdClubSection({
     setRemoving({ posid: row.posid, name: boardName(row) })
   }
   function remove() {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -2072,7 +2070,7 @@ export function FdClubSection({
     )
   }
   function allowBack(row: FdClubBoardRow) {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -2675,7 +2673,7 @@ function useNowUnix(): number {
 }
 
 /**
- * ⭐ **THE RATE METER (batch 12)** — contacts per hour, on the scoreboard beside the
+ * ⭐ **THE RATE METER** — contacts per hour, on the scoreboard beside the
  * score tiles, for every contest the picker offers including both Field Day events. A
  * Field Day operator watches rate as closely as a contester does.
  *
@@ -2728,14 +2726,14 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 
 /**
  * ⭐ **ON TIME AND OFF TIME** — two `.fd-score` tiles beside the rate meter, the shipped tile idiom
- * as `RateTiles` uses it: a break of 30 minutes or more between two contacts is off time, the rest
- * from the first contact to the last is on time (`features/contestOpTime`). Nothing before the
- * first contact.
+ * as `RateTiles` uses it: a break of the contest's own minimum or more between two contacts is off
+ * time (`offTimeRule`: 60 minutes in CQ WW and WPX, else 30), the rest from the first contact to the
+ * last is on time (`features/contestOpTime`). Nothing before the first contact.
  */
-export function OperatingTimeTiles({ log }: { log: FieldDayQso[] }) {
-  const op = useMemo(() => operatingTime(log), [log])
+export function OperatingTimeTiles({ log, minOffSec = OFF_TIME_MIN_SEC }: { log: FieldDayQso[]; minOffSec?: number }) {
+  const op = useMemo(() => operatingTime(log, minOffSec), [log, minOffSec])
   if (!op) return null
-  const minutes = OFF_TIME_MIN_SEC / 60
+  const minutes = minOffSec / 60
   return (
     <>
       <div
@@ -2831,7 +2829,7 @@ export function OperatorBox({
         value={draft}
         disabled={value === null}
         readOnly={readOnly}
-        onChange={(e) => { if (!readOnly) setDraft(e.target.value.toUpperCase()) }}
+        onChange={(e) => { if (!readOnly) setDraft(upperTyped(e.target)) }}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur()
@@ -2853,6 +2851,64 @@ export function OperatorBox({
  * box is on the log line above this scoreboard (ContestView's `operatorBoxAbove`), so its row
  * holds the buttons alone and the screen has one box.
  */
+/**
+ * The score's arithmetic in one line, as the contest scores: points × multipliers, Winter Field
+ * Day's objectives, or Field Day's power and bonuses. The scoreboard and the Stats tab draw this one.
+ */
+export function ScoreMath({ fieldDay, settings }: { fieldDay: FieldDayStatus | null; settings: FdDisplaySettings | null }) {
+  const isWfd = (fieldDay?.event ?? '') === 'wfd'
+  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(fieldDay, settings)
+  return multCount !== null ? (
+      /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
+         power×+bonus line here would print `× power ×1` for a contest that has no
+         power multiplier and omit the factor that actually decides the total. */
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          <T
+            k="fieldDay.score.mathMults"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{ qsoPts, multCount, totalScore }}
+          />
+        </span>
+      </div>
+    ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
+      /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
+         three numbers the engine's, so the line and the total cannot disagree. */
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          <T
+            k="fieldDay.score.wfdObjectives"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
+          />
+        </span>
+      </div>
+    ) : isWfd ? (
+      /* A station that does not score Winter Field Day's objectives (a Remote view of an
+         older one): its total is raw QSO points, so the honest line says so rather than
+         claiming ARRL power×+bonus arithmetic WFD never produces. */
+      <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
+    ) : (
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          {/* The whole sum as ONE message — the eight fragments it used to be could not be
+              reordered by a language that words the arithmetic differently. */}
+          <T
+            k="fieldDay.score.math"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{
+              qsoPts,
+              powerMult: fdPowerMult,
+              poweredPoints,
+              bonusPoints,
+              totalScore,
+            }}
+          />
+        </span>
+      </div>
+    )
+}
+
 export function FieldDayScoreboard({
   fieldDay,
   settings,
@@ -2874,14 +2930,10 @@ export function FieldDayScoreboard({
   onOperatorFocused?: () => void
 }) {
   const log = fieldDay?.log ?? []
-  const isWfd = (fieldDay?.event ?? '') === 'wfd'
   const nowUnix = useNowUnix()
   const modes = useMemo(() => modeCounts(log), [log])
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
-  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(
-    fieldDay,
-    settings,
-  )
+  const { multCount } = computeFdScore(fieldDay, settings)
 
   return (
     <>
@@ -2961,7 +3013,7 @@ export function FieldDayScoreboard({
             timestamps and nothing about the score touches it. */}
         <RateTiles log={log} nowUnix={nowUnix} />
         {/* …and how long the station has been on, by the sponsors' off-time rule. */}
-        <OperatingTimeTiles log={log} />
+        <OperatingTimeTiles log={log} minOffSec={offTimeRule(fieldDay?.event).minOffSec} />
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
@@ -2969,55 +3021,7 @@ export function FieldDayScoreboard({
           {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} {FD_MODE_CODES.ph}</span>}
         </div>
         {/* Score math */}
-        {multCount !== null ? (
-          /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
-             power×+bonus line here would print `× power ×1` for a contest that has no
-             power multiplier and omit the factor that actually decides the total. */
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              <T
-                k="fieldDay.score.mathMults"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{ qsoPts, multCount, totalScore }}
-              />
-            </span>
-          </div>
-        ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
-          /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
-             three numbers the engine's, so the line and the total cannot disagree. */
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              <T
-                k="fieldDay.score.wfdObjectives"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
-              />
-            </span>
-          </div>
-        ) : isWfd ? (
-          /* A station that does not score Winter Field Day's objectives (a Remote view of an
-             older one): its total is raw QSO points, so the honest line says so rather than
-             claiming ARRL power×+bonus arithmetic WFD never produces. */
-          <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
-        ) : (
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              {/* The whole sum as ONE message — the eight fragments it used to be could not be
-                  reordered by a language that words the arithmetic differently. */}
-              <T
-                k="fieldDay.score.math"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{
-                  qsoPts,
-                  powerMult: fdPowerMult,
-                  poweredPoints,
-                  bonusPoints,
-                  totalScore,
-                }}
-              />
-            </span>
-          </div>
-        )}
+        <ScoreMath fieldDay={fieldDay} settings={settings} />
         <div className="fd-state-chip" title={t('fieldDay.state.title')}>
           {fieldDay?.state ?? t('fieldDay.state.idle')}
         </div>
@@ -3047,6 +3051,7 @@ export function ContestView({
   fdRuleset = null,
   tier,
   section,
+  keyboardMode: keyboardModeProp,
   observation,
   onOpenSettings,
   onSettingsSaved,
@@ -3061,8 +3066,8 @@ export function ContestView({
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
-  const pskName = usePskName(observed ? undefined : section)
-  const activeMode = section === undefined ? tier : stationMode(section, tier, pskName)
+  const keyboardMode = useKeyboardMode(observed ? undefined : section, keyboardModeProp)
+  const activeMode = section === undefined ? tier : stationMode(section, tier, keyboardMode)
   // The clock the spot advisory judges the event window by.
   const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
@@ -3084,9 +3089,10 @@ export function ContestView({
   // The work-in hint, until it is dismissed on this computer (features/contestWorkIn).
   const [workInHint, setWorkInHint] = useState(() => !workInHintSeen())
   // The route to the cockpits that send: only with Contest mode on, and never on a page that watches;
-  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it).
+  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it), and
+  // per cockpit whose mode the contest allows (RTTY alone for the RTTY Roundup, `workInViewsFor`).
   const features = useFeatures()
-  const workInViews = (['cw', 'phone'] as const).filter((v) => features.enabled[v] !== false)
+  const workInViews = workInViewsFor(fdRuleset?.bannedModes, (v) => features.enabled[v] !== false)
   const workIn = fdActive && !observed && workInViews.length > 0
   const openedForRun = useRef(false)
 
@@ -3110,7 +3116,6 @@ export function ContestView({
 
   const rows = useMemo(() => annotate(log), [log])
   const numbered = logIsNumbered(log)
-  const modes = useMemo(() => modeCounts(log), [log])
 
   // ⭐ REMOVE THE NEWEST CONTACT, AND THE REMOVED LIST WITH RESTORE — the screen's half of the
   // strip's Ctrl+D. Remove sits on the newest row alone and asks before it acts (a second click
@@ -3190,9 +3195,10 @@ export function ContestView({
       setRemovedNote({ text, alert })
       pushToast(text, alert ? 'error' : 'info', CLEAR_TOAST_MS)
     }
-    // Only at the station, as removal is: a press through the Remote stream clears nothing. Read
-    // before anything awaits, inside the stream's dispatch.
-    if (isStreamInput()) {
+    // Only at the station, as removal is: a press through the Remote stream clears nothing, nor one
+    // from a computer driving the station (the station refuses it there). Read before anything
+    // awaits, inside the stream's dispatch.
+    if (isStreamInput() || drivesAnotherStation()) {
       setClearAsk(null)
       say(t('contest.clear.remote'), true)
       return
@@ -3248,10 +3254,16 @@ export function ContestView({
   const editRows = editing
     ? log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
     : []
-  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
   useEffect(() => {
-    if (editing && editRows.length === 0) setEditing(null)
-  }, [editing, editRows.length])
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setRemovedNote({ text: closedText(log, editing.whenUnix), alert: true })
+  }, [editing, editRows.length, log])
   const editRow = (q: FieldDayQso) => {
     if (isStreamInput()) {
       setRemovedNote({ text: t('contest.edit.remote'), alert: true })
@@ -3262,17 +3274,21 @@ export function ContestView({
       setRemovedNote({ text: t('contest.edit.club'), alert: true })
       return
     }
+    // Another edit open in this window (the strip's Ctrl+Y, a last contact's): it keeps the
+    // keyboard and its typing, and no second one opens.
+    if (!editing && focusOpenContestEdit()) {
+      setRemovedNote({ text: t('contest.edit.open'), alert: false })
+      return
+    }
     setRemovedNote(null)
+    saving.current = false
     setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
   }
   const editDone = (note: EditNote | null) => {
+    saving.current = false
     setEditing(null)
     if (note) setRemovedNote(note)
   }
-
-  // Worked-section set for the summary/dupe exports (the board derives its own
-  // inside FieldDayScoreboard).
-  const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
 
   // The §18.1 upload control. The DESTINATIONS are mirrored locally so a click reads
   // back instantly — the snapshot that carries the engine's answer arrives on the next
@@ -3433,6 +3449,10 @@ export function ContestView({
   // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning the mode off offers, while
   // it is open. The save that turns the mode off waits for its answer.
   const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
+  // ⭐ THE STATS TAB (ContestStats.tsx): the scoreboard's place, or the contest's stats in it. The
+  // log below stays either way.
+  const [statsTab, setStatsTab] = useState(false)
+  const [setupOpen, setSetupOpen] = useState<'pick' | 'sends' | null>(null)
   const toggleMode = async () => {
     if (observed || logger || modeBusy) return
     const next = !modeOn
@@ -3452,7 +3472,10 @@ export function ContestView({
         // session it holds. Read against what is saved NOW, the engine's note of "before" included,
         // with the club chip's count of contacts the host does not have yet. With nothing to offer
         // or say, the switch goes off as it always did.
-        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event, fieldDay?.club?.queued ?? 0)
+        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event, fieldDay?.club?.queued ?? 0, {
+          missing: fieldDay?.cabrilloMissing,
+          choices: fdRuleset,
+        })
         if (hasOffer(offer)) {
           setOverOffer(offer)
           return
@@ -3519,10 +3542,8 @@ export function ContestView({
   const slotColumns = fdEventIsFieldDay ? [] : (fieldDay?.receives ?? [])
   const subtitle = useMemo(() => (fdEvent ? fdHeaderSubtitle(new Date(), fdEvent) : ''), [fdEvent])
 
-  // Score components (shared with the scoreboard tiles) — needed here for the
-  // Summary export + the bonuses count.
-  const { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds: claimedBonuses, bonusPoints, totalScore } =
-    computeFdScore(fieldDay, settings)
+  // Score components (shared with the scoreboard tiles) — needed here for the bonuses count.
+  const { fdPowerMult, claimedBonusIds: claimedBonuses, bonusPoints } = computeFdScore(fieldDay, settings)
 
   // The chase: earned vs planned. `computeFdScore` above is untouched by any of this —
   // it reads `fdBonuses` and nothing else, which is what makes a plan unscoreable.
@@ -3549,38 +3570,7 @@ export function ContestView({
     try {
       let text: string
       if (format === 'summary') {
-        text = buildSummaryText({
-          eventName,
-          isWfd,
-          rulesYear: fieldDay?.rulesYear ?? 0,
-          rulesGenerated: fieldDay?.rulesGenerated ?? '',
-          myClass: composingSlot(fieldDay?.composing, 'CLASS'),
-          mySection: composingSlot(fieldDay?.composing, 'SECTION'),
-          log,
-          modes,
-          workedSet,
-          powerMult: fdPowerMult,
-          qsoPts,
-          poweredPoints,
-          bonusPoints,
-          totalScore,
-          claimedBonuses: FD_BONUSES.filter((b) => claimedBonuses.includes(b.id)),
-          objectives:
-            wfdOm === null
-              ? undefined
-              : {
-                  om: wfdOm,
-                  done: WFD_OBJECTIVES.filter((o) => wfdEarnedIds(settings?.fdObjectives ?? []).has(o.id)),
-                },
-          // What the station sends, as it renders it: the issued serial, never the composing
-          // vector's "0" placeholder, which a serial contest's summary used to print.
-          contest: fdEventIsFieldDay
-            ? undefined
-            : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
-          dupeRule: fieldDay?.dupeRule,
-          fieldDaySheet: fdEventIsFieldDay && !isWfd,
-          operators: fieldDay?.operators,
-        })
+        text = contestSummaryText(fieldDay, settings, shownEvent)
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows, fdEventIsFieldDay ? undefined : eventName)
       } else if (format === 'club-cabrillo' || format === 'club-adif') {
@@ -3686,7 +3676,26 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
-      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
+      <ContestOverDialog
+        offer={overOffer}
+        onNotNow={() => setOverOffer(null)}
+        onTurnOff={turnOffWithChecklist}
+        onStats={() => {
+          setOverOffer(null)
+          setStatsTab(true)
+        }}
+        summaryText={fieldDay ? () => contestSummaryText(fieldDay, settings, fieldDay.event) : undefined}
+      />
+      {/* ⭐ THE CONTEST SETUP (ContestSetupWizard.tsx): "Set up a contest…" with none running, "Change
+          setup…" on one that runs. It saves through the patch seam and tells App, as the switch does. */}
+      {setupOpen && (
+        <ContestSetupWizard
+          startAt={setupOpen}
+          onClose={() => setSetupOpen(null)}
+          onSaved={() => onSettingsSaved?.()}
+          onWorkIn={onWorkIn}
+        />
+      )}
       {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
@@ -3736,6 +3745,11 @@ export function ContestView({
             })}
           </span>
         ) : null}
+        {!observed && !logger && (
+          <button type="button" className="fd-setup-btn" onClick={() => setSetupOpen(fieldDay ? 'sends' : 'pick')}>
+            {fieldDay ? t('contestSetup.change') : t('contestSetup.open')}
+          </button>
+        )}
         {/* ⭐ THE CLOCK, large (the Illinois QSO Party, 2026-10-18: the operator squinted at the top bar's):
             UTC first, the time a contest and its log run on, then this computer's local time beside it.
             The top bar's own clock (`UtcClock`), so the two can never read differently. On the banner, so
@@ -3809,6 +3823,9 @@ export function ContestView({
         </div>
       )}
 
+      {/* ⭐ "<contest> this weekend — Set up…": a quiet line when a contest starts within a week and
+          none runs. No pop-up. */}
+      {!fieldDay && !observed && !logger && <ContestSoonLine onWorkIn={onWorkIn} />}
       <div className="panel-header fd-header">
         <div className="fd-ident">
           <h2 className="conv-peer">
@@ -3839,6 +3856,7 @@ export function ContestView({
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
             disabled={observed || logger || roleLocked}
+            title={t('fieldDay.role.running.title')}
             onClick={() => { if (!observed && !logger && !roleLocked) onSetMode?.('fieldday-run') }}
           >
             {t('fieldDay.role.running')}
@@ -3865,10 +3883,10 @@ export function ContestView({
                 key={view}
                 type="button"
                 className="export-btn"
-                title={view === 'cw' ? t('fieldDay.workIn.cw.title') : t('fieldDay.workIn.phone.title')}
+                title={workInTitle(view)}
                 onClick={() => (onWorkIn ?? askMainToWorkIn)(view)}
               >
-                {view === 'cw' ? t('fieldDay.workIn.cw') : t('fieldDay.workIn.phone')}
+                {workInLabel(view)}
               </button>
             ))}
           </div>
@@ -4118,6 +4136,49 @@ export function ContestView({
         />
       )}
 
+      {/* SCOREBOARD or STATS — two tabs over the same session, read-only both. */}
+      <div className="filter-row contest-tabs" role="tablist" aria-label={t('contestStats.tabs.aria')}>
+        <button type="button" role="tab" aria-selected={!statsTab} className={`filter-chip${statsTab ? '' : ' active'}`} onClick={() => setStatsTab(false)}>
+          {t('contestStats.tab.score')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statsTab}
+          aria-controls={statsTab ? 'contest-stats-panel' : undefined}
+          className={`filter-chip${statsTab ? ' active' : ''}`}
+          onClick={() => setStatsTab(true)}
+        >
+          {t('contestStats.tab.stats')}
+        </button>
+      </div>
+      {statsTab ? (
+        <ContestStats
+          fieldDay={fieldDay}
+          nowUnix={nowUnix}
+          myCall={nativeSettings?.mycall ?? ''}
+          myGrid={nativeSettings?.mygrid ?? ''}
+          contest={eventName}
+          score={
+            <>
+              {fieldDay?.scoreNoteKey && SCORE_NOTE_KEYS.has(fieldDay.scoreNoteKey) && (
+                <p className="fd-score-note" role="note">
+                  {t(fieldDay.scoreNoteKey as MessageKey)}
+                </p>
+              )}
+              <ScoreMath fieldDay={fieldDay} settings={settings} />
+            </>
+          }
+          mults={
+            fieldDay?.boards?.length ? (
+              <MultiplierBoards boards={fieldDay.boards} />
+            ) : (
+              <SectionsBoard workedSet={workedSectionSet(fieldDay)} />
+            )
+          }
+        />
+      ) : (
+      <>
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard
         fieldDay={fieldDay}
@@ -4273,6 +4334,8 @@ export function ContestView({
         )}
       </div>
       )}
+      </>
+      )}
 
       {/* THE LOG'S DIVIDER (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows (county
           list etc.)"). It sizes the log, and the multiplier board above takes what is left, down to its
@@ -4315,6 +4378,9 @@ export function ContestView({
                   receives={fieldDay?.receives ?? []}
                   role={fieldDay?.role}
                   bands={fieldDay?.bands}
+                  onSaving={() => {
+                    saving.current = true
+                  }}
                   onDone={editDone}
                 />
               ) : null

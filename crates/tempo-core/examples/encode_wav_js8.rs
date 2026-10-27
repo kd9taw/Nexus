@@ -38,8 +38,8 @@
 //!   --speed accepts slow|normal|fast|turbo|ultra or the ALL.TXT letter E|A|B|C|I (Ultra is
 //!   JS8Call 3.0's "JS8 60", Turbo its "JS8 40").
 //!
-//! Then, from the parity lab (cwd = a scratch dir; it drops jt9_wisdom.dat + timer.out):
-//!   ~/work/twowayfd/paritylab/js8/stock/js8 -8 -b A -d 3 OUT.wav
+//! Then, with a stock `js8` CLI (cwd = a scratch dir; it drops jt9_wisdom.dat + timer.out):
+//!   js8 -8 -b A -d 3 OUT.wav
 
 use js8::phy::{encode_word, modulate, Speed, Word87};
 use tempo_core::wavfile::write_wav_i16;

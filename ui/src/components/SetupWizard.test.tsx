@@ -555,7 +555,8 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
     fireEvent.click(option(/Serial DTR/))
     const port = screen.getByLabelText(/PTT Serial Port/) as HTMLInputElement
     expect(port.value).toBe('')
-    expect(port.placeholder).toMatch(/blank = use the CAT port/)
+    // The words only: no sample port (it showed "e.g. COM16 — …", a value that reads as filled in).
+    expect(port.placeholder).toBe('blank = use the CAT port')
     fireEvent.change(port, { target: { value: 'COM9' } })
     const draft = finishDraft(onApply)
     expect(draft.pttMethod).toBe('dtr')
@@ -807,5 +808,45 @@ describe('the wizard gives the keyboard back when it closes', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(opener))
     cleanup()
+  })
+})
+
+// AN EMPTY BOX SHOWS NO MADE-UP SAMPLE. The station step showed N0CALL and FN31 in grey, and the
+// network rig's address box 127.0.0.1:5002 — a sample reads as a value already filled in.
+describe('the wizard shows no sample value in an empty box', () => {
+  const placeholderOf = (label: RegExp) => (screen.getByLabelText(label) as HTMLInputElement).getAttribute('placeholder')
+
+  it('the station step: callsign and grid', () => {
+    renderWizard({ settings: { mycall: '', mygrid: '' } })
+    expect(placeholderOf(/^Callsign/)).toBeNull()
+    expect(placeholderOf(/^Grid square/)).toBeNull()
+  })
+
+  it("the radio step: a network rig's address", () => {
+    renderWizard({ settings: { rigConn: 'network', rigAddr: '' } })
+    clickNext() // 0 station → 1 rig
+    expect(placeholderOf(/^Address/)).toBeNull()
+  })
+})
+
+describe('SetupWizard licence class', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The grandfathered US classes are offered beside the others, and the pick reaches onApply as
+  // the token the engine parses; an unknown token there would fall to Open and lift the lockout.
+  it.each([
+    [/^Novice/, 'novice'],
+    [/^Advanced/, 'advanced'],
+    [/^Technician/, 'technician'],
+  ])('a pick of %s applies the %s class', (name, token) => {
+    const { onApply } = renderWizard()
+    gotoLogStep()
+    clickNext() // → goals
+    fireEvent.click(screen.getByRole('button', { name }))
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onApply.mock.calls[0][3]).toBe(token)
   })
 })

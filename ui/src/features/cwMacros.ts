@@ -28,6 +28,8 @@ export const CW_TOKENS = [
   '{CLASS}',
   '{SECTION}',
   '{EXCH}',
+  '{MYPARK}',
+  '{HISPARK}',
 ] as const
 
 const KNOWN = new RegExp(`\\{(${CW_TOKENS.map((tok) => tok.slice(1, -1)).join('|')})\\}`, 'g')

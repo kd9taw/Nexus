@@ -10,6 +10,7 @@
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -42,7 +43,8 @@ import type {
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
-import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots } from '../api'
+import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots, getPotaActivator } from '../api'
+import type { MyPark } from '../api'
 import { logSource } from '../features/logSource'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
@@ -758,6 +760,9 @@ const BAND_COLOR: Record<string, string> = {
   '6m': '#ff4d6d',
   '4m': '#ff4da6',
   '2m': '#d24dff',
+  '70cm': '#b04dff',
+  '33cm': '#a24dff',
+  '23cm': '#944dff',
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
 const GETTING_OUT = '#3ddc6a' // a station that heard ME
@@ -1413,6 +1418,38 @@ export function MapView({
   // An explicit `ota` prop wins when a host supplies one (the APRS layer's shape);
   // otherwise the layer feeds itself.
   const otaSpots = ota ?? otaFetched
+
+  // Your own parks on the same layer: the running activation's, and the ones you have activated,
+  // from the log and the park directory — never the network. Read with the spots.
+  const [myParks, setMyParks] = useState<MyPark[]>([])
+  useEffect(() => {
+    if (!otaOn) {
+      setMyParks([])
+      return
+    }
+    let live = true
+    const load = () =>
+      getPotaActivator()
+        .then((v) => live && setMyParks(v.parks))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 120_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [otaOn])
+  const placedMyParks = useMemo(() => {
+    const proj = size.w === 0 ? null : projectionFor(size.w, size.h)
+    if (!proj) return [] as Array<{ park: MyPark; xy: [number, number] }>
+    const out: Array<{ park: MyPark; xy: [number, number] }> = []
+    for (const park of myParks) {
+      const xy = placePoint(kind, proj, { lat: park.lat, lon: park.lon })
+      if (xy) out.push({ park, xy })
+    }
+    // The park you are activating draws last, on top.
+    return out.sort((a, b) => Number(a.park.activating) - Number(b.park.activating))
+  }, [me, kind, size, view, myParks, streetView])
 
   // Parks on the air, projected from the feed's own coordinates (a POTA row carries
   // latitude/longitude, so the marker is the park rather than the 4 km square a grid
@@ -2807,6 +2844,34 @@ export function MapView({
           ctx.stroke()
         }
       }
+      // Your parks: a diamond, so one is never read as an activator to go and work. A park you
+      // have activated is a small outline; the one you are activating now is filled, larger and
+      // named, so "where am I on the air from" reads at a glance.
+      const good = cssVar('--state-good')
+      for (const { park, xy: p } of placedMyParks) {
+        const r = (park.activating ? 6.5 : 4) * ms
+        ctx.globalAlpha = layers.ota.opacity
+        ctx.beginPath()
+        ctx.moveTo(p[0], p[1] - r)
+        ctx.lineTo(p[0] + r, p[1])
+        ctx.lineTo(p[0], p[1] + r)
+        ctx.lineTo(p[0] - r, p[1])
+        ctx.closePath()
+        if (park.activating) {
+          ctx.fillStyle = good
+          ctx.fill()
+          haloStroke(1)
+          ctx.font = `600 ${Math.round(11 * ms)}px system-ui`
+          ctx.textAlign = 'center'
+          ctx.fillStyle = good
+          haloText(park.reference, p[0], p[1] - r - 4 * ms)
+        } else {
+          haloStroke(3)
+          ctx.strokeStyle = good
+          ctx.lineWidth = 1.2 * ms
+          ctx.stroke()
+        }
+      }
       ctx.globalAlpha = 1
     }
 
@@ -2866,7 +2931,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3661,7 +3726,10 @@ export function MapView({
           )}
           {selStation && pathInfo && (
             <div className="map-path">
-              <span className="map-path-call">{selStation.call}</span>
+              {/* The selected station's card, from the call in this readout. */}
+              <button type="button" className="map-path-call" {...callCardTrigger(selStation.call)}>
+                {selStation.call}
+              </button>
               <span className="map-path-fig">
                 {t('map.path.figure', {
                   brg: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).brg,

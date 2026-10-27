@@ -214,7 +214,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'app_version') return '0.0.0-test'
   if (cmd === 'radio_launch_info') return { showPicker: false }
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log|contest_removed|contest_unmerged|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_zone_hint|get_call_history|fd_club_log_newest)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_place|get_call_history|fd_club_log_newest)$/.test(cmd)) return null
   if (cmd === 'ask_log') throw new Error('no log in this test')
   // A computer running its own station: the backend answers None, and the banner asks once. The
   // catch-all's `{}` would read as driving a remote station, asked every half second.

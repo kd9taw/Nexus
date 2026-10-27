@@ -324,6 +324,8 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   // PSK (Keyboard Modes Phase 1) rides RTTY's region-less shell rule — one
   // comma group in styles.css, but the cascade is computed per shell here.
   ['.layout.single.psk-cockpit', shellChain('psk-cockpit')],
+  // JTTY (WSJT-X's keyboard mode, 2026-10) takes CW's REGION shell rule too — JS8's block in styles.css.
+  ['.layout.single.jtty-cockpit', shellChain('jtty-cockpit')],
   // JS8 (2026-09) takes CW's REGION shell rule — its own block in styles.css, computed here.
   ['.layout.single.js8-cockpit', shellChain('js8-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
@@ -560,10 +562,7 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
       // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
       const v = finalDecl(shell, '--cockpit-fill-min')
       expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      // An em length, or RTTY's tuning-scope knob over one (`var(--rtty-fill-min, 10em)`: the RTTY
-      // shell lowers its log strip's floor to the Call row while the scope is shown; the stock em
-      // value stands wherever nothing sets the knob, as on PSK and SSTV, which share this rule).
-      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-min, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
     })
   }
 })
@@ -607,12 +606,13 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     // RTTY's and PSK's waterfall dividers (layout L6), the same kind; and SSTV's stage divider.
     ['rtty-cockpit', []],
     ['psk-cockpit', []],
+    ['jtty-cockpit', []],
     ['sstv-view', []],
+    // Phone's, a shell child in both of its left side's states since 2026-10-26 (it stood in the stage).
+    ['phone-cockpit', []],
   ]
-  // Phone's sits in its stage (PHONE_STAGES) and carries `in-column` (its margins, below): both states.
   const STRIP_CHAINS: Array<[string, Array<Set<string>>]> = [
     ...STRIPS.map(([shell, between]): [string, Array<Set<string>>] => [shell, [...shellChain(shell), ...between.map((c) => new Set([c])), new Set(['pane-splitter', 'horizontal'])]]),
-    ...PHONE_STAGES.map(([state, stage]): [string, Array<Set<string>>] => [`phone-cockpit (${state})`, [...stage, new Set(['pane-splitter', 'horizontal', 'in-column'])]]),
   ]
   for (const [shell, chain] of STRIP_CHAINS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -706,20 +706,11 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   const QSOCOL = [...BODY, new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
   /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
   const CASES: Array<[string, Array<Set<string>> | null, Array<Set<string>>, string[]]> = [
-    ...['rtty-cockpit', 'psk-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit'].map(
+    // PHONE'S SCOPE DIVIDER is a shell child in both of its left side's states (2026-10-26; from
+    // 2026-10-03 it stood in the stage and carried `in-column`).
+    ...['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit', 'phone-cockpit'].map(
       (shell): [string, Array<Set<string>>, Array<Set<string>>, string[]] => [`.${shell}`, shellChain(shell), shellChain(shell), ['pane-splitter', 'horizontal']],
     ),
-    // PHONE'S SCOPE DIVIDER (2026-10-03) stands in the stage (PHONE_STAGES) and gives back a column's
-    // gap by `in-column`, like every divider whose parent this sheet may not name. With no side the
-    // flat wrappers have no box, so the column whose gap it sits in is the SHELL; with the side shown
-    // it is the stage, whose gap cockpit-panes.css declares (`.cockpit-stage`).
-    [
-      '.phone-cockpit (no side)',
-      shellChain('phone-cockpit'),
-      [...PHONE_STAGES[0][1]],
-      ['pane-splitter', 'horizontal', 'in-column'],
-    ],
-    ['.phone-cockpit (left side shown)', null, [...PHONE_STAGES[1][1]], ['pane-splitter', 'horizontal', 'in-column']],
     ...['phone-cockpit', 'js8-cockpit'].map(
       (shell): [string, null, Array<Set<string>>, string[]] => [
         `.${shell} .cockpit-col`,
@@ -782,6 +773,13 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   }
 })
 
+/** The strip a waterfall's height divider sizes, as its chain: the `.waterfall-wrap` itself, except on
+ *  RTTY, where the strip is the ROW that holds the waterfall and, right of it, the tuning scope
+ *  (2026-10-26) — the waterfall in it takes the row's width, never its height. */
+function wfStrip(shell: string): Array<Set<string>> {
+  return [...shellChain(shell), new Set([shell === 'rtty-cockpit' ? 'rtty-wf-row' : 'waterfall-wrap'])]
+}
+
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {
   // The Splitter (PhoneCockpit.tsx ~728 / CwCockpit) drives --ph-scope-h / --cw-scope-h
   // as the scope's flex-BASIS. A basis only sets the rendered height while flex-grow
@@ -792,9 +790,9 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // the pointer at half rate instead). Operate is the pattern: `.cockpit-waterfall
   // { flex: 0 1 var(--cockpit-wf-h, 22%) }` with the decode scroller as the grower.
   // JS8's (layout L2), RTTY's and PSK's (L6) waterfall dividers drive the same kind of basis.
-  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit']) {
+  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
     it(`.${shell} .waterfall-wrap resolves flex-grow 0 (its waterfall divider)`, () => {
-      const win = winningValue([...shellChain(shell), new Set(['waterfall-wrap'])], blockGrow)
+      const win = winningValue(wfStrip(shell), blockGrow)
       expect(win, `.${shell} .waterfall-wrap: no rule declares flex at all`).not.toBeNull()
       expect(
         win!.value,
@@ -841,9 +839,10 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
     for (const fontPx of [14, 16]) expect(resolveClamp(TX_SPLIT_MIN, { fontPx, vhEff: 768 })).toBe(4 * fontPx)
   })
 
+  // Both scopes are shell children; Phone's in both of its left side's states (2026-10-26).
   const SCOPES: Array<[string, Array<Set<string>>]> = [
     ['cw-cockpit', shellChain('cw-cockpit')],
-    ...PHONE_STAGES.map(([state, stage]): [string, Array<Set<string>>] => [`phone-cockpit (${state})`, stage]),
+    ['phone-cockpit', shellChain('phone-cockpit')],
   ]
   for (const [shell, host] of SCOPES) {
     it(`.${shell} .ph-scope-panel resolves flex-grow 0 (grow ≥1 voids the dragged basis)`, () => {
@@ -886,6 +885,9 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
     // shell-scoped rule that wins for one cockpit and not the other visible.
     ['psk-cockpit', 'rtty-dock-keys (F1–F8, Call, TX latch, Esc/Stop)', ['rtty-dock-keys']],
     ['psk-cockpit', 'cw-send (compose bar)', ['cw-send']],
+    // JTTY's compose bar is drawn disabled in its receive-only build; it is the row its sender
+    // lands in, pinned now so the transmit build cannot inherit a shrinkable one.
+    ['jtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
     ['js8-cockpit', 'js8-dock-row (compose + beacon rows)', ['js8-dock-row']],
   ]
   for (const [shell, name, rowClasses] of ROWS) {
@@ -1177,9 +1179,9 @@ function lengthPx(v: string, g: Geom): number | null {
   return null
 }
 
-/** The two hosts of the strip, as DOM chains — Phone's in both of its stage's states. */
+/** The two hosts of the strip, as DOM chains — both shells (Phone's in both of its left side's states, 2026-10-26). */
 const SCOPE_HOSTS: Array<[string, () => Array<Set<string>>]> = [
-  ...PHONE_STAGES.map(([state, stage]): [string, () => Array<Set<string>>] => [`phone-cockpit (${state})`, () => stage]),
+  ['phone-cockpit', () => shellChain('phone-cockpit')],
   ['cw-cockpit', () => shellChain('cw-cockpit')],
 ]
 const SIZE_PROPS = ['flex', 'height', 'min-height', 'max-height']
@@ -1237,6 +1239,24 @@ describe('the band-scope strip is sized by its HOST, never by the shared base ru
   }
 })
 
+describe('RTTY: the waterfall and the tuning scope share one strip, side by side (2026-10-26)', () => {
+  // The divider sizes the ROW; the waterfall in it fills the row's height and whatever width the tuning
+  // scope leaves. A waterfall that kept the strip's column basis here would take it as a WIDTH.
+  const row = wfStrip('rtty-cockpit')
+  const wf = [...row, new Set(['waterfall-wrap'])]
+  it('the strip is a flex row', () => {
+    expect(winningValue(row, blockLonghand('display'))?.value).toBe('flex')
+    const dir = winningValue(row, blockFlexDirection)
+    expect(dir === null || dir.value === 'row', `the strip stacks: ${JSON.stringify(dir)}`).toBe(true)
+  })
+  it('the waterfall in it grows into the width and may shrink to nothing of it', () => {
+    expect(winningValue(wf, blockGrow)?.value, 'the waterfall does not take the row\'s width').toBe(1)
+    expect(winningValue(wf, blockLonghand('min-width'))?.value).toBe('0')
+    // No strip floor or ceiling on the waterfall itself: those are the row's.
+    expect(winningValue(wf, blockLonghand('max-height'))).toBeNull()
+  })
+})
+
 describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divider)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
   // carried the same `min-height: 120px` — and until layout L6 RTTY gave the operator no drag
@@ -1246,8 +1266,8 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
   // shell valve keeps it from TRAPPING anything, which is why this is a share bug and not a
   // safety bug. PSK shares the strip rule (one comma group), so it is computed separately
   // here — a split of that group could regress one alone.
-  for (const shell of ['rtty-cockpit', 'psk-cockpit']) {
-    const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
+  for (const shell of ['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
+    const chain = wfStrip(shell)
 
     it(`.${shell} resolves a min-height at all (the canvas needs real device pixels)`, () => {
       const win = winningValue(chain, blockLonghand('min-height'))
@@ -1277,22 +1297,14 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
   }
 })
 
-describe('beside the left side the scope counts at its FLOOR, not its content (2026-10-03)', () => {
-  // With the side shown, the row's automatic minimum is the stage's INTRINSIC height, and a column's
-  // intrinsic height takes each child at its preferred size: the scope counted at its content height
-  // (134 px on a 1280×720 window) instead of the 8em it shrinks to under deficit, so the shell scrolled
-  // 22 px further and the TX strip sat 22 px lower than without the side — measured in Chrome. Size
-  // containment makes its intrinsic size the floor; laid out, it is still its basis, clamped. Only in
-  // that state: the stock shell resolves the scope's basis against the shell, and nothing changes there.
+describe('the scope is never size-contained: it is a shell child in both of Phone’s states (2026-10-26)', () => {
+  // From 2026-10-03 to 2026-10-26 the scope stood in the stage beside the left side, and there it had
+  // to be size-contained (a column's intrinsic height counted it at its content, which scrolled the
+  // shell 22 px further at 1280×720). It stands above the row now, as CW's does, so no rule may
+  // contain it: containment would make its intrinsic size its floor in the stock layout as well.
   const blockContain = blockLonghand('contain')
-  it('with the side shown the scope is size-contained', () => {
-    const chain = [...PHONE_STAGES[1][1], new Set(['ph-scope-panel', 'ph-scope-panel--beside'])]
-    const win = winningValue(chain, blockContain)
-    expect(win, 'nothing contains the scope beside the side').not.toBeNull()
-    expect(win!.value.split(/\s+/), `\`${win!.selector} { contain: ${win!.value} }\``).toContain('size')
-  })
-  it('without the side nothing contains it (control: the stock and hosted layouts are untouched)', () => {
-    for (const host of [PHONE_STAGES[0][1], shellChain('cw-cockpit')]) {
+  it('no rule contains either cockpit’s scope', () => {
+    for (const host of [shellChain('phone-cockpit'), shellChain('cw-cockpit')]) {
       expect(winningValue([...host, new Set(['ph-scope-panel'])], blockContain)).toBeNull()
     }
   })
@@ -1393,15 +1405,16 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
     ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', ['waterfall-wrap']],
     // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
-    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    // RTTY's strip is the row that holds the waterfall and the tuning scope beside it (2026-10-26).
+    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['rtty-wf-row']],
     ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    ['jtty-cockpit', './components/JttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
     // SSTV's stage divider (layout L6) sizes the stage in its SIZED shape, which is the one its
     // clamps must agree with: the stage's own 16em floor and the sized rule's ceiling.
     ['sstv-view', './components/SstvView.tsx', '--sstv-stage-h', ['sstv-canvas', '[data-sized]']],
   ]
   for (const [shell, file, varName, tokens] of CALLERS) {
-    // Phone's strip stands in its stage (PHONE_STAGES); its clamps are the same in both states.
-    const chain = [...(shell === 'phone-cockpit' ? PHONE_STAGES[1][1] : shellChain(shell)), new Set(tokens)]
+    const chain = [...shellChain(shell), new Set(tokens)]
     const strip = tokens.map((t) => (t.startsWith('[') ? t : `.${t}`)).join('').slice(1)
     for (const [end, prop] of [
       ['min', 'min-height'],

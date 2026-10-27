@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into ten tabs. Only the active tab renders, so typing in
+Settings is organized into twelve tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -11,10 +11,10 @@ leaving a dead button with no reason and no fix.
 
 The tabs, in the order they appear:
 
-[Station](#station) · [Radio](#radio) · [Phone](#phone) · [CW](#cw) ·
-[Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
-[Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
-[Appearance](#appearance) · [Config](#config)
+[Station](#station) · [Remote](#remote) · [Radio](#radio) · [Phone](#phone) ·
+[CW](#cw) · [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
+[Logbook](#logbook) · [Logging & Connectors](#logging--connectors) ·
+[Contesting](#contesting) · [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took), a **Check for updates** button and a **Licenses** button (the license
@@ -36,23 +36,29 @@ Your operator identity, license privileges, and default frequency.
 - **Callsign** — "Your station callsign (required)." Everything keys off this.
 - **Grid** — "Maidenhead locator. All 6 characters — 4 measures every distance
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
-  propagation anchoring, and distance math.
+  propagation anchoring, and distance math. Every contact you log carries it as
+  your grid (ADIF `MY_GRIDSQUARE`) unless the contact arrived with one of its own
+  (WSJT-X's, or one typed in the Logbook). Your LoTW uploads leave a grid Nexus
+  filled in itself out, so TQSL keeps signing from your Station Location; every
+  other service receives it.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
 - **Operator at the key** — for multi-operator only: the callsign of whoever is
   actually running the station, when that is not the station call. It is stamped
   on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
   per operator afterwards — POTA and Field Day both want each operator to submit
-  their own. Blank means single-op and nothing is stamped. Change it when you swap
-  seats. It is the same setting as **Operator at the key** under
+  their own. Blank means single-op: your station call is logged as the operator.
+  Change it when you swap seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
 - **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
-  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  macro, the QTH an RTTY ragchew sends, and your state on each contact you log
+  (ADIF `MY_STATE`). A park or summit activation logs the park's state instead,
+  never this one, and LoTW uploads leave it out as they do the grid. A contest has a box of its own,
   **State or province** under [Your station data](#your-station-data) on the
   Contesting tab, because a contest entry can be somewhere else: a portable or mobile
   entry types where it is operating there, and this one stays as it is.
-- **License Class** — Technician / General / Amateur Extra (US), or **Open** for
-  non-US operators. "Sets your transmit privileges + the licensed-segment band
+- **License Class** — Technician / General / Amateur Extra (US), the grandfathered
+  Novice and Advanced classes, or **Open** for non-US operators. "Sets your transmit privileges + the licensed-segment band
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
   in every Nexus TX path, checked against the Part 97 sub-band table — Nexus
   refuses to key the rig outside your segment.
@@ -69,6 +75,14 @@ Your operator identity, license privileges, and default frequency.
 operator name sit to the left of these. The values shown are one station's, not
 recommendations.*
 
+---
+
+## Remote
+
+Signing this station in to Nexus Remote, pairing it with a browser or another computer, and
+approving the devices that connect. One card, with the older pairing and permission options
+folded under **Advanced**.
+
 ### Remote access
 
 Remote lets you use this station from a web browser. Remote streaming is a beta feature,
@@ -84,13 +98,11 @@ browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
 paired from. A browser streaming this station uses Nexus as you would here, transmit
-included, with this approval alone: leave **Also allow FT8/FT4 transmit from the Remote page**
-(under **Advanced**) unticked. It was for the Remote page's own FT8/FT4 controls, which the
-page no longer has. Any other browser asks with the Remote site's **Stream** button,
-and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
-with the browser's key. Approve it only if the key matches the one the browser shows.
-**Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
-request, and Escape closes the question and answers nothing.
+included, with this approval alone. Any other browser asks with the Remote site's **Stream**
+button, and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this
+station?**, with the browser's key. Approve it only if the key matches the one the browser
+shows. **Approve** there is **Approve browser**; **Deny** refuses the request, and Escape
+closes the question and answers nothing.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store, and
@@ -106,29 +118,21 @@ say yes.
 
 **What a browser may do** is decided here at the station. Approving a browser gives it
 station controls, which is all a stream needs: with streaming on, they let a browser stream
-this window and use Nexus as you would here, transmit included. Approving also gives it
-remote logging, and FT8/FT4 transmit when the approval's transmit box is ticked; nothing on
-the Remote page uses either now (below). All of it is kept when Nexus restarts, until you
-revoke it, for as long as that browser stays approved: a browser whose approval was revoked,
-or given again, starts with nothing kept. The switches under each approved browser, under
-**Advanced**, limit it, or give a permission back. Without station controls a browser cannot
-stream this station.
+this window and use Nexus as you would here, transmit included. They are kept when Nexus
+restarts, until you revoke them, for as long as that browser stays approved: a browser whose
+approval was revoked, or given again, starts with nothing kept. The switch under each
+approved browser, under **Advanced**, limits it, or gives station controls back. Without station
+controls a browser cannot stream this station.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
   active. One browser holds control at a time. Revoking them also ends that browser's stream.
-- **Allow remote logging** — was for the Remote page's own Log QSO form, which the page no
-  longer has. A browser streaming this station logs with Nexus's own log form, as you would
-  here, and does not need it.
-- **Allow FT8/FT4 transmission from the Remote page** — was for the Remote page's own FT8/FT4
-  controls, which the page no longer has. A browser streaming this station does not need
-  it: through the stream it transmits as you would here, in any mode.
+  A browser streaming this station logs with Nexus's own log form, as you would here.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
 shown this Nexus window and operate it as you would here, transmit included, and hear the
-station's receive audio. It needs no FT8/FT4 transmit permission for that. Only this
-window is sent: a dialog that opens outside it, such as a file picker, is not, and a
+station's receive audio. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
 station stops within five seconds if its connection drops, and within seven if its picture
@@ -229,14 +233,29 @@ closed in full screen reopens at its last size. The page in this window can reac
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
 
 **Stations on this network…** is the other end of **Remote over this network**. On a Windows
-computer you operate from, it opens a Nexus window of its own for the stations this computer is
-paired with over your own network, with no internet at all. To add one, choose **Pair with a
-station…**: the window looks for stations by name on your network and offers each one it finds
-("Nexus" and the first characters of its key, as the station's card shows it). Press one to use
-its address, or type the address the station shows, then the code it shows under **Pair a
-computer** (capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
-it in this computer's password store, with the station's key, the station's address and nothing
-else. **Stream** connects and opens the station's stream as the Remote page does, with the same
+computer you operate from, it opens a Nexus window of its own for the stations on this computer.
+To add one, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
+the station is linked to, or one its owner invited to operate it: the window finds the station on
+your network by name (or asks for its address), checks that it is the station its owner signed in
+for, and the station is then on this computer on its own network, with no code. Over the internet
+this computer waits until you approve it at the station under Remote access, as a computer paired
+with a code does: Nexus asks there, with this computer's key. A sign-in alone never lets a computer
+or a browser operate the station over the internet. The station takes this computer on its
+network for 30 days from that sign-in; in the last week the window offers **Sign in again**. If Nexus Remote cannot be reached, pair such a computer
+again with a code (**Pair with a code instead…**, below): the station then keeps it until you
+remove it there, with no 30 days to count, and removing it on the Nexus Remote web page no longer
+takes it off the station's network. Signing in from somewhere else (a laptop away from home,
+a friend you invited at their own house), press **Not on this network** when the window asks
+where the station is: the station is then on this computer by its name, over the internet only
+once you approve this computer at the station, until you press **Sign in** on its row once while
+this computer is on the station's network.
+For a station whose owner has not signed in to Nexus
+Remote at the station, choose **Pair with a code instead…**: the window looks for stations by
+name on your network and offers each one it finds ("Nexus" and the first characters of its key,
+as the station's card shows it). Press one to use its address, or type the address the station
+shows, then the code it shows under **Pair a computer** (capitals or not, spaces or not). Either
+way this computer makes keys of its own for that station and keeps them in this computer's
+password store, with the station's keys, the station's address and nothing else. **Stream** connects and opens the station's stream as the Remote page does, with the same
 **Stop TX**, **Esc** and **F11**. It tries the address that worked last first; if the station is
 not there any more (a new address from the router, say), the window looks for it by name and
 connects where it is found. If the station's key ever changes (Nexus reinstalled there, or
@@ -284,6 +303,14 @@ Run more than one rig. Always shown — with one radio it is just a card and an
   **Editing** badge; **Make active** swaps rigs (dropping any carrier first);
   **Remove** deletes a non-active radio. The card's meta line shows model,
   port/address, audio device, and rigctld port.
+- **Disable** / **Enable** — with two or more radios, each card has a **Disable** button. A
+  disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
+  port, so another program on the same computer can use that rig. The card shows a
+  **Disabled** badge, auto band-routing skips the radio, and its pill leaves the header's radio
+  switcher. It can't be made active until you enable it, here or from Nexus Remote: **Make
+  active** is greyed out. **Enable** opens its CAT port again and brings the pill back. The
+  radio you are operating can't be disabled (its **Disable** is greyed out): make another radio
+  active first.
 - **Covers bands** — band chips per radio for auto band-routing. None = covers
   all. Appears once you have two radios.
 - **+ Add radio** — the discovery affordance. "Run two rigs at once — e.g. an HF
@@ -458,7 +485,8 @@ Baud continue across to the right.*
   **Audio over TCI**, on by default, carries the receive audio and Nexus's
   transmit audio over TCI with no virtual audio cable; **SDR panadapter in the
   scope**, off by default, draws the program's own spectrum in Nexus's scope;
-  **Spots on the SDR panadapter**, off by default, is not yet in effect.
+  **Spots on the SDR panadapter**, off by default, marks the stations you still
+  need on the program's panadapter; a click on one there only tunes Nexus.
   **Find TCI server** reads what the server at that address says about itself
   and closes, the form's port first and then 50001 and 40001; it never
   transmits. See
@@ -615,6 +643,34 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 - **Headphones or speakers** — and "must NOT be the rig's TX output
   device": playing the received band into the transmitter would put it back on the air.
 - **Listening level** — playback volume, with no effect on transmit.
+
+### Scope source
+
+Where the RF scope's picture comes from. **The radio** (as it comes) is the radio's own
+panadapter — Flex, Icom CI-V, the FT-710's, a TCI program's — or the sound card's audio where the
+radio has none. **SDRconnect (SDRplay)** draws an SDRplay RSP receiver instead, through SDRplay's
+own SDRconnect program over its WebSocket API: the receiver's whole span, each station at its own
+frequency, with the dial, the passband and spots drawn on it as usual.
+
+- SDRconnect is a separate, free, closed-source program from SDRplay. Install it, turn its
+  WebSocket API on, and leave it running (with its window, or headless). Nexus ships nothing of
+  SDRplay's and loads none of its code. It serves every RSP except the original RSP1.
+- **SDRconnect computer** and **WebSocket API port** — 127.0.0.1 and 5454 unless SDRconnect runs
+  elsewhere or you moved its port.
+- **Follow the dial** — the receiver's centre is set from the rig's dial: on every change (*Keep
+  the dial in the centre*), or only when the dial nears the edge of the span (*Retune only when
+  the dial nears the edge*), which moves SDRconnect's own display far less. A retune in
+  SDRconnect's window is drawn where it went; Nexus retunes again only when the dial moves.
+- Pick the receiver, and an RSPduo's tuner mode, in SDRconnect. Nexus uses the primary tuner.
+- The scope source is one choice for the whole station, not one per radio. With two radios the
+  receiver's centre follows whichever radio is active, but the receiver still hears only the rig
+  whose RX OUT feeds it.
+- Receive only: Nexus never transmits through SDRconnect and sends it no CAT. Clicking a spot on
+  the scope tunes the rig through Nexus's normal CAT path.
+- When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it
+  reports, the scope's status line says which, and Nexus keeps trying.
+- **Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection** —
+  never a plain T-piece on the transmit line. An RSP takes at most 0 dBm; 100 W is +50 dBm.
 
 ### Satellite Doppler
 
@@ -891,13 +947,17 @@ full power on every mode.*
   - **TCI server port**: 40001 unless something else on this computer already
     has it.
   - **Programs on TCI may transmit**: off by default, shown and set at the
-    station only. On, a program can Tune, key the radio's microphone on the
-    Phone screen and send CW macros on the CW screen, behind every Nexus
-    transmit safeguard, and no program can turn TX on. FT8, FT4 and the other
-    slot-timed modes may not transmit through TCI yet.
+    station only. On, a program can Tune, key the radio's microphone or send
+    its own audio on the Phone screen, and send CW macros on the CW screen,
+    behind every Nexus transmit safeguard, and no program can turn TX on. A
+    program's own audio goes out only once it has asked for a voice mode (USB,
+    LSB, AM or FM). FT8, FT4 and the other slot-timed modes may not transmit
+    through TCI yet.
   - **CW macros from programs**: on by default. A logger's CW macros go out on
     Nexus's own CW keyer, at the program's speed, while programs may transmit.
-  - **Spots from programs**: on by default, and not yet in effect.
+  - **Spots from programs**: on by default. Programs' spots show on the band
+    map and in the Phone and CW screens' band activity; a click on one only
+    tunes Nexus, and clicks on spots are passed back to the programs.
   - **Programs connected**: each connection by number, with its address,
     whether it is receiving audio or transmitting, the last thing Nexus
     refused it, and **Disconnect**.
@@ -1016,7 +1076,8 @@ the radio.
 - **Transmit period — Tx 1st (even)** — "On = transmit in the even/1st T/R slots;
   off = odd/2nd. The two stations in a QSO must pick **opposite** periods." Also
   on the top bar.
-- **Tx Watchdog (min)** — "Auto-halt TX after this many minutes (0 = off)."
+- **Tx Watchdog (min)** — "Auto-halt TX after this many minutes (0 = off)." When it ends an
+  FT8/FT4 call, the QSO strip shows **TX watchdog stopped the call** in red.
 - **Disable TX after sending 73** — "After your final 73 goes out, Enable TX
   drops — working the next station is a deliberate arm (WSJT-X default). A CQ run
   is unaffected: it returns to CQ."
@@ -1129,10 +1190,12 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   set the machine's clock instead. Turn the check off for fully-offline operation
   (no network calls) — the last measurement then keeps steering until it ages
   out, and the bar says when it has.
-- **Station power (W)** — "Your transmit power in watts — unlocks the Journey
-  miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown. This is what you actually run, for the record — it commands
-  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Station power (W)** — "Your transmit power in watts — logged on every
+  contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
+  QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
+  contacts are logged with no power. This is what you actually run, for the
+  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
+  slider.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1323,6 +1386,19 @@ the mode transmits.)
   instance on a shared rig you monitor from. Stopping the receiver yourself is
   remembered for the rest of the session either way. **This arms the receiver
   only** — transmit is never armed for you.
+
+**JTTY**, the WSJT-X keyboard mode, is the Keyboard section's other modem, so its one
+setting is here too.
+
+- **Start receiving when JTTY opens** — on by default, as for PSK: entering the JTTY
+  screen arms its decoder. Turn it off to arm by hand (the Arm RX button in the All
+  decodes pane). Stopping the receiver yourself is remembered for the rest of the
+  session. **This arms the receiver only**; this build of the JTTY screen does not
+  transmit.
+
+JTTY's F Tol is set on the JTTY screen and kept between sessions, as WSJT-X keeps it.
+Its Rx frequency goes back to 1500 Hz each time JTTY is opened from another mode, as
+in WSJT-X.
 
 ![The PSK group with a single control: "Start receiving when PSK opens", switched on.](../img/manual/settings-psk.webp)
 
@@ -1712,8 +1788,17 @@ a new one is genuinely an event.
   calling you, a band opening, space weather, a DXpedition you chase coming on) stop popping up.
   Their sounds are unchanged. Errors, notices about transmitting, the radio or the log, and any
   message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
+- **Keep pop-ups up for at least** — **Each pop-up's own time** (the default), or 10, 20, 30 or
+  60 seconds. Most pop-ups go after 4 seconds and errors after 12. The choice only makes a pop-up
+  stay longer, so pick a longer time if you look away and miss them. A pop-up that stays until
+  you close it still does.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
+- **Show WPX prefix needs** — adds a WPX chip to a Needed-board station that would be a new
+  CQ WPX prefix on that band and mode (CW, phone or digital). Off by default: almost every
+  station is a new prefix, so with it on most rows carry the chip. A chip only: no sound, no
+  pop-up, and the row's headline and order stay as they were.
+- **Show WAE country needs** — the same for a new Worked All Europe country. Off by default.
 - **New DXCC and grid alerts** — the sound and the pop-up when you decode a new
   DXCC, a new grid or a rare grid 💎 on a band its menu allows. On by default. Off
   silences those alerts and changes nothing else: the three menus keep their
@@ -1739,6 +1824,111 @@ HF grids back.
   (`Samoa DXp 9/27-10/3`): type it when you add the entry, or later in the field
   on its row, which saves when you leave it. A note changes nothing about what
   alerts.
+
+---
+
+## Logbook
+
+The logbook's own settings: how the Logbook shows your contacts, how long a deleted
+contact can be put back, the callbook that fills in a station's name and grid, and the
+lists a logged contact is checked against. The services you upload to are on
+[Logging & Connectors](#logging--connectors).
+
+### Logbook display
+
+- **Logbook columns** — the columns and widths you chose in the Logbook (its
+  **Columns** button) are kept with your settings. **Reset** puts back the default
+  table; it is greyed out while nothing has been changed.
+- **Station card on hover** — off by default. A click on a call, or Enter on it,
+  always opens its station card; turn this on and resting the pointer on a call for
+  half a second opens it too. Remembered per computer, in every window.
+
+### Deleted contacts
+
+**Keep deleted contacts for (days)** — the logbook keeps a full copy of every
+contact you delete or purge, so **Recently deleted** and the **Undo** on the
+delete, import and purge messages can put it back exactly as it was. This sets
+how long, 90 days by default. After that the copy is removed, a little at a time
+in the background, when Nexus starts. The old and new values of every edit are
+kept for good whatever this says; `0` keeps deleted contacts for good too.
+
+### Callbook lookups
+
+What fills in a station's name, QTH, grid and state when you look a call up or
+log it. QRZ is asked first, then HamQTH, then callook.info.
+
+**QRZ**
+
+- **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
+  (name, QTH, grid). Separate from the QRZ Logbook API key on
+  [Logging & Connectors ▸ Confirmations](#confirmations), which only uploads QSOs.
+  "Grid & state need a QRZ XML subscription; free accounts return only
+  name/address/country."
+
+**HamQTH**
+
+- **HamQTH username** / **HamQTH password** — "A **free** callbook used as a
+  fallback when QRZ isn't configured or has no match — a HamQTH account returns
+  name, grid & US state at no charge."
+
+**Callbook cache**
+
+- **Also ask callook.info** — free, no account: US licences only, asked after QRZ
+  and HamQTH. Only the callsign is sent. On by default.
+- **Keep answers for (days)** — a call looked up within this many days is answered
+  from this computer without asking the callbook again (30 by default). Offline, a
+  kept answer is used at any age.
+- **Update from callbook: seconds between lookups** — the Logbook's **Update from
+  callbook** waits at least this long before each call it looks up (2 by default, 1 to
+  60). HamQTH and callook.info, asked only when QRZ has no record, go in the same turn.
+- **Update from callbook: lookups per day** — the most lookups it makes in 24 hours,
+  across runs (250 by default). QRZ publishes no daily number, so the default is a
+  cautious one. Answers from the cache do not count; a sign-in to QRZ or HamQTH does, and
+  so does the count QRZ itself last reported for your account in the past day.
+- **Refresh this call** — type a callsign and **Refresh** to look it up again now.
+- **Clear cache** — forgets every kept callbook answer. Your log is not touched, and
+  passwords are never kept here.
+
+### Worked-before (B4) & dupes
+
+What "worked before" means, everywhere it appears. The B4 chip on the roster and decode feed
+comes in two strengths: hollow — you have worked this callsign somewhere, on any band — and
+solid — you have worked them **on the band you are on now**. The log strip's **Dupe** badge uses
+the on-band scope.
+
+**Match mode too** (off by default, matching WSJT-X): when off, working a station on 40m marks
+them B4-on-band for 40m in every mode, and a 40m contact in any mode reads as a dupe on 40m.
+Turn it on and 40m FT8 and 40m phone become separate contacts — the solid chip and the Dupe
+badge then require the mode to match as well. The hollow any-band chip is unaffected either
+way. Most awards count band slots, not band-and-mode slots, which is why off is the default.
+
+### LoTW users list
+
+- **Fetch now** — downloads ARRL's weekly activity list; the status line shows
+  the call count and date. This powers the teal **L** marks on decode and roster
+  rows.
+- **Count as a LoTW user if uploaded within (days)** — the recency window
+  (default 365).
+
+"ARRL's activity list updates weekly — refetching more often just returns
+'unchanged'. Manual fetch by design (WSJT-X convention)."
+
+### Callsign → state database
+
+- **Update now** — "A callsign→state index (from the FCC license file) so a New
+  State lights up on cluster / CW / SSB spots that carry no grid." Downloads on
+  first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
+  grid refines it for rovers.
+
+### Country file (DXCC)
+
+- **Update country file** — "The AD1C cty.dat country file maps callsigns to
+  DXCC entities — the country on decode rows, the Needed board and the log."
+  A copy ships built in, so entity resolution always works offline; Nexus
+  checks weekly for a newer AD1C release and downloads it automatically. The
+  resolver is fixed for a running session, so a downloaded update **applies at
+  the next launch** — the status line shows the active release date and notes
+  when a newer download is waiting.
 
 ---
 
@@ -1781,19 +1971,6 @@ real history rather than a blank panel. HRDLog.net and Cloudlog leave no per-QSO
 stamp, so they read "not verified yet" after each restart until the next contact
 goes out. The QRZ callbook and RepeaterBook only ever look things up, so they
 carry no upload history at all.
-
-### Worked-before (B4) & dupes
-
-What "worked before" means, everywhere it appears. The B4 chip on the roster and decode feed
-comes in two strengths: hollow — you have worked this callsign somewhere, on any band — and
-solid — you have worked them **on the band you are on now**. The log strip's **Dupe** badge uses
-the on-band scope.
-
-**Match mode too** (off by default, matching WSJT-X): when off, working a station on 40m marks
-them B4-on-band for 40m in every mode, and a 40m contact in any mode reads as a dupe on 40m.
-Turn it on and 40m FT8 and 40m phone become separate contacts — the solid chip and the Dupe
-badge then require the mode to match as well. The hollow any-band chip is unaffected either
-way. Most awards count band slots, not band-and-mode slots, which is why off is the default.
 
 ### Integrations & Feeds
 
@@ -1866,6 +2043,10 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
+- **Log space weather on each contact** — off by default. On, every contact you
+  log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
+  `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
+  nothing when that reading is more than 3 hours old.
 - **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
   physics). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
@@ -1935,34 +2116,6 @@ Test N3FJP button continue to the right.*
   the contest broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.
 
-### LoTW users list
-
-- **Fetch now** — downloads ARRL's weekly activity list; the status line shows
-  the call count and date. This powers the teal **L** marks on decode and roster
-  rows.
-- **Count as a LoTW user if uploaded within (days)** — the recency window
-  (default 365).
-
-"ARRL's activity list updates weekly — refetching more often just returns
-'unchanged'. Manual fetch by design (WSJT-X convention)."
-
-### Callsign → state database
-
-- **Update now** — "A callsign→state index (from the FCC license file) so a New
-  State lights up on cluster / CW / SSB spots that carry no grid." Downloads on
-  first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
-  grid refines it for rovers.
-
-### Country file (DXCC)
-
-- **Update country file** — "The AD1C cty.dat country file maps callsigns to
-  DXCC entities — the country on decode rows, the Needed board and the log."
-  A copy ships built in, so entity resolution always works offline; Nexus
-  checks weekly for a newer AD1C release and downloads it automatically. The
-  resolver is fixed for a running session, so a downloaded update **applies at
-  the next launch** — the status line shows the active release date and notes
-  when a newer download is waiting.
-
 ### Confirmations
 
 One group per service, in the order the panel shows them. Every password, key and
@@ -2028,12 +2181,9 @@ service looks like.*
 
 **QRZ**
 
-- **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
-  (name, QTH, grid). Separate from the Logbook API key below, which only uploads
-  QSOs. "Grid & state need a QRZ XML subscription; free accounts return only
-  name/address/country."
 - **QRZ Logbook API key** — a **separate** key from your QRZ logbook's settings
-  page, used to upload logged QSOs.
+  page, used to upload logged QSOs. The QRZ login that powers callbook lookups is
+  on [Logbook ▸ Callbook lookups](#callbook-lookups).
 - **Auto-upload QSOs to QRZ** — push each logged QSO to your QRZ logbook.
 - **Pull confirmations automatically** — "As people confirm on QRZ, the
   confirmations flow in on their own — no need to press Sync. After the first run
@@ -2042,12 +2192,6 @@ service looks like.*
 - **Two-way sync** — **Sync from QRZ now** pulls your QRZ logbook **down**,
   adding QSOs you logged elsewhere (e.g. a phone app in the field) and marking
   QRZ-confirmed contacts. Safe to run repeatedly (deduped).
-
-**HamQTH**
-
-- **HamQTH username** / **HamQTH password** — "A **free** callbook used as a
-  fallback when QRZ isn't configured or has no match — a HamQTH account returns
-  name, grid & US state at no charge."
 
 **ClubLog**
 
@@ -2066,7 +2210,8 @@ service looks like.*
 ![Three groups stacked: QRZ with a username, empty password and Logbook API key boxes and Auto-upload switched on; HamQTH with empty username and password; and ClubLog with an email, a callsign, an empty app-password and an empty application API key.](../img/manual/settings-confirmations-qrz.webp)
 
 *QRZ, HamQTH and ClubLog in Nexus 1.10.3. QRZ takes two separate credentials —
-the login that powers callbook lookups, and a Logbook API key that only uploads.*
+the login that powers callbook lookups, and a Logbook API key that only uploads.
+The login and HamQTH have since moved to [Logbook ▸ Callbook lookups](#callbook-lookups).*
 
 **HRDLog**
 
@@ -2181,7 +2326,7 @@ reads are here with it.
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
   Illinois, New York, Ohio, Tennessee and Texas QSO Parties. **Contest mode**, under
-  it, is the switch that starts the contest picked here. While it is running a
+  it, starts and stops the contest picked here. While it is running a
   contest, a line under the picker says which one, and saving a different pick switches at once, exactly as
   turning Contest mode off and on does: the running contest ends, the new one starts in
   Search-and-Pounce without calling CQ, each keeps its own contacts, and the Contest screen
@@ -2195,14 +2340,29 @@ reads are here with it.
   out-of-state, W/VE or DX, and the same word sits beside **Sending** on the contest log
   strip. Both Field Day events work the same way for everyone, so there is no role to
   show yet.
-- **Contest mode** — the switch for whichever contest is picked above, named for it:
-  "For Illinois QSO Party, the contest picked above. When it is on, the log strips in
-  every mode, the Contest screen and the exports follow its rules. Off the rest of the
-  year." It stays on across restarts until you turn it
-  off. It was called Field Day mode; the setting is the same one. The **same switch** is
-  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
-  says what is missing when the picked contest cannot start yet. Those are its only two
-  places: it is not among the [Features](#features).
+- **Contest mode** — says Off, or On and the contest the station is running now (even one
+  started on the Contest screen after Settings opened), with one button beside it.
+  **Start contest…** opens the contest setup: pick the contest (this week's first, in UTC),
+  fill in what it sends (filled in from these fields, with the reason it cannot start yet
+  shown as you type), declare the entry lines its Cabrillo log writes, check the radio and
+  mode (a mode the contest does not allow is a warning with a way to CW or Phone, never a
+  refusal), then **Start**: one save with the mode on, after which the setup checks that the
+  station really entered the contest and shows "Illinois QSO Party is on · S&P". It saves only
+  the answers the setup showed for that contest; other unsaved edits on these tabs stay
+  unsaved. If the station did not enter, it says why and puts back everything it saved (the
+  answers, the mode, and a contest it ended, which runs again), so Contest mode can no longer
+  be on with nothing running. Start never calls CQ. For ARRL Field Day the setup asks
+  your power once (QRP, LOW or HIGH, with ×5, ×2 or ×1 beside it, and whether you run on
+  battery or other natural power for ×5) and sets both Power category and the power
+  multiplier from it. **Stop contest…** opens the end-of-contest checklist. Both take effect
+  at once; neither waits for Save. The mode stays on across restarts until you stop it. It
+  was called Field Day mode; the setting is the same one. The same switch is at the top of
+  the **Contest** screen (the tent in the left bar), beside **Set up a contest…** (or
+  **Change setup…** while one runs; there a new county, state, class or section goes out
+  through I moved where the contest allows it, and the other fields you send are shown as
+  read when the contest starts). It is not among the [Features](#features). With a contest
+  running, a Save that picks a contest the station cannot enter yet is refused, with the
+  reason, and so is one when the station cannot be asked.
 - **Check for rules updates** — the rules data behind every contest on the list:
   scoring, dates, exchanges and multipliers. The line beside the button says which
   rules year and data date are in use; a downloaded update applies at the next
@@ -2749,12 +2909,13 @@ sections cannot be turned off.*
   toggleable below." Hand-toggling produces a seventh chip, **Custom**, and
   switching away from Custom asks first because it discards your hand-tuned set.
   A **Re-run setup…** link reopens the first-run wizard.
-- **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar, Chat,
+- **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar,
   Conditions, Needed) shows an "always on" badge instead of a toggle: a locked
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
   Propagation, POTA/SOTA, Logging, System. Each row is a toggle with
-  a one-line "why you'd want it". Enabling a feature pulls in anything it depends
+  a one-line "why you'd want it". **Tempo** (under Operate) is the TempoFast/TempoDeep
+  chat: off takes Tempo off the left-hand menu. Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
 - **Contest mode** is not here: it is at the top of the **Contest** screen and in
   [Contesting ▸ Contest](#contest).
@@ -2771,7 +2932,7 @@ folder on Linux. It is off unless you turn it on, and it changes nothing else. N
 listening, with transmit off, exactly as if you had opened it yourself.
 
 This is what lets Remote come back after the computer itself restarts, so the first time you
-turn Remote on (Station ▸ Remote access), Nexus offers to switch this on. The offer is made
+turn Remote on (Remote ▸ Remote access), Nexus offers to switch this on. The offer is made
 once, and your answer is remembered either way. If your computer will not let Nexus start at
 sign-in, the switch stays off and says so.
 
@@ -2815,6 +2976,9 @@ be photographed, and were not exercised for this capture.*
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
+  turn to send. Never while you transmit." Off as it comes. The cue itself is on
+  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
 
 ---
 

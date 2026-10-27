@@ -1,4 +1,5 @@
 {
+  "activation": null,
   "activePeer": null,
   "activeRadioId": 0,
   "aiCw": {
@@ -47,6 +48,7 @@
     "attStepsDb": null,
     "atu": null,
     "atuStartTuneUnsupported": false,
+    "atuSwitchOut": false,
     "audioError": null,
     "band": "20m",
     "beacon": false,
@@ -72,6 +74,7 @@
     "holdTxFreq": false,
     "hrdLinkUp": null,
     "hrdQueued": 0,
+    "keyboardMode": "PSK31",
     "manualNotch": null,
     "micGain": null,
     "monitor": null,
@@ -87,6 +90,7 @@
     "phoneSegLo": null,
     "preampDb": null,
     "preampStepsDb": null,
+    "pttRefusal": "noFeed",
     "qsoRecording": false,
     "radioConfigWarning": null,
     "ratedWatts": 100,
@@ -152,6 +156,7 @@
     "scopeSpanRefused": null,
     "sideband": "USB",
     "sidebandOverride": null,
+    "skipTx1": false,
     "slot": 101,
     "smeterDb": null,
     "source": "native",
@@ -213,6 +218,7 @@
       "workedBand": false
     }
   ],
+  "rxFreqClearTick": null,
   "stations": [
     {
       "call": "N7GHI",
@@ -230,7 +236,9 @@
       "state": null,
       "tier": "FT4",
       "worked": false,
-      "workedBand": false
+      "workedAgoSecs": null,
+      "workedBand": false,
+      "workedTodayUtc": false
     }
   ],
   "uploadNote": null,

@@ -15,8 +15,41 @@
 // Both keys are SHARED (storage-scope.test.ts): the request is the whole mechanism between two documents,
 // and the hint, once dismissed, is dismissed for this computer, whichever window showed it.
 import { useEffect, useRef } from 'react'
+import { t } from '../i18n'
 
-export type WorkInView = 'cw' | 'phone'
+export type WorkInView = 'cw' | 'phone' | 'rtty'
+
+/** The mode each cockpit's contacts log under, as a contest's `bannedModes` names it. */
+const VIEW_MODE: Record<WorkInView, string> = { cw: 'CW', phone: 'SSB', rtty: 'RTTY' }
+
+/** Each cockpit's button: its words. */
+export function workInLabel(view: WorkInView): string {
+  if (view === 'cw') return t('fieldDay.workIn.cw')
+  if (view === 'phone') return t('fieldDay.workIn.phone')
+  return t('fieldDay.workIn.rtty')
+}
+
+/** …and its tooltip. */
+export function workInTitle(view: WorkInView): string {
+  if (view === 'cw') return t('fieldDay.workIn.cw.title')
+  if (view === 'phone') return t('fieldDay.workIn.phone.title')
+  return t('fieldDay.workIn.rtty.title')
+}
+
+/** ⭐ **The cockpits to offer for working a contest** — CW and Phone, less any whose mode the contest
+ *  does not allow; and where it allows neither, RTTY when it allows that (the ARRL RTTY Roundup,
+ *  RTTY only). A contest that bans neither gets CW and Phone as it always did. `enabled` is the
+ *  station's own Settings ▸ Features: a cockpit switched off is never offered. */
+export function workInViewsFor(
+  bannedModes: readonly string[] | undefined,
+  enabled: (view: WorkInView) => boolean = () => true,
+): WorkInView[] {
+  const banned = new Set((bannedModes ?? []).map((m) => m.toUpperCase()))
+  const allowed = (v: WorkInView) => !banned.has(VIEW_MODE[v])
+  const voice = (['cw', 'phone'] as const).filter(allowed)
+  const routes: WorkInView[] = voice.length > 0 ? voice : allowed('rtty') ? ['rtty'] : []
+  return routes.filter(enabled)
+}
 
 export const CONTEST_WORK_IN_KEY = 'nexus.contest.workIn'
 export const CONTEST_WORK_IN_HINT_KEY = 'nexus.contest.workInHint'
@@ -27,7 +60,7 @@ export function workInRequest(stored: string | null): WorkInView | null {
   if (!stored) return null
   try {
     const v = (JSON.parse(stored) as { view?: unknown }).view
-    return v === 'cw' || v === 'phone' ? v : null
+    return v === 'cw' || v === 'phone' || v === 'rtty' ? v : null
   } catch {
     return null
   }

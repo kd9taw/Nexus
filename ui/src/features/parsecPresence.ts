@@ -12,14 +12,9 @@ import { t } from '../i18n'
 
 /**
  * Where the switch appears. The Parsec HOST is Windows, so it is offered there and explained as
- * unavailable elsewhere; the Remote page never shows it — the key is not in Remote's settings
- * projection, and the page's command surface is frozen.
+ * unavailable elsewhere.
  */
-export function parsecSwitchPlacement(
-  isWindows: boolean,
-  remote: boolean,
-): 'offered' | 'unavailable' | 'hidden' {
-  if (remote) return 'hidden'
+export function parsecSwitchPlacement(isWindows: boolean): 'offered' | 'unavailable' {
   return isWindows ? 'offered' : 'unavailable'
 }
 

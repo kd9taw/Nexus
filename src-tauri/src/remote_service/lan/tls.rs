@@ -12,10 +12,11 @@
 //! - resumption and early data: no tickets and no session cache, so every connection is a full
 //!   handshake that proves both keys again.
 //!
-//! **The second branch: an open pairing window ([`Pairing`]).** While it is open, a P-256 key no
-//! paired computer holds is taken too, read at each handshake. Such a connection can only become a
-//! pairing-only one (`super::pairing`): its first message must ask to pair, the session it gets
-//! reaches nothing but the pairing, and a hello from it is refused as from any unpaired key.
+//! **The second branch: an open pairing window, or an enrolment the station can check
+//! ([`Pairing`]).** While either is open, a P-256 key no paired computer holds is taken too, read at
+//! each handshake. Such a connection can only become a pairing-only one (`super::pairing`) or an
+//! enrol-only one (`super::enrol`): its first message must ask to pair or to enrol, the session it
+//! gets reaches nothing but that, and a hello from it is refused as from any unpaired key.
 //!
 //! In TLS 1.3 the shack's key is proved before the client sends its own, so a machine posing as the
 //! shack learns nothing about which key a computer holds.
@@ -40,8 +41,8 @@ use super::super::station_key::Signer;
 /// for a key no paired computer holds. Pairing keeps these; until it does, nothing is paired.
 pub type Paired = Arc<dyn Fn(&[u8; 32]) -> Option<String> + Send + Sync>;
 
-/// Whether the pairing window is open now: while it is, a key no paired computer holds is taken
-/// into a pairing-only connection.
+/// Whether the pairing window, or enrolment, is open now: while it is, a key no paired computer
+/// holds is taken into a pairing-only or enrol-only connection.
 pub type Pairing = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// SHA-256 of a key's SPKI: its pin, as the device records keep it.

@@ -93,7 +93,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_entry_put') return ++rev
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -125,7 +125,7 @@ async function mountLogger(): Promise<void> {
   await act(async () => new Promise((r) => setTimeout(r, 0)))
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const sizeLine = () => document.querySelector('.contest-logger-size')!.textContent
 const larger = () => screen.getByRole('button', { name: t('contestLogger.size.larger') }) as HTMLButtonElement
 const smaller = () => screen.getByRole('button', { name: t('contestLogger.size.smaller') }) as HTMLButtonElement
@@ -297,7 +297,7 @@ describe('the contest logger window puts the entry first', () => {
     ])
     const [entry, recent, , contestScreen] = parts as HTMLElement[]
     // The entry holds the contact in progress, the main window's, in its boxes.
-    expect(within(entry).getByPlaceholderText('W1AW')).toBe(callBox())
+    expect(within(entry).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })).toBe(callBox())
     expect([...entry.querySelectorAll<HTMLInputElement>('.le-fd-big input')].map((b) => b.value)).toEqual([
       'K9ABC',
       '59',
@@ -317,14 +317,15 @@ describe('the contest logger window puts the entry first', () => {
     const dupe = within(entry).getByRole('alert')
     expect(dupe.textContent).toBe(t('logEntry.fd.dupe.own', { call: 'K9ABC', band: '20m', mode: 'PH' }))
     expect(entry.querySelector('.le-fd-big')!.compareDocumentPosition(dupe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // The last contacts: the newest five, newest first, under the contest screen's own columns.
-    expect(LAST_CONTACTS).toBe(5)
+    // The last contacts: the newest ten (here all six), newest first, under the contest screen's own columns.
+    expect(LAST_CONTACTS).toBe(10)
     expect([...recent.querySelectorAll('.fd-log-row .fd-col.call')].map((c) => c.textContent)).toEqual([
       'K9DEF',
       'W0AAA',
       'N9AAA',
       'K9AAA',
       'K9ABC',
+      'W9XYZ',
     ])
     expect([...recent.querySelectorAll('.fd-log-row .fd-col.slot')].slice(0, 2).map((c) => c.textContent)).toEqual([
       '59',
@@ -427,5 +428,29 @@ describe('Ctrl+O in the logger window', () => {
     })
     expect(document.activeElement).toBe(operator)
     expect(callBox().value, 'the contact in progress is untouched').toBe('K9ABC')
+  })
+})
+
+describe('a last contact’s edit in the logger window', () => {
+  it('gives the caret back to Call once it is over, as the strip’s own Ctrl+Y edit does', async () => {
+    const asked: string[] = []
+    window.__TAURI_INTERNALS__ = {
+      invoke: async <T,>(cmd: string): Promise<T> => {
+        asked.push(cmd)
+        // Esc is also this window's halt, which answers with the station's snapshot.
+        return (cmd === 'halt_tx' ? snapshot : respond(cmd)) as T
+      },
+    }
+    await mountLogger()
+    const recent = document.querySelector<HTMLElement>('.contest-logger-recent')!
+    fireEvent.click(within(recent).getAllByRole('button', { name: /^Edit / })[0])
+    const edit = recent.querySelector<HTMLInputElement>('.contest-edit input')!
+    expect(document.activeElement).toBe(edit)
+    fireEvent.keyDown(edit, { key: 'Escape', code: 'Escape' })
+    await act(async () => new Promise((r) => setTimeout(r, 50)))
+    expect(recent.querySelector('.contest-edit')).toBeNull()
+    expect(document.activeElement).toBe(callBox())
+    expect(callBox().value, 'the contact in progress is untouched').toBe('K9ABC')
+    expect(asked, 'Esc edits nothing').not.toContain('contest_edit')
   })
 })

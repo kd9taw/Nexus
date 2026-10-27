@@ -11,8 +11,7 @@ into a global cascade with no enforcement. This skill is the procedure that keep
 
 The law: `CLAUDE.md` §"UI layout contract" + the header comment of `ui/src/cockpit-panes.css`.
 The enforcement: `cockpit-panes.test.ts`, `cockpit-shells.test.ts`, `responsive-vocab.test.ts`
-(they COMPUTE cascade winners and rendered structure). Forensic history + design rationale:
-`resolution/assessment-2026-07-30/` (machine-local) and the memory `reference-cockpit-pane-grid`.
+(they COMPUTE cascade winners and rendered structure).
 
 ## 1. Route the surface first
 

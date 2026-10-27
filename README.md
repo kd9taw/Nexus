@@ -289,8 +289,8 @@ logs, and never shown back to the UI beyond "configured."
    versus `arm64`, so picking the right one meant already knowing that `amd64` means "PC" here —
    the names say `pc` and `pi` now, and the Pi files name their OS base.
 
-   **The two PC Linux files need Ubuntu 24.04 or newer** (Debian 13, Fedora 40+, Mint 22 — anything
-   with glibc 2.39 or later; check with `ldd --version`). The AppImage is no exception: it carries
+   **The two PC Linux files need Ubuntu 22.04 or newer** (Debian 12, Fedora 36+, Mint 21 — anything
+   with glibc 2.35 or later; check with `ldd --version`). The AppImage is no exception: it carries
    the app's own libraries but not the system C library. On an older distro both install cleanly and
    then fail to start, so it is worth checking first. See
    [Install → What you need](docs/install.md#what-you-need).
@@ -425,7 +425,10 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   MSK144 / JT65 / WSPR mode sources are their GPL-licensed work, vendored and reused via a
   foreign-function interface, and the FT8/FT4 transmit encoder is also translated into Rust from
   those sources (`crates/modes/src/wsjt77/`; see **[NOTICE](NOTICE)** for the full lineage and marked
-  modifications). Nexus interoperates with their ecosystem over the standard WSJT-X UDP protocol;
+  modifications). The **JTTY** keyboard-mode modem sources, by K1JT, K9AN and **David Christle
+  KD0BTO**, are vendored at `libtempo/vendor/wsjtx/lib/jtty/` from the WSJT-X 3.3.0-beta4
+  pre-release, and are taken again from the first WSJT-X general release that carries JTTY. Nexus
+  interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
 - **[qracodes](https://github.com/IV3NWV/qracodes)** — **Nico Palermo IV3NWV** / Microtelecom Srl
@@ -545,7 +548,7 @@ This is **experimental amateur-radio software**. You are responsible for operati
 license privileges and local regulations. Nexus never transmits on launch; ARRL Field Day
 prohibits fully-automated contacts, and Nexus's Field Day workflow is operator-initiated by design.
 
-**Author:** **KD9TAW** · kd9taw@protonmail.com ·
+**Author:** **KD9TAW** · contact@hamradiotools.io ·
 contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 

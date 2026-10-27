@@ -7,6 +7,620 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Updating from inside Nexus works again.** When Check for updates found a new version, the download failed at once with "Cannot read properties of undefined (reading 'rid')", so the update never arrived and only the download page could install it. The download now runs, and Install restarts into the new version as intended. Versions before this one still show that error: install this one from the download page, and later updates come through Nexus.
+- **A JTTY contact in the contest logger window is logged as JTTY.** With the JTTY screen as the station's mode, the contest logger window logged its contacts as PSK31, and the contest screen, the contest setup's mode warning, the station card's new-mode check and the Spots board's Spot me named the mode PSK31 too. Each now names JTTY (and QPSK31 when the PSK screen is on QPSK31), and a POTA self-spot from JTTY is refused as a mode pota.app does not list instead of going out as PSK31. Contacts already logged keep the mode they were logged with.
+- **A JTTY contact is logged on JTTY's frequency.** A contact logged from the JTTY screen's log strip was logged on the dial alone, and one logged in a contest (the contest logger window, the log strip in a contest) at the dial plus PSK's audio centre. Both are now the dial plus JTTY's Tx frequency, as WSJT-X logs a JTTY contact; a PSK contact is logged as before. This holds on a computer driving the station as well. Contacts already logged keep the frequency they were logged with.
+- **ARRL VHF Cabrillo LOCATION is your ARRL section.** The January, June and September VHF contests headed the Cabrillo file with your state; LOCATION is now your ARRL section, which ARRL's log upload asks for, and the contest setup asks for it. A blank section still writes the state.
+- **A PSK contact is logged on the frequency it was worked on.** A PSK31 or QPSK31 contact logged from the PSK screen's log strip outside a contest was logged on the dial alone; it is now the dial plus the audio centre the decoder is netted on (where PSK transmits), as a contest contact already was, so 14.070 netted on 1200 Hz logs 14.0712. A contact drafted from a computer driving the station now keeps that same frequency (and JTTY's, the dial plus its Tx) instead of the bare dial. Contacts already logged keep the frequency they were logged with.
+- **A computer driving a station on JTTY shows the JTTY screen.** A computer connected to a station in JTTY followed it to the PSK screen; it now lands on JTTY, and on PSK when the station is on PSK. It still sends nothing to the station by following.
+- **A contact's power is the power the radio measured.** 1.21.0 stamped every new contact with Settings ▸ Station power, whatever the radio was doing. A contact now carries the forward power the radio reported during its own over (the over's peak, in watts), on every path that reads the radio's power in watts: Hamlib, TCI, a Flex on its own connection and Nexus's built-in Icom connection. Settings ▸ Station power is used only when the radio reports nothing; with an amplifier set up on the radio, whose meter then reads the amplifier's drive; and during a tune. No new reading is asked of the radio, and contacts already in the log are not changed.
+- **Icom forward power in watts on each radio's own scale.** On the built-in Icom connection the power meter used one 100 W scale for every radio, so an IC-705 or IC-905 read about ten times its output and an IC-9700 read wrong on 70 cm and 23 cm. The meter now reads Icom's percentage of the radio's rated output on the band it transmits on (IC-705 10 W; IC-905 10 W up to 23 cm and 2 W on 2.4 and 5.6 GHz; IC-9700 100, 75 and 10 W; IC-7300 100 W, 50 W on 4 m; IC-7610 100 W; IC-7760 200 W). Where Icom gives no figure (the IC-905 on 10 GHz, the IC-9700 transmitting on the other band of a satellite split) the power row is hidden rather than wrong.
+- **The shared comment has room.** In the log strip and the Logbook's edit form, Comments (sharable) now has a full-width box of its own directly above Notes, and long text wraps over several lines instead of scrolling sideways in a narrow box. It is still one line in the log, as ADIF's COMMENT is: a line break you type becomes a space, and Enter still logs. Editing any other field of a contact whose stored comment holds line breaks (an imported one) no longer runs its words together.
+- **The station card uses its width and shows the callbook photo.** The card's text was squeezed to about the width of the callsign; it now uses the card's width, with Look up and QRZ on a line of their own. A card opened after the log strip had looked the call up showed initials and a Look up button; it now shows that answer, photo included, straight away. When the callbook sent no photo, hovering the circle says why (QRZ sends photos only to XML subscribers, and only when the station posted one).
+- **Editing a contact keeps its stored country.** Saving a correction from the Logbook's edit form or the contact card rewrote the contact's country in Nexus's own spelling on every save, so a country imported or downloaded as "Germany" became "Fed. Rep. of Germany" when you only fixed the name. The country is now written back exactly as it was, unless it names a different DXCC entity than the DXCC number the awards count the contact under (LoTW's, where LoTW confirmed it as another entity, else the contact's own): then it becomes the name of that number's entity (a K1N contact with DXCC 182 stored as "United States" becomes "Navassa Island", and one LoTW confirmed as Navassa keeps "Navassa Island"). A country that already names that entity, in any capitals, is never respelled. A contact with no country gets the name of that same entity, so a later edit does not change it again. A LoTW DXCC number that names no entity is passed over for the contact's own, as the awards do. The same rules apply to an edit made from a Remote browser. Correcting a contact's callsign used to leave it with no country at all; it now takes the new call's country, from the edit form, the contact card and Remote alike, and never keeps the old call's.
+- **Correcting a contact's callsign clears what belonged to the old call.** A contact LoTW had confirmed as another DXCC entity kept counting toward that entity in Awards, the Needed board and the statistics after its call was corrected, with nothing on screen to say why (a K1N contact confirmed as Navassa and corrected to K1NX still counted as Navassa). A callsign correction now also takes off the old call's LoTW DXCC, CQ and ITU zones, continent and county, and LoTW's and eQSL's received dates and eQSL's Authenticity-Guaranteed mark, beside the confirmations it already took off; the contact goes out again to the logbook services under the new call as before. A value you change in the same save is kept, a State included. Undo puts all of it back. On a contact already uploaded, Undo decides service by service: each logging service the new call has not been sent to gets its upload mark back (LoTW's with its sent mark) and its waiting re-send is cancelled; each that already has the new call, or may have it, leaves the contact marked not uploaded there, and the Undo message names those services. Nothing queued under the new call is sent after the Undo. After a restart Nexus no longer knows what was sent, so Undo puts the contact back marked not uploaded everywhere and says so. On the contact card, saving a corrected call first says which of the values shown it will take off (the zones, continent and county, and the LoTW and eQSL confirmations), and saves only when you confirm. A callsign corrected on the contact card together with changes under More fields now goes to QRZ, Club Log, eQSL and the other services with those changes, not without them.
+- **An Icom keeps its filter when Nexus retunes it (#417).** On the built-in Icom connection every frequency change re-sent the mode without a filter number, and the radio answers that by selecting the mode's default filter, so an IC-7300 set to FIL1 jumped to FIL2 on each QSY. Nexus now reads the radio's mode first and sends nothing when it is already right, the way WSJT-X does, so FIL1, FIL2 or FIL3 stays as you set it. A real mode change is sent as before. Applies to the IC-7300, IC-7300MK2, IC-705, IC-905, IC-9700 and IC-7610; the IC-7760 is unchanged for now. Needs a check on the radios.
+- **Digital modes leave your radio's filter alone (#82, #107).** Going into FT8, FT4 or any other data mode, Nexus asked the radio for a 3 kHz filter, read back what it took and asked again, and said so on the CAT line when the radio kept its own. Some radios answered with a wider default (a Flex over SmartSDR CAT landed on 6 kHz), and an operator who wanted a 4 kHz DATA filter was held to 3. Nexus no longer sets a filter width on digital modes, the way WSJT-X does: the radio's own DATA filter is used, whatever you set there, including a narrow one the radio remembers for a band. The filter-width control in the CW and Phone screens still sets a width when you use it. Needs a check on the radios.
+- **APRS can use DATA-FM on an FT-991/991A (#393).** Entering APRS always put the radio in plain FM, so an operator whose radio sends USB sound-card audio only in DATA-FM had it put back to FM each time. A new per-radio switch, Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ "APRS uses DATA-FM", shown for the FT-991 and FT-991A, makes APRS select DATA-FM on that radio. It is off by default, so an APRS setup that works in plain FM today is unchanged. Turn it on only with the radio's menu 077 FM PKT PORT SELECT set to USB, or beacons go out silent. Repeater voice on the same radio stays plain FM, and with "Data modes use plain SSB" on, APRS stays plain FM. Needs a check on the radio.
+- **Stop TX on an FT-710 or FTX-1 unkeys at once.** Every Stop TX sends these radios Yaesu's CW playback stop, and Hamlib held the radio for its whole reply timeout after each one, because a Yaesu never answers a setting. The unkey waited behind them and reached the radio about 2 seconds late on an FT-710 and about 4 seconds late on an FTX-1. Changing the FT-710's scope span or mode held the next command, a key included, for about a second the same way. Nexus now sends these commands in a form Hamlib does not wait on, and the unkey reaches the radio within a few tens of milliseconds.
+- **The Tx panel's dot follows the FT8/FT4 contact.** In Classic, the dot beside the next message sometimes stayed put while the contact went on normally: when the report Nexus sends (from the decode it answered) differed from the station's latest one in the list, when Tx5 was edited, or when another decode was clicked mid-contact. The dot now follows the message actually going out.
+- **The Repeaters note points at the right place in Settings.** When a directory looks thin, the note on the Repeaters screen said to add a RepeaterBook API token in "Settings ▸ Integrations", which does not exist. It now says Settings ▸ Logging & Connectors ▸ Confirmations, where the token is, and clicking it opens that page.
+
+### Changed
+- **Every mode's waterfall starts at the same size.** FT8/FT4, Phone, CW, JS8, JTTY, PSK, RTTY and Tempo now open with a waterfall the full width of the window and a quarter of the cockpit's height. CW's was much shorter (13 %) and Phone's and FT's a little shorter (22 %). Tempo's waterfall leaves the narrow right-hand column for a full-width strip across the top, with a divider to set its height like FT's; Band Activity and the link pill stay in the right column. With Band Activity, Spots or Needed on Phone's left side, the scope and the transmit strip now run the full width above the side instead of beside it, and PTT, Stop TX and Tune stay where they were. A height you have already dragged is kept as you left it. On a small window a cockpit whose own panes need the room (CW, PSK and RTTY at 1024×768) starts its waterfall as tall as that room allows. SSTV keeps its larger picture area.
+- **RTTY's tuning scope moves beside the waterfall.** The crossed-ellipse tuning display now stands to the right of the waterfall, in the same strip, with ◀ ▶ and the words beside the square, so RTTY's waterfall is as tall as every other mode's and the tuning square keeps its size. The waterfall is that much narrower on RTTY. The decoded text and the log no longer give up room for it. Hide Tuning and the waterfall takes the full width; hide the waterfall and the tuning display keeps the strip.
+
+### Added
+- **A contact card in the Logbook.** Double-click a contact in the Logbook (or press Enter on the one the keyboard is on) and a card opens with every field it holds to correct: call, date and time on and off in UTC, band, frequency, mode, RST sent and received, power, name, QTH, grid, state, park, summit and WWFF references (theirs and yours), IOTA, your grid and rig, QSL sent and card received, Comment (sharable) in its own full-width box above Notes, and Notes. More fields lists every other ADIF field the contact carries, to correct, remove or add one; the satellite, DXCC entity, station callsign and operator are shown there and changed where they always were. On a contest contact the exchange's own fields (a county, section or zone) are shown there too and are not changed from the card, because exports, uploads and awards read them from the exchange. Your own station's fields (your grid, MY_STATE, MY_CNTY, OWNER_CALLSIGN and the like) can be corrected too; they are not sent to LoTW again, and on a contact LoTW already has the card says so. More fields also shows, read only, what the old contact view showed: when the QSL card was sent, whether the contact is confirmed (and for awards), when each service took its upload, and the county, zones, continent and distance under their own names. The card shows the callbook photo when a lookup has brought one (initials otherwise, with the reason on hover), Look up, a link to the call's QRZ page, the last 10 contacts with the call (UTC date and time, band, frequency, mode, RST and confirmations; click one to open it on the card), and the contact's history with its Undo. Save is the Logbook's own edit: one change, one Undo, refused if the contact changed elsewhere meanwhile, and a field you did not touch is written back exactly as it was. A box the log reads as "leave it" when empty (state, end time, the parks, IOTA, your grid and rig) cannot be emptied here, and the card says so rather than saving nothing. Closing it or opening another contact with unsaved changes asks first; after an Undo in its history it shows the contact as the undo left it. A multi-line field keeps its line endings exactly as stored unless you edit its text. A single click still selects, and the pencil still opens the edit form. Nothing is looked up unless you press Look up.
+- **Download confirmations in the Logbook.** One button downloads new confirmations from LoTW and eQSL, where you have set them up, one after another, through the same downloads their own button and Settings run, and says what each one brought or why it failed. The QRZ sync keeps its own button, since it can also add contacts logged elsewhere. While a download runs, the other download buttons wait for it; Settings' LoTW and eQSL downloads also wait for each other.
+- **A Cancel button on the Logbook's edit form**, beside Save. It closes the form without saving, as Esc does.
+- **ATU ON (#344).** The ATU button now reads ATU ON while the radio reports its built-in tuner in line: after a tune-up, and within about ten seconds of switching it at the radio. A click on the button runs a tune-up as it always did, ATU or ATU ON. To switch the tuner out, right-click the button (or press and hold on a touch screen) and choose Switch tuner out; Nexus sends the same CAT command it starts a tune-up with, set to off (`AC000` on a Yaesu). Switching out puts nothing on the air, is refused while anything is transmitting, and a switch-out the radio refuses or that could not be sent in time is said on the CAT line. The menu is offered only where Nexus can switch the tuner out: not on a Flex run by Nexus's own connection, and not on the built-in Icom connection, which has no tuner command. Needs a check on the radios.
+- **JTTY: your own F1 to F8, and WSJT-X's FT8-style set.** Edit keys turns the JTTY F-keys into their messages to edit, as in WSJT-X, and Messages picks WSJT-X's Contest set or its FT8-style set (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73`, `CQ %M %G`); each set keeps its own messages between sessions and Defaults puts a set back. While the keys are open for editing, F1 to F8 send nothing, pressed or clicked, and say so; they send again when you finish editing. A message in one of WSJT-X's contest forms goes in JTTY's compact form, as WSJT-X sends it, and any other goes as text. `%R` is now the SNR of the newest decode naming the call you clicked, as in WSJT-X, rather than always -10, and it goes only with the call it was taken for.
+- **JTTY asks to log the contact after TU.** When a message starting `TU` goes out, as WSJT-X opens its Log QSO window, the log pane asks "Log the contact with W1AW?", naming the station the TU thanked: the station your last messages went to, even with keys such as F4 and F8 that send no call (after F6, the one before the station it calls). Asking changes nothing on screen. Log QSO logs through the strip's own Log only when the strip holds that call; an empty strip is filled for you to check first, and another call is left alone with nothing logged. The first answer closes the question on every screen, Remote included, and so does logging that contact any other way, such as with the strip's own Log, so a contact is never logged twice. If the log line then cannot log it, the question comes back. A second TU to another station before you answer replaces the question and says whose it was, and an unanswered question goes after two minutes; when Log QSO finds the question already closed, it says why. Nothing is logged unless you press it, and nothing more is sent.
+- **JTTY: decode again.** Decode in the All decodes pane decodes the last three minutes of receive audio again, as WSJT-X's Decode button does, and a double-click on a waterfall row decodes 40 seconds from just before that row. What one press finds shows under one JTTY review heading in both panes, after the live lines, and never pushes live lines out of the window; it is not written to ALL.TXT, spotted or counted as hearing a station.
+- **JTTY: WSJT-X's smaller controls.** Ctrl+H types both calls (`%H %M `) into the compose bar, Ctrl+Shift+K empties it and stops what is still going, Rx→Tx and Tx→Rx copy one frequency to the other, and a Frames count (sent/total) shows beside Send while a transmission runs. PSK Reporter spots of a JTTY message that carries a grid (`CQ W1AW FN31`) now include the grid, as WSJT-X's do.
+- **ARRL RTTY Roundup.** Settings ▸ Contesting and the contest setup now offer the ARRL RTTY Roundup (first full weekend of January, never on January 1; 1800Z Saturday to 2359Z Sunday), from ARRL's current rules. A station in the 48 states, DC or Canada sends RST and its state or province; everyone else sends RST and a serial from 1. Each station counts once per band for one point, and the multipliers (states, Canadian provinces and territories with Labrador, and DXCC entities other than the USA and Canada, Alaska and Hawaii included) count once per log. The Cabrillo file is ARRL-RTTY with every contact as RY, and its LOCATION is your ARRL section (DX outside the USA and Canada), as ARRL's log upload asks; the contest setup asks for the section. The contest is RTTY only: a contact in JTTY, FT8, PSK31, CW or any other mode is logged and kept but scores nothing, and the screen says so; nothing is refused. The setup and the Contest screen offer the RTTY screen to work it from, and the contest setup no longer asks for a county for CQ WW RTTY or this contest, neither of which sends one. Operating time counts breaks of 30 minutes or more as off time, as the rules do.
+- **A note about DAX for a Flex over SmartSDR CAT.** In SSB a Flex transmits from its own mic unless DAX is on for voice, so a voice-keyer message keys the radio with no RF. The first time a voice message plays on a Flex controlled through SmartSDR CAT, a note in the voice keyer says to turn on DAX in SmartSDR's P/CW panel; Got it hides it for good. It never holds up the message. The Flex page of the manual says the same.
+- **Save the settings backup where you like.** Settings ▸ Config ▸ Backup & reset now has Save as… beside Back up: it opens your system's save dialog in Downloads with the usual dated name filled in, so you can pick a USB stick or any other folder. Back up still saves straight to Downloads.
+- **The Icom IC-7850 and IC-7851 in the radio list.** Pick "Icom IC-7850/7851" in Settings or the setup wizard and Nexus drives it through Hamlib (model 3075) over its serial CI-V port. It has not been on a bench yet. Nexus's own Icom connections (native CI-V and the network port) do not cover this radio.
+- **Add ticked memories to a group in one go.** In Memories, the bar that appears when you tick rows now has Add to group…: pick a group and every ticked memory in view joins it, keeping the groups it was already in. Rows ticked but narrowed out of view by a search or filter are left alone, as with Delete.
+
+### Changed
+- **Tune is in the same place on the FT8/FT4 screen as everywhere else.** The FT8/FT4 strip now opens with TX On/Off, Tune, ATU, Stop TX and Hold Tx, then Call CQ and S&P, so Tune sits right after TX On/Off exactly where every other operating screen's TX strip has it. What each button does is unchanged.
+- **Pounce follows the Spots view's "Spotted from" chips.** Narrow the Spots view to spots heard from a continent or a country and the Pounce alert listens only to spots heard from there too: with France chosen, a new one heard only by a US skimmer stays quiet, and the same station heard from France then fires. With no chip chosen Pounce hears every spot, as before. The chips of a Spots pane on another screen do not change Pounce.
+- **Sharing the radio steps aside when its port is taken.** If another program, such as your own rigctld, is already listening on the sharing port (4532 by default) when Nexus starts, sharing no longer stops with a complaint: it stays on and moves to the next free port, leaving the other program's port alone. Settings ▸ Radio shows the address sharing really uses, its Copy button copies that address, and a note says which port was taken. Your "Sharing port" setting is not changed, and the next start tries it first again. A NET rigctl radio pointed at that other program's rigctld (for example your own rigctld on 127.0.0.1:4532) now connects once sharing has moved, instead of being refused as "Nexus talking to itself"; a radio pointed at the port sharing really uses is still refused. Sharing also never takes the address of such a radio's rigctld when that rigctld is not running yet: it moves to the next free port, so you can start your rigctld after Nexus and the radio connects to it, and the note says the port is your radio's rigctld address.
+
+## [1.21.0] — 2026-10-26
+
+### Added
+- **A Stats tab on the Contest screen.** Beside the scoreboard, Stats shows how the contest is going, live, from your contest log: contacts, on time and breaks (a break between two contacts counts as off time from the contest's own minimum: 60 minutes in CQ WW and CQ WPX, 30 in Sweepstakes, and 30 minutes, stated as a default, in a contest with no minimum on record; the scoreboard's On time and Off time and the Score Summary follow the same rule), the overall rate over your on time, your best 60 minutes, the current rate, the time since your last contact and today's contacts in UTC. A bar for each UTC hour of the contest shows contacts per hour. Distance gives your longest contact (call and country) and the average, measured from your grid to the grid the station sent where the exchange carries one, otherwise to the centre of its country. Bands and modes have bars, countries are listed with their counts (Show all for the rest) with the number of DX contacts, and grids worked are counted where the contest exchanges a grid. Your contest's own multiplier board shows what is worked and what is still needed, and the score shows its points, multipliers and total. Dupes and contacts in a banned mode are left out of the counts, as the score leaves them out. Share stats saves a picture of the stats to your Downloads folder for you to share; nothing is posted. The checklist that opens when you turn Contest mode off has See the contest stats, which opens the tab and leaves Contest mode on. The tab changes no contact and transmits nothing, and works the same from a Remote computer.
+- **A contest setup that walks you through it.** Set up a contest… on the Contest screen (and Start contest… in Settings ▸ Contesting) opens a dialog in five steps: the contest, with the ones running or starting this week first and every window in UTC; what it sends, filled in from Settings, showing only the boxes that contest uses and the exact reason it cannot start yet while you type; your entry, asking only the Cabrillo lines that contest's log writes; your radio and mode, where a mode the contest does not allow (FT8 at the Illinois QSO Party) is a warning with a way to CW or Phone, never a block; and Start. Start saves once with Contest mode on, saving only the answers the setup showed for that contest, checks the station really entered the contest and says "Illinois QSO Party is on · S&P". If it did not enter, it says why and puts back everything it saved: your answers, the mode, and a contest it ended, which then runs again. Start never calls CQ. Cancel saves nothing. Starting a different contest while one runs asks you to confirm that it ends the running one; its contacts stay apart. For ARRL Field Day the power is one question, QRP, LOW or HIGH with ×5, ×2 or ×1 beside it, plus whether you run on battery or natural power for ×5, and it sets both Power category and the power multiplier. Change setup… reopens it while a contest runs. There, a new county, state, class or section goes out through I moved and takes effect on your next contact, where the contest allows a station to move; every other field you send is shown as read when the contest starts (stop the contest, then start it, to change it). "You send" is always what the station is sending, and a contest stopped elsewhere while the dialog is open shows as not running. If a contest is started or stopped elsewhere while the setup is open, Start saves nothing and goes back to the contest step, where a contest it would end asks for your confirmation again. A move that took effect is kept and said even when saving the other changes fails. When a contest on the picker starts within a week, the Contest screen and the Contests pane show one quiet line with Set up…; there is no pop-up.
+- **Contest over? offers more.** The checklist that opens when Contest mode goes off can now export the Summary, lists the Cabrillo lines the sponsor requires that your log leaves out with a box for each one Settings can fill (what you type is saved just before the Cabrillo export), and shows where the sponsor takes the log, with a Copy button. Nexus never opens that address or sends the log. Nothing is ticked to begin with, as before.
+- **POTA activations: today's count, dupes, two-fers, park grid and P2P.** The activation strip on the POTA/SOTA view now counts what POTA counts: the contacts from your park since 0000Z, each call, band and mode once, shown as "US-1234 7 of 10 · 3 to go" and marked valid at ten. At 0000Z the count starts again from 0 of 10, the activation keeps running and a notice says so; yesterday's contacts export as their own file. The Logbook's activation export list counts the same way, so its "under 10" agrees with the strip; the file still holds every contact. Type two or more parks to activate a two-fer ("US-1234, US-5678"): each contact is logged once carrying both, each park gets its own count, and the per-activation export writes one file per park. While you activate, the log form shows "Dupe today @ US-1234" with the earlier contact's band, mode and time when the call was already worked today on that band and mode from the same park of theirs. It only warns; the contact still logs. The "Dupe 20m" badge for a station worked on the band at any time is hidden meanwhile. Your contacts carry the park's grid from the park list as MY_GRIDSQUARE instead of your home grid, and you can type a more precise one in the strip; Settings keep your home grid, which comes back at Stop. When the park list has no grid for the park, the contacts carry none and the strip says "No park grid: type one". An activation now survives a restart or a crash: it is taken up at launch paused, with a "Still activating US-1234?" notice. Until you press Still activating (on the notice or the strip) nothing is tagged with the park, so contacts made at home after a field day that ended without Stop stay home contacts; Stop ends it. A contact waiting in the confirm-before-log popup carries the park, grid and state of the activation it was made in, whatever runs when you confirm it. While you activate, every POTA activator on the board shows a P2P badge, and the strip counts today's park-to-park contacts, park by park on a two-fer. A hunter in two parks counts once toward your ten, and once as park to park, while the per-activation export writes that contact once per park of theirs so each of their parks gets its P2P credit; your log keeps it as one contact. The same hunter again on the same band and mode from another park of theirs adds nothing to your count, and is not marked a dupe, since they need it. A hunter on a summit or a WWFF area is not counted as park to park. A park typed with the old K- prefix is accepted, with a reminder to check it before upload.
+- **Contest contacts made during a POTA activation count for the activation.** A contest contact logged while an activation runs carries its park or parks, program, state and the park's grid, exactly as any other contact made then, and keeps them when it is merged into the Logbook, so it counts toward the activation's ten, shows in its contacts and export, and counts in the activator awards. They are recorded when the contact is logged, not at the merge: a contact logged while the activation is paused (taken up at launch, before Still activating) or after Stop carries none, and editing a contest contact before the merge keeps them. Your Cabrillo and the contest ADIF export are unchanged. Contest logs from earlier versions open as before.
+- **POTA activator achievements in Awards.** A new POTA activator panel counts your activations from the log, by the same rule as the activation strip (ten different contacts — call, band and mode — from a park in one UTC day): valid activations, days that fell short, parks activated and the next achievement (10, 20, 30, 40, 50, 75, 100 …), Repeat Offender (activations at one park, a tier every 20), Kilo (1000 contacts from one park) and Rover (parks activated in one UTC day: Warthog 5 up to Lion 30), each as POTA defines it, with a table of your parks. Each call you activated under is counted on its own, as POTA counts each account; a portable /P counts as the plain call (KD9TAW/P is KD9TAW), while /M or any other suffix stays a call of its own. pota.app still awards from the logs you upload there.
+- **Your park on the map.** With the Parks on the air layer on, the park you are activating is a filled, named diamond, and parks you have activated are outlined diamonds. The park list you downloaded now keeps each park's own position, so a park is drawn at its pin rather than its grid square.
+- **Re-tag contacts with your park after the fact.** Logbook ▸ Clean up ▸ Bulk edit (below) sets or clears MY_POTA_REF; a two-fer typed as `us-1234, US-5678` (or with `;` between the parks) is stored the way an activation stamps it (`US-1234,US-5678`), and the preview says which of the contacts were already sent to LoTW, eQSL, QRZ or Club Log (they keep the park they were sent with; nothing is sent again) and which are in an activation file you already exported, naming the files to export again. That warning covers any bulk edit of those contacts (a grid or power set on them too), not only a park change; a two-fer re-ordered changes no file and is not flagged. A file is remembered as exported only once it is saved. It is one change, undone with one Undo. Activation files exported before this version are not known to it.
+- **POTA activators: a spot comment, a re-spot prompt when you move, and QRT at Stop.** Spot me now has a comment box beside it (QRV when left blank, up to 30 characters), and the comment goes to both pota.app and the DX cluster. On a two-fer, one confirm names every park and each park is spotted on pota.app on its own, under the same one-minute repeat limit; the cluster spot names them all ("POTA US-1234 US-5678 QRV"). Re-spot and QRT work the same way. When the dial has sat at least 1 kHz (CW and digital) or 3 kHz (phone) away from where you were spotted for 20 seconds, a notice says "Moved to 14.062. Re-spot?" with one button; the button is Spot me, with the same confirm and the same one-minute repeat limit, and nothing is posted unless you press it and confirm. Once you have spotted, the checklist Stop opens offers Post QRT, unticked every time; tick it and End activation asks before spotting QRT on the frequency you were spotted on, then ends the activation. The cluster spot is kept within a node's 30-character comment column by naming the later parks of a two-fer or more as a count ("POTA US-1234 US-5678 +1 QRT"), never by cutting your comment.
+- **An Activation pane, an "Activation over?" checklist and a Logbook view of the activation.** A new Activation box shows the activation running now: each park's count today in the strip's own words ("US-1234 7 of 10", "3 to go" or "valid") with its park-to-park count, how long the activation has run, how long until 0000Z starts the counts again, the rate (as the contest rate meter reads it) and this activation's contacts, newest first. Put it in any cockpit's box, the dashboard rail or Conditions like any other box, or open it in a window of its own with Activation window on the POTA/SOTA strip. It sends nothing. Stop on the strip now opens a checklist before the activation ends: each park's count, Export the ADIF files for POTA (one per park per UTC day the activation ran, exactly the files the Logbook's per-activation export writes, to Downloads), Post QRT once you have spotted, and reminders for a K- park, contacts that carried no grid, a state line with no state picked, and that you upload the files at pota.app yourself. Nothing is ticked until you tick it, Keep activating changes nothing, and a QRT still asks before it posts. When a park's contacts today were made under more than one call (KD9TAW and KD9TAW/M, say), the strip, the pane and the checklist say so with each call's count, because POTA counts each call separately; the checklist lists each call's file. If the log cannot be read for the checklist it says so instead of offering no files, and a checklist left open past 0000Z lists the new day's file. While an activation runs, the Logbook has a This activation button that shows only its contacts: its park, on each UTC day it ran, a two-fer and a run past 0000Z included; Filters ▸ Save keeps it under a name, and Filters has a new My park / summit field (your own reference, matched whole: US-1000 does not find US-10000, and a contact hunting that park is not yours).
+- **`{MYPARK}` and `{HISPARK}` in CW macros, and a POTA set.** `{MYPARK}` sends every park of the activation, separated by spaces as a two-fer is sent on CW; `{HISPARK}` sends the park of the station you are hunting. Each is left out when there is none. While a park activation runs and no contest does, the CW keys you have not made your own are the POTA set: F1 `CQ POTA DE {MYCALL} {MYCALL} K`, F2 `! UR 5NN 5NN {MYSTATE} {MYPARK} BK`, F3 `TU 73 {MYCALL} POTA`, F6 your parks. Edit a key from the dock as usual. While you activate, `{MYSTATE}` sends the state your contacts carry (the park's, or the one you picked on a state line), not your home state.
+- **WPX and WAE chips on the Needed board, off by default.** Settings ▸ Spots & Alerts ▸ Alerts has two new switches, Show WPX prefix needs and Show WAE country needs. With one on, a station on the board that would be a new WPX prefix, or a new Worked All Europe country, on that band and mode (CW, phone or digital) gets a WPX or WAE chip, counted the way the Awards page counts them. They are off as they ship because almost every station is a new prefix. A chip changes nothing else: no sound, no pop-up, and each row's headline and order stay the same.
+- **Import shows what a log file holds before anything is written.** Import ADIF in the Logbook now opens a preview: how many records and their date range, how many are new and how many are already in your log (by the log's own duplicate rule, and how many of those would gain confirmations), the problems it found with examples (no call, a date or time it cannot read, a value that is not of its field's type, an unknown band or mode), and which fields the file carries. You then choose Import, Import new only (contacts already in your log are left exactly as they are) or Cancel. Either import is still one step that Undo, or Recently deleted later, takes back. A file over 200 MB is refused with its size; split it and import the parts. A record with more than 2,000 fields, which only a damaged file has, is not imported at all, and the preview and the report say so. A file naming more than 10,000 different fields, which no real log does, is refused before its preview.
+- **ADX and Cabrillo logs can be imported.** ADX (ADIF's XML form) is read with the same field mapping as an .adi file. A Cabrillo contest log is read with its contest's own exchange template (Sweepstakes, CQ WW, CQ WPX, ARRL and Winter Field Day, ARRL VHF and the QSO parties), each column going to its ADIF field (serials, sections, zones, class, RST), with each side's whole exchange also kept as STX_STRING/SRX_STRING; a contest with no template keeps the call, band, mode and time, the RST when both sides send one for the line's mode, and the exchange as text. A line is never stored under a report, a serial or your own call: a line whose other station cannot be told is listed in the preview and not imported. Whatever has no field of its own is listed in the preview.
+- **A no-loss report after every import.** It accounts for every field of the file: stored, written back in the log's spelling (20M becomes 20m), kept byte for byte as another program's field, or not stored, with the reason. Save it as a text file from the import window.
+- **Novice and Advanced licence classes.** Holders of the grandfathered US Novice and Advanced
+  licences can now pick their class in the setup wizard and Settings ▸ Station, and the transmit
+  lockout holds them to their own segments: a Novice to CW on 80, 40 and 15 m, 10 m from 28.0 to
+  28.5 MHz (data below 28.3, single-sideband voice above), 222–225 MHz and 1270–1295 MHz; an
+  Advanced to everything a General has plus 3.700–3.800, 7.125–7.175, 14.175–14.225 and
+  21.225–21.275 MHz phone. Power limits (200 W on HF, 25 W on 222 MHz and 5 W on 23 cm for a
+  Novice) are still yours to keep: the lockout checks frequency and mode, not power. The settings
+  file stays readable by older versions of Nexus: they see a Novice as a Technician and an Advanced
+  as a General, and this version still opens it as the class you picked.
+- **Find and merge duplicate contacts.** Logbook ▸ Clean up ▸ Duplicates lists contacts logged more than once: the same call, band and mode within 5 minutes (the log's own duplicate window), or within an hour for possible ones. Different calls are never one contact (W1AW/KH6 and W1AW/KL7 stay apart), and neither are copies under two station calls (a portable /P aside: KD9TAW/P is KD9TAW), two operators, two grids (FN31 and FN31PR are one grid), two activations or a satellite beside a terrestrial contact. Merging keeps one copy (the fullest is suggested, and of equally full ones the one already uploaded) and gives it everything the others held, every confirmation included; its upload marks stay its own, except that a copy whose station call differs from the merged contact's or the kept copy's only by /P passes on the upload marks the merged contact lacks, whichever spelling you keep, so LoTW is never sent the contact a second time under the other spelling. A field the copies disagree on is shown for you to choose, and a confirmed copy's value, a QSL-sent mark (sent or cleared), a comment, notes or a contest exchange is never replaced without your choice. A hunter's two-fer, a summit on one copy and a park on the other, keeps both. The other copies go to Recently deleted, nothing is sent to any service, and Undo takes the whole merge back; upload marks passed on by a /P copy stay.
+- **Bulk edit.** Logbook ▸ Clean up ▸ Bulk edit sets or clears your grid, station call, operator, rig, power, propagation mode, satellite, or your POTA/SOTA reference on the contacts you ticked or every contact the list shows. A preview counts what will change before you confirm. It never changes the worked call. A station call replaced with another call is the call a contact is uploaded under, so those contacts' upload marks are cleared and the next upload sends them under the new call, and their LoTW, eQSL and QRZ confirmations, matched under the old call, are cleared with their dates; paper QSL cards and award credit stay. Filling in a blank station call (with any call, whatever Settings now says), clearing one, or adding or removing /P clears no upload mark or confirmation. A contact with no station call is uploaded under the call in Settings, so a fill or a clear can change the call contacts go under to a service they have not been sent to yet: the confirm names how many, under which call instead of which (as sent, /P included), and waits until you tick that you understand. If the contacts it would send under another call are no longer the ones you ticked for (the call in Settings changed since the preview, say), the edit is refused and nothing changes. The confirm says what Undo cannot take back: anything uploaded under the new call stays on that service. The preview says how many of each before you confirm. Every other field keeps its confirmations. The edit is made on exactly the contacts the preview counted. Undo takes the whole edit back, but never puts back a blank station call that would send a contact under the call in Settings now rather than the call it was made under: that call stays, and Undo names the call in Settings the blank would have sent them under, or says Settings has no call.
+- **Update from callbook.** Logbook ▸ Update from callbook (also a tab in Clean up) fills the empty fields of the contacts you ticked, or of every contact the list shows, from your callbook lookups: each call asks QRZ, then HamQTH, then callook.info for a US call, as you have them set up, the next only when the one before has no record. It fills the name, e-mail, web page, QSL route and the station's LoTW/eQSL/paper-QSL habits on any contact, and where the station is (grid, QTH, state, county, IOTA, CQ and ITU zone, latitude/longitude and UTC offset) only on contacts from the last 12 months, because a callbook says where a station is now; older contacts keep those blank, and the preview says how many. A field a contact already holds is never changed, a contest exchange's fields are never touched, and the call, country, upload marks and confirmations stay as they were; nothing is uploaded. A preview shows the contacts, the distinct calls, the services it will ask, how many calls are already in the lookup cache, the time the rest take, and per field how many contacts could be filled. It looks one call up every 2 seconds, whichever service answers, and stops at 250 lookups a day across runs (both in Settings ▸ Logbook ▸ Callbook lookups); answers from the cache cost nothing. It runs in the background with progress and Stop, and however it ends, what it found is one change that Undo takes back; run it again to pick up the rest. You can close the dialog while it runs: the Logbook tells you when it ends, with Undo. A lookup that fails, such as a QRZ sign-in turned down, stops it, and so does QRZ answering three calls in a row with no record, which is how QRZ refuses lookups. While the radio transmits, a large update waits to change the contacts until the transmission ends. It follows QRZ's published XML rules: one sign-in per session, Nexus names itself on every request, and QRZ's own messages are shown. If QRZ refuses service for the account, the update stops and Nexus does not ask QRZ again for 24 hours, in any lookup. On an account without the QRZ XML subscription the update leaves QRZ out and uses HamQTH and callook.info. HamQTH is credited in Settings and in the preview, and callook.info's few minutes offline each day leave those calls for the next run instead of stopping it. Calls the callbook does not know are listed and left alone. From a Remote computer you can preview it; the update itself is started at the station.
+- **Check the log.** Logbook ▸ Clean up ▸ Check lists invalid grids, a DXCC entity the call's prefix does not match, a missing band or one its frequency is not in, an end time before the start or a date in the future, and POTA, SOTA or IOTA references not in their format, each with a proposed fix. A confirmed contact's DXCC or band, a grid list and an end time that is not a midnight wrap are listed without one, and so is a DXCC entity the call's prefix cannot settle (K1ABC logged as Hawaii, 3Y0PI logged as Peter I). Only the fixes you tick are made, as one change Undo takes back.
+- **Contest entry: the country of the call, ten last contacts, and Edit on each of them.** While you type a call in a contest, the line above the Call box shows its country as the contest counts it, with the CQ zone its prefix usually has in a contest whose exchange is a CQ zone (for example "Fed. Rep. of Germany · CQ 14", and "Sicily · CQ 15" for IT9 in CQ WW, which counts Sicily as a country of its own); a DUPE warning on that line comes first. Nothing is filled in for you: the zone box still only shows the zone as a hint, because a portable station sends its own. The Last contacts list under the entry now shows the ten newest contacts instead of five, and each has an Edit button that corrects it in place, the same edit as the full log's (Enter saves, Esc leaves it as it was, and the caret goes back to Call), with the dupe marks and the score following. Contacts logged while an edit is open do not close it. As on the full log, an edit is refused at a club and through Remote, and if the contest was already merged into your logbook you are told to fix the logbook copy too, on a line under the list that stays in view until the next edit or contact. Only one edit of a contact is open at a time: Edit or Ctrl+Y while another is open takes you back to it. If the same contact is edited (its call included) or removed in another window (the contest logger window and the Contest screen) while your edit is open, your edit closes and says which, and a save pressed before that change reaches your window is refused, so an older edit never writes its values back over the newer one.
+- **Logbook filters, saved filters and sorting on up to three columns.** The new Filters button beside the search box filters the whole log by call (prefix or `*`/`?` pattern), band, mode, dates, DXCC entity, continent, CQ and ITU zone, grid, state, county, IOTA, park or summit reference, contest, words in the comment, name or QTH, QSL state per service (LoTW, eQSL, card, QRZ: confirmed, sent, not sent; Club Log: sent, not sent) and award need (contacts whose DXCC, WAS, WAZ, VUCC or FFMA band slot is worked but not yet confirmed). Save a filter under a name, recall, rename or delete it. Shift-click a column header to sort by it next; grid, state, IOTA, county and contest now sort too.
+- **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
+- **Station card.** Click a call (or press Enter on it) in the Logbook, Spots, the decode list's QRZ
+  link, the roster's ↗ and the station cards' QRZ, the map's path line or the log strip's new Card button, and one card shows what
+  Nexus knows about it: distance and bearing, the contacts you have made as a band × mode grid of
+  worked and confirmed, the last one, what it would be new for on the band and mode you are on, its
+  latest spot, and what your log recorded about it, with Lookup for the callbook (name, QTH, county,
+  IOTA, zones, e-mail, web, QSL route, LoTW/eQSL/card, their local time and photo) and a QRZ button for
+  the page. Opening it asks nothing over the internet. Esc or a click elsewhere closes it, and it never
+  covers the TX strip, Stop TX or the TX dock. Settings ▸ Appearance can also open it when the pointer
+  rests on a call (off by default).
+- **More from the callbook on every contact.** When you have looked a station up (the callsign card
+  or the log strip), the contact you log with that call keeps what the lookup said: county, IOTA,
+  CQ and ITU zones, position, e-mail, web page, QSL manager, whether they use LoTW, eQSL or paper
+  cards, and their UTC offset, plus name, QTH, grid and state when you left them empty. This works
+  for every way a contact is logged, the FT auto-log too, which uses the answer already on screen
+  and never waits for a lookup. Nothing you typed is replaced. Where the station is (grid, county,
+  zones and so on) is taken only from their own callbook entry, not a home call's entry for a
+  /P or a station at a park. A zone or location from the callbook gives way to LoTW's when LoTW
+  confirms the contact.
+- **LoTW sync keeps the QSL details.** A LoTW confirmation now also fills the station's grid,
+  county, IOTA, ITU zone and prefix when the contact had none.
+- **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
+- **More awards: WPX, WAE, WWFF and Worked All Provinces.** The Awards page now counts CQ WPX prefixes,
+  DARC's Worked All Europe countries with their band points and class, WWFF references worked with the
+  hunter levels, and the Canadian provinces it already counted but never showed.
+- **Custom awards.** Define your own award from a list of calls, prefixes, grids, references or ADIF
+  field values, with band and mode filters, and export or import the definitions as a file.
+- **A whole-log DXCC chart.** Every DXCC entity against every band, shaded confirmed, worked or needed,
+  with a mode filter.
+- **What to QSL.** A list of the unconfirmed contacts whose confirmation would fill a slot an award still
+  needs, most valuable first, with the QSL route where the log holds one.
+- **The Fred Fish Memorial Award (FFMA) on the Awards page.** A new card counts the 488 grid squares of the
+  48 contiguous states worked and confirmed on 6 m, with the squares still needed listed beside the other
+  chases, and a needed 6 m square on the Needed board now says FFMA.
+- **70 cm, 33 cm and 23 cm are full bands for openings, need alerts and awards.** A grid, zone or state
+  worked on one of them no longer shows as new there, tropo openings on them are detected (moonbounce is
+  not), 33 cm gets a weak-signal channel and a CW calling dial, and the 70 cm and 23 cm CW dials move to
+  the ARRL calling frequencies, out of the moonbounce segments.
+- **One Devices list at the shack.** Settings ▸ Remote access lists every computer, phone and browser
+  that can reach the station once, under you or the person you invited, with how it connects, where it
+  stands, and Approve, Allow to transmit and Remove on the row. It replaces the separate lists of
+  browsers, computers, paired computers and people.
+- **One Connect to my station… entry on the computer you operate from.** It replaces Remote stations… and Stations on this network… in Settings ▸ Remote access: Nexus looks for your station on this network first and connects, opens the code pairing if this computer is not paired yet, or offers to sign in and reach it over the internet; the station list, a typed address and the code stay under Advanced.
+- **Every contact keeps its history, and every change can be undone.** The contact view now ends
+  with a History section: each change to the contact, when it was made, what it changed (old → new)
+  and who made it — you, an import, a LoTW, eQSL or QRZ download, the automatic fill, the contest
+  log, a Remote computer. Each change has **Undo**, which puts back the fields it changed that have
+  not changed since; an undo is itself a change, so it can be redone. **Recently deleted** in the
+  Logbook lists deleted contacts with **Restore**, which brings one back exactly as it was. After a
+  delete, an import or a purge, the message offers **Undo**, and a whole import or purge is undone in
+  one step — that import or purge, and never a contact logged after it. An undo never puts a contact
+  back beside the same contact logged again after it was deleted (the same station, band and mode
+  within 5 minutes), and **Restore anyway** puts it back when they are two different contacts; a
+  contact the log held beside it before the delete, such as a rover worked from two grids minutes
+  apart, never stops it coming back. An import's undo keeps any contact you have edited, that has
+  been confirmed or uploaded, or that you imported again, since; the message names them. A whole
+  undo does not name a contact you already undid on its own as one it could not undo. Undoing
+  more than a few hundred contacts at once waits until you stop transmitting, or a voice message or
+  APRS frame finishes, because it holds up the radio while it is made; the message then stays up and
+  says so, and its Undo works once you stop. Recently deleted also lists each recent purge and import
+  with **Undo this purge** or **Undo this import**, so a whole one can still be undone after its
+  message has gone, and each recent whole undo with **Redo**. Each asks first, naming how many
+  contacts, from when, and whether they leave the log or come back to it. Undoing a whole purge,
+  import or undo is done only at the station: a computer driving it through Remote sees the list
+  but cannot press it. The history is kept in the logbook
+  database, so it survives a restart. Undoing a change to a contact merged from a contest, or putting
+  back a deleted one, keeps what its exchange carried (the zone, county, state or grid the other
+  station sent) in the contest's own columns, and the history shows a change to one of them as, for
+  example, `STATE (contest)`. Every edit is kept for good; a deleted or purged contact's full
+  copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
+  Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that
+  changes a callsign marks the contact to be sent again with your next upload, as correcting a
+  callsign does.
+- **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
+  F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
+  modes.
+- **Allow to transmit, at the shack.** A device added by signing in is held from transmitting until
+  you let it. Settings ▸ Remote access now shows such a device, browser or computer, once it has
+  station control, as "Waiting for you to allow it to transmit" with an **Allow to transmit** button
+  beside it; one press lifts the hold. A device still waiting for **Approve** is offered Approve
+  instead, which lifts the hold as well.
+  The button works only on the station's own screen: a remote computer or browser can never press it,
+  so a held device cannot allow itself. Stop is never held.
+- **The shack asks when a signed-in device is waiting to transmit.** Nexus at the shack pops up "Allow
+  *Laptop* to transmit?" with the device's key, and **Allow to transmit** or **Not now**. Not now leaves
+  it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
+  now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
+- **A held remote computer sees its hold in every mode**, with "or about N min" when the station would lift it by itself; a voice message cut short by leaving Phone is now announced.
+- **Approvals given at the shack last across a station restart.** A browser added by signing in
+  that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
+  station restarts, once the station has heard the device list again, and so do your own computers and
+  phones once the station has sent you the new-device notice. A guest's computer or phone is held again after a restart until you press **Allow to
+  transmit** again. Revoking its station control,
+  removing it, the device expiring or no longer being listed, cancelling, or revoking station access
+  ends that approval for good, and the device is held again until you allow it. Turning Remote off
+  only pauses it, as it pauses the device's other grants. Devices on your own network are unaffected.
+- **Spot a station from anywhere — now on the phone cockpit and on every Spots row.** The one-click
+  Spot button, which opens the review popup that posts a DX-cluster spot from your station's login,
+  used to live only on the Operate and DXpedition screens. It now also sits on the phone/SSB
+  cockpit's toolbar (seeded with the call you are logging) and on each row of the Spots board
+  (seeded with that spot's call and frequency). The confirm popup is unchanged — every spot is still
+  reviewed before it goes out.
+- **A "show all spots" step on the Needed board while a contest is running.** The Needed board shows
+  only stations you still need, which during a contest — when you want to work everyone, not just new
+  ones — can leave the phone board looking empty. While a contest is running the board now shows a
+  short bar with one click to the full, un-gated Spots view (filter to Phone there for SSB). Outside
+  a contest nothing changes.
+- **An SDRplay receiver as the scope's source, through SDRconnect (needs a bench check).** Settings ▸ Radio has a
+  new **Scope source** section: **The radio** (as before, and as it comes) or **SDRconnect (SDRplay)**. With an
+  SDRplay RSP fed from the rig's RX OUT (or a splitter with transmit protection) and SDRplay's own SDRconnect
+  program running with its WebSocket API on, the RF scope pane and the Phone and CW scopes draw the receiver's whole
+  span, each station at its own frequency, with the dial, the passband and spots on it as usual. The receiver's
+  centre follows the rig's dial, on every change or only when the dial nears the edge of the span. Nexus only reads
+  the receiver's IQ and sets its centre frequency: it never transmits through SDRconnect and sends it no CAT.
+  SDRconnect is a separate, free, closed-source program from SDRplay that you install; Nexus ships and loads nothing
+  of SDRplay's. When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it reports,
+  the scope's status line says which and Nexus keeps trying. Built and tested against the published SDRconnect
+  WebSocket API 1.0.3 only: it has not yet been run with a real RSP and SDRconnect, so treat it as untested on real
+  hardware until a bench check confirms the IQ rate, where a carrier is drawn, retuning while the knob turns, and
+  whether RX OUT stays quiet while you transmit.
+- **JTTY, WSJT-X's new keyboard mode, to receive and to send (needs a bench check on the air).** A JTTY screen
+  sits under Digital, beside PSK. It has WSJT-X's eleven JTTY frequencies (20 m at 14.090), its Rx, Tx and F Tol
+  boxes, its All decodes and QSO frequency panes, and a waterfall with Rx and Tx cursors. Nexus decodes JTTY as
+  WSJT-X does, and sends what WSJT-X sends: text you type and Send; WSJT-X's F1–F8 contest messages, with a Call
+  box and a serial number; and Live, which keeps the transmitter up while you type and sends your words as you go.
+  Every send needs TX On and your license class across the whole signal, and the TX watchdog runs for JTTY,
+  though WSJT-X's does not. Stop TX, Esc and the dock's Esc/Stop cut it at once, and leaving the JTTY screen
+  stops it. A JTTY session stops 10 minutes after it starts, the text still going out after Send, the
+  sign-off or live typing included, at the station and from afar. Opening JTTY turns TX on as opening
+  PSK does, but not after a Stop. A call becomes clickable, is
+  spotted to PSK Reporter and reaches the Needed board only once it has been decoded in two separate messages. JTTY
+  comes from the WSJT-X 3.3.0-beta4 test release and no WSJT-X general release has it yet, so the other station
+  needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
+  ALC at your data power, and that a WSJT-X station copies what Nexus sends.
+- **JTTY contacts log as JTTY, and export as `MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it.** A log
+  with a bare `MODE=JTTY` still reads as JTTY. LoTW does not list the JTTY mode yet and TQSL would drop such a
+  contact, so a LoTW upload holds JTTY contacts back, leaves them marked not uploaded, and says so. The
+  WSJT-X UDP Status names the mode JTTY, and no Decode messages go out for it, as from WSJT-X.
+- **JTTY in contests.** In ARRL Field Day, F2, F6 and F8 send your class and section in JTTY's compact exchange
+  form, and %E in typed text is your class and section, as in WSJT-X. Winter Field Day allows JTTY for 2027; its
+  classes do not fit that form, so a Winter Field Day exchange goes as typed text, which a WSJT-X station reads the
+  same way.
+- **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
+  Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
+  planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
+  Nexus fetched, and nothing when that reading is more than 3 hours old.
+- **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
+  DISTANCE in km from your grid to theirs when both are known).
+- **Disable a second radio without deleting it.** With two or more radios, each card in Settings ▸ Radio has a
+  **Disable** button. A disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
+  port, so another program on the same computer can use that rig. Auto band-routing skips it. **Enable** brings it
+  back. The radio you are operating can't be disabled: make another radio active first.
+- **A disabled radio leaves the radio switcher.** Its pill is gone from the header's radio switcher, and its
+  **Make active** button in Settings ▸ Radio is greyed out until you enable it, so a click can't open its port
+  again. Enable it and the pill comes back. With only one radio left enabled, the switcher hides as it does for a
+  one-radio station. A computer driving the station through Remote cannot make a disabled radio active either.
+- **The Call Roster's Hide worked can reach back a set time.** Beside Hide worked on the FT8/FT4 Call Roster is
+  the same window picker the Spots panel has: Any time (the default, and what Hide worked did before), Until 0000Z,
+  1 h, 4 h, 24 h or 7 days. A station you last worked before the window shows again, which suits special-event
+  calls such as 13 Colonies and Route 66 that are on the air all week. Nexus remembers the choice.
+- **Callsigns on the FT8/FT4 waterfall.** Each station decoded in the last period is labelled along the top of the
+  waterfall, over its own audio frequency, and the station in the DX Call box is shown in red. When the labels crowd,
+  they stack in up to three rows, a station calling you and then the strongest first, and a count says how many had
+  no room. Clicking a label moves your RX offset there, as clicking the waterfall does. The **Calls** button in the
+  waterfall's header turns the labels off.
+- **A Comment box in the Log this QSO? pop-up.** With logging set to ask first, the pop-up that
+  shows a finished FT contact now has a Comment box under the call, grid and reports. What you type
+  there is logged as the contact's comment (ADIF COMMENT), so a note no longer means editing the
+  contact on QRZ afterwards. The box opens with the comment the contact already has, such as the
+  dB reports when you log those to comments; leave it alone and that is logged as before.
+- **Choose how long the pop-ups in the bottom-right corner stay.** Settings ▸ Spots & Alerts ▸
+  Alerts has a new **Keep pop-ups up for at least** menu: each pop-up's own time (as before, and
+  as it comes), 10, 20, 30 or 60 seconds. It only makes a pop-up stay longer: an error still
+  stays at least 12 seconds, and one that stays until you close it still does.
+- **−B4 can hide only the stations you have worked on this band.** A small menu beside Band
+  Activity's −B4 chip picks what it hides: **Any band** (every station worked before, as −B4
+  always did, and still the default) or **This band**, which keeps a station you have worked only
+  on another band on screen so you can work it for a new band. The Rx Frequency pane follows the
+  same choice, and with This band chosen, hovering over its −B4 says it hides only stations worked
+  on this band, and where to change that.
+- **Tempo can come off the left-hand menu.** Settings ▸ Appearance ▸ Features now has a switch for
+  **Tempo** (the TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
+  other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
+  Nexus was last in Tempo it starts in FT8/FT4 instead.
+- **Nexus Remote: download your data or delete your account from the Remote page.** The Your account card has
+  Download my data, and Delete account, which deletes only after you type DELETE. A paid plan is cancelled first, and
+  nothing is deleted if it cannot be. Your stations, devices and invitations go; the sign-in record is removed on
+  request.
+- **Your own signed-in devices pair with your station automatically, over your network and over the internet.**
+  When you sign a computer, phone or browser in to your Nexus Remote account, it is granted control of your
+  station without a trip to the shack to approve it — on your home network and across the internet alike. Code
+  pairing and approving a device at the radio still work exactly as before. For safety, a device added this way
+  cannot transmit for its first 15 minutes: it can listen and take control at once, but transmitting waits out the
+  hold (Stop is never held). A device that joins on your own network is never held, and approving a device at the
+  shack lifts its hold at once. A device signed in over the internet can also transmit once its 15 minutes pass —
+  but only after the email telling you it was added has actually been sent to your account; until then it stays
+  held, so approve it at the shack to let it transmit. That email names the device, the station and when, and how
+  to remove it if it was not you. Restarting Nexus does not start a device's hold over: once the service has
+  confirmed that email, the station remembers it, and after a restart the device is held only for what was left of
+  its 15 minutes, once your account's device list confirms it again.
+
+### Changed
+- **Settings ▸ Contesting: Start contest… and Stop contest… instead of the Contest mode switch.** Start opens the contest setup and Stop opens the end-of-contest checklist, both at once, without Save. Settings can no longer save Contest mode on with an exchange the station cannot start with. With a contest running, a Save that switches to a contest the station cannot enter yet is refused, with the reason, and so is one when the station cannot be asked. Start and Stop follow the station, so a contest started or stopped on the Contest screen since Settings opened shows as it is, and a Save made after another radio was picked elsewhere keeps Contest mode and the picked contest as the station holds them, unless you changed the pick on the form. Field Day saved on with a blank class or section shows Waiting for Class + Section, not Off. Every other field on the tab is unchanged.
+- **The Contest screen says what Running does.** Its Running button now says that on an FT mode it turns TX on and calls CQ, and the screen's note no longer claims the screen never transmits. What the button does is unchanged.
+- **The Tempo 23 cm channel moved from 1296.200 to 1296.185 MHz**, below the 1296.200–1296.400 beacon segment and inside the weak-signal segment of the ARRL band plan. Older Nexus builds still call on 1296.200 and will not hear this one; tune there by hand to reach them.
+- **In a contest, FT8 and FT4 Search & Pounce no longer calls stations by itself.** S&P now only
+  listens, as in WSJT-X: you start each contact with a double-click on a CQ, or a reply to one from
+  a logging program. That contact still runs itself to RR73 and the log, and S&P then waits for
+  your next pick. Leaving TX on never calls anyone, and nothing is queued while TX is off. With
+  **Disable TX after sending 73** on, TX now goes off after every S&P contact. In ARRL Field Day and
+  Winter Field Day on FT8, FT4, FT2, FT1 and DX1, a double-click on a CQ while you are in the
+  contest's S&P answers it with your class and section and logs it in the contest. On FST4, Q65,
+  MSK144 and JT65, and in other contests on FT2, FT1 and DX1, a double-click works the station as a
+  normal QSO, as before.
+- **In a contest, FT8 and FT4 Running stops after each contact.** Once a contact is logged and your
+  last over (the 73, or the RR73) has gone out, TX goes off and Nexus stops calling CQ, as WSJT-X does
+  with Auto Seq on. While TX is off the run takes no caller, as WSJT-X does with Enable Tx off: a
+  station that answers your earlier CQ is not answered and nothing is logged. Press **Call CQ**, the
+  Contest screen's **Running** or **TX On** to call CQ again, in the same period as before; each
+  sends the CQ. A station that answers your CQ while you are calling it is worked as before, and the
+  contact still runs itself to the log. The AUTO-CQ sign on the FT cockpit goes out while the run
+  is stopped. The Contest screen's Running stops
+  the same way on FT2, FT1 and DX1. Outside a contest, Call CQ still goes back to CQ after each
+  contact.
+- **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
+  page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
+  attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.
+- **The Nexus Remote page explains itself before you sign in.** Signed out, it shows how to get
+  started, what works and what does not yet, who can transmit and how Stop works, and where to send a
+  report (contact@hamradiotools.io, with `nexus-diag.log`). It says Remote is free during the beta.
+  Signed in with no station yet, it lists the three steps at the shack. Its messages that named
+  Settings ▸ Station ▸ Remote access now name Settings ▸ Remote, where the card lives.
+- **The phone scope starts snappier.** The phone panadapter and waterfall now default to the Fast analysis
+  window (85 ms, was 171 ms), so a signal appearing or a fading one dropping shows about twice as fast. Voice is
+  wide enough that the slightly coarser frequency resolution is not visible; if you want the finer Balanced or Sharp
+  window back, the scope's window button still sets it, and your choice is remembered. The passband trace also
+  settles and falls back faster on phone — its averaging default drops from 250 to 100 ms and its peak-hold from
+  250 to 150 ms — so the trace tracks the band more like a live SDR panadapter instead of lagging behind it.
+  Separately, the rig scope and the radio's RF panadapter pane now refresh about 30 times a second instead of
+  20 (the window, averaging and peak-hold changes above are the phone scope's alone; CW, the digital waterfalls
+  and the RF panadapter keep their own trace settings). The faster refresh pairs with the FlexRadio change below.
+- **A FlexRadio panadapter updates twice as often (needs a bench check on a real Flex).** Nexus now asks a
+  FlexRadio to stream its panadapter at 30 frames a second instead of 15, so the scope and waterfall from a Flex
+  move about twice as live, closer to SmartSDR's own feel. It roughly doubles the data the radio sends over the
+  network (still modest). Not yet run against a real Flex: a bench check should confirm the higher rate does not
+  disturb a second radio sharing the connection before this is relied on.
+- **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
+  entity or grid (a rare grid loudly), a watch-list station, an opted-in CQ and a park newly on the air are now
+  decided once, at the station, from your alert settings, your watch list (its CQ-only, minimum SNR and label with
+  it) and your area filter. The desktop and a computer driving the station both show what it raises, with the same
+  sounds, pop-ups and Work button as before. The new-park beep no longer needs the main window to be polling.
+- **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X, and still finds
+  every station the old way found (needs a check on the air).** At 13.5 seconds into the period Nexus now takes the
+  stations the early decode found at 11.8 seconds out of the audio, as WSJT-X does, and the full decode at 14.4
+  seconds searches what is left. It no longer finds those stations again first: what they hid comes out in its first
+  search, and only new decodes reach the decode list and the QSO sequencer. On a busy band this is what puts a weak
+  reply on your frequency in the decision for your next over: with 80 stations in the period it arrives about 14.6
+  seconds into the period instead of 15.1, after your over had started. Taking the stations out can damage a few weak
+  ones right beside them, which WSJT-X then misses; Nexus searches the original audio once more after the full
+  decode and adds only the stations the period has not shown yet, so on busy test recordings it finds about 3 % more
+  stations than before and none fewer. That second search runs after the first, so the decoder is busy about twice
+  as long after 14.4 seconds, and the few stations only it finds show up about a second later than they used to; on
+  a computer too slow for it, it stops in time for the next period's decoding. FT4 has no early decode, in WSJT-X or
+  in Nexus, and is unchanged.
+- **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
+  Logbook's add-a-contact form used to show a sample in grey, such as W1AW in Call, 1D and WI in Field Day's Class
+  and Section, a county in a QSO party's county box, and FN31, 20m and a park reference in the Logbook form. A
+  sample like that could read as a value already filled in. Those boxes are now blank. Hints that are words or
+  formats stay, such as Call, Name, RST, MHz and the UTC date format. The park box now reads "Park (reference or
+  name)", and the CQ WW zone box still shows the zone the country file gives for the call typed.
+- **No other screen shows made-up example values in an empty box either.** Settings (Station's callsign, grid,
+  name and state, the Field Day class and section, Your station data, the club event boxes, the port and address
+  boxes, Blocked callsigns, Station power), the setup wizard, the POTA/SOTA activation box, Repeaters' place box,
+  APRS's watched calls, the hide-calls filter, the watch list and the spot comment no longer show a sample such as
+  KD9TAW, WI, 1D, K-1234, COM16 or 192.168.1.50. Words that say what goes in a box stay ("Select or type",
+  "empty = off", "host:port"), and so does a box's real default, such as the rigctld port 4534 or the APRS-IS
+  server.
+- **FT8/FT4: the test of what Nexus refuses to send names the refused messages.** The build's test that compares
+  every FT8 and FT4 over against WSJT-X's own encoder took the list of messages Nexus refuses to send from the very
+  check it was there to test, so that check refusing a message Nexus should send would still have passed. The test
+  now names the refused messages, and such a mistake fails the build. Nothing you see on the air or on screen
+  changes.
+- **Remote has its own Settings tab.** The sign-in, pairing and device-approval card that used to sit at the bottom
+  of the Station tab now lives on a dedicated **Remote** tab, next to Station, so it is easier to find. Nothing on
+  the card changed, and every switch keeps its setting; the Icom-network and rig-sharing settings on the Radio tab,
+  and the "Conditions on a TV" setting on the Appearance tab, stay where they are.
+- **Signing a station in to Remote no longer starts with a dead button.** The station-name box on the Remote card
+  fills in with your callsign on arrival, so **Sign in** and **Pair a station** work straight away (you can still
+  change the name). If you have not set a callsign yet, a short line beside the box says to type a name.
+
+### Removed
+- **Nexus Remote: the old Remote page's FT8/FT4 transmit permission.** The page that used it is gone, so the
+  station no longer takes FT8/FT4 or held-contact commands from a browser, and Settings ▸ Remote access no
+  longer offers **Also allow FT8/FT4 transmit from the Remote page** or the switch to allow or revoke it. A
+  browser streaming the station is unchanged: it operates Nexus as you would at the shack, transmit included,
+  and its Stop TX works as before. A browser you approved with that permission keeps its station controls
+  after you update; only the old permission is dropped.
+- **Nexus Remote: the remote logging permission.** It was for the old Remote page's Log QSO form, which is
+  gone; all it still did was let a browser take control without station controls. Settings ▸ Remote access no
+  longer shows **Allow remote logging** or **Revoke logging permission**, approving a browser gives it station
+  controls only, and a browser now needs station controls to take control. **End remote control** works as
+  before. A browser streaming the station logs with Nexus's own log form, as you would at the shack. A browser
+  that had only remote logging left after an update has nothing; approve it again or allow its station
+  controls to give it control.
+
+### Fixed
+- **Contest DX multipliers: Sicily is Italy, except in CQ WW.** The Tennessee, Texas and Illinois
+  QSO Parties counted a WAE area (Sicily, African Italy, Shetland, Bear Island, European Turkey,
+  the Vienna International Centre) as a DX multiplier separate from its DXCC country, so working
+  IT9 and I claimed two where those contests count one. They now count DXCC countries only, and the
+  contest entry names the country the same way (IT9 shows Italy). CQ WW, whose rules count the WAE
+  areas as countries, still counts Sicily and Italy as two and shows IT9 as Sicily. Logs with no
+  WAE-area contact score as before.
+- **Technician and Novice: only CW and single-sideband voice on 28.3–28.5 MHz.** The transmit
+  lockout let a Technician send AM, FM and SSTV pictures there, which 47 CFR 97.307(f)(10) does
+  not allow. They are now refused for a Technician and a Novice, and the refusal says why. Nexus
+  cannot hear what another program sends, so there it no longer lets other programs key the radio
+  through the CAT broker or TCI, whatever the radio's mode; the connection log says why. Nexus's own
+  PTT, voice keyer and CW still key there. General, Advanced and Extra are unchanged.
+- **Typing in the middle of a call no longer jumps the cursor to the end.** Type the suffix first,
+  go back to the start and type the prefix, and the cursor now stays after each letter you type, as in
+  any text box: "abc", Home, "dl1" gives DL1ABC. This holds in the contest entry (the Contest screen,
+  the cockpit strip and the logger window), the log entry, the contact editor and every other box that
+  capitalises as you type.
+- **Merging a contest into the logbook keeps the grid the other station sent.** In the ARRL VHF contests the grid in the exchange went into the exported file but not the logbook's own Grid column, so those contacts were missing from the Grid column, grid searches and anything that counts grids until the log was imported again. A name and a QTH sent in an exchange now land in the Name and QTH columns the same way. Contacts merged before this get theirs once, on the first start of this version, wherever their own Grid, Name or QTH is empty; one you filled in yourself is never touched. Their uploads carry the same grid, name and QTH as before. The copy is one change: **Recently deleted** in the Logbook lists it for as long as Settings keeps deleted contacts (90 days unless you changed it), and one Undo there blanks every field it filled again, while the contest exchange keeps the values; after that, each contact's own history still undoes its copy.
+- **WAZ counts the zone a CQ WW contact sent.** A contest merged into the logbook kept the CQ zone the other station sent only with the contest's columns, and the awards counted the zone of its callsign's country instead: a W1 station operating from California sends zone 3 and was credited zone 5. The same contacts now count for a custom award on the county, section or class their exchange carried, a LoTW download no longer adds a second, different grid, zone or county beside the ones they sent, and a contact that already got one that way uploads only the one the station sent. With **Sign from ADIF location** on, a LoTW upload of a merged VHF contest contact signs the grid you sent in the exchange (a rover's grid at that moment) rather than adding the grid in Settings beside it; with a named TQSL Station Location, nothing about the signing changes.
+- **A merged contest contact's state is the one its exchange carried, everywhere.** Its uploads already carried the state the other station sent; WAS, the WAS needs, the statistics, the Logbook's State column, its sort and filter and the edit form now show and count that state too, where they used the state looked up from the callsign. Editing State in the Logbook replaces the exchange's state, so the upload, WAS and custom awards all follow the edit.
+- **Other programs can no longer transmit past a band or segment edge from a dial just inside it.**
+  Nexus cannot tell where in the sideband another program puts its audio, so a key from the CAT
+  broker or TCI is now allowed only when everything from the dial to 3 kHz above it (below it on
+  LSB) is inside your license privileges for the mode. With the dial at 14.149 MHz, a data
+  program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
+  if you retune that close to an edge, and stays off until the program keys again; the connection
+  log says how far the program's audio could reach. If the radio reports a different sideband
+  than Nexus set (DATA-L after a front-panel change), that side is checked too; AM is checked on
+  both sides of the dial and FM as Nexus checks its own FM, so a General at 14.026 MHz whose radio
+  was switched to AM is refused. A retune from Nexus keeps the radio's last reported mode for this
+  check until the radio is read again. The mode is read between overs, so a change at the radio
+  during an over counts from the next one. In a CW-only
+  segment, such as 50.0-50.1 MHz, other programs can key only while the radio is in CW. In Phone
+  and CW the check is the one Nexus applies to its own voice and CW, and Nexus's own transmissions
+  are judged as before. On 60 m, a key from a channel's USB dial (5.3305, 5.3465, 5.3715 or
+  5.4035 MHz, within 50 Hz) is judged at the channel as before, since a channel is narrower than
+  3 kHz, and only while the radio reports upper sideband (USB or its DATA form) or nothing;
+  anywhere else on a channel, and in the 60 m segment, the whole passband is checked.
+- **With Follow the radio's split on, a long over on a split set at the radio runs to its end.**
+  Nexus cannot read the radio's split while it transmits, and the last reading counted as too old
+  after 6 seconds, so an FT8 over or a phone over was cut off part way. The reading now holds until
+  the over ends, for up to 2 minutes, and is read again right after; this covers another program's
+  over through Nexus too. A reading already too old when you key is still refused, and a key held
+  past 2 minutes on a split set at the radio is refused as before.
+- **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
+  at the shack; a refused change is shown.
+- **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone
+  press or a program on TCI could start transmitting over a message still going out. Both are now
+  refused until the message ends, and Stop still ends it at once. A TCI program that sends a
+  transmit-off while a message plays now stops the message, as it already stops FT, CW, RTTY and Tune.
+- **Remove at the shack now removes a computer everywhere.** Remove on the Devices list ends both its internet access and its place on your network, when Nexus can confirm they are the same computer; one it cannot confirm is listed on a row of its own for each, each with its own Remove. If the computer signs in again, it comes back held until you allow it to transmit. Taking back an invitation also takes that person's computers off your network at once, even while the internet is down; a guest's computer Nexus cannot tell the owner of goes too, and is named on the card so whoever uses it can sign in again.
+- **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
+  the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
+  change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
+  instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
+  of the shack's transmit checks, and a refused Tune is shown.
+- **Driving the shack from another computer: CW's TX On/Off button beside Tune now works**, as Phone's does, so
+  Enter Sends Message can send once you turn TX on; a refusal is shown, and Enter still never turns TX on.
+- **Driving the shack from another computer: a refused press now says why, and nothing that belongs to the shack
+  pretends otherwise.** CQ, Tune in every screen, the popped-out Operate window's buttons, JS8 typeahead, band picks,
+  tuning, AGC, RF power and CW speed show the reason when they are refused, and a refused power or speed slider goes
+  back to the rig's level. Opening the contest logger window no longer brings up "Nexus could not start". A send
+  refused because TX is off now says "turn TX on first". Repair clock, Clear test contacts, the Field Day club's
+  Give and Remove, the Remote access card and the Connections log say they are at the shack, and the first-run
+  setup wizard no longer opens by itself on that computer.
+- **Driving a station from another computer, TX no longer turns itself off after a second, or after every over.**
+  Letting go of the PTT, Tune off, Phone's Lock, leaving Phone or hiding the voice keyer, and the contest S&P chip
+  each stopped everything at the station, the TX On you had just pressed included. Each now ends only its own
+  transmission, as on the station's own screen; Stop TX and the voice keyer's Stop still stop everything.
+- **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
+  paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
+  opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping
+  you out of the shack you were driving. Now a fresh launch connects again to the station you last drove, at the
+  address you reached it at; the connecting banner and Leave are still there to come back to this computer's own
+  station, or to wait, if that station is off or gone. Press Leave, or Operate a different station, and that is what
+  the next launch opens. A station you have since removed is not reconnected to.
+- **No more empty window flashing on screen as Nexus starts, on Windows, when it last closed maximised.** Before the
+  splash gave way to the app, a launch that reopened a maximised window showed an empty full-screen frame for a
+  moment and took it away again. The window is now maximised out of sight and appears once, when the app is ready.
+- **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
+  logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
+  last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the
+  period it was heard in and marked not new, as WSJT-X does. Once you erase Band Activity, a logger clears it or a
+  band or mode change wipes it, a Replay sends only what has been heard since; a logger's Clear of Rx Frequency
+  alone leaves it. NEEDS-BENCH: Nexus decoding FT8 with its UDP feed on for a few minutes, then start GridTracker
+  or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
+  Activity and restart the program: nothing comes back until the next period is decoded.
+- **WSJT-X UDP: a logger's free text goes into Tx 5, and out as Tx 5, as in WSJT-X.** Free text from JTAlert,
+  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Tempo a
+  piece of it could go out reading as another station's call). Now the text goes into Tx 5. When the program asks
+  for it to be sent, it is your next over, as when you click Tx 5, and an over on the air switches to it, as in
+  WSJT-X; an empty text that is not sent clears Tx 5. It goes out only while TX is on, and it never turns TX on or
+  restarts the TX watchdog. When it does not go out, Tx 5 still shows it and Nexus says why: TX is off, it is
+  text FT8 or FT4 cannot encode (as for the free text you type), the contest screen sends its own exchange, or
+  the program asked to send Tx 5 without its text. Tempo sends it as a chat broadcast, as before, on the Tempo
+  tiers only. NEEDS-BENCH: FT8 into a dummy load with TX on and the UDP feed on, and WSJT-X's message_aggregator
+  example (or GridTracker) connected: type `TNX 73` in its free-text box and Tx 5 follows each key; press Enter
+  and the next over is `TNX 73`, which a WSJT-X station decodes; press Enter during an over and the rest of it
+  switches. With TX off, Enter fills Tx 5, says TX is off and nothing keys. Enter on `W9XYZ K1ABC TNX 73`
+  says FT8 cannot encode it and nothing keys. Repeat on FT4, and once on the contest screen (the run goes on).
+- **Nexus Remote: Save to this computer saves only the station's own kinds of file.** The second PC saves a
+  recording (.wav), an SSTV picture (.png or .bmp) or ALL.TXT, and nothing else. Any other file is refused with a
+  message that names it, and nothing is written to the Downloads folder.
+- **FT8/FT4: a logging program's Clear of Rx Frequency clears only that pane.** When a program connected over the
+  WSJT-X UDP link asks to clear the Rx Frequency window, Nexus now empties only its Rx Frequency pane, and a clear of
+  Band Activity empties only Band Activity, as WSJT-X does. Before, any clear from such a program emptied both decode
+  panes.
+- **FT-991, FT-710 and FTDX10: the ALC meter works again behind your own older rigctld.** Since 1.19.0 Nexus reads
+  these radios' ALC with a raw `RM4;` through rigctld. A rigctld from Hamlib before 4.6 (Hamlib 4.5.5, for example,
+  which many Linux distributions still ship) never answers that raw read, so a radio reached over Network through
+  such a rigctld showed ALC as "not reported" after the first few reads. When the raw read never answers, Nexus now
+  reads ALC the way 1.18.0 did, through Hamlib, for the rest of the session. This changes the CAT reads made while
+  transmitting, so it needs a check on an FT-991 behind its own rigctld.
+- **Remote: a paired computer can no longer make the station hold hundreds of megabytes in unfinished calls.** A
+  call too big for one message is sent in pieces, and the station limited each call to 16 MiB but let a computer
+  leave 16 of them unfinished at once, about 256 MiB a connection. The station now holds at most two calls of the
+  largest size unfinished on a connection, 32 MiB, and closes a connection that sends more. A large ADIF import, a
+  voice message and an SSTV picture from the other computer go through as before.
+- **Remote: a flood of Stops or call-outcome questions from a paired computer no longer slows the station.** Each
+  Stop on the command link started a thread of its own, so thousands of Stops a second could crowd the station's
+  screen and radio loop out. Each kind of Stop now runs on one thread: the first runs at once, a different kind of
+  Stop still runs at once beside it, and Stops of the same kind that arrive while one is running are run once more
+  as soon as it finishes, so a Stop is never lost or held back. At most eight runs of one kind, each with
+  different arguments, wait at once; a Stop past them is answered busy, so varying the arguments no longer makes
+  the waiting list or the work grow. Every Stop still ends the computer's transmit permission the moment it arrives. Questions about what became of earlier calls are answered one after another on
+  one thread.
+- **Phone, CW, RTTY, PSK and Satellites contacts now log when they started and ended.** A contact
+  logged from the entry strip starts when its call was entered, typed or clicked in, and ends when
+  you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
+  contact typed in under "Logged on another radio" with its own UTC time starts and ends at the
+  time you typed.
+- **Every new contact names its operator.** With Operator at the key left blank, your station call is
+  logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
+  the contact's own operator instead of always your station call.
+- **Your grid and state are logged on each new contact.** New contacts carry your grid from Settings ▸
+  Station (ADIF MY_GRIDSQUARE) and, on everyday contacts, your State (MY_STATE); a park or summit
+  activation still logs the park's state, never your home one. QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the ADIF export receive them. Your LoTW uploads leave out a grid or state
+  Nexus filled in itself, so TQSL keeps signing from your Station Location exactly as before; a
+  grid that came with the contact (from WSJT-X, typed in the Logbook, or imported) goes to LoTW as
+  it always did.
+- **Contest and Field Day contacts keep their radio, power and grid, and gain an end time, in the
+  Logbook.** Each contest contact records the radio, station power and grid in use when it was
+  logged, keeps them across a restart, and carries them, with its time as its end time, when the
+  contest is merged into the Logbook. As on everyday contacts, your LoTW uploads leave that grid
+  out; in a VHF contest the grid you sent in the exchange is the one logged.
+- **A contact logged for an earlier time is not given today's station details.** A contact whose
+  start is more than 3 hours before you log it (typed in afterwards with its own UTC time, or
+  added in the Logbook) gets no grid, state, operator, rig or power from your current settings,
+  since they may not be what you used then; fill them in yourself if you want them. Anything you
+  enter on the contact is kept, and contacts you log as you make them are unchanged. A contact
+  waiting for your confirm (Prompt before logging) keeps the station details from the moment it
+  was made, however late you confirm it and whatever you changed in Settings meanwhile.
+- **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
+  the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
+- **Your station power is logged on every new contact.** The watts in Settings ▸ Digital ▸ Station
+  Housekeeping ▸ Station power go on
+  each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts
+  are logged without a power, as before. A contact that already carries a power keeps it.
+- **A contest's contacts keep their operator and station call in the Logbook.** Merging a
+  contest into the Logbook dropped the "Operator at the key" each contact was logged with, and
+  stamped the station call in use at the merge rather than the one the contact was made on.
+- **Linux: the PC .deb and AppImage run on Ubuntu 22.04, Mint 21, and Debian 12.** They were built on Ubuntu
+  24.04, which made glibc 2.39 the minimum, so on Debian 12 (bookworm), Ubuntu 22.04 and Mint 21.x the package
+  installed and then the app did not start, and an installed Nexus could not take an update without upgrading
+  the whole distro. Both files are now built inside an Ubuntu 22.04 container and need glibc 2.35
+  (`ldd --version` shows yours). The Raspberry Pi packages are unchanged.
+- **FT8/FT4: a call or Call CQ made during the other station's period sent its over twice (needs a check on the
+  air).** Double-clicking a station in the Call Roster or Band Activity, or pressing Call CQ, before your own period
+  began keyed the over at the start of your period as it should. About 2 s later, when the decode of the period
+  just heard finished, Nexus keyed the same over again: Rx Frequency and ALL.TXT showed your message twice, a
+  second or two apart, and the second copy went to the sound card behind the first. Now the over goes out once,
+  with one line, as WSJT-X sends it. A call made after your period has started was never affected. Check on the
+  air: double-click a station during their period, and Rx Frequency and ALL.TXT show your call once.
+- **CW: the pitch box can be typed to any pitch again.** Typing into the CW cockpit's Pitch box forced each key
+  into 300–1200 Hz as it was pressed, so typing 650 gave 300 and then 1200; only the arrows could reach a pitch in
+  between. The box now keeps what you type, applies it once it is a pitch in range, and puts an out-of-range entry
+  back into range when you press Enter or leave the box. The decoder passband's F low and F high boxes in
+  Settings ▸ Digital had the same fault and are fixed the same way.
+- **CW: the cockpit no longer comes back on your old pitch.** After you changed the pitch in the CW cockpit,
+  the radio kept the new one, but going to another page and back showed the pitch you had before, with the
+  scope marker on it. The cockpit now shows the pitch you set.
+- **FT8/FT4: the strip says so when the TX watchdog stops a call.** Calling a station that never answers goes on
+  until the TX watchdog turns transmit off, and the strip then showed only "AwaitReport" beside TX off. It now
+  shows "TX watchdog stopped the call" in red in place of the state, and the window's taskbar button flashes
+  once (a dock bounce on macOS), as WSJT-X does. TX On calls again. How long Nexus calls is unchanged.
+- **Signing in and pairing again from another computer.** A sign-in refused because your email address
+  is not confirmed yet now says to confirm it, not "The sign-in was cancelled"; Stations on this network
+  has one **Sign in…** button, with **Link to your account…** on a station paired with a code; and a
+  station that no longer knows this computer offers **Pair again** with its address filled in, in that
+  window and on the client banner, instead of reconnecting to it on every start.
+
+### Security
+- **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you
+  added the internet road to a station paired with a code (its owner not yet signed in at the station) or to a
+  station you were invited to, the computer kept the station key the service listed without checking it. Now:
+  - **At home**, linking a station paired with a code asks the station itself for its key over your network,
+    before anything is added. If the service named a different key, you are told so and nothing is added.
+  - **Away from the station, or as an invited guest**, the station's row shows **This station's key for the
+    internet road** in the same eight groups the station shows under Remote access. The internet road carries
+    nothing until you compare the two and press **It matches**. For a station paired with a code, the hold also
+    clears by itself the next time you Operate it on your network and the station names the same key.
+  - **It doesn't match**, for a station paired with a code, removes only its internet road: the pairing on your
+    network stays, so you can still operate at home and add the internet road again later. For a station you
+    were invited to, it forgets the station.
+  - Both of those apply only to a station paired with a code on this version or later, which the computer now
+    records in its credential store when the pairing is made. A station paired with a code on an earlier version
+    is treated like an invited one: its hold clears only with **It matches**, and **It doesn't match** forgets it,
+    so you pair it again with a code.
+  - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
+    read out in the same call.
+  - Every internet road's row now shows the station's key. A computer that already has an internet road checks it
+    quietly the next time it reaches the station on your network; if the station names another key, that road is
+    turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
+  - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+- **The station itself now ends a press from a second computer after 3 minutes.** Phone's Lock from another
+  computer had a 3-minute limit, but only that computer kept it: if it failed to let go, the station's own limit
+  was the 10-minute microphone ceiling. Now the station ends any one press from afar 3 minutes after it began, by
+  its own clock, whatever the other computer does. Answering **Still talking?** there still keeps the Lock on for
+  another 3 minutes, with no break in the audio. A PTT held from afar for more than 3 minutes now ends too; press
+  it again to go on. Lock at the station's own screen is unchanged.
+- **A machine on your network can no longer keep your second computer out of Nexus Remote.** A device opening
+  many slow connections from many addresses could take all four of the station's connection places, so a
+  computer you paired could not connect, or reconnect after a Wi-Fi drop. Connections still being set up no longer
+  take those places, and when too many are waiting the oldest is dropped. An open session and Stop were never
+  affected.
+
+## [1.20.0] — 2026-10-22
+
 ### Added
 - **TCI connection (Beta): Nexus can talk to an SDR program's own TCI server.** In Settings ▸ Radio ▸ Rig & CAT,
   Connection has a new choice, **TCI (SDR program) — Beta**, for ExpertSDR3 (SunSDR), Thetis 2.10.3.14 and later,
@@ -29,9 +643,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the program transmits its own input, which you route from Nexus with a virtual audio cable. CW goes out over
   TCI with the Soundcard keyer; through the program's own keyer it is not ready yet. Every Nexus transmit safeguard
   applies as on any other connection. Programs that use the radio through **Share by TCI** are not changed by this:
-  they still may not send FT8, FT4 or the other slot-timed modes. NEEDS-BENCH: FT8 and FT4 through a real SDR
-  program into a dummy load, with Audio over TCI on and then off: the overs' timing at a second receiver, the
-  mid-over switch, and Stop TX part way through an over; and CW on the Soundcard keyer.
+  they still may not send FT8, FT4 or the other slot-timed modes.
 - **TCI (Beta): Nexus's needed spots on the SDR program's own panadapter.** On a TCI radio, **Spots on the SDR
   panadapter** (Settings ▸ Radio ▸ Rig & CAT, off as it comes) now puts the stations on the Needed board that have
   a frequency (cluster and skimmer spots, and your own decodes) on the SDR program's panadapter, each in the colour
@@ -45,9 +657,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows, its own cluster and skimmer spots too, so there Nexus takes off only its own, one by one, sends the
   colours the way AetherSDR draws them, and puts each spot up again before AetherSDR's 30 minutes for it are over.
   In an unassisted contest entry the Needed board has no cluster spots, so the panadapter has none either.
-  piHPSDR's TCI has no spots. NEEDS-BENCH: on ExpertSDR3, on Thetis and on AetherSDR in front of a Flex, the spots
-  and their colours on the panadapter, a click tuning Nexus (and whether the program tunes itself too), and the
-  spots gone when Nexus closes.
+  piHPSDR's TCI has no spots.
 - **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits
   & sharing has a new switch, **Share by TCI**, below **Share this radio with other programs**. It is off as it
   comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other
@@ -68,9 +678,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver, each station at its own frequency and the dial where it is. If the program stops sending it, the scope
   says so rather than holding an old picture. A program whose TCI has no panadapter (piHPSDR's) leaves the scope as
   it was, and Nexus's log says why. Turning the switch off, or changing to another radio, stops it. It is a stream
-  of its own: receive audio and keying over TCI work as before. NEEDS-BENCH: ExpertSDR3 and Thetis on their radios,
-  a known carrier (a beacon or a signal generator) drawn at its frequency, against the dial and the program's own
-  panadapter, in USB and in LSB.
+  of its own: receive audio and keying over TCI work as before.
 - **Share by TCI: a program's own transmit audio (Beta).** With **Programs on TCI may transmit** on, a program on
   this computer can now put its own audio on the air through Nexus while Nexus is on the Phone screen, a logger's
   voice macro for one. Nexus keys the radio when the program's first audio arrives and plays that audio and nothing
@@ -80,15 +688,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out before the radio unkeys. It ends at once on Stop TX, Esc, TX Off, a logger's UDP Halt Tx, the Remote's Stop,
   the high-SWR cutoff, a band or radio change, the switch turned off, the program's own stop or its lost
   connection, 0.3 seconds with no audio from it, and 10 minutes on the air. Programs on a Flex's native connection
-  now hear the radio's own receive audio (DAX) instead of the sound card's; the Icom network connection carries no
-  audio, so there they hear the sound card. FT8, FT4 and the other slot-timed modes from programs stay refused, and
+  with **Flex native DAX audio** on now hear the radio's own receive audio (DAX) instead of the sound card's; the
+  Icom network connection carries no audio, so there they hear the sound card. FT8, FT4 and the other slot-timed
+  modes from programs stay refused, and
   so does any over from a program whose last mode request was a data mode (DIGU or DIGL), on whatever screen Nexus
   is: WSJT-X asking for DIGU and then keying is held like FT8 even on the Phone screen. A program must also ask for
-  a voice mode (USB, LSB, AM or FM) before its own audio goes out: one that has asked for no mode, as WSJT-X, JTDX
-  and MSHV do with their Radio mode at None (their default), or that asked for CW, is refused, and Last refused says
-  to set the program's Radio mode or to use Nexus for FT8. NEEDS-BENCH: a program's voice audio through Share by
-  TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first audio, its tail on its release,
-  and each stop; and WSJT-X, JTDX and MSHV refused with their Radio mode at None and at Data/Pkt.
+  a voice mode (USB, LSB, AM or FM) before its own audio goes out. One that has asked for no mode, as WSJT-X, JTDX
+  and MSHV do with their Radio mode at None (their default), or that asked for CW, is refused. WSJT-X and JTDX ask
+  for a mode only when it differs from Nexus's: with their Radio mode at USB while Nexus is already in USB, they ask
+  for nothing and are refused too. Last refused then says to set the program's Radio mode or to use Nexus for FT8,
+  and that some programs ask for their mode only when it differs from Nexus's.
 - **Share by TCI: spots from programs on Nexus's band map (Beta).** With **Spots from programs** on, as it comes,
   the spots a program on this computer sends over TCI (a logger's cluster spots, Log4OM's for one, or a skimmer's)
   show on the band map and on the Phone and CW screens' band activity, beside the cluster's and kept apart from
@@ -100,8 +709,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of these spots tunes Nexus there and does nothing else: it never changes the screen, turns TX on or starts a
   contact, and while anything is on the air it changes nothing. Every click on a spot in Nexus, a cluster spot
   worked as much as a program's spot tuned, is passed back to the programs as an SDR program passes it on, so a
-  logger can pick up the station. A spot or a click never transmits. NEEDS-BENCH: Log4OM 2 connected by TCI, its
-  cluster spots on Nexus's band map, and a click on one in Nexus selecting that station in Log4OM.
+  logger can pick up the station. A spot or a click never transmits.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the
@@ -241,7 +849,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledgement. When PstRotatorAz does not answer, the compass shows "—" instead of the target or 0°. Nexus
   listens for PstRotatorAz's replies on its UDP Control Port + 1 (12001 by default); if another program holds that
   port, the Connections log names it and says how to move PstRotatorAz to another port. A station already set up
-  with this entry keeps its settings. Nobody has tried this against a real PstRotatorAz yet (NEEDS-BENCH).
+  with this entry keeps its settings.
 - **Contest statistics per operator.** In a multi-operator contest the Contest screen's score area now has an
   Operators section: each operator's QSOs, points and the multipliers they worked first, with their share of the
   total, their rate over the last 10 and 60 minutes, their best clock hour, and a band × mode table. Dupes, banned
@@ -267,10 +875,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Viridis, and somewhat more on Turbo. Its rows, and the SSTV waterfall's, now also come at an even pace: they
   used to arrive every third or fourth frame, so the scroll stuttered. The other waterfalls keep the row timing
   they had.
-- **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
-  and Listen still work from a browser already approved for the station, as long as that device is on the same
-  network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
-  running an older Nexus is named as the reason the stream cannot start.
+- **Nexus Remote: on the shack's own network, Remote stays free.** When an account can no longer use Remote over the
+  internet, because its trial is over or its paid plan has lapsed, Stream and Listen still work from a browser
+  already approved for the station, as long as that device is on the same network as the shack. The stream is held
+  to that network at both ends and never goes through the relay. A shack running an older Nexus is named as the
+  reason the stream cannot start.
 - **Nexus Remote: one trial per callsign and per shack computer.** Approving a station now sends the station
   callsign from Settings ▸ Station and one-way hashes of this computer's hardware and installation IDs; the IDs
   themselves never leave the computer. When the service refuses the approval for one of these reasons, Nexus at the
@@ -279,31 +888,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and unchanged) or USB. On USB, Nexus puts the rig in its upper data mode (DATA-U, USB-D or DIGU) and swaps the AFSK
   tones itself, so mark stays high on the air and the decoder still copies. Reverse now only flips the sense for a
   station sending upside down; its help text no longer tells you to use it for USB. True FSK is unchanged.
-  NEEDS-BENCH: an AFSK RTTY QSO on USB, checked on a second receiver or a skimmer for mark high on RF.
 - **Yaesu FT-1000 and FT-1000D in the rig list.** Both now appear in the default list beside the FT-1000MP and
-  use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib). NEEDS-BENCH: an FT-1000 or FT-1000D on CAT.
-- **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
+  use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib).
+- **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta).** On your own
   network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
   the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW
   from the keyboard and its macros, FT8 and FT4 (answering, Call CQ and contest S&P, timed by the shack) and JS8 work as
   at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
   the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
-  there is no paddle from afar. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
-- **Nexus Remote: operate from the second PC over the internet too (Beta, test builds).** In **Stations on this
-  network**, press **Add the internet road** beside your shack and sign in to Nexus Remote in your web browser, then
-  approve the PC at the shack under Remote access. From then on, when the shack is not on the network you are on,
+  there is no paddle from afar. It is in the regular Windows installer, a Beta like the rest of Nexus Remote, and
+  needs no special build.
+- **Nexus Remote: operate from the second PC over the internet too (Beta).** For a shack paired with a code, press
+  **Sign in…** on its row in **Stations on this network** and sign in to Nexus Remote in your web browser; a shack
+  added by signing in has the internet road from the start. Either way, approve the PC at the shack under Remote
+  access: until then the road waits. From then on, when the shack is not on the network you are on,
   **Operate from this computer** reaches it over the internet instead, and it moves back to your own network by itself
   when the shack answers there again. The internet road is part of Remote's paid service; on your own network it stays
   free. Stop keeps its own road over the internet as well, so nothing transmits unless that road is working; on a
   network that blocks it (some hotels and offices) you can still watch, tune and log, and transmitting is off. After 15
   minutes with no click, key or PTT, Nexus asks "Still there?" and ends the internet link a minute later if nobody
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
-  internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
-  into a dummy load.
+  internet's jitter.
+- **Nexus Remote: add your station to a second PC by signing in, with no code (Beta).** In **Stations on
+  this network** on the second PC, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
+  your station is linked to, or one its owner invited to operate it. The station is then on that PC on its own
+  network in one step, with no code to type and nothing to press at the shack. Over the internet the PC waits until
+  you approve it at the shack under Remote access, where Nexus asks with the PC's key: a sign-in alone never lets a PC
+  or a browser operate the station over the internet. Nexus finds the
+  station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
+  Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
+  station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
+  with a code has **Sign in…** on its row: it links that pairing to your account and adds the internet road; for a
+  station not yet signed in at the shack the road waits for Approve there, as before. **Pair with a code instead…**
+  stays for such a station. A PC invited only to listen is not added; listen in
+  your web browser instead.
+- **Nexus Remote: a signed-in PC keeps its place on the station's network by signing in again every 30 days.** The
+  station takes a PC on its own network for 30 days from that PC's sign-in, with the internet up or down. In the last
+  week the PC's row in Stations on this network says by what day to sign in again and offers **Sign in again**, and
+  **Operate from this computer** signs in again by itself, opening the browser while you operate, so the link is
+  never dropped for it.
+- **Nexus Remote: signing in shares less about you.** The Remote web page's sign-in no longer asks your account for
+  your name, nickname or picture, and neither does any sign-in in Nexus. The shack's own sign-in (Settings → Station →
+  Remote access → Sign in to Nexus Remote) does not ask for your email address either: Nexus Remote passes that
+  sign-in on to every computer that you, or someone you invite, signs in on, so a guest's computer never receives
+  your address. A second PC's sign-in carries its verified email address, which is how your shack recognises a person
+  you invited.
+- **Nexus Remote: add your station from a PC that has never been on its network (Beta).** A laptop away
+  from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
+  the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
+  is added over the internet, waiting until you approve the PC at the shack under Remote access. **Operate from this
+  computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in…** on the station's
+  row there once: the station is then on the PC on its network too, with the same keys and no second device at
+  Nexus Remote, and from then on it signs in again every 30 days as any other.
+- **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta).** A PC added by
+  signing in is taken on the station's own network for 30 days from its sign-in, and to stay longer it signs in
+  again, which needs Nexus Remote. Pairing it again with a code ends the 30 days: it then stays until you remove it
+  at the shack, as any PC paired with a code does, and signing in from its row later starts the 30 days again. So if
+  Nexus Remote cannot be reached, pair that PC again with a code: **Pair a computer** at the shack, then **Pair with
+  a code instead…** on the PC. With the internet up or down, its row in Stations on this network then no longer asks
+  you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove such
+  a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network. If the
+  shack cannot save the change, it refuses the pairing ("The station could not keep the pairing.") and the PC keeps
+  its 30 days.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
-  seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
+  seconds of that PC dropping, as a transmission does; a track started at the shack runs on.
 - **Nexus Remote from a second PC: APRS, SSTV and Chat transmit too.** From the second PC you can now send an APRS
   beacon or message, arm APRS Monitor (which lets automatic acks go out), send an SSTV picture, and in Chat send a
   message or broadcast, resend one, run CQ and turn on the presence beacon, and a CQ run started from the Operate mode
@@ -312,35 +962,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops, or when its permission to transmit is withdrawn, and a Chat message it queued is dropped (shown as not sent,
   ready to resend), so nothing it left keys later; APRS keeps receiving. A settings save from the second PC cannot turn
   on the presence beacon, JS8's automatic replies, relay, heartbeat acks or APRS-IS relay, or a WSPR beacon, and a
-  stale Settings save at the shack no longer turns the beacon or those JS8 switches back. NEEDS-BENCH: two PCs, the
-  radio into a dummy load.
-- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta, test builds).** Tune, the radio's own
+  stale Settings save at the shack no longer turns the beacon or those JS8 switches back.
+- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta).** Tune, the radio's own
   tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
   as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and
   continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
-  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again. NEEDS-BENCH: two PCs,
-  the radio into a dummy load.
+  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again.
 - **Nexus Remote: take control from a second PC.** When another PC is operating the shack, the banner now offers **Take
   control**. Confirm it and anything the other PC is transmitting stops at once, a satellite track ends, and this PC
   starts with TX off; the other PC's banner says it lost control and offers to take it back the same way. The shack's
-  own screen and every Stop still work as before. NEEDS-BENCH: two client PCs and the shack, the radio into a dummy load.
+  own screen and every Stop still work as before.
 - **Nexus Remote: the shack's recordings, ALL.TXT and SSTV pictures reach the second PC.** The SSTV gallery and its
   picture viewer now show the shack's pictures on the second PC (they were blank), and **Save a copy** saves the
   shack's picture there. Where the shack shows **Reveal in folder** for ALL.TXT, the QSO recordings and the SSTV
   gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
-  those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
+  those three folders can be read from afar.
 - **Elecraft KPA1500 over the network.** In Settings ▸ Radio ▸ Amplifier, a KPA1500 can now be reached by its IP
   address instead of a USB cable: pick **Network (KPA1500)** under Connection and type the address from the
   amplifier's NET IP ADDRESS menu (port 1500). Nexus uses the amplifier's UDP server, which any number of programs can
   share, so Elecraft's KPA1500 Remote keeps working alongside. Readings, Operate/Standby and the band buttons work as
   they do over USB, with the same refusals while you transmit; an amplifier that stops answering shows "Not
-  answering". NEEDS-BENCH: a KPA1500 on the LAN with KPA1500 Remote connected at the same time; readings, Operate,
-  Standby and a band step from Nexus; then unplug its network cable and plug it back in.
+  answering".
 - **RTTY screen: the waterfall shades the mark and space tones, and Auto-tune nets onto a signal.** A band now fills
   the waterfall between mark and space where the decoder is listening, and follows the AFC. It turns red while you
   transmit. **Auto-tune**, in the waterfall's header, finds the nearest signal near the current tones whose two tones
   sit at your shift, passing over single carriers and signals at another shift, and nets onto it. Netting moves your
-  transmit tones too, so Auto-tune is off while you transmit. NEEDS-BENCH: a real RTTY signal off the air.
+  transmit tones too, so Auto-tune is off while you transmit.
 
 - **Contest logger window: drag it small and keep it in front.** The contest logger window (the contest screen's
   **⧉ Logger window**) now drags down to 420×320, small enough to drop in a corner beside another program; its call,
@@ -351,57 +998,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was pinned. **⧉ Pop out entry** on the Contest screen's entry opens the same window with the entry alone (the
   call, the exchange, the dupe warning and Log, without the last contacts or the rest of the contest screen); it
   shares the contact with your entry, and Enter in either logs it once. **Entry only** on that window's bar switches
-  between the entry alone and the whole window. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
-  unplugged.
+  between the entry alone and the whole window.
 - **Spots pops out into its own window.** **⧉ Pop out** in the Spots header opens the board in a window of its own,
   for a second monitor, as the Needed board's does. It is the whole board: the search, the filters, Hide worked and
   Spot me. Clicking a row tunes the radio to the spot and the main window opens the matching screen, as from the
   Needed window. The window's filters are its own: it opens with your Spots view's filters, and closing it forgets them.
   The Spots box in the popped-out Conditions window now has Spot me too, as it has in the main window.
+- **CW: a turn cue for when you copy with the decoder.** A small lamp at the start of the CW send row says whose
+  turn it is (`≋ W1ABC sending`, `▶ Your turn · F3`, `⏸ Hold · W2XYZ`, `? Not sure · F7`), and the F-key that fits
+  glows again: F2 to answer a CQ, F3 when a station comes back to you, F4 when they sign. "Your turn" waits for the
+  other station to stop AND end its over (K, KN, BK, QRZ, part of your call with "?", a CQ), so a pause alone only
+  says "Not sure"; your own over heard back through the radio never counts as theirs. When a DX comes back to you
+  in a pileup no key glows, and the lamp says `Your turn · send 5NN TU`. The Decode pane's speed now reads
+  `them 18 · you 25 WPM`, and a click sends at their speed for this contact. It never transmits: every send is still
+  your own key press. It shows with the AI decoder on and the Decode pane shown, never in an unassisted contest
+  entry, and unticking Turn Cue in ⊞ Panels hides it, after a restart too, until you tick it again. A screen reader
+  hears "Your turn" and "Hold" once per over; a short chirp is there too, off until you turn on CW turn sound in
+  Settings ▸ Appearance ▸ Accessibility & eyes-free. The cue lands about a second after the other station stops: in
+  time for a ragchew or a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
+- **Every save of the contest log now keeps backup copies beside it.** The contest log
+  (`fieldday_backup_<n>.adi`) is the only copy of a contest's contacts until you merge them into the Logbook. Each
+  time it is saved, Nexus also writes a copy to a `fieldday_history` folder next to it: `%APPDATA%\tempo\fieldday_history\`
+  on Windows, `~/.config/tempo/fieldday_history/` on Linux and Mac, and `tempo-r<n>` in place of `tempo` for a second
+  radio's window. It keeps the last 10 saves (`….save-000123.adi`, the highest number is the newest) and one copy per
+  hour (`….hour-20261017-21.adi`, the hour in UTC) for the last 48 hours. A big contest log is well under 1 MB, so the
+  folder stays a few MB at most. Nexus never reads these copies back on its own, and a copy that can't be written
+  never stops a contact from being logged. To use one: quit Nexus, copy the backup you want over
+  `fieldday_backup_<n>.adi` (keep the damaged file somewhere first), rename it to that name, and start Nexus again. You
+  can also import a copy into the Logbook like any ADIF file.
 
 ### Changed
+- **Nexus Remote: inviting someone to operate says what that gives them.** Under Settings ▸ Station ▸ Remote access ▸
+  People, with **Operate** chosen, the form now says that someone invited to operate can do all you can from another
+  computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed
+  with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would
+  hand the shack to; **Listen** gives none of that.
+- **Windows: FT8, FT4 and the other WSJT-X modes finish decoding sooner.** The FFT library in the Windows build now
+  uses the processor's SSE2 and AVX instructions, as WSJT-X's own Windows build does; until now it used none. On one
+  Windows PC the early FT8 decode took 17-36 % less time and the full decode 1-21 % less, and the decodes were
+  exactly the same. There is nothing to set: the library picks what the processor has when Nexus starts, and a
+  processor without AVX works as before. Linux and Mac builds are unchanged.
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
   new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. Programs
   that listen on the WSJT-X UDP feed (GridTracker, JTAlert) are told the new message as the over switches. A Tx button
-  clicked during an over switches it the same way. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with
-  a weak station.
+  clicked during an over switches it the same way.
 - **Flex native audio (Beta): the late-reply switch works on DAX too.** With Nexus's own Flex client sending the
   over over DAX, a reply decoded after the over has started now switches the rest of it to the new message, as on a
   sound card. Nexus sends the radio only the audio that is due, so the part not yet sent is replaced; the over keeps
-  its start, its end and its PTT, and Stop TX still cuts it at once. NEEDS-BENCH: a Flex, FT8 and FT4 into a dummy
-  load with a second receiver.
+  its start, its end and its PTT, and Stop TX still cuts it at once.
 - **FT8/FT4: an RR73 answering your report is answered with 73, as in WSJT-X.** When the station you sent
   your report to rogers it with RR73 (or RRR) without sending its own R-report first, Nexus kept sending the report.
   It now sends 73 and the QSO is complete, as WSJT-X does; if the RR73 is decoded while the report is already on the
   air, the rest of that over becomes the 73. A bare 73, an RR73 from another station, or one sent to another
-  station changes nothing. NEEDS-BENCH: FT8 and FT4, a second station that answers your report with RR73.
+  station changes nothing.
 - **FT8/FT4: which late replies change the over on the air, as in WSJT-X.** Once an over carries your RR73 or
-  73, no reply changes it any more (WSJT-X turns Enable Tx off as it sends one). A CQ run that logs the contact and
-  goes back to CQ, or gives up on a caller who went quiet, now lets the over on the air finish: before, the rest
-  of your RR73 or report could become the CQ. If you close with RRR and your partner's 73 arrives while the RRR is
-  on the air, the rest of that over is your CQ (WSJT-X's Tx6) and TX turns off after it with "Disable Tx after
-  sending 73"; nothing is sent after it. NEEDS-BENCH: FT8 and FT4, Call CQ and a station you work by double-click.
+  73, no reply changes it any more: WSJT-X turns Enable Tx off as it sends one, so a reply decoded then cannot move
+  it. A CQ run that logs the contact and goes back to CQ, or gives up on a caller who went quiet, now lets the over
+  on the air finish: before, the rest of your RR73 or report could become the CQ. If you close with RRR and your
+  partner's 73 arrives while the RRR is on the air, the contact is over, so the rest of that over is your CQ, as
+  WSJT-X does it: a 73 answering your RRR moves WSJT-X on to its CQ message (Tx6) and turns its Enable Tx off. TX
+  turns off after that over with "Disable Tx after sending 73"; either way nothing is sent after it.
 - **Contest FT8/FT4: a late reply changes the over on the air inside a contact.** In the Contest screen's Running
   and S&P, a reply decoded after your over has started now switches the rest of that over to your next message, as
   WSJT-X does: your exchange becomes the RR73 when the runner's rogered exchange arrives, and the rogered exchange
   becomes the 73 when the caller's RR73 arrives. It never starts a contact: a CQ on the air is never switched to an
-  answer, and an over to one station never becomes a call to another. NEEDS-BENCH: FT8 and FT4, a second station in
-  the same contest.
+  answer, and an over to one station never becomes a call to another.
 - **FT8/FT4: an RR73 answering your RRR is answered with 73, as in WSJT-X.** If you close with RRR (Settings: RRR
   instead of RR73) and your partner answers it with RR73 or RRR, Nexus now sends 73, once, and the QSO is complete;
   before, it closed without one. If the RR73 is decoded while your RRR is already on the air, the rest of that over
   becomes the 73, and "Disable Tx after sending 73" turns TX off after it as usual. The contact is logged once. After
-  your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73. NEEDS-BENCH:
-  FT8 and FT4, a second station that answers your RRR with RR73.
+  your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73: by Fox/Hound
+  mode's own rules the Fox's RR73 ends a Hound's contact and the Hound sends nothing more, as in WSJT-X, since a 73
+  would only add noise where the Fox transmits.
 - **FT8/FT4 Call CQ: a caller's RR73 to your RRR gets one 73, then the run calls CQ.** With "Roger with RRR (not
   RR73)" on, a Call CQ run now answers the caller's RR73 (or RRR) to your RRR with 73, once, as WSJT-X does, and
   then calls CQ again. Before, the run went back to CQ without a reply, and when that RR73 was decoded while your
   RRR was on the air, the rest of the RRR became the CQ. If the RR73 is decoded late, while the next over is
   already on the air, the rest of that over becomes the 73. TX stays on, the contact is logged once, and a repeat
-  of the caller's RR73 gets nothing more. Only the caller's own RR73 or RRR to you counts. NEEDS-BENCH: FT8 and
-  FT4, a second station that answers your RRR with RR73.
+  of the caller's RR73 gets nothing more. Only the caller's own RR73 or RRR to you counts.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.
@@ -425,7 +1101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8, FT4 and FST4: when the other station repeats its report or grid, your repeated reply carries the new
   signal report, as WSJT-X 3.0 does.** Heard at +20 and then again at +27, Nexus now sends R+27 the second time
   instead of R+20, and logs +27 as the report sent. Nothing else about the sequence or its timing changes; other modes
-  keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
+  keep the report fixed, as WSJT-X does.
 - **Phone voice keyer: a slot's Record, Import and Delete buttons now sit on the left of the slot, away from Play, and
   Delete can be undone.** They used to sit right under Play, where Delete was easy to hit by mistake. After Delete the
   slot reads empty and "Deleted F1 (CQ)" offers Undo for about 8 seconds; Undo brings back the same recording under the
@@ -436,6 +1112,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the keys themselves are greyed out there and say "Set at the station", with the station's own value. A save
   from that computer already left them as the station had them; before, the form let you edit them and quietly put
   them back. At the station itself nothing changes.
+- **Nexus Remote: every setting only the station can change, in one list.** A save of Settings or of a profile from a
+  computer driving the station keeps the station's own value of each of these. What lets the station transmit with
+  nobody at a key, or lets another program or a browser transmit: the WSJT-X UDP API and its address, **Share this
+  radio with other programs** (the CAT broker) and its PTT, JS8's API over TCP and UDP and its APRS-IS relay,
+  **Share by TCI** with its port, **Programs on TCI may transmit**, CW macros and Spots from programs, the Remote
+  stream, the WSPR and FST4W beacons' Transmit %, and a CQ run's pause. The guards on a transmission: the TX
+  watchdog, JS8's idle watchdog, the tune limit, the Parsec stop, "Disable TX after sending 73", the CQ, reply and
+  Chat retry limits, RTTY Auto's repeats, the high-SWR cutoff and its level, the power ceiling for each mode, and the
+  licence class. The lines that key the radio: the PTT method, port and line and the CAT port's RTS, DTR and
+  handshake settings, the CW keyer backend, keyline port and line and the WinKeyer port, the RTTY keying backend with
+  its FSK port and line, and each radio's **Let Nexus send CW, Tune and ATU through the native Flex client**. The
+  TQSL path. Where your keys and passwords are sent: the Cloudlog/Wavelog URL, the Field Day club host, and an Icom
+  network radio's address and port. And the Club Log and Cloudlog keys themselves.
 - **The assistance record and the contest-category note name the CW decoder, not the AI CW decoder.** An unassisted
   entry turns off the classic decoder as well as the AI one, and CQ WW's rule names "a CW decoder". With the AI
   switch off, the classic decoder still copies CW, while the record (Settings ▸ Contesting ▸ Your entry) showed the
@@ -446,19 +1135,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spots, Super Check Partial and call history stay on until you switch Unassisted entry on. While the switch is
   off, a line beside the picker now says so, with a button that turns it on. Nothing turns it on unless you click.
 
-### Added
-- **Every save of the contest log now keeps backup copies beside it.** The contest log
-  (`fieldday_backup_<n>.adi`) is the only copy of a contest's contacts until you merge them into the Logbook. Each
-  time it is saved, Nexus also writes a copy to a `fieldday_history` folder next to it: `%APPDATA%\tempo\fieldday_history\`
-  on Windows, `~/.config/tempo/fieldday_history/` on Linux and Mac, and `tempo-r<n>` in place of `tempo` for a second
-  radio's window. It keeps the last 10 saves (`….save-000123.adi`, the highest number is the newest) and one copy per
-  hour (`….hour-20261017-21.adi`, the hour in UTC) for the last 48 hours. A big contest log is well under 1 MB, so the
-  folder stays a few MB at most. Nexus never reads these copies back on its own, and a copy that can't be written
-  never stops a contact from being logged. To use one: quit Nexus, copy the backup you want over
-  `fieldday_backup_<n>.adi` (keep the damaged file somewhere first), rename it to that name, and start Nexus again. You
-  can also import a copy into the Logbook like any ADIF file.
+### Removed
+- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
+  your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Fixed
+- **FT8: a period with almost no receive audio is not decoded, as in WSJT-X.** When a whole period's receive audio
+  is under half a bit (0.5 LSB rms), as with the rig's audio muted, the input turned right down or the cable pulled,
+  WSJT-X does not decode it at all. Nexus did, and after a busy period its a7 decoder could "hear" that period's
+  stations again in a few stray bits of noise. In a QSO such a line could read as your partner's RR73 or R-report:
+  Nexus then sent the next message and logged a contact that was never finished. Such a period now gives no line
+  in Band Activity, ALL.TXT, the WSJT-X UDP feed or PSK Reporter, and the QSO repeats its last message as WSJT-X
+  does. Receive audio at any working level decodes exactly as before.
+- **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
+  ALL.TXT.** The time was when the line reached the list, so a line the full decode found at :34 read :34 under the
+  :15 period's separator. It now reads :15; hold the pointer over the time to see when the line arrived. A line
+  heard before a band or mode change shows the period it was heard in, and your own transmissions still show when
+  they were sent. With an MSK144, FST4, Q65 or JS8 T/R period other than the usual one, the period separators show
+  the right time now too.
+- **WSJT-X UDP: each decode carries the start of the period it was heard in, as WSJT-X sends it.** JTAlert,
+  GridTracker and loggers were given the moment Nexus sent each decode. A decode from the full pass, which finishes
+  a second or more into the next period, carried a time in that next period (a decode of the 12:00:15 period sent
+  at 12:00:31 said 12:00:31), and an early-pass decode a time 12 seconds into its own. Each decode now carries its
+  period's start, 12:00:15, and so does a logger's Replay. ALL.TXT already wrote that time.
+- **CW: "Colors" in the scope's head sits with its colour picker.** The word stood against the zero-beat reading,
+  in the same small capitals, and read as part of it, while the picker sat in the middle of the row. The word and
+  the picker are now one group after the zero-beat reading, set off from it by a thin line, and clicking the word
+  opens the picker. On the Phone screen the colour picker sits beside the scope strip's ✕ too, where it had stood
+  a third of the way along the row.
 - **CW on the Soundcard keyer no longer warns of a PTT problem after a message that went out whole on a TCI
   radio.** Each word after the first asks for the transmitter again while the first word's key still holds it, and
   the TCI connection refuses a second key while one of Nexus's is on the air. The CW screen read that as "the rig
@@ -488,6 +1192,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen does, and with two radios it uses the one set up for 2 m FM. After RTTY it also tuned 2.125 kHz high and
   then did not put your frequency back at the end of the pass; it now tunes 145.800 MHz exactly. At the end of the
   pass your own frequency comes back on its own radio, in its own mode. A satellite you are working keeps its mode.
+- **SSTV's FM channels and the ISS auto-arm now transmit on the channel, with no repeater offset or tone.** After
+  you had tuned a repeater, the SSTV screen's 145.800 and 144.500 MHz FM channels, the ISS auto-arm's park on
+  145.800 MHz, and Phone kept on either channel all used that repeater's offset and tone: the radio was set to
+  transmit 600 kHz away, with the tone. On 144.500 MHz that is 143.900 MHz, outside the 2 m band: with a US licence
+  class set, transmit was locked out there, and with License Class set to Open nothing stopped it. These channels are
+  now simplex with no tone, as APRS is. A repeater you tune still gets its own offset and tone, and so does a
+  frequency you set to FM yourself on the SSTV screen.
+- **With two radios, an FM channel picked on the SSTV screen goes to your FM radio.** With 2 m FM set to go to one
+  radio and 2 m SSB to another, picking 145.800 or 144.500 MHz FM on the SSTV screen (or a frequency you set to FM
+  there) went to the SSB radio and put it in FM. It now goes to the radio set up for 2 m FM, as the ISS auto-arm and
+  a repeater tune do.
+- **The ISS SSTV auto-arm leaves a satellite you are working alone.** With a transponder picked on the Satellites
+  screen, an ISS pass made the auto-arm retune to 145.800 MHz, and Doppler tuning pulled the radio straight back to
+  your satellite. While a satellite holds the radio, the auto-arm now only tells you the ISS is up, as it does on
+  other screens, and arms if you release the satellite while the ISS is still up. On the SSTV screen that notice
+  says the satellite pass has the radio, instead of asking you to open SSTV.
+- **RTTY's band channels now put your signal on the RTTY frequency with AFSK keying.** Picking a channel in the RTTY
+  cockpit, entering RTTY on a band, or picking a band for RTTY tuned the radio to the channel's frequency as if it
+  were the signal. With AFSK (the default) the signal sits a mark tone (2.125 kHz) below the dial, so on 20 m it went
+  out at about 14.081 MHz, among the FT4 signals, and on 17 m and 12 m among FT8's and on 15 m among JS8's. With AFSK
+  these picks now tune a mark tone higher (14.0851 MHz on 20 m, as the channel list shows), so the signal lands on the
+  channel's frequency, as with FSK. FSK is unchanged.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an
@@ -518,8 +1244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own over under that program's key: two signals from one transmitter. Nexus now sends nothing while the other program
   holds the key. Your CQ or QSO stays armed and stays where it was, and its message goes out in your first period after
   the program lets go. Stop TX still drops the other program's key and stops everything. JS8 and Nexus's other timed
-  modes wait the same way. NEEDS-BENCH: WSJT-X on the CAT broker holding PTT through a Nexus FT8 CQ's period, into a
-  dummy load first.
+  modes wait the same way.
 - **Mac: an IC-7300's sound card opens again.** macOS names that radio's USB sound card "USB Audio CODEC" with a space
   at the end. Nexus listed and saved the name with the space, then dropped it when opening the device, so the radio
   you chose never matched: there was no receive audio, the error said "USB Audio CODEC" is not available, and Nexus
@@ -537,9 +1262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reads, or whose computer drops what it has not read when a reset comes, then never read Nexus's last commands:
   the transmitter's stop, the panadapter's stop, and the stop Nexus sends again when the program has not confirmed the
   transmitter went off. Nexus now reads on for up to 0.2 s after its close, until the program answers it, so the
-  connection ends cleanly and the program has read everything sent before. NEEDS-BENCH: ExpertSDR3 and Thetis with
-  Audio over TCI and the panadapter on: change the radio's Connection and save, then quit Nexus; the program shows a
-  clean disconnect and stops sending to Nexus.
+  connection ends cleanly and the program has read everything sent before.
 - **TCI (Beta): a stop can no longer wait behind an SDR program that sends or reads slowly.** Nexus read each message
   from the program until it was whole, so a program sending one a byte at a time, the bytes under 20 ms apart, held
   Nexus in that one read. Stop, and Nexus's own checks that end an over the program is not taking Nexus's audio for or
@@ -550,6 +1273,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one message, such as a block of Nexus's transmit audio, and a stop behind it, for as long as it kept reading. Each
   message now has 2 s in all. A program that takes longer is treated as a lost connection: if Nexus was transmitting
   it says the radio may still be transmitting, then connects again and sends its stop first.
+- **Share by TCI (Beta): a program's mode request no longer outlives its connection.** A program's own transmit audio
+  goes out only after that program asks for a voice mode (USB, LSB, AM or FM). A mode request that arrived just as you
+  pressed Disconnect, or as Share by TCI stopped, could be kept after the program was gone, and once Share by TCI
+  started again the program listed under the same Connection number counted as having asked for it, though it had
+  asked for nothing. Nexus now lets a mode request already under way finish before it ends the program, forgets it
+  with the program, and takes none once the program's end has begun.
+- **Share by TCI (Beta): a program that takes what Nexus sends a few bytes at a time is now disconnected after 5 s.**
+  A program that stopped reading was already treated as gone after 5 s, and whatever it had on the air ended with it.
+  One that still read a few bytes every few seconds was not: Nexus waited on it for as long as it kept reading, and
+  the program stayed connected, holding any key it had. What Nexus sends a program at one time now has 5 s in all; a
+  program that takes longer is disconnected as a lost connection, and whatever it was transmitting ends. A program
+  that keeps up is not affected.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
@@ -564,8 +1299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it opened it, though nothing had been pressed to transmit. With TX on, the station's own PTT and a program keying
   the radio over the CAT share could transmit with nobody asking. The station's window now opens the screen and
   leaves TX as the second PC left it, off until you turn it on. A spot worked at the station turns TX on as it always
-  has, and Stop TX still holds TX off everywhere. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy
-  load.
+  has, and Stop TX still holds TX off everywhere.
 - **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
   and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
   on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as
@@ -578,14 +1312,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused as "not a callsign or @group JS8 can address". It now goes out as JS8Call sends it, a message or a command
   alike: a directed frame to W1AW with JS8Call's portable flag set, the same frame byte for byte. Other suffixes are
   unchanged: W1AW/M, W1AW/1 or W1AW/QRP goes as a compound call, as JS8Call sends one, and a call JS8Call cannot send
-  to is still refused. NEEDS-BENCH: a JS8Call station receiving a message sent to its /P call.
+  to is still refused.
 - **FT8 and FT4: a weak reply that arrives late in the period now counts for your next over.** Nexus now
   decodes at the same moments as WSJT-X. FT8's full decode runs 14.4 seconds into the period instead of after the
   period ends, and FT4's one decode runs at 6.05 seconds instead of at 5.5 and again at 7.5. A weak RR73 or report
   that only the full decode finds is then known before your next over starts, so Nexus answers it instead of
   sending its last message again. If that decode is still running when your over starts, its result still counts
-  as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged. NEEDS-BENCH: an FT8 and an FT4 QSO
-  with a weak station, into a dummy load first.
+  as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged.
+- **FT8 and FT4: each decode counts the moment it is found, as in WSJT-X.** Nexus handed a decode pass's results
+  to the QSO sequencer and the decode list only when the whole pass had finished. It now hands each decode on as soon
+  as it is found, and your RX frequency is looked at first, as in WSJT-X. A weak reply on your frequency is then in
+  the decision for your next over even on a slower computer, where it used to arrive after your over had started and
+  the over went out again. The decodes themselves are unchanged and each still appears once, in the list, in ALL.TXT
+  and to loggers and PSK Reporter, which now also get each one as it is found. A CQ run whose best-caller choice is
+  strongest, farthest or CQ callers first still compares all the answers a pass brings before it picks one. The
+  early FT8 decode at 11.8 seconds now stops at 13.4 seconds if it is still running, as WSJT-X's does, so a slow
+  computer no longer loses that period's full decode to it.
+- **The diagnostic log now says when a period's decode was dropped.** When the decoder is still busy as a period
+  ends, Nexus skips that period's decode, and it said so only on a console that Windows never shows. The line, with
+  how many periods have been dropped so far, now goes to the diagnostic log too, so a computer too slow for the
+  T/R period shows up in the log you send with a report.
 - **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
   than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
@@ -617,8 +1363,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that station had confirmed; its own RR73 then got no 73. Now, as in WSJT-X, another station's confirmation is
   ignored: nothing is logged or sent to it, and your caller keeps getting your R and exchange until its own RR73
   logs the contact, with your 73 in ARRL Field Day on FT8 and FT4 as before. The ARRL VHF contests and the
-  contests with the standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a
-  station that calls you and a second station that sends you RR73.
+  contests with the standard messages already worked this way.
+- **Field Day S&P: only the station you called completes the contact.** In the Contest screen's S&P on Field
+  Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), once you had answered a
+  station's CQ, a rogered exchange sent to you by a different station logged that station and sent it your RR73,
+  and the station you had called then never got its RR73 or a place in your log. Now, as in WSJT-X, that exchange
+  is ignored: nothing is logged or sent to it, and your exchange keeps going to the station you called until its
+  own rogered exchange logs the contact and gets your RR73. The ARRL VHF contests and the contests with the
+  standard messages already worked this way.
+- **Field Day: a station signing W9XYZ/M is logged as W9XYZ/M, not `<W9XYZ/M>`.** In the Contest screen on Field
+  Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), a station whose call ends
+  in a suffix such as /M, /4 or /QRP sends its exchange with its call in angle brackets, and a contact with it went
+  into your contest log that way: in the ADIF and Cabrillo files you export, and in the dupe check, so S&P answered
+  that station's next CQ and worked it again. The call is now logged without the brackets, as the ARRL VHF contests
+  and the contests with the standard messages already log it and as WSJT-X does, so that station's next CQ is a dupe
+  like any other. What you send on the air during the contact is unchanged.
+- **Field Day: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** In the Contest screen on
+  Field Day's messages, closing a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix
+  such as PJ4/, sent `<W9XYZ/M> K1ABC RR73`, a different message from the one WSJT-X sends. Nexus now sends WSJT-X's,
+  `W9XYZ/M <K1ABC> RR73` and `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same
+  message bit for bit. Your exchange and your roger to that station are unchanged, and so is everything when your
+  own call has a suffix or a prefix.
+- **Field Day: when you run, a station signing W9XYZ/M can now close the contact.** In the Contest screen on Field
+  Day's messages, a station whose call has a suffix such as /M, /4 or /QRP and runs WSJT-X sends its RR73 or 73 with
+  your call in angle brackets and its own in full, `<K1ABC> W9XYZ/M RR73`. Your run did not take that as sent to you:
+  it sent the station your roger and exchange again, and the contact was never logged. It now takes it as WSJT-X does,
+  logs the station as W9XYZ/M and, in ARRL Field Day on FT8 and FT4, answers with WSJT-X's 73 before calling CQ again.
+- **Field Day: a call shown as `<...>` is no longer answered or logged.** In the Contest screen on Field Day's
+  messages, a station whose call has a suffix or a prefix shows as `<...>` until Nexus has heard that call in full.
+  When you ran, Nexus answered such a caller's exchange, addressed to `<...>`, and logged the contact with the call
+  `...`; in S&P it answered a CQ from `<...>`. Nexus now passes such a message by, as WSJT-X does in Field Day. Once
+  the station has sent its call in full (in a CQ, for example), its next message is worked as usual.
+- **ARRL VHF contests and contests with the standard messages: your 73 to a station signing W9XYZ/M no longer
+  goes out with another station's call.** In the Contest screen, closing a contact with a station whose call has a
+  suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, your 73 read `W9XYZ/M K1ABC 73`, which goes on the air
+  as `W9XYZ K1ABC 73`: the call without its suffix, which is a different station. In the contests with the
+  standard messages your RR73 to such a station read `<W9XYZ/M> K1ABC RR73`, a different message from the one
+  WSJT-X sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> 73` and `W9XYZ/M <K1ABC> RR73`, the same message bit for
+  bit, as it already does in Field Day. Your grid, report and roger are unchanged, and so is everything when your
+  own call has a suffix or a prefix.
+- **Contests: double-clicking a CQ from `<...>` no longer answers it.** With the contest switch on, a station whose
+  call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
+  CQ, or a logger's Reply to it, switched to the contest's S&P, turned TX on, moved RX and TX onto the station and
+  sent your exchange or grid to `<...>`, a call no one could read. It now does none of that and says why, as WSJT-X
+  answers no `<...>`. Once the station's call shows in full, a double-click works it as usual.
+- **FT8/FT4: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** Outside a contest, closing
+  a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, sent
+  `<W9XYZ/M> K1ABC RR73` and `<W9XYZ/M> K1ABC 73`: the right two calls, but a different message from the one WSJT-X
+  sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> RR73` (or `W9XYZ/M <K1ABC> RRR` when you prefer RRR) and
+  `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same message bit for bit, and
+  the Tx panel's Tx4 and Tx5 show them that way. This holds when your own call ends in /P or /R too. Your grid,
+  report and roger are unchanged, and so is everything when your own call has another suffix or a prefix.
+- **ARRL VHF contests and contests with the standard messages: S&P no longer answers a CQ from `<...>`.** With TX
+  on in the Contest screen's S&P, a station whose call has a suffix or a prefix can show as `CQ TEST <...> EN37`
+  until Nexus has decoded its call in full. S&P answered that CQ, sending your grid to `<...>`, a call no one could
+  read. It now passes such a CQ by, as Field Day's S&P already did and as WSJT-X answers no `<...>`, and answers the
+  station's next CQ once its call shows.
+- **FT8/FT4: double-clicking a CQ from `<...>` no longer answers it outside a contest either.** A station whose
+  call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
+  CQ with the contest switch off, or a logger's Reply to it, turned TX on, moved RX
+  and TX onto the station and sent your grid to `<...>`, a call no one could read. It now does none of that and says
+  why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
+  in full, a double-click works it as usual.
+- **Contests with the standard messages: when you run, a station signing W9XYZ/M that runs WSJT-X now gets an
+  answer.** Such a station calls you with your call in angle brackets, its own in full and no grid,
+  `<K1ABC> W9XYZ/M`. Your run did not answer it and kept calling CQ, unless that station had Skip Tx1 on. It now
+  answers with your report, `<W9XYZ/M> K1ABC -12`, as WSJT-X does, and the contact goes on as usual and is logged as
+  W9XYZ/M, with no grid. A first call from `<...>`, or one where both calls have a suffix or a prefix, is still not
+  answered; the ARRL VHF contests and Field Day are unchanged.
+- **FT8/FT4: a caller shown as `<...>` is no longer answered.** A station whose call has a suffix or a prefix
+  can show as `<...>` until Nexus has decoded its call in full. When you called CQ, outside a contest or Running in
+  an ARRL VHF contest or a contest with the standard messages, and such a station called you with its grid or its
+  report, Nexus answered it, sending your report or roger to `<...>`, a call no one could read; a best-caller choice
+  could even pick it over a station whose call shows. Double-clicking any other message from `<...>`, a logger's
+  Reply to one, or clicking `<...>` in a list started a contact with `<...>` too.
+  Nexus now passes such a caller by and answers the next station that called you in the same period, or calls CQ
+  again; a click on `<...>` changes nothing and says why. WSJT-X answers no `<...>`. Once the station's call shows
+  in full, it is answered and worked as usual. Field Day already passed such a caller by.
+- **FT8/FT4: typing 73 to a station signing W9XYZ/M no longer sends it to W9XYZ.** In a contact with a station
+  whose call has a suffix such as /M or /QRP, a prefix such as PJ4/, or a shape such as YW18FIFA, the free text you
+  type for the next message (`73`, `RR73`, `RRR` or a report) went out as `W9XYZ/M K1ABC 73`, which goes on the air
+  as `W9XYZ K1ABC 73`: another station's call (with YW18FIFA, a cut-off `YW18FIFA K1AB`). The same happened to your
+  own call when it has a suffix or a prefix. Nexus now sends the message WSJT-X sends for the two calls, such as
+  `W9XYZ/M <K1ABC> 73` (your call in angle brackets) or `<W9XYZ> K1ABC/QRP 73`, the same message bit for bit and
+  the same one Nexus's own 73 is. Other free text, and contacts where both calls are plain or both have a suffix or
+  a prefix, go out as before.
+- **FT8/FT4: clicking the Tx3 row sends what the row shows.** With your call ending in /P or /R and a station
+  signing W9XYZ/M or PJ4/W9XYZ, no report can ride your roger, so the Tx panel's Tx3 shows `<W9XYZ/M> K1ABC/P RRR`.
+  Clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 message. It now goes out as the row shows it, as WSJT-X
+  sends what its Tx3 box holds; the automatic sequence already sent it that way.
+- **FT8/FT4: free text that FT8 cannot send no longer keys a steady tone.** Nexus puts both calls in front of the
+  free text you type for the next message, so `TNX 73` becomes `W9XYZ K1ABC TNX 73`: a message FT8's encoder cannot
+  build. Nexus transmitted it anyway: on FT8, one steady tone for 13 seconds; on FT4 nothing went out, though Band
+  Activity and ALL.TXT showed it sent. With a station signing W9XYZ/M, `TNX` went out as a message naming nobody
+  (`<...>`). Now such a message is never transmitted, whether it comes from the free-text box, a Tx row (Tx 5 as
+  typed or filled from a macro), a click during an over, the contest screen or Remote, and Nexus says why: after
+  two calls only a report, R-report, RRR, RR73 or 73 fits, and free text on its own, as in Tx 5, holds 13
+  characters. The message you had queued stays queued. Text FT8 can send goes out as before.
+- **WSJT-X UDP: a Replay no longer marks old decodes as new.** When a logger such as JTAlert or GridTracker asks
+  Nexus to replay the decodes, Nexus sent them marked New, as if just heard, so a program could alert on them again.
+  They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
@@ -692,8 +1536,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio happened to report itself keyed), and the meter strip showed the last word of every send, and any one-word
   send, as off the air. The meters are now read for every word Nexus sends, on every keyer, and blank when it
   ends or Stop TX cuts it. The high-SWR cutoff, if switched on, now also sees the last word. The 150 ms meter
-  cadence is unchanged. NEEDS-BENCH: send CW with the radio's own keyer and with a WinKeyer and watch Po, ALC and
-  SWR move.
+  cadence is unchanged.
 - **CW now owns the transmitter until its last word ends.** Nexus counted CW as transmitting only while words were
   still waiting to go, so during the last word of every send (and all of a one-word send, such as the CW ID after
   an FT 73) another program's PTT over the CAT broker, the radio's ATU tune-up, a voice message on a Flex, an
@@ -707,14 +1550,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending — stop it first"); a voice message queued just before CW started is dropped, not played later. Stopping a
   tune, letting go of PTT and stopping a voice message always work, and Stop TX still ends everything at once. An
   FT slot that starts while CW is sending is skipped, as one is while tuning: the QSO stays where it was and the
-  next free slot sends the same message. NEEDS-BENCH: press Tune, PTT and a voice-keyer F-key during a CW send on
-  the radio's keyer and on a WinKeyer.
+  next free slot sends the same message.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set
   to. Nexus left one byte out of those commands that Icom's own command tables show for these models. The IC-9700,
-  IC-7610 and IC-7760 send exactly what they sent before. NEEDS-BENCH: on an IC-7300, set each span from ±2.5 to
-  ±500 kHz, change the reference level, and switch Center/Fixed.
+  IC-7610 and IC-7760 send exactly what they sent before.
 - **Contest contacts no longer upload to QRZ, ClubLog and the other logging services while the contest runs.** With
   contest mode on, a contact logged anywhere but the contest entry strip (the everyday log form, the Logbook, a screen
   that had left the contest) went to every logging service the moment it was logged. It now waits: the contest's
@@ -726,12 +1567,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version the shack runs, and that installing here now ends remote operation until the shack runs the same version.
   Update the shack first, or both together. **Install anyway** works only once you tick the warning, and after
   **Leave** the update installs as usual. When the shack does refuse a different version, the banner now names both
-  versions and says which side to update. NEEDS-BENCH: two PCs, one of them a version behind.
+  versions and says which side to update.
 - **FT-1000 and FT-1000D owners: clicking a spot tunes the radio.** With neither radio in the rig list, the nearest
   choice was the FT-1000MP, and its driver reads these radios' frequency in the wrong format. Nexus sent the spot's
   frequency, read back a wrong one and followed it, so the dial never settled on the spot. Choose FT-1000 or FT-1000D
-  in your radio settings instead of FT-1000MP. An FT-1000MP itself was not affected. NEEDS-BENCH: an FT-1000 or
-  FT-1000D on CAT, clicking a cluster spot.
+  in your radio settings instead of FT-1000MP. An FT-1000MP itself was not affected.
 - **Fetch LoTW works on a large account the first time.** The first download (and the one after Download
   everything again) asked LoTW for every confirmation at once, which LoTW could not finish on a big account: it
   answered "503", and every retry asked for everything again. Nexus now asks a year of contacts at a time, newest
@@ -759,7 +1599,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2) the SWR figure comes through the same calibrated
   scale as an Icom on USB with Native Icom CI-V, so it now reads as a trusted number and the high-SWR cutoff can be
   turned on. An IC-7300MK2 on USB still shows "SWR?": Nexus drives it through Hamlib there, not through its own CI-V
-  scale. Not yet checked against a known load on the network connection (NEEDS-BENCH).
+  scale.
 - **FT screen: the transmit meters no longer stretch and shrink at the start of an over.** The meters beside the
   Tx messages used to appear one at a time as the radio reported them, so SWR alone spread across the whole space and
   then shrank as ALC, power and compression arrived. From the moment the radio keys, SWR, ALC, PO and COMP now each
@@ -775,17 +1615,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Elecraft KPA1500 set to 57600, 115200 or 230400 baud now connects.** Nexus tried only the KPA500's four speeds
   (4800 to 38400), so a KPA1500 set to one of its three faster ones showed "Not answering" even when it was cabled
   correctly. All seven speeds Elecraft documents are now tried. A KPA500 is asked at its four speeds first, in the
-  same order as before. NEEDS-BENCH: a KPA1500 set to 230400, then 57600, on its USB port.
+  same order as before.
 - **RTTY screen: a click on the waterfall no longer moves your transmit tones during an over.** Netting moves the
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
   nothing, and the waterfall's hint says tuning is held.
-- **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** After
-  **Add the internet road**, the shack asks "Let … operate this station?" and says to approve only if the key matches
-  the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on this network** now
-  shows **This computer's key for the internet road** on that station's row, and the line after **Add the internet
-  road** shows it too, in the same eight groups of four as the shack. The station's own key there is now written in
-  capitals, as the shack writes it.
+- **Nexus Remote: a PC that signs in while the shack reads its device list keeps its 30-day limit (Beta).** A PC
+  added by signing in, and not paired again with a code, now always leaves the station's network 30 days after its
+  last sign-in, and removing it on the Nexus Remote web page always takes it off. Before, four things changed the
+  shack's list of PCs added by signing in (a PC signing in on the station's network, each device list the shack hears
+  from Nexus Remote, a PC paired again with a code, and a PC leaving after its 30 days), and two at the same moment
+  could lose one change. At worst a PC that had just signed in stayed on the station's network with no 30-day limit,
+  and removing it on the web page did not take it off. The shack now makes these changes one at a time.
+- **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** When the
+  internet road waits for Approve at the shack, the shack asks "Let … operate this station?" and says to approve only
+  if the key matches the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on
+  this network** now shows **This computer's key for the internet road** on that station's row, and the line after
+  **Sign in** shows it too while the road waits for Approve, in the same eight groups of four as the shack. The
+  station's own key there is now written in capitals, as the shack writes it.
 - **Stations on this network: after pairing, the line names the button that is there.** It said to press Stream, but a
   paired station's row leads with **Operate from this computer**. The line now says to press that.
 - **The built-in guide's Remote access section matches Remote as it is now.** It still called Remote an early pilot
@@ -798,9 +1645,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped answering, with commands piled up ahead of that one, the wait ran out (1.3 s on USB, 4.1 s on the network
   connection) and the connection closed without the command ever being sent, so a radio that was transmitting stayed
   on the air. The transmit-off command is now always sent once as the connection closes, and nothing else is sent
-  then. NEEDS-BENCH: an Icom on Native Icom CI-V into a dummy load, Nexus quit while Tune is keyed: the radio returns
-  to receive at once. With the CI-V diagnostic log on, each close (USB, and the Icom network connection) shows one
-  transmit-off and nothing after it.
+  then.
 - **CW sent through the radio's own keyer no longer passes a `;` to Kenwood, Yaesu and Elecraft radios, where it would
   be read as a radio command.** With the CAT keyer (Settings ▸ CW ▸ Keyer backend: CAT), a word holding a `;`, a
   control character or a character Nexus has no Morse for (an apostrophe, `"`, an accented letter) is no longer
@@ -808,15 +1653,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys, and Enter Sends Message logs nothing. Typed CW, F-key macros, Enter Sends Message and CW sent from a computer
   driving the station all keep to this, by the same rule that TCI programs' CW already kept. A callbook name or
   state that `{HISNAME}` and `{HISSTATE}` key keeps only the characters the keyer can send, so the rest of it still
-  goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before. NEEDS-BENCH: on a
-  Kenwood or Elecraft and on an FTDX10, each on the CAT keyer into a dummy load, an F-key macro `CQ TEST;X` keys
-  nothing, shows the warning and leaves the dial where it was; `CQ TEST K` keys in full.
-
-### Removed
-- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
-  your browser; the watch-and-control workspace it replaced is gone from the page.
+  goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before.
+- **Turning off Remote over this network takes effect at once, however slow the disk.** Turning it off in Settings ▸
+  Station ▸ Remote access, or pressing **End remote control**, saved the setting before it closed the station's port,
+  ended the other computers' sessions and took back their control of the station. While the disk was busy, or
+  something held the settings file open, those computers stayed connected and anything they had on the air kept going
+  until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
+- **Nexus Remote: Save to this computer never replaces a file already in the second PC's Downloads folder.** A
+  station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
+  `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
+  after the save names the file it went to.
 
 ### Security
+- **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
+  station only.** Profiles are kept at the station, and loading one there applies what it holds. A profile saved from a
+  computer driving the station now keeps the transmit limits and safety stops, the switches that let other programs or
+  a browser transmit, the PTT method, port and lines, the TQSL path and the addresses your logging-service keys are sent
+  to as the station's own profile of that name has them, and a new one carries none of them, so loading it keeps the
+  station's own. Profiles saved at the station, and loading them there, are unchanged.
+- **Nexus Remote: a saved profile sent from a computer driving the station that the station cannot read in full is
+  refused.** Nothing of that save is written, so a profile saved there can never change the settings that are set at
+  the station only. If the station's own saved profiles cannot be read in full, they are not sent to that computer, so
+  no logging-service key saved in a profile leaves the station, and a save from that computer leaves them as they are.
+- **Nexus Remote: the CW and RTTY keying lines and the Flex client's Beta are set at the station only.** A settings
+  save from a computer driving the station now keeps the station's CW keyer backend, its keyline serial port and line
+  and the WinKeyer port, the RTTY keying backend with the FSK serial port and line, and each radio's **Let Nexus send
+  CW, Tune and ATU through the native Flex client** switch. On that computer they are greyed out and say "Set at the
+  station", with the station's own value. The station's own Settings window changes them as before.
 - **The certificate checks behind Nexus's downloads no longer trust the distrusted emSign certificates.** Nexus's HTTPS
   (propagation data, maps, the update check and the other downloads) now uses the releases of its certificate libraries that
   drop the emSign certificates whose private keys were exposed (RUSTSEC-2026-0381, 0382 and 0383, published 20 October 2026).
@@ -824,6 +1687,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The in-app updater no longer carries the `zip` library**, which three new advisories (RUSTSEC-2026-0367, -0368 and
   -0369) cover. Nexus's updates are installers, not zip files, so the advisories' code was never used; it is now not
   built in at all.
+- **The radio-sharing ports now cap how much Nexus reads for one command.** When Nexus shares a radio with other
+  programs over the Hamlib rigctld text protocol — the CAT broker and the SDR-program daemons — a single local
+  connection that sent one over-long command, or a stream that was never a complete command, could make Nexus hold
+  it in memory without limit. Every such port now bounds the length of one command line and ends a connection that
+  runs past it; nothing in an over-long line reaches the radio, and ordinary sharing clients, whose commands are
+  short, are unaffected. These ports are reachable only from this computer, as they have always been.
+- **The PstRotatorAz link's rotator port now caps how much it reads for one command.** With the rotator set to
+  PstRotatorAz, Nexus answers rotator commands on this computer in the Hamlib rotctld text protocol, which its Rotor
+  pane and other rotator programs use. A single local connection that sent one over-long command, or a stream that was
+  never a complete command, could make Nexus hold it in memory without limit. The port now bounds the length of one
+  command line and ends a connection that runs past it; nothing in an over-long line reaches the rotator, and rotator
+  programs, whose commands are short, are unaffected. The link is new since 1.19.0, so no earlier release is affected,
+  and the port is reachable only from this computer.
+- **The PstRotatorAz link's rotator port now hangs up on a web page.** A page open in a browser on this computer can
+  send a request to the port Nexus answers rotator commands on. Nothing in such a request moved the antenna, but only
+  because of where a browser's request happens to put a blank line. The port now ends the connection at the request's
+  first line and answers it nothing, as the radio-sharing port does; rotator programs are unaffected.
 
 ## [1.19.0] — 2026-10-16
 

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::geo::maidenhead_to_latlon;
 
-/// HF/VHF bands Nexus reasons about (FT8/FT4 relevant).
+/// HF/VHF/UHF bands Nexus reasons about (FT8/FT4 relevant, and the UHF bands an
+/// IC-9700-class station logs and chases grids on).
 ///
 /// `Ord` follows declaration order (low band → high) and exists so collections
 /// keyed on Band can be `BTreeMap`/`BTreeSet`: several operator-visible answers
@@ -27,10 +28,16 @@ pub enum Band {
     B6,
     B4,
     B2,
+    /// 70 cm (420–450 MHz).
+    B70cm,
+    /// 33 cm (902–928 MHz) — an ITU Region 2 allocation.
+    B33cm,
+    /// 23 cm (1240–1300 MHz).
+    B23cm,
 }
 
 impl Band {
-    pub const ALL: [Band; 13] = [
+    pub const ALL: [Band; 16] = [
         Band::B160,
         Band::B80,
         Band::B60,
@@ -44,6 +51,9 @@ impl Band {
         Band::B6,
         Band::B4,
         Band::B2,
+        Band::B70cm,
+        Band::B33cm,
+        Band::B23cm,
     ];
 
     pub fn label(self) -> &'static str {
@@ -61,6 +71,9 @@ impl Band {
             Band::B6 => "6m",
             Band::B4 => "4m",
             Band::B2 => "2m",
+            Band::B70cm => "70cm",
+            Band::B33cm => "33cm",
+            Band::B23cm => "23cm",
         }
     }
 
@@ -80,12 +93,23 @@ impl Band {
             Band::B6 => 50.2,
             Band::B4 => 70.2,
             Band::B2 => 144.2,
+            Band::B70cm => 432.1,
+            Band::B33cm => 903.1,
+            Band::B23cm => 1296.1,
         }
     }
 
-    /// Is this a VHF band where "openings" (Es/F2/aurora/MS) are the story?
+    /// Is this a VHF/UHF band (6 m and up), where "openings" — not the MUF — are the story?
+    /// Every HF model (MUF, absorption, the path likelihood) skips these bands.
     pub fn is_vhf(self) -> bool {
-        matches!(self, Band::B6 | Band::B4 | Band::B2)
+        matches!(self, Band::B6 | Band::B4 | Band::B2) || self.is_uhf()
+    }
+
+    /// Is this a UHF band (70 cm and up)? These open by tropospheric enhancement only:
+    /// sporadic-E, F2 and aurora do not reach them in practice, so the opening classifier
+    /// and the advisor never claim those modes here.
+    pub fn is_uhf(self) -> bool {
+        matches!(self, Band::B70cm | Band::B33cm | Band::B23cm)
     }
 
     /// Parse a band label ("20m", "160M") back to a [`Band`] (inverse of
@@ -105,6 +129,9 @@ impl Band {
             "6m" => Band::B6,
             "4m" => Band::B4,
             "2m" => Band::B2,
+            "70cm" => Band::B70cm,
+            "33cm" => Band::B33cm,
+            "23cm" => Band::B23cm,
             _ => return None,
         })
     }
@@ -135,6 +162,9 @@ impl Band {
             x if (50.0..54.0).contains(&x) => Band::B6,
             x if (70.0..71.0).contains(&x) => Band::B4,
             x if (144.0..148.0).contains(&x) => Band::B2,
+            x if (420.0..450.0).contains(&x) => Band::B70cm,
+            x if (902.0..928.0).contains(&x) => Band::B33cm,
+            x if (1240.0..1300.0).contains(&x) => Band::B23cm,
             _ => return None,
         };
         Some(b)
@@ -216,8 +246,9 @@ pub fn mode_key(mode: &str) -> String {
 /// `DATA`, `DIGI`, a voice `DV`), a family (`PSK`, a bare `MFSK`), a retired name (`FT1`, `DX1`), a
 /// beacon nobody works (`WSPR`, `FST4W`), and another program's own name for something no contact
 /// here is logged as — PSK Reporter passes on whatever the reporting program calls its mode
-/// (`VARAC`, `JTTY`, `FREEDV`, `SAFECOM`). A mode the log can hold that is not named here (the
-/// rarer PSK submodes) is judged by its class as well.
+/// (`VARAC`, `FREEDV`, `SAFECOM`). A mode the log can hold that is not named here (the rarer PSK
+/// submodes) is judged by its class as well. `JTTY` is a mode of its own: a JTTY contact is stored
+/// as JTTY, whether its log spelled it as a bare `MODE=JTTY` or `MODE=MFSK SUBMODE=JTTY`.
 fn names_a_contact_mode(name: &str) -> bool {
     matches!(
         name,
@@ -241,6 +272,7 @@ fn names_a_contact_mode(name: &str) -> bool {
             | "JT65"
             | "JT9"
             | "JS8"
+            | "JTTY"
             | "MSK144"
             | "OLIVIA"
             | "SSTV"
@@ -372,6 +404,12 @@ pub fn band_digital_mhz(band: Band) -> f64 {
         Band::B6 => 50.313,
         Band::B4 => 70.154,
         Band::B2 => 144.174,
+        // The same dials `bandplan::ft8_band_plan` tunes. 33 cm has no FT8 dial there (no
+        // published one was found), so it is modelled at the ARRL band plan's CW/SSB
+        // weak-signal calling frequency.
+        Band::B70cm => 432.065,
+        Band::B33cm => 903.1,
+        Band::B23cm => 1296.174,
     }
 }
 
@@ -839,7 +877,33 @@ mod tests {
             assert_eq!(Band::from_label(b.label()), Some(b));
         }
         assert_eq!(Band::from_label("20M"), Some(Band::B20)); // case-insensitive
-        assert_eq!(Band::from_label("70cm"), None);
+        assert_eq!(Band::from_label("13cm"), None);
+    }
+
+    /// 70 cm, 33 cm and 23 cm are bands Nexus names, both ways: a frequency inside the US
+    /// allocation (420–450, 902–928, 1240–1300 MHz) lands on the band, the band's label parses
+    /// back to it, and a frequency just outside each edge lands on nothing.
+    #[test]
+    fn the_uhf_bands_map_both_ways() {
+        let at = |f: f64| Band::from_mhz(f).map(|b| b.label());
+        for (lo, hi, label) in [
+            (420.0, 449.999, "70cm"),
+            (902.0, 927.999, "33cm"),
+            (1240.0, 1299.999, "23cm"),
+        ] {
+            assert_eq!(at(lo), Some(label), "{lo} MHz");
+            assert_eq!(at(hi), Some(label), "{hi} MHz");
+            assert_eq!(at(lo - 0.001), None, "just below {label}");
+            assert_eq!(
+                at(hi + 0.001),
+                None,
+                "the top edge of {label} is outside it"
+            );
+            let b = Band::from_label(label).unwrap_or_else(|| panic!("{label} parses"));
+            assert_eq!(b.label(), label);
+            assert_eq!(Band::from_band_token(&label.to_uppercase()), Some(b));
+            assert!(b.is_vhf(), "{label} is skipped by every HF model");
+        }
     }
 
     #[test]
@@ -851,7 +915,12 @@ mod tests {
         }
         assert_eq!(Band::from_band_token("20m"), Some(Band::B20));
         // Bands the model doesn't cover stay None (the caller fails open).
-        assert_eq!(Band::from_band_token("70cm"), None);
+        assert_eq!(Band::from_band_token("13cm"), None);
+        assert_eq!(
+            Band::from_band_token("70cm-fm").map(|b| b.label()),
+            Some("70cm"),
+            "the 70 cm FM channel token is 70 cm"
+        );
         assert_eq!(Band::from_band_token(""), None);
     }
 

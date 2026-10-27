@@ -36,6 +36,16 @@ async function approve(app, owner, extra = {}, expected = 200) {
   return { value, stationId: enrollment.id }
 }
 const session = async owner => (await owner.post('session')).value.entitlement
+/** `approve`, keeping the cookie the confirming browser is given: it is approved with the pairing. */
+async function approveHere(app, owner) {
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await owner.post('pair/claim', { code: enrollment.code })
+  const { response } = await owner.post('pair/confirm', { id: enrollment.id })
+  owner.setCookie(response.headers.get('set-cookie'))
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential: credential() })
+  return enrollment.id
+}
 const trialRow = (app, accountId) => app.db.prepare('SELECT * FROM trials WHERE account_id=?').bind(accountId).first()
 const markers = (app, accountId) => app.db.prepare('SELECT kind,value_hmac,proven,method FROM trial_markers WHERE account_id=? ORDER BY kind')
   .bind(accountId).all().then(r => r.results)
@@ -134,6 +144,86 @@ test('a subscriber pairs whatever a sibling sign-in spent, and paying starts no 
   await subscribe(plain, payer.accountId, 'active', Date.now() + 30 * DAY)
   await approve(plain, payer)
   assert.equal(await trialRow(plain, payer.accountId), null)
+})
+
+// ---------------------------------------------------------------------------------------------------
+// FREE DURING THE BETA: REMOTE_BETA_FREE='1' takes away the trial's end, and nothing else.
+
+test('with the beta on, an account past its fourteen days keeps internet use; off, it ends as today', async () => {
+  const beta = await runtime({ bindings: { REMOTE_BETA_FREE: '1' } })
+  try {
+    for (const [app, on] of [[beta, true], [plain, false]]) {
+      const owner = await person(app)
+      const stationId = await approveHere(app, owner)
+      const started = await trialRow(app, owner.accountId)
+      assert.equal(started.source, 'trial', `${on}: approval still starts the one trial`)
+      assert.equal(started.expires_at - started.started_at, 14 * DAY, `${on}: the row keeps its fourteen days`)
+      // Thirty days on: the trial row says it ended sixteen days ago.
+      await app.db.prepare('UPDATE trials SET started_at=?, expires_at=? WHERE account_id=?')
+        .bind(Date.now() - 30 * DAY, Date.now() - 16 * DAY, owner.accountId).run()
+      const { value } = await owner.post('session')
+      assert.equal(value.beta, on, `${on}: the page is told`)
+      if (on) {
+        assert.equal(value.entitlement.state, 'active')
+        assert.equal(value.entitlement.access, 'internet')
+        assert.equal(value.entitlement.plan.kind, 'trial')
+        assert.ok(value.entitlement.expiresAt > Date.now(), 'a date ahead, so every session deadline still has one')
+        // The paired browser is approved with the pairing, so the ticket is the internet gate itself.
+        assert.equal(typeof (await owner.post(`stations/${stationId}/ticket`, {})).value.ticket, 'string')
+      } else {
+        assert.equal(value.entitlement.state, 'ended')
+        assert.equal(value.entitlement.access, 'lan')
+        assert.equal((await owner.post(`stations/${stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+      }
+    }
+  } finally { await beta.mf.dispose() }
+})
+
+test('the beta removes the expiry only: a ban, the one-trial-per-person rule and deletion still refuse', async () => {
+  const beta = await runtime({ bindings: { REMOTE_BETA_FREE: '1' } })
+  try {
+    // An operator's ban outranks the beta, on the internet and the LAN alike.
+    const banned = await person(beta)
+    const stationId = await approveHere(beta, banned)
+    assert.equal(typeof (await banned.post(`stations/${stationId}/ticket`, {})).value.ticket, 'string', 'positive control: before the ban')
+    await beta.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(banned.accountId).run()
+    const ban = await session(banned)
+    assert.deepEqual([ban.state, ban.access, ban.enabled], ['disabled', 'none', false])
+    assert.equal((await banned.post(`stations/${stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+    assert.equal((await banned.post(`stations/${stationId}/ticket`, { scope: 'lan' }, 403)).value.error, 'trialRequired')
+
+    // One trial per person: a second sign-in on the same mailbox is refused, and told the first is
+    // still running (it is, with no end), where today it would hear that the trial ended.
+    for (const [app, code] of [[beta, 'trialActiveElsewhere'], [plain, 'trialEnded']]) {
+      const address = `op-${crypto.randomUUID()}@example.invalid`
+      const first = await person(app, address)
+      await approve(app, first)
+      await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - DAY, first.accountId).run()
+      const second = await person(app, address)
+      const { value: enrollment } = await app.client().post('enroll', { name: 'Second shack' })
+      assert.equal((await second.post('pair/claim', { code: enrollment.code }, 403)).value.error, code)
+      assert.equal(await trialRow(app, second.accountId), null)
+    }
+
+    // Deletion: the account's stations, devices and sign-in go, and signing in again makes a new account
+    // that the same mailbox cannot start a second trial on. Its deleted sibling's trial is not "running".
+    const address = `op-${crypto.randomUUID()}@example.invalid`, subject = `auth0|${crypto.randomUUID()}`
+    const signIn = async () => {
+      const browser = beta.client(await beta.token(subject, { email: address, email_verified: true }))
+      return { ...browser, accountId: (await browser.post('session')).value.accountId }
+    }
+    const gone = await signIn()
+    const stationId2 = await approveHere(beta, gone)
+    await beta.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - DAY, gone.accountId).run()
+    assert.equal(typeof (await gone.post(`stations/${stationId2}/ticket`, {})).value.ticket, 'string', 'positive control: past its days, in use')
+    assert.deepEqual((await gone.post('account/delete', { confirm: 'DELETE' })).value, { ok: true })
+    assert.equal((await gone.post(`stations/${stationId2}/ticket`, {}, 404)).value.error, 'stationUnavailable')
+    const again = await signIn()
+    assert.notEqual(again.accountId, gone.accountId)
+    assert.equal((await session(again)).state, 'none')
+    const { value: enrollment } = await beta.client().post('enroll', { name: 'Shack again' })
+    assert.equal((await again.post('pair/claim', { code: enrollment.code }, 403)).value.error, 'trialEnded')
+  } finally { await beta.mf.dispose() }
 })
 
 // ---------------------------------------------------------------------------------------------------
@@ -381,5 +471,79 @@ test('the relay serves no payment webhook, even with payment keys configured', a
     assert.deepEqual(await app.db.prepare('SELECT COUNT(*) AS n FROM billing_events').first(), { n: 0 })
     // Positive control: the same runtime and browser reach the account's own route.
     assert.equal((await session(owner)).state, 'none')
+  } finally { await app.mf.dispose() }
+})
+
+// ---------------------------------------------------------------------------------------------------
+// SUBSCRIBE AND MANAGE: the relay's two billing routes, which reach the private billing Worker through its
+// BILLING binding. Every deploy carries none until that Worker is deployed, and the routes say so.
+
+test('with no billing Worker bound, Subscribe and Manage are not available yet, and the page is told so', async () => {
+  const config = async app => (await app.mf.dispatchFetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal((await config(plain)).billing, false)
+  const owner = await person(plain)
+  assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'billingNotAvailable' })
+  assert.deepEqual((await owner.post('billing/portal', {}, 503)).value, { error: 'billingNotAvailable' })
+  // Still behind the sign-in: a request with no account gets nothing about billing at all.
+  assert.deepEqual((await plain.client().post('billing/checkout', { plan: 'monthly' }, 403)).value, { error: 'originDenied' })
+  // Positive control: the same config route says true where the billing Worker is bound.
+  const bound = await runtime({ billing: () => ({ error: 'serviceUnavailable', status: 503 }) })
+  try { assert.equal((await config(bound)).billing, true) } finally { await bound.mf.dispose() }
+})
+
+test('with the billing Worker bound, checkout and the portal pass only the signed-in account and hand back the provider page', async () => {
+  const calls = []
+  let answer = null
+  const app = await runtime({ billing: (method, args) => {
+    calls.push({ method, args })
+    if (answer) return answer(method)
+    return method === 'checkout' ? { url: 'https://checkout.stripe.com/c/pay/cs_test_fixture' } : { url: 'https://billing.stripe.com/p/session/fixture' }
+  } })
+  try {
+    const owner = await person(app)
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'annual' })).value, { url: 'https://checkout.stripe.com/c/pay/cs_test_fixture' })
+    assert.deepEqual((await owner.post('billing/portal', {})).value, { url: 'https://billing.stripe.com/p/session/fixture' })
+    assert.deepEqual(calls, [{ method: 'checkout', args: [owner.accountId, 'annual'] }, { method: 'portal', args: [owner.accountId] }])
+    // Opening a checkout buys nothing: only the webhook's write, read by the one entitlement read, does.
+    assert.equal((await session(owner)).state, 'none')
+
+    // The page cannot name another account, or a plan that is not ours; nothing reaches the billing Worker.
+    calls.length = 0
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'weekly' }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly', accountId: crypto.randomUUID() }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await owner.post('billing/portal', { accountId: crypto.randomUUID() }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await app.client().post('billing/portal', {}, 403)).value, { error: 'originDenied' })
+    assert.deepEqual(calls, [])
+
+    // Its refusals are passed on by name; anything else it says, or a page anywhere else, is not.
+    const cases = [
+      [{ error: 'alreadySubscribed', status: 409 }, 409, 'alreadySubscribed'],
+      [{ error: 'noSubscription', status: 404 }, 404, 'noSubscription'],
+      [{ error: 'secret detail rk_test_fixture', status: 400 }, 503, 'serviceUnavailable'],
+      [{ error: 'alreadySubscribed', status: 200 }, 503, 'serviceUnavailable'],
+      [{ url: 'https://example.invalid/pay' }, 503, 'serviceUnavailable'],
+    ]
+    for (const [given, status, error] of cases) {
+      answer = () => given
+      for (const [path, value] of [['billing/checkout', { plan: 'monthly' }], ['billing/portal', {}]]) {
+        assert.deepEqual((await (await person(app)).post(path, value, status)).value, { error }, `${path} ${JSON.stringify(given)}`)
+      }
+    }
+    // Each route takes only its own provider page: a portal answering with a checkout page is refused, and the reverse.
+    answer = method => ({ url: method === 'checkout' ? 'https://billing.stripe.com/p/session/fixture' : 'https://checkout.stripe.com/c/pay/cs_test_fixture' })
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'serviceUnavailable' })
+    assert.deepEqual((await owner.post('billing/portal', {}, 503)).value, { error: 'serviceUnavailable' })
+    // The billing Worker failing outright is a plain 503 too.
+    answer = () => { throw new Error('billing Worker down') }
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'serviceUnavailable' })
+
+    // Each one is a call to the payment provider: ten a minute an account.
+    answer = null
+    const busy = await person(app)
+    for (let i = 0; i < 10; i++) await busy.post('billing/portal', {})
+    assert.deepEqual((await busy.post('billing/checkout', { plan: 'monthly' }, 429)).value, { error: 'tryLater' })
+
+    // Bound or not, the relay still serves no webhook.
+    assert.deepEqual((await owner.post('billing/webhook', {}, 404)).value, { error: 'notFound' })
   } finally { await app.mf.dispose() }
 })

@@ -14,7 +14,7 @@
 //
 // ⚠️ PHONE ONLY. `TxMeters` has three hosts and `PhoneScope` has two; this is Phone's. A ruling
 // taken about one surface must not be implemented in a component the others share — see
-// `feedback-a-host-ruling-is-not-a-component-ruling`, and the Operate recall card that went 5 px
+// the Operate recall card that went 5 px
 // past the fold when that was forgotten.
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'

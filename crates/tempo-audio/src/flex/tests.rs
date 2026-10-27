@@ -1673,7 +1673,7 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
 }
 
 /// ⭐ THE REGISTRATION DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
-/// upstream sends it (port plan §4.5, step 7). The radio learns our UDP endpoint from its source,
+/// upstream sends it. The radio learns our UDP endpoint from its source,
 /// which firmware that answers `client udpport` with "not supported" needs. The client sent it
 /// after its whole bring-up, about 46 ms after the command, and then right after the bind, before
 /// the session even connected, to a radio with no client of ours yet.

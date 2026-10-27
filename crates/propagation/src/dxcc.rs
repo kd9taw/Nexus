@@ -513,6 +513,53 @@ fn kg4_is_guantanamo(base: &str) -> bool {
 /// Resolve a callsign to a DXCC entity + representative location.
 pub fn resolve(call: &str) -> Option<DxccInfo> {
     let r = resolver();
+    let full = spelled(call);
+    if full.is_empty() {
+        return None;
+    }
+    // Exact-call exceptions win (full call, before affix stripping).
+    if let Some(&(i, zone)) = r.exact.get(&full) {
+        return Some(info(r, i, zone));
+    }
+    // Longest-prefix on the base call.
+    let prefix = matched_prefix(r, base_call(&full))?;
+    let &(i, zone) = r.prefixes.get(prefix)?;
+    Some(info(r, i, zone))
+}
+
+/// Whether the country file can call a contact logged under `call` with the DXCC number `logged`
+/// misfiled ([`resolve`] places the call elsewhere). Never when `call` is one of the file's
+/// exact-call exceptions — a DXpedition or special operation, whose entry is the file's whole
+/// knowledge of it — and never when the logged entity has an exception or prefix of its own that
+/// begins with the prefix the call resolved through. `3Y0PI` (Peter I, 1994) has no exact entry
+/// any more and resolves through Antarctica's bare `3Y`; Peter I's and Bouvet's calls are `3Y`
+/// calls too, so a 3Y call logged as either is no evidence of a mistake. AD1C drops an operation's
+/// exact entry once it is over, so the file cannot say which past operation a call was.
+pub fn prefix_decides(call: &str, logged: u32) -> bool {
+    let r = resolver();
+    let full = spelled(call);
+    if full.is_empty() || r.exact.contains_key(&full) {
+        return false;
+    }
+    let Some(prefix) = matched_prefix(r, base_call(&full)) else {
+        return false;
+    };
+    let of_logged = |&(i, _): &(u32, Option<u8>)| r.entities[i as usize].dxcc == Some(logged);
+    // An exception by the call it is under its affix: `=W0SD/VE2` is a Canadian `VE2` call, no
+    // sign that a `W` call may be Canadian.
+    let shares = r
+        .exact
+        .iter()
+        .any(|(call, at)| base_call(call).starts_with(prefix) && of_logged(at))
+        || r.prefixes
+            .iter()
+            .any(|(key, at)| key.starts_with(prefix) && of_logged(at));
+    !shares
+}
+
+/// A call as the country file is asked about it: up to its first non-ASCII character, out of its
+/// hashed-call brackets, trimmed and upper-cased. Empty when nothing of a call is left.
+fn spelled(call: &str) -> String {
     // ⚠️ A NON-ASCII CHARACTER ENDS THE CALL. A callsign is ASCII by definition, but what
     // reaches here is outside input — POTA spots, cluster lines, decodes, imported logs — and
     // the POTA feed carried `KK4JAB ☕️` (2026-09-23): the call, then decoration. The prefix
@@ -531,21 +578,15 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
     // — a worked DXpedition scoring as neither a new country nor a new band, which is exactly
     // what the reporter saw. Stripping here rather than at each call site because this is the
     // boundary: everything past this line is prefix arithmetic that assumes a bare call.
-    let full = call
-        .trim()
+    call.trim()
         .trim_start_matches('<')
         .trim_end_matches('>')
         .trim()
-        .to_ascii_uppercase();
-    if full.is_empty() {
-        return None;
-    }
-    // Exact-call exceptions win (full call, before affix stripping).
-    if let Some(&(i, zone)) = r.exact.get(&full) {
-        return Some(info(r, i, zone));
-    }
-    // Longest-prefix on the base call.
-    let base = base_call(&full);
+        .to_ascii_uppercase()
+}
+
+/// The longest prefix of `base` the country file holds: the one [`resolve`] places a call by.
+fn matched_prefix<'a>(r: &Resolver, base: &'a str) -> Option<&'a str> {
     for prefix in prefixes_longest_first(base) {
         // The one prefix in the file that is wrong on its own: `KG4` covers a block shared with
         // the United States, and only a 2-character suffix is Guantanamo Bay (#52). Skipping the
@@ -554,8 +595,8 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
         if prefix == "KG4" && !kg4_is_guantanamo(base) {
             continue;
         }
-        if let Some(&(i, zone)) = r.prefixes.get(prefix) {
-            return Some(info(r, i, zone));
+        if r.prefixes.contains_key(prefix) {
+            return Some(prefix);
         }
     }
     None
@@ -671,6 +712,41 @@ pub fn country_by_dxcc(code: u32) -> Option<&'static str> {
     entity_by_dxcc(code).map(|e| e.name)
 }
 
+/// The DXCC number of the entity a contact's `COUNTRY` text names, read against the names of the
+/// current entities, as cty.dat gives them (a WAE area's carries its parent's number, as in ADIF),
+/// case and spacing aside. So "fed. rep. of  GERMANY" is 230 and "Sicily" 248.
+///
+/// `None` where the text names nothing the table holds — another program's spelling, "Germany"
+/// for the Fed. Rep. of Germany — and where it cannot say which entity: a name entities of
+/// different numbers share, or one whose entity has no number. A caller comparing the text with
+/// a contact's number reads `None` as "cannot tell", never as "differs". The deleted entities'
+/// names are not read: the ARRL's are the plain ones today's programs write for a current entity
+/// ("GERMANY", 81; "OKINAWA", 193), so they cannot say which of the two a text means.
+pub fn dxcc_by_name(text: &str) -> Option<u32> {
+    let folded = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let want = folded(text);
+    if want.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    for e in &resolver().entities {
+        if folded(&e.name) != want {
+            continue;
+        }
+        let code = e.dxcc?;
+        if found.is_some_and(|f| f != code) {
+            return None;
+        }
+        found = Some(code);
+    }
+    found
+}
+
 /// The entity a contact is under on the callsign card: [`shown_entity`] for the contact as it
 /// would be with its DXCC number — its record's own where that names an entity, else the number its
 /// call carries. A typed call has no record (`dxcc` is `None`) and asks its card for this, and an
@@ -685,6 +761,30 @@ pub fn country_by_dxcc(code: u32) -> Option<&'static str> {
 pub fn card_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'static str> {
     dxcc.and_then(country_by_dxcc)
         .or_else(|| shown_entity(resolved, resolved.and_then(|i| i.dxcc)))
+}
+
+/// The DXCC entity a WAE/CQ-only area belongs to, by the number it carries (Sicily → Italy,
+/// European Turkey → Turkey); `None` for every other name, a DXCC entity's included. Read by
+/// the contest scorer, which keeps a row's entity as [`resolve`] named it and counts a WAE area
+/// as a country of its own only in the contests whose list has them (CQ WW, WAE DX).
+pub fn wae_parent(entity: &str) -> Option<&'static str> {
+    // Six areas in the vendored file: the scan is over those, never over every entity.
+    static AREAS: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+    AREAS
+        .get_or_init(|| {
+            let r = resolver();
+            r.entities
+                .iter()
+                .filter(|e| !e.is_dxcc)
+                .filter_map(|e| {
+                    let parent = r.by_dxcc.get(&e.dxcc?)?;
+                    Some((e.name.as_str(), r.entities[*parent as usize].name.as_str()))
+                })
+                .collect()
+        })
+        .iter()
+        .find(|(area, _)| *area == entity)
+        .map(|(_, parent)| *parent)
 }
 
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
@@ -790,6 +890,58 @@ pub fn dxcc_entity_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `COUNTRY` text names the current entity whose name it is, case and spacing aside — a WAE
+    /// area under its parent's number — and nothing for a text the table does not hold. A deleted
+    /// entity's name is not read: "Germany" is deleted 81's, and a QRZ "Germany" means 230.
+    #[test]
+    fn a_country_text_names_the_entity_the_table_calls_by_it() {
+        for (text, code) in [
+            ("Fed. Rep. of Germany", Some(230)),
+            ("  fed. rep. of   GERMANY ", Some(230)),
+            ("United States", Some(291)),
+            ("NAVASSA ISLAND", Some(182)),
+            ("Sicily", Some(248)),
+            ("Germany", None),
+            ("UNITED STATES OF AMERICA", None),
+            ("", None),
+            ("   ", None),
+        ] {
+            assert_eq!(dxcc_by_name(text), code, "{text:?}");
+        }
+        assert_eq!(
+            country_by_dxcc(81),
+            Some("GERMANY"),
+            "premise: deleted 81's name"
+        );
+        for deleted in ["GERMANY", "Okinawa", "CANAL ZONE"] {
+            assert_eq!(dxcc_by_name(deleted), None, "{deleted}");
+        }
+        assert_eq!(dxcc_by_name("Palestine"), Some(510), "the current entity");
+    }
+
+    /// The file judges an ordinary call by its prefix, and never a DXpedition's: an exact-call
+    /// exception, or a call whose prefix the logged entity's own calls share (`3Y0PI` falls to
+    /// Antarctica's bare `3Y`, and Peter I's and Bouvet's calls are `3Y` calls too).
+    #[test]
+    fn a_dxpedition_call_is_not_judged_by_its_prefix() {
+        assert!(prefix_decides("W1AW", 1), "a US call logged as Canada");
+        assert!(
+            prefix_decides("3Y0PI", 291),
+            "a 3Y call logged as the United States"
+        );
+        assert!(!prefix_decides("3Y0PI", 199), "Peter I");
+        assert!(!prefix_decides("3Y5X", 24), "Bouvet");
+        assert!(!prefix_decides("3Y0J", 199), "an exact-call exception");
+        // An exception is never judged, even against an entity sharing nothing with it: the
+        // file's entry is all it knows of the operation (=OP0LE is an Antarctic station).
+        assert!(
+            prefix_decides("OP4LE", 339),
+            "premise: an ordinary OP call is judged"
+        );
+        assert!(!prefix_decides("OP0LE", 339), "an exact-call exception");
+        assert!(!prefix_decides("", 1));
+    }
 
     #[test]
     fn entity_names_are_the_full_sorted_deduped_set() {
@@ -1396,6 +1548,33 @@ mod dxcc_numbers {
             assert_eq!(named.name, resolve(parent).unwrap().entity, "{code}");
             assert!(!named.deleted);
         }
+    }
+
+    /// Every WAE area the file holds folds into the DXCC entity its own number names, and a DXCC
+    /// entity folds into nothing — the contest scorer keeps it as it is.
+    #[test]
+    fn a_wae_area_folds_into_its_dxcc_entity_and_nothing_else_folds() {
+        let areas: Vec<_> = resolver()
+            .entities
+            .iter()
+            .filter(|e| !e.is_dxcc)
+            .map(|e| (e.name.as_str(), wae_parent(&e.name)))
+            .collect();
+        assert_eq!(
+            areas,
+            [
+                ("Vienna Intl Ctr", Some("Austria")),
+                ("Shetland Islands", Some("Scotland")),
+                ("African Italy", Some("Italy")),
+                ("Sicily", Some("Italy")),
+                ("Bear Island", Some("Svalbard")),
+                ("European Turkey", Some("Asiatic Turkey")),
+            ]
+        );
+        for dxcc in ["Italy", "Austria", "United States", "Fed. Rep. of Germany"] {
+            assert_eq!(wae_parent(dxcc), None, "{dxcc}");
+        }
+        assert_eq!(wae_parent(""), None);
     }
 
     /// Each number the reports and the awards' tests rest on, checked against the table: it names

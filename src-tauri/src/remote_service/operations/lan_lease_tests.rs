@@ -74,15 +74,20 @@ fn heartbeat_on(
     )
 }
 
-/// An FT8 CQ on the air under `who`'s lease, with its transmit grant: what the radio loop halts on
-/// its next tick once the authority that permitted it is revoked.
-fn keyed_under(f: &Fixture, who: (&str, &str), now: Instant) {
-    f.authority.permit_transmit(who.1, true).unwrap();
-    let permit = f.authority.transmit.permit(now + LEASE).unwrap();
+/// An FT8 CQ on the air under the lease held, as a streamed controller's Call CQ puts it there:
+/// the native verb, under the session's presence minted from that lease. What the radio loop halts
+/// on its next tick once the lease's authority is revoked.
+fn keyed_under(f: &Fixture, (session, device): (&str, &str), state: &Value, now: Instant) {
+    let lease = state["leaseId"].as_str().unwrap();
+    let presence = f
+        .authority
+        .stream_presence(session, device, lease, now)
+        .unwrap();
     let mut e = f.engine.lock().unwrap();
     e.configure_remote_settings_store(f.dir.join("settings.json"));
     e.take_slot_tx_abort();
-    e.start_remote_ft_cq(permit, None).unwrap();
+    e.start_cq(None).unwrap();
+    assert!(e.hold_remote_presence(presence, now));
     assert!(e.tx_enabled(), "premise: on the air");
 }
 
@@ -119,7 +124,7 @@ fn the_relays_road_moving_never_drops_a_lan_controller() {
         let who = (LAN_SESSION, LAN_DEVICE);
         let state = control_on(&f, lan, who, now).unwrap();
         assert_eq!(state["phase"], "controlling", "{event}: premise");
-        keyed_under(&f, who, now);
+        keyed_under(&f, who, &state, now);
         let lease = state["leaseId"].as_str().unwrap();
         let presence = f
             .authority
@@ -148,7 +153,7 @@ fn the_relays_road_moving_never_drops_a_lan_controller() {
         // has.
         let g = Fixture::new();
         let relay_state = control_on(&g, g.connection, (SESSION, DEVICE), now).unwrap();
-        keyed_under(&g, (SESSION, DEVICE), now);
+        keyed_under(&g, (SESSION, DEVICE), &relay_state, now);
         relay_event(&g, event);
         assert!(
             halted(&g, now),
@@ -173,7 +178,7 @@ fn a_lan_connection_that_closes_drops_only_its_own_lease() {
     // The relay's browser in control; a LAN computer that holds nothing leaves.
     let f = Fixture::new();
     let state = control_on(&f, f.connection, (SESSION, DEVICE), now).unwrap();
-    keyed_under(&f, (SESSION, DEVICE), now);
+    keyed_under(&f, (SESSION, DEVICE), &state, now);
     let idle = f.authority.start_lan_connection();
     f.authority.retire_lan_connection(idle);
     assert!(
@@ -193,7 +198,7 @@ fn a_lan_connection_that_closes_drops_only_its_own_lease() {
     let second = f.authority.start_lan_connection();
     let who = (LAN_SESSION, LAN_DEVICE);
     let state = control_on(&f, first, who, now).unwrap();
-    keyed_under(&f, who, now);
+    keyed_under(&f, who, &state, now);
     f.authority.retire_lan_connection(second);
     assert!(
         !halted(&f, now),
@@ -265,7 +270,7 @@ fn invalidate_drops_every_lease_on_either_road() {
             (f.connection, (SESSION, DEVICE))
         };
         let state = control_on(&f, connection, who, now).unwrap();
-        keyed_under(&f, who, now);
+        keyed_under(&f, who, &state, now);
         assert!(!halted(&f, now), "{road}: premise, on the air");
         f.authority.invalidate();
         assert!(
@@ -335,7 +340,7 @@ fn a_lan_controllers_stop_holds_through_the_relays_road_moving() {
     let lan = f.authority.start_lan_connection();
     let who = (LAN_SESSION, LAN_DEVICE);
     let state = control_on(&f, lan, who, now).unwrap();
-    keyed_under(&f, who, now);
+    keyed_under(&f, who, &state, now);
     let stop = Request::StopTransmit {
         request_id: id(),
         station_boot_id: state["stationBootId"].as_str().unwrap().into(),
@@ -415,7 +420,7 @@ fn a_computer_takes_control_from_another_and_starts_with_tx_off() {
     );
     let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
     let held = control_on(&f, lan_a, a, now).unwrap();
-    keyed_under(&f, a, now);
+    keyed_under(&f, a, &held, now);
     let lease = held["leaseId"].as_str().unwrap();
     let presence = f
         .authority
@@ -428,7 +433,7 @@ fn a_computer_takes_control_from_another_and_starts_with_tx_off() {
             .expect("premise: A's presence is live")
     };
     assert!(
-        standing.held() && f.engine.lock().unwrap().remote_ft_tx_owned(),
+        standing.held() && f.engine.lock().unwrap().tx_enabled(),
         "premise: A on the air, its presence held"
     );
     assert_eq!(control_on(&f, lan_b, b, now), Err("controllerBusy"));
@@ -438,11 +443,7 @@ fn a_computer_takes_control_from_another_and_starts_with_tx_off() {
     assert_ne!(taken["leaseId"], held["leaseId"]);
     {
         let e = f.engine.lock().unwrap();
-        assert_eq!(
-            (e.tx_enabled(), e.remote_ft_tx_owned()),
-            (false, false),
-            "(TX enabled, A's over owned) after B took control"
-        );
+        assert!(!e.tx_enabled(), "TX enabled after B took control");
     }
     assert!(!presence.valid(now), "A's presence outlived the take");
     assert!(
@@ -602,5 +603,40 @@ fn taking_control_ends_a_live_satellite_track() {
     assert!(
         f.engine.lock().unwrap().sat_transponder_held().is_none(),
         "the dial is the operator's again"
+    );
+}
+
+/// ★ THE LAN WAIVER IS RECORDED PROVENANCE, NOT TRANSPORT (the 2026-10-23 sign-in decision,
+/// finding 3): a device the station paired/enrolled on its OWN network — recorded in the LAN book —
+/// is never held, even when the account lists it as sign-in-added with no waiver record, and even
+/// when it connects over the relay. A sign-in device that is NOT in the book is held regardless of
+/// a LAN-looking transport: a tunnelled connection can never take the LAN waiver.
+#[test]
+fn the_lan_waiver_keys_on_the_book_not_the_transport() {
+    // In the LAN book + listed sign-in-added + no record, but FREE: the book is the waiver.
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::from([LAN_DEVICE.to_string()]));
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![LAN_DEVICE.to_string()]));
+    control_on(&f, f.connection, (LAN_SESSION, LAN_DEVICE), now).unwrap();
+    assert!(
+        !f.engine.lock().unwrap().remote_transmit_held(),
+        "a device in the LAN book is free, sign-in-added or not, over any road"
+    );
+
+    // CONTROL (finding 3): a sign-in device NOT in the book, over a LAN-LOOKING transport, is still
+    // held — the transport marker grants no waiver.
+    let g = Fixture::new();
+    g.engine.lock().unwrap().set_tx_enabled(false);
+    g.authority
+        .set_signin_devices(std::collections::BTreeSet::from([LAN_DEVICE.to_string()]));
+    let lan = g.authority.start_lan_connection();
+    control_on(&g, lan, (LAN_SESSION, LAN_DEVICE), now).unwrap();
+    assert!(
+        g.engine.lock().unwrap().remote_transmit_held(),
+        "a sign-in device not in the book is held even on a LAN-looking transport"
     );
 }

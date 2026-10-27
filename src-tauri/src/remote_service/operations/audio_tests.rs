@@ -1,8 +1,7 @@
 //! Who may listen to the station's receive audio.
 //!
-//! The one thing these assert is a separation the operator makes at the radio: the
-//! logging grant and the control grant are given independently, and hearing the shack
-//! belongs to the second one. Every case that PASSES here is paired with one that must
+//! The one thing these assert is that hearing the shack belongs to the control grant the
+//! operator gives at the radio. Every case that PASSES here is paired with one that must
 //! fail, because a permission test that only ever says yes proves nothing.
 
 use super::*;
@@ -18,16 +17,21 @@ fn controlling(f: &Fixture, now: Instant) -> String {
 }
 
 #[test]
-fn a_logging_only_browser_may_not_listen() {
+fn a_browser_without_station_control_may_not_listen() {
     let f = Fixture::new();
     let now = Instant::now();
-    // The logging grant and a perfectly valid lease. This browser can write to the log.
-    let lease = f.acquire(now)["leaseId"].as_str().unwrap().to_owned();
+    // No control grant: no lease to listen under, and a lease id it names is not one.
+    let boot = control_state_version(&f, now, 4)["stationBootId"].clone();
+    let acquire = Request::Acquire {
+        request_id: id(),
+        station_boot_id: boot.as_str().unwrap().into(),
+    };
+    assert_eq!(f.run(&acquire, now), Err("localPermissionRequired"));
     assert_eq!(
         f.authority
-            .audio_admitted(SESSION, LEASE_DEVICE, &lease, now),
+            .audio_admitted(SESSION, LEASE_DEVICE, &id(), now),
         Err("notController"),
-        "a browser allowed to log was also allowed to listen"
+        "a browser without station control was allowed to listen"
     );
 
     // The control, and it is the whole point: the SAME browser, the SAME session, with
@@ -124,21 +128,16 @@ fn a_malformed_identity_is_refused_before_anything_is_looked_up() {
 
 #[test]
 #[cfg(feature = "radio")]
-fn the_listen_capability_is_advertised_under_station_control_and_not_under_logging() {
+fn the_listen_capability_is_advertised_only_under_station_control() {
     let f = Fixture::new();
     let now = Instant::now();
-    // Logging only: the browser is told about its logging capabilities and nothing about
-    // audio, so a browser that knows the lane still never offers a listen control.
-    f.authority.permit(DEVICE, true).unwrap();
-    let logging = control_state_version(&f, now, 4);
-    let capabilities = logging["controls"]["capabilities"].as_array().unwrap();
-    assert!(
-        capabilities.iter().any(|c| c == "qsoLogging"),
-        "fixture: logging was not granted"
-    );
+    // No station control: the browser is told nothing about audio, so a browser that knows the
+    // lane still never offers a listen control.
+    let without = control_state_version(&f, now, 4);
+    let capabilities = without["controls"]["capabilities"].as_array().unwrap();
     assert!(
         !capabilities.iter().any(|c| c == "audioListen"),
-        "a logging-only browser was offered the listen control"
+        "a browser without station control was offered the listen control"
     );
 
     // With station control, the hint appears — the control that makes the absence above

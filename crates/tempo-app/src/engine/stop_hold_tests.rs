@@ -594,16 +594,20 @@ fn a_udp_reply_after_a_watchdog_trip_arms_nothing_and_leaves_the_trip() {
 }
 
 /// ⛔ A logger's FreeText with "send" never arms TX, never restarts the watchdog clock and never
-/// clears a stop or a trip. It is queued only while the operator has TX armed (WSJT-X's Tx5 goes
-/// out only with Enable Tx on).
+/// clears a stop or a trip. It is queued as the next over (Tx 5) only while the operator has TX
+/// armed (WSJT-X's Tx5 goes out only with Enable Tx on).
 #[test]
 fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
     let free_text = |e: &mut Engine| {
-        let r = e.udp_free_text("TNX 73");
-        (r.is_ok(), e.tx_enabled(), !e.broadcast_queue.is_empty())
+        let r = e.udp_free_text("TNX 73", true);
+        let queued = e.snapshot().qso.and_then(|q| q.tx_now).as_deref() == Some("TNX 73");
+        (r.is_ok(), e.tx_enabled(), queued)
     };
+    // Operate's FT8 screen.
+    let operate = |e: &mut Engine| e.set_mode("qso-monitor").expect("the FT screen");
     // TX off, nothing stopped.
     let mut off = station();
+    operate(&mut off);
     off.set_operating_mode("digital", true);
     assert_eq!(
         free_text(&mut off),
@@ -612,6 +616,7 @@ fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
     );
     // After Stop TX: refused, and the stop still holds at Phone entry.
     let mut stopped = station();
+    operate(&mut stopped);
     stopped.set_operating_mode("digital", true);
     stopped.set_tx_enabled_by_operator(true);
     stopped.halt_tx();
@@ -625,6 +630,7 @@ fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
     // After a watchdog trip: refused, and the trip stands.
     let mut tripped = Engine::new("K1ABC", "EN61", 0);
     tripped.set_license_class("general");
+    operate(&mut tripped);
     rtty_watchdog_tripped(&mut tripped);
     tripped.set_operating_mode("digital", false);
     let after_trip = free_text(&mut tripped);
@@ -635,6 +641,7 @@ fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
     );
     // Control: armed by the operator, the text is queued and the watchdog clock keeps running.
     let mut armed = station();
+    operate(&mut armed);
     armed.set_operating_mode("digital", true);
     armed.set_tx_enabled_by_operator(true);
     armed.tx_watchdog_start = Some(1_000);

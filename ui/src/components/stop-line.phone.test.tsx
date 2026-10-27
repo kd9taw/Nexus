@@ -61,8 +61,8 @@ describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that 
 })
 
 describe('THE LEFT SIDE SWEEP (2026-10-03): no arrangement with Phone’s left side gates a control that stops a transmission', () => {
-  // The side stands between the header and the dock, beside the scope, the TX strip and the region;
-  // the strip moves into the stage beside it. Swept on a window wide enough for the side, with every
+  // The side stands between the TX strip and the dock, beside the region; the scope and the strip stay
+  // shell children above it (2026-10-26). Swept on a window wide enough for the side, with every
   // id hidden singly and all at once, as the arrangement sweep above does for the columns.
   afterEach(() => document.documentElement.style.removeProperty('--vw-eff'))
 

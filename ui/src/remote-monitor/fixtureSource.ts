@@ -1,4 +1,4 @@
-// Imported ONLY by the explicit preview entry and tests, never by the native adapter.
+// Imported only by tests: a monitor source that serves the recorded frames in fixtures.v2.json.
 import fixtures from './fixtures.v2.json'
 import type { MonitorSource } from './session'
 import { parseFrame } from './protocol'

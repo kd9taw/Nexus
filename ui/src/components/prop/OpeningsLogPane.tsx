@@ -43,11 +43,14 @@ export function modeClass(mode: string): string {
 }
 
 const FILTERS = ['All', '6m', '2m'] as const
+/** Bands the log can hold beyond the standing filters: a chip for one appears once the log holds
+ *  an opening on it (the UHF bands open by tropo), so the row stays as it was until then. */
+const MORE_BANDS = ['4m', '70cm', '33cm', '23cm'] as const
 
 export function OpeningsLogPane() {
   const units = useUnits()
   const [episodes, setEpisodes] = useState<OpeningEpisode[]>([])
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All')
+  const [filter, setFilter] = useState<string>('All')
   useEffect(() => {
     let live = true
     const load = () =>
@@ -119,7 +122,7 @@ export function OpeningsLogPane() {
   return (
     <div className="openings-log">
       <div className="openings-log-filters" role="group" aria-label={t('prop.openingsLog.filter.aria')}>
-        {FILTERS.map((f) => (
+        {[...FILTERS, ...MORE_BANDS.filter((b) => episodes.some((e) => e.band === b))].map((f) => (
           <button
             key={f}
             type="button"

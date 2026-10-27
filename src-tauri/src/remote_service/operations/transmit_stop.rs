@@ -2,10 +2,9 @@
 //! The mirror is updated only under Core; its own lock never contains I/O or
 //! acquires Core/Engine. An admitted Stop retires the current transmit generation at once.
 //!
-//! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, with
-//! or without FT8/FT4 transmit permission (that permission is needed only to START), and an admitted
-//! Stop stops every transmission at the station, however it started (`stop_station`). A browser
-//! without station control is refused and changes nothing.
+//! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, and an
+//! admitted Stop stops every transmission at the station, however it started (`stop_station`). A
+//! browser without station control is refused and changes nothing.
 //!
 //! NEVER REFUSED FOR ITS AGE (operator ruling 2026-10-03: "Stop TX always stops whatever is
 //! transmitting, even if it was pressed before the last halt"). The stop token is checked for its
@@ -48,10 +47,12 @@ impl Owner {
 }
 
 impl Authority {
-    pub(super) fn revoke_transmit_device(&self, device: &str) -> Result<(), &'static str> {
+    /// A station-control revoke (#318). `reconcile` removes the grant, and ends the device's
+    /// lease if it holds one, before any later request consumes Core.
+    pub(super) fn revoke_grant_device(&self, device: &str) -> Result<(), &'static str> {
         {
             let mut pending = self
-                .transmit_revocations
+                .grant_revocations
                 .lock()
                 .map_err(|_| "authorityUnavailable")?;
             // This local-only queue is bounded independently of a blocked file.
@@ -62,37 +63,7 @@ impl Authority {
         }
         let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         if owner.as_ref().is_some_and(|o| o.device == device) {
-            // Ends this browser's own transmission at once. Its Stop stays: stopping needs only
-            // station control, and revoking transmit permission leaves that in place.
-            self.transmit.revoke();
-        }
-        // reconcile removes the queued grant before any subsequent command.
-        // Neither lock above acquires Core/Engine or performs external I/O.
-        Ok(())
-    }
-
-    /// The same for a logging or station-control revoke (#318). `reconcile` removes the grant,
-    /// and ends the device's lease if it holds one, before any later request consumes Core.
-    pub(super) fn revoke_grant_device(
-        &self,
-        grant: Grant,
-        device: &str,
-    ) -> Result<(), &'static str> {
-        {
-            let mut pending = self
-                .grant_revocations
-                .lock()
-                .map_err(|_| "authorityUnavailable")?;
-            let entry = (grant, device.to_owned());
-            // Bounded like the transmit queue, and for the same reason.
-            if pending.len() >= 64 && !pending.contains(&entry) {
-                return Err("remoteBusy");
-            }
-            pending.insert(entry);
-        }
-        let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
-        if owner.as_ref().is_some_and(|o| o.device == device) {
-            // The controller's in-flight hardware and transmit permits end at once, as they do
+            // The controller's in-flight transmit permits end at once, as they do
             // when Core is free; the lease itself goes at the next reconcile.
             self.revoke_execution();
         }
@@ -106,7 +77,7 @@ impl Authority {
     /// would be gone and the Stop refused `localPermissionRequired` instead of `leaseExpired`. The
     /// worst this allows is an unnecessary unkey of a station that was already transmitting, and
     /// that is a smaller harm than a keyed rig with a Stop button that reported a refusal. It
-    /// keeps nothing else alive: every arming path checks the LIVE lease and the transmit grant.
+    /// keeps nothing else alive: presence is minted only under the LIVE lease (`presence_until`).
     pub(super) fn sync_stop_owner(&self, c: &Core, now: Instant) {
         // The lease's road, for the relay's departures, which cannot wait for Core.
         self.lan_lease.store(
@@ -116,7 +87,7 @@ impl Authority {
         let owner = c
             .lease
             .as_ref()
-            // Station control, not transmit permission: stopping is always the safe direction.
+            // Station control alone: stopping is always the safe direction.
             .filter(|l| c.control_grants.contains(&l.device))
             .and_then(|l| {
                 c.boot.as_ref().map(|boot| Owner {
@@ -242,6 +213,7 @@ impl Authority {
 ///   · Operate and JS8 Stop TX, and the Phone and SSTV header Stop TX → `halt_tx`
 ///   · CW Stop TX (and Esc) → `stop_cw` + `halt_tx`
 ///   · RTTY Stop TX → `rtty_stop` + `halt_tx`; PSK Stop TX → `psk_stop` + `halt_tx`
+///   · JTTY's dock Esc/Stop → `jtty_stop`; its Stop TX → `halt_tx`
 ///   · SSTV's send-bar Stop → `sstv_stop`; the Phone voice keyer's ■ Stop → `stop_voice`
 ///
 /// The station does not know which cockpit the browser is showing, so it runs the union, `halt_tx`
@@ -322,6 +294,7 @@ pub(super) fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
     e.stop_cw();
     e.rtty_stop();
     e.psk_stop();
+    e.jtty_stop();
     e.sstv_stop();
     e.stop_voice();
     e.halt_tx();

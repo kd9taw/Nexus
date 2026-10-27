@@ -154,21 +154,21 @@ describe("the Logbook's Country cell sets the DXCC entity by hand", () => {
   // not modal: a modal menu takes the page's pointer events, so the second click of a double-click
   // on the country itself landed on nothing, and the row never opened the contact (measured in
   // Chromium; jsdom sees only the pointer-events lock that caused it).
-  it("keeps a double-click inside the picker away from the row's detail view, and leaves the page's clicks alone", async () => {
+  it("keeps a double-click inside the picker away from the row's contact card, and leaves the page's clicks alone", async () => {
     const cell = await mount(k1n(null, 'United States'))
     const menu = await open(cell)
     expect(document.body.style.pointerEvents).not.toBe('none')
-    // Each double-click is checked as it lands: an open detail view hides the menu from the
+    // Each double-click is checked as it lands: an open contact card hides the menu from the
     // accessibility tree, so a later lookup would fail first and name the wrong cause.
     fireEvent.doubleClick(within(menu).getByRole('textbox'))
-    expect(document.querySelector('.qso-detail-dialog')).toBeNull()
+    expect(document.querySelector('.contact-card-dialog')).toBeNull()
     fireEvent.doubleClick(within(menu).getAllByRole('menuitemradio')[0])
-    expect(document.querySelector('.qso-detail-dialog')).toBeNull()
+    expect(document.querySelector('.contact-card-dialog')).toBeNull()
     fireEvent.keyDown(within(menu).getByRole('textbox'), { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     // Control: the row's double-click does open it, so the absence above is a real one.
     const row = cell.closest('.logbook-row') as HTMLElement
     fireEvent.doubleClick(row)
-    await waitFor(() => expect(document.querySelector('.qso-detail-dialog')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('.contact-card-dialog')).not.toBeNull())
   })
 })

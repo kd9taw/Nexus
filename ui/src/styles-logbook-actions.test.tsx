@@ -82,14 +82,20 @@ function winner(selectors: string[], prop: string): string | null {
   return best?.value ?? null
 }
 
-/** The track list the row gets under `selectors`. `minmax(336px, 0.8fr)` stays one track. */
-function tracks(selectors: string[]): string[] {
-  const v = winner(selectors, 'grid-template-columns')
-  expect(v, `no grid-template-columns wins for ${selectors.join(' / ')}`).toBeTruthy()
+/** Every rule that can set a Logbook row's template, by surface: the generic log rows, the
+ *  Logbook's own, the narrow viewports and the wide table. The cascade must hand each surface the
+ *  column model's `var(--log-cols)` — a later or stronger rule that wins instead puts back a
+ *  template that knows nothing of the columns rendered. */
+const ROW_RULES = ['.log-row', '.logbook-row', '.logbook-table .logbook-row', '.logbook-table.wide .logbook-row']
+const NARROW_RULES = ["[data-viewport='sm'] .log-row", "[data-viewport='sm'] .logbook-row", "[data-viewport='sm'] .logbook-table .logbook-row"]
+
+/** A template's tracks. `minmax(384px, 0.8fr)` stays one track. */
+function tracks(template: string): string[] {
+  expect(template, 'the table must carry a template').toBeTruthy()
   const out: string[] = []
   let depth = 0
   let cur = ''
-  for (const ch of (v ?? '').replace(/\s+/g, ' ').trim()) {
+  for (const ch of template.replace(/\s+/g, ' ').trim()) {
     if (ch === '(') depth++
     if (ch === ')') depth--
     if (ch === ' ' && depth === 0) {
@@ -202,6 +208,11 @@ vi.mock('./api', () => {
 })
 vi.mock('./toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn() }))
 
+/** The template the rendered table hands its rows (`--log-cols`, the column model's). */
+function renderedTemplate(row: HTMLElement): string {
+  return (row.closest('.logbook-table') as HTMLElement).style.getPropertyValue('--log-cols')
+}
+
 async function renderRow(moreColumns = false): Promise<HTMLElement> {
   // `moreColumns` is read from localStorage on mount (#239's "More columns" toggle), so the
   // wide table is rendered by seeding it rather than by driving the chip.
@@ -252,41 +263,42 @@ describe('the Logbook row-action cluster fits its grid track', () => {
   })
 
   it('gives the tail cell a track of its own at every viewport', async () => {
+    // The row's template is the column model's, through `var(--log-cols)`, on every surface. The
+    // cascade is COMPUTED: the generic `[data-viewport='sm'] .log-row` rule carries two classes
+    // too, and wins over a one-class Logbook rule at the narrow sizes — the four-track log
+    // template back on a thirteen-cell row.
+    expect(winner(ROW_RULES, 'grid-template-columns')).toBe('var(--log-cols)')
+    expect(winner([...ROW_RULES, ...NARROW_RULES], 'grid-template-columns')).toBe('var(--log-cols)')
+    // …and a rule that still hid cells by POSITION would hide the wrong ones once a column can
+    // be hidden. None may remain.
+    expect(RULES.filter((r) => /logbook-row[^{]*nth-child/.test(r.selector)).map((r) => r.selector)).toEqual([])
+
     const row = await renderRow()
     const cells = row.querySelectorAll(':scope > .log-cell').length
     expect(cells, 'the row must render cells').toBeGreaterThan(5)
-    expect(
-      tracks(['.logbook-row']).length,
-      'the compact template must have one track per rendered cell',
-    ).toBe(cells)
+    expect(tracks(renderedTemplate(row)).length, 'the compact template must have one track per rendered cell').toBe(cells)
+    cleanup()
 
-    // …and the narrow one, which hides seven columns (six until #239 split Date from Time —
-    // the count is computed below, so only this sentence had to move). A template SHORTER
-    // than the cell count
-    // auto-places the tail cell onto a second GRID ROW — the action cluster rendered beneath
-    // the callsign instead of beside it. That is what shipped from 2026-08-23, when the Notes
-    // column landed and was added to neither the hide list nor this template.
-    // Which columns sm hides is COMPUTED, one cascade query per cell position, so a later
-    // rule that unhides one is seen. (:nth-child is 1-based, hence the +1.)
-    const hidden = Array.from({ length: cells }, (_, i) => i + 1).filter(
-      (n) => winner([`[data-viewport='sm'] .logbook-row .log-cell:nth-child(${n})`], 'display') === 'none',
-    ).length
-    expect(hidden, 'the sm rules must hide some columns, or this check is vacuous').toBeGreaterThan(0)
-    expect(
-      tracks(["[data-viewport='sm'] .logbook-row"]).length,
-      'the narrow template must have a track for every cell it does not hide',
-    ).toBe(cells - hidden)
+    // The narrow window, which renders fewer columns. A template SHORTER than the cell count
+    // auto-places the tail cell onto a second GRID ROW — the action cluster rendered beneath the
+    // callsign instead of beside it. That is what shipped from 2026-08-23, when the Notes column
+    // landed and was added to neither the hide list nor the narrow template.
+    document.documentElement.setAttribute('data-viewport', 'sm')
+    try {
+      const narrow = await renderRow()
+      const narrowCells = narrow.querySelectorAll(':scope > .log-cell').length
+      expect(narrowCells, 'the narrow table must render fewer cells, or this check is vacuous').toBeLessThan(cells)
+      expect(tracks(renderedTemplate(narrow)).length).toBe(narrowCells)
+    } finally {
+      document.documentElement.removeAttribute('data-viewport')
+    }
+    cleanup()
 
-    // The "More columns" table (#239) is the same shape of trap: seven more cells, its own
-    // template, and nothing tying the two together. It shows every column at every viewport,
-    // so one count covers it.
+    // The wide ("More columns") table: more cells, still one track each.
     const wideRow = await renderRow(true)
     const wideCells = wideRow.querySelectorAll(':scope > .log-cell').length
     expect(wideCells, 'the wide table must render more cells than the compact one').toBeGreaterThan(cells)
-    expect(
-      tracks(['.logbook-table.wide .logbook-row']).length,
-      'the wide template must have one track per rendered cell',
-    ).toBe(wideCells)
+    expect(tracks(renderedTemplate(wideRow)).length, 'the wide template must have one track per rendered cell').toBe(wideCells)
   })
 
   it('floors the tail track above the cluster it has to hold', async () => {
@@ -304,13 +316,22 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     const lower = clusterLowerBound()
     expect(lower, 'the bound must be non-trivial, or every floor check below is vacuous').toBeGreaterThan(200)
 
-    const surfaces: [string, string[]][] = [
-      ['the compact table', ['.logbook-row']],
-      ['the narrow viewport', ["[data-viewport='sm'] .logbook-row"]],
-      ['the wide ("more columns") table', ['.logbook-table.wide .logbook-row']],
+    cleanup()
+    const surfaces: [string, () => Promise<HTMLElement>][] = [
+      ['the compact table', () => renderRow()],
+      [
+        'the narrow viewport',
+        async () => {
+          document.documentElement.setAttribute('data-viewport', 'sm')
+          return renderRow()
+        },
+      ],
+      ['the wide ("more columns") table', () => renderRow(true)],
     ]
-    for (const [name, sels] of surfaces) {
-      const list = tracks(sels)
+    for (const [name, rendered] of surfaces) {
+      const list = tracks(renderedTemplate(await rendered()))
+      cleanup()
+      document.documentElement.removeAttribute('data-viewport')
       const floor = floorOf(list[list.length - 1])
       expect(floor, `${name}: the tail track must carry a px floor, not a bare fr`).not.toBeNull()
       expect(

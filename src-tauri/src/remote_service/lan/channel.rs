@@ -6,8 +6,9 @@
 //!    or over the caps ([`super::gate`]), is dropped as it arrives.
 //! 2. **The handshake, inside one deadline** ([`HANDSHAKE`]): TLS 1.3 with the computer's key held
 //!    to the paired keys ([`super::tls`]), the WebSocket upgrade, and the hello. A computer that
-//!    does not finish in time, or proves no paired key, counts against its address at the gate. A
-//!    refused key reads its refusal and then an orderly close ([`drain`]).
+//!    does not finish in time, or proves no paired key, counts against its address at the gate; one
+//!    cut there to make room for newer handshakes does not. One that finishes then takes a
+//!    session's place. A refused key reads its refusal and then an orderly close ([`drain`]).
 //! 3. **The hello.** The LAN protocol, stream and operation versions must be the shack's own; a
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
@@ -27,7 +28,9 @@
 //!    other build is refused, saying which side to update, and the connection closes before a call
 //!    runs. A window's session never opens it. On it go the calls, routed by class, and their
 //!    answers, the pushed feeds and the events. One writer writes everything on the connection
-//!    (`super::outbox`), a Stop and its answer ahead of all else.
+//!    (`super::outbox`), a Stop and its answer ahead of all else. Its `opened` names this station's
+//!    key for the internet road (public half only) when the station has one, so a computer hears it
+//!    from the station on a link already pinned to it, never from the service alone.
 //! 6. **Internet roads**, in place of the LAN's: an `open` may ask for them on a connection whose
 //!    welcome named no road of the LAN's, where the listener offers them (`InternetRoads`). Each
 //!    is a socket, ICE and thread of its own at the shack (`super::stop_road`,
@@ -55,6 +58,7 @@ use super::super::stream::{Station, StreamLane};
 use super::super::transport::{identifier, random_secret, Feeds};
 use super::commands::{Commands, Lane, Opening, OUTCOMES, WATCH};
 use super::datagram;
+use super::enrol;
 use super::gate::Gate;
 use super::outbox::Outbox;
 use super::pairing::{self, Asked, Desk, Outcome};
@@ -125,7 +129,15 @@ pub(super) struct Shared {
     /// welcome named no road of the LAN's. `None` on the LAN's own listener, where every road is
     /// the LAN's.
     pub internet: Option<InternetRoads>,
+    /// This station's key for the internet road, the public half only (SPKI, lowercase hex, as the
+    /// service lists it), read when an `open` is answered; `None` while the station has no pairing
+    /// with the service. Its `opened` names it, so a computer learns it over a link already pinned.
+    pub station_key: StationKeyOf,
 }
+
+/// Where a connection reads this station's key for the internet road: the public half alone. The
+/// signer that holds the private half never reaches a channel.
+pub(crate) type StationKeyOf = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// Who may hold a session on this channel, by the SHA-256 of the key its TLS proved: that
 /// computer's device id, or `None`. And what tells a session its computer was removed, so it ends
@@ -283,6 +295,18 @@ enum FromComputer {
         name: String,
         nonce: String,
     },
+    /// A computer enrolling by its own sign-in to the station's account (`super::enrol`): the
+    /// first message only, and it never reaches the lane.
+    Enrol {
+        protocol: u8,
+        stream: u8,
+        operation: u8,
+        name: String,
+        kind: String,
+        #[serde(rename = "publicKey")]
+        public_key: String,
+        proof: String,
+    },
     OperationRequest {
         request: Box<Request>,
     },
@@ -423,16 +447,39 @@ pub(super) async fn connection<S>(
     {
         return;
     }
-    let Ok(_ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
+    let Ok(mut ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
         return;
     };
-    // 2 and 3. The handshake, inside one deadline.
-    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
+    // A first read of the signed-in computers that did not complete admits nobody: read again
+    // before this one is asked (at most once a while), off the runtime, since the store can block,
+    // and inside the handshake's deadline.
+    let enrolment = shared.desk.as_ref().map(|desk| desk.enrolment.clone());
+    let opening = async {
+        if let Some(enrolment) = enrolment.filter(|enrolment| !enrolment.is_read()) {
+            let now = Instant::now();
+            let _ = tokio::task::spawn_blocking(move || enrolment.retry(now)).await;
+        }
+        handshake(stream, &shared, Some(peer)).await
+    };
+    // 2 and 3. The handshake, inside one deadline, unless enough newer ones arrive meanwhile to cut
+    // it: a handshake holds a handshake's place, never a session's.
+    let handshake = tokio::select! {
+        done = tokio::time::timeout(shared.handshake, opening) => done.ok(),
+        // ⛔ Cut to make room: newer arrivals did it, not this address, so it is never counted
+        // against it. Counted, a flood could cut a paired computer's handshakes until its own
+        // address was ignored.
+        () = ticket.cut() => return,
+    };
     match handshake {
-        Ok(Ok(Opened::Session(socket, pin, device))) => {
+        // Refused for its version, and told which side to update: not counted.
+        Some(Ok(Opened::Told)) => {}
+        // Done, and only now holding one of the sessions' places: with every one taken, it is closed
+        // before its welcome, not counted.
+        Some(Ok(_)) if ticket.opened().is_err() => {}
+        Some(Ok(Opened::Session(socket, pin, device))) => {
             session(socket, pin, device, shared, stop, Some(peer.ip())).await;
         }
-        Ok(Ok(Opened::Pairing(socket, asked))) => {
+        Some(Ok(Opened::Pairing(socket, asked))) => {
             // From here on this connection holds the pairing desk and nothing else: no operations
             // authority, no engine, no stream.
             let (gate, desk, deadline) =
@@ -444,9 +491,18 @@ pub(super) async fn connection<S>(
                 }
             }
         }
-        // Refused for its version, and told which side to update: not counted.
-        Ok(Ok(Opened::Told)) => {}
-        Ok(Err(())) | Err(_) => shared.gate.failed(peer.ip(), Instant::now()),
+        Some(Ok(Opened::Enrol(socket, asked))) => {
+            // As a pairing: this connection holds the desk and nothing else.
+            let (gate, desk, deadline) =
+                (shared.gate.clone(), shared.desk.clone(), shared.handshake);
+            drop(shared);
+            if let Some(desk) = desk {
+                if enrol::session(socket, asked, desk, deadline, stop).await == Outcome::Failed {
+                    gate.failed(peer.ip(), Instant::now());
+                }
+            }
+        }
+        Some(Err(())) | None => shared.gate.failed(peer.ip(), Instant::now()),
     }
 }
 
@@ -458,7 +514,7 @@ pub(super) async fn tunnel<S>(stream: S, shared: Shared, stop: watch::Receiver<b
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
+    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared, None)).await;
     if let Ok(Ok(Opened::Session(socket, pin, device))) = handshake {
         session(socket, pin, device, shared, stop, None).await;
     }
@@ -472,13 +528,16 @@ enum Opened<S> {
     Session(Socket<S>, [u8; 32], String),
     /// A computer asking to pair, for a pairing-only connection.
     Pairing(Socket<S>, Asked),
+    /// A computer asking to enrol, for an enrol-only connection.
+    Enrol(Socket<S>, enrol::Asked),
     /// Refused for its version, and already told which side to update.
     Told,
 }
 
 /// TLS, the upgrade and the first message: a hello from a paired computer, or a request to pair.
-/// `Err`: a failed handshake.
-async fn handshake<S>(stream: S, shared: &Shared) -> Result<Opened<S>, ()>
+/// `Err`: a failed handshake. A computer refused for its key is written to the diagnostic log with
+/// the address it came from (`peer`, none through the room's pipe) and why, never the key.
+async fn handshake<S>(stream: S, shared: &Shared, peer: Option<SocketAddr>) -> Result<Opened<S>, ()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -491,6 +550,7 @@ where
         Err((error, io)) => {
             // Every other failure closes at once.
             if refused_key(&error) {
+                refused(peer, "its key is not paired here");
                 drain(io).await;
             }
             return Err(());
@@ -525,11 +585,10 @@ where
         }) => {
             // Asked again here, after the verifier: a computer revoked during its own handshake
             // is out, and a key the verifier took only for the pairing window is no paired one.
-            let device = shared
-                .roster
-                .paired(&pin)
-                .filter(|d| identifier(d))
-                .ok_or(())?;
+            let Some(device) = shared.roster.paired(&pin).filter(|d| identifier(d)) else {
+                refused(peer, "its key is not paired here, or no longer");
+                return Err(());
+            };
             match refusal((protocol, stream, operation)) {
                 Some(reason) => told(socket, reason).await,
                 None => Ok(Opened::Session(socket, pin, device)),
@@ -550,8 +609,34 @@ where
                 Asked::new(&name, &nonce, key, exporter).ok_or(())?,
             )),
         },
+        // Nor does anything enrol through it.
+        Ok(FromComputer::Enrol { .. }) if shared.desk.is_none() => Err(()),
+        Ok(FromComputer::Enrol {
+            protocol,
+            stream,
+            operation,
+            name,
+            kind,
+            public_key,
+            proof,
+        }) => match refusal((protocol, stream, operation)) {
+            Some(reason) => told(socket, reason).await,
+            None => Ok(Opened::Enrol(
+                socket,
+                enrol::Asked::new(&name, &kind, &public_key, &proof, key).ok_or(())?,
+            )),
+        },
         _ => Err(()),
     }
+}
+
+/// Why the station did not take a computer, for the diagnostic log: where it came from and why.
+fn refused(peer: Option<SocketAddr>, why: &str) {
+    let from = peer.map_or_else(|| "through the room".to_string(), |at| format!("at {at}"));
+    tempo_core::applog::warn(
+        "remote",
+        &format!("on this network: refused a computer {from}: {why}"),
+    );
 }
 
 /// Did the handshake fail on the computer's key: one no paired computer holds, outside the pairing
@@ -761,13 +846,16 @@ async fn session<S>(
                     break StreamReason::StreamClosed;
                 }
                 match message {
-                    FromComputer::Hello { .. } | FromComputer::Pair { .. } => break StreamReason::StreamClosed,
+                    FromComputer::Hello { .. } | FromComputer::Pair { .. } | FromComputer::Enrol { .. } => break StreamReason::StreamClosed,
                     FromComputer::Open { profile, app, contract, run, roads } => {
                         if lane.is_some() || run == 0 { break StreamReason::StreamClosed }
                         let profile = Profile::named(&profile);
                         let refused = match profile {
-                            // A kind of client this build does not serve; a later shack may.
+                            // A kind of client this build does not know; a later shack may.
                             None => Some("updateStation"),
+                            // A phone, known and refused by name: a later shack serves it, so the
+                            // phone is told to update the station, as for a kind not known.
+                            Some(profile) if !profile.served() => Some("updateStation"),
                             Some(_) => wire::refusal(End::Shack, shared.build, (&app, &contract)),
                         };
                         let (Some(profile), None) = (profile, refused) else {
@@ -801,6 +889,13 @@ async fn session<S>(
                         let mut opened = json!({"type":"opened"});
                         if let Some(net) = &internet {
                             opened["roads"] = net.named();
+                        }
+                        // This station's key for the internet road, on a link already pinned to
+                        // this station: what lets a computer pin it without taking the service's
+                        // word for it. Never in the welcome, which a computer of another build
+                        // reads whole and exactly.
+                        if let Some(key) = (shared.station_key)() {
+                            opened["stationKey"] = key.into();
                         }
                         if outbox.text(opened.to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }

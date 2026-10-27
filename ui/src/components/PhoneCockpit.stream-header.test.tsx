@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // THE PHONE SCREEN'S ON AIR SIGN WAITS FOR THE VOICE, LIKE THE PTT BUTTON (the operator's pick
-// "Header ON AIR waits too", 2026-09-28, completed by the lead's Q1 ruling of 2026-09-29). DISPLAY ONLY.
+// "Header ON AIR waits too", 2026-09-28, completed by a ruling of 2026-09-29). DISPLAY ONLY.
 // The sign left the header for the TX strip under the scope with the rest of the transmit cluster
 // (2026-10-01, `CockpitTxStrip`), and the rule went with it: the sign under test is the strip's.
 //

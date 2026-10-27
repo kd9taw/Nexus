@@ -39,14 +39,14 @@ afterEach(() => {
 })
 
 describe('a cockpit’s scale settings', () => {
-  it('start from the specification’s defaults, with CW’s averaging off', () => {
+  it('start from the specification’s defaults, with CW’s averaging off and Phone’s window fast', () => {
     for (const c of COCKPITS) {
       expect(loadScaleSettings(c), c).toEqual({
-        averageMs: c === 'cw' ? 0 : 250,
+        averageMs: c === 'cw' ? 0 : c === 'phone' ? 100 : 250,
         detector: 'peak',
         gain: 0,
         zero: 0,
-        window: 'balanced',
+        window: c === 'phone' ? 'fast' : 'balanced',
       })
     }
   })
@@ -139,10 +139,10 @@ describe('clamped on load', () => {
     // Never crossed: the rig scope's G/Z were never stored, the waterfall had no window.
     expect(loadScaleSettings('phone').gain).toBe(0)
     expect(loadScaleSettings('operate').window).toBe('balanced')
-    // Garbage in the old keys is the default, as the old controls read it.
+    // Garbage in the old keys is the default, as the old controls read it (Phone's is now 'fast').
     window.localStorage.setItem('nexus.phonescope.win', 'ultra')
     window.localStorage.setItem('nexus.waterfall.gain', 'abc')
-    expect(loadScaleSettings('phone').window).toBe('balanced')
+    expect(loadScaleSettings('phone').window).toBe('fast')
     expect(loadScaleSettings('psk').gain).toBe(0)
   })
 

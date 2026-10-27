@@ -312,10 +312,11 @@ const phoneShellGap = () => {
   return v
 }
 
-describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and the five-kind shell is unchanged without it', () => {
-  // The operator's pick: ⊞ Panels ▸ Arrange's "Left side", a column from under the header to the
-  // dock, beside the scope, the TX strip and the pane region, for Band Activity, Spots and Needed.
-  // Phone renders the scope, the strip and the region inside TWO WRAPPERS that are always there — so
+describe('THE LEFT SIDE (2026-10-03): a column beside the region, and the five-kind shell is unchanged without it', () => {
+  // The operator's pick: ⊞ Panels ▸ Arrange's "Left side", a column from under the TX strip to the
+  // dock (2026-10-26; from under the header until then), beside the pane region, for Band Activity,
+  // Spots and Needed. The scope and the TX strip are shell children, full width, in both states.
+  // Phone renders the region inside TWO WRAPPERS that are always there — so
   // showing the side never moves the voice keyer or the log form to a new parent — and the wrappers
   // generate NO BOX until the side shows. These compute that the two states are what they claim.
 
@@ -324,9 +325,8 @@ describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and
     expect(win, 'nothing declares display on .cockpit-flat — a wrapper with a box changes every Phone screen').not.toBeNull()
     expect(
       win!.value,
-      `\`${win!.sheet}: ${win!.selector} { display: ${win!.value} }\` — the scope, the TX strip and the region ` +
-        'must stay flex items of the SHELL while no side shows: the strip\'s sticky edges are measured against ' +
-        'the shell, which is what keeps Stop TX on screen at a 175 % pin.',
+      `\`${win!.sheet}: ${win!.selector} { display: ${win!.value} }\` — the region ` +
+        'must stay a flex item of the SHELL while no side shows, or the stock Phone screen changes.',
     ).toBe('contents')
     // A flat wrapper is never a scroll container or a clip edge either.
     expect(classWinner('cockpit-flat', blockOverflowY)).toBeNull()
@@ -442,64 +442,52 @@ describe("FT'S ARRANGED COLUMNS (2026-10-07): stacks that scroll, FT's gap, and 
   })
 })
 
-describe('THE RTTY TUNING SCOPE (2026-10-17): a yielding row, a column that scrolls, a square that never sizes from its bitmap', () => {
-  // The column (square + nudges + words) is content that cannot shrink, inside a stream pane whose
-  // height the operator's divider sets. Shorter than the stack, the COLUMN must scroll; the row must
-  // yield like the transcript it replaced as the grower; and the text keeps the larger share.
-  it('the RX row is a grower that yields', () => {
-    expect(classWinner('rtty-rx-row', blockDecl('display'))?.value).toBe('flex')
-    expect(classWinner('rtty-rx-row', blockDecl('flex'))?.value).toBe('1 1 0')
-    expect(classWinner('rtty-rx-row', blockDecl('min-height'))?.value, 'a grower with a content floor clips').toBe('0')
+describe('THE RTTY TUNING SCOPE: right of the waterfall in its strip, a square of its own size (2026-10-26)', () => {
+  // The operator's placement since 2026-10-26: the scope stands RIGHT of the waterfall in the strip its
+  // divider sizes, so the waterfall keeps the common 25 % height and the scope keeps its size; the waterfall
+  // gives up the width. The square is the window's share (10em, growing to 14.5em) and the strip's height caps
+  // it only where the operator drags the strip shorter than that. The nudges and the words stand BESIDE the
+  // square (a strip is short and wide), so they never cost it height.
+  const SIZE = /^clamp\(10em, calc\(\S+ \* var\(--vw-eff[^)]*\)\), \S+em\)$/
+
+  it('the column is a grid: the square spans both rows, the nudges and the words stand beside it', () => {
+    expect(classWinner('rtty-tuning', blockDecl('display'))?.value).toBe('grid')
+    expect(classWinner('rtty-tuning', blockDecl('grid-template-columns'))?.value).toBe('auto min-content')
+    expect(classWinner('rtty-tuning', blockDecl('grid-template-rows'))?.value).toBe('minmax(0, 1fr) minmax(0, 1fr)')
+    expect(classWinner('rtty-tuning-box', blockDecl('grid-row'))?.value).toBe('1 / 3')
+    expect(classWinner('rtty-tuning-nudge', blockDecl('align-self'))?.value).toBe('end')
+    expect(classWinner('rtty-tuning-status', blockDecl('align-self'))?.value).toBe('start')
   })
 
-  it('the column scrolls its own deficit and never takes most of the row', () => {
+  it('the column neither grows nor shrinks, scrolls its own deficit, and never takes most of the strip', () => {
     const y = classWinner('rtty-tuning', blockOverflowY)
     expect(y && SCROLLS(y.value), `the tuning column does not scroll: ${JSON.stringify(y)}`).toBe(true)
     expect(classWinner('rtty-tuning', blockDecl('min-height'))?.value).toBe('0')
     expect(classWinner('rtty-tuning', blockDecl('flex'))?.value, 'the column must not grow or shrink').toBe('0 0 auto')
     expect(classWinner('rtty-tuning', blockDecl('max-width'))?.value).toBe('45%')
-    // Grows with the window between a floor and a ceiling, through the zoom-aware width only.
-    // The window's share, as a clamp, capped by what the row has room for (the fit below).
-    expect(classWinner('rtty-tuning', blockDecl('width'))?.value).toMatch(/^min\(clamp\(\S+em, calc\(\S+ \* var\(--vw-eff[^)]*\)\), \S+em\), calc\(100cqh - \S+em\)\)$/)
   })
 
-  it('THE GUARANTEE, AS AMENDED: the square never yields; the text pane takes the room and the scope fits it', () => {
-    // Operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks", amended the same day: take the room
-    // from the waterfall (to its 6em minimum) and the log strip (to its Call row), and where even that
-    // is short the square takes the largest that fits. NOTHING scrolls.
-    expect(classWinner('rtty-tuning-box', blockDecl('flex'))?.value, 'the square must not shrink').toBe('0 0 auto')
-    const width = classWinner('rtty-tuning', blockDecl('width'))!.value
-    const size = /^min\((clamp\([^]*\)), calc\(100cqh - \S+em\)\)$/.exec(width)?.[1]
-    expect(size, `the column's width is not min(<size>, <the row's room>): ${width}`).toMatch(/^clamp\(10em,/)
-    // The fit reads the row's own height: the row must be the size container.
-    expect(classWinner('rtty-rx-row', blockDecl('container-type'))?.value).toBe('size')
-    // A browser without container units keeps the plain clamp: it is declared first, in the same rule.
-    const col = RULES.find((r) => r.selector === '.rtty-tuning')!
-    expect([...col.body.matchAll(/(?:^|;)\s*width\s*:\s*([^;]+)/g)].map((m) => m[1].trim().replace(/\s+/g, ' '))).toEqual([size, width])
-    // The text pane is floored at the column it holds, but never past what the shell has once the
-    // rest stands at its minimum (`100% - 34em`, measured in Chrome so nothing scrolls).
-    const floor = classWinner('rtty-tuning-on', blockVar('--rtty-stream-floor'))?.value
-    expect(floor).toBe(`min(calc(100% - 34em), calc(${size} + 8.5em))`)
-    // The room it takes: the waterfall to its 6em minimum, the log strip to its Call row.
-    expect(classWinner('rtty-tuning-on', blockVar('--rtty-wf-floor'))?.value).toBe('6em')
-    expect(classWinner('rtty-tuning-on', blockVar('--rtty-fill-min'))?.value).toBe('6em')
-    // Each knob is set by that one shell modifier and nothing else.
+  it('the square is the window\'s share, capped only by the strip\'s own height', () => {
+    const width = classWinner('rtty-tuning-box', blockDecl('width'))!.value
+    const size = /^min\(([^]*), 100cqh\)$/.exec(width)?.[1]
+    expect(size, `the square's width is not min(<size>, 100cqh): ${width}`).toMatch(SIZE)
+    // A browser without container units keeps the plain share: declared first, in the same rule.
+    const box = RULES.find((r) => r.selector === '.rtty-tuning-box')!
+    expect([...box.body.matchAll(/(?:^|;)\s*width\s*:\s*([^;]+)/g)].map((m) => m[1].trim().replace(/\s+/g, ' '))).toEqual([size, width])
+    // The cap reads the strip's height: the strip is the size container.
+    const strip = STYLES_RULES.find((r) => r.selector === '.rtty-wf-row' && /container-type\s*:/.test(r.body))
+    expect(strip && blockDecl('container-type')(strip.body), 'the strip is not a size container').toBe('size')
+  })
+
+  it('takes no room from anything else: the 2026-10-17 knobs are gone', () => {
     for (const knob of ['--rtty-stream-floor', '--rtty-wf-floor', '--rtty-fill-min']) {
-      const setters = [...RULES, ...STYLES_RULES].filter((r) => new RegExp(`${knob}\\s*:`).test(r.body)).map((r) => r.selector)
-      expect(setters, knob).toEqual(['.rtty-tuning-on'])
+      const uses = [...RULES, ...STYLES_RULES].filter((r) => r.body.includes(knob)).map((r) => r.selector)
+      expect(uses, knob).toEqual([])
     }
-    // …and read where they act: the RTTY shell's fill floor and the RTTY/PSK waterfall's floor,
-    // each with the stock value as its fallback, so PSK and a hidden scope are unchanged.
-    const shell = STYLES_RULES.find((r) => r.selector.split(/\s*,\s*/).includes('.layout.single.rtty-cockpit') && /--cockpit-fill-min\s*:/.test(r.body))!
-    expect(blockVar('--cockpit-fill-min')(shell.body)).toBe('var(--rtty-fill-min, 10em)')
-    const wf = STYLES_RULES.find((r) => r.selector.split(/\s*,\s*/).includes('.rtty-cockpit .waterfall-wrap'))!
-    expect(blockDecl('min-height')(wf.body)).toBe('min(var(--rtty-wf-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)))')
-    // The floor is legal only with a valve behind it: the RTTY shell's own scroller.
-    const valve = STYLES_RULES.find((r) => r.selector.split(/\s*,\s*/).includes('.layout.single.rtty-cockpit') && /overflow-y\s*:/.test(r.body))
-    expect(valve && SCROLLS(blockOverflowY(valve.body) ?? ''), 'no deficit valve behind the floor').toBe(true)
+    expect([...RULES, ...STYLES_RULES].filter((r) => r.selector.includes('rtty-tuning-on'))).toEqual([])
   })
 
-  it('the square is the column wide and its canvas is out of flow', () => {
+  it('the square is square and its canvas is out of flow', () => {
     expect(classWinner('rtty-tuning-box', blockDecl('aspect-ratio'))?.value).toBe('1 / 1')
     expect(classWinner('rtty-tuning-box', blockDecl('position'))?.value).toBe('relative')
     expect(classWinner('rtty-tuning-box', blockDecl('min-height'))?.value, 'an aspect-ratio box will not shrink without it').toBe('0')

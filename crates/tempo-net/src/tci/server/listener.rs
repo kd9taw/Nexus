@@ -1,4 +1,4 @@
-//! Where the server listens (design §4.1): this computer's loopback only, IPv4 and IPv6, never a
+//! Where the server listens: this computer's loopback only, IPv4 and IPv6, never a
 //! wildcard and never a LAN address (operator ruling: loopback only in this release). A program
 //! that resolves `localhost` to `::1` first still reaches it.
 //!

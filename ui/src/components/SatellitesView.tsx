@@ -26,8 +26,7 @@
 // binding prints (MODE_FM/MODE_SSB below), and the sky dome's own plate text —
 // those plates are SIZED from the string by the viewBox arithmetic this file
 // documents at length, so they are instrument tick labels, not prose.
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useStationControl } from '../stationAccess'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppSnapshot,
   NeedTag,
@@ -1229,7 +1228,7 @@ function PassTimeline({
           ? t('sat.state.inPass', { mins: minsLeft })
           : t('sat.timeline.nextPass', { countdown: countdown(pass, nowSecs) })}
       </div>
-      {/* Phase 2's visual home (sat-visual-design §3.4): what the pass is WORTH
+      {/* Phase 2's visual home: what the pass is WORTH
           — the needed grids its footprint crosses — on the timeline itself, not
           buried in a sort order. Sample names print (backend caps at 8), the
           remainder is said honestly, and a pass that earns nothing has no lane. */}
@@ -1721,14 +1720,6 @@ function railDot(ok: boolean, absent = false) {
   )
 }
 
-/** Whether the satellite controls in this subtree may act, published once by the section rather
- * than threaded through it — the shape `StationControlContext` already has, and for the same
- * reason: the readiness rail, the radio binding and the lock-on pill all ask the one question, and
- * none of them is given what it takes to answer it. */
-const SatelliteControlContext = createContext(true)
-function useSatelliteAllowed(): boolean {
-  return useContext(SatelliteControlContext)
-}
 
 function TrackRail({
   track,
@@ -1783,7 +1774,6 @@ function TrackRail({
   onRefreshElements: () => void
   scrollRef: React.RefObject<HTMLDivElement>
 }) {
-  const stationControl=useSatelliteAllowed()
   // The rotor half of the track is fixed at arm time (DTO `mode`) except for a
   // rotator that stops answering, which demotes it mid-pass (`rotorLost` — the
   // track keeps the dial and runs to LOS); the Doppler row below reports the
@@ -1899,7 +1889,7 @@ function TrackRail({
         <span className="sat-rail-state" title={passText}>
           {passText}
         </span>
-        <button className="sat-rail-fix" disabled={!stationControl} onClick={onStop} title={t('sat.rail.stop.title')}>
+        <button className="sat-rail-fix" onClick={onStop} title={t('sat.rail.stop.title')}>
           {t('sat.track.stop')}
         </button>
       </div>
@@ -1956,7 +1946,7 @@ function TrackRail({
         {!dopplerOn && (
           <button
             className="sat-rail-fix"
-            disabled={!stationControl} onClick={onDopplerOn}
+            onClick={onDopplerOn}
             title={t('sat.rail.doppler.turnOn.title')}
           >
             {t('sat.rail.doppler.turnOn')}
@@ -1987,7 +1977,7 @@ function TrackRail({
         {dopplerOn && (!track.dopplerUplink || switchMapping) && canConfirm && !simplex && (
           <button
             className="sat-rail-fix"
-            disabled={!stationControl} onClick={() =>
+            onClick={() =>
               onVfoMap(
                 track.uplinkOffer === 'confirm-mapping'
                   ? undefined
@@ -2017,7 +2007,7 @@ function TrackRail({
         <select
           className="sat-rail-vfo"
           value={vfoMap}
-          disabled={!stationControl} onChange={(e) => onVfoMap(e.target.value as SatVfoMap, track.uplinkRadioId)}
+          onChange={(e) => onVfoMap(e.target.value as SatVfoMap, track.uplinkRadioId)}
           aria-label={t('sat.rail.vfoMap.aria')}
           title={t('sat.rail.vfoMap.title')}
         >
@@ -2051,7 +2041,7 @@ function TrackRail({
         {track.elementAgeDays > 14 && (
           <button
             className="sat-rail-fix"
-            disabled={!stationControl} onClick={onRefreshElements}
+            onClick={onRefreshElements}
             title={t('sat.rail.elements.refresh.title')}
           >
             {t('sat.rail.elements.refresh')}
@@ -2093,7 +2083,6 @@ function SatRadioBinding({
   pegged: boolean
   onTogglePeg: (on: boolean) => void
 }) {
-  const stationControl=useSatelliteAllowed()
   const leg = (confirmed: number | null, pending: number | null, arrow: string) =>
     confirmed != null
       ? `${confirmed.toFixed(3)} ${arrow}`
@@ -2146,7 +2135,7 @@ function SatRadioBinding({
         <button
           className={`sat-rail-fix${pegged ? ' on' : ''}`}
           aria-pressed={pegged}
-          disabled={!stationControl} onClick={() => onTogglePeg(!pegged)}
+          onClick={() => onTogglePeg(!pegged)}
           title={pegged ? t('sat.binding.pegged.title') : t('sat.binding.unpegged.title')}
         >
           {pegged ? t('sat.binding.pegged') : t('sat.binding.unpegged')}
@@ -2200,7 +2189,6 @@ function SatRadioBinding({
  * Layout: content-height row in the arm bar, sharing the rail/binding box
  * treatment (ui-layout §2). */
 function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
-  const stationControl=useSatelliteAllowed()
   return (
     <div className="sat-lockon" data-testid="sat-lockon">
       <div className="sat-rail-row">
@@ -2212,7 +2200,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
         <button
           type="button"
           className="sat-rail-fix"
-          disabled={!stationControl} onClick={onLockOn}
+          onClick={onLockOn}
           title={t('sat.lockOn.title')}
         >
           {t('sat.lockOn.label')}
@@ -2227,9 +2215,6 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
 const SATS_COLUMN_VARS = ['--sats-col-a', '--sats-col-b'] as const
 
 export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap }: Props) {
-  // Every gesture in this section — arm, stop, pick, Doppler, mapping, peg, elements — asks this
-  // one question.
-  const stationControl=useStationControl()
   const [nativeView, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
   const [nativeSchedule, setSchedule] = useState<SatPass[]>([])
@@ -2888,7 +2873,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
     heldT != null && (isSidebandSwap(heldT) || txNoteCw) ? heldT.uplinkMode : null
 
   const armTrack = (name: string, aosUnix: number) => {
-    if(!stationControl)return
     startSatTrack(name, aosUnix)
       .then((armed) => {
         setTrack(armed)
@@ -2913,7 +2897,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
       )
   }
   const disarmTrack = () => {
-    if(!stationControl)return
     stopSatTrack()
       .then(() => {
         setTrack(null)
@@ -2935,7 +2918,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
    * the view so the chip clears the moment fresh elements land. Always
    * resolves — a caller chaining on it never needs its own catch. */
   const refreshTles = () => {
-    if(!stationControl)return Promise.resolve()
     setTleRefreshing(true)
     return fetchTlesNow()
       .then((s) => {
@@ -2961,7 +2943,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
    * believing the radio is under Doppler control. `auto` = picked by "Work
    * this pass", disclosed in the toast and on the card. */
   const pickTransponder = (name: string, index: number | null, label = '', auto = false) => {
-    if(!stationControl)return Promise.resolve()
     pickBusy.current = true
     // `auto` travels to the backend as well as into the local mirror: it is the
     // one thing the engine cannot work out for itself, and while a pass is
@@ -3034,7 +3015,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   // wrong. Local state updates only after the write succeeds — the rail must
   // never show a switch position the store refused.
   const writeDopplerOn = () => {
-    if(!stationControl)return
     settingsWriteBusy.current = true
     getSettings()
       .then((s: Settings) => setSettings({ ...s, satDopplerOff: false }))
@@ -3059,7 +3039,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
    * rail's next 2 s read-back returned the untouched value and flipped it back
    * to 🔓. That is the "goes pinned, then goes unpinned" field report. */
   const writePegged = (on: boolean) => {
-    if(!stationControl)return
     settingsWriteBusy.current = true
     setPegLock(on)
       .then(() => setPegged(on))
@@ -3084,7 +3063,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
    * lands: if the two differ, consenting the active one would authorize a
    * radio the operator never saw named. */
   const writeVfoMap = (v: SatVfoMap | undefined, radio?: number) => {
-    if(!stationControl)return
     settingsWriteBusy.current = true
     confirmSatUplink(v, radio)
       // `v` undefined = confirming the mapping already in force (round 4):
@@ -3108,7 +3086,6 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
    * never a beacon (downlink-only, nothing to work), never a dead entry, and
    * never over the operator's explicit "None" or an existing hold. */
   const workPass = (p: SatPass) => {
-    if(!stationControl)return
     setSelected(p.name)
     wantRailScroll.current = true
     Promise.all([
@@ -3170,11 +3147,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
   /** Title for the work affordances — honest about what an arm will drive. */
   const workTitle = rotorOn ? t('sat.work.title.rotor') : t('sat.work.title.noRotor')
 
-  // The one answer every control in this section follows — published rather than threaded,
-  // because the readiness rail, the radio binding and the lock-on pill each ask it and none of
-  // them can work it out from what they are given.
   return (
-    <SatelliteControlContext.Provider value={stationControl}>
     <div className="sats-view" ref={viewRef} style={columnShareStyle(colShare, SATS_COLUMN_VARS)}>
       <header className="sats-head">
         <h1>{t('sat.head.title')}</h1>
@@ -3208,7 +3181,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
           <button
             type="button"
             className="sat-chip stale"
-            disabled={!stationControl || tleRefreshing}
+            disabled={tleRefreshing}
             onClick={() => void refreshTles()}
             title={t('sat.head.stale.title', { days: view.tleAgeDays.toFixed(1) })}
           >
@@ -3232,7 +3205,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
           <button
             type="button"
             className="sat-chip quiet"
-            disabled={!stationControl || tleRefreshing}
+            disabled={tleRefreshing}
             onClick={() => void refreshTles()}
             title={
               view
@@ -3438,7 +3411,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                   })}
             </button>
             <button
-              disabled={!stationControl} onClick={disarmTrack}
+              onClick={disarmTrack}
               title={
                 track.mode === 'rotor+doppler' || track.mode === 'rotor-only'
                   ? t('sat.track.stop.rotor.title')
@@ -3586,7 +3559,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                           </button>
                           <button
                             className="sat-work"
-                            disabled={!stationControl} onClick={() => workPass(p)}
+                            onClick={() => workPass(p)}
                             title={workTitle}
                           >
                             {t('sat.work.label')}
@@ -3744,13 +3717,13 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                         {track?.name === p.name && Math.abs(track.aosUnix - p.aosUnix) <= 180 ? (
                           <button
                             className="sat-track on"
-                            disabled={!stationControl} onClick={(e) => { e.stopPropagation(); disarmTrack() }}
+                            onClick={(e) => { e.stopPropagation(); disarmTrack() }}
                             title={t('sat.schedule.stop.title')}
                           >
                             ■
                           </button>
                         ) : (
-                          <button disabled={!stationControl}
+                          <button
                             className="sat-track"
                             onClick={(e) => {
                               e.stopPropagation()
@@ -3862,7 +3835,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                               row above carries the bell. */}
                           <td></td>
                           <td>
-                            <button disabled={!stationControl}
+                            <button
                               className="sat-track"
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -3961,7 +3934,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                         type="radio"
                         name="sat-transponder"
                         checked={heldIndex == null}
-                        disabled={!stationControl} onChange={() => pickTransponder(detail.name, null)}
+                        onChange={() => pickTransponder(detail.name, null)}
                         aria-label={t('sat.transponder.none.aria')}
                       />
                       <span className="sat-tp-desc">{t('sat.transponder.none.label')}</span>
@@ -3971,7 +3944,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
                           key={aliveIndex ?? tx.description}
                           className={`sat-tp-card${heldIndex === aliveIndex ? ' held' : ''}`}
                         >
-                          <input disabled={!stationControl}
+                          <input
                             type="radio"
                             name="sat-transponder"
                             checked={heldIndex === aliveIndex}
@@ -4458,7 +4431,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
           <button
             type="button"
             className="settings-save"
-            disabled={!stationControl || tleRefreshing}
+            disabled={tleRefreshing}
             onClick={() => {
               const c = armConfirm
               setArmConfirm(null)
@@ -4490,6 +4463,5 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
         </div>
       </Dialog>
     </div>
-    </SatelliteControlContext.Provider>
   )
 }

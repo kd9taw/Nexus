@@ -747,6 +747,8 @@ describe('a row opens the screen of its own mode', () => {
 
   it('names the own screen from the mode the station was heard in, never from the class', () => {
     expect(ownScreen(row('JS8'))).toBe('js8')
+    expect(ownScreen(row('JTTY'))).toBe('jtty')
+    expect(ownScreen(row('JTTY', { mode: 'JTTY' })), 'with its own label').toBe('jtty')
     for (const m of ['PSK31', 'PSK63', 'PSK125', 'QPSK31', 'BPSK31']) expect(ownScreen(row(m)), m).toBe('psk')
     for (const m of ['FT8', 'FT4', 'FT2', 'Q65', 'RTTY', 'CW', 'SSB', null]) expect(ownScreen(row(m)), String(m)).toBeNull()
   })
@@ -759,7 +761,16 @@ describe('a row opens the screen of its own mode', () => {
     expect(workTarget(row('JS8', { freqMhz: 14.0795 }), BAND_PLAN, js8)?.freqMhz).toBe(14.0795)
   })
 
-  it('keeps the target every such row had where the screen cannot place it, or was not handed over', () => {
+  it('a JTTY row, labelled JTTY, opens the JTTY screen at its frequency or JTTY’s channel', () => {
+    const jtty = { view: 'jtty' as const, plan: [ch('20m', 14.09)] }
+    const r = row('JTTY', { mode: 'JTTY' })
+    expect(workTarget(r, BAND_PLAN, jtty)).toEqual({ call: 'K1JSE', view: 'jtty', freqMhz: 14.09, band: '20m' })
+    expect(workTarget(row('JTTY', { mode: 'JTTY', freqMhz: 14.0915 }), BAND_PLAN, jtty)?.freqMhz).toBe(14.0915)
+    // Not handed the screen (switched off): the target a Digital row always had.
+    expect(workTarget(r, BAND_PLAN)?.view).toBe('operate')
+  })
+
+    it('keeps the target every such row had where the screen cannot place it, or was not handed over', () => {
     const before = { call: 'K1JSE', view: 'operate', freqMhz: 7.074, band: '40m' }
     // A band the JS8 screen has no channel on, and a row with no frequency of its own.
     expect(workTarget(row('JS8', { band: '40m' }), BAND_PLAN, js8)).toEqual(before)
@@ -790,6 +801,7 @@ describe('a row opens the screen of its own mode', () => {
     for (const view of Object.keys(WORK_SECTION) as (keyof typeof WORK_SECTION)[])
       expect(workHintView(WORK_SECTION[view]), view).toBe(view)
     expect(WORK_SECTION.psk).toBe('keyboard')
+    expect(WORK_SECTION.jtty).toBe('jtty')
     expect(WORK_SECTION.js8).toBe('js8')
     for (const hint of ['psk', 'operate', '', null, undefined]) expect(workHintView(hint), String(hint)).toBe('operate')
   })

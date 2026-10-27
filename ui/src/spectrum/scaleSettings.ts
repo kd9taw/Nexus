@@ -70,8 +70,12 @@ const DETECTORS: readonly Detector[] = ['peak', 'average']
 
 /** The averaging default, deskHPSDR's 250 ms, on every cockpit but Phone and CW. */
 export const AVERAGE_DEFAULT_MS = 250
-/** Phone's averaging default: 250 ms. Set 2026-10-04 ahead of the operator's ruling on it. */
-export const PHONE_AVERAGE_DEFAULT_MS = 250
+/** Phone's averaging default: 100 ms (operator ruling 2026-10-23 — down from the 250 ms
+ *  placeholder set 2026-10-04 ahead of that ruling). The log-recursive average is what flattens
+ *  the noise floor's grain; 100 ms keeps most of that calm while cutting ~150 ms of settling lag
+ *  off the passband trace, so a signal appearing or fading tracks closer to a live Flex. It is a
+ *  display filter on the trace only (not the waterfall) and does not touch the dB axis or levels. */
+export const PHONE_AVERAGE_DEFAULT_MS = 100
 /**
  * CW's averaging default: off. Set 2026-10-04 ahead of the operator's ruling on it. CW's trace
  * already has its own fast hold (TRACE_HOLD_MS.fast, 120 ms), and a 250 ms log-recursive average on
@@ -86,6 +90,15 @@ export const CW_AVERAGE_DEFAULT_MS = 0
  *
  * The detector defaults to PEAK, which is what every scope and waterfall draws today (`resampleRow`);
  * deskHPSDR's default is AVERAGE.
+ *
+ * Phone defaults the analysis window to FAST (1024, 85 ms) rather than BALANCED (2048, 171 ms): the
+ * phone scope's job is to track the band live, and the window is that display's only temporal smear
+ * (`tempo-core::spectrum::WindowN`). Voice occupies ~2.7 kHz, so Fast's 46.9 Hz lobe costs nothing a
+ * phone operator can see while halving the onset latency; 2048's 23.4 Hz resolution is for pulling a
+ * carrier out of the noise, which is the expert's opt-IN, not the default
+ * (the right value follows from the signal). Every other
+ * cockpit (CW, the digital waterfalls, the RF pane) stays BALANCED. The operator's window control is
+ * unchanged; this moves only the starting point.
  */
 export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
   return {
@@ -93,7 +106,7 @@ export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
     detector: 'peak',
     gain: 0,
     zero: 0,
-    window: 'balanced',
+    window: cockpit === 'phone' ? 'fast' : 'balanced',
   }
 }
 

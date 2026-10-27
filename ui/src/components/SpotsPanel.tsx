@@ -1,4 +1,3 @@
-import { useStationControl } from '../stationAccess'
 // The raw "Spots" board — every recent cluster/RBN spot (CW/Phone/Digital, all sources),
 // NOT needs-gated. This is the firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
@@ -10,8 +9,7 @@ import { useStationControl } from '../stationAccess'
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
@@ -22,6 +20,9 @@ import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/co
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
 import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
+import { SpotDialog } from './SpotDialog'
+import { WorkedWindowSelect, isWorkedWindow, workedWithin, type WorkedWindow } from './WorkedWindowSelect'
+import { setPounceSpotterFilter } from '../api'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -49,34 +50,8 @@ function workedAgeLabel(secs: number): string {
   return secs < 86_400 ? ageLabel(secs) : `${Math.round(secs / 86_400)}d`
 }
 
-/**
- * How far back "worked" reaches for Hide worked. `'utcDay'` is since 0000Z on the STATION's
- * clock — the row's own `workedTodayUtc`, never a browser's idea of the date — and a number is
- * plain seconds. The ladder is the operator's (2026-09-17): the UTC day by default, because that
- * is the day POTA credits and the day a spotted station is "already in the log today", and the
- * hour/day/week rungs for events like 13 Colonies and Route 66 where one callsign is on the air
- * all week and a UTC day is far too coarse.
- */
-export type WorkedWindow = 'utcDay' | 3600 | 14400 | 86400 | 604800
-export const WORKED_WINDOWS: readonly WorkedWindow[] = ['utcDay', 3600, 14400, 86400, 604800]
-export function isWorkedWindow(v: unknown): v is WorkedWindow {
-  return (WORKED_WINDOWS as readonly unknown[]).includes(v)
-}
-
-/**
- * Was this spot's station worked within `window`?
- *
- * A row carrying NO flags — an older station, or one that never answered — is worked in no
- * window at all. The panel must never hide a row it cannot judge, which is the same fail-open
- * posture `spotterLocal === false` takes one filter along.
- */
-export function workedWithin(
-  s: Pick<SpotRow, 'workedAgoSecs' | 'workedTodayUtc'>,
-  window: WorkedWindow,
-): boolean {
-  if (window === 'utcDay') return s.workedTodayUtc === true
-  return s.workedAgoSecs != null && s.workedAgoSecs < window
-}
+// The worked window, its rule and its picker are shared with the Call Roster.
+export { WORKED_WINDOWS, isWorkedWindow, workedWithin, type WorkedWindow } from './WorkedWindowSelect'
 
 /**
  * Does a need the Needed board admitted still apply HERE — on the band and mode this spot is on?
@@ -97,8 +72,7 @@ export interface SpotsPanelProps {
   onSelect: (call: string) => void
   /** Work the spot — QSY to its freq/mode and open the matching cockpit. */
   onWork: (spot: SpotRow) => void
-  /** A browser Work for this row; the desktop leaves it unset and works every row. */
-  canWork?: (spot: SpotRow) => boolean
+
   onPopOut?: () => void
   /** The operator's own square — origin for the beam heading beside each entity. A
    * cluster/RBN spot carries no grid, so that heading is always the entity centre. */
@@ -247,9 +221,13 @@ function adoptPopOutFilters(): void {
   }
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
-  const control = useStationControl()
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
   const marker = useContestSpotMarker(fieldDay)
+  // The row-level Spot button (reuses SpotDialog, the same reviewable popup Operate/Phone open):
+  // which row's call+freq is being spotted, or null when the popup is closed. A right-there spot
+  // for a station already on the board is one click, then the confirm (it posts publicly from the
+  // station's own cluster login — the review step is deliberate, never bypassed).
+  const [spotRow, setSpotRow] = useState<{ call: string; freqMhz: number } | null>(null)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
@@ -320,6 +298,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   // chip, which asks the narrower question "heard on MY continent".
   const [spotterConts, setSpotterConts] = useSessionState<string[]>('nexus.spots.spotterConts', [], host)
   const [spotterEntities, setSpotterEntities] = useSessionState<string[]>('nexus.spots.spotterEntities', [], host)
+  // Pounce follows the Spots view's own Spotted-from chips (#174), so narrowing the board to
+  // France also keeps the rare-DX alert to spots heard from France. Only the view's copy: a pane
+  // on another screen keeps chips of its own for its own box. Sent on every change and on mount;
+  // the station applies them before its alert gate, and nothing is saved.
+  useEffect(() => {
+    if (host !== undefined) return
+    setPounceSpotterFilter(spotterConts, spotterEntities).catch(() => {})
+  }, [host, spotterConts, spotterEntities])
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 
@@ -516,9 +502,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         {!pane && <h2>{t('spots.title')}</h2>}
         <span className="np-count">{rows.length}</span>
         {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
-        {/* Not in a pane: "every spot on the air" is untrue of a filtered pane, and its host
-            shows the collection's own status on Remote. */}
-        {!pane && <span className="np-hint">{control ? t('spots.hint') : t('remote.collectionObserver')}</span>}
+        {/* Not in a pane: "every spot on the air" is untrue of a filtered pane. */}
+        {!pane && <span className="np-hint">{t('spots.hint')}</span>}
         <span className="np-search">
           <input
             type="search"
@@ -550,8 +535,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         </button>
         {/* Spot me: one cluster spot of this station per press (SpotsSpotMe.tsx). Not on a page that
             only watches. */}
-        {control && spotMe && <SpotsSpotMe {...spotMe} />}
-        {control && onPopOut && (
+        {spotMe && <SpotsSpotMe {...spotMe} />}
+        {onPopOut && (
           <button
             type="button"
             className="np-popout"
@@ -705,22 +690,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
               ? t('spots.filter.worked.hidden', { count: workedHidden })
               : t('spots.filter.worked.label')}
           </button>
-          <select
+          <WorkedWindowSelect
             className="sp-worked-window"
-            value={String(workedWindow)}
-            onChange={(e) =>
-              setWorkedWindow(e.target.value === 'utcDay' ? 'utcDay' : (Number(e.target.value) as WorkedWindow))
-            }
-            aria-label={t('spots.filter.workedWindow.aria')}
-            title={t('spots.filter.workedWindow.title')}
-          >
-            {/* The <option> VALUES are the persisted window; only the labels are prose. */}
-            <option value="utcDay">{t('spots.filter.workedWindow.utcDay')}</option>
-            <option value="3600">{t('spots.filter.workedWindow.hour1')}</option>
-            <option value="14400">{t('spots.filter.workedWindow.hours4')}</option>
-            <option value="86400">{t('spots.filter.workedWindow.hours24')}</option>
-            <option value="604800">{t('spots.filter.workedWindow.days7')}</option>
-          </select>
+            value={workedWindow}
+            onChange={(w) => setWorkedWindow(w ?? 'utcDay')}
+          />
           {hasActiveFilters && (
             <button
               type="button"
@@ -772,8 +746,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           </div>
         ) : (
           rows.map((s) => {
-            const workable = control || !!canWork?.(s)
-            const canQsy = workable && knownBands.has(s.band)
+            const canQsy = knownBands.has(s.band)
             // Worked inside the window the chip is set to — so the badge below answers for the
             // rows Hide worked would drop, and says nothing about a contact from last month.
             const workedAge =
@@ -804,16 +777,16 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 title={markWords.length > 0 ? [rowTitle, ...markWords].join(' · ') : rowTitle}
                 onClick={() => {
                   onSelect(s.call)
-                  if (workable) onWork(s)
+                  onWork(s)
                 }}
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>
                 <span className="np-call">
+                  {/* The station card; stopping the click keeps the row's tune from firing. */}
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(s.call), t('callbook.qrzPage.failed', { call: s.call })) }}
-                    title={t('callbook.qrzPage.title', { call: s.call })}
+                    {...callCardTrigger(s.call, qrzPageOf(s.call), true)}
                   >
                     {s.call}
                   </button>
@@ -879,11 +852,38 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                   )}
                   {s.comment || (workedAge || watch || mark ? '' : '—')}
                 </span>
+                {/* Spot THIS station in one click — the reviewable cluster-spot popup
+                    (SpotDialog), seeded with its call and frequency. Its OWN trailing cell
+                    (`data-col='spot'`, a 10th grid track; hidden in the narrow Connect box), so the
+                    call and comment cells keep their exact text and the WATCH tile keeps the lead of
+                    its cell. `stopPropagation` so the press spots rather than working the row. The
+                    small-action button style is the Needed board's ↗ (`np-point`). */}
+                <span className="sp-actions" data-col="spot">
+                  <button
+                    type="button"
+                    className="np-point sp-spot-btn"
+                    onClick={(e) => { e.stopPropagation(); setSpotRow({ call: s.call, freqMhz: s.freqMhz }) }}
+                    aria-label={t('spots.row.spot.aria', { call: s.call })}
+                    title={t('operate.header.spot.title')}
+                  >
+                    📢
+                  </button>
+                </span>
               </div>
             )
           })
         )}
       </div>
+      {/* The row Spot popup — one instance for the board, seeded from whichever row's
+          button was pressed (SpotDialog re-seeds each time `open` goes true). Portals out, so it
+          is fine in the view, in a cockpit pane and in a box alike. */}
+      <SpotDialog
+        open={spotRow != null}
+        onClose={() => setSpotRow(null)}
+        initialCall={spotRow?.call ?? ''}
+        freqMhz={spotRow?.freqMhz ?? 0}
+        defaultComment=""
+      />
     </Root>
   )
 }

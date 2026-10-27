@@ -18,7 +18,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { RttyCockpit } from './RttyCockpit'
 import { pointRotatorAtCall, readRotator } from '../api'
-import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, RttyState } from '../types'
 
@@ -113,19 +112,7 @@ describe('the RTTY cockpit carries the rotor strip', () => {
     await waitFor(() => expect(poll).toHaveBeenCalled())
     await settle()
     expect(strip()).toBeNull()
-    expect(screen.queryByLabelText(t('remote.rotatorUnavailable'))).toBeNull()
     expect(document.querySelector('.cockpit-header')!.childElementCount).toBe(0)
-  })
-
-  it('shows a browser without the station’s rotator control the unavailable plate', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RttyCockpit snap={snap} />
-      </StationControlContext.Provider>,
-    )
-    const plate = await screen.findByLabelText(t('remote.rotatorUnavailable'))
-    expect(plate.closest('.cockpit-header')).not.toBeNull()
-    expect(strip()).toBeNull()
   })
 
   it('asks the rotator nothing while the cockpit is hidden', async () => {

@@ -162,3 +162,25 @@ describe('the pop-up switch in Settings', () => {
     expect(lastSaved().popupNotifications).toBe(true)
   })
 })
+
+describe('the pop-up dwell in Settings (#321)', () => {
+  const dwell = () => screen.getByRole('combobox', { name: 'Keep pop-ups up for at least' }) as HTMLSelectElement
+
+  it('sits beside the switch, on "Each pop-up\'s own time" from a settings file without it', async () => {
+    const label = await openAlerts()
+    expect(dwell().closest('fieldset')).toBe(label.closest('fieldset'))
+    expect(dwell().value, 'an old settings file changed the dwell').toBe('0')
+  })
+
+  it('writes the chosen seconds, and 0 when put back', async () => {
+    await openAlerts()
+    fireEvent.change(dwell(), { target: { value: '30' } })
+    clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    expect(lastSaved().popupMinSecs, '30 s never reached the saved document').toBe(30)
+    fireEvent.change(dwell(), { target: { value: '0' } })
+    clickSave()
+    await waitFor(() => expect(api.get('setSettings').mock.calls.length).toBeGreaterThan(1))
+    expect(lastSaved().popupMinSecs).toBe(0)
+  })
+})

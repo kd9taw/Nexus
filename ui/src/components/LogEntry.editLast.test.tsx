@@ -14,11 +14,13 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
+import { ContestContactEdit } from './ContestContactEdit'
 import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 import { useEsmHost, type EsmMessage } from '../features/esmHost'
 import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT } from '../features/esmRoles'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import { MOD_CTRL } from '../remote-web/stream-protocol'
+import { t } from '../i18n'
 
 vi.mock('../api', () => ({
   contestLogManual: vi.fn(() => Promise.resolve({})),
@@ -29,7 +31,7 @@ vi.mock('../api', () => ({
   contestIMoved: vi.fn(() => Promise.resolve({})),
   contestRemoveLast: vi.fn(),
   contestEdit: vi.fn(),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -84,11 +86,13 @@ function Strip({
   esmOn = false,
   remote = false,
   logger = false,
+  active = true,
 }: {
   fieldDay: FieldDayStatus
   esmOn?: boolean
   remote?: boolean
   logger?: boolean
+  active?: boolean
 }) {
   const esm = useEsmHost({
     cockpit: 'cw',
@@ -113,7 +117,7 @@ function Strip({
       fieldDay={fieldDay}
       fdMode="CW"
       esm={esm.host}
-      active
+      active={active}
       sharedEntry={logger ? 'logger' : undefined}
       remote={
         remote
@@ -133,7 +137,7 @@ const altW = () => !fireEvent.keyDown(window, { key: 'w', code: 'KeyW', altKey: 
 const line = () => document.querySelector('.le-fd-remove-line')?.textContent ?? null
 const editor = () => document.querySelector<HTMLElement>('.contest-edit')
 const editBoxes = () => [...(editor()?.querySelectorAll<HTMLInputElement>('input') ?? [])]
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const settle = async () => {
   await act(async () => {
@@ -178,7 +182,7 @@ describe('Ctrl+Y opens the newest contact for edit', () => {
       rows: [[['RST', '599'], ['QTH', 'LAKE']]],
       band: '20m',
       mode: '',
-    })
+    }, [LOG[1]])
     expect(editor()).toBeNull()
     expect(callBox().value, 'what was typed in the strip is still there').toBe('N9XYZ')
     expect(line()).toBe('Edited W9BBB: now W9BBC · 20m CW · 17:01 · 599 LAKE.')
@@ -251,8 +255,39 @@ describe('Ctrl+Y opens the newest contact for edit', () => {
     rerender(<Strip fieldDay={party([LOG[0]])} />)
     expect(editor()).toBeNull()
     expect(document.querySelector('.le-fd-big')).not.toBeNull()
+    expect(line(), 'and the line says why').toBe(t('contest.edit.gone'))
     rerender(<Strip fieldDay={party(LOG)} />)
     expect(editor(), 'restored meanwhile, it does not open again by itself').toBeNull()
+  })
+
+  it('closes when its call is fixed elsewhere meanwhile, and the line says the contact changed', () => {
+    const { rerender } = render(<Strip fieldDay={party(LOG)} />)
+    ctrlY()
+    type(editBoxes()[2], 'COOK')
+    rerender(<Strip fieldDay={party([LOG[0], row('W9BBC', 'LAKE', T0 + 60)])} />)
+    expect(editor()).toBeNull()
+    expect(line()).toBe(t('contest.edit.changed'))
+    expect(api.contestEdit).not.toHaveBeenCalled()
+  })
+
+  it('its own call fix answers for itself: the change arriving before the answer is not "changed"', async () => {
+    let answer: (a: unknown) => void = () => {}
+    api.contestEdit.mockReturnValueOnce(new Promise((r) => (answer = r)))
+    const { rerender } = render(<Strip fieldDay={party(LOG)} />)
+    ctrlY()
+    type(editBoxes()[0], 'W9BBC')
+    await act(async () => {
+      fireEvent.keyDown(editBoxes()[0], { key: 'Enter' })
+    })
+    rerender(<Strip fieldDay={party([LOG[0], row('W9BBC', 'LAKE', T0 + 60)])} />)
+    await settle()
+    expect(editor()).toBeNull()
+    expect(line()).not.toBe(t('contest.edit.changed'))
+    await act(async () => {
+      answer({ outcome: 'edited', before: [LOG[1]], after: [row('W9BBC', 'LAKE', T0 + 60)], sentTo: { wsjtx: false, logbook: false, uploaded: [] } })
+    })
+    await settle()
+    expect(line()).toBe('Edited W9BBB: now W9BBC · 20m CW · 17:01 · 599 LAKE.')
   })
 
   it('Ctrl+Y again, after a newer contact is logged, opens that one afresh', () => {
@@ -319,5 +354,97 @@ describe('at a club, and from afar', () => {
       ctrlY()
       expect(editor()).not.toBeNull()
     })
+  })
+})
+
+describe('one edit of a contact at a time', () => {
+  /** The strip, and another edit of a contact open in the same window (the last contacts' row edit). */
+  const withOther = () =>
+    render(
+      <>
+        <Strip fieldDay={party(LOG)} />
+        <div className="other">
+          <ContestContactEdit rows={[LOG[0]]} receives={party(LOG).receives ?? []} onDone={() => {}} />
+        </div>
+      </>,
+    )
+  const other = () => document.querySelector<HTMLInputElement>('.other .contest-edit input')!
+
+  it('Ctrl+Y opens no second edit while another is open, says so, and gives the keyboard back to it as typed', () => {
+    withOther()
+    type(other(), 'K9AAB')
+    callBox().focus()
+    expect(ctrlY()).toBe(true)
+    expect(document.querySelectorAll('.contest-edit')).toHaveLength(1)
+    expect(document.querySelector('.le-fd-big'), 'the entry boxes stay').not.toBeNull()
+    expect(line()).toBe(t('contest.edit.open'))
+    expect(document.activeElement).toBe(other())
+    expect(other().value).toBe('K9AAB')
+    // …and pressed in that edit, the same.
+    fireEvent.keyDown(other(), { key: 'y', code: 'KeyY', ctrlKey: true })
+    expect(document.querySelectorAll('.contest-edit')).toHaveLength(1)
+    expect(other().value).toBe('K9AAB')
+  })
+
+  it('Alt+W pressed in another edit wipes nothing in the entry; CONTROL: in the entry it wipes', () => {
+    withOther()
+    type(callBox(), 'N9XYZ')
+    expect(!fireEvent.keyDown(other(), { key: 'w', code: 'KeyW', altKey: true }), 'held from the webview').toBe(true)
+    expect(callBox().value).toBe('N9XYZ')
+    fireEvent.keyDown(callBox(), { key: 'w', code: 'KeyW', altKey: true })
+    expect(callBox().value).toBe('')
+  })
+})
+
+describe('an edit left open in a cockpit that is then hidden', () => {
+  /** The PSK cockpit's strip, which stays mounted under `hidden` on another screen, and the screen
+   *  shown instead with a strip of its own (the Contest screen's). */
+  const Screens = ({ psk, log = LOG }: { psk: boolean; log?: FieldDayQso[] }) => (
+    <>
+      <div className="psk-host" hidden={!psk}>
+        <Strip fieldDay={party(log)} active={psk} />
+      </div>
+      {!psk && (
+        <div className="contest-screen">
+          <Strip fieldDay={party(log)} />
+        </div>
+      )}
+    </>
+  )
+  const pskEdit = () => document.querySelector<HTMLInputElement>('.psk-host .contest-edit input')
+  const screenEdit = () => document.querySelector<HTMLInputElement>('.contest-screen .contest-edit input')
+  const screenLine = () => document.querySelector('.contest-screen .le-fd-remove-line')?.textContent ?? null
+
+  it('holds back no edit on the screen shown instead, and is there as typed when the cockpit is back', () => {
+    const view = render(<Screens psk />)
+    ctrlY()
+    type(pskEdit()!, 'W9BBC')
+    view.rerender(<Screens psk={false} />)
+    ctrlY()
+    expect(screenLine(), 'no edit on screen holds this one back').not.toBe(t('contest.edit.open'))
+    expect(screenEdit(), 'the screen’s own edit opens').not.toBeNull()
+    expect(document.activeElement).toBe(screenEdit())
+    fireEvent.keyDown(screenEdit()!, { key: 'Escape', code: 'Escape' })
+    view.rerender(<Screens psk />)
+    expect(pskEdit()?.value, 'the cockpit’s edit, as typed').toBe('W9BBC')
+  })
+
+  it('closes when its contact is edited elsewhere meanwhile, so it cannot save over the change; CONTROL: unchanged, it stays', () => {
+    const view = render(<Screens psk />)
+    ctrlY()
+    type(pskEdit()!, 'W9BBC')
+    view.rerender(<Screens psk={false} />)
+    view.rerender(<Screens psk={false} log={[...LOG]} />)
+    view.rerender(<Screens psk log={[...LOG]} />)
+    expect(pskEdit()?.value, 'the same contact, re-sent as it was').toBe('W9BBC')
+    view.rerender(<Screens psk={false} log={[...LOG]} />)
+    view.rerender(<Screens psk={false} log={[LOG[0], row('W9BBB', 'COOK', T0 + 60)]} />)
+    view.rerender(<Screens psk log={[LOG[0], row('W9BBB', 'COOK', T0 + 60)]} />)
+    expect(pskEdit(), 'its county changed on the screen meanwhile').toBeNull()
+    expect(document.querySelector('.psk-host .le-fd-big'), 'the entry boxes are back').not.toBeNull()
+    expect(
+      document.querySelector('.psk-host .le-fd-remove-line')?.textContent,
+      'and the line says why the typing is gone',
+    ).toBe(t('contest.edit.changed'))
   })
 })

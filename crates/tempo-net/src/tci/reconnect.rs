@@ -3,10 +3,10 @@
 //! - **Our key first.** A session that ended with a key of ours possibly on the air hands that
 //!   belief on ([`Step::StillKeyed`]): the engine halts its transmission and tells the operator the
 //!   radio may still be transmitting, and the next session is given the belief
-//!   ([`super::session::Config::carried`]) so its stops go out first after `ready;` (plan §6.1
-//!   item 8). A lost link never clears it; only the server's own report does.
-//! - **At once, then on a ladder.** A link lost while keyed is retried at once (item 8: "reconnect
-//!   at once"), once until a session reaches `ready;` again. Every other retry waits on the ladder
+//!   ([`super::session::Config::carried`]) so its stops go out first after `ready;`.
+//!   A lost link never clears it; only the server's own report does.
+//! - **At once, then on a ladder.** A link lost while keyed is retried at once,
+//!   once until a session reaches `ready;` again. Every other retry waits on the ladder
 //!   ([`LADDER_MS`]: 1, 2, 5 and 10 s, then every 30 s), which starts again from the bottom
 //!   whenever a session reaches `ready;`. An unkey the server did not confirm is retried on the
 //!   ladder, never at once: the session already sent its stops twice and raised the alarm, and a

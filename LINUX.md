@@ -81,8 +81,8 @@ only:
 
 ## Which Linux
 
-The published `.deb` and AppImage are built on **Ubuntu 24.04** and need **glibc 2.39 or newer** —
-Ubuntu 24.04+, Debian 13+, Fedora 40+, Mint 22+. Check with `ldd --version`. Building from source
+The published `.deb` and AppImage are built in an **Ubuntu 22.04** container and need **glibc 2.35
+or newer** — Ubuntu 22.04+, Debian 12+, Fedora 36+, Mint 21+. Check with `ldd --version`. Building from source
 has no such floor: you get whatever your own toolchain produces.
 
 The AppImage is no exception to the floor. An AppImage carries the application's libraries, not the

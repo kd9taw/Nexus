@@ -82,7 +82,6 @@ describe('only at the shack: a press through the stream changes nothing', () => 
     ['the switch', listening, () => screen.getByRole('switch'), { type: 'lanOff' }],
     ['Pair a computer', listening, () => screen.getByRole('button', { name: 'Pair a computer' }), { type: 'lanPair' }],
     ['Cancel pairing', pairing, () => screen.getByRole('button', { name: 'Cancel pairing' }), { type: 'lanCancel' }],
-    ['Remove', listening, () => screen.getByRole('button', { name: 'Remove' }), { type: 'lanRevoke', deviceId: COMPUTER }],
     ['Reset network identity', listening, () => screen.getByRole('button', { name: 'Reset network identity' }), { type: 'lanReset' }],
   ]
   for (const [name, lan, control, sent] of presses) {
@@ -128,14 +127,15 @@ describe('what the card says', () => {
     expect(screen.getByRole('status').textContent).toBe('Off.')
   })
 
-  it('shows where it listens, the code with its warning, and each computer by name and key', async () => {
+  // Each paired computer is listed, with its Remove (refused through a stream there too), under Devices:
+  // DevicesList.test.tsx.
+  it('shows where it listens and the code with its warning, and leaves the paired computers to Devices', async () => {
     await showing(pairing)
     expect(screen.getByRole('status').textContent).toBe('Listening at 192.168.1.20:42075. Only computers paired here can connect.')
     expect(screen.getByText('0123 4567 89ab cdef')).toBeTruthy()
     expect(screen.getByText(/Whoever types it in time can operate this station, transmit included/)).toBeTruthy()
     expect(screen.getByText('This station: 192.168.1.20:42075, key ABAB ABAB ABAB ABAB ABAB ABAB ABAB ABAB')).toBeTruthy()
-    expect(screen.getByText('Den PC')).toBeTruthy()
-    expect(screen.getByText('Key 0123 4567 89AB CDEF 0123 4567 89AB CDEF')).toBeTruthy()
+    expect(screen.queryByText('Den PC'), 'listed under Devices').toBeNull()
     // One window at a time: no second Pair a computer while one is open.
     expect(screen.queryByRole('button', { name: 'Pair a computer' })).toBeNull()
   })

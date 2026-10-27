@@ -6,19 +6,19 @@
 //! CRC-12 (poly 0xC06, XOR 42, field zeroed), the i3 placement in bits 72..=74, the
 //! MSB-first tone map (no Gray), the two Costas kernels and the start-delay timing — with
 //! no Nexus decoder in the loop, so a shared bug in our encode/decode pair cannot hide.
-//! Passing this test FREEZES the `Word87` seam (spec §Sequencing B2).
+//! Passing this test FREEZES the `Word87` seam.
 //!
-//! Oracle: the stock `js8` CLI built by ~/work/twowayfd/paritylab/js8/build_js8.sh (the
+//! Oracle: the stock `js8` CLI (the
 //! Fortran reference decoder still shipped in js8call @ a7ff1be0, built with the source list
 //! of 28ea7378 — the last commit that built it — and a Qt-free shared-memory stub). It is
 //! found through `JS8_STOCK_BIN`; the stock-backed test is `#[ignore]` so a box without the
 //! lab reports `ignored` (never a silent `ok`), and it PANICS if run with `--ignored` while
 //! the variable is unset or points at nothing runnable.
 //!
-//! Fixture pins: the three upstream media/tests WAVs land here for B3's decoder gate; this
-//! file owns their pin check because B2 is the batch that lands them.
+//! Fixture pins: the three upstream media/tests WAVs land here for the decoder gate; this
+//! file owns their pin check because it landed them.
 //!
-//! CALIBRATION (lab, 2026-09-06, stock js8 -d 3 over paritylab/js8/corpus, 5/point):
+//! CALIBRATION (lab, 2026-09-06, stock js8 -d 3 over the lab corpus, 5/point):
 //!   knee (yield ≤ 2/5): Slow -24 dB · Normal -22 dB · Fast -18 dB · Turbo -16 dB
 //!   reported − nominal SNR at 0…−10 dB: Slow -5.0 · Normal -7.3 · Fast -11.4 · Turbo -15.9
 //!   false decodes: 0 over 295 files
@@ -53,7 +53,7 @@ fn sha256_helper_matches_fips_vectors_and_sees_a_flipped_bit() {
 
 /// Every pinned upstream WAV is present and byte-identical to its pin, and the pinned set is
 /// exactly the three WAVs NOTICE credits (A_2_9, A_3_3, E_2_1 — three distinct blobs) plus the
-/// two sanitised JS8Call log fixtures Task B4.1 appended (js8call_frames/js8call_directed.txt).
+/// two sanitised JS8Call log fixtures (js8call_frames/js8call_directed.txt).
 #[test]
 fn upstream_media_test_fixtures_match_their_sha256_pins() {
     let verified = common::verify_fixture_pins();
@@ -115,7 +115,7 @@ const VECTORS: [(&str, u8); 4] = [
 ];
 
 /// Every wave is slot-positioned (leading `delay_ms` of exact silence, then signal) and
-/// shorter than its period — the bounded-airtime invariant (spec TX safety #6) measured at
+/// shorter than its period — the bounded-airtime invariant measured at
 /// the modulator, at all four speeds, before any engine code exists. `encode_word` is called
 /// per speed because the Costas kernel is speed-dependent (Normal ORIGINAL vs MODIFIED).
 #[test]
@@ -147,7 +147,7 @@ fn every_speed_wave_is_slot_positioned_and_fits_its_period() {
         // JS8Call's Modulator.cpp:38 sets m_amp = qint16 max (a full-scale sine, no shaping),
         // and place_in_period()'s 2500 Hz SNR arithmetic assumes a unit-peak wave exactly as
         // crates/ft8/tests/decode_parity.rs:51-66 assumes of gen_wave. A quieter wave would
-        // shift every calibration number in Task B2.5 by the same dB.
+        // shift every calibration number above by the same dB.
         let peak = wave.iter().fold(0f32, |m, &x| m.max(x.abs()));
         assert!(
             (0.99..=1.0).contains(&peak),
@@ -196,15 +196,15 @@ fn lab_text_form_round_trips_through_word87() {
 /// begins after exactly `delay_ms` of silence reads 0.0 ± a quarter symbol).
 ///
 /// Ignored by default so a box without the lab reports `ignored`, never `ok`. Run it with:
-///   JS8_STOCK_BIN=$HOME/work/twowayfd/paritylab/js8/stock/js8 \
+///   JS8_STOCK_BIN=/path/to/stock/js8 \
 ///     cargo test -p js8 --test encode_parity -- --ignored --nocapture
 /// With `--ignored` and no usable JS8_STOCK_BIN it PANICS — there is no silent pass.
 #[test]
-#[ignore = "needs the stock JS8Call decoder: set JS8_STOCK_BIN=~/work/twowayfd/paritylab/js8/stock/js8 (built by build_js8.sh) and run with --ignored"]
+#[ignore = "needs the stock JS8Call decoder: set JS8_STOCK_BIN to its js8 binary and run with --ignored"]
 fn stock_js8_decodes_our_encoder_at_every_speed() {
     let bin = common::stock_js8_bin().expect(
-        "JS8_STOCK_BIN is unset or not an executable file — build it with \
-         ~/work/twowayfd/paritylab/js8/build_js8.sh and export the path",
+        "JS8_STOCK_BIN is unset or not an executable file — build the stock js8 \
+         CLI and export its path",
     );
     let dir = std::env::temp_dir().join(format!("js8_encode_parity_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -234,7 +234,7 @@ fn stock_js8_decodes_our_encoder_at_every_speed() {
             // NOMINAL input legitimately reads negative once the per-symbol bandwidth widens —
             // measured here Fast ≈ −1, Turbo ≈ −5, with a −16 outlier on the -+ pattern at
             // Normal — while the 12-char word + i3 come back EXACT every time. That
-            // nominal→reported delta is precisely what Task B2.5 calibrates; it is a property
+            // nominal→reported delta is precisely what the calibration measures; it is a property
             // of the decoder's SNR estimator, not of parity. The seam this test freezes is the
             // WORD: exact 12 sixbit chars + i3, one decode at our f0/dt, and no noise fluke
             // yields our exact LDPC(174,87)+CRC-12 word. (Brief defect, diagnosed 2026-09-06.)

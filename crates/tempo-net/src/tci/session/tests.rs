@@ -476,7 +476,7 @@ fn an_unkey_not_reported_in_time_is_sent_again_and_the_session_closes() {
 
 #[test]
 fn stops_go_out_in_every_phase_but_closed() {
-    // M13. Before ready, nothing of ours keyed: still sent.
+    // Before ready, nothing of ours keyed: still sent.
     let mut b = Bench::new(Config::new(trx(0)));
     b.at(1).text(BURST);
     assert_eq!(b.end_ours(), stop_trx0());
@@ -517,7 +517,7 @@ fn stops_go_out_in_every_phase_but_closed() {
 
 #[test]
 fn a_lost_link_keeps_the_keyed_belief() {
-    // M4, on the manual clock.
+    // On the manual clock.
     for start in [TxStart::Audio, TxStart::Microphone, TxStart::Tune] {
         let mut b = Bench::ready(Config::new(trx(0)));
         b.at(10).key(start).expect("admitted");
@@ -626,7 +626,7 @@ fn a_carried_key_is_stopped_first_and_ends_on_the_servers_word() {
 
 #[test]
 fn the_sdr_stopping_mid_over_halts_it_and_refuses_keys() {
-    // M12, on the manual clock.
+    // On the manual clock.
     let mut b = Bench::ready(Config::new(trx(0)));
     b.at(10).key(TxStart::Audio).expect("admitted");
     b.at(11).chrono(0);
@@ -843,7 +843,7 @@ fn a_failed_write_ends_the_session_and_keeps_the_belief() {
 
 #[test]
 fn the_drive_nexus_writes_is_the_ceiling_its_readback_is_held_to() {
-    // M7, on the manual clock.
+    // On the manual clock.
     let mut b = Bench::ready(Config::new(trx(0)));
     let drive = |b: &mut Bench, level: u32, t: u64| {
         let write = Command::Set(Setting::drive(trx(0), level, &EXPERT_SDR3));

@@ -264,7 +264,7 @@ fn test_bodies(src: &str) -> Vec<(String, String)> {
     out
 }
 struct Fixture {
-    authority: Authority,
+    authority: Arc<Authority>,
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
@@ -291,8 +291,13 @@ impl Fixture {
         settings.save_qso_wav = false;
         engine.apply_settings(settings);
         engine.set_log_path(dir.join("contacts.adi"));
-        let authority = Authority::default();
-        // Wired exactly as `Service::new` wires it, so a stand-down at the shack retires
+        let authority = Arc::new(Authority::default());
+        // The normal operating state: the station has heard the account's device list and it names
+        // no sign-in device, so an ordinary controller is free. A test about the sign-in transmit
+        // hold overrides this with `set_signin_devices`, or clears it with `forget_signin_devices`
+        // to exercise the pre-list (restart) window.
+        authority.set_signin_devices(std::collections::BTreeSet::new());
+        // Wired exactly as `Service::start` wires it, so a stand-down at the shack retires
         // remote transmit here too — a fixture that skipped this would prove nothing.
         engine.set_remote_transmit_revocation(authority.transmit_revocation());
         let connection = authority.start_connection();
@@ -330,13 +335,6 @@ impl Fixture {
         }
         f
     }
-    /// Every row the store holds, read through a connection of the test's own — what is on
-    /// disk, not what the engine remembers.
-    fn stored(&self) -> Vec<tempo_core::logbook::QsoRecord> {
-        tempo_core::logbook::sqlite::LogDb::open(&self.dir.join("contacts.sqlite3"))
-            .and_then(|db| db.load_all())
-            .expect("the store reads")
-    }
     fn run(&self, request: &Request, now: Instant) -> Result<Value, &'static str> {
         self.authority.handle_version(
             (self.connection, 4),
@@ -351,7 +349,7 @@ impl Fixture {
         self.run(&Request::State { request_id: id() }, now).unwrap()
     }
     fn acquire(&self, now: Instant) -> Value {
-        self.authority.permit(DEVICE, true).unwrap();
+        self.authority.permit_station(DEVICE, true).unwrap();
         self.run(
             &Request::Acquire {
                 request_id: id(),
@@ -361,13 +359,15 @@ impl Fixture {
         )
         .unwrap()
     }
-    /// A receipt-bearing command under the logging grant: discarding the held FT contact, here with
-    /// none held, which the station answers `rejected` on a receipt like any other.
-    fn command(&self, state: &Value) -> Request {
-        control_request(
-            state,
-            json!({"action":"qso.discard","expectedKey":"0123456789abcdef"}),
-        )
+    /// Install the real radio-loop hold source, exactly as `Service::start` does, so a
+    /// `poll_remote_transmit` tick re-derives the sign-in transmit hold from the live lease. Used by
+    /// the tests that model a held controller DEPARTING with no further request.
+    fn wire_tx_hold(&self) {
+        let authority = self.authority.clone();
+        self.engine
+            .lock()
+            .unwrap()
+            .set_remote_tx_hold_source(Arc::new(move |now| authority.current_transmit_hold(now)));
     }
 }
 /// ★ THE FOLDER GOES LAST. Since SPEC-2 v3 C19 (D1-A) a session on the 1.13 path writes its
@@ -466,47 +466,15 @@ fn acquire_controls_version(f: &Fixture, now: Instant, version: u8) -> Value {
         .unwrap()
 }
 
-fn control_request(state: &Value, action: Value) -> Request {
-    serde_json::from_value(json!({"type":"stationControl", "requestId":id(), "stationBootId":state["stationBootId"],
-        "leaseId":state["leaseId"], "expectedRevision":state["revision"], "commandWindowId":state["commandWindowId"],
-        "clientSequence":state["nextSequence"], "context":state["controls"]["context"], "action":action})).unwrap()
-}
-
-/// An FT gesture, for the tests below that need a request under station control and transmit. Its
-/// epoch is never current: what they assert is refused before it is read.
-fn gesture(state: &Value) -> Request {
-    control_request(
-        state,
-        json!({"action":"ft.txEnabled","expectedTier":"FT8","transmitEpoch":"0000000000000000","on":false}),
-    )
-}
-
-#[test]
-fn logging_and_station_permissions_do_not_grant_each_other() {
-    let f = Fixture::new();
-    let now = Instant::now();
-    let state = f.acquire(now);
-    assert_eq!(f.run(&gesture(&state), now), Err("localPermissionRequired"));
-    f.authority.permit(DEVICE, false).unwrap();
-    let control = acquire_controls_version(&f, now, 4);
-    #[cfg(feature = "radio")]
-    assert_eq!(control["controls"]["capabilities"], json!(["audioListen"]));
-    #[cfg(not(feature = "radio"))]
-    assert_eq!(control["controls"]["capabilities"], json!([]));
-    assert_eq!(control["actions"], json!([]));
-    assert_eq!(control["txArmed"], false);
-    assert_eq!(
-        f.run(&f.command(&control), now),
-        Err("localPermissionRequired")
-    );
-}
-
 #[test]
 fn a_disconnect_takeover_or_reconnect_cannot_restore_a_lease() {
     for kind in ["disconnect", "takeover", "socket"] {
         let mut f = Fixture::new();
         let now = Instant::now();
-        let command = f.command(&f.acquire(now));
+        let command = Request::Heartbeat {
+            request_id: id(),
+            lease_id: f.acquire(now)["leaseId"].as_str().unwrap().into(),
+        };
         match kind {
             "disconnect" => f.authority.disconnect_session(SESSION),
             "takeover" => f.authority.invalidate(),
@@ -528,7 +496,6 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         let f = Fixture::new();
         let now = Instant::now();
         let state = f.acquire(now);
-        let command = f.command(&state);
         let acquire = Request::Acquire {
             request_id: id(),
             station_boot_id: state["stationBootId"].as_str().unwrap().into(),
@@ -536,21 +503,16 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         // Positive control: the same busy Engine refuses an allowed device as busy.
         {
             let _busy = f.engine.lock().unwrap();
-            assert_eq!(f.run(&command, now), Err("stationBusy"));
+            assert_eq!(f.run(&acquire, now), Err("stationBusy"));
         }
         match revoke {
             "takeover" => f.authority.invalidate(),
             _ => {
-                f.authority.permit(DEVICE, false).unwrap();
+                f.authority.permit_station(DEVICE, false).unwrap();
             }
         }
         // A refusal for permission never depends on Engine contention.
         let busy = f.engine.lock().unwrap();
-        assert_eq!(
-            f.run(&command, now),
-            Err("localPermissionRequired"),
-            "{revoke}"
-        );
         assert_eq!(
             f.run(&acquire, now),
             Err("localPermissionRequired"),
@@ -558,65 +520,89 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         );
         drop(busy);
         assert_eq!(
-            f.run(&command, now),
+            f.run(&acquire, now),
             Err("localPermissionRequired"),
             "{revoke}"
         );
     }
 }
-/// #318: a logging or station-control revoke must not fail because Core is busy — it used to
-/// return `remoteBusy` and leave the grant standing. The transmit revoke already queued itself
-/// (`transmit_local_revocation_does_not_wait_for_a_pending_durable_write`).
+/// The shack's grant (an Approve, the restrict switch, a sign-in's grant) is not refused
+/// `remoteBusy` by the station's own traffic. A live computer's feed checks (`lan_controls`) and the
+/// radio loop's tick (`current_transmit_hold`) each take Core many times a second, and a grant that
+/// tried Core only once lost to one of them now and then. CONTROL: a Core held for longer than the
+/// grant waits still refuses it (`a_station_revoke_does_not_wait_for_a_busy_core`).
 #[test]
-fn a_logging_or_station_revoke_does_not_wait_for_a_busy_core() {
-    for grant in ["logging", "station"] {
-        let f = Fixture::new();
-        let now = Instant::now();
-        let (state, command) = if grant == "logging" {
-            let state = f.acquire(now);
-            let command = f.command(&state);
-            (state, command)
-        } else {
-            let state = acquire_controls_version(&f, now, 4);
-            (state.clone(), gesture(&state))
-        };
-        assert_eq!(state["phase"], "controlling", "{grant}: holds the lease");
-        let hardware = f.authority.hardware.permit(now + LEASE).unwrap();
+fn the_shacks_grant_is_not_refused_while_the_station_is_busy() {
+    use std::sync::atomic::AtomicBool;
+    let f = Fixture::new();
+    f.wire_tx_hold();
+    let now = f.now();
+    f.acquire(now);
+    let done = Arc::new(AtomicBool::new(false));
+    let busy = |work: Box<dyn Fn() + Send>| {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                work();
+                std::thread::sleep(Duration::from_micros(20));
+            }
+        })
+    };
+    let (authority, connection) = (f.authority.clone(), f.connection);
+    let feeds = busy(Box::new(move || {
+        authority.lan_controls(connection, DEVICE, now);
+    }));
+    let engine = f.engine.clone();
+    let ticks = busy(Box::new(move || {
+        engine.lock().unwrap().poll_remote_transmit(now);
+    }));
+    let refused = (0..2000)
+        .filter(|_| f.authority.permit_station(OTHER, true).is_err())
+        .count();
+    done.store(true, Ordering::SeqCst);
+    feeds.join().unwrap();
+    ticks.join().unwrap();
+    assert_eq!(refused, 0, "the shack's grant was refused remoteBusy");
+}
+/// #318: a station-control revoke must not fail because Core is busy — it used to
+/// return `remoteBusy` and leave the grant standing.
+#[test]
+fn a_station_revoke_does_not_wait_for_a_busy_core() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls_version(&f, now, 4);
+    let command = Request::Acquire {
+        request_id: id(),
+        station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+    };
+    assert_eq!(state["phase"], "controlling", "holds the lease");
+    let transmit = f.authority.transmit.permit(now + LEASE).unwrap();
 
-        let core = f.authority.core.lock().unwrap(); // an operation in flight
-        let revoke = match grant {
-            "logging" => f.authority.permit(DEVICE, false),
-            _ => f.authority.permit_station(DEVICE, false),
-        };
-        assert_eq!(revoke, Ok(()), "{grant}: revoke must not fail");
-        // A grant still may, and must not widen anything.
-        assert_eq!(f.authority.permit(OTHER, true), Err("remoteBusy"));
-        if grant == "station" {
-            assert!(
-                !hardware.valid(now),
-                "the controller's in-flight hardware permit ends at once"
-            );
-        }
-        drop(core);
+    let core = f.authority.core.lock().unwrap(); // an operation in flight
+    let revoke = f.authority.permit_station(DEVICE, false);
+    assert_eq!(revoke, Ok(()), "revoke must not fail");
+    // A grant still may, and must not widen anything.
+    assert_eq!(f.authority.permit_station(OTHER, true), Err("remoteBusy"));
+    assert!(
+        !transmit.valid(now),
+        "the controller's in-flight transmit permit ends at once"
+    );
+    drop(core);
 
-        // The device's next command is refused, and its lease is gone.
-        assert_eq!(
-            f.run(&command, now),
-            Err("localPermissionRequired"),
-            "{grant}"
-        );
-        let status = f.authority.local_status();
-        assert_eq!(status["controller"], Value::Null, "{grant}: lease ended");
-        assert_eq!(status["devices"], json!([]), "{grant}: OTHER not granted");
-        assert!(!hardware.valid(now), "{grant}");
-    }
+    // The device's next command is refused, and its lease is gone.
+    assert_eq!(f.run(&command, now), Err("localPermissionRequired"));
+    let status = f.authority.local_status();
+    assert_eq!(status["controller"], Value::Null, "lease ended");
+    assert_eq!(status["controlDevices"], json!([]), "OTHER not granted");
+    assert!(!transmit.valid(now));
 }
 
 #[test]
 fn a_command_refuses_a_busy_engine_instead_of_queueing_and_counter_wrap() {
     let f = Fixture::new();
     let now = Instant::now();
-    let command = f.command(&f.acquire(now));
+    f.acquire(now);
+    let command = Request::State { request_id: id() };
     let lock = f.engine.lock().unwrap();
     assert_eq!(f.run(&command, now), Err("stationBusy"));
     drop(lock);
@@ -630,13 +616,13 @@ fn a_command_refuses_a_busy_engine_instead_of_queueing_and_counter_wrap() {
 }
 
 #[test]
-fn authority_counter_exhaustion_revokes_already_issued_hardware_permission() {
+fn authority_counter_exhaustion_revokes_already_issued_transmit_permission() {
     let f = Fixture::new();
     let now = Instant::now();
     acquire_controls(&f, now);
     let permit = f
         .authority
-        .hardware
+        .transmit
         .permit(now + Duration::from_secs(5))
         .unwrap();
     assert!(permit.valid(now));
@@ -648,120 +634,6 @@ fn authority_counter_exhaustion_revokes_already_issued_hardware_permission() {
         assert!(core.windows.is_empty());
     }
     assert!(!permit.valid(now));
-}
-
-#[test]
-fn expired_receipt_never_reopens_an_old_sequence_under_a_live_lease() {
-    let f = Fixture::new();
-    let now = Instant::now();
-    let state = f.acquire(now);
-    let request = f.command(&state);
-    assert_eq!(f.run(&request, now).unwrap()["outcome"], "rejected");
-    let lease_id = state["leaseId"].as_str().unwrap().to_string();
-    // Keep the same controller alive while the bounded result history expires.
-    // A receipt's absence must never turn an old action into a new one.
-    for second in 1..=601 {
-        let heartbeat = Request::Heartbeat {
-            request_id: id(),
-            lease_id: lease_id.clone(),
-        };
-        assert_eq!(
-            f.run(&heartbeat, now + Duration::from_secs(second))
-                .unwrap()["phase"],
-            "controlling"
-        );
-    }
-    let later = now + Duration::from_secs(601);
-    assert_eq!(
-        f.run(
-            &Request::Result {
-                request_id: id(),
-                operation_id: request.id().into()
-            },
-            later
-        ),
-        Err("resultExpired")
-    );
-    assert_eq!(f.run(&request, later), Err("resultExpired"));
-}
-
-#[test]
-fn a_replay_is_served_from_its_receipt_while_the_engine_is_busy() {
-    let f = Fixture::new();
-    let now = Instant::now();
-    let command = f.command(&f.acquire(now));
-    let answered = f.run(&command, now).expect("the first command is answered");
-    // Built before the lock is taken: reading state needs the Engine too.
-    let fresh = f.command(&f.state(now));
-
-    let held = f.engine.lock().unwrap();
-    assert_eq!(
-        f.run(&command, now),
-        Ok(answered),
-        "a replay's answer is its receipt; the Engine is not involved"
-    );
-    assert_eq!(
-        f.run(&fresh, now),
-        Err("stationBusy"),
-        "a genuinely new command still needs the Engine and must still be refused"
-    );
-    drop(held);
-}
-
-/// **THE FINGERPRINT MUST COVER EXACTLY THE RECEIPT-BEARING ARM.** A request that arm serves with
-/// no fingerprint is refused `invalidRequest`; a request from another arm must not gain a receipt
-/// lookup it never had. Both directions, for both kinds of station control.
-#[test]
-fn every_variant_of_the_receipt_bearing_arm_has_a_replay_fingerprint() {
-    let f = Fixture::new();
-    let now = Instant::now();
-    let state = acquire_controls_version(&f, now, 4);
-    for request in [f.command(&state), gesture(&state)] {
-        assert!(
-            Authority::replay_fingerprint(&request)
-                .expect("a well-formed request serializes")
-                .is_some(),
-            "{} is served by the receipt-bearing arm and needs a fingerprint",
-            request.id()
-        );
-    }
-    let state_request = Request::State { request_id: id() };
-    assert!(
-        Authority::replay_fingerprint(&state_request)
-            .expect("a well-formed request serializes")
-            .is_none(),
-        "a request whose arm keeps no receipt must not gain a replay lookup"
-    );
-}
-
-/// **A `Result` REQUEST IS A PURE RECEIPT READ, AND THE ENGINE HAS NOTHING TO DO WITH IT.** It
-/// reads `c.receipts`, the grants and `device`, so it is served while the Engine is held; a
-/// request that genuinely needs the Engine is still refused.
-#[test]
-fn a_result_request_is_served_from_its_receipt_while_the_engine_is_busy() {
-    let f = Fixture::new();
-    let now = Instant::now();
-    let command = f.command(&f.acquire(now));
-    let answered = f.run(&command, now).expect("the first command is answered");
-    let result = Request::Result {
-        request_id: id(),
-        operation_id: command.id().into(),
-    };
-    // Built before the lock is taken: reading state needs the Engine too.
-    let fresh = f.command(&f.state(now));
-
-    let held = f.engine.lock().unwrap();
-    assert_eq!(
-        f.run(&result, now),
-        Ok(answered),
-        "a Result request reads a receipt; the Engine is not involved"
-    );
-    assert_eq!(
-        f.run(&fresh, now),
-        Err("stationBusy"),
-        "a genuinely new command still needs the Engine and must still be refused"
-    );
-    drop(held);
 }
 
 /// True once the process-wide badge is clear. The stop runs on a worker, so this is a wait.
@@ -879,9 +751,8 @@ fn a_remote_stop_with_no_track_running_leaves_a_staged_transponder_alone() {
 }
 
 /// ⭐ **Giving a club position is refused from afar.** The host's Give button is on its own
-/// desktop and is none of Remote's operations: a request naming it, at the top or as a station
-/// control, is refused before anything reads it, whichever spelling it tries. CONTROL: a request
-/// and a station control the page does send are read.
+/// desktop and is none of Remote's operations: a request naming it is refused before anything
+/// reads it, whichever spelling it tries. CONTROL: a request the page does send is read.
 #[test]
 fn giving_a_club_position_is_refused_from_afar() {
     for name in [
@@ -895,28 +766,16 @@ fn giving_a_club_position_is_refused_from_afar() {
                 .is_err(),
             "a request named {name} was read"
         );
-        assert!(
-            serde_json::from_value::<station::Action>(json!({"action": name, "handle": 1}))
-                .is_err(),
-            "a station control named {name} was read"
-        );
     }
     assert!(
         serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
         "CONTROL: a request the page sends"
     );
-    assert!(
-        serde_json::from_value::<station::Action>(
-            json!({"action": "qso.discard", "expectedKey": "x"})
-        )
-        .is_ok(),
-        "CONTROL: a station control the page sends"
-    );
 }
 
 /// ⭐ **Removing a club position, or letting one back, is refused from afar**, as Give is: both
 /// buttons are on the host's own board and neither is one of Remote's operations, whichever
-/// spelling a request tries. CONTROL: a request and a station control the page does send are read.
+/// spelling a request tries. CONTROL: a request the page does send is read.
 #[test]
 fn removing_a_club_position_or_letting_one_back_is_refused_from_afar() {
     for name in [
@@ -936,21 +795,43 @@ fn removing_a_club_position_or_letting_one_back_is_refused_from_afar() {
             .is_err(),
             "a request named {name} was read"
         );
-        assert!(
-            serde_json::from_value::<station::Action>(json!({"action": name, "posid": "bbbb0002"}))
-                .is_err(),
-            "a station control named {name} was read"
-        );
     }
     assert!(
         serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
         "CONTROL: a request the page sends"
     );
-    assert!(
-        serde_json::from_value::<station::Action>(
-            json!({"action": "qso.discard", "expectedKey": "x"})
+}
+
+/// The state's `txArmed` is the station's TX-enable latch, by value, for the browser holding the
+/// lease: on → true, off → false. Another browser watching the same station is not told (the
+/// page refuses a `txArmed` without the lease), and neither is one older than the stop token.
+#[test]
+fn tx_armed_reports_the_stations_tx_latch_to_the_controller() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls_version(&f, now, 4);
+    assert_eq!(state["phase"], "controlling");
+    assert_eq!(state["txArmed"], false, "TX is off at the start");
+    for on in [true, false, true] {
+        f.engine.lock().unwrap().set_tx_enabled(on);
+        assert_eq!(f.engine.lock().unwrap().tx_enabled(), on, "premise");
+        let state = control_state_version(&f, now, 4);
+        assert_eq!(state["txArmed"], on, "the latch is {on}");
+        assert!(state["transmitEpoch"].is_string());
+    }
+    f.authority.permit_station(OTHER, true).unwrap();
+    let watching = f
+        .authority
+        .handle_version(
+            (f.connection, 4),
+            OTHER,
+            OTHER,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
         )
-        .is_ok(),
-        "CONTROL: a station control the page sends"
-    );
+        .unwrap();
+    assert_eq!(watching["phase"], "occupied");
+    assert_eq!(watching["txArmed"], false, "only the controller is told");
+    assert_eq!(control_state_version(&f, now, 3)["txArmed"], false);
 }

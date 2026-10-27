@@ -9,9 +9,10 @@
 // needs engine ranks for that log (hundreds of FT8 contacts with the United States and Canada, Germany on
 // CW alone, Japan in FT8) against the stations PSK Reporter's receivers near EN52 heard on 20 m, in every
 // mode one capture named; crates/propagation/tests/needs_each_mode.rs holds the file to that board. The
-// engine judged every name PSK Reporter passes on as a mode of its own, so each WSPR beacon, VarAC, JTTY
+// engine judged every name PSK Reporter passes on as a mode of its own, so each WSPR beacon, VarAC
 // and FreeDV station of the two countries was a "new mode" no contact could clear, and the radio's own
-// WSPR decodes were too.
+// WSPR decodes were too. JTTY is a mode contacts are logged in (MODE=MFSK SUBMODE=JTTY), so a station
+// heard in it is a real new mode until one is worked, as a JS8 station is.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -128,10 +129,11 @@ function bandActivityModeChips(calls: string[], tier: Tier): string[] {
 }
 
 describe('the New mode need, on the report’s log and the stations heard near EN52', () => {
-  it('the Needed board with New mode on lists Germany in FT8 and the United States in JS8, nothing the log holds', () => {
+  it('the Needed board with New mode on lists Germany in FT8 and the United States in JS8 and JTTY, nothing the log holds', () => {
     expect(newModeBoard()).toEqual([
       'DL1ABC, Fed. Rep. of Germany, 20m FT8, needed NewMode | New mode — FT8 Fed. Rep. of Germany (any band)',
       'K1JSE, United States, 20m Digital, needed NewMode | New mode — JS8 United States (any band)',
+      'K4JTY, United States, 20m JTTY, needed NewMode | New mode — JTTY United States (any band)',
     ])
   })
 
@@ -155,6 +157,7 @@ describe('the New mode need, on the report’s log and the stations heard near E
     expect([...topNeedByCall(byCall())].sort()).toEqual([
       ['DL1ABC', 'NewMode'],
       ['K1JSE', 'NewMode'],
+      ['K4JTY', 'NewMode'],
     ])
   })
 })

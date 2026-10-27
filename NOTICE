@@ -28,7 +28,7 @@ License: **GNU GPL, version 3** (GPLv3).
 Nexus's modem library, `libtempo/`, is derived from WSJT-X. The WSJT-X-derived
 sources are **vendored in this repository** at `libtempo/vendor/wsjtx/` — the
 complete corresponding source (GPL §6) for the modem compiled into the Nexus
-binary: a ~70-file subset of WSJT-X's `lib/` (no Qt/GUI code), with KD9TAW's
+binary: a subset of WSJT-X's `lib/` (no Qt/GUI code), with KD9TAW's
 modifications marked and the full provenance documented in
 `libtempo/vendor/wsjtx/README.md`. From WSJT-X, `libtempo` reuses:
 
@@ -39,7 +39,10 @@ modifications marked and the full provenance documented in
   soft-decision belief-propagation decoder;
 - the **CRC-14** message check (`chkcrc14a.f90` plus `crc14.cpp`);
 - the **`four2a` FFT** routine and surrounding DSP infrastructure that
-  `libtempo` reuses (alongside FFTW3, below).
+  `libtempo` reuses (alongside FFTW3, below);
+- the **JTTY** keyboard-mode modem, taken unmodified from a later WSJT-X
+  than the rest (see *JTTY — the keyboard-mode modem core, from WSJT-X*,
+  below).
 
 Nexus also carries a **Rust translation of WSJT-X's FT8/FT4 transmit encoder**, in
 `crates/modes/src/wsjt77/` (`mod.rs`, `pack.rs`, `wave.rs`), ported statement by statement
@@ -58,7 +61,13 @@ WSJT-X is the work of Joe Taylor (K1JT) and the WSJT Development Group,
 including Steve Franke (K9AN), Bill Somerville (G4WJS), Nico Palermo (IV3NWV),
 Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project
 for the authoritative copyright and contributor list:
-https://sourceforge.net/projects/wsjt/
+<https://github.com/WSJTX/wsjtx> (older releases:
+<https://sourceforge.net/projects/wsjt/>).
+
+The WSJT Development Team asserts WSJT-X as its trademark (see its
+`TRADEMARK.md`). Nexus is a different program under its own name. It uses the
+name WSJT-X only to say that its modem code is based on WSJT-X's and that it
+works with WSJT-X.
 
 ### Reed-Solomon codec — Phil Karn (KA9Q)
 License: **GNU General Public License**, version unspecified, © 2002.
@@ -200,6 +209,68 @@ Shared dependencies (the LDPC(174,91) codec, CRC-14, OSD, 77-bit packing,
 credited above; Decodium's copies were verified byte-identical at vendor time
 and not re-vendored. Decodium's `normalizebmet` was deliberately not vendored
 — see `libtempo/CMakeLists.txt` for the duplicate-symbol rationale.
+
+### JTTY — the keyboard-mode modem core, from WSJT-X
+License: **GNU GPL, version 3** (GPLv3), like the rest of WSJT-X.
+<https://github.com/WSJTX/wsjtx>, taken at the tag `v3.3.0-beta4`, commit `0f7d5928`
+(`0f7d5928449ec747c3d1f6da1306f8c94404c3a9`, 2026-10-21).
+
+JTTY is WSJT-X's keyboard mode for RTTY-style contest exchanges and conversation. Its modem
+sources are vendored at `libtempo/vendor/wsjtx/lib/jtty/`, byte for byte as upstream has them
+at that commit: nothing in them is changed and nothing is added to them.
+
+- the message grammar, text packing and tone generation (`jtty_source_codec.f90`,
+  `jtty_mod.f90`, `genjtty.f90`), with the 77-bit grammar tables they read, among them the
+  ARRL and RAC section list (`packjt77_grammar.f90`, vendored at
+  `libtempo/vendor/wsjtx/lib/77bit/`);
+- the error correction: the tail-biting convolutional code, its CRC-12 and its decoders
+  (`tbcc.f90`, `jtty_fec_mod.f90`, `jtty_tbcc_code_profile.f90`, `jtty_tbcc_decoder.f90`,
+  `jtty_tbcc_list_decoder.f90`);
+- the waveform (`gen_jttywave.f90`, `gen_syncwave.f90`);
+- the receiver: the multi-signal decoder with its streaming receive interface and signal
+  subtraction (`jtty_mdecode.f90`, `jtty_receive_context.f90`, `subtract_jtty.f90`,
+  `jtty_peakup.f90`, `jtty_payload_correlators.f90`, `jtty_block_pow.f90`, `ana64a.f90`), the
+  whole-recording decoder that upstream's tests drive (`rjtty_sub.f90`), and the
+  single-signal decoder (`jtty_decode.f90`).
+
+Upstream's own Fortran unit tests for these files are vendored with them, under
+`libtempo/vendor/wsjtx/tests/`: 19 of the 23 in WSJT-X's `tests/unit/jtty/` (one of the other
+four needs WSJT-X's Qt code; three, added in 3.3.0-beta2 to beta4, carry a licence header of
+their own and are not taken), and the message list one of them reads,
+`tests/fixtures/jtty/jtty_msgs.txt`. They test the modem and are not part of the program.
+
+The files carry no per-file copyright or licence header, like the rest of WSJT-X's `lib/`.
+WSJT-X licenses its source under the GNU GPL, version 3 (its `COPYING`; its README: "WSJT-X,
+MAP65, and QMAP are free software licensed under the GNU General Public License version 3"),
+with no "or any later version" grant, so these files are GPL-3.0-only here, like the rest of
+the vendored tree. Upstream's commit history shows them written by Joe Taylor (K1JT), Steve
+Franke (K9AN) and David Christle (KD0BTO), with a contribution from Brian Moran (N9ADG).
+WSJT-X's About window reads: "© 2001-2026 by Joe Taylor, K1JT, Bill Somerville, G4WJS, Steve
+Franke, K9AN, Nico Palermo, IV3NWV, Uwe Risse, DG2YCB, Brian Moran, N9ADG, Roger Rehr, W3SZ,
+John Nelson, G4KLA, Charlie Suckling, DL3WDG, Terrell Deppe, KJ5HST, and David Christle,
+KD0BTO".
+
+Not taken: the standalone `jtty` program with its audio, console and PortAudio code
+(PortAudio's header, under PortAudio's own licence, is the one file in upstream's directory
+that is not under WSJT-X's), the simulation and laboratory programs, two files upstream's
+build does not compile, upstream's notes, and all of WSJT-X's Qt/C++ JTTY code;
+`libtempo/vendor/wsjtx/README.md` lists every file. Nexus writes its own code around the
+modem and takes none of WSJT-X's transmit, keying, live-typing, macro, logging or
+interoperability code.
+
+The routines these files call from the rest of WSJT-X (`pack28` and `unpack28` from
+`packjt77`, `chkcall`, `four2a`, `twkfreq`, `db`, `gfsk_pulse` and the `fftw3` module) are the
+copies already vendored for the other modes, from WSJT-X 3.0.2. At `0f7d5928` upstream's
+copies are the same, except that `twkfreq` gained a fast path for a constant frequency and
+`packjt77` was rewritten; Nexus keeps its own modified `packjt77` (see the WSJT-X entry above).
+
+**`v3.3.0-beta4` is a WSJT-X pre-release.** No WSJT-X general release carries JTTY yet. When
+one does, the files are taken again from that release, and this entry, `libtempo/vendor/wsjtx/README.md` and the test that holds the files to their upstream
+commit (`crates/tempo-fast-sys/tests/jtty_provenance.rs`) name the new tag and commit.
+
+Nexus is not endorsed by nor affiliated with the WSJT Development Team. The team asserts
+WSJT-X as its trademark; Nexus's JTTY is not WSJT-X, and Nexus uses the name only to say where
+this code comes from.
 
 ### AetherSDR — waterfall history + 3D stacked-spectrum
 License: **GNU GPL, version 3** (GPLv3). <https://github.com/aethersdr/AetherSDR>

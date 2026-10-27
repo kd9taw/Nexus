@@ -21,11 +21,17 @@
 // at most every few seconds, while the link is on the internet), with a button that answers it,
 // and Reconnect once nobody did; and, when this network lets no datagram road through, that
 // transmitting from here is off. A pop-out window reports its input the same way (`ClientInput`, at
-// its root), so work in a pop-out answers "Still there?" too.
+// its root), so work in a pop-out answers "Still there?" too. A station signed in to from elsewhere
+// (`away`: kept by its service id) has no address to name, so the banner says the
+// internet while it connects and when the station does not take this computer.
 //
 // In a test build it carries the road switch too (`src-tauri/src/bench_road_switch.rs`): Normal,
 // Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
 // Only a test build's status names the switch, so a shipped build draws none of it.
+//
+// A station that no longer knows this computer, or answers with another key, is not fixed by waiting:
+// it offers Pair again, which leaves and opens Stations on this network with the pairing for that
+// station (`client_mode::pair_again`).
 //
 // While another device holds the station it offers Take control, asked inline (a modal would
 // stand between the operator and Stop TX): confirmed, that device's over ends as its Stop would and
@@ -43,9 +49,11 @@ import {
   type BenchPosition,
   type ClientOver,
   type ClientStatus,
+  type PttRefusal,
 } from '../api'
 import { t } from '../i18n'
 import { lanReachLine } from '../remote-native/lanReach'
+import { heldLine } from '../features/txOnHeld'
 
 /** How often the banner asks after the link while this computer drives a station. */
 export const CLIENT_STATUS_EVERY_MS = 500
@@ -94,6 +102,8 @@ function reasonLine(status: ClientStatus): string {
     case 'tryLater': return t('client.reason.tryLater')
     case 'accessDenied': return t('client.reason.accessDenied')
     case 'pipeClosed': return t('client.reason.pipeClosed')
+    case 'stationKeyUnconfirmed': return t('client.reason.stationKeyUnconfirmed')
+    case 'stationKeyDisagrees': return t('client.reason.stationKeyDisagrees')
     default: return t('client.reason.unknown')
   }
 }
@@ -109,6 +119,24 @@ function endedLine(why: Extract<ClientOver, { phase: 'ended' }>['why']): string 
     case 'watchdog': return t('client.over.ended.watchdog')
     case 'routeChanged': return t('client.over.ended.routeChanged')
     case 'refused': return t('client.over.ended.refused')
+  }
+}
+
+/** Why a press of PTT here would not key the station, in a plain sentence. Literal calls, so the
+ *  catalog guard can see each key. The station decides whether a press keys; this only explains a
+ *  refusal the station reported, so the operator is not left pressing a dead key with no reason. */
+function refusalLine(refusal: PttRefusal): string {
+  switch (refusal) {
+    case 'notPhone': return t('client.ptt.refusal.notPhone')
+    case 'txDisabled': return t('client.ptt.refusal.txDisabled')
+    case 'outsideLicence': return t('client.ptt.refusal.outsideLicence')
+    case 'tuning': return t('client.ptt.refusal.tuning')
+    case 'otherOwner': return t('client.ptt.refusal.otherOwner')
+    case 'clockRepair': return t('client.ptt.refusal.clockRepair')
+    case 'onHold': return t('client.ptt.refusal.onHold')
+    case 'noPresence': return t('client.ptt.refusal.noPresence')
+    case 'noFeed': return t('client.ptt.refusal.noFeed')
+    case 'noAudio': return t('client.ptt.refusal.noAudio')
   }
 }
 
@@ -134,6 +162,14 @@ function line(status: ClientStatus): string {
       case 'live': return t('client.banner.internet.live')
       case 'notLive': return t('client.banner.internet.notLive')
       case 'busy': return t('client.banner.internet.busy')
+      default: break
+    }
+  }
+  // Signed in to from elsewhere: no address to name, and the internet its only road.
+  if (status.away) {
+    switch (status.phase) {
+      case 'connecting': return t('client.banner.internet.connecting')
+      case 'refused': return t('client.banner.internet.refused', { reason: reasonLine(status) })
       default: break
     }
   }
@@ -264,10 +300,14 @@ export function ClientBanner() {
   }
   const over = overLine(status.over)
   const idleEnded = status.phase === 'refused' && status.reason === 'idle'
-  const leave = () => {
+  const leave = (pairAgain?: boolean) => {
     setLeaving(true)
-    void leaveClientMode().catch(() => setLeaving(false))
+    void leaveClientMode(pairAgain).catch(() => setLeaving(false))
   }
+  // Refused in a way only a new pairing ends. A station signed in to from elsewhere has no pairing
+  // on this network to make again.
+  const pairAgain = status.phase === 'refused' && !status.away
+    && (status.reason === 'notPaired' || status.reason === 'keyChanged')
   const bench = status.bench
   return (
     <div
@@ -284,7 +324,29 @@ export function ClientBanner() {
           {over}
         </span>
       )}
+      {/* Why a PTT press here would not key the station, from the client status. Beside the over
+          line, the banner's own place for what the station says of transmitting; it never covers
+          Stop. Absent on an older station build, so nothing shows then. */}
+      {/* The station holds this computer from transmit, in any mode: Allow to transmit at the shack,
+          with the minutes left only when the station sent them. It stands in for the PTT's own
+          on-hold line, which says the same without the time. */}
+      {status.txHold && (
+        <span className="client-banner-over" data-tx-hold={status.txHold.leftSecs != null ? 'counting' : 'waiting'}>
+          {heldLine(status.txHold)}
+        </span>
+      )}
+      {status.pttRefusal && !(status.txHold && status.pttRefusal === 'onHold') && (
+        <span className="client-banner-over" data-ptt-refusal={status.pttRefusal}>
+          {refusalLine(status.pttRefusal)}
+        </span>
+      )}
       {status.udpBlocked && <span className="client-banner-over">{t('client.banner.udpBlocked')}</span>}
+      {/* Signing in again before the station stops taking this computer on its network. The day is
+          written YYYY-MM-DD, in UTC, never in a locale's format. */}
+      {status.signingAgain
+        ? <span className="client-banner-over">{t('client.banner.signingAgain')}</span>
+        : status.signInBy != null && <span className="client-banner-over">
+          {t('client.banner.signInBy', { date: new Date(status.signInBy * 1000).toISOString().slice(0, 10) })}</span>}
       {status.stillThere && <span className="client-banner-over">{t('client.banner.stillThere')}</span>}
       {(status.stillThere || idleEnded) && (
         <button type="button" className="client-banner-leave" onClick={() => void clientStillHere().catch(() => undefined)}>
@@ -313,10 +375,21 @@ export function ClientBanner() {
           moved={(now) => setStatus((was) => (was ? { ...was, bench: now } : was))}
         />
       )}
+      {pairAgain && (
+        <button
+          type="button"
+          className="client-banner-leave"
+          onClick={() => leave(true)}
+          disabled={leaving}
+          title={t('client.banner.pairAgain.title')}
+        >
+          {t('client.banner.pairAgain')}
+        </button>
+      )}
       <button
         type="button"
         className="client-banner-leave"
-        onClick={leave}
+        onClick={() => leave()}
         disabled={leaving}
         title={t('client.banner.leave.title')}
       >

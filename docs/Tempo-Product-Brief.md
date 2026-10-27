@@ -121,7 +121,7 @@ This is an open invitation. If you have an HF station and a soundcard-mode workf
 
 - **Download for Windows (latest release):** https://sourceforge.net/projects/nexus-ham-radio/files/latest/download
 - **Source, issues & feedback:** https://sourceforge.net/projects/nexus-ham-radio
-- **Direct contact:** kd9taw@protonmail.com
+- **Direct contact:** contact@hamradiotools.io
 
 The best feedback is a GitHub issue with your **rig, band, observed SNR, and decode result** — but an email works too.
 

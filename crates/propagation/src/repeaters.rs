@@ -2501,7 +2501,7 @@ mod tests {
         assert_eq!(state_id_for("XX"), None);
     }
 
-    // ── RSGB + the merge (N46 P1) ───────────────────────────────────────────
+    // ── RSGB + the merge ────────────────────────────────────────────────────
 
     /// Real listings, kept small: RSGB rows from `api-beta.rsgb.online/locator/` IO83, IO93 and
     /// IO74, and their hearham twins, both read 2026-10-01 (keeper callsigns and hearham's free

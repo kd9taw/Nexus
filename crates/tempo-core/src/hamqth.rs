@@ -111,6 +111,22 @@ pub struct HamQthLookup {
     /// a missing or unparseable pair reports absence.
     pub lat: Option<f64>,
     pub lon: Option<f64>,
+    /// The fields a contact can hold, as [`crate::qrz::QrzLookup`] names them. County is
+    /// HamQTH's `us_county` (US stations only).
+    pub county: Option<String>,
+    pub iota: Option<String>,
+    pub email: Option<String>,
+    /// Web page (HamQTH `web`).
+    pub web: Option<String>,
+    /// QSL route (HamQTH `qsl_via`).
+    pub qsl_via: Option<String>,
+    /// Will confirm by LoTW / eQSL (HamQTH `lotw` / `eqsl`, `Y` or `N`) and by paper card,
+    /// by bureau (`qsl`) or direct (`qsldirect`): either `Y` is yes, both `N` is no.
+    pub lotw: Option<bool>,
+    pub eqsl: Option<bool>,
+    pub paper_qsl: Option<bool>,
+    /// Offset from UTC in hours (HamQTH `utc_offset`).
+    pub utc_offset: Option<f32>,
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved set). Same encoder as the
@@ -200,6 +216,22 @@ pub fn parse_callsign(xml: &str) -> Option<HamQthLookup> {
         image: tag(xml, "picture"),
         lat,
         lon,
+        county: tag(xml, "us_county"),
+        iota: tag(xml, "iota"),
+        email: tag(xml, "email"),
+        web: tag(xml, "web"),
+        qsl_via: tag(xml, "qsl_via"),
+        lotw: crate::qrz::callbook_flag(tag(xml, "lotw")),
+        eqsl: crate::qrz::callbook_flag(tag(xml, "eqsl")),
+        paper_qsl: match (
+            crate::qrz::callbook_flag(tag(xml, "qsl")),
+            crate::qrz::callbook_flag(tag(xml, "qsldirect")),
+        ) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        },
+        utc_offset: crate::qrz::callbook_utc_offset(tag(xml, "utc_offset")),
     })
 }
 
@@ -377,6 +409,32 @@ mod tests {
         );
         assert_eq!(r.lat, Some(41.7147));
         assert_eq!(r.lon, Some(-72.7272));
+    }
+
+    /// Every field a contact can hold: county, IOTA, e-mail, web page, QSL route, the
+    /// LoTW/eQSL/paper-card flags and the UTC offset. HamQTH says Y/N where QRZ says 1/0, and a
+    /// paper card goes either by bureau (`qsl`) or direct (`qsldirect`).
+    #[test]
+    fn parses_the_fields_a_contact_can_hold() {
+        let r = parse_callsign(LOOKUP_US).unwrap();
+        assert_eq!(r.county.as_deref(), Some("Hartford")); // <us_county>
+        let xml = "<HamQTH version=\"2.7\"><search><callsign>ok7an</callsign>\
+<iota>EU-001</iota><email>ok7an@example.org</email><web>https://example.org</web>\
+<qsl_via>OK1MGR</qsl_via><lotw>Y</lotw><eqsl>N</eqsl><qsl>N</qsl><qsldirect>Y</qsldirect>\
+<utc_offset>+1</utc_offset></search></HamQTH>";
+        let r = parse_callsign(xml).unwrap();
+        assert_eq!(r.iota.as_deref(), Some("EU-001"));
+        assert_eq!(r.email.as_deref(), Some("ok7an@example.org"));
+        assert_eq!(r.web.as_deref(), Some("https://example.org"));
+        assert_eq!(r.qsl_via.as_deref(), Some("OK1MGR"));
+        assert_eq!(
+            (r.lotw, r.eqsl, r.paper_qsl),
+            (Some(true), Some(false), Some(true))
+        );
+        assert_eq!(r.utc_offset, Some(1.0));
+        // Neither card route said: unknown, not "no".
+        let r = parse_callsign(LOOKUP_DX).unwrap();
+        assert_eq!((r.lotw, r.paper_qsl, r.utc_offset), (None, None, None));
     }
 
     #[test]

@@ -1,4 +1,3 @@
-import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
 // reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
 // written in English here — the button's four labels (which ARE the accessible name
@@ -43,6 +42,7 @@ import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer, type VoiceKeyerForEnter } from './VoiceKeyer'
 import { drivesAnotherStation } from '../features/durableStore'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { STREAM_PTT_REASSERT_MS } from '../remote-web/stream-protocol'
 import { EsmPlate } from './EsmPlate'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
@@ -70,8 +70,8 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
@@ -87,6 +87,7 @@ import {
   startQsoRecording,
   stopQsoRecording,
   setTune,
+  atuBypass,
   atuTune,
   haltTx,
   setTxEnabled,
@@ -107,10 +108,9 @@ import {
 } from '../api'
 import { pushToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
-import { latestOnly } from '../latestOnly'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
-import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
+import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
@@ -259,6 +259,9 @@ interface Props {
   /** Enter Sends Message's switch for this cockpit and the voice keyer's step mapping (App, from
    *  Settings). Absent on the hosted page. */
   esmSetting?: EsmSetting
+  /** The active radio is a Flex on SmartSDR CAT or Hamlib (App, from Settings): the voice keyer
+   *  notes once that SSB goes out only with DAX on for voice. Absent on the hosted page. */
+  flexDaxNote?: boolean
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -624,17 +627,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
-  const frequencyControl = useStationCapability('frequency')
-  const rotatorControl = useStationCapability('rotator')
-  const control = useStationControl()
-  // A browser moves the rig scope with the station's rigScope hint; the station judges the family.
-  const rigScope = useStationCapability('rigScope')
-  const scopeControl = control || rigScope
-  const scopeFailed = (): void => { pushToast(t('remote.controlRequestFailed'), 'error') }
-  // One remote reference change at a time: a drag sends its newest value, never every step.
-  const [sendScopeRef] = useState(() => latestOnly((tenths: number) => setScopeRef(tenths), scopeFailed))
-  const [sendFlexRef] = useState(() => latestOnly((dbm: number) => setFlexPanRef(dbm), scopeFailed))
+export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -661,15 +654,14 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.micGain])
   const shownMic = mic
   const changeMic = (pct: number) => {
-    if (control) setMic(pct)
+    setMic(pct)
     void setMicGain(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // ── THE TX MONITOR'S LEVEL (2026-09-22) ──────────────────────────────────────────────
   // Same optimistic shape as MIC above, and deliberately NOT through `useRadioLevels`:
   // `MONITOR_GAIN` is not one of the remote protocol's `RadioLevel`s, and inventing an entry
   // for it would widen the station-operation surface a browser observer may command — a
-  // trust decision, not a cockpit one. So it is LOCAL ONLY, and a remote observer gets the
-  // slider disabled rather than a control that would be refused at the far end.
+  // trust decision, not a cockpit one. So it is LOCAL ONLY.
   const [mon, setMon] = useState(0) // % TX-monitor level — pushed to the rig once touched
   const monDragging = useRef(false)
   useEffect(() => {
@@ -679,9 +671,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
       setMon((m) => (Math.abs(m - pct) >= 2 ? pct : m))
     }
   }, [snap.radio.monitorGain])
-  const shownMon = control ? mon : Math.round((snap.radio.monitorGain ?? 0) * 100)
   const changeMon = (pct: number) => {
-    if (!control) return
     setMon(pct)
     void setMonitorGain(pct / 100)
       .then((s) => s && onSnap?.(s))
@@ -697,7 +687,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
    * radio handoff mid-click); it is said rather than swallowed.
    */
   const pickStep = (which: 'ATT' | 'PRE', db: number) => {
-    if (!control) return
     void (which === 'ATT' ? setAttDb(db) : setPreampDb(db))
       .then((s) => s && onSnap?.(s))
       .catch(() => pushToast(t('phone.chain.failed', { plate: which }), 'error'))
@@ -724,7 +713,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.compLevel])
   const shownComp = comp
   const changeComp = (pct: number) => {
-    if (control) setComp(pct)
+    setComp(pct)
     void setCompLevel(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // HZ, not a percentage — the notch sits at an audio frequency and the operator is placing it
@@ -741,7 +730,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.notchFreqHz])
   const shownNotch = notchHz
   const changeNotch = (hz: number) => {
-    if (control) setNotchHz(hz)
+    setNotchHz(hz)
     void setNotchFreq(hz).catch(error => pushToast(String(error), 'error'))
   }
   // The three analog levels, each the same shape as NR/COMP above: mirror the rig's own
@@ -757,7 +746,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.afGain])
   const shownAf = af
   const changeAf = (pct: number) => {
-    if (control) setAf(pct)
+    setAf(pct)
     void setAfGain(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   const [rfg, setRfg] = useState(100)
@@ -771,7 +760,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.rfGain])
   const shownRfg = rfg
   const changeRfg = (pct: number) => {
-    if (control) setRfg(pct)
+    setRfg(pct)
     void setRfGain(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   const [sql, setSql] = useState(0)
@@ -785,12 +774,12 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   }, [snap.radio.squelch])
   const shownSql = sql
   const changeSql = (pct: number) => {
-    if (control) setSql(pct)
+    setSql(pct)
     void setSquelch(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   const shownNr = nr
   const changeNr = (pct: number) => {
-    if (control) setNr(pct)
+    setNr(pct)
     void setNrLevel(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // AGC speed — the chip lights on the click, then the rig gets the last word. Reading
@@ -801,20 +790,18 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   // read-back never moves, and the chip claimed a speed the radio never took.
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
-    control && agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
+    agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
-    if (control) setAgcPick(sp)
+    setAgcPick(sp)
     void setAgc(sp)
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
-    if (!scopeControl) return
     setScopeRefTenths(tenths)
-    if (control) void setScopeRef(tenths)
-    else sendScopeRef(tenths)
+    void setScopeRef(tenths).catch(showWhenDriving)
   }
   const [keyed, setKeyed] = useState(false)
   /** Mirrors `keyed` for the window key handlers, which capture their closure once per
@@ -888,12 +875,10 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const flexScope = scopeFeed?.source === 'flex'
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
-    if (!scopeControl) return
     setFlexRefDbm(dbm)
-    if (!control) return sendFlexRef(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
@@ -936,11 +921,9 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const lastPoW = useRef<number | null>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
   // The scope strip its height divider sizes: the divider sets its CSS var on the strip's
-  // parent (the stage, which has no box until the left side shows — then the shell is the
-  // container) and measures the range the layout honours (on a short window the pane region's
-  // floor stops the strip below its own max-height). The stored height is a share of the shell.
+  // parent (the shell) and measures the range the layout honours (on a short window the pane
+  // region's floor stops the strip below its own max-height).
   const scopePanelRef = useRef<HTMLElement>(null)
-  const scopeShareOf = () => scopePanelRef.current?.closest<HTMLElement>('main.phone-cockpit') ?? null
   useWheelTune(scopeRef, {
     dialMhz: snap.radio.dialMhz,
     sideband: snap.radio.sideband || 'USB',
@@ -974,7 +957,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   // and reports the final dial; this hook just commands it.
   const onScopeTune = useScopeTune({
     sideband: commandedMode,
-    enabled: control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
 
@@ -1137,7 +1120,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     setStillAsk(null)
   }
   const key = (on: boolean) => {
-    if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
       const radio = snapRef.current.radio
@@ -1228,7 +1210,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     if (!on) releaseMic()
   }
   const onPttDown = () => {
-    if (!control) return
     if (lock) {
       key(!keyed) // hands-free: toggle
     } else {
@@ -1236,7 +1217,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     }
   }
   const onPttUp = () => {
-    if (!control) return
     if (!lock) key(false)
   }
   // THE ARMED LABEL (the operator's pick "Show Armed until keyed", 2026-09-28). DISPLAY ONLY: the
@@ -1256,23 +1236,27 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const pttArmed =
     keyed && snap.radio.txAllowed && snap.radio.txEnabled && (micArmed.current || driving) &&
     !pressEnded && (streamMic === 'armed' || (streamMic === null && !micReported))
+  // A refused level goes back to what the rig reports: the read-back above moves the slider only
+  // when the rig's value changes, and a refusal changes nothing.
   const changePower = (pct: number) => {
-    if (!control) return
     setPower(pct)
-    void setRfPower(pct / 100)
+    void setRfPower(pct / 100).catch((e) => {
+      const rb = snap.radio.rfPower
+      if (rb != null) setPower(Math.round(rb * 100))
+      showWhenDriving(e)
+    })
   }
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
     void setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
 
   // QSO recording (audio bridge): a session-level toggle driven by the snapshot (so the REC
@@ -1280,7 +1264,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   // poll lag) and guard re-entry so a rapid double-click can't double-fire.
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
-    if (!control) return
     if (recBusy) return
     setRecBusy(true)
     const fn = recording ? stopQsoRecording : startQsoRecording
@@ -1309,7 +1292,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
 
   // Spacebar = push-to-talk (hold), unless typing in a field or pressing a control in the ⊞ menu.
   useEffect(() => {
-    if (!control) return // observation owns no PTT; mounting/leaving it cannot unkey the station
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
     // THE ⊞ POPOVER IS BUTTONS (⊞ Arrange's moves, Undo, Reset), and Space is how a keyboard presses
@@ -1490,7 +1472,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withRecent(withStats(PHONE_MENU)),
+        menu: PHONE_MENU,
         side: [],
         main: 'bandActivity',
         labels,
@@ -1525,7 +1507,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const [keyerForEnter, setKeyerForEnter] = useState<VoiceKeyerForEnter | null>(null)
   const esm = useEsmHost({
     cockpit: 'phone',
-    on: !!esmSetting?.on && !!fieldDay && control,
+    on: !!esmSetting?.on && !!fieldDay,
     callOnce: !!esmSetting?.callOnce,
     roles: esmRoles(VOICE_SLOT_ROLES, esmSetting?.voiceRoles),
     slots: esmVoiceSlots(keyerForEnter?.messages ?? []),
@@ -1554,9 +1536,9 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const hasNeededPane = neededBoard != null && shown('needed')
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
-  const hasStatsPane = host != null && shown('stats') && statsHere()
+  const hasStatsPane = host != null && shown('stats')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
-  const hasRecentPane = host != null && shown('recent') && statsHere()
+  const hasRecentPane = host != null && shown('recent')
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -1590,7 +1572,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           stats: hasStatsPane,
         })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
-  // A full-height column beside the scope, the TX strip and the region, between the header and the
+  // A column beside the region, under the full-width scope and TX strip (2026-10-26), above the
   // dock, for the panes the operator put there (the record's `leftSide`: Band Activity, Spots, Needed —
   // PHONE_PANELS.arrange.leftSide, so never the keyer or the log form). It has ROOM on a window at least
   // about 1280 effective px wide, read from the published `--vw-eff` (never a size @media), and never in
@@ -1600,7 +1582,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const sideRoom = sideWide && panels != null
   const sideIds = sideRoom ? (panels?.layout.leftSide ?? []) : []
   // What the side renders, top to bottom. With nothing on it shown it is not drawn at all — an empty
-  // column beside the scope is the "band of empty black" by another name.
+  // column beside the region is the "band of empty black" by another name.
   const sideGroup = sideIds.filter(paneShown)
   const sideShows = sideGroup.length > 0
   // The panes IN THE REGION: shown, and not on the left side.
@@ -1719,7 +1701,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   // FT8's), and this window is the station's own (the Remote page's scope is click-only). Held, like
   // tuning, while anything transmits — the rig's own PTT included.
   const passbandEditable =
-    control && !dead('BW') && (filterHz ?? 0) > 0 && !rigMode.startsWith('PKT')
+    !dead('BW') && (filterHz ?? 0) > 0 && !rigMode.startsWith('PKT')
   const onScopePassband = useScopePassband({
     enabled: passbandEditable && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.rigKeyed !== true,
     limits: PASSBAND_LIMITS.phone,
@@ -1843,7 +1825,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             <button
               {...(isDead
                 ? deadControlProps('button', describedBy('rx'))
-                : { disabled: !control })}
+                : {})}
               key={db}
               type="button"
               className={`theme-chip${now === db ? ' active' : ''}${isDead ? ' dead' : ''}`}
@@ -1906,7 +1888,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const bandPane =
     hasBandPane && onWorkSpot ? (
       <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content" {...closeProps('bandActivity')}>
-        {control ? <BandStrip
+        <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
           txAllowed={snap.radio.txAllowed}
@@ -1926,7 +1908,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           stepHz={tuneStep}
           wheelSensitivity={wheelSensitivity}
           onSnap={onSnap}
-        /> : <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>}
+        />
       </CockpitPaneFrame>
     ) : null
 
@@ -1957,18 +1939,19 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   // of other panels, and the restore back to stock).
   const keyerPane = hasKeyerPane ? (
     <CockpitPaneFrame title={t('phone.pane.voiceKeyer.title')} paneId="voiceKeyer" fit="content" {...closeProps('voiceKeyer')}>
-      {control ? <VoiceKeyer
+      <VoiceKeyer
         txEnabled={snap.radio.txEnabled}
         keyed={keyed}
-        transmitting={snap.radio.transmitting}
+        voicePlaying={snap.radio.voicePlaying}
         fdExchange={fdExchange}
+        flexDaxNote={flexDaxNote}
         esm={{
           lit: esmLitKeys(esm.preview),
           report: setKeyerForEnter,
           onStop: esm.noteStop,
           onPlay: (slot) => esm.noteKey(`F${slot}`),
         }}
-      /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
+      />
     </CockpitPaneFrame>
   ) : null
 
@@ -2033,16 +2016,12 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         {...closeProps('spots')}
       >
         <div className={feedWrap('spots')}>
-          {control ? (
-            <SpotsPanel
-              {...spotsBoard}
-              spots={spots ?? []}
-              pane={{ scope: PHONE_SPOTS_SCOPE, modes: PHONE_SPOT_MODES, band: snap.radio.band }}
-              fieldDay={fieldDay}
-            />
-          ) : (
-            <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>
-          )}
+          <SpotsPanel
+            {...spotsBoard}
+            spots={spots ?? []}
+            pane={{ scope: PHONE_SPOTS_SCOPE, modes: PHONE_SPOT_MODES, band: snap.radio.band }}
+            fieldDay={fieldDay}
+          />
         </div>
       </CockpitPaneFrame>
     ) : null
@@ -2057,9 +2036,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         {...closeProps('needed')}
       >
         <div className={feedWrap('needed')}>
-          {control && (
-            <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS, modes: PHONE_NEEDED_MODES }} />
-          )}
+          <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS, modes: PHONE_NEEDED_MODES }} />
         </div>
       </CockpitPaneFrame>
     ) : null
@@ -2099,7 +2076,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
-                <button disabled={!scopeControl}
+                <button
                   key={sp.label}
                   type="button"
                   className="theme-chip"
@@ -2109,7 +2086,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
                      explanation anywhere. The rig's OWN refusal arrives a tick later in
                      `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
                      the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>
@@ -2117,17 +2094,16 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <WheelRange wheelStep={5} disabled={!scopeControl}
+              <WheelRange wheelStep={5}
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
                 value={scopeRefTenths}
-                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
                 aria-label={t('phone.rigScope.ref.aria')}
               />
-              <span className="ph-power-val">{scopeControl ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}</span>
+              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} {DB}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -2142,12 +2118,12 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
-                <button disabled={!scopeControl}
+                <button
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('phone.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>
@@ -2155,17 +2131,16 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <WheelRange wheelStep={5} disabled={!scopeControl}
+              <WheelRange wheelStep={5}
                 type="range"
                 min={-140}
                 max={-20}
                 step={5}
                 value={flexRefDbm}
-                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
                 aria-label={t('phone.flexPan.ref.aria')}
               />
-              <span className="ph-power-val">{scopeControl ? flexRefDbm : '—'} {DBM}</span>
+              <span className="ph-power-val">{flexRefDbm} {DBM}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -2432,7 +2407,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
               radio's pane is exactly what it was. On the Remote page too: its sliders go through
               the station's `radio.subLevel` intent. A component of its own, not a widened shared
               one — see its header. */}
-          <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} wheelStep={LEVEL_WHEEL_STEP} />
+          <SubReceiverStrip radio={snap.radio} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} wheelStep={LEVEL_WHEEL_STEP} />
         </CockpitPaneFrame>
   ) : null
   const transmitterPane = hasTransmitterPane ? (
@@ -2510,18 +2485,18 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             <div className="ph-chain-item" data-chain="MON">
               <label className="ph-dsplev" title={t('phone.chain.mon.title')}>
                 <span>{MON}</span>
-                <WheelRange wheelStep={LEVEL_WHEEL_STEP} disabled={dead('MON') || !control}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} disabled={dead('MON')}
                   aria-describedby={describedBy('tx')}
                   type="range"
                   min={0}
                   max={100}
-                  value={shownMon}
+                  value={mon}
                   onChange={(e) => changeMon(Number(e.target.value))}
                   onPointerDown={() => { monDragging.current = true }}
                   onPointerUp={() => { monDragging.current = false }}
                   aria-label={t('phone.chain.mon.aria')}
                 />
-                <span className="ph-power-val">{dead('MON') ? '—' : `${shownMon}%`}</span>
+                <span className="ph-power-val">{dead('MON') ? '—' : `${mon}%`}</span>
               </label>
             </div>
             )}
@@ -2550,7 +2525,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
           card scrolls inside the log column and can never squeeze the cockpit — the operator
           gets the QRZ photo / bearing / history back while operating. */}
-      {control ? <LogEntry
+      <LogEntry
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)
@@ -2578,7 +2553,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
         onResumeContest={onResumeContest}
-      /> : null}
+      />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
       {hasRecentPane && recentPane}
     </CockpitPaneFrame>
@@ -2629,19 +2604,38 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     </Fragment>
   )
 
-  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (Phone arms TX
-  // itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
-  // (→ halt_tx), sticky so they never leave the window. A shell child with no ⊞ id: under the
+  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY at the station (Phone
+  // arms TX itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
+  // (→ halt_tx), sticky so they never leave the window. ON A COMPUTER DRIVING A STATION the latch is
+  // a button: entering Phone from afar arms nothing, so it reads TX Off, and one click is one
+  // `set_tx_enabled` under every guard the station applies to a start from afar; a refusal is shown.
+  // A refused Tune or ATU is shown too, wherever this screen runs. A shell child with no ⊞ id: under the
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
   // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
   // which calls preventDefault, so the focused button does not click.
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
-      onSnap={onSnap}
-      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onSetTxEnabled={
+        driving
+          ? (on) =>
+              void setTxEnabled(on)
+                .then((s) => onSnap?.(s))
+                .catch((e) => pushToast(String(e), 'error'))
+          : undefined
+      }
+      onTune={(on) =>
+        void setTune(on)
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
       onAtuTune={() =>
         void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onAtuBypass={() =>
+        void atuBypass()
           .then((s) => onSnap?.(s))
           .catch((e) => pushToast(String(e), 'error'))
       }
@@ -2700,7 +2694,6 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           </div>
         }
         bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
-        remoteFrequency
         onCommitDial={commitDial}
         actions={
           host && panels ? (
@@ -2751,7 +2744,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           />
         }
         power={{
-          value: control ? power : snap.radio.rfPower == null ? null : Math.round(snap.radio.rfPower * 100),
+          value: power,
           unit: '%',
           onChange: changePower,
           wheelStep: 1,
@@ -2808,12 +2801,12 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           // The ★-favorites quick-recall strip (bounded + wrapping — the old
           // MemoryBank list grew the header unbounded). Recall is App-owned
           // (recallMemory): settings patch + retune + cockpit auto-switch.
-          control ? <MemoryStrip
+          <MemoryStrip
             dialMhz={snap.radio.dialMhz}
             mode={commandedMode}
             onRecall={onRecallMemory}
             onManage={onOpenMemories}
-          /> : <MemoryStripUnavailable />
+          />
         )}
         {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
             `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
@@ -2821,11 +2814,29 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
             feature as absent — one of them naming this tab specifically. Phone was the only
             cockpit with no live worked-call to pass; `workedCall` above is that source. */}
-        {control || rotatorControl ? <RotorStrip
+        <RotorStrip
           onOpenSettings={onOpenSettings}
           targetCall={workedCall || null}
-          onPointAt={rotorPointAt(control)}
-        /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+          onPointAt={rotorPointAt()}
+        />
+        {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
+            the reviewable cluster-spot popup (SpotDialog), seeded with the call being logged —
+            empty when none is typed, exactly as Operate seeds from its worked/selected call.
+            The popup's Send posts publicly from the station's own cluster login, so the review
+            step stays. Shares Operate's catalog keys: the text is mode-neutral ("Spot a callsign
+            on the DX cluster"). The dialog itself is already mounted at the shell foot. */}
+        <button
+          type="button"
+          className="cockpit-popout icon"
+          onClick={() => {
+            setSpotCall(workedCall)
+            setSpotOpen(true)
+          }}
+          aria-label={t('operate.header.spot.aria')}
+          title={t('operate.header.spot.title')}
+        >
+          📢
+        </button>
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather
@@ -2834,7 +2845,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
-          disabled={!control || (recBusy)}
+          disabled={recBusy}
           aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
           title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
         >
@@ -2854,7 +2865,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           unchanged — header, scope, ONE pane region, TX dock — one of the four is simply
           conditional now, exactly as Operate's waterfall has been since 0.15.0. The gate is
           HERE, at the shell child, and not inside the section: a scope that rendered an empty
-          `.ph-scope-panel` would keep its `flex: 0 1 22%` basis and its 8em floor and hand the
+          `.ph-scope-panel` would keep its `flex: 0 1 25%` basis and its 8em floor and hand the
           operator back a bordered empty box instead of the height he asked to reclaim.
           `.cockpit-panes` is `flex: 1 1 0` (cockpit-panes.css) — the region IS the sink, so
           the freed height goes to the panes with no rule change.
@@ -2863,37 +2874,14 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           own it is a grab handle for something that is not there — and it is a shell child of
           its own, which would leave a stranded 8px seam between the header and the region.
           The var it wrote is untouched and still stored, so re-ticking restores the height he
-          dragged to rather than the 22% default.
+          dragged to rather than the 25% default.
 
           Nothing on this strip stops a transmission (THE STOP LINE, features/panelState.ts):
           it is a display plus click-to-tune, and Stop TX / Tune are in the TX strip below it, PTT in
           the dock below, none of them reachable from the ⊞ menu. */}
-      {/* THE LEFT SIDE'S ROW AND THE STAGE (2026-10-03, cockpit-panes.css "THE LEFT SIDE"). The scope,
-          its divider, the TX strip and the pane region ALWAYS render inside these two wrappers, so the
-          side showing or going (a window crossing about 1280 px, a pane moved in ⊞ Arrange) never
-          moves the voice keyer or the log form to a new parent — React would remount both, stopping
-          an over and losing a half-typed contact. Until the side shows both are `cockpit-flat`, with
-          no box at all: the scope, the strip and the region are then the shell's flex items exactly as
-          before, which is what keeps the strip's sticky edges measured against the shell. With the
-          side shown the row lays it beside the stage. The header above and the TX dock below never
-          enter either, so PTT and the dock never move; Stop TX and Tune ride the strip under the scope. */}
-      <div className={sideShows ? 'cockpit-leftrow' : 'cockpit-flat'}>
-      {sideShows && panels && (
-        <LeftSide
-          stored={panels.layout.cols?.leftSide}
-          setCols={panels.setCols}
-          label={t('pane.left.label')}
-          widthLabel={t('pane.seam.leftWidth.label')}
-          colRef={sideColRef}
-        >
-          {sideGroup.map(placedPane)}
-          <PaneDropLayer drag={paneDrag} host={sideColRef} />
-        </LeftSide>
-      )}
-      <div className={sideShows ? 'cockpit-stage' : 'cockpit-flat'}>
       {shown('scope') && (
         <>
-      <section className={`ph-scope-panel${sideShows ? ' ph-scope-panel--beside' : ''}`} ref={scopePanelRef}>
+      <section className="ph-scope-panel" ref={scopePanelRef}>
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
@@ -2931,14 +2919,14 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
             // is supposed to serve.
             <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
-              <select disabled={!scopeControl}
+              <select
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.span.aria')}
                 title={t('phone.scope.yaesu.span.title')}
                 value={yaesuSpanLabel}
                 onChange={(e) => {
                   const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
-                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed()))
+                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
                 }}
               >
                 {YAESU_SPANS.map((sp) => (
@@ -2947,14 +2935,14 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
                   </option>
                 ))}
               </select>
-              <select disabled={!scopeControl}
+              <select
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.pos.aria')}
                 title={t('phone.scope.yaesu.pos.title')}
                 value={yaesuPosition}
                 onChange={(e) => {
                   const pos = e.target.value as 'center' | 'cursor' | 'fix'
-                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed()))
+                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
                 }}
               >
                 <option value="center">{t('phone.scope.yaesu.pos.center')}</option>
@@ -3014,11 +3002,10 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
             onPassband={passbandEditable ? onScopePassband : undefined}
             notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
             subReceiver={subScopeMarker(snap.radio, catOk)}
-            interactive={control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+            interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
             spots={scopeTags}
-            // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
-            // page's scope is click-only, so its tags are display only.
-            onSpot={control ? onWorkSpot : undefined}
+            // A tag's click is Band Activity's own: QSY to the spot and prefill the log.
+            onSpot={onWorkSpot}
             privilegeMode={snap.radio.operatingMode}
           />
         </div>
@@ -3027,16 +3014,11 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         axis="y"
         varName="--ph-scope-h"
         strip={scopePanelRef}
-        // In the stage, not a direct shell child: it gives back its column's gap as every divider
-        // whose parent styles.css may not name does (styles.css `.pane-splitter.horizontal.in-column`).
-        className="in-column"
-        // The stored height is a share of the SHELL in both states, so the left side showing narrows
-        // the scope without shortening it, and the TX strip under it stays at the same height.
-        shareOf={scopeShareOf}
         storageKey="nexus.split.phone.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
-        defaultPct={22}
+        // 25 % of the shell, every cockpit's waterfall default (2026-10-26); a dragged height is kept.
+        defaultPct={25}
         label={t('phone.scope.splitter.label')}
       />
         </>
@@ -3044,6 +3026,31 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
 
       {/* THE TX STRIP (`txStrip` above), under the scope. */}
       {txStrip}
+
+      {/* THE LEFT SIDE'S ROW AND THE STAGE (2026-10-03, cockpit-panes.css "THE LEFT SIDE"). The pane
+          region ALWAYS renders inside these two wrappers, so the side showing or going (a window crossing
+          about 1280 px, a pane moved in ⊞ Arrange) never moves the voice keyer or the log form to a new
+          parent — React would remount both, stopping an over and losing a half-typed contact. Until the
+          side shows both are `cockpit-flat`, with no box at all: the region is then the shell's flex item
+          exactly as before. With the side shown the row lays it beside the stage. The scope, its divider
+          and the TX strip stand ABOVE the row as shell children in both states (2026-10-26: "width and
+          height to be consistent"), so the scope keeps the shell's full width and its parent never
+          changes, and the side starts under the TX strip. The header above and the TX dock below never
+          enter the row either, so PTT and the dock never move. */}
+      <div className={sideShows ? 'cockpit-leftrow' : 'cockpit-flat'}>
+      {sideShows && panels && (
+        <LeftSide
+          stored={panels.layout.cols?.leftSide}
+          setCols={panels.setCols}
+          label={t('pane.left.label')}
+          widthLabel={t('pane.seam.leftWidth.label')}
+          colRef={sideColRef}
+        >
+          {sideGroup.map(placedPane)}
+          <PaneDropLayer drag={paneDrag} host={sideColRef} />
+        </LeftSide>
+      )}
+      <div className={sideShows ? 'cockpit-stage' : 'cockpit-flat'}>
 
       {/* THE PANE REGION — one CockpitPaneFrame grid for every operator-content block.
           useRegionCols OWNS data-cols (measured from the region itself, stamped
@@ -3127,7 +3134,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           have no id in the panel vocabulary (unrepresentable beats guarded); the TX
           meters DO keep their ⊞ id — a readout, not a control — but render here, beside
           the button that keys the rig. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
+      <div className="cockpit-txdock">
       {/* Transmit meters (SWR/ALC/Po/COMP), `pinned`: the readings STAY after the key is
           released, dimmed, and before the first over the panel holds a one-line hint saying
           when it reads. They used to render only while keyed, and that is the wrong half of
@@ -3302,7 +3309,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
               key(!keyed)
             }
           }}
-          disabled={!control || (!snap.radio.txAllowed)}
+          disabled={!snap.radio.txAllowed}
           // The last clause was a `.ph-ptt-hint` span below this row until 2026-08-04.
           // `flex-basis: 100%` made it a whole line of the PINNED dock, so it cost its ~19px
           // at every window size and no scroller could take it back — and its first half
@@ -3334,7 +3341,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
                 : 'PUSH TO TALK'}
         </button>
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">
-          <input disabled={!control} type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
+          <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
         {/* "STILL TALKING?" for a Lock from afar, after PTT and Lock so it never moves them under a
@@ -3349,7 +3356,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         )}
         {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: AFTER PTT and Lock, and
             taking only the room left, so nothing it says can move PTT under a held pointer. */}
-        {esmSetting && fieldDay && control && (
+        {esmSetting && fieldDay && (
           <EsmPlate
             on={esmSetting.on}
             onSwitch={esmSetting.onSwitch}

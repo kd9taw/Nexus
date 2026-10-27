@@ -324,6 +324,12 @@ pub struct ContestSession {
     /// (`ASSISTED`/`NON-ASSISTED`) — read at the same moment, for the same reason, as
     /// [`category_power`](Self::category_power).
     pub category_assisted: String,
+    /// ⭐ **The entry's `LOCATION` as the sponsor names it from a station setting**
+    /// ([`FdRuleset::cabrillo_location_setting`](crate::fd_rules::FdRuleset::cabrillo_location_setting):
+    /// the ARRL RTTY Roundup's ARRL/RAC section), read once, when the session starts, as
+    /// [`category_power`](Self::category_power) is. `""` = the sponsor names none, or the
+    /// setting is blank: the file then heads with the state, as it always did.
+    pub location_setting: String,
     /// ⭐ **A WARNING, never a refusal: this station's own call is in the USA or Canada,
     /// the contest has a W/VE role, and the location it was given puts it in the dx role
     /// anyway** — so it will send the DX exchange (no QTH). Computed when the session is
@@ -389,6 +395,8 @@ impl ContestSession {
             // Field Day's Cabrillo writes neither header (its power is a scoring TIER).
             category_power: String::new(),
             category_assisted: String::new(),
+            // Field Day's LOCATION is the section it sends.
+            location_setting: String::new(),
             // Field Day has no W/VE role.
             location_warning: None,
         }
@@ -491,6 +499,11 @@ impl ContestSession {
                 &station.contest_category_assisted,
                 &["ASSISTED", "NON-ASSISTED"],
             ),
+            location_setting: station
+                .setting(rs.cabrillo_location_setting)
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
             location_warning: None,
         };
         // ⭐ **A contest priced by the RELATION between two stations cannot run without a

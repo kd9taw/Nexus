@@ -645,7 +645,7 @@ fn a_band_restore_is_put_back_before_the_key() {
 
 // ── Stops and another program's key ─────────────────────────────────────────────────────────
 
-/// ⭐ `T 0` is never gated (M13): it goes out with nothing of ours on the air, and during another
+/// ⭐ `T 0` is never gated: it goes out with nothing of ours on the air, and during another
 /// program's over, which a server with no owner (ExpertSDR3) then ends: the safe direction.
 #[test]
 fn t_0_is_sent_whatever_the_session_believes() {
@@ -700,7 +700,7 @@ fn another_programs_key_shows_and_ours_is_refused_meanwhile() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
-/// No key goes out while the server forbids transmitting (M14 at the shim): refused, with the
+/// No key goes out while the server forbids transmitting (at the shim): refused, with the
 /// server's reason in the operator's words, and nothing keyed.
 #[test]
 fn no_key_goes_out_while_the_server_forbids_transmitting() {
@@ -789,7 +789,7 @@ fn tune_is_the_sdr_programs_carrier_and_ends_by_itself_past_its_hold() {
 
 // ── What the radio loop is told ─────────────────────────────────────────────────────────────
 
-/// An over the session ends by itself (the SDR program stopped, M12) is the halt the radio loop
+/// An over the session ends by itself (the SDR program stopped) is the halt the radio loop
 /// reads, in the operator's words.
 #[test]
 fn an_over_the_session_ends_by_itself_is_the_halt_the_radio_loop_reads() {
@@ -840,7 +840,7 @@ fn an_unkey_the_server_never_confirms_is_the_alarm_and_is_carried() {
     );
 }
 
-/// ⭐ The link is LOST during an over and the radio stays keyed (M4 at the daemon): the belief
+/// ⭐ The link is LOST during an over and the radio stays keyed (at the daemon): the belief
 /// stays, the operator is told the radio may still be transmitting, the key is carried, and the
 /// radio loop's next daemon sends `trx:0,false` as its first command after `ready;`, whose report
 /// ends the belief.
@@ -887,7 +887,7 @@ fn a_link_lost_mid_over_is_carried_to_the_next_session_which_stops_first() {
 
 /// ⭐ Teardown while keyed, with a rigctld client still connected (Nexus's own `Rig`): the stop goes
 /// out before the close, the server confirms it, the session closes inside teardown, and nothing is
-/// left carried (M3).
+/// left carried.
 #[test]
 fn teardown_while_keyed_stops_first_and_closes_with_nothing_carried() {
     let sim = esdr3([]);
@@ -1144,7 +1144,7 @@ fn nexus_audio_goes_out_as_the_sdr_program_pulls_it_with_silence_around_it() {
     }
 }
 
-/// ⛔ AUDIO ONLY FOR OUR KEY (plan §6.1 item 5, M6). Audio handed to the route while nothing of ours
+/// ⛔ AUDIO ONLY FOR OUR KEY. Audio handed to the route while nothing of ours
 /// is keyed is dropped, never kept for a later key; another program's over, whose chronos reach
 /// every client, gets none of ours; and our next key carries silence until its own over is handed
 /// over, then that over alone.
@@ -1189,7 +1189,7 @@ fn nexus_audio_goes_to_no_key_but_ours_and_waits_for_none() {
     );
 }
 
-/// ⛔ STOP TX WINS AND FLUSHES (M10). The radio loop's hard stop: the unkey, then the flush. The rest
+/// ⛔ STOP TX WINS AND FLUSHES. The radio loop's hard stop: the unkey, then the flush. The rest
 /// of the over goes where it waits, with what the resampler had made ahead, so nothing of it reaches
 /// the server after the stop: the session answers silence until the server reports the unkey, and
 /// the next key carries silence until its own over is handed over, then that over from its first
@@ -1425,7 +1425,7 @@ fn a_tci_switch_with_nothing_left_a_grown_queue_or_no_over_open_changes_nothing(
     wait_unkeyed(&d);
 }
 
-/// ⭐⭐ NEVER A SILENT OVER, PART WAY THROUGH EITHER (plan §6.1 item 4). The SDR program stops
+/// ⭐⭐ NEVER A SILENT OVER, PART WAY THROUGH EITHER. The SDR program stops
 /// pulling Nexus's audio part way through an over and stays keyed. The daemon ends the over: our
 /// stop goes out once the last pull is older than the chrono window, and the radio loop reads why,
 /// as it reads the session's own halts.

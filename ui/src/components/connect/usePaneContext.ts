@@ -131,6 +131,8 @@ export interface PaneContextInput {
   neededBoard?: NeededBoard
   /** The running contest (PaneContext `fieldDay`), for the Operators box. */
   fieldDay?: FieldDayStatus | null
+  /** The running activation (PaneContext `activation`), for the Activation box. */
+  activation?: PaneContext['activation']
   /** The call in the log entry of the cockpit beside the box (PaneContext `entryCall`); absent on every
    *  surface with no cockpit beside it. */
   entryCall?: string | null
@@ -177,6 +179,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     otaBoard: i.otaBoard,
     neededBoard: i.neededBoard,
     fieldDay: i.fieldDay,
+    activation: i.activation,
     onSelectCall: i.onSelectCall,
     onWorkSpot: i.onWorkSpot,
     onPoint: i.onPoint,

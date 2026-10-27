@@ -15,7 +15,7 @@ Nexus left beta at 1.0.0. The habit the beta was written with does not close wit
 it: where a feature is opt-in, or a number comes from simulation rather than the
 air, these pages say so, and each page ends with what its section does **not** do.
 
-**This guide documents Nexus 1.19.0.** These pages ship inside the app, and the same files are
+**This guide documents Nexus 1.21.0.** These pages ship inside the app, and the same files are
 synced to the website and built into the PDF and EPUB at each release — so a copy matches the
 release it came out with. It cannot promise to match the build *you* are running. The website
 and the downloads track the latest release; your installed copy may be older, or newer than a
@@ -125,6 +125,9 @@ Fourteen panels tear off into their own OS window — see
   conversations, and messages that queue until the other station is actually heard.
 - **[PSK](psk.md)** — PSK31 and QPSK31 keyboard ragchewing at 31.25 baud: click a
   warble on the waterfall and it prints, type into a live transmission, four macros.
+- **[JTTY](jtty.md)** — WSJT-X's keyboard mode: WSJT-X's two decode panes, its Rx, Tx and
+  F Tol, F1–F8 contest messages and live typing, and calls you can look up once two separate
+  messages have confirmed them.
 - **[SSTV](sstv.md)** — receive-first slow-scan; pictures decode themselves into
   a local gallery, and transmit is always an explicit **Send**.
 - **[APRS](aprs.md)** — a 2 m AFSK-1200 packet monitor with its own map, plus
@@ -166,6 +169,8 @@ Fourteen panels tear off into their own OS window — see
 ### System
 - **[Repeaters](program.md)** — the radio-programming workbench: the repeaters
   around a location become a channel list, and the list becomes a CHIRP CSV.
+- **[Remote](remote.md)** — operate the station from a web browser or a second
+  Windows PC, on the shack's own network or over the internet (Beta).
 - **[Settings reference](settings-reference.md)** — a walk through every Settings
   tab, field by field.
 

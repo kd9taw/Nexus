@@ -9852,7 +9852,7 @@ IMPLEMENTATION. nm reports `s.0` with LOCAL binding, so no other translation uni
 
 ONE BOUNDS NOTE that is not a classification issue: `s[51]` hard-codes 51 while every loop bound is NROOTS = rs->nroots, a runtime field. With the only caller passing nroots=51 (ftrsdap.c:55) it fits exactly; a refresh that instantiates the codec with more roots overflows it silently.
 
-VENDOR STATUS: byte-identical to upstream WSJT-X 3.0.2 (diff against paritylab/wsjtx-3.0.2/lib/ftrsd/decode_rs.c reports no differences), so this is Karn+Franke code as shipped, not a Nexus edit. 204 B, and it is the only per-chain cost this whole group carries."""
+VENDOR STATUS: byte-identical to upstream WSJT-X 3.0.2 (diff against upstream's lib/ftrsd/decode_rs.c reports no differences), so this is Karn+Franke code as shipped, not a Nexus edit. 204 B, and it is the only per-chain cost this whole group carries."""
 
 [[symbol]]
 name = "nseed"
@@ -10504,7 +10504,7 @@ THE TRAP, and it is a good one. grep for a word-boundary msg0 in this file retur
 
 SO IT IS NEVER WRITTEN AND NEVER READ. The module has exactly one procedure after `contains` at :31 (`subroutine decode`, :33-:499), and it does not reference msg0. Nothing else can: the ONLY unit in the whole libtempo build that names this module is libtempo/q65_cabi.f90:58, `use q65_decode, only: q65_decoder` - an ONLY clause, which makes msg0 inaccessible by name in that scope. That ONLY clause is the linchpin of the class-4 claim and is one grep to re-verify after a refresh.
 
-NOT A NEXUS ARTIFACT, checked against the vendor: upstream WSJT-X 3.0.2 (paritylab/wsjtx-3.0.2/lib/q65_decode.f90) carries the identical declaration at its :5 and the identical two keyword-argument hits at its :334 and :446, and nothing else - the grep is exhaustive there too. So these are upstream DEAD DECLARATIONS, not something the Nexus headless surgery orphaned. Their intended role is legible from the set: nsnr0/nfreq0/xdt0/msg0 is the classic 'same message, same frequency, same dt, same SNR as last time -> suppress' key, superseded by the in-routine `decodes(100)`/`idupe` duplicate check at :343-:349 and :442-:447. The excised q65_decodes.txt dump did not use them either.
+NOT A NEXUS ARTIFACT, checked against the vendor: upstream WSJT-X 3.0.2 (lib/q65_decode.f90) carries the identical declaration at its :5 and the identical two keyword-argument hits at its :334 and :446, and nothing else - the grep is exhaustive there too. So these are upstream DEAD DECLARATIONS, not something the Nexus headless surgery orphaned. Their intended role is legible from the set: nsnr0/nfreq0/xdt0/msg0 is the classic 'same message, same frequency, same dt, same SNR as last time -> suppress' key, superseded by the in-routine `decodes(100)`/`idupe` duplicate check at :343-:349 and :442-:447. The excised q65_decodes.txt dump did not use them either.
 
 CLASS 4 by the manifest's own precedent for an unreferenced object - msk144spd.f90:31 `tpat`, 'not merely unwritten but entirely unreachable'. Argued POSITIVELY rather than from the section, because unlike the .rodata rows this is writable .bss and placement settles nothing: never written (no relocation, no source reference, no accessible name outside the module), so no chain can leave anything in it; never read, so no chain can consume anything from it. Shareable at zero risk, and since it is 37 bytes of permanent zeros, at zero benefit either. Filing it class 3 or class 2 would be vacuously true as well and would change nothing operationally; class 4 is the honest description of an object that is never written.
 
@@ -12037,3 +12037,1855 @@ line = 10
 class = 2
 size_bytes = 4
 reason = "implicit real*4, SAVE-only at :10. Written hmod=1.0 (a literal) once inside if(first); read in dphi_peak. Mirrors ft4/gen_ft4wave.f90:10 hmod (GROUP D, class 2)."
+
+# ---------------------------------------------------------------------------
+# GROUP O — JTTY (WSJT-X's keyboard mode, vendored 2026-10-08 from WSJT-X
+# 3.3.0-beta1 and taken again 2026-10-23 at 3.3.0-beta4: lib/jtty/ plus
+# lib/77bit/packjt77_grammar.f90)
+#
+# The files are upstream's byte for byte (crates/tempo-fast-sys/tests/
+# jtty_provenance.rs holds them to their blob ids), so every line number below
+# is upstream's and a re-pin re-keys these rows.
+#
+# Disposition: the receiver is upstream's own handle API (jtty_rx_*,
+# jtty_receive_context.f90). Each handle owns one slot of `contexts`, and
+# jtty_rx_process/jtty_rx_end swap that slot's reception state into jtty_mdec
+# and back out around every decode (exchange_state). So reception state is
+# per-handle by construction, and a radio that owns its handle needs no swap from
+# Nexus. What stays shared is the DSP scratch and the caches (class 2/3 below),
+# which is why every call runs under the one modem lock, as upstream's own
+# comment asks: "Contexts share DSP scratch and must be called from one
+# serialized decoder owner" (WSJT-X JttyDecoder.hpp).
+#
+# Class-1 storage: 123,936 B. contexts 112,320 (8 handles x 14,040); the live
+# reception state those slots swap in and out of jtty_mdec 11,604; rjtty_core's
+# stream cursor 12 (upstream's whole-recording path, which Nexus does not use).
+#
+# ⚠️ A GATE BLIND SPOT, recorded rather than fixed here: a `<type>, save :: x`
+# declaration INSIDE a subprogram is invisible to manifest_gate.rs, which sees
+# `save`/`data`/`common` statements and module-scope declarations only. JTTY
+# uses that form for all of jtty_mdecode's DSP scratch. Those 35 rows, and the
+# nine type-metadata cluster rows, came from `nm -S` on the built objects and
+# say NOT REPORTED BY THE GATE; a re-pin must run nm again, because the gate
+# will not notice a new one.
+#
+# Not classified because not vendored: upstream's standalone program, its
+# simulators, jtty_codewords.f90 and jtty_spec.f90 (vendor README, "Not
+# vendored").
+# ---------------------------------------------------------------------------
+
+[[symbol]]
+name = "is13"
+file = "jtty/jtty_fec_mod.f90"
+line = 12
+class = 4
+size_bytes = 52
+reason = "integer is13(13), the 13-symbol 4-FSK sync sequence, a module variable initialised at :12 and never assigned anywhere in the tree. Every use is a read: gen_syncwave.f90:17, genjtty.f90:78, jtty_decode.f90:163/:170, jtty_mdecode.f90:735/:1020/:1027/:1165. nm puts it in .data (52 B). Writable storage that nothing writes: class 4."
+
+[[symbol]]
+name = "JTTY_RESERVED_BIT"
+file = "jtty/jtty_fec_mod.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_RESERVED_BIT = 33` at :17). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PAYLOAD_BITS"
+file = "jtty/tbcc.f90"
+line = 16
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PAYLOAD_BITS = PROFILE_PAYLOAD_BITS` at :16). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "CRC_BITS"
+file = "jtty/tbcc.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`CRC_BITS = PROFILE_OUTER_CHECK_BITS` at :17). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "TOTAL_K"
+file = "jtty/tbcc.f90"
+line = 18
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`TOTAL_K = PROFILE_INFORMATION_BITS` at :18). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "TBCC_OUTER_POLYNOMIAL_80F"
+file = "jtty/tbcc.f90"
+line = 19
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`TBCC_OUTER_POLYNOMIAL_80F = int(Z'80F', int32), the CRC-12 polynomial` at :19). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PROFILE_PAYLOAD_BITS"
+file = "jtty/tbcc.f90"
+line = 16
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `PROFILE_PAYLOAD_BITS` is the local name the `use` at :7-11 gives jtty_tbcc_code_profiles' PARAMETER JTTY_TBCC_PAYLOAD_BITS; it appears here on the right-hand side of the PARAMETER at :16. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PROFILE_OUTER_CHECK_BITS"
+file = "jtty/tbcc.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `PROFILE_OUTER_CHECK_BITS` is the local name the `use` at :7-11 gives jtty_tbcc_code_profiles' PARAMETER JTTY_TBCC_OUTER_CHECK_BITS; it appears here on the right-hand side of the PARAMETER at :17. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PROFILE_INFORMATION_BITS"
+file = "jtty/tbcc.f90"
+line = 18
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `PROFILE_INFORMATION_BITS` is the local name the `use` at :7-11 gives jtty_tbcc_code_profiles' PARAMETER JTTY_TBCC_INFORMATION_BITS; it appears here on the right-hand side of the PARAMETER at :18. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "int"
+file = "jtty/tbcc.f90"
+line = 19
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `int` is the intrinsic called in the PARAMETER initialiser at :19. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "memory_nu"
+file = "jtty/tbcc.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "integer memory_nu, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "num_states"
+file = "jtty/tbcc.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "integer num_states, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "g0_poly"
+file = "jtty/tbcc.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "integer g0_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "g1_poly"
+file = "jtty/tbcc.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "integer g1_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "reg_mask"
+file = "jtty/tbcc.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "integer reg_mask, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "incoming_tones"
+file = "jtty/tbcc.f90"
+line = 25
+class = 2
+size_bytes = 88
+reason = "integer, allocatable, protected incoming_tones(:,:) (:25); 88 B is the descriptor, the heap block is 2 x 2**nu integers. Allocated and filled only by tbcc_init (:55-57) from nu alone, and read only by tbcc_wava_fsk_decode when no profile is passed (:159). Same reachability as memory_nu: never on a libtempo path. Class 2."
+
+[[symbol]]
+name = "rng_state"
+file = "jtty/tbcc.f90"
+line = 41
+class = 3
+size_bytes = 4
+reason = "integer, save, !$omp threadprivate rng_state (:41-42), the xorshift32 stream of upstream's channel-simulation helpers (thread_uniform, box_muller :335, generate_random_bits :343, seed_random_generator :415-418; the stream advances at :358-361). tbcc_encode, the decoders and encode_crc12 never touch it, as the comment at :32-40 says, and no libtempo entry point reaches those helpers. On every path libtempo runs it is neither read nor written, so the class-3 condition holds vacuously; it is a PRNG, not chain data. Class 3."
+
+[[symbol]]
+name = "JTTY_TBCC_PAYLOAD_BITS"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`JTTY_TBCC_PAYLOAD_BITS = 34_int32` at :6). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_TBCC_OUTER_CHECK_BITS"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`JTTY_TBCC_OUTER_CHECK_BITS = 12_int32` at :7). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_TBCC_INFORMATION_BITS"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 8
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`JTTY_TBCC_INFORMATION_BITS = payload + check bits` at :8). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "34_int32"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `34_int32` is the kind-suffixed literal in the PARAMETER at :6. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "12_int32"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `12_int32` is the kind-suffixed literal in the PARAMETER at :7. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_TBCC_RESERVED_BIT"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 16
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`JTTY_TBCC_RESERVED_BIT = 33_int32` at :16). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_TBCC_MAX_HYPOTHESES"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`JTTY_TBCC_MAX_HYPOTHESES = 4_int32` at :17). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "NEGATIVE_METRIC"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 18
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`NEGATIVE_METRIC = -huge(0.0_real64)` at :18). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACKED_ORIGIN_BITS"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 36
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACKED_ORIGIN_BITS = 11_int32` at :36). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACKED_VALID_BIT"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 37
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACKED_VALID_BIT = JTTY_TBCC_INFORMATION_BITS + PACKED_ORIGIN_BITS` at :37). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_TBCC_INFORMATION_BITS"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 37
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `JTTY_TBCC_INFORMATION_BITS` is jtty_tbcc_code_profiles' PARAMETER (imported, and re-exported by the `public` at :15) on the right-hand side of the PARAMETER at :37. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "33_int32"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 16
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `33_int32` is the kind-suffixed literal in the PARAMETER at :16. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "4_int32"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `4_int32` is the kind-suffixed literal in the PARAMETER at :17. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "11_int32"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 36
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `11_int32` is the kind-suffixed literal in the PARAMETER at :36. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "huge"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 18
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `huge` is the intrinsic called in the PARAMETER initialiser at :18. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "COHERENT_LENGTHS"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`COHERENT_LENGTHS(3) = [1_int32, 2_int32, 4_int32]` at :12). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "CIRCULAR_PASSES"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 13
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`CIRCULAR_PASSES = 2_int32` at :13). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "1_int32"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `1_int32` is a kind-suffixed literal in the PARAMETER array at :12. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "2_int32"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `2_int32` is a kind-suffixed literal in the PARAMETER array at :12. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "4_int32"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `4_int32` is a kind-suffixed literal in the PARAMETER array at :12. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "decoders_initialized"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 37
+class = 2
+size_bytes = 4
+reason = "logical, save, initialised .false. (:37): the guard of initialize_decoders (:60-74), set .true. once at :73 after plans and workspaces are built. Never cleared. Guard and data share a class: class 2, with plans."
+
+[[symbol]]
+name = "plans"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 38
+class = 2
+size_bytes = 2544
+reason = "type(jtty_tbcc_decoder_plan), save :: plans(3) (:38), 2544 B static plus allocatable components. Built once by initialize_decoders (:62-72) from compile-time constants only (JTTY_TBCC_PROFILE_1167_1545_80F, COHERENT_LENGTHS, 4, CIRCULAR_PASSES, JTTY_TBCC_MAX_HYPOTHESES), read by every decode_ladder call. Init-once, chain-independent: class 2."
+
+[[symbol]]
+name = "workspaces"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 39
+class = 3
+size_bytes = 1896
+reason = "type(jtty_tbcc_decoder_workspace), save :: workspaces(3) (:39), 1896 B static plus the heap blocks its allocatable components hold. Allocated once by initialize_decoders, then every list decode starts by recomputing sequence_energies, clearing the survivor arrays and resetting hash_used before any read (jtty_tbcc_list_decoder.f90:374-397). Scratch: class 3. Upstream serialises jtty_tbcc_decode with !$omp critical(jtty_tbcc_decoder) (:53-56, inert without -fopenmp); in Nexus the modem lock does that job."
+
+[[symbol]]
+name = "TWO_PI"
+file = "jtty/jtty_payload_correlators.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`TWO_PI = 6.2831853071795864769_real32` at :6). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "2831853071795864769_real32"
+file = "jtty/jtty_payload_correlators.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `2831853071795864769_real32` is the fraction of the real literal at :6, split at its decimal point. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ALPHABET"
+file = "jtty/jtty_mod.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`character(len=*), parameter :: JTTY_ALPHABET = ALPHABET` at :6). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "ALPHABET"
+file = "jtty/jtty_mod.f90"
+line = 6
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `ALPHABET` is jtty_source_codec's PARAMETER (use-associated at :3) on the right-hand side of the PARAMETER at :6. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_EXCHANGE_UNKNOWN"
+file = "jtty/jtty_mod.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_EXCHANGE_UNKNOWN=0,...FIELD_DAY=1,...RTTY=2` at :7). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_EXCHANGE_FIELD_DAY"
+file = "jtty/jtty_mod.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_EXCHANGE_UNKNOWN=0,...FIELD_DAY=1,...RTTY=2` at :7). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_EXCHANGE_RTTY"
+file = "jtty/jtty_mod.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_EXCHANGE_UNKNOWN=0,...FIELD_DAY=1,...RTTY=2` at :7). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "I8"
+file = "jtty/jtty_source_codec.f90"
+line = 27
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: I8=selected_int_kind(18)` at :27). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "selected_int_kind"
+file = "jtty/jtty_source_codec.f90"
+line = 27
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `selected_int_kind` is the intrinsic called in the PARAMETER initialiser at :27. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "ALPHABET"
+file = "jtty/jtty_source_codec.f90"
+line = 28
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`character(len=*), parameter :: ALPHABET = '0123...:;'` at :28). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "CONTROL_TEXT"
+file = "jtty/jtty_source_codec.f90"
+line = 52
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`character(len=8), parameter :: CONTROL_TEXT(0:17)` at :52). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_CALL"
+file = "jtty/jtty_source_codec.f90"
+line = 30
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_CALL=...,JTTY_ATOM_EXCH_NUM=...` at :30). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_EXCH_NUM"
+file = "jtty/jtty_source_codec.f90"
+line = 30
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_CALL=...,JTTY_ATOM_EXCH_NUM=...` at :30). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_EXCH_LOC"
+file = "jtty/jtty_source_codec.f90"
+line = 31
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_EXCH_LOC=...,JTTY_ATOM_EXCH_PAIR=...` at :31). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_EXCH_PAIR"
+file = "jtty/jtty_source_codec.f90"
+line = 31
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_EXCH_LOC=...,JTTY_ATOM_EXCH_PAIR=...` at :31). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_EXCH_NUM_TIME"
+file = "jtty/jtty_source_codec.f90"
+line = 32
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_EXCH_NUM_TIME=...,JTTY_ATOM_CONTROL=...` at :32). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_CONTROL"
+file = "jtty/jtty_source_codec.f90"
+line = 32
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_EXCH_NUM_TIME=...,JTTY_ATOM_CONTROL=...` at :32). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_GRID4"
+file = "jtty/jtty_source_codec.f90"
+line = 33
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_GRID4=...,JTTY_ATOM_TEXT5=...` at :33). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ATOM_TEXT5"
+file = "jtty/jtty_source_codec.f90"
+line = 33
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ATOM_GRID4=...,JTTY_ATOM_TEXT5=...` at :33). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_CQ"
+file = "jtty/jtty_source_codec.f90"
+line = 34
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CQ=...,JTTY_CALL_CALL=...,JTTY_CALL_TU_CQ=...` at :34). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_CALL"
+file = "jtty/jtty_source_codec.f90"
+line = 34
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CQ=...,JTTY_CALL_CALL=...,JTTY_CALL_TU_CQ=...` at :34). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_TU_CQ"
+file = "jtty/jtty_source_codec.f90"
+line = 34
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CQ=...,JTTY_CALL_CALL=...,JTTY_CALL_TU_CQ=...` at :34). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_CALL_TU"
+file = "jtty/jtty_source_codec.f90"
+line = 35
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CALL_TU=...,JTTY_CALL_CALL_AGN=...,JTTY_CALL_TU_NOW=...` at :35). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_CALL_AGN"
+file = "jtty/jtty_source_codec.f90"
+line = 35
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CALL_TU=...,JTTY_CALL_CALL_AGN=...,JTTY_CALL_TU_NOW=...` at :35). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CALL_TU_NOW"
+file = "jtty/jtty_source_codec.f90"
+line = 35
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CALL_CALL_TU=...,JTTY_CALL_CALL_AGN=...,JTTY_CALL_TU_NOW=...` at :35). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ROLE_FIELD_ONLY"
+file = "jtty/jtty_source_codec.f90"
+line = 36
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ROLE_FIELD_ONLY=...,JTTY_ROLE_FULL=...` at :36). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ROLE_FULL"
+file = "jtty/jtty_source_codec.f90"
+line = 36
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ROLE_FIELD_ONLY=...,JTTY_ROLE_FULL=...` at :36). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_SERIAL"
+file = "jtty/jtty_source_codec.f90"
+line = 37
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_SERIAL=...,JTTY_NUM_CQ_ZONE=...,JTTY_NUM_ITU_ZONE=...` at :37). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_CQ_ZONE"
+file = "jtty/jtty_source_codec.f90"
+line = 37
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_SERIAL=...,JTTY_NUM_CQ_ZONE=...,JTTY_NUM_ITU_ZONE=...` at :37). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_ITU_ZONE"
+file = "jtty/jtty_source_codec.f90"
+line = 37
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_SERIAL=...,JTTY_NUM_CQ_ZONE=...,JTTY_NUM_ITU_ZONE=...` at :37). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_AGE"
+file = "jtty/jtty_source_codec.f90"
+line = 38
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_AGE=...,JTTY_NUM_POWER=...,JTTY_NUM_CHECK=...` at :38). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_POWER"
+file = "jtty/jtty_source_codec.f90"
+line = 38
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_AGE=...,JTTY_NUM_POWER=...,JTTY_NUM_CHECK=...` at :38). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_CHECK"
+file = "jtty/jtty_source_codec.f90"
+line = 38
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_AGE=...,JTTY_NUM_POWER=...,JTTY_NUM_CHECK=...` at :38). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_LICENSE_YEAR"
+file = "jtty/jtty_source_codec.f90"
+line = 39
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_LICENSE_YEAR=...,JTTY_NUM_GENERIC=...` at :39). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_NUM_GENERIC"
+file = "jtty/jtty_source_codec.f90"
+line = 39
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_NUM_LICENSE_YEAR=...,JTTY_NUM_GENERIC=...` at :39). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_LOC_STATE_PROVINCE"
+file = "jtty/jtty_source_codec.f90"
+line = 40
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_LOC_STATE_PROVINCE=...,JTTY_LOC_SECTION=...` at :40). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_LOC_SECTION"
+file = "jtty/jtty_source_codec.f90"
+line = 40
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_LOC_STATE_PROVINCE=...,JTTY_LOC_SECTION=...` at :40). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_LOC_COUNTRY_PREFIX"
+file = "jtty/jtty_source_codec.f90"
+line = 41
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_LOC_COUNTRY_PREFIX=...,JTTY_LOC_QTH=...,JTTY_LOC_ADMIN_CODE=...` at :41). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_LOC_QTH"
+file = "jtty/jtty_source_codec.f90"
+line = 41
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_LOC_COUNTRY_PREFIX=...,JTTY_LOC_QTH=...,JTTY_LOC_ADMIN_CODE=...` at :41). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_LOC_ADMIN_CODE"
+file = "jtty/jtty_source_codec.f90"
+line = 41
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_LOC_COUNTRY_PREFIX=...,JTTY_LOC_QTH=...,JTTY_LOC_ADMIN_CODE=...` at :41). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_PAIR_ZONE_LOC3"
+file = "jtty/jtty_source_codec.f90"
+line = 42
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_PAIR_ZONE_LOC3=...,JTTY_PAIR_CLASS_SECTION=...` at :42). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_PAIR_CLASS_SECTION"
+file = "jtty/jtty_source_codec.f90"
+line = 42
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_PAIR_ZONE_LOC3=...,JTTY_PAIR_CLASS_SECTION=...` at :42). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_MISC_CONTROL"
+file = "jtty/jtty_source_codec.f90"
+line = 43
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_MISC_CONTROL=...,JTTY_MISC_GRID4=...` at :43). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_MISC_GRID4"
+file = "jtty/jtty_source_codec.f90"
+line = 43
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_MISC_CONTROL=...,JTTY_MISC_GRID4=...` at :43). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ENCODE_OK"
+file = "jtty/jtty_source_codec.f90"
+line = 44
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ENCODE_OK=...,JTTY_ENCODE_INVALID_DESCRIPTOR=...` at :44). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ENCODE_INVALID_DESCRIPTOR"
+file = "jtty/jtty_source_codec.f90"
+line = 44
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ENCODE_OK=...,JTTY_ENCODE_INVALID_DESCRIPTOR=...` at :44). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ENCODE_UNKNOWN_SECTION"
+file = "jtty/jtty_source_codec.f90"
+line = 45
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_ENCODE_UNKNOWN_SECTION=...` at :45). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_ENCODE_UNENCODABLE"
+file = "jtty/jtty_source_codec.f90"
+line = 45
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer(c_int), parameter :: ...,JTTY_ENCODE_UNENCODABLE=3` at :45). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_AGN"
+file = "jtty/jtty_source_codec.f90"
+line = 46
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_AGN=...,JTTY_CONTROL_CALL=...,JTTY_CONTROL_AGN_CALL=...` at :46). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_CALL"
+file = "jtty/jtty_source_codec.f90"
+line = 46
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_AGN=...,JTTY_CONTROL_CALL=...,JTTY_CONTROL_AGN_CALL=...` at :46). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_AGN_CALL"
+file = "jtty/jtty_source_codec.f90"
+line = 46
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_AGN=...,JTTY_CONTROL_CALL=...,JTTY_CONTROL_AGN_CALL=...` at :46). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_NR"
+file = "jtty/jtty_source_codec.f90"
+line = 47
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_NR=...,JTTY_CONTROL_AGN_NR=...,JTTY_CONTROL_EXCH=...` at :47). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_AGN_NR"
+file = "jtty/jtty_source_codec.f90"
+line = 47
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_NR=...,JTTY_CONTROL_AGN_NR=...,JTTY_CONTROL_EXCH=...` at :47). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_EXCH"
+file = "jtty/jtty_source_codec.f90"
+line = 47
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_NR=...,JTTY_CONTROL_AGN_NR=...,JTTY_CONTROL_EXCH=...` at :47). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_STATE"
+file = "jtty/jtty_source_codec.f90"
+line = 48
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_STATE=...,JTTY_CONTROL_SECTION=...,JTTY_CONTROL_ZONE=...` at :48). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_SECTION"
+file = "jtty/jtty_source_codec.f90"
+line = 48
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_STATE=...,JTTY_CONTROL_SECTION=...,JTTY_CONTROL_ZONE=...` at :48). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_ZONE"
+file = "jtty/jtty_source_codec.f90"
+line = 48
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_STATE=...,JTTY_CONTROL_SECTION=...,JTTY_CONTROL_ZONE=...` at :48). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_GRID"
+file = "jtty/jtty_source_codec.f90"
+line = 49
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_GRID=...,JTTY_CONTROL_RPRT=...,JTTY_CONTROL_QSL_TU=...` at :49). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_RPRT"
+file = "jtty/jtty_source_codec.f90"
+line = 49
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_GRID=...,JTTY_CONTROL_RPRT=...,JTTY_CONTROL_QSL_TU=...` at :49). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_QSL_TU"
+file = "jtty/jtty_source_codec.f90"
+line = 49
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_GRID=...,JTTY_CONTROL_RPRT=...,JTTY_CONTROL_QSL_TU=...` at :49). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_TU"
+file = "jtty/jtty_source_codec.f90"
+line = 50
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_TU=...,JTTY_CONTROL_QRZ=...,JTTY_CONTROL_QSO_B4=...` at :50). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_QRZ"
+file = "jtty/jtty_source_codec.f90"
+line = 50
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_TU=...,JTTY_CONTROL_QRZ=...,JTTY_CONTROL_QSO_B4=...` at :50). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_QSO_B4"
+file = "jtty/jtty_source_codec.f90"
+line = 50
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_TU=...,JTTY_CONTROL_QRZ=...,JTTY_CONTROL_QSO_B4=...` at :50). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_WAIT"
+file = "jtty/jtty_source_codec.f90"
+line = 51
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_WAIT=...,JTTY_CONTROL_NIL=...,JTTY_CONTROL_OK=...` at :51). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_NIL"
+file = "jtty/jtty_source_codec.f90"
+line = 51
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_WAIT=...,JTTY_CONTROL_NIL=...,JTTY_CONTROL_OK=...` at :51). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "JTTY_CONTROL_OK"
+file = "jtty/jtty_source_codec.f90"
+line = 51
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: JTTY_CONTROL_WAIT=...,JTTY_CONTROL_NIL=...,JTTY_CONTROL_OK=...` at :51). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_NSEC"
+file = "77bit/packjt77_grammar.f90"
+line = 7
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_NSEC, a PARAMETER of the grammar module` at :7). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_NUSCAN"
+file = "77bit/packjt77_grammar.f90"
+line = 8
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_NUSCAN, a PARAMETER of the grammar module` at :8). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_WSPR_NZZZ"
+file = "77bit/packjt77_grammar.f90"
+line = 9
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_WSPR_NZZZ, a PARAMETER of the grammar module` at :9). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_NTOKENS"
+file = "77bit/packjt77_grammar.f90"
+line = 12
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_NTOKENS, a PARAMETER of the grammar module` at :12). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_MAX22"
+file = "77bit/packjt77_grammar.f90"
+line = 13
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_MAX22, a PARAMETER of the grammar module` at :13). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_MAXGRID4"
+file = "77bit/packjt77_grammar.f90"
+line = 14
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_MAXGRID4, a PARAMETER of the grammar module` at :14). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_BASE36"
+file = "77bit/packjt77_grammar.f90"
+line = 15
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_BASE36, a PARAMETER of the grammar module` at :15). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_BASE38"
+file = "77bit/packjt77_grammar.f90"
+line = 16
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_BASE38, a PARAMETER of the grammar module` at :16). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_ARRL_SECTIONS"
+file = "77bit/packjt77_grammar.f90"
+line = 17
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_ARRL_SECTIONS, a PARAMETER of the grammar module` at :17). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_RTTY_MULTIPLIERS"
+file = "77bit/packjt77_grammar.f90"
+line = 27
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_RTTY_MULTIPLIERS, a PARAMETER of the grammar module` at :27). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_TYPE12_SUFFIX_NONE"
+file = "77bit/packjt77_grammar.f90"
+line = 46
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_TYPE12_SUFFIX_NONE, a PARAMETER of the grammar module` at :46). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_TYPE12_SUFFIX_R"
+file = "77bit/packjt77_grammar.f90"
+line = 47
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_TYPE12_SUFFIX_R, a PARAMETER of the grammar module` at :47). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "PACK77_TYPE12_SUFFIX_P"
+file = "77bit/packjt77_grammar.f90"
+line = 48
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`PACK77_TYPE12_SUFFIX_P, a PARAMETER of the grammar module` at :48). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+file = "77bit/packjt77_grammar.f90"
+line = 15
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: this is the text of the character literals that initialise PACK77_BASE36 (:15) and PACK77_BASE38 (:16); the scanner does not skip quoted strings. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "ctab"
+file = "jtty/gen_jttywave.f90"
+line = 19
+class = 2
+size_bytes = 524288
+reason = "complex ctab(0:NTAB-1), NTAB=65536 (:17, :19), SAVEd at :24: 524288 B of .bss, the trig table for the complex (icmplx/=0) output. Filled at :47-50 with values that depend on nothing but NTAB. Rebuilt only when the key fchk=nsym+nsps+bt+fsample (:32) differs from fchk0 (:33-52). The cached content depends on nsps, bt and fsample alone, so a rebuild on an nsym change is merely redundant. CAVEAT: the key is a SUM, so two parameter sets can share it and the second would reuse the first's pulse and dt (nsps 384->320 with nsym +64, say). In libtempo exactly two sets reach this routine and their sums cannot meet: Nexus's TX via jtty_cabi (nsps 384, bt 2, 12000 Hz: key >= 12445) and the decoder's subtraction (subtract_jtty.f90:75: nsym 59, nss = nsps/2 <= 240, bt 2, 6000 Hz: key <= 6301). A new caller with another set must re-check this. Class 2."
+
+[[symbol]]
+name = "pulse"
+file = "jtty/gen_jttywave.f90"
+line = 20
+class = 2
+size_bytes = 64
+reason = "real, allocatable pulse(:) (:20), SAVEd at :24; 64 B descriptor, heap 3*nsps reals. Reallocated and filled with gfsk_pulse(bt,.) at :34-46. Rebuilt only when the key fchk=nsym+nsps+bt+fsample (:32) differs from fchk0 (:33-52). The cached content depends on nsps, bt and fsample alone, so a rebuild on an nsym change is merely redundant. CAVEAT: the key is a SUM, so two parameter sets can share it and the second would reuse the first's pulse and dt (nsps 384->320 with nsym +64, say). In libtempo exactly two sets reach this routine and their sums cannot meet: Nexus's TX via jtty_cabi (nsps 384, bt 2, 12000 Hz: key >= 12445) and the decoder's subtraction (subtract_jtty.f90:75: nsym 59, nss = nsps/2 <= 240, bt 2, 6000 Hz: key <= 6301). A new caller with another set must re-check this. Class 2."
+
+[[symbol]]
+name = "twopi"
+file = "jtty/gen_jttywave.f90"
+line = 24
+class = 2
+size_bytes = 4
+reason = "implicit real, SAVE-only at :24; written 8*atan(1.0) in the rebuild block (:39). A constant computed once: class 2."
+
+[[symbol]]
+name = "hmod"
+file = "jtty/gen_jttywave.f90"
+line = 24
+class = 2
+size_bytes = 4
+reason = "implicit real, SAVE-only at :24; written 1.0 in the rebuild block (:41). A constant computed once: class 2."
+
+[[symbol]]
+name = "dt"
+file = "jtty/gen_jttywave.f90"
+line = 24
+class = 2
+size_bytes = 4
+reason = "implicit real, SAVE-only at :24; written 1.0/fsample in the rebuild block (:40), so it follows the key. Rebuilt only when the key fchk=nsym+nsps+bt+fsample (:32) differs from fchk0 (:33-52). The cached content depends on nsps, bt and fsample alone, so a rebuild on an nsym change is merely redundant. CAVEAT: the key is a SUM, so two parameter sets can share it and the second would reuse the first's pulse and dt (nsps 384->320 with nsym +64, say). In libtempo exactly two sets reach this routine and their sums cannot meet: Nexus's TX via jtty_cabi (nsps 384, bt 2, 12000 Hz: key >= 12445) and the decoder's subtraction (subtract_jtty.f90:75: nsym 59, nss = nsps/2 <= 240, bt 2, 6000 Hz: key <= 6301). A new caller with another set must re-check this. Class 2."
+
+[[symbol]]
+name = "fchk0"
+file = "jtty/gen_jttywave.f90"
+line = 23
+class = 2
+size_bytes = 4
+reason = "implicit real, DATA 0.0 at :23, SAVEd at :24: the cache key, set at :51. Guard and data share a class: class 2, with pulse/dt/ctab."
+
+[[symbol]]
+name = "MAX_CONTEXTS"
+file = "jtty/jtty_receive_context.f90"
+line = 32
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: MAX_CONTEXTS=8` at :32). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "contexts"
+file = "jtty/jtty_receive_context.f90"
+line = 33
+class = 1
+size_bytes = 112320
+reason = "type(receive_context), save :: contexts(MAX_CONTEXTS) (:33), 112320 B = 8 x 14040: one slot per jtty_rx_* handle, holding that reception's message assemblies, recent-frame fingerprints, pending updates, retro-sweep queue and sample cursors. PER-CHAIN DATA, so class 1, but PARTITIONED BY HANDLE: jtty_rx_create hands out a free slot (:83-94), every other entry touches only contexts(handle), and jtty_rx_process/jtty_rx_end swap the slot's reception state in and out of jtty_mdec around the decode (exchange_state, :50-81). A radio that owns its handle is isolated with no further swap. DO NOT add this symbol to a whole-symbol per-chain swap: it holds every handle's state at once, and restoring one chain's copy would roll the others back."
+
+[[symbol]]
+name = "MAX_DECODES"
+file = "jtty/jtty_mdecode.f90"
+line = 50
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_DECODES, a PARAMETER of module jtty_mdec` at :50). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_ACTIVE_MESSAGES"
+file = "jtty/jtty_mdecode.f90"
+line = 51
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_ACTIVE_MESSAGES, a PARAMETER of module jtty_mdec` at :51). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_RECENT_FRAMES"
+file = "jtty/jtty_mdecode.f90"
+line = 52
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_RECENT_FRAMES, a PARAMETER of module jtty_mdec` at :52). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_CONTINUATION_GAP"
+file = "jtty/jtty_mdecode.f90"
+line = 53
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_CONTINUATION_GAP, a PARAMETER of module jtty_mdec` at :53). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_RETRO_STEPS"
+file = "jtty/jtty_mdecode.f90"
+line = 54
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_RETRO_STEPS, a PARAMETER of module jtty_mdec` at :54). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_DISPLAY_GAPS"
+file = "jtty/jtty_mdecode.f90"
+line = 55
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_DISPLAY_GAPS, a PARAMETER of module jtty_mdec` at :55). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "FRAME_HISTORY_TIME_TOLERANCE"
+file = "jtty/jtty_mdecode.f90"
+line = 56
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`FRAME_HISTORY_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :56). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "FRAME_HISTORY_FREQ_TOLERANCE"
+file = "jtty/jtty_mdecode.f90"
+line = 57
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`FRAME_HISTORY_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :57). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "NEAR_SIMULTANEOUS_FREQ_TOLERANCE"
+file = "jtty/jtty_mdecode.f90"
+line = 58
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`NEAR_SIMULTANEOUS_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :58). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "CONTINUATION_TIME_TOLERANCE"
+file = "jtty/jtty_mdecode.f90"
+line = 59
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`CONTINUATION_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :59). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "SNR_LEAKAGE_K"
+file = "jtty/jtty_mdecode.f90"
+line = 61
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`SNR_LEAKAGE_K, a PARAMETER of module jtty_mdec` at :61). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "SNR_FLOOR_DB"
+file = "jtty/jtty_mdecode.f90"
+line = 62
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`SNR_FLOOR_DB, a PARAMETER of module jtty_mdec` at :62). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_SUBTRACTED"
+file = "jtty/jtty_mdecode.f90"
+line = 81
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_SUBTRACTED, a PARAMETER of module jtty_mdec` at :81). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MIN_SYNC_FFT_ORDER"
+file = "jtty/jtty_mdecode.f90"
+line = 103
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MIN_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :103). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_SYNC_FFT_ORDER"
+file = "jtty/jtty_mdecode.f90"
+line = 103
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`MAX_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :103). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "UPDATE_GROWING"
+file = "jtty/jtty_mdecode.f90"
+line = 69
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "UPDATE_COMPLETE"
+file = "jtty/jtty_mdecode.f90"
+line = 69
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "UPDATE_EXPIRED"
+file = "jtty/jtty_mdecode.f90"
+line = 70
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :70). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "UPDATE_RECEPTION_ENDED"
+file = "jtty/jtty_mdecode.f90"
+line = 70
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :70). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "0_int64"
+file = "jtty/jtty_mdecode.f90"
+line = 71
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `0_int64` is the kind-suffixed literal initialising sample_origin (:71) and first_search_sample (:72). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "0_real64"
+file = "jtty/jtty_mdecode.f90"
+line = 84
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `0_real64` is the fraction of the literal `0.0_real64` initialising interferer_tsync (:84) and subtracted_tsync (:88). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "MAX_FRAMES"
+file = "jtty/jtty_mdecode.f90"
+line = 52
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `MAX_FRAMES` is jtty_mod's PARAMETER (16, use-associated at :6) on the right-hand side of the PARAMETER at :52. names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "1_int64"
+file = "jtty/jtty_mdecode.f90"
+line = 68
+class = 4
+size_bytes = 0
+reason = "SCANNER ARTIFACT, not a symbol: `1_int64` is the kind-suffixed literal initialising next_message_id (:68). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+
+[[symbol]]
+name = "active_messages"
+file = "jtty/jtty_mdecode.f90"
+line = 74
+class = 1
+size_bytes = 3840
+reason = "type(message_assembly) active_messages(30): the messages being assembled frame by frame, with their text so far. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "recent_frames"
+file = "jtty/jtty_mdecode.f90"
+line = 75
+class = 1
+size_bytes = 7680
+reason = "type(frame_fingerprint) recent_frames(480): the (f1, tsync) of recently decoded frames, the duplicate filter. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "pending_updates"
+file = "jtty/jtty_mdecode.f90"
+line = 76
+class = 1
+size_bytes = 64
+reason = "type(message_update), allocatable pending_updates(:): the queue jtty_rx_take_updates drains (64 B descriptor, heap grows by doubling, :358-369). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "ndecodes"
+file = "jtty/jtty_mdecode.f90"
+line = 63
+class = 1
+size_bytes = 4
+reason = "integer ndecodes: frames decoded since the stream began, reset only at a stream start (:669-672). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "nactive"
+file = "jtty/jtty_mdecode.f90"
+line = 64
+class = 1
+size_bytes = 4
+reason = "integer nactive: how many active_messages are live. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "nrecent"
+file = "jtty/jtty_mdecode.f90"
+line = 65
+class = 1
+size_bytes = 4
+reason = "integer nrecent: how many recent_frames are live. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "npending"
+file = "jtty/jtty_mdecode.f90"
+line = 66
+class = 1
+size_bytes = 4
+reason = "integer npending: queued updates. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "pending_first"
+file = "jtty/jtty_mdecode.f90"
+line = 67
+class = 1
+size_bytes = 4
+reason = "integer pending_first: the queue head. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+
+[[symbol]]
+name = "next_message_id"
+file = "jtty/jtty_mdecode.f90"
+line = 68
+class = 3
+size_bytes = 8
+reason = "integer(int64), initialised 1 (:68): the message-id allocator, read and incremented once per new message by start_message (:402, :413). NOT in exchange_state's list, deliberately: it is process-wide so that ids stay unique across handles, and it must not be swapped per chain (each chain would then reissue ids from the same start). Its content is not chain data. Read-modify-write, so it needs serialised calls, which the modem lock provides; the class-3 shape (shareable if calls serialise) is the right guidance, though it is a counter rather than scratch."
+
+[[symbol]]
+name = "sample_origin"
+file = "jtty/jtty_mdecode.f90"
+line = 71
+class = 3
+size_bytes = 8
+reason = "sample_origin (:71): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+
+[[symbol]]
+name = "first_search_sample"
+file = "jtty/jtty_mdecode.f90"
+line = 72
+class = 3
+size_bytes = 8
+reason = "first_search_sample (:72): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+
+[[symbol]]
+name = "explicit_receive_context"
+file = "jtty/jtty_mdecode.f90"
+line = 73
+class = 3
+size_bytes = 4
+reason = "explicit_receive_context (:73): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+
+[[symbol]]
+name = "interferer_pending"
+file = "jtty/jtty_mdecode.f90"
+line = 82
+class = 3
+size_bytes = 4
+reason = "interferer_pending (:82), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
+
+[[symbol]]
+name = "interferer_f1"
+file = "jtty/jtty_mdecode.f90"
+line = 83
+class = 3
+size_bytes = 4
+reason = "interferer_f1 (:83), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
+
+[[symbol]]
+name = "interferer_tsync"
+file = "jtty/jtty_mdecode.f90"
+line = 84
+class = 3
+size_bytes = 8
+reason = "interferer_tsync (:84), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
+
+[[symbol]]
+name = "interferer_payload"
+file = "jtty/jtty_mdecode.f90"
+line = 85
+class = 3
+size_bytes = 136
+reason = "interferer_payload (:85), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
+
+[[symbol]]
+name = "nsubtracted"
+file = "jtty/jtty_mdecode.f90"
+line = 86
+class = 3
+size_bytes = 4
+reason = "integer nsubtracted (:86): this call's subtraction count. Reset to 0 at the top of every jtty_mdecode (:665), incremented as signals are subtracted, read by the caller after the call (jtty_receive_context.f90:217; jtty_mdecode_step :1276). Class 3."
+
+[[symbol]]
+name = "subtracted_f1"
+file = "jtty/jtty_mdecode.f90"
+line = 87
+class = 3
+size_bytes = 64
+reason = "subtracted_f1 (:87): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
+
+[[symbol]]
+name = "subtracted_tsync"
+file = "jtty/jtty_mdecode.f90"
+line = 88
+class = 3
+size_bytes = 128
+reason = "subtracted_tsync (:88): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
+
+[[symbol]]
+name = "subtracted_payload"
+file = "jtty/jtty_mdecode.f90"
+line = 89
+class = 3
+size_bytes = 2176
+reason = "subtracted_payload (:89): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
+
+[[symbol]]
+name = "sync_chirp_weights"
+file = "jtty/jtty_mdecode.f90"
+line = 90
+class = 2
+size_bytes = 64
+reason = "complex, allocatable (:90), 64 B descriptor: the chirp-z sync weights. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
+
+[[symbol]]
+name = "sync_chirp_kernel"
+file = "jtty/jtty_mdecode.f90"
+line = 90
+class = 2
+size_bytes = 64
+reason = "complex, allocatable (:90), 64 B descriptor: the transformed chirp kernel. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
+
+[[symbol]]
+name = "sync_chirp_samples"
+file = "jtty/jtty_mdecode.f90"
+line = 91
+class = 2
+size_bytes = 4
+reason = "integer, initialised 0 (:91): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
+
+[[symbol]]
+name = "sync_chirp_first_bin"
+file = "jtty/jtty_mdecode.f90"
+line = 91
+class = 2
+size_bytes = 4
+reason = "integer, initialised -1 (:91): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
+
+[[symbol]]
+name = "sync_chirp_output_count"
+file = "jtty/jtty_mdecode.f90"
+line = 92
+class = 2
+size_bytes = 4
+reason = "integer, initialised 0 (:92): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
+
+[[symbol]]
+name = "sync_fft_caches"
+file = "jtty/jtty_mdecode.f90"
+line = 104
+class = 2
+size_bytes = 696
+reason = "type(sync_fft_cache) sync_fft_caches(11:13) (:104), 696 B: one FFTW forward/backward plan pair and its aligned buffers per FFT order. Created once per order by ensure_sync_fft_cache (:166-220), destroyed only by jtty_release_fft_resources (:224-235). The plans depend on nfft alone; the buffers are refilled before every execute (build_s0 :830-903). A chain-independent plan cache: class 2. FFTW planning is not thread-safe; upstream wraps it in !$omp critical(fftw), Nexus runs it under the modem lock."
+
+[[symbol]]
+name = "nsps0"
+file = "jtty/jtty_mdecode.f90"
+line = 608
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -999 (:608): the rebuild key, set at :680. Guard and data share a class. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "ntstep"
+file = "jtty/jtty_mdecode.f90"
+line = 601
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the quarter-frame step at 6000 Sa/s (:686). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "nframe6"
+file = "jtty/jtty_mdecode.f90"
+line = 607
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the frame length at 6000 Sa/s (:685). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "nss"
+file = "jtty/jtty_mdecode.f90"
+line = 610
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the samples per symbol at 6000 Sa/s (:681). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "nfft"
+file = "jtty/jtty_mdecode.f90"
+line = 610
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the sync-search FFT size, 8192 (:682). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "nh2"
+file = "jtty/jtty_mdecode.f90"
+line = 610
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the half of nfft (:684). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "baud"
+file = "jtty/jtty_mdecode.f90"
+line = 628
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nss (:707). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "dt"
+file = "jtty/jtty_mdecode.f90"
+line = 628
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 1/6000 (:708). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "df2"
+file = "jtty/jtty_mdecode.f90"
+line = 628
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nfft (:683). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "ntgrid"
+file = "jtty/jtty_mdecode.f90"
+line = 601
+class = 2
+size_bytes = 0
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save (:601), ntstep/12 (:687), read only in the same block to size s0/mask0 (:700-704); gfortran keeps it in a register and emits no storage (nm shows none). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "csync"
+file = "jtty/jtty_mdecode.f90"
+line = 637
+class = 2
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:637), 64 B descriptor: the sync waveform at 6000 Sa/s, regenerated by gen_syncwave at :709. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "ctones"
+file = "jtty/jtty_mdecode.f90"
+line = 638
+class = 2
+size_bytes = 88
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:638), 88 B descriptor: the four tone references, refilled at :711-718. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+
+[[symbol]]
+name = "payload_correlator"
+file = "jtty/jtty_mdecode.f90"
+line = 609
+class = 2
+size_bytes = 184
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. type(jtty_payload_correlator), save (:609): the payload tone references, rebuilt by jtty_payload_correlator_prepare (:721; jtty_payload_correlators.f90:20-46) only when samples_per_symbol changes. A cache keyed on nss: class 2."
+
+[[symbol]]
+name = "c0"
+file = "jtty/jtty_mdecode.f90"
+line = 635
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:635), 64 B descriptor (allocated in the rebuild block): the analytic signal of this call's chunk, written in full by ana64a at :724 (ana64a.f90:11-17 assigns every element) and then edited in place by subtraction. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+
+[[symbol]]
+name = "c1"
+file = "jtty/jtty_mdecode.f90"
+line = 636
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:636), 64 B descriptor (allocated in the rebuild block): the frequency-shifted candidate signal, written by twkfreq/jtty_peakup (:992, :1004, :1066) before each read. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+
+[[symbol]]
+name = "c"
+file = "jtty/jtty_mdecode.f90"
+line = 634
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:634), 64 B descriptor (allocated in the rebuild block): the sync-search FFT buffer, filled at :908 before each transform. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+
+[[symbol]]
+name = "s0"
+file = "jtty/jtty_mdecode.f90"
+line = 624
+class = 3
+size_bytes = 88
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:624), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:763) and build_s0 rebuilds the surface before each use (:771, :781). build_s0 writes only the searched span, and upstream's comment at :749 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
+
+[[symbol]]
+name = "mask0"
+file = "jtty/jtty_mdecode.f90"
+line = 625
+class = 3
+size_bytes = 88
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:625), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:763) and build_s0 rebuilds the surface before each use (:771, :781). build_s0 writes only the searched span, and upstream's comment at :749 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
+
+[[symbol]]
+name = "nsps0"
+file = "jtty/jtty_decode.f90"
+line = 19
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -999 (:19): the rebuild key. Guard and data share a class. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "nfft"
+file = "jtty/jtty_decode.f90"
+line = 20
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, 8192. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "nh2"
+file = "jtty/jtty_decode.f90"
+line = 20
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, nfft/2. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "nss"
+file = "jtty/jtty_decode.f90"
+line = 20
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, nsps/2. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "twopi"
+file = "jtty/jtty_decode.f90"
+line = 32
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, 8*atan(1). Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "baud"
+file = "jtty/jtty_decode.f90"
+line = 32
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, 6000/nss. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "dt"
+file = "jtty/jtty_decode.f90"
+line = 32
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, 1/6000. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "csync"
+file = "jtty/jtty_decode.f90"
+line = 41
+class = 2
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:41): the sync waveform. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "ctones"
+file = "jtty/jtty_decode.f90"
+line = 42
+class = 2
+size_bytes = 88
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:42): the tone references. Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "payload_correlator"
+file = "jtty/jtty_decode.f90"
+line = 21
+class = 2
+size_bytes = 184
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. type(jtty_payload_correlator), save (:21): a cache keyed on nss (jtty_payload_correlators.f90:20-46). Set in jtty_decode's `nsps.ne.nsps0` rebuild block (:55-81) from nsps alone. jtty_decode is not on any libtempo path: nothing in the vendored set calls it (upstream's console program update.f90 is its only caller, and it is not vendored). Class 2."
+
+[[symbol]]
+name = "nframe_save"
+file = "jtty/subtract_jtty.f90"
+line = 38
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+
+[[symbol]]
+name = "nfft_save"
+file = "jtty/subtract_jtty.f90"
+line = 38
+class = 2
+size_bytes = 4
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+
+[[symbol]]
+name = "window"
+file = "jtty/subtract_jtty.f90"
+line = 40
+class = 2
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. real, allocatable, save (:40): the cos^2 smoothing window. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+
+[[symbol]]
+name = "cw"
+file = "jtty/subtract_jtty.f90"
+line = 39
+class = 2
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): the transformed low-pass filter built from window (:63-68). Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+
+[[symbol]]
+name = "cref"
+file = "jtty/subtract_jtty.f90"
+line = 39
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): the unit-amplitude reference for this signal, written in full by gen_jttywave (icmplx=1, nwave=nframe) at :75-76 before it is read. Class 3."
+
+[[symbol]]
+name = "camp"
+file = "jtty/subtract_jtty.f90"
+line = 39
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): zeroed at :79 and filled at :80-83 on every call before it is read. Class 3."
+
+[[symbol]]
+name = "cfilt"
+file = "jtty/subtract_jtty.f90"
+line = 39
+class = 3
+size_bytes = 64
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): copied from camp at :85 on every call before it is read. Class 3."
+
+[[symbol]]
+name = "istart"
+file = "jtty/rjtty_sub.f90"
+line = 22
+class = 1
+size_bytes = 4
+reason = "SAVEd (:22): the stream's scan cursor, set at a restart (:35) and advanced a quarter-frame per step (:51). Carries stream position between calls: class 1. rjtty_core is upstream's whole-recording decoder: one process-global stream that upstream's tests and file decoder drive with a growing buffer. Nexus's receive path is the jtty_rx_* handle API and never calls it."
+
+[[symbol]]
+name = "kz0"
+file = "jtty/rjtty_sub.f90"
+line = 21
+class = 1
+size_bytes = 4
+reason = "DATA 9999999 (:21), SAVEd (:22): the previous call's buffer length; a shorter buffer means a new recording (:33). Carries stream state: class 1. rjtty_core is upstream's whole-recording decoder: one process-global stream that upstream's tests and file decoder drive with a growing buffer. Nexus's receive path is the jtty_rx_* handle API and never calls it."
+
+[[symbol]]
+name = "istart0_save"
+file = "jtty/rjtty_sub.f90"
+line = 21
+class = 1
+size_bytes = 4
+reason = "DATA 0 (:21), SAVEd (:22): the previous window start; a moved window restarts the stream (:33, :39). Class 1. rjtty_core is upstream's whole-recording decoder: one process-global stream that upstream's tests and file decoder drive with a growing buffer. Nexus's receive path is the jtty_rx_* handle API and never calls it."
+
+[[symbol]]
+name = "kchar"
+file = "jtty/rjtty_sub.f90"
+line = 22
+class = 3
+size_bytes = 0
+reason = "SAVEd (:22), written 0 at a restart (:36) and never read; gfortran emits no storage (nm shows none). Write-only, so class 3 holds vacuously. rjtty_core is upstream's whole-recording decoder: one process-global stream that upstream's tests and file decoder drive with a growing buffer. Nexus's receive path is the jtty_rx_* handle API and never calls it."
+
+[[symbol]]
+name = "ndtol"
+file = "jtty/rjtty_sub.f90"
+line = 22
+class = 3
+size_bytes = 0
+reason = "SAVEd (:22), written 0 at a restart (:37) and never read; no storage emitted. Write-only: class 3, vacuously. rjtty_core is upstream's whole-recording decoder: one process-global stream that upstream's tests and file decoder drive with a growing buffer. Nexus's receive path is the jtty_rx_* handle API and never calls it."
+
+[[symbol]]
+name = "missed_syncs"
+file = "jtty/rjtty_sub.f90"
+line = 21
+class = 4
+size_bytes = 0
+reason = "DATA 0 (:21), SAVEd (:22), and never referenced again; no storage emitted. Never written after load: class 4."
+
+[[symbol]]
+name = "__jtty_mdec_MOD___vtab_jtty_mdec_Decode"
+file = "jtty/jtty_mdecode.f90"
+line = 13
+class = 4
+size_bytes = 288
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of decode, frame_fingerprint, message_assembly, message_update and c_ptr (5 x 56 B) and __def_init of c_ptr (8 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_receive_context_MOD___vtab_jtty_receive_context_Receive_context"
+file = "jtty/jtty_receive_context.f90"
+line = 9
+class = 4
+size_bytes = 224
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of receive_context, receive_state, receive_retro_state and sync_fft_cache (4 x 56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_source_codec_MOD___vtab_jtty_source_codec_Jtty_source_atom"
+file = "jtty/jtty_source_codec.f90"
+line = 54
+class = 4
+size_bytes = 132
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of jtty_source_atom and jtty_source_atom_c (2 x 56 B) and __def_init of jtty_source_atom_c (20 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_payload_correlators_MOD___vtab_jtty_payload_correlators_Jtty_payload_correlator"
+file = "jtty/jtty_payload_correlators.f90"
+line = 8
+class = 4
+size_bytes = 56
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: the vtab of jtty_payload_correlator (56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_tbcc_code_profiles_MOD___vtab_jtty_tbcc_code_profiles_Jtty_tbcc_code_profile"
+file = "jtty/jtty_tbcc_code_profile.f90"
+line = 13
+class = 4
+size_bytes = 56
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: the vtab of jtty_tbcc_code_profile (56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_tbcc_decoder_MOD___vtab_jtty_tbcc_decoder_Jtty_tbcc_decode_result"
+file = "jtty/jtty_tbcc_decoder.f90"
+line = 15
+class = 4
+size_bytes = 112
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of jtty_tbcc_decode_result and jtty_tbcc_rung_result (2 x 56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__jtty_tbcc_list_decoder_MOD___vtab_jtty_tbcc_list_decoder_Jtty_tbcc_decoder_plan"
+file = "jtty/jtty_tbcc_list_decoder.f90"
+line = 46
+class = 4
+size_bytes = 280
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of jtty_tbcc_decoder_plan, packed_survivor_t, pool_candidate_t, survivor_t and one under a hashed name (gfortran shortens long names; by elimination jtty_tbcc_decoder_workspace's), 5 x 56 B. Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__tbcc_MOD___vtab_tbcc_Candidate_t"
+file = "jtty/tbcc.f90"
+line = 27
+class = 4
+size_bytes = 244
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: the vtab of candidate_t (56 B) and its __def_init (188 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."
+
+[[symbol]]
+name = "__packjt77_grammar_MOD___vtab_packjt77_grammar_Pack77_type12_call_source"
+file = "77bit/packjt77_grammar.f90"
+line = 51
+class = 4
+size_bytes = 448
+reason = "NOT REPORTED BY THE GATE and not in any source line: gfortran's type-bound metadata (__vtab_*, and __def_init_* default-initialisation templates), found with nm -S. CLUSTER ROW for this object: vtabs of the eight pack77_*_source types (8 x 56 B). Written only by the loader, never by any code (no CLASS(...) dispatch in these files touches them). Class 4."

@@ -31,6 +31,7 @@ import {
   MIN_SPAN,
   spanDb,
   tuneTarget,
+  laneTags,
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { ageLabel } from '../waterfallHistory'
@@ -240,6 +241,14 @@ interface Props {
   /** The strip's own box, for the divider under it to measure and size (PaneSeam's strip kind:
    *  JS8's waterfall height, layout L2). Omitted ⇒ no ref. */
   stripRef?: Ref<HTMLDivElement>
+  /** Told the audio window the strip shows (Hz), when it mounts and whenever it moves — a zoom
+   *  pick, or the RX marker paging a zoomed view. JTTY's decoder searches its fixed channels
+   *  only inside the range WSJT-X's wide graph shows, so its cockpit hands this on. */
+  onViewChange?: (loHz: number, hiHz: number) => void
+  /** A left double-click (not with Ctrl) on a row of the flat picture: that row's time, UTC ms, as
+   *  it was drawn. JTTY decodes again from it, as WSJT-X's wide graph does
+   *  (`CPlotter::mouseDoubleClickEvent`). Omitted ⇒ a double-click is two clicks, as before. */
+  onRowDoubleClick?: (utcMs: number) => void
   /** A control of the host's own in the header row, after the hint (JS8's decode-filter plate,
    *  which opens its waterfall controls). Display and receive only: it hosts no stop control and
    *  no sender. Omitted ⇒ the header as before. */
@@ -258,6 +267,10 @@ interface Props {
   /** A tag's click, with the tag's frequency. Omitted ⇒ the tags are labels and do nothing.
    *  Disabled while `keyed`: the host's own handler must refuse as well. */
   onTag?: (hz: number) => void
+  /** Stack crowded tags in up to this many rows, each over its own frequency, and count the ones
+   *  that fit in none (the FT decodes' callsigns, dozens to a slot). Omitted ⇒ one row, every tag
+   *  drawn (RTTY's few). */
+  tagLanes?: number
   /** Rows at the true `rowMs` (RTTY): the part of a frame a row overshot is carried into the
    *  next, so 50 ms rows on 60 Hz land every 3 frames, not 3 or 4. Omitted ⇒ the overshoot is
    *  dropped, so a row lands on the first frame at or past `rowMs` after the last: 120 ms is
@@ -266,7 +279,9 @@ interface Props {
 }
 
 /** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
- *  `dim` marks it as already dealt with (a contest dupe) and is shown as a class. */
+ *  `dim` marks it as already dealt with (a contest dupe) and is shown as a class. `selected` is
+ *  the station the operator is working, which WSJT-X marks in red. `rank` orders a crowd: lower is
+ *  kept first (`tagLanes`). */
 export interface WaterfallTag {
   key: string
   hz: number
@@ -274,7 +289,17 @@ export interface WaterfallTag {
   title: string
   opacity: number
   dim: boolean
+  selected?: boolean
+  rank?: number
 }
+
+/** A tag's width before it is drawn, CSS px at text scale 1: `.wf-tag`'s bold 10 px callsign,
+ *  its padding and its border. An estimate, generous so two neighbours never touch. */
+const tagWidthPx = (label: string) => label.length * 6.6 + 12
+/** The gap kept between two tags in one row, CSS px. */
+const TAG_GAP_PX = 4
+/** Room kept at the right for the count of tags left out, CSS px at text scale 1. */
+const TAG_COUNT_PX = 36
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
 // spectrum row so stations calling above ~2.9 kHz are visible + clickable. drawRow maps the view
@@ -323,12 +348,15 @@ export function Waterfall({
   fixedWindow,
   keyed = false,
   stripRef,
+  onViewChange,
   headerExtra,
   spanChoices,
   contrastCurve,
   tags,
   onTag,
+  tagLanes,
   keepRowRemainder = false,
+  onRowDoubleClick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -377,6 +405,50 @@ export function Waterfall({
     prevViewRef.current = next
     return next
   }, [rxOffsetHz, zoomSpan, fixedLo, fixedHi])
+  // The tag layer's width and text scale, for stacking crowded tags (`tagLanes`). Until it is
+  // measured every tag is drawn in the one row, as without `tagLanes`.
+  const tagsRef = useRef<HTMLDivElement>(null)
+  const [tagBox, setTagBox] = useState({ w: 0, scale: 1 })
+  const hasTags = !!tags && tags.length > 0
+  useEffect(() => {
+    const el = tagsRef.current
+    if (!tagLanes || !el || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      const scale = parseFloat(getComputedStyle(el).getPropertyValue('--text-scale')) || 1
+      const w = el.clientWidth
+      setTagBox((b) => (b.w === w && b.scale === scale ? b : { w, scale }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tagLanes, hasTags])
+  const tagLayout = useMemo(() => {
+    if (!tags || !tagLanes || !(tagBox.w > 0)) return null
+    const span = view.hi - view.lo
+    const inView = tags.filter((tag) => tag.hz >= view.lo && tag.hz <= view.hi)
+    const lay = (widthPx: number) =>
+      laneTags(
+        inView.map((tag) => ({
+          x: ((tag.hz - view.lo) / span) * tagBox.w,
+          w: tagWidthPx(tag.label) * tagBox.scale,
+          rank: tag.rank ?? 0,
+        })),
+        widthPx,
+        tagLanes,
+        TAG_GAP_PX * tagBox.scale,
+      )
+    // With some left out, the count takes the right end of the rows.
+    let laid = lay(tagBox.w)
+    if (laid.hidden > 0) laid = lay(tagBox.w - TAG_COUNT_PX * tagBox.scale)
+    return { lane: new Map(inView.map((tag, i) => [tag.key, laid.lane[i]])), hidden: laid.hidden }
+  }, [tags, tagLanes, tagBox, view.lo, view.hi])
+  // The window, told to whoever asked (`onViewChange`) — on the edges, never on a fresh callback.
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+  useEffect(() => {
+    onViewChangeRef.current?.(view.lo, view.hi)
+  }, [view.lo, view.hi])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
@@ -437,6 +509,9 @@ export function Waterfall({
   /** Scrollback while paused: the age of the newest row on screen (0 = the live tail). A row
    *  committed while paused adds one, so the paused picture holds still. */
   const offsetRef = useRef(0)
+  /** The time a row of the flat picture was drawn, from its height in the canvas (CSS px), read
+   *  through the renderer's own row mapping; set by the drawing effect, which owns the geometry. */
+  const rowTimeAtRef = useRef<((yCss: number) => number | null) | null>(null)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
   const rebuildRef = useRef<(() => void) | null>(null)
 
@@ -619,6 +694,18 @@ export function Waterfall({
       newestAtTop: newestAtTopRef.current,
       trace: null,
     })
+
+    // The row under a height in the canvas, by the mapping the paused time tape reads (newest row
+    // at the top by default, at the bottom when the flow is flipped): its drawn time, or null on
+    // the axis strip, past the history, or in the 3D view.
+    rowTimeAtRef.current = (yCss: number) => {
+      const wfH = cssH - axisHFor(cssH)
+      if (dssRef.current || yCss < 0 || yCss >= wfH) return null
+      const devRows = Math.max(1, Math.round(wfH * scaleY))
+      const yDev = Math.min(devRows - 1, Math.round(yCss * scaleY))
+      const age = offsetRef.current + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
+      return renderer.rowAt(age)?.tMs ?? null
+    }
 
     const resize = (entry?: ResizeObserverEntry) => {
       const rect = canvas.getBoundingClientRect()
@@ -1051,6 +1138,7 @@ export function Waterfall({
       running = false
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       ro.disconnect()
+      rowTimeAtRef.current = null
       release()
     }
     // intentionally run once; live props read via refs
@@ -1282,6 +1370,16 @@ export function Waterfall({
           ref={canvasRef}
           className="waterfall-canvas"
           onMouseDown={handleMouseDown}
+          onDoubleClick={
+            onRowDoubleClick
+              ? (e) => {
+                  if (e.button !== 0 || e.ctrlKey || e.metaKey) return
+                  const rect = canvasRef.current!.getBoundingClientRect()
+                  const at = rowTimeAtRef.current?.(e.clientY - rect.top)
+                  if (at != null) onRowDoubleClick(at)
+                }
+              : undefined
+          }
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {
             // Paused = scrollback mode. The wheel FOLLOWS THE FLOW: older rows lie the way
@@ -1313,15 +1411,21 @@ export function Waterfall({
             surface already reads as "that was us transmitting". A live region, so a screen
             reader hears it when the over starts rather than only on inspection. */}
         {tags && tags.length > 0 && (
-          <div className="wf-tags">
+          <div className="wf-tags" ref={tagsRef}>
             {tags.map((tag) => {
               if (tag.hz < view.lo || tag.hz > view.hi) return null
+              const lane = tagLayout ? tagLayout.lane.get(tag.key) : 0
+              if (lane == null) return null
               return (
                 <button
                   key={tag.key}
                   type="button"
-                  className={tag.dim ? 'wf-tag dim' : 'wf-tag'}
-                  style={{ left: `${((tag.hz - view.lo) / (view.hi - view.lo)) * 100}%`, opacity: tag.opacity }}
+                  className={`wf-tag${tag.dim ? ' dim' : ''}${tag.selected ? ' selected' : ''}`}
+                  style={{
+                    left: `${((tag.hz - view.lo) / (view.hi - view.lo)) * 100}%`,
+                    opacity: tag.opacity,
+                    ...(lane > 0 ? { top: `calc(2px + ${lane} * (1.4em + 3px))` } : {}),
+                  }}
                   disabled={!onTag || keyed}
                   title={tag.title}
                   onClick={() => onTag?.(tag.hz)}
@@ -1330,6 +1434,11 @@ export function Waterfall({
                 </button>
               )
             })}
+            {tagLayout && tagLayout.hidden > 0 && (
+              <span className="wf-tag-more" title={t('waterfall.tags.hidden.title', { count: tagLayout.hidden })}>
+                +{tagLayout.hidden}
+              </span>
+            )}
           </div>
         )}
         {keyed && !txBlanks && (

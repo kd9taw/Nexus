@@ -1391,7 +1391,7 @@ describe('flattenRow (spectral flattening)', () => {
 
 describe('trace peak-hold (rig scope)', () => {
   const DIT_25WPM_MS = 1200 / 25 // 48 ms — PARIS timing
-  const ROW_MS = 50 // PhoneScope's poll cadence
+  const ROW_MS = 33 // PhoneScope's poll cadence (30 Hz)
 
   it('lets 25 WPM keying modulate the trace at the CW default', () => {
     // The complaint this fixes: on the CW scope, keying renders as a static bar. A dit gap has

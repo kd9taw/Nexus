@@ -416,8 +416,9 @@ fn the_needs_per_band_are_never_worked_and_worked_not_confirmed() {
         bands(&n.dxcc),
         ["160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"]
     );
-    assert_eq!(bands(&n.was).len(), 13);
-    assert_eq!(bands(&n.waz).len(), 13);
+    // DXCC keeps no band slot on 70/33/23 cm (above); WAS and WAZ list every band Nexus names.
+    assert_eq!(bands(&n.was).len(), 16);
+    assert_eq!(bands(&n.waz).len(), 16);
     let on = |v: &[propagation::BandNeed], band: &str| {
         let b = v.iter().find(|b| b.band == band).expect("the band");
         (b.unworked.clone(), b.unconfirmed.clone())

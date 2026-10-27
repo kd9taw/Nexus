@@ -2,7 +2,7 @@
 //! ([`Told`]), and the per-program protocol state ([`Session`]) the answers depend on. Pure: no
 //! sockets, no locks, no backend.
 //!
-//! # The init burst (design §5)
+//! # The init burst
 //!
 //! A program is sent, each line its own WebSocket message: `vfo_limits`, `if_limits`, `trx_count`,
 //! `channels_count` (plural: RF2K-S reads only it), `device:Nexus`, `receive_only`,
@@ -31,14 +31,14 @@ use crate::tci::{Channel, Trx};
 
 use super::backend::{AudioFormat, ClientId, KeyKind, Refusal, Refused};
 
-/// The modes Nexus offers programs (`modulations_list`, design §5), as TCI names them. A
+/// The modes Nexus offers programs (`modulations_list`), as TCI names them. A
 /// program's `modulation` must name one of these.
 pub const MODULATIONS: [&str; 7] = ["am", "lsb", "usb", "cw", "nfm", "digl", "digu"];
 
-/// The range told when Nexus does not know the radio's own: 30 kHz to 1.3 GHz (design §5).
+/// The range told when Nexus does not know the radio's own: 30 kHz to 1.3 GHz.
 pub const UNKNOWN_LIMITS: (i64, i64) = (30_000, 1_300_000_000);
 
-/// What the server says it is (design §5, Q6): ExpertSDR3 for the command forms WSJT-X and JTDX
+/// What the server says it is: ExpertSDR3 for the command forms WSJT-X and JTDX
 /// choose on that name, and Nexus by device so nothing mistakes it for a SunSDR (WSJT-X halves the
 /// transmit amplitude for `SunSDR2DX`/`SunSDR2PRO` outside ExpertSDR3).
 pub const DEVICE: &str = "Nexus";
@@ -61,14 +61,14 @@ pub(super) const SENSOR_RANGE: (u64, u64) = (30, 1000);
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// Which radio this is. When it changes, every program is sent the device lines again, then
-    /// the whole state (design §2.2).
+    /// the whole state.
     pub radio: u64,
     /// The radio's range, or [`UNKNOWN_LIMITS`]. A program's dial outside it is refused by the
     /// server before the backend is asked.
     pub vfo_limits: (Hz, Hz),
     /// The radio's connection cannot transmit (the Icom network Beta).
     pub receive_only: bool,
-    /// The dial. Channel B always reads the same: no split (design §2.4).
+    /// The dial. Channel B always reads the same: no split.
     pub dial: Hz,
     /// The mode, as one of [`MODULATIONS`].
     pub mode: Word,
@@ -76,19 +76,19 @@ pub struct Snapshot {
     pub drive: u32,
     /// Output power in Tune, 0–100.
     pub tune_drive: u32,
-    /// Anything is on the air, or a program's key is admitted and its over armed (design §3.5:
-    /// WSJT-X needs `trx:0,true;` within a second of its key, before the first audio keys it).
+    /// Anything is on the air, or a program's key is admitted and its over armed
+    /// (WSJT-X needs `trx:0,true;` within a second of its key, before the first audio keys it).
     pub trx: bool,
     pub tune: bool,
     /// The program that owns the transmitter, when one does. A program the server admitted but
     /// that no longer owns it (Stop, the watchdog, a band change) loses its transmit audio here.
     pub owner: Option<ClientId>,
     /// The `tx_enable` notice for each program: the backend's verdict for a `tci` key from it
-    /// (design §3.2, the same function that admits keys). A program not listed is told false.
+    /// (the same function that admits keys). A program not listed is told false.
     pub tx_enable: Vec<(ClientId, bool)>,
     /// CW speed, WPM.
     pub cw_speed: u32,
-    /// Nexus's own transmit buffering, ms: lead-in plus look-ahead (design §3.3).
+    /// Nexus's own transmit buffering, ms: lead-in plus look-ahead.
     pub tx_buffering_ms: u32,
     /// The receive level, dBm, when Nexus has one.
     pub rx_dbm: Option<f64>,
@@ -166,7 +166,7 @@ pub(super) enum FormatField {
 }
 
 /// A parameter a program is answered with: a read's reply, or a refused write's echo of the value
-/// in force (design §3.5).
+/// in force.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Value {
     /// `start;`
@@ -313,7 +313,7 @@ fn sensor_interval(ms: Option<u32>) -> Duration {
 }
 
 impl Session {
-    /// The init burst (design §5), in order, each line one message. Marks the session ready for
+    /// The init burst, in order, each line one message. Marks the session ready for
     /// snapshots.
     pub(super) fn greet(&mut self, s: &Snapshot, client: ClientId) -> Vec<ServerText> {
         let mut out = Vec::with_capacity(32);
@@ -477,7 +477,7 @@ impl Session {
                 if force || t.dial != Some(hz) {
                     t.dial = Some(hz);
                     dial_lines(hz, &mut out);
-                    // The transmitter's frequency is the dial: no split (design §2.4).
+                    // The transmitter's frequency is the dial: no split.
                     out.push(Notice::TxFrequency(hz).render());
                 }
             }

@@ -28,6 +28,13 @@ fn free_text_datagram(text: &str, send: bool) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// A logger's Clear (WSJT-X UDP message type 3) of `window`: 0 Band Activity, 1 Rx Frequency, 2 both.
+fn clear_datagram(window: u8) -> Vec<u8> {
+    let mut w = head(tempo_net::wsjtx::msg_type::CLEAR);
+    w.put_u8(window);
+    w.into_bytes()
+}
+
 /// A logger's HaltTx (WSJT-X UDP message type 8), auto-TX-only off: halt now.
 pub(super) fn halt_tx_datagram() -> Vec<u8> {
     let mut w = head(tempo_net::wsjtx::msg_type::HALT_TX);
@@ -145,5 +152,58 @@ fn a_loggers_halt_tx_stops_and_holds_against_a_reply() {
         (halted, answered(&engine)),
         (false, (None, false)),
         "(armed after HaltTx, (station worked, armed after the Reply))"
+    );
+}
+
+/// The "Now sending" readout.
+fn now_sending(engine: &Arc<Mutex<Engine>>) -> Option<String> {
+    engine.lock().unwrap().snapshot().qso.and_then(|q| q.tx_now)
+}
+
+/// ⭐ A logger's FreeText with "send", TX on: the text is the next over, as WSJT-X's click on Tx5
+/// makes it (`widgets/mainwindow.cpp:692-709`). Nexus queued a chat broadcast that the FT8
+/// screen's sequencer never sent.
+#[test]
+fn a_loggers_free_text_with_send_goes_out_as_tx5_while_tx_is_on() {
+    let engine = station();
+    engine.lock().unwrap().set_tx_enabled_by_operator(true);
+    deliver(&engine, &[free_text_datagram("TNX 73", true)]);
+    assert_eq!(
+        (now_sending(&engine), engine.lock().unwrap().tx_enabled()),
+        (Some("TNX 73".to_string()), true),
+        "(now sending, TX on)"
+    );
+}
+
+/// Without "send" the logger's text only fills Tx5: nothing is queued.
+#[test]
+fn a_loggers_free_text_without_send_fills_tx5_only() {
+    let engine = station();
+    engine.lock().unwrap().set_tx_enabled_by_operator(true);
+    deliver(&engine, &[free_text_datagram("TNX 73", false)]);
+    let taken = engine.lock().unwrap().snapshot().udp_free_text;
+    assert_eq!(
+        (taken.and_then(|t| t.fill), now_sending(&engine)),
+        (Some("TNX 73".to_string()), None),
+        "(Tx 5, now sending)"
+    );
+}
+
+/// A logger's Clear erases the panes its window names, as WSJT-X's does (`++window`; `& 1` Band
+/// Activity, `& 2` Rx Frequency; `widgets/mainwindow.cpp:667-674`): 0 Band Activity only, 1 Rx
+/// Frequency only, 2 both, 3 neither. Each pane has its own tick in the snapshot, which the window
+/// showing it erases on.
+#[test]
+fn a_loggers_clear_erases_only_the_panes_its_window_names() {
+    let cleared = |window: u8| {
+        let engine = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+        deliver(&engine, &[clear_datagram(window)]);
+        let s = engine.lock().unwrap().snapshot();
+        (s.clear_tick, s.rx_freq_clear_tick)
+    };
+    assert_eq!(
+        [0, 1, 2, 3].map(cleared),
+        [(1, 0), (0, 1), (1, 1), (0, 0)],
+        "(Band Activity, Rx Frequency) ticks after a Clear of window 0, 1, 2, 3"
     );
 }

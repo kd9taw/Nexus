@@ -68,7 +68,7 @@ describe('what must NOT change', () => {
   })
 
   it('every cockpit that owns a frequency still homes from a different mode', () => {
-    for (const v of ['operate', 'cw', 'phone', 'rtty', 'psk', 'js8']) {
+    for (const v of ['operate', 'cw', 'phone', 'rtty', 'psk', 'jtty', 'js8']) {
       const from: RigMode = v === 'cw' ? 'digital' : 'cw'
       expect(rigModeTransition(v, from).followFreq, `${v} must re-home`).toBe(true)
     }
@@ -86,7 +86,16 @@ describe('what must NOT change', () => {
     expect(t.nextHomed).toBe('digital')
   })
 
-  it('control: the map is not empty and the helper can say no', () => {
+  it('PSK and JTTY are one engine section, and moving between them still re-homes', () => {
+    // The modem picks the frequency (PSK31 14.070, JTTY 14.090), so the guard must see PSK ⇄ JTTY
+    // as a change of rig mode, or the second cockpit opens on the first one's dial — #143's
+    // shape, one section down.
+    expect(RIG_MODE_BY_VIEW.jtty).toBe('jtty')
+    expect(homesAlong(['psk', 'jtty', 'psk'])).toEqual(['psk', 'jtty', 'psk'])
+    expect(rigModeTransition('jtty', 'jtty').followFreq, 'a re-entry does not re-home').toBe(false)
+  })
+
+    it('control: the map is not empty and the helper can say no', () => {
     // A "nothing found" guard is worthless if the map it reads is empty.
     expect(Object.keys(RIG_MODE_BY_VIEW).length).toBeGreaterThan(4)
     expect(rigModeTransition('operate', 'digital').followFreq).toBe(false)

@@ -85,7 +85,7 @@ describe('#276 Band Activity newest on top', () => {
   it('only applies in Time order; another sort leaves the ranking alone and says why', () => {
     mountTwoPeriods()
     fireEvent.click(chip())
-    const sort = screen.getByRole('combobox')
+    const sort = screen.getByRole('combobox', { name: new RegExp(EN['operate.decodes.sort.label']) })
     fireEvent.change(sort, { target: { value: 'freq' } })
     expect(chip().hasAttribute('disabled')).toBe(true)
     expect(chip().getAttribute('title')).toBe(EN['operate.decodes.newestTop.title.idle'])

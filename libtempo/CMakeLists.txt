@@ -40,7 +40,8 @@ if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
         message(FATAL_ERROR
             "Cross build needs MinGW FFTW3f at ${FFTW_MINGW_PREFIX}/lib/libfftw3f.a "
             "(build it with ./configure --host=x86_64-w64-mingw32 --enable-float "
-            "--enable-static --disable-shared --prefix=${FFTW_MINGW_PREFIX}).")
+            "--enable-static --disable-shared --enable-sse2 --enable-avx --enable-avx2 "
+            "--with-our-malloc --prefix=${FFTW_MINGW_PREFIX}).")
     endif()
     set(FFTW3F_INCLUDE_DIRS "${FFTW_MINGW_PREFIX}/include")
     set(FFTW3F_LIBRARY_DIRS "${FFTW_MINGW_PREFIX}/lib")
@@ -459,6 +460,45 @@ set(LIBTEMPO_SOURCES
     ${LIB}/smo121.f90                     # 1-2-1 smoothing
     ${LIB}/types.f90                      # module types: q3list + kind params
 
+    # --- JTTY modem (lib/jtty) : WSJT-X's untimed keyboard mode ---
+    #     4-GFSK at 31.25 baud, 1.888 s frames of 34-bit atoms protected by a
+    #     CRC-12 and a K=10 tail-biting convolutional code. Taken unchanged from
+    #     the WSJT-X 3.3.0-beta4 pre-release (NOTICE and vendor/wsjtx/README.md
+    #     say where and why; crates/tempo-fast-sys/tests/jtty_provenance.rs holds
+    #     every file to its upstream blob, so a local edit here fails that test).
+    #
+    #     The receiver is upstream's own handle API (jtty_receive_context.f90,
+    #     jtty_rx_*): each handle keeps its own reception state and swaps it in
+    #     around every call. The DSP scratch in jtty_mdecode is shared, so every
+    #     call runs under the modem lock, as for every other mode here.
+    #
+    #     NOT listed, because they are not vendored at all: upstream's standalone
+    #     jtty console program (PortAudio), its simulators and two files upstream's
+    #     own build does not compile. The vendor README lists every one.
+    ${CMAKE_CURRENT_SOURCE_DIR}/jtty_cabi.f90   # Nexus's C ABI: encode, wave, updates
+    ${LIB}/jtty/jtty_tbcc_code_profile.f90  # module jtty_tbcc_code_profiles
+    ${LIB}/jtty/tbcc.f90                  # module tbcc: CRC-12 + convolutional code
+    ${LIB}/jtty/jtty_fec_mod.f90          # module jtty_fec: sync sequence + the code
+    ${LIB}/jtty/jtty_tbcc_list_decoder.f90  # module jtty_tbcc_list_decoder
+    ${LIB}/jtty/jtty_tbcc_decoder.f90     # module jtty_tbcc_decoder: the decode ladder
+    ${LIB}/jtty/jtty_source_codec.f90     # module jtty_source_codec: the 34-bit atoms
+    ${LIB}/jtty/jtty_mod.f90              # module jtty_mod: normalise, pack frames
+    ${LIB}/jtty/genjtty.f90               # message -> channel tones
+    ${LIB}/jtty/gen_jttywave.f90          # tones -> 4-GFSK waveform (TX, and the
+                                          #   decoder's subtraction)
+    ${LIB}/jtty/gen_syncwave.f90          # the sync waveform the decoder correlates
+    ${LIB}/jtty/jtty_payload_correlators.f90  # module jtty_payload_correlators
+    ${LIB}/jtty/jtty_mdecode.f90          # module jtty_mdec: the multi-signal decoder
+    ${LIB}/jtty/jtty_receive_context.f90  # module jtty_receive_context: jtty_rx_*
+    ${LIB}/jtty/subtract_jtty.f90         # subtracts a decoded signal
+    ${LIB}/jtty/jtty_peakup.f90           # fine time and frequency
+    ${LIB}/jtty/jtty_block_pow.f90        # coherent block detection
+    ${LIB}/jtty/ana64a.f90                # iwave -> analytic signal at 6000 Sa/s
+    ${LIB}/jtty/rjtty_sub.f90             # whole-recording decoder upstream's tests
+                                          #   drive; not on Nexus's receive path
+    ${LIB}/jtty/jtty_decode.f90           # single-signal decoder; nothing in the set
+                                          #   calls it, upstream's library builds it
+
     # --- 77-bit message packing (lib/77bit) ---
     # NOTE: call_to_c28, encode77, free_text, hash22calc, nonstd_to_c58, test28
     # are standalone TEST PROGRAMS (each has its own `program main`), NOT library
@@ -467,6 +507,10 @@ set(LIBTEMPO_SOURCES
     # live inside packjt77.f90's module. parse77/my_hash are not in the genft1
     # encode->decode path, so they are omitted.
     ${LIB}/77bit/packjt77.f90             # module packjt77
+    ${LIB}/77bit/packjt77_grammar.f90     # module packjt77_grammar: the grammar tables
+                                          #   JTTY reads (the ARRL/RAC sections), from
+                                          #   WSJT-X 3.3.0-beta4; packjt77.f90 above is
+                                          #   Nexus's 3.0.2 copy and does not use it
 
     # --- misc shared (lib) ---
     ${LIB}/chkcall.f90                    # called by pack77 (callsign validation)
@@ -671,4 +715,68 @@ target_link_libraries(ft4_false_alarm PRIVATE tempo_static m gfortran)
 # ---------------------------------------------------------------------------
 add_executable(ft8_callsign_roundtrip ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft8_callsign_roundtrip.c)
 target_link_libraries(ft8_callsign_roundtrip PRIVATE tempo_static m gfortran)
+
+# ---------------------------------------------------------------------------
+# Verification I: WSJT-X's own Fortran unit tests for the JTTY modem, vendored
+# unchanged under vendor/wsjtx/tests/ (19 of upstream's 23: one needs WSJT-X's
+# Qt code; three carry a licence header of their own and are not taken; see
+# vendor/wsjtx/README.md). They run against THIS libtempo, so they are also the check
+# that the JTTY codec still round-trips through Nexus's own 3.0.2 packjt77.
+#
+# EXCLUDE_FROM_ALL: neither cargo (which builds tempo_static only) nor a plain
+# `cmake --build` (scripts/build-windows-cross.sh) compiles them. Run by hand:
+#     cmake -S libtempo -B <dir> -DCMAKE_BUILD_TYPE=Release
+#     cmake --build <dir> --target jtty_upstream_tests
+#     ctest --test-dir <dir> -L jtty-upstream --output-on-failure
+#
+# The registrations copy upstream's tests/unit/jtty/CMakeLists.txt at the same
+# commit: the same arguments, pass expressions, working directory and timeouts,
+# so a pass here means what it means upstream.
+# ---------------------------------------------------------------------------
+set(JTTY_TESTS "${WX}/tests/unit/jtty")
+set(JTTY_UPSTREAM_TESTS
+    test_jtty_adjacent_decode test_jtty_block_pow test_jtty_continuous_decode
+    test_jtty_frequency_window test_jtty_gap_merge test_jtty_get_updates
+    test_jtty_message_matching test_jtty_overlap_decode test_jtty_pack
+    test_jtty_payload_correlators test_jtty_receive_state test_jtty_source_codec
+    test_jtty_sticky_retry test_jtty_surface_ranges test_jtty_tbcc_code_profile
+    test_jtty_tbcc_decoder test_jtty_tbcc_list_decoder test_jtty_windowed_decode
+    test_tbcc)
+foreach(t ${JTTY_UPSTREAM_TESTS})
+    add_executable(${t} EXCLUDE_FROM_ALL "${JTTY_TESTS}/${t}.f90")
+    set_target_properties(${t} PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/modules/${t}")
+    target_include_directories(${t} PRIVATE
+        ${LIBFT1_INCLUDE_DIRS}
+        "${CMAKE_CURRENT_BINARY_DIR}/modules/tempo_static")
+    target_link_libraries(${t} PRIVATE tempo_static)
+endforeach()
+add_custom_target(jtty_upstream_tests DEPENDS ${JTTY_UPSTREAM_TESTS})
+
+enable_testing()
+set(JTTY_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/jtty-upstream")
+file(MAKE_DIRECTORY "${JTTY_TEST_DIR}")
+# test_jtty_pack opens jtty_msgs.txt from its working directory.
+configure_file("${WX}/tests/fixtures/jtty/jtty_msgs.txt" "${JTTY_TEST_DIR}/jtty_msgs.txt" COPYONLY)
+foreach(t ${JTTY_UPSTREAM_TESTS})
+    add_test(NAME ${t} COMMAND ${t} WORKING_DIRECTORY "${JTTY_TEST_DIR}")
+endforeach()
+add_test(NAME test_jtty_overlap_decode_480 COMMAND test_jtty_overlap_decode 480
+    WORKING_DIRECTORY "${JTTY_TEST_DIR}")
+foreach(t test_jtty_source_codec test_tbcc test_jtty_block_pow test_jtty_message_matching
+          test_jtty_receive_state test_jtty_adjacent_decode test_jtty_overlap_decode
+          test_jtty_sticky_retry test_jtty_windowed_decode test_jtty_gap_merge
+          test_jtty_get_updates test_jtty_continuous_decode)
+    set_tests_properties(${t} PROPERTIES PASS_REGULAR_EXPRESSION "${t}: all checks passed")
+endforeach()
+set_tests_properties(test_jtty_overlap_decode_480 PROPERTIES
+    PASS_REGULAR_EXPRESSION "test_jtty_overlap_decode: all checks passed" TIMEOUT 240)
+set_tests_properties(test_jtty_pack PROPERTIES PASS_REGULAR_EXPRESSION
+    "^ 3     3    67 14     NOW IS THE TIME FOR ALL GOOD MEN TO COME TO THE AID OF THEIR PARTY\.;^ 3     3    52 11     THE QUICK BROWN FOX JUMPED OVER THE LAZY DOG, TWICE\.;\nTotal messages: 36   Number of errors:  0\n$")
+set_tests_properties(test_jtty_adjacent_decode test_jtty_overlap_decode
+    test_jtty_windowed_decode test_jtty_gap_merge test_jtty_surface_ranges PROPERTIES TIMEOUT 180)
+set_tests_properties(test_jtty_sticky_retry PROPERTIES TIMEOUT 60)
+set_tests_properties(test_jtty_continuous_decode PROPERTIES TIMEOUT 300)
+set_tests_properties(${JTTY_UPSTREAM_TESTS} test_jtty_overlap_decode_480 PROPERTIES
+    LABELS jtty-upstream)
 

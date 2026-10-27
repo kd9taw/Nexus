@@ -8,7 +8,7 @@ documentation, bug reports, and especially **real on-air decode-rate data from
 the TempoFast/TempoDeep tiers** (more on that below).
 
 Nexus is maintained by KD9TAW
-&lt;kd9taw@protonmail.com&gt;. The canonical repo is
+&lt;contact@hamradiotools.io&gt;. The canonical repo is
 <https://github.com/kd9taw/Nexus>; SourceForge mirrors it.
 
 ---

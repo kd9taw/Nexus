@@ -19,9 +19,25 @@
 
 import type { LoggedQso } from '../types'
 import { modeKey } from './callHistory'
+import { filterKey, type LogFilter, type LogSortTerm } from './logFilter'
 
 /** Sortable columns. `band` sorts by frequency (more meaningful than the label string). */
-export type LogSortKey = 'call' | 'country' | 'band' | 'freq' | 'mode' | 'sent' | 'rcvd' | 'time' | 'park' | 'qsl'
+export type LogSortKey =
+  | 'call'
+  | 'country'
+  | 'band'
+  | 'freq'
+  | 'mode'
+  | 'sent'
+  | 'rcvd'
+  | 'time'
+  | 'park'
+  | 'qsl'
+  | 'grid'
+  | 'state'
+  | 'iota'
+  | 'contest'
+  | 'county'
 
 /** What the Logbook list shows: the rows the search and the filter chip let through, in the
  *  order the sorted column gives. The same four fields identify an order everywhere — the view,
@@ -33,6 +49,12 @@ export interface LogQuery {
   search: string
   /** Only contacts still lacking an award-eligible confirmation (the DX chaser's chip). */
   needsConfirmOnly: boolean
+  /** The keys after `sort`, in order (shift-click on a header; `features/logFilter`). Absent or
+   *  empty: `sort` alone, as before. */
+  then?: LogSortTerm[]
+  /** The field filters (`features/logFilter`). They run in the engine, in SQL, and this module's
+   *  reference order below does not apply them: no window holds the log to filter it. */
+  filter?: LogFilter
 }
 
 /** Newest first, nothing filtered: the view the Logbook opens on. */
@@ -69,12 +91,23 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number {
       return (q.ota?.theirRef ?? q.ota?.myRef ?? '').toUpperCase()
     case 'qsl':
       return q.awardConfirmed ? 2 : q.confirmed ? 1 : 0
+    case 'grid':
+      return (q.grid ?? '').toUpperCase()
+    case 'state':
+      return (q.state ?? '').toUpperCase()
+    case 'iota':
+      return (q.ota?.iota ?? '').toUpperCase()
+    case 'contest':
+      return (q.contest?.contestId ?? '').toUpperCase()
+    case 'county':
+      // A tag the log keeps only as passthrough (ADIF `CNTY`), as the import spelled it.
+      return (q.extra?.find(([k]) => k === 'CNTY')?.[1] ?? '').toUpperCase()
   }
 }
 
 /** Sensible default direction when switching TO a column: text ascending, numeric/time descending. */
 export function defaultAsc(k: LogSortKey): boolean {
-  return k === 'call' || k === 'country' || k === 'mode' || k === 'sent' || k === 'rcvd' || k === 'park'
+  return k !== 'band' && k !== 'freq' && k !== 'time' && k !== 'qsl'
 }
 
 /** Whether the Logbook shows `q` under `query` — Logbook.tsx's `matchesSearch`, verbatim. */
@@ -108,16 +141,31 @@ export function matchesLogQuery(q: LoggedQso, query: LogQuery): boolean {
  *  Logbook.tsx's filter-then-sort `useMemo`, verbatim, returning positions instead of `{q, i}`. */
 export function logOrder(log: readonly LoggedQso[], query: LogQuery): number[] {
   const out = log.map((q, i) => ({ q, i })).filter(({ q }) => matchesLogQuery(q, query))
+  const keys = [{ sort: query.sort, asc: query.asc }, ...(query.then ?? [])]
   out.sort((a, b) => {
-    const av = sortVal(a.q, query.sort)
-    const bv = sortVal(b.q, query.sort)
-    const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
-    return query.asc ? cmp : -cmp
+    // Each key in its own direction; the time breaks a full tie in the FIRST key's direction, so
+    // one key alone orders exactly as it always did.
+    for (const k of keys) {
+      const av = sortVal(a.q, k.sort)
+      const bv = sortVal(b.q, k.sort)
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0
+      if (cmp) return k.asc ? cmp : -cmp
+    }
+    const t = a.q.whenUnix - b.q.whenUnix
+    return query.asc ? t : -t
   })
   return out.map(({ i }) => i)
 }
 
 /** A stable text key for a query — for caches and for telling one view's answers from another's. */
 export function logQueryKey(query: LogQuery): string {
-  return `${query.sort}|${query.asc ? 'asc' : 'desc'}|${query.needsConfirmOnly ? 'unconfirmed' : 'all'}|${query.search}`
+  return `${query.sort}|${query.asc ? 'asc' : 'desc'}|${query.needsConfirmOnly ? 'unconfirmed' : 'all'}|${query.search}${extraKey(query)}`
+}
+
+/** The sort keys after the first and the filter, as a key's tail — empty when there are none, so
+ *  every key a single-column query had is unchanged. */
+export function extraKey(query: LogQuery): string {
+  const then = (query.then ?? []).map((t) => `${t.sort}:${t.asc ? 'asc' : 'desc'}`).join(',')
+  const f = filterKey(query.filter)
+  return then || f ? `|${then}|${f}` : ''
 }

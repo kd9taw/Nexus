@@ -1601,32 +1601,28 @@ impl Rig {
     /// off the wire. Diagnostic-only; `None` if not a CAT rig or no reply.
     /// Send a raw CAT string that the rig does NOT answer — a SET.
     ///
-    /// Measured against Hamlib 4.7.0 on an FT-710: a read (`w SS05;`) comes back as
-    /// `SS0570000;\0`, but a set (`w SS0570000;`) returns NOTHING AT ALL — not even an `RPRT`.
-    /// Putting a set through `send_raw` therefore burns the whole reply deadline, returns
-    /// TimedOut, and drops the CAT connection, which is a heavy price for a command that worked.
-    /// So this writes and does not wait. Any late bytes are harmless: `command_inner` drains
-    /// stale bytes before every command precisely so a straggler cannot be read as the next
-    /// command's answer.
+    /// ⛔ **NEVER THROUGH `w`.** rigctld's `w` (send_cmd) writes the string and then waits for
+    /// the radio's reply for the radio's whole read timeout, holding the port, and a Yaesu never
+    /// answers a set (Hamlib 4.7.1 `tests/rigctl_parse.c` `send_cmd`: `read_string(rp, buf,
+    /// rxbytes, …)` runs for a set too; `.timeout` is 1000 ms on the FT-710, 2000 ms on the
+    /// FTDX101, FTDX10, FT-991, FT-891 and FTX-1). Every command after it, the next `T 0`
+    /// included, waited that long: Stop TX on an FT-710 reached the radio 2.06 s late behind the
+    /// two `KY` playback stops, 4.18 s on an FTX-1, against a real rigctld (4.7.1 and 4.5.5).
     ///
-    /// Returns whether the bytes went out — NOT whether the radio honoured them, which nothing
+    /// `W <cmd> 0` (send_cmd_rx) is the same write with a reply length of zero, and Hamlib
+    /// reads nothing for it (`read_string_generic` returns at once for `rxmax < 1`, iofunc.c).
+    /// rigctld then answers with one terminator, a NUL on 4.7.1 and a newline on 4.5.5, which
+    /// `command_inner` takes as a whole reply, so nothing is left in the socket either. The
+    /// deadline is the PTT one: like a key, this waits for rigctld and never for the radio.
+    ///
+    /// Returns whether rigctld took the line — NOT whether the radio honoured it, which nothing
     /// on this path can know. The caller confirms by reading the value back.
     pub fn send_raw_set(&mut self, raw: &str) -> bool {
         if self.control.is_none() {
             return false;
         }
-        let line = format!("w {raw}\n");
-        let Ok(stream) = self.ensure_connected() else {
-            return false;
-        };
-        use std::io::Write as _;
-        match stream.write_all(line.as_bytes()) {
-            Ok(()) => true,
-            Err(_) => {
-                self.stream = None; // force a clean reconnect, same as `command_with_deadline`
-                false
-            }
-        }
+        self.command_with_deadline(&format!("W {raw} 0\n"), Some(PTT_DEADLINE_MS))
+            .is_ok_and(|reply| !reply.trim_start().starts_with("RPRT -"))
     }
 
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {

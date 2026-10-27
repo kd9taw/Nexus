@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -78,6 +78,48 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         first rows are on screen and the last row is reached by scrolling,
                         with a control below the smallest that must come back clipped
                         (ui/probe/spots-probe.mjs; it builds nothing)
+  --desktop callcard    the station card beside the transmit controls: a call just above
+                        the TX strip and dock, and one above FT's QSO strip, clicked at
+                        1366×768 and 1024×768, asserting the card is drawn and covers no
+                        point of the strip, Stop TX, the dock or the QSO strip, with a
+                        control (the transmit classes removed) where it must cover one
+                        (ui/probe/callcard-probe.mjs; it builds nothing)
+  --desktop activation  the Activation pane in the dashboard rail beside a TX strip and dock,
+                        in its own window, and the "Activation over?" checklist, at 1024×768
+                        and 1920×1080, asserting nothing scrolls sideways, the pane's lines
+                        and the checklist's buttons are on screen and no transmit control is
+                        covered, with a control (a planted overflow, the TX boxes drawn over
+                        the rail) that must be caught (ui/probe/activation-probe.mjs)
+  --desktop voicenote   the voice keyer's Flex DAX note after F1, in a Phone-shaped pane
+                        region over a TX dock, at 1024×768, 1366×768 and 1920×1080,
+                        asserting nothing scrolls sideways, the note, Got it and F1 are
+                        on screen, the dock is clear and Got it dismisses it, with a
+                        planted overflow that must be caught (ui/probe/voicenote-probe.mjs)
+  --desktop contactcard the Logbook's contact card opened by a real double-click on a call,
+                        at 1024×768, 1366×768 and 1920×1080, asserting it is inside the
+                        window, scrolls nowhere sideways, draws the callbook photo, keeps
+                        Save and Cancel on screen at its top and foot and lists ten recent
+                        contacts, with a control (the Save bar in the flow) that must hide
+                        Save (ui/probe/contactcard-probe.mjs)
+  --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at 1024×768
+                        and 1920×1080 in both themes, asserting nothing scrolls sideways, the
+                        strip's four controls are on screen, Stop TX does not move for ATU ON,
+                        ATU ON is lit, a click tunes, and the right-click and long-press menu
+                        switches the tuner out clear of Stop TX, with a planted overflow and a
+                        cover that must be caught (ui/probe/atu-probe.mjs)
+  --desktop jtty        the JTTY screen (the real cockpit) at 1024×768, 1366×768 and
+                        1920×1080: the dock's Messages box, Edit keys and the eight
+                        F-keys (and, while editing, the eight key boxes and Defaults)
+                        and the Log QSO prompt's words, Log QSO and Not now on screen,
+                        with a control (a box over Messages and Log QSO) that must be
+                        seen as covered (ui/probe/jtty-probe.mjs)
+  --desktop waterfalls  every mode's waterfall in the real app at 1024×768, 1366×768,
+                        1920×1080 and 2560×1440, asserting each starts at 25 % of its
+                        cockpit (or the layout's ceiling) and all are the same width and,
+                        where the layout lets them, the same height; Stop TX, Tune and PTT
+                        on screen; Phone's scope full width beside its left side; Tempo
+                        stacked; with a moved divider and a planted margin that must be
+                        caught (ui/probe/waterfalls-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -94,7 +136,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots) ;; *) echo "browser-probe: --desktop takes rotor, contestlog or spots" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty or waterfalls" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -113,6 +155,13 @@ command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/de
 if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = contestlog ] && exec node "$ROOT/ui/probe/contestlog-probe.mjs"
   [ "$DESKTOP" = spots ] && exec node "$ROOT/ui/probe/spots-probe.mjs"
+  [ "$DESKTOP" = callcard ] && exec node "$ROOT/ui/probe/callcard-probe.mjs"
+  [ "$DESKTOP" = activation ] && exec node "$ROOT/ui/probe/activation-probe.mjs"
+  [ "$DESKTOP" = voicenote ] && exec node "$ROOT/ui/probe/voicenote-probe.mjs"
+  [ "$DESKTOP" = contactcard ] && exec node "$ROOT/ui/probe/contactcard-probe.mjs"
+  [ "$DESKTOP" = atu ] && exec node "$ROOT/ui/probe/atu-probe.mjs"
+  [ "$DESKTOP" = jtty ] && exec node "$ROOT/ui/probe/jtty-probe.mjs"
+  [ "$DESKTOP" = waterfalls ] && exec node "$ROOT/ui/probe/waterfalls-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

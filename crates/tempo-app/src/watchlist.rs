@@ -3,8 +3,8 @@
 //! The list is the DESKTOP's: Settings ▸ Spots & Alerts edits it and keeps it in ui-state.json
 //! (`nexus.watchlist`, a blob this side deliberately never parses). The Needed board puts every
 //! heard station it names at the top, even one nothing else needs (operator 2026-09-24: "watched
-//! counts as needed"), and a Remote browser is served the board the station computes — so the
-//! station needs the list too. The desktop's main window sends it whole on launch and after every
+//! counts as needed"), a Remote browser is served the board the station computes, and the station
+//! raises the watch list's alerts (`crate::needed_alert`) — so the station needs the list too. The desktop's main window sends it whole on launch and after every
 //! edit ([`crate::engine::Engine::set_watch_list`]); it is held in memory, never written.
 //!
 //! [`watched`] is the desktop's `watchedEntry` (`ui/src/watchlist.ts`), the matcher behind the
@@ -24,13 +24,43 @@ pub enum WatchKind {
     Grid,
 }
 
-/// One entry, as the desktop sends it: only what NAMES a station. The list's alert gates (CQ only,
-/// a minimum SNR) are the alert's and stay on the desktop; the board, like the WATCH tile, matches
-/// identity alone — a station does not leave the watch list when it stops calling CQ.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One entry, as the desktop sends it: what NAMES a station, and the alert's own gates and label.
+/// The board, like the WATCH tile, matches identity alone ([`watched`]) — a station does not leave
+/// the watch list when it stops calling CQ; the gates are the alert's
+/// (`crate::needed_alert`), which the station raises. Each gate is absent when unset, so an
+/// entry that names a station and nothing more reads and writes as `{"kind","value"}` alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WatchEntry {
     pub kind: WatchKind,
     pub value: String,
+    /// The desktop's id for the entry: the alert's dedup names it, so an edit to one entry does
+    /// not re-announce a station another entry already announced.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Alert only on a CQ.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cq_only: bool,
+    /// Alert only at this SNR (dB) or better.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_snr: Option<f64>,
+    /// What the alert calls the entry ("Bouvet DXpedition").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl WatchEntry {
+    /// An entry that names a station and sets no gate.
+    pub fn naming(kind: WatchKind, value: impl Into<String>) -> Self {
+        Self {
+            kind,
+            value: value.into(),
+            id: String::new(),
+            cq_only: false,
+            min_snr: None,
+            label: None,
+        }
+    }
 }
 
 /// `text` against an entry's `pattern`, exactly as the desktop's `matchCallPattern` does:
@@ -139,14 +169,8 @@ mod tests {
     #[test]
     fn the_first_entry_that_names_the_station_answers() {
         let list = [
-            WatchEntry {
-                kind: WatchKind::Dxcc,
-                value: "Bouvet".into(),
-            },
-            WatchEntry {
-                kind: WatchKind::Call,
-                value: "3Y0*".into(),
-            },
+            WatchEntry::naming(WatchKind::Dxcc, "Bouvet"),
+            WatchEntry::naming(WatchKind::Call, "3Y0*"),
         ];
         let hit = watched(&list, "3Y0J", Some("Bouvet"), None).unwrap();
         assert_eq!(hit.kind, WatchKind::Dxcc);
@@ -160,17 +184,33 @@ mod tests {
     #[test]
     fn an_entry_reads_and_writes_the_desktops_spelling() {
         let e: WatchEntry = serde_json::from_str(r#"{"kind":"grid","value":"EM7*"}"#).unwrap();
-        assert_eq!(
-            e,
-            WatchEntry {
-                kind: WatchKind::Grid,
-                value: "EM7*".into()
-            }
-        );
+        assert_eq!(e, WatchEntry::naming(WatchKind::Grid, "EM7*"));
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
             r#"{"kind":"grid","value":"EM7*"}"#
         );
         assert!(serde_json::from_str::<WatchEntry>(r#"{"kind":"band","value":"20m"}"#).is_err());
+    }
+
+    /// The whole entry the desktop sends, its alert gates and label with it, reads and writes back
+    /// as it came; the operator's note, which is the Settings manager's alone, is not taken.
+    #[test]
+    fn an_entry_carries_the_alerts_gates_and_label() {
+        let sent = r#"{"kind":"call","value":"VP8*","id":"w1","cqOnly":true,"minSnr":-12.0,"label":"Falklands DXp","notes":"till Friday"}"#;
+        let e: WatchEntry = serde_json::from_str(sent).unwrap();
+        assert_eq!(
+            e,
+            WatchEntry {
+                id: "w1".into(),
+                cq_only: true,
+                min_snr: Some(-12.0),
+                label: Some("Falklands DXp".into()),
+                ..WatchEntry::naming(WatchKind::Call, "VP8*")
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&e).unwrap(),
+            r#"{"kind":"call","value":"VP8*","id":"w1","cqOnly":true,"minSnr":-12.0,"label":"Falklands DXp"}"#
+        );
     }
 }

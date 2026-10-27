@@ -7,6 +7,7 @@
 // component and never sees a null from it.
 import { useEffect, useState } from 'react'
 import { t, type MessageKey } from '../i18n'
+import { ContestSoonLine } from './ContestSetupWizard'
 
 /** One upcoming contest (mirrors the Rust `ContestEvent`, camelCase over the wire). */
 export interface ContestEvent {
@@ -108,10 +109,18 @@ export function ContestCalendarPane({
     }
   }, [load])
 
-  if (!contests) return <p className="pane-basic">{t('connect.pane.contests.basic')}</p>
+  // ⭐ The quiet line first, from Nexus's own rules data rather than the calendar: a supported contest
+  // that starts within a week, with "Set up…" (ContestSetupWizard.tsx). No pop-up.
+  const basic = (
+    <>
+      <ContestSoonLine />
+      <p className="pane-basic">{t('connect.pane.contests.basic')}</p>
+    </>
+  )
+  if (!contests) return basic
   const now = Date.now() / 1000
   const up = upcomingContests(contests, now)
-  if (up.length === 0) return <p className="pane-basic">{t('connect.pane.contests.basic')}</p>
+  if (up.length === 0) return basic
 
   const shown = up.slice(0, 20)
   const byBucket = new Map<ContestBucket, ContestEvent[]>()
@@ -124,6 +133,7 @@ export function ContestCalendarPane({
 
   return (
     <section className="contest-pane panel">
+      <ContestSoonLine />
       {GROUPS.map(({ bucket, labelKey }) => {
         const rows = byBucket.get(bucket)
         if (!rows || rows.length === 0) return null

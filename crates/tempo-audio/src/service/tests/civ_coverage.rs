@@ -603,6 +603,10 @@ fn a_mode_given_up(ng: bool) -> (Vec<String>, bool, usize, Option<String>, (u8, 
     let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.074, "20m"), &[]);
     {
         let mut r = s.regs.lock().unwrap();
+        // In LSB, so the plain-USB fallback is a mode the radio is NOT in and goes out as a write:
+        // a radio already in USB is not written to at all (#417), and this test is about the
+        // fallback's wire.
+        r.main_mode = 0x00;
         if ng {
             r.nak_mode_writes = u32::MAX;
         } else {
@@ -655,7 +659,7 @@ fn a_mode_given_up(ng: bool) -> (Vec<String>, bool, usize, Option<String>, (u8, 
 /// ⭐ A MODE THE RADIO DOES NOT ANSWER IS NOT CALLED REJECTED, AND ITS GIVE-UP SENDS NO FALLBACK.
 /// The IC-7300 answers everything but a mode write. Each try says the rig did not reply, the
 /// give-up says the same and blames the link, and nothing more is sent: the two tries before it,
-/// and the radio still in USB with DATA off. The silence was "rig rejected PKTUSB", and the give-up
+/// and the radio still in LSB (where the fixture starts it) with DATA off. The silence was "rig rejected PKTUSB", and the give-up
 /// sent the plain-USB fallback (a third `06`) to a radio that was not answering, then said "rig
 /// refused PKTUSB". An NG, the control, keeps its words and its fallback.
 #[test]
@@ -683,14 +687,14 @@ fn a_mode_the_radio_does_not_answer_is_not_called_rejected_and_its_give_up_sends
                 false,
                 2,
                 Some("PKTUSB".to_string()),
-                (0x01, false),
+                (0x00, false),
             ),
             (
                 ng.map(String::from).to_vec(),
                 true,
                 3,
                 Some("PKTUSB".to_string()),
-                (0x01, false),
+                (0x00, false),
             ),
         )
     );

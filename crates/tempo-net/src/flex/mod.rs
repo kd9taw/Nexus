@@ -31,7 +31,7 @@
 //! # The transmit rule
 //!
 //! Models hold state, a separate encoder turns typed intents into wire text, and every transmit
-//! check sits on the typed intent, never on rendered text (port plan §3.1):
+//! check sits on the typed intent, never on rendered text:
 //!
 //! - A command that can key the radio ([`encode::TxStart`]) is rendered only from an
 //!   [`admission::Admitted`], and only [`admission::admit`] makes one (with

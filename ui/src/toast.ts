@@ -14,10 +14,14 @@ export interface Toast {
    * "someone is calling you", a new DXCC. Routine toasts (QSY, errors) leave it off. */
   prominent?: boolean
   /** Optional one-click action — e.g. "Work" the station this alert is about. When set,
-   * the toast shows an action button that runs this then dismisses the toast. */
+   * the toast shows an action button that runs this then dismisses the toast — or, for an action
+   * that returns a promise, once it resolves: one that rejects leaves the toast up, with the
+   * rejection's message, until the operator closes it (`keepToast`). */
   action?: () => void
   /** Button label for `action` (default "Work"). */
   actionLabel?: string
+  /** Why its action did not happen, shown under the message once it failed (`keepToast`). */
+  note?: string
   /** An ALERT about the world — a decode, a spot, a band opening, space weather — that the app
    *  raised on its own. With pop-ups off it does not pop up (see `popsUpWhenOff`). */
   alert?: boolean
@@ -43,6 +47,8 @@ export const ERROR_MIN_TTL_MS = 12_000
 let nextId = 1
 let toasts: Toast[] = []
 const listeners = new Set<Listener>()
+/** The toasts whose expiry is called off (`keepToast`): they leave only when dismissed. */
+const kept = new Set<number>()
 
 /**
  * #391: WHAT STILL POPS UP WITH POP-UPS OFF. InsaneSplash, 2026-09-29: "how do I turn off the popup
@@ -110,6 +116,18 @@ export function setPopupNotifications(on: boolean): void {
   for (const fn of popupListeners) fn(shown)
 }
 
+/** #321: the least time a timed pop-up stays, in ms. 0 (the default) leaves each its own ttl, as
+ *  it always was. It only ever lengthens: a longer ttl, the error floor above and a sticky `0` all
+ *  stand. Read when a toast is raised, so one already up keeps its timer. Each window sets its own
+ *  from its settings, as it does the pop-up switch. */
+let popupMinMs = 0
+
+/** The pop-up dwell, in seconds (Settings ▸ Spots & Alerts ▸ Alerts). Anything not a positive
+ *  number is 0. */
+export function setPopupMinSeconds(secs: number): void {
+  popupMinMs = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 0
+}
+
 export function pushToast(
   message: string,
   kind: ToastKind = 'error',
@@ -120,18 +138,38 @@ export function pushToast(
   toasts = [...toasts, { id, kind, message, ...opts }]
   emit()
   if (ttlMs > 0) {
-    const ttl = kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs
-    window.setTimeout(() => dismissToast(id), ttl)
+    const ttl = Math.max(kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs, popupMinMs)
+    window.setTimeout(() => {
+      if (!kept.has(id)) dismissToast(id)
+    }, ttl)
   }
   return id
 }
 
 export function dismissToast(id: number): void {
+  kept.delete(id)
   const next = toasts.filter((t) => t.id !== id)
   if (next.length !== toasts.length) {
     toasts = next
     emit()
   }
+}
+
+/** Call off a toast's expiry: it stays until dismissed — while its action is in flight, and after
+ *  the action failed, when `note` says why so the operator can act on it and press again. */
+export function keepToast(id: number, note?: string): void {
+  if (!toasts.some((t) => t.id === id)) return
+  kept.add(id)
+  if (note !== undefined) {
+    toasts = toasts.map((t) => (t.id === id ? { ...t, note } : t))
+    emit()
+  }
+}
+
+/** A failure in words: `fallback`, and what `err` said, if anything. */
+export function failureText(fallback: string, err: unknown): string {
+  const detail = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  return detail ? `${fallback}: ${detail}` : fallback
 }
 
 /**
@@ -145,8 +183,7 @@ export async function withErrorToast<T>(
   try {
     return await action()
   } catch (err) {
-    const detail = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
-    pushToast(detail ? `${fallbackMessage}: ${detail}` : fallbackMessage, 'error')
+    pushToast(failureText(fallbackMessage, err), 'error')
     return null
   }
 }

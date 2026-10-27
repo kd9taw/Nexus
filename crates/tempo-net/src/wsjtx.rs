@@ -221,7 +221,7 @@ pub fn encode_qso_logged(id: &str, q: &QsoLogged) -> Vec<u8> {
 
 /// The ADIF version and program id [`encode_logged_adif`] puts in its header — Nexus's own
 /// logbook writer's (`tempo_core::logbook::adif_header`), since the record is Nexus's.
-const LOGGED_ADIF_VERSION: &str = "3.1.4";
+const LOGGED_ADIF_VERSION: &str = "3.1.8";
 const LOGGED_ADIF_PROGRAM_ID: &str = "Nexus";
 
 /// **LoggedADIF (type 12).** One completed contact as ADIF text, sent right after
@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(
             r.read_utf8(),
             Some(Some(
-                "\n<adif_ver:5>3.1.4\n<programid:5>Nexus\n<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8 <EOR>"
+                "\n<adif_ver:5>3.1.8\n<programid:5>Nexus\n<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8 <EOR>"
                     .to_string()
             ))
         );

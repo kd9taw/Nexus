@@ -42,6 +42,7 @@ vi.mock('../api', () => {
     deleteQsoById: noop(), importAdif: noop(), editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: vi.fn(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
+    noteActivationExported: vi.fn(async () => {}),
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
     markQslSentById: noop(), markQslCardById: noop(),

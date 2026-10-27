@@ -121,7 +121,10 @@ fn a_lock_nobody_answers_ends_at_its_cap() {
 
 /// ★ An answer to "Still talking?" moves the cap on: answered while asked, the Lock is no longer
 /// asked, goes on the air past the cap it would have met, and is capped only a whole cap after the
-/// answer. CONTROL: the same Lock unanswered was asked before the answer.
+/// answer. It goes on under a new press, since the station caps each press on its own clock: the
+/// answer's hold names the next press, under the Stops pressed so far, and the first press is never
+/// let go, so the station hands the key straight over; the cap lets go the new one. CONTROL: the
+/// same Lock unanswered was asked before the answer, and held press 1 until then.
 #[test]
 fn an_answer_to_still_talking_moves_the_cap_on() {
     let (_shack, end, client, s, dir) = present_for(Duration::from_secs(10));
@@ -133,8 +136,18 @@ fn an_answer_to_still_talking_moves_the_cap_on() {
         true,
         "CONTROL: asked"
     );
+    assert!(
+        end.presses()
+            .iter()
+            .all(|up| *up == Up::Hold { press: 1, stops: 0 }),
+        "CONTROL: {:?}",
+        end.presses()
+    );
     let answered = Instant::now();
     assert_eq!(hold(&s, true), Ok(json!({ "ask": false })), "answered");
+    eventually("the next press", || {
+        end.presses().last() == Some(&Up::Hold { press: 2, stops: 0 })
+    });
     let said = hold_until(&s, answered, Duration::from_millis(1100));
     assert!(
         said.iter().all(|(_, answer)| answer.is_ok()),
@@ -153,7 +166,12 @@ fn an_answer_to_still_talking_moves_the_cap_on() {
         "a whole cap after the answer"
     );
     eventually("let go on the road", || {
-        end.presses().last() == Some(&Up::Release { press: 1 })
+        end.presses().last() == Some(&Up::Release { press: 2 })
     });
+    assert!(
+        !end.presses().contains(&Up::Release { press: 1 }),
+        "the first press let go: {:?}",
+        end.presses()
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

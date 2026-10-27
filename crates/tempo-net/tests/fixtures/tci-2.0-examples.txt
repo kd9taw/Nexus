@@ -222,7 +222,7 @@ p40 s   `RX_CHANNEL_SENSORS:1,1,-112.7;`
 # VFO_LOCK has a "Read" row: a client asks.
 p40 c   `VFO_LOCK:0,1;`
 
-# ── Not in the spec: forms real servers send (plan §2.2, §2.5), each with its evidence ──
+# ── Not in the spec: forms real servers send, each with its evidence ──
 # TCI 1.x drive without a receiver: WSJT-X 3.0.2 reads it from ExpertSDR2
 # (Transceiver/TCITransceiver.cpp:737-743).
 x   s   `drive:30;`

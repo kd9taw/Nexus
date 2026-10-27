@@ -54,9 +54,9 @@ const APP_WORDMARK = 'NEXUS'
  * identifiers reported by the OS, and three dial frequencies. They are the same characters in
  * every language — `14.074 MHz` is not `14,074 MHz`, and a decimal comma reaching a dial reading
  * is an operating fault. Gathered here (rather than inlined) so the guard can prove they never
- * became catalog entries, exactly as STATION_EXAMPLES does for Settings ▸ Station.
+ * became catalog entries (`i18n/i18n.invariant.test.ts`).
  */
-const GUIDE_EXAMPLES = {
+export const GUIDE_EXAMPLES = {
   callsign: 'KD9TAW',
   grid: 'EN52xa',
   gridShort: 'EN52',

@@ -19,6 +19,10 @@ modes = { path = "../modes" }
 # JS8 message layer (Station/Reassembler behind the engine adapter in `js8.rs`) and the
 # `Js8State` DTO's leaf types. Pure Rust; `modes` already pulls the same crate for the modem.
 js8 = { path = "../js8" }
+# JTTY's modem (WSJT-X's keyboard mode) for the receive side in `jtty_rx.rs`: the streaming
+# receiver and its update records. In-workspace, and it links the same libtempo `modes`
+# already links, so this adds no new code to the build.
+jtty = { path = "../jtty" }
 # Wire formats for the per-QSO interop broadcasts fired from `log_qso` (N1MM
 # <contactinfo>). A leaf crate over std sockets — tempo-core already reaches it
 # through `modes`, so this is an explicit edge on an existing arrow, not a new one.

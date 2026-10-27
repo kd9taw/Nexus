@@ -21,7 +21,7 @@ vi.setConfig({ testTimeout: 15_000 })
 const WANT: Array<[string, PaneId[]]> = [
   ['Bands', ['advisory', 'bandAdvisor', 'bandTiles', 'outlook', 'openings', 'openingsLog', 'bestband', 'beacons', 'bandHours', 'esNowcast']],
   ['Space weather', ['kpOutlook', 'spacewx', 'insights', 'greyline', 'measuredMuf']],
-  ['Activity', ['selection', 'getout', 'activity', 'chase', 'chaseFeed', 'satPasses', 'contests', 'spots', 'pota', 'needed', 'operators']],
+  ['Activity', ['selection', 'getout', 'activity', 'chase', 'chaseFeed', 'satPasses', 'contests', 'spots', 'pota', 'needed', 'operators', 'activation']],
   ['Station', ['rotor', 'amp', 'scope', 'clock']],
 ]
 const titleOf = (id: PaneId) => PANES.find((p) => p.id === id)!.title

@@ -285,7 +285,7 @@ the characters to ask **AGN** about rather than the ones to write in the log.*
 
 ### Tune with the tuning scope
 
-The square left of the decoded text is a **tuning scope**: the crossed-ellipse
+The square to the right of the waterfall is a **tuning scope**: the crossed-ellipse
 picture of a classic terminal unit. Two narrow filters sit on the mark and space
 tones the decoder is listening to, after the AFC's correction; the mark filter
 moves the trace left and right, the space filter up and down.
@@ -297,12 +297,12 @@ moves the trace left and right, the space filter up and down.
   the arms get fatter as it moves further off.
 - **Noise draws a round blob** that fills the middle, with no arms.
 
-The line under the square says the same in words, for anyone who cannot use the
+The line beside the square says the same in words, for anyone who cannot use the
 picture: **Tuned**, **Signal 20 Hz high**, **Signal 20 Hz low**, or **No signal**.
 It changes at most once a second while only the number moves.
 
 To tune, click the signal on the waterfall first (step 3 above), then use
-**◀** and **▶** under the square to move the decoder 5 Hz at a time; hold one
+**◀** and **▶** beside the square to move the decoder 5 Hz at a time; hold one
 down to keep stepping. Move towards the words: **Signal 20 Hz high** wants ▶.
 The figure between the buttons is the mark tone in hertz.
 
@@ -316,14 +316,18 @@ tone either; net between overs.
 
 ![The tuning scope beside the decoded text, showing a crossed-ellipse "+" with ◀ M 2125 ▶ and the words "Signal 18 Hz low" under it.](../img/manual/rtty-tuning-scope.webp)
 
-*The tuning scope in the Decoded Text pane, drawn from a test pattern rather
-than off the air, in a development build after Nexus 1.19.0.*
+*The tuning scope in its earlier place in the Decoded Text pane, drawn from a
+test pattern rather than off the air, in a development build after Nexus 1.19.0.
+It now stands beside the waterfall, with ◀ ▶ and the words to the right of the
+square.*
 
 The scope is a ⊞ Panels entry, **Tuning**, shown by default; hide it there or
-with its own ✕. With the decoded text hidden it stands on its own under the TX
-strip. The square takes the room it needs from the decoded text, the waterfall
-and the log strip (about 200 px on a large window); on a small one it is the
-largest that fits, about 100 px at 1024×768, and nothing has to scroll. It goes blank while you transmit and while the decoder is
+with its own ✕, and the waterfall takes the full width. It shares the
+waterfall's strip, so the waterfall keeps its usual height and gives up the
+width instead. The square grows with the window, from about 120 px at 1024×768
+to about 200 px on a large one; drag the waterfall's divider shorter than that
+and the square follows the strip. With the waterfall hidden the scope keeps the
+strip on its own. It goes blank while you transmit and while the decoder is
 not armed. On a second computer driving the station with Nexus's own Remote
 client it works the same way, fed from the station.
 

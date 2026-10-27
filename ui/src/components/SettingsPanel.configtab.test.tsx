@@ -232,6 +232,7 @@ describe('the station’s files: Reveal at the station, Save to this computer fr
       expect(screen.getAllByRole('button', { name: EN['settings.integrations.allTxt.reveal'] })).toHaveLength(1)
       expect(screen.queryByRole('button', { name: EN['settings.integrations.qsoWav.reveal'] })).toBeNull()
       api.get('shackFileRead').mockImplementation(() => Promise.resolve({ data: 'QUJD', offset: 0, size: 3 }))
+      api.get('shackFileSave').mockImplementation(() => Promise.resolve({ name: 'ALL.TXT', path: '/home/op/Downloads/ALL.TXT' }))
       fireEvent.click(await screen.findByRole('button', { name: EN['remote.stationFiles.save.label'] }))
       await waitFor(() => expect(api.get('shackFileSave')).toHaveBeenCalledWith('ALL.TXT', 'QUJD', 0))
       expect(api.get('shackFileRead')).toHaveBeenCalledWith('allTxt', 'ALL.TXT', 0)

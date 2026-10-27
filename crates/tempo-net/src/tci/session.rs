@@ -21,7 +21,7 @@
 //!   meters (pushed where the dialect pushes, otherwise `rx_smeter` polled every
 //!   [`METER_POLL_MS`]). No `ready;` within [`Config::ready_timeout_ms`] ends the session
 //!   ([`End::NoReady`]). Each text message is read on its own: piHPSDR sends two unterminated
-//!   burst lines, and buffering across messages would swallow its `ready;` (T2 finding 1).
+//!   burst lines, and buffering across messages would swallow its `ready;`.
 //! - *The model* is the server's word only. A readback the codec refuses leaves its parameter
 //!   unknown, never the value before ([`super::model::Reading::Unreadable`]); the session asks
 //!   again where a read exists, at most once a [`REREAD_MS`].
@@ -43,25 +43,25 @@
 //! rendered, and the session's keyed belief is set before the write, so a key whose write fails
 //! partway still needs its stop. The belief clears only on the server's own report that the
 //! transmitter is off (`trx:<trx>,false` for an over, `tune:<trx>,false` for a tune), and only a
-//! report that cannot predate the key: one after its echo, after our stop, or on a new connection
-//! (plan §6.1 item 8). A lost link never clears it; the belief survives the session
+//! report that cannot predate the key: one after its echo, after our stop, or on a new connection.
+//! A lost link never clears it; the belief survives the session
 //! ([`Snapshot::keyed`], [`Event::Closed`]) for the next one. While a key of ours is open:
 //! - *TX_CHRONO* for our transceiver is answered at once with exactly the frames it asks for, read
 //!   with the dialect's `length` meaning: Nexus's audio from [`Streams::transmit`] while the over is
 //!   open, silence after our stop (until the server reports the unkey), and nothing at all when no
-//!   key of ours is on the air: another program's over gets none of our samples (item 5). A chrono
+//!   key of ours is on the air: another program's over gets none of our samples. A chrono
 //!   whose answer would not fit one frame is dropped and counted before anything is sized by it.
-//! - *Nexus's audio stream* stays up for the whole over (item 3): a server report that it stopped
+//! - *Nexus's audio stream* stays up for the whole over: a server report that it stopped
 //!   ends the over at once ([`Halt::AudioStopped`]), and [`Session::send`] will not stop or reshape
 //!   it while a key of ours that takes it may be up ([`SendError::AudioInUse`]).
 //! - *The chrono window*: a key that takes Nexus's audio with no TX_CHRONO within
 //!   [`Config::chrono_window_ms`] of its write is ended at once ([`Halt::NoChrono`]): the server is
-//!   not taking Nexus's audio, and may be transmitting its microphone (item 3, M2).
+//!   not taking Nexus's audio, and may be transmitting its microphone.
 //! - *The echo window*: a key the server has not echoed within [`Config::key_echo_ms`] is ended
 //!   ([`Halt::NoEcho`]). An echo that names a source other than Nexus's audio for a key that takes
 //!   it ends the over at once ([`Halt::WrongSource`]).
 //! - *The server's own say*: `stop;` (the SDR program stops) ends an open over and says so
-//!   ([`Halt::SdrStopped`], M12); a `trx:<trx>,false` after the echo and before our stop is the
+//!   ([`Halt::SdrStopped`]); a `trx:<trx>,false` after the echo and before our stop is the
 //!   server ending our over itself ([`Halt::ServerEnded`]).
 //! - *Escalation*: an unkey the server has not confirmed [`Config::unkey_deadline_ms`] after our
 //!   first stop, while it is still heard from, sends the stops again, reports
@@ -69,13 +69,13 @@
 //!   and closes the session ([`End::UnkeyUnconfirmed`]). A server silent since our stop is a dead
 //!   link instead: the stale close ends it, with the same belief handed on.
 //!
-//! **Stops are never gated** (item 6, M13). [`Session::stop`] sends any [`Stop`] and
+//! **Stops are never gated**. [`Session::stop`] sends any [`Stop`] and
 //! [`Session::end_ours`], rigctld's `T 0`, sends `trx:<trx>,false;` (with `tune:<trx>,false;`
 //! first when a tune of ours may be up), in every phase but the closed one: before `ready;`, in
 //! the middle of a key, while closing. On a server that has no notion of an owner (ExpertSDR3 by
 //! the spec) `trx:<trx>,false;` also ends another program's over: that is the safe direction.
 //!
-//! **Every close sends the stops first** (item 7): a close on purpose, the escalation, a stale
+//! **Every close sends the stops first**: a close on purpose, the escalation, a stale
 //! link, a server that never said `ready;`, a message the WebSocket layer refused. A close on
 //! purpose with a key of ours on the air waits up to [`Config::close_wait_ms`] for the server to
 //! report the unkey before the close frame. After the close frame the driver reads on, dropping
@@ -130,8 +130,8 @@ pub const STALE_MS: u64 = 5_000;
 /// 1.25 s, so this allows a little more.
 pub const KEY_ECHO_MS: u64 = 1_500;
 
-/// How long after a key that takes Nexus's audio the first TX_CHRONO may take (plan §6.1 item 3:
-/// "start at 300 ms"; the bench sets it, U3).
+/// How long after a key that takes Nexus's audio the first TX_CHRONO may take (it
+/// starts at 300 ms; the bench sets it).
 pub const CHRONO_WINDOW_MS: u64 = 300;
 
 /// How long after our first stop the server has to report the unkey before the escalation.
@@ -218,7 +218,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// The production settings for transceiver `trx`, receive audio on (the lead's default).
+    /// The production settings for transceiver `trx`, receive audio on.
     pub fn new(trx: Trx) -> Config {
         Config {
             trx,
@@ -260,7 +260,7 @@ pub trait Outbox {
 }
 
 /// The audio and IQ a session carries, for whoever owns them (the receive path and the transmit
-/// tee, T7; the panadapter, T11). Called on the session's own thread, between reads: each call
+/// tee; the panadapter). Called on the session's own thread, between reads: each call
 /// must be short.
 pub trait Streams: Send {
     /// A receive audio block for this session's transceiver.
@@ -408,7 +408,7 @@ pub enum StopOutcome {
     NotConnected,
 }
 
-/// How long the server took, for the bench (plan U3, U11).
+/// How long the server took, for the bench.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Timing {
     /// From our last key's write to its echo.
@@ -930,7 +930,7 @@ impl Session {
 
     /// A command from the server that could not be read, with its arguments when the codec split
     /// them: counted, and what it names is unknown ([`Model::refused`]). A command cut off at the
-    /// message's end is such a report as much as a malformed one (T2 finding 1).
+    /// message's end is such a report as much as a malformed one.
     fn refused(&mut self, e: WireError, args: Option<&[&str]>, text: &str) {
         self.text_refused = self.text_refused.saturating_add(1);
         let name = match &e {
@@ -945,7 +945,7 @@ impl Session {
 
     /// Our own open over of Nexus's audio, keyed on this connection, whose stream the server no
     /// longer reports running (`audio_stop`, or a report of it that could not be read): ended at
-    /// once, since the SDR would take its microphone (§6.1 item 3 holds for the whole over).
+    /// once, since the SDR would take its microphone (this holds for the whole over).
     fn check_audio(&mut self, out: &mut dyn Outbox, now: u64) {
         let lost = self.phase == Phase::Ready
             && self.keyed.is_some_and(|k| {
@@ -997,7 +997,7 @@ impl Session {
         self.phase = Phase::Ready;
         self.dialect = self.evidence.pin(self.config.preference);
         // The stops an earlier session left owing, before anything else, whatever the burst
-        // said: a stop costs nothing on an idle transmitter (plan §6.1 item 8).
+        // said: a stop costs nothing on an idle transmitter.
         if let Some(owed) = self.config.carried {
             let mut stops = Vec::new();
             if owed.kind == TxStart::Tune {

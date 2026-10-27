@@ -164,16 +164,16 @@ fn a_soundcard_stop_unkeys_before_the_radio_is_asked_to_stop_cw() {
 #[test]
 fn an_ft710_and_an_ftx1_stop_gets_yaesus_own_playback_stop_and_no_other_radio_does() {
     for (model, name, stops) in [
-        (1049u32, "FT-710", vec!["w KY00;", "w KY10;"]),
-        (1051, "FTX-1", vec!["w KY00;", "w KY10;"]),
+        (1049u32, "FT-710", vec!["W KY00; 0", "W KY10; 0"]),
+        (1051, "FTX-1", vec!["W KY00; 0", "W KY10; 0"]),
         (1035, "FT-991A", vec![]),
         (1042, "FTDX10", vec![]),
         (3073, "IC-7300", vec![]),
         (2037, "TS-590SG", vec![]),
     ] {
         let engine = cw_engine(model, "cat", |_| {});
-        // A raw `w` set draws no answer from Hamlib (measured on an FT-710, `Rig::send_raw_set`).
-        let (addr, log) = logging_rigctld(|l| l.starts_with("w KY").then(String::new));
+        // A raw set goes as `W <cmd> 0`, which rigctld answers with one NUL (`Rig::send_raw_set`).
+        let (addr, log) = logging_rigctld(|l| l.starts_with("W KY").then(|| "\0".to_string()));
         let mut rig = Rig::rigctld(&addr);
         let mut backend = MockBackend::new();
         let after = key_then_stop(&engine, &mut backend, &mut rig, &log);
@@ -187,17 +187,72 @@ fn an_ft710_and_an_ftx1_stop_gets_yaesus_own_playback_stop_and_no_other_radio_do
             .iter()
             .position(|l| l == "\\stop_morse")
             .unwrap_or_else(|| panic!("{name}: the CAT CW stop must go out: {after:?}"));
-        // The raw stops are written without waiting for an answer; give the rigctld time to
-        // read them (and, where none is expected, time to prove none came).
+        // Where none is expected, give a stray one time to arrive.
         std::thread::sleep(Duration::from_millis(200));
         let raw: Vec<String> = lines_since(&log, 0)
             .into_iter()
-            .filter(|l| l.starts_with("w KY"))
+            .filter(|l| l.contains("KY"))
             .collect();
         assert_eq!(raw, stops, "{name}: the raw playback stops sent");
-        if let Some(first) = after.iter().position(|l| l.starts_with("w KY")) {
+        if let Some(first) = after.iter().position(|l| l.contains("KY")) {
             assert!(cw_stop < first, "{name}: after the CAT CW stop: {after:?}");
         }
+    }
+}
+
+/// ⭐ STOP TX ON AN FT-710 OR AN FTX-1 UNKEYS WITHIN THE PTT DEADLINE, BEHIND THE PLAYBACK STOPS.
+/// Every halt arms the CW abort, in any mode, so every Stop TX on these two radios sends the
+/// `KY` playback stops in the same tick, before the over's `T 0`. Hamlib's rigctld answers a
+/// `w` (send_cmd) by waiting for the radio's reply for the radio's whole read timeout, and a
+/// Yaesu never answers a set: 1000 ms on the FT-710, 2000 ms on the FTX-1 (Hamlib 4.7.1
+/// `ft710.c` / `ftx1.c` `.timeout`), per stop, with the port held. The `T 0` waited behind both
+/// and missed the 700 ms PTT deadline (measured against a real rigctld: the radio got `TX0;`
+/// 2.06 s after Stop on an FT-710, 4.18 s on an FTX-1). This rigctld holds its connection the
+/// same way after a `w` set, and answers rigctld's `W <cmd> 0` (send_cmd_rx, read nothing) at
+/// once with the NUL Hamlib 4.7.1 sends.
+#[test]
+fn a_stop_on_an_ft710_or_an_ftx1_unkeys_in_time_behind_its_playback_stops() {
+    for (model, name, hold_ms) in [(1049u32, "FT-710", 1000), (1051, "FTX-1", 2000)] {
+        let engine = cw_engine(model, "cat", |_| {});
+        let (addr, log) = logging_rigctld(move |l| {
+            if l.starts_with("w KY") {
+                std::thread::sleep(Duration::from_millis(hold_ms));
+                Some(String::new())
+            } else if l.starts_with("W KY") {
+                Some("\0".to_string())
+            } else {
+                None
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+        // An over on the air: the radio keyed and the loop holding its deadline.
+        rig.ptt(true).expect("premise: the key");
+        state.tx_until_ms = Some(60_000.0);
+        let from = log.lock().unwrap().len();
+        engine.lock().unwrap().halt_tx();
+        let started = std::time::Instant::now();
+        step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+        let took = started.elapsed();
+        let after = lines_since(&log, from);
+        // POSITIVE CONTROL: the playback stops went out, ahead of the unkey.
+        let first_stop = after.iter().position(|l| l.contains("KY00;"));
+        let unkey = after.iter().position(|l| l == "T 0");
+        assert!(
+            matches!((first_stop, unkey), (Some(s), Some(u)) if s < u),
+            "{name}: control: the playback stops must precede the unkey: {after:?}"
+        );
+        assert!(
+            !rig.keyed,
+            "{name}: the unkey must be answered within the PTT deadline (tick took {took:?}): \
+             {after:?}"
+        );
+        assert!(
+            took < Duration::from_millis(700),
+            "{name}: the Stop tick, its unkey included, took {took:?}: {after:?}"
+        );
     }
 }
 

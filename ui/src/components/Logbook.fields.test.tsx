@@ -3,8 +3,9 @@
 // #239: "More log information should be shown and be able to edit in the logbook — DE and DX
 // geographic location, QSL information, rig information — all on the line with a scroll bar."
 // Three things this pins: your own grid and rig are shown and saved from the edit form; QSL sent
-// and a received card are editable there (in the same one change as the fields); and a
-// "More columns" chip opens the wider table, off by default so nobody's log changes under them.
+// and a received card are editable there (in the same one change as the fields); and the column
+// chooser (once a "More columns" chip) opens the wider table, off by default so nobody's log
+// changes under them.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
@@ -149,19 +150,26 @@ describe('QSL status is editable in the edit form (#239)', () => {
   })
 })
 
-describe('More columns (#239)', () => {
-  it('is off by default, and on shows my grid and rig as columns', async () => {
+describe('More columns (#239), now the column chooser', () => {
+  it('is off by default, and choosing my grid and rig shows them as columns', async () => {
     await renderLog()
     expect(screen.queryByRole('columnheader', { name: 'My grid' }), 'off by default').toBeNull()
 
-    const chip = screen.getByRole('button', { name: 'More columns' })
-    expect(chip.getAttribute('aria-pressed')).toBe('false')
-    fireEvent.click(chip)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Columns' }), { key: 'Enter' })
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'My grid' }))
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'Rig' }))
 
-    expect(chip.getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('columnheader', { name: 'My grid' })).toBeTruthy()
     expect(screen.getByRole('columnheader', { name: 'Rig' })).toBeTruthy()
     expect(screen.getByText('EN52XA')).toBeTruthy()
     expect(screen.getByText('IC-705')).toBeTruthy()
+  })
+
+  it('an operator who had "More columns" on in this browser still gets that table', async () => {
+    localStorage.setItem('nexus.logbook.moreColumns', '1')
+    await renderLog()
+    expect(screen.getByRole('columnheader', { name: 'My grid' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Operator' })).toBeTruthy()
   })
 })

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// N46 P2: Program's search box finds the machines ON a typed frequency (147.18, 147.180, 438.5125,
+// Program's search box finds the machines ON a typed frequency (147.18, 147.180, 438.5125,
 // 438,5125), within 2.5 kHz and whatever the band, digital and on-air filters say, and never a
 // neighbouring channel; a callsign or town still filters by text with the filters applied. Each
 // machine's links (AllStar, IRLP, DMR ID, a node whose network is not named) and its DMR colour

@@ -25,7 +25,7 @@
 //! (B5). Every peak accumulator is initialised before its loop and a
 //! non-finite sync is "no candidate": the front-zero-padded RxRing frame
 //! (mostly silence) is a normal input, not the Windows 0xC0000005 class it
-//! was in Fortran (reference-fortran-uninitialized-hazard).
+//! was in Fortran.
 //!
 //! Deliberate divergences (each at its site): (1) rows whose window would
 //! run past the period are ZERO here — JS8.cpp:1720 `break`s and leaves the

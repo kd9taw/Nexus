@@ -19,6 +19,12 @@
 // that picker). Away from SSTV and Satellites the pass is announced, once, and
 // nothing moves: an alert notifies, it never acts.
 //
+// A satellite pass the operator is working has the radio too, on any screen.
+// While a transponder is held, Doppler steers the dial back to that bird within
+// seconds, so a park on 145.800 is taken straight back. The ISS pass is
+// announced as it is elsewhere, and the auto-arm arms if the hold ends while
+// the ISS is still up.
+//
 // Where NO radio here can receive 145.800 (the station's only enabled radio, its
 // probed coverage leaving 2 m out: an FT-710 alone), the auto-arm cannot work on
 // any screen, and a tune could only be refused. It says so once a session, with
@@ -26,7 +32,7 @@
 
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
-// three notices come from the catalog; the DIAL and the MODE are interpolated
+// notices come from the catalog; the DIAL and the MODE are interpolated
 // from the constants below and never become text, because a decimal comma
 // reaching 145.800 is an operating fault rather than a cosmetic one.
 
@@ -148,7 +154,9 @@ function unwind(radio: IssRadio | undefined, deps: IssArmDeps, reason: string): 
  * saved dial. Idempotent under the repeating tick: the `weArmedIt` guard means a
  * second tick inside the same pass does nothing. `soleRadio` = `radio` is the
  * station's only enabled radio; with its coverage leaving 145.800 out, nothing is
- * tuned on any screen and the notice is said once a session.
+ * tuned on any screen and the notice is said once a session. `passHoldsDial` = a
+ * satellite pass holds the dial (a transponder is held); the pass is then announced
+ * on every screen, as on a screen that does not work the ISS.
  */
 export function tickIssAutoArm(
   pass: SatPass | null,
@@ -158,6 +166,7 @@ export function tickIssAutoArm(
   nowSecs: number,
   screen: View,
   soleRadio = false,
+  passHoldsDial = false,
 ): void {
   // Opt-in OFF: unwind an arm still in flight (so turning it off mid-pass puts
   // the dial back), then stay completely inert.
@@ -189,13 +198,18 @@ export function tickIssAutoArm(
       }
       return
     }
-    // …and only on a screen that works the ISS. Elsewhere the radio is in use:
-    // say so once, move nothing, and arm if they come to SSTV or Satellites.
-    if (!ISS_SCREENS.has(screen)) {
+    // …and only on a screen that works the ISS, with no satellite pass holding the
+    // dial. Elsewhere, or under a held pass, the radio is in use: say so once, move
+    // nothing, and arm if they come to SSTV or Satellites, or the hold ends.
+    if (!ISS_SCREENS.has(screen) || passHoldsDial) {
       if (toldAos !== pass.aosUnix) {
         toldAos = pass.aosUnix
+        // On the SSTV screen only a held pass gets here, so the notice says that, and does not ask
+        // the operator to open the screen they are on.
         pushToast(
-          t('sat.iss.overhead', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
+          screen === 'sstv'
+            ? t('sat.iss.overhead.onSstv', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE })
+            : t('sat.iss.overhead', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
           'info',
           12000,
           { prominent: true },

@@ -3,7 +3,7 @@
 //! Layout (JS8.cpp:2662-2712, genjs8.f90:1003 `12b6.6,b3.3,b12.12`), MSB-first in 11 bytes:
 //! bits 0..=71 payload (twelve 6-bit chars), bits 72..=74 the i3 value MSB-first (bit 72 =
 //! Data 4, bit 73 = Last 2, bit 74 = First 1 — js8dec.f90 `i3bit = 4*d(73)+2*d(74)+d(75)`),
-//! bits 75..=86 CRC-12 (Task B1.3), bit 87 unused and always 0.
+//! bits 75..=86 CRC-12, bit 87 unused and always 0.
 //!
 //! WHY a typed word and not text: the engine's `TxWaveform::Js8` carries a `Word87` (a typed
 //! 87-bit value must never round-trip through a string — sentinels make consumers guess), and
@@ -13,10 +13,10 @@
 //! `tests/golden_frames.rs` (the ALL.TXT `<i3>` column); if that golden test disagrees, only
 //! this file changes.
 //!
-//! [`Word87::from_lab`] / [`Word87::to_lab`] (plan interface addendum) are the lab/debug text
+//! [`Word87::from_lab`] / [`Word87::to_lab`] are the lab/debug text
 //! form `"<12 sixbit chars> <i3>"` (ALL.TXT's two columns) that B2/B3/B5 all parse — never a
 //! private copy. They live here rather than deferring to `proto::alphabet::{sixbit_to_string,
-//! sixbit_from_str}` (Task B1.7) because the module direction runs the other way: `proto`
+//! sixbit_from_str}` because the module direction runs the other way: `proto`
 //! depends on `phy`, never the reverse, so `phy` carries its own small, independently tested
 //! copy of JS8.cpp:849-892's 64-character alphabet for this one lab-text purpose only.
 
@@ -112,7 +112,7 @@ impl Payload72 {
 
 /// The 64-character alphabet JS8.cpp:849-892 uses for the sixbit lab text form: '0'..'9',
 /// 'A'..'Z', 'a'..'z', '-', '+'. A local, independently tested copy — see the module header
-/// for why `phy` cannot depend on the eventual canonical `proto::alphabet::SIXBIT` (Task B1.7).
+/// for why `phy` cannot depend on the eventual canonical `proto::alphabet::SIXBIT`.
 const SIXBIT_CHARS: [u8; 64] = *b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-+";
 
 /// 87 info bits MSB-first in 11 bytes: bits 0..=71 payload, 72..=74 i3, 75..=86 CRC-12, bit 87 unused.
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn word_layout_matches_js8_cpp_encode_and_the_boost_crc() {
         // JS8.cpp:2662-2712: bytes[9] = (type & 7) << 5 | (crc >> 7) & 0x1F; bytes[10] = (crc & 0x7F) << 1.
-        // CRC of this payload with i3 = 1 is 0x406 (boost oracle, Task B1.3) → 0x28, 0x0C.
+        // CRC of this payload with i3 = 1 is 0x406 (boost oracle) → 0x28, 0x0C.
         let w = Word87::new(
             Payload72::from_bytes(PAYLOAD),
             I3 {
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn lab_text_form_round_trips() {
-        // Interface addendum (plan §"Interface addenda"): Word87::from_lab/to_lab, the lab text
+        // Word87::from_lab/to_lab, the lab text
         // form "<12 sixbit chars> <i3>" — the ALL.TXT two-column shape B2/B3/B5 all parse.
         let w = Word87::new(Payload72::from_chars12(CHARS), I3::from_u8(3));
         assert_eq!(w.to_lab(), "0123456789AB 3");
@@ -423,10 +423,10 @@ mod tests {
         assert_eq!(Word87::from_lab("0123456789AB x"), None, "i3 not a number");
     }
 
-    /// The drift guard team-lead required after B1.2's `phy::frame` doc comment claimed a
+    /// The drift guard added after an earlier `phy::frame` doc comment claimed a
     /// hand-mirrored copy was "independently tested" with nothing actually enforcing it: a
     /// comment is not a guard. `phy` cannot depend on `proto` (module direction), so
-    /// `SIXBIT_CHARS` here and `proto::alphabet::SIXBIT` (Task B1.8, JS8.cpp:849-892's same
+    /// `SIXBIT_CHARS` here and `proto::alphabet::SIXBIT` (JS8.cpp:849-892's same
     /// 64-character alphabet) are two copies by construction — this test is what keeps them
     /// byte-identical instead of a comment's word.
     #[test]

@@ -17,7 +17,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import { SettingsPanel } from './SettingsPanel'
-import { StationControlContext } from '../stationAccess'
 import { CONTEST_LAYOUT_ROLES } from '../features/esmRoles'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { FeaturesApi } from '../useFeatures'
@@ -117,11 +116,9 @@ async function flush() {
   })
 }
 
-async function renderCockpit(s: AppSnapshot = snap(), control = true) {
+async function renderCockpit(s: AppSnapshot = snap()) {
   const r = render(
-    <StationControlContext.Provider value={control}>
-      <CwCockpit snap={s} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={s.fieldDay ?? undefined} />
-    </StationControlContext.Provider>,
+    <CwCockpit snap={s} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={s.fieldDay ?? undefined} />,
   )
   await flush()
   return r
@@ -209,14 +206,6 @@ describe('opening the editor keys nothing', () => {
     expect(edit.getAttribute('aria-keyshortcuts')).toBe('Control+Shift+F4')
     expect(edit.getAttribute('aria-label')).toBe('Edit the F4 macro')
     expect(edit.title).toBe('Edit the F4 macro. You can also right-click the key, or press Ctrl+Shift+F4.')
-  })
-
-  it('a Remote observer gets no editor from a right-click or the shortcut', async () => {
-    await renderCockpit(snap(), false)
-    fireEvent.contextMenu(key('F1'))
-    press('F1', { ctrlKey: true, shiftKey: true })
-    expect(editor()).toBeNull()
-    expect(document.querySelectorAll('.rtty-macro-edit')).toHaveLength(0)
   })
 })
 

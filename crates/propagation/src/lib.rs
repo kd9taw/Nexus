@@ -18,13 +18,16 @@
 pub mod achievements;
 pub mod advisor;
 pub mod awards;
+pub mod awards_more;
 pub mod beacons;
 pub mod callstats;
 pub mod chirp;
+pub mod custom;
 pub mod dxcc;
 pub mod dxped;
 pub mod engine;
 pub mod fccstate;
+pub mod ffma;
 pub mod geo;
 pub mod gettingout;
 pub mod gridrarity;
@@ -57,7 +60,10 @@ pub mod space_wx;
 pub mod spot;
 pub mod stats;
 pub mod swpc_scales;
+pub mod wae;
 pub mod wmm;
+pub mod wpx;
+pub mod wwff;
 
 /// Live feed adapters (NOAA SWPC + PSK Reporter). Opt-in via the `live` feature.
 #[cfg(feature = "live")]
@@ -66,8 +72,12 @@ pub mod live;
 pub use achievements::Achievement;
 pub use advisor::{BandReport, PropAdvisor, PropAdvisory, RegionReport};
 pub use awards::{
-    AwardBandNeeds, AwardSummary, Awards, BandAward, BandNeed, DxccDisagreement, EntityNeed,
-    QslChannels, RecordFields,
+    AwardBandNeeds, AwardSummary, Awards, BandAward, BandNeed, ContactExtras, DxccDisagreement,
+    EntityNeed, QslChannels, RecordFields,
+};
+pub use awards_more::{
+    mark_award_needs, DxccChart, DxccChartRow, QslFor, QslSlot, QslWant, WaeCountry, WaeProgress,
+    WpxProgress, WpxWaeWorked, WwffProgress,
 };
 pub use callstats::{CallStats, CallStatsIndex, StatsGrid};
 pub use dxped::{

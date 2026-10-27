@@ -1,0 +1,4920 @@
+{
+ "_about": "Which decodes are worth interrupting the operator for. ONE table for both halves of Nexus that decide it: the desktop screen's `processDecodes` and `processPotaAlert` (ui/src/alerts.ts, ui/src/features/potaAlert.ts), where the expected values were captured, and the station's `NeededAlerts` and `FreshParks` (crates/tempo-app/src/needed_alert.rs). Each half has a test that walks every case. A scenario starts from nothing and runs its steps in order: each step is one look at the decode window (`decodes`, each laid over `baseDecode`) at `atMs`, under its settings (laid over `baseSettings`), QSO, watch list, dial and geographic scope (absent = none), and `alerts` are the toasts it raises in order, `sounds` every tone in the order it sounds (a double beep's second tone 130 ms after its first). A POTA run's ticks are polls of the spotted parks.",
+ "baseDecode": {
+  "from": null,
+  "snr": -10,
+  "dtSec": 0.2,
+  "freqHz": 1500,
+  "message": "",
+  "isCq": false,
+  "directedToMe": false,
+  "signoff": false,
+  "worked": false,
+  "newDxcc": false,
+  "newGrid": false,
+  "tier": "FT8",
+  "rv": 0
+ },
+ "baseSettings": {
+  "alertMyCall": true,
+  "alertNew": true,
+  "alertCq": false
+ },
+ "scenarios": [
+  {
+   "name": "a new DXCC alerts once per entity, loud",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ GD18",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "VP8PJ",
+       "entity": "Falkland Islands",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "W9XYZ VP8PJ -12",
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "VP8LP",
+       "message": "CQ VP8LP GD18",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000045000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "3Y0J",
+       "message": "CQ 3Y0J JD15",
+       "isCq": true,
+       "newDxcc": true,
+       "country": null
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "3Y0J",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the new-DXCC band scope and the master switch",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertDxccBands": "off"
+     },
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ",
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000001000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertDxccBands": "vhf"
+     },
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ",
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000002000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertNew": false
+     },
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ",
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000003000,
+     "dialMhz": 50.313,
+     "settings": {
+      "alertDxccBands": "vhf"
+     },
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ",
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "VP8PJ",
+       "entity": "Falkland Islands",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "plain new grids are quiet and VHF-only by default; an unknown dial is permissive",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "FN42",
+       "country": "United States"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000015000,
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "FN42",
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "K1ABC",
+       "entity": "United States",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC R-05",
+       "newGrid": true,
+       "grid": "FN42",
+       "country": "United States"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000045000,
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "CQ W2DEF FN31",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "FN31",
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "W2DEF",
+       "entity": "United States",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000060000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertGridBands": "hf"
+     },
+     "decodes": [
+      {
+       "from": "W3GHI",
+       "message": "CQ W3GHI FM19",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "FM19"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "W3GHI",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a rare grid is loud where its scope admits it, once per grid",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "VE1XYZ",
+       "message": "CQ VE1XYZ GN05",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "GN05",
+       "gridRarity": "rare",
+       "country": "Canada"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000015000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertRareGridBands": "all"
+     },
+     "decodes": [
+      {
+       "from": "VE1XYZ",
+       "message": "CQ VE1XYZ GN05",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "GN05",
+       "gridRarity": "rare",
+       "country": "Canada"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "VE1XYZ",
+       "entity": "Canada",
+       "grid": "GN05",
+       "tier": "rare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    },
+    {
+     "atMs": 1760000030000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertRareGridBands": "all"
+     },
+     "decodes": [
+      {
+       "from": "VE1ABC",
+       "message": "CQ VE1ABC gn05",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "gn05",
+       "gridRarity": "rare",
+       "country": "Canada"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000045000,
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "W1AW/MM",
+       "message": "CQ W1AW/MM GM00",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "GM00",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "W1AW/MM",
+       "entity": null,
+       "grid": "GM00",
+       "tier": "ultraRare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    },
+    {
+     "atMs": 1760000060000,
+     "dialMhz": 14.074,
+     "settings": {
+      "alertGridBands": "all",
+      "alertRareGridBands": "off"
+     },
+     "decodes": [
+      {
+       "from": "W1XX",
+       "message": "CQ W1XX FN44",
+       "isCq": true,
+       "newGrid": true,
+       "grid": "FN44",
+       "gridRarity": "rare",
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "W1XX",
+       "entity": "United States",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "someone calling you: once per station per ten minutes, never a sign-off, only when fresh",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC FN42",
+       "directedToMe": true,
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC FN42",
+       "directedToMe": true,
+       "country": "United States"
+      },
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC -07",
+       "directedToMe": true,
+       "country": "United States"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "W9XYZ W2DEF RR73",
+       "directedToMe": true,
+       "signoff": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000600000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC EN61",
+       "directedToMe": true,
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000615000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC EN61",
+       "directedToMe": true,
+       "country": "United States",
+       "freqHz": 1620
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000616000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "k1abc",
+       "message": "W9XYZ k1abc R-10",
+       "directedToMe": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760001300000,
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC FN42",
+       "directedToMe": true,
+       "freqHz": 1777
+      },
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC R+02",
+       "directedToMe": true,
+       "freqHz": 1777
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760001310000,
+     "qso": {
+      "state": null,
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": null,
+       "message": "W9XYZ <...> -03",
+       "directedToMe": true
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": null,
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760001320000,
+     "settings": {
+      "alertMyCall": false
+     },
+     "decodes": [
+      {
+       "from": "N0CALL",
+       "message": "W9XYZ N0CALL EN34",
+       "directedToMe": true,
+       "newDxcc": true,
+       "country": "Mexico"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "N0CALL",
+       "entity": "Mexico",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the station being worked: an answer to your CQ still announces, its exchange never does",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "k1abc"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC FN42",
+       "directedToMe": true,
+       "newDxcc": true,
+       "country": "Bermuda"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC R-07",
+       "directedToMe": true,
+       "newDxcc": true,
+       "country": "Bermuda"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "W2DEF"
+     },
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "W9XYZ W2DEF -09",
+       "directedToMe": true
+      },
+      {
+       "from": "W2DEF",
+       "message": "CQ W2DEF FN31",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Bahamas"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000045000,
+     "qso": {
+      "state": "AwaitRr73",
+      "dxcall": "W2DEF"
+     },
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "CQ W2DEF FN20",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Bahamas"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000060000,
+     "qso": {
+      "state": "Done",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "CQ W2DEF FN20",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Bahamas"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "W2DEF",
+       "entity": "Bahamas",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    },
+    {
+     "atMs": 1760000075000,
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "VK9X"
+     },
+     "decodes": [
+      {
+       "from": "VK9X",
+       "message": "W9XYZ VK9X OH29",
+       "directedToMe": true,
+       "country": "Christmas Island"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "with Auto on, the answer to your CQ lands with the sequencer already answering it, and still announces",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "W9XYZ K1ABC FN42",
+       "directedToMe": true
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "qso": {
+      "state": "AwaitRr73",
+      "dxcall": "W2DEF"
+     },
+     "decodes": [
+      {
+       "from": "W2DEF",
+       "message": "W9XYZ W2DEF FN31",
+       "directedToMe": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "W3GHI"
+     },
+     "decodes": [
+      {
+       "from": "W3GHI",
+       "message": "W9XYZ W3GHI FM19",
+       "directedToMe": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "the watch list is the loudest tier, once per entry and station, above the band scopes",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "dialMhz": 14.074,
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "VP8*",
+       "label": "  Falklands DXpedition  "
+      },
+      {
+       "id": "w2",
+       "kind": "call",
+       "value": "W1AW",
+       "cqOnly": true
+      },
+      {
+       "id": "w3",
+       "kind": "grid",
+       "value": "em1*",
+       "minSnr": -15
+      },
+      {
+       "id": "w4",
+       "kind": "dxcc",
+       "value": "japan "
+      }
+     ],
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ GD18",
+       "isCq": true,
+       "snr": -12,
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      },
+      {
+       "from": "W1AW",
+       "message": "W1AW K9XX EN52",
+       "snr": -3
+      },
+      {
+       "from": "K5ZZ",
+       "message": "CQ K5ZZ EM12",
+       "isCq": true,
+       "grid": "EM12",
+       "snr": -20
+      },
+      {
+       "from": "JA1XYZ",
+       "message": "JA1XYZ W9ABC -01",
+       "snr": 0,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "VP8PJ",
+       "entity": "Falkland Islands",
+       "grid": null,
+       "tier": null,
+       "watch": "Falklands DXpedition",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      },
+      {
+       "kind": "watch",
+       "call": "JA1XYZ",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": "japan ",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      520,
+      780,
+      780
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "dialMhz": 14.074,
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "VP8*",
+       "label": "  Falklands DXpedition  "
+      },
+      {
+       "id": "w2",
+       "kind": "call",
+       "value": "W1AW",
+       "cqOnly": true
+      },
+      {
+       "id": "w3",
+       "kind": "grid",
+       "value": "em1*",
+       "minSnr": -15
+      },
+      {
+       "id": "w4",
+       "kind": "dxcc",
+       "value": "japan "
+      }
+     ],
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "W9XYZ VP8PJ -10",
+       "snr": -10,
+       "newDxcc": true,
+       "country": "Falkland Islands"
+      },
+      {
+       "from": "W1AW",
+       "message": "CQ W1AW FN31",
+       "isCq": true,
+       "snr": -3
+      },
+      {
+       "from": "K5ZZ",
+       "message": "CQ K5ZZ EM12",
+       "isCq": true,
+       "grid": "EM12",
+       "snr": -14
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "W1AW",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": "W1AW",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      },
+      {
+       "kind": "watch",
+       "call": "K5ZZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": "grid EM1*",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      520,
+      780,
+      780
+     ]
+    },
+    {
+     "atMs": 1760000030000,
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "VP8PJ"
+     },
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "VP8*"
+      }
+     ],
+     "decodes": [
+      {
+       "from": "VP8PJ",
+       "message": "CQ VP8PJ GD18 again",
+       "isCq": true,
+       "directedToMe": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "VP8PJ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000045000,
+     "geoScope": [
+      "Japan"
+     ],
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "VP8*"
+      }
+     ],
+     "decodes": [
+      {
+       "from": "VP8ZZ",
+       "message": "CQ VP8ZZ",
+       "isCq": true,
+       "country": "Falkland Islands"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "VP8ZZ",
+       "entity": "Falkland Islands",
+       "grid": null,
+       "tier": null,
+       "watch": "VP8*",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "an opted-in CQ is quiet, once per station and message whatever its frequency",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "settings": {
+      "alertCq": true
+     },
+     "decodes": [
+      {
+       "from": "W4ABC",
+       "message": "CQ W4ABC EM73",
+       "isCq": true,
+       "freqHz": 1200.4,
+       "country": "United States"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "cq",
+       "call": "W4ABC",
+       "entity": "United States",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      620
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "settings": {
+      "alertCq": true
+     },
+     "decodes": [
+      {
+       "from": "W4ABC",
+       "message": "CQ W4ABC EM73",
+       "isCq": true,
+       "freqHz": 1203.6,
+       "country": "United States"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "settings": {
+      "alertCq": true
+     },
+     "decodes": [
+      {
+       "from": "W4ABC",
+       "message": "CQ DX W4ABC EM73",
+       "isCq": true,
+       "freqHz": 1203.6
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "cq",
+       "call": "W4ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      620
+     ]
+    },
+    {
+     "atMs": 1760000045000,
+     "settings": {
+      "alertCq": false
+     },
+     "decodes": [
+      {
+       "from": "W5ABC",
+       "message": "CQ W5ABC EM12",
+       "isCq": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000060000,
+     "settings": {
+      "alertCq": true
+     },
+     "decodes": [
+      {
+       "from": "W6ABC",
+       "message": "CQ W6ABC CM87",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Hawaii"
+      },
+      {
+       "from": "W7ABC",
+       "message": "W9XYZ W7ABC DN31",
+       "isCq": false,
+       "directedToMe": true,
+       "newDxcc": true,
+       "country": "Alaska"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "W6ABC",
+       "entity": "Hawaii",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      },
+      {
+       "kind": "myCall",
+       "call": "W7ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      520,
+      880,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the geographic scope narrows the new ones, never a station calling you, and burns no key",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "geoScope": [
+      "Japan"
+     ],
+     "decodes": [
+      {
+       "from": "F5ABC",
+       "message": "CQ F5ABC JN18",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "France"
+      },
+      {
+       "from": "F6XYZ",
+       "message": "W9XYZ F6XYZ JN05",
+       "directedToMe": true,
+       "country": "France"
+      },
+      {
+       "from": "ZZ9ZZ",
+       "message": "CQ ZZ9ZZ",
+       "isCq": true,
+       "newDxcc": true,
+       "country": null
+      },
+      {
+       "from": "JA1ABC",
+       "message": "CQ JA1ABC PM95",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "F6XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      },
+      {
+       "kind": "newDxcc",
+       "call": "ZZ9ZZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      },
+      {
+       "kind": "newDxcc",
+       "call": "JA1ABC",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      880,
+      520,
+      520,
+      780,
+      780
+     ]
+    },
+    {
+     "atMs": 1760000015000,
+     "geoScope": [],
+     "decodes": [
+      {
+       "from": "F5ABC",
+       "message": "CQ F5ABC JN18",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "France"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000030000,
+     "decodes": [
+      {
+       "from": "F5ABC",
+       "message": "CQ F5ABC JN18",
+       "isCq": true,
+       "newDxcc": true,
+       "country": "France"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "F5ABC",
+       "entity": "France",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "our own rows never call us, and a kind ladder puts calling-you first",
+   "steps": [
+    {
+     "atMs": 1760000000000,
+     "decodes": [
+      {
+       "from": "W9XYZ",
+       "message": "K1ABC W9XYZ EN52",
+       "mine": true,
+       "directedToMe": true,
+       "txAt": 1760000000
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1760000015000,
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "OX3XR",
+       "message": "W9XYZ OX3XR GP60",
+       "directedToMe": true,
+       "newDxcc": true,
+       "newGrid": true,
+       "grid": "GP60",
+       "gridRarity": "ultraRare",
+       "isCq": false,
+       "country": "Greenland"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "OX3XR",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1760000030000,
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "OX3XR",
+       "message": "CQ OX3XR GP60",
+       "isCq": true,
+       "newDxcc": true,
+       "newGrid": true,
+       "grid": "GP60",
+       "gridRarity": "ultraRare",
+       "country": "Greenland"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "OX3XR",
+       "entity": "Greenland",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > alerts \"calling you\" while idle/monitoring",
+   "steps": [
+    {
+     "atMs": 1792759368551,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "msg-0",
+       "freqHz": 1501,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "F5XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > ANNOUNCES a station answering while we are calling CQ — the event CQ is for",
+   "steps": [
+    {
+     "atMs": 1792759368552,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-1",
+       "freqHz": 1502,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > announces it during a Field Day CQ run too (FD state strings)",
+   "steps": [
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "W1AW",
+       "message": "msg-2",
+       "freqHz": 1503,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "W1AW",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > a DIFFERENT station calling while the exchange is under way announces — once",
+   "steps": [
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-3",
+       "freqHz": 1504,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-4",
+       "freqHz": 1505,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-5",
+       "freqHz": 1506,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitExchange",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-6",
+       "freqHz": 1507,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitConfirm",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-7",
+       "freqHz": 1508,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > goes quiet as soon as the answer moves the sequencer on",
+   "steps": [
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-8",
+       "freqHz": 1509,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "KD9TAW K1ABC AwaitReport",
+       "freqHz": 1510,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "KD9TAW K1ABC AwaitRoger",
+       "freqHz": 1511,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "KD9TAW K1ABC Confirming",
+       "freqHz": 1512,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > a station YOU called (S&P) is never \"calling you\" — its replies are the QSO",
+   "steps": [
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "f5xyz"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "msg-12",
+       "freqHz": 1513,
+       "directedToMe": true,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368553,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRr73",
+      "dxcall": "f5xyz"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "msg-13",
+       "freqHz": 1514,
+       "directedToMe": true,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > the station answering YOUR CQ announces once even when Auto engaged it in the same ingest",
+   "steps": [
+    {
+     "atMs": 1792759368554,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "KD9TAW F5XYZ JN25",
+       "freqHz": 1515,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "F5XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759368554,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "KD9TAW F5XYZ R-10",
+       "freqHz": 1516,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368554,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "KD9TAW F5XYZ 73",
+       "freqHz": 1517,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false,
+       "signoff": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > a second station calling during the Auto CQ run announces too",
+   "steps": [
+    {
+     "atMs": 1792759368554,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "F5XYZ",
+       "message": "KD9TAW F5XYZ JN25",
+       "freqHz": 1518,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      },
+      {
+       "from": "SP1TJ",
+       "message": "KD9TAW SP1TJ JO74",
+       "freqHz": 1519,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "F5XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      },
+      {
+       "kind": "myCall",
+       "call": "SP1TJ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880,
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > a station is announced once per episode, and again after the window",
+   "steps": [
+    {
+     "atMs": 1788307200000,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-19",
+       "freqHz": 1520,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1788307200000,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-20",
+       "freqHz": 1521,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1788307860000,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "msg-21",
+       "freqHz": 1522,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > still fires the loud new-DXCC alert for OTHER stations while engaged",
+   "steps": [
+    {
+     "atMs": 1792759368555,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "F5XYZ"
+     },
+     "decodes": [
+      {
+       "from": "ZL9DX",
+       "message": "msg-22",
+       "freqHz": 1523,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Auckland Is."
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "ZL9DX",
+       "entity": "Auckland Is.",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > behaves as before when no QSO context is passed",
+   "steps": [
+    {
+     "atMs": 1792759368556,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "W1AW",
+       "message": "msg-23",
+       "freqHz": 1524,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "W1AW",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > new-grid alerts are quiet: info toast, short, not prominent",
+   "steps": [
+    {
+     "atMs": 1792759368556,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K7XYZ",
+       "message": "msg-24",
+       "freqHz": 1525,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "gridRarity": "common"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "K7XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > a RARE needed grid earns the loud prominent alert",
+   "steps": [
+    {
+     "atMs": 1792759368556,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K7XYZ/MM",
+       "message": "msg-25",
+       "freqHz": 1526,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "RR73",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "K7XYZ/MM",
+       "entity": null,
+       "grid": "RR73",
+       "tier": "ultraRare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    }
+   ]
+  },
+  {
+   "name": "processDecodes QSO-aware quieting > rare-grid alerts dedup per GRID, not per station",
+   "steps": [
+    {
+     "atMs": 1792759368556,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "K7AAA",
+       "message": "msg-26",
+       "freqHz": 1527,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "JJ00",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "K7AAA",
+       "entity": null,
+       "grid": "JJ00",
+       "tier": "ultraRare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    },
+    {
+     "atMs": 1792759368556,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "W1BBB",
+       "message": "msg-27",
+       "freqHz": 1528,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "JJ00",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > plain new grid is SUPPRESSED on HF by default (scope vhf)",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "N1GA",
+       "message": "msg-28",
+       "freqHz": 1529,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > plain new grid fires on 6 m by default",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "N2GB",
+       "message": "msg-29",
+       "freqHz": 1530,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "N2GB",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > unknown dial (no CAT) is permissive — grid alert still fires",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "N3GC",
+       "message": "msg-30",
+       "freqHz": 1531,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "N3GC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > new DXCC still fires on HF (default scope all)",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "N4GD",
+       "message": "msg-31",
+       "freqHz": 1532,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Bhutan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "N4GD",
+       "entity": "Bhutan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > rare 💎 grid is QUIET on HF by default, and fires when the rare scope is widened",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "N5GE",
+       "message": "msg-32",
+       "freqHz": 1533,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "AA11",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": "all"
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "N5GE",
+       "message": "msg-32",
+       "freqHz": 1533,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "AA11",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "N5GE",
+       "entity": null,
+       "grid": "AA11",
+       "tier": "ultraRare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    },
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 144.174,
+     "decodes": [
+      {
+       "from": "K0AA",
+       "message": "msg-33",
+       "freqHz": 1534,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "BB22",
+       "gridRarity": "ultraRare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "rareGrid",
+       "call": "K0AA",
+       "entity": null,
+       "grid": "BB22",
+       "tier": "ultraRare",
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      740,
+      1110
+     ]
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > explicit Off silences grids even on VHF",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": "off",
+      "alertRareGridBands": "off"
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "N6GF",
+       "message": "msg-34",
+       "freqHz": 1535,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > rare scope Off demotes a gem to the quiet toast where plain grids are allowed",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": "off"
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "N7GG",
+       "message": "msg-35",
+       "freqHz": 1536,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "BB22",
+       "gridRarity": "rare"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newGrid",
+       "call": "N7GG",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "work"
+      }
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "per-alert band scopes (dialMhz gate) > legacy master off keeps everything silent regardless of scopes",
+   "steps": [
+    {
+     "atMs": 1792759368557,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": false,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "N8GH",
+       "message": "msg-36",
+       "freqHz": 1537,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false
+      },
+      {
+       "from": "N9GI",
+       "message": "msg-37",
+       "freqHz": 1538,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "grid squares on the watch list > a watched grid fires the loud ⭐ watch tier and consumes the decode",
+   "steps": [
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "watchlist": [
+      {
+       "id": "g1",
+       "kind": "grid",
+       "value": "EM7*"
+      }
+     ],
+     "dialMhz": 50.313,
+     "decodes": [
+      {
+       "from": "K4ROV",
+       "message": "msg-38",
+       "freqHz": 1539,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "EM79",
+       "gridRarity": "common"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "K4ROV",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": "grid EM7*",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "grid squares on the watch list > fires on HF — a square asked for by name outranks the HF grid-quiet default",
+   "steps": [
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "watchlist": [
+      {
+       "id": "g1",
+       "kind": "grid",
+       "value": "EM7*"
+      }
+     ],
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "W9ROV",
+       "message": "msg-39",
+       "freqHz": 1540,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "EM77"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "W9ROV",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": "grid EM7*",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "alerts do not repeat every cycle > the same station sending the same message does not re-alert when its measured frequency drifts",
+   "steps": [
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "freqHz": 1500.2,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "cq",
+       "call": "K1ABC",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      620
+     ]
+    },
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "freqHz": 1502.9,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "freqHz": 1498.4,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "freqHz": 1501.1,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368558,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "decodes": [
+      {
+       "from": "K1ABC",
+       "message": "CQ K1ABC FN42",
+       "freqHz": 1499.7,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a stale decode must not become a phantom \"calling you\" > does not announce the RR73 tail of the QSO you just finished (the screenshot)",
+   "steps": [
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Report",
+      "dxcall": "KF0WWR"
+     },
+     "decodes": [
+      {
+       "from": "KF0WWR",
+       "message": "N5TAN KF0WWR RR73",
+       "freqHz": 1541,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "KF0WWR"
+     },
+     "decodes": [
+      {
+       "from": "KF0WWR",
+       "message": "N5TAN KF0WWR RR73",
+       "freqHz": 1541,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a stale decode must not become a phantom \"calling you\" > a FRESH 73 after Done is not a call either (the 1.10.1 screenshots)",
+   "steps": [
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "DD6WF"
+     },
+     "decodes": [
+      {
+       "from": "DD6WF",
+       "message": "KR4FQG DD6WF JO62",
+       "freqHz": 1542,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "DD6WF",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "DD6WF"
+     },
+     "decodes": [
+      {
+       "from": "DD6WF",
+       "message": "KR4FQG DD6WF 73",
+       "freqHz": 1543,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false,
+       "signoff": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "DD6WF"
+     },
+     "decodes": [
+      {
+       "from": "PA0KGB",
+       "message": "KR4FQG PA0KGB RR73",
+       "freqHz": 1544,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false,
+       "signoff": true
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a stale decode must not become a phantom \"calling you\" > does not replay an old caller after a band switch resets the state machine",
+   "steps": [
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "K1ABC"
+     },
+     "decodes": [
+      {
+       "from": "W9STALE",
+       "message": "N5TAN W9STALE EN52",
+       "freqHz": 1545,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "W9STALE",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "decodes": [
+      {
+       "from": "W9STALE",
+       "message": "N5TAN W9STALE EN52",
+       "freqHz": 1545,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a stale decode must not become a phantom \"calling you\" > still alerts for the fresh decode that answers your CQ (#167)",
+   "steps": [
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "N0CALL"
+     },
+     "decodes": [
+      {
+       "from": "N0CALL",
+       "message": "N5TAN N0CALL EN34",
+       "freqHz": 1546,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "N0CALL",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a stale decode must not become a phantom \"calling you\" > still alerts for a genuinely new caller arriving after the QSO is done",
+   "steps": [
+    {
+     "atMs": 1792759368577,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "KF0WWR"
+     },
+     "decodes": [
+      {
+       "from": "K5NEXT",
+       "message": "N5TAN K5NEXT EM12",
+       "freqHz": 1547,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "K5NEXT",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > fires even though the sequencer already made that station the partner",
+   "steps": [
+    {
+     "atMs": 1792759369868,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "W9XYZ"
+     },
+     "decodes": [
+      {
+       "from": "W9XYZ",
+       "message": "msg-0",
+       "freqHz": 1501,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "W9XYZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > fires for a partner set while merely listening too (no CQ run in progress)",
+   "steps": [
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": "VK3ZZ"
+     },
+     "decodes": [
+      {
+       "from": "VK3ZZ",
+       "message": "msg-1",
+       "freqHz": 1502,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "VK3ZZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > does NOT re-alert when the same call re-sends the same message",
+   "steps": [
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "JA1QQ"
+     },
+     "decodes": [
+      {
+       "from": "JA1QQ",
+       "message": "KD9TAW JA1QQ PM95",
+       "freqHz": 1503,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "JA1QQ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "CallingCq",
+      "dxcall": "JA1QQ"
+     },
+     "decodes": [
+      {
+       "from": "JA1QQ",
+       "message": "KD9TAW JA1QQ PM95",
+       "freqHz": 1506,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > goes quiet for the rest of the exchange — on either path",
+   "steps": [
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "G4ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "G4ZZZ",
+       "message": "msg-3",
+       "freqHz": 1504,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "G4ZZZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "G4ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "G4ZZZ",
+       "message": "msg-4",
+       "freqHz": 1505,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Done",
+      "dxcall": "G4ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "G4ZZZ",
+       "message": "msg-5",
+       "freqHz": 1506,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitReport",
+      "dxcall": "F6ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "F6ZZZ",
+       "message": "msg-6",
+       "freqHz": 1507,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRr73",
+      "dxcall": "F6ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "F6ZZZ",
+       "message": "msg-7",
+       "freqHz": 1508,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "F6ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "F6ZZZ",
+       "message": "msg-8",
+       "freqHz": 1509,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitExchange",
+      "dxcall": "F6ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "F6ZZZ",
+       "message": "msg-9",
+       "freqHz": 1510,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759369869,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitConfirm",
+      "dxcall": "F6ZZZ"
+     },
+     "decodes": [
+      {
+       "from": "F6ZZZ",
+       "message": "msg-10",
+       "freqHz": 1511,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > still pops nothing ELSE about the station being worked — a partner row can only say \"calling you\"",
+   "steps": [
+    {
+     "atMs": 1792759369870,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "AwaitRoger",
+      "dxcall": "zl9dx"
+     },
+     "decodes": [
+      {
+       "from": "ZL9DX",
+       "message": "msg-11",
+       "freqHz": 1512,
+       "directedToMe": true,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Auckland Is."
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "ZL9DX",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a station answering your CQ alerts on the decode that answers it (#167) > does not let a watch-list entry fire for the station already being worked",
+   "steps": [
+    {
+     "atMs": 1792759369870,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": false,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Confirming",
+      "dxcall": "PY2AA"
+     },
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "PY2AA"
+      }
+     ],
+     "decodes": [
+      {
+       "from": "PY2AA",
+       "message": "msg-12",
+       "freqHz": 1513,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "an unconfigured scope changes nothing > alerts on a new DXCC from anywhere — scope absent (an older caller that passes no scope at all)",
+   "steps": [
+    {
+     "atMs": 1792759371070,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "JA1ABC",
+       "message": "msg-0",
+       "freqHz": 1501,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "JA1ABC",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "an unconfigured scope changes nothing > alerts on a new DXCC from anywhere — scope null (settings loaded, nothing ticked)",
+   "steps": [
+    {
+     "atMs": 1792759371071,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "JA1ABC",
+       "message": "msg-1",
+       "freqHz": 1502,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "JA1ABC",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "an unconfigured scope changes nothing > alerts on a CQ from anywhere",
+   "steps": [
+    {
+     "atMs": 1792759371071,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "decodes": [
+      {
+       "from": "JA1CQ",
+       "message": "msg-2",
+       "freqHz": 1503,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "cq",
+       "call": "JA1CQ",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      620
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a configured scope gates the generic alert kinds > refuses a new DXCC outside the scope and admits one inside it",
+   "steps": [
+    {
+     "atMs": 1792759371071,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1ABC",
+       "message": "msg-3",
+       "freqHz": 1504,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759371071,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "DL1ABC",
+       "message": "msg-4",
+       "freqHz": 1505,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Fed. Rep. of Germany"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "DL1ABC",
+       "entity": "Fed. Rep. of Germany",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a configured scope gates the generic alert kinds > refuses a CQ outside the scope and admits one inside it",
+   "steps": [
+    {
+     "atMs": 1792759371072,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1CQ",
+       "message": "msg-5",
+       "freqHz": 1506,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true,
+       "country": "Japan"
+      },
+      {
+       "from": "F5CQ",
+       "message": "msg-6",
+       "freqHz": 1507,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true,
+       "country": "France"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "cq",
+       "call": "F5CQ",
+       "entity": "France",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "info",
+       "ms": 6000,
+       "prominent": false,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      620
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a configured scope gates the generic alert kinds > refuses a new grid outside the scope",
+   "steps": [
+    {
+     "atMs": 1792759371072,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 50.313,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1GRID",
+       "message": "msg-7",
+       "freqHz": 1508,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": true,
+       "isCq": false,
+       "grid": "PM95",
+       "country": "Japan"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "the exemptions > SOMEONE CALLING YOU alerts from outside the scope",
+   "steps": [
+    {
+     "atMs": 1792759371072,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1ME",
+       "message": "msg-8",
+       "freqHz": 1509,
+       "directedToMe": true,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "myCall",
+       "call": "JA1ME",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 20000,
+       "prominent": true,
+       "action": "answer"
+      }
+     ],
+     "sounds": [
+      880
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the exemptions > a WATCH-LIST hit alerts from outside the scope",
+   "steps": [
+    {
+     "atMs": 1792759371072,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "watchlist": [
+      {
+       "id": "w1",
+       "kind": "call",
+       "value": "JA1DX"
+      }
+     ],
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1DX",
+       "message": "msg-9",
+       "freqHz": 1510,
+       "directedToMe": false,
+       "newDxcc": false,
+       "newGrid": false,
+       "isCq": true,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "watch",
+       "call": "JA1DX",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": "JA1DX",
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the exemptions > a station cty.dat could not place still alerts — absence is not a match",
+   "steps": [
+    {
+     "atMs": 1792759371073,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "XX9ZZ",
+       "message": "msg-10",
+       "freqHz": 1511,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "XX9ZZ",
+       "entity": null,
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a refused decode is not remembered > alerts once the scope is widened to admit it",
+   "steps": [
+    {
+     "atMs": 1792759371073,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France"
+     ],
+     "decodes": [
+      {
+       "from": "JA1ABC",
+       "message": "CQ JA1ABC",
+       "freqHz": 1512,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [],
+     "sounds": []
+    },
+    {
+     "atMs": 1792759371073,
+     "settings": {
+      "alertMyCall": true,
+      "alertNew": true,
+      "alertCq": true,
+      "alertDxccBands": null,
+      "alertGridBands": null,
+      "alertRareGridBands": null
+     },
+     "qso": {
+      "state": "Listening",
+      "dxcall": null
+     },
+     "dialMhz": 14.074,
+     "geoScope": [
+      "Fed. Rep. of Germany",
+      "France",
+      "Japan"
+     ],
+     "decodes": [
+      {
+       "from": "JA1ABC",
+       "message": "CQ JA1ABC",
+       "freqHz": 1513,
+       "directedToMe": false,
+       "newDxcc": true,
+       "newGrid": false,
+       "isCq": false,
+       "country": "Japan"
+      }
+     ],
+     "alerts": [
+      {
+       "kind": "newDxcc",
+       "call": "JA1ABC",
+       "entity": "Japan",
+       "grid": null,
+       "tier": null,
+       "watch": null,
+       "tone": "success",
+       "ms": 15000,
+       "prominent": true,
+       "action": "work"
+      }
+     ],
+     "sounds": [
+      520,
+      780
+     ]
+    }
+   ]
+  }
+ ],
+ "pota": [
+  {
+   "name": "a park's first tick primes silently; later a fresh reference beeps once per tick",
+   "ticks": [
+    {
+     "refs": [
+      "US-0001",
+      "US-0002"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003",
+      "US-0004"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0003",
+      "US-0004"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0003",
+      "US-0004"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003",
+      "US-0004"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    }
+   ]
+  },
+  {
+   "name": "an empty first tick still primes",
+   "ticks": [
+    {
+     "refs": [],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "K-1234"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a park that drops off the feed is not carried forward: its return is a new spot",
+   "ticks": [
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0002"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a park already known never sounds again, in any order; a new one beside it does",
+   "ticks": [
+    {
+     "refs": [
+      "US-0001",
+      "US-0002"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0002",
+      "US-0001"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003"
+     ],
+     "sounds": []
+    }
+   ]
+  }
+ ]
+}

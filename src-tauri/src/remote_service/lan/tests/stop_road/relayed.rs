@@ -154,6 +154,67 @@ fn press_kind() -> u8 {
     .kind()
 }
 
+/// Whether the press `press`, whose hold the relay let through only now, keyed: waited for until
+/// the station has answered it on the road, or ten seconds pass, not for a window of time, then
+/// read from that answer, the held PTT and the microphone over. A hold the station refuses is
+/// answered at once; one it keyed is reported as keyed at the road's next look.
+pub(super) async fn keyed_once_answered(road: &ComputerRoad, r: &Roadside, press: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut answer = None;
+    while answer.is_none() && Instant::now() < deadline {
+        answer = road
+            .heard()
+            .presses
+            .into_iter()
+            .find(|down| matches!(down, Down::Press { press: p, .. } if *p == press));
+        if answer.is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    matches!(answer, Some(Down::Press { keyed: true, .. }))
+        || r.ptt.keyed()
+        || r.s.shared.engine.lock().unwrap().mic_armed()
+}
+
+/// Whether a press begun when this computer had pressed `stops` Stops keys: begun, and re-asserted
+/// every 100 ms as the screen re-asserts it, until the station says on the road that it keyed, or
+/// how it ended, then let go. A press the station let lapse before its radio loop keyed it (no hold
+/// reached it for the gap, as when this process stalls) ends `Lapsed`, as it must, and a new press
+/// from `first` on is tried, up to five; any other end, or none within ten seconds, is the
+/// answer: not keyed.
+pub(super) async fn a_press_keys_on(road: &ComputerRoad, first: u64, stops: u64) -> bool {
+    for press in first..first + 5 {
+        road.press(press, stops);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut ended = None;
+        while ended.is_none() && Instant::now() < deadline {
+            for down in road.heard().presses {
+                match down {
+                    Down::Press {
+                        press: p,
+                        keyed: true,
+                        end: None,
+                    } if p == press => {
+                        road.release(press);
+                        return true;
+                    }
+                    Down::Press { press: p, end, .. } if p == press && end.is_some() => {
+                        ended = end;
+                    }
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            road.hold(press);
+        }
+        road.release(press);
+        if ended != Some(HoldEnd::Lapsed) {
+            return false;
+        }
+    }
+    false
+}
+
 /// A shack in Phone, its radio loop running, with a computer seated under the lease, and that
 /// computer's own road to the shack's through a relay. The loop runs until the flag is set.
 struct ThroughARelay {
@@ -292,13 +353,9 @@ async fn through_a_relay_a_hold_delivered_after_the_stop_never_keys_on_a_runtime
     .await;
     assert_eq!(said(&armed), "ran set_tx_enabled", "premise: armed again");
     t.relay.release();
-    let late = t.keyed_within(Duration::from_millis(400)).await;
+    let late = keyed_once_answered(&t.road, &t.r, 7).await;
     t.present().await;
-    t.road.press(8, 1);
-    let holding = t.reassert(8, 5);
-    let after = t.keyed_within(Duration::from_millis(500)).await;
-    let _ = holding.await;
-    t.road.release(8);
+    let after = a_press_keys_on(&t.road, 8, 1).await;
     t.end().await;
     assert_eq!(
         (late, after),

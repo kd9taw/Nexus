@@ -186,13 +186,15 @@ async fn a_start_admitted_before_a_lapse_does_not_run_after_its_halt() {
     );
 }
 
-/// ⛔ A start admitted before the off half of a switch, or a Stop that names one over, does not
-/// run after it either: neither of those halts the station, so only the link moving the
-/// stand-down as it reads them voids what was waiting. Each case on a link with no Stop on the
-/// road: Enable TX's off half behind a CQ (TX stays off, no CQ armed), and the voice keyer's Stop
-/// behind its play (nothing queued to play). The off half goes with an `afar` of its own, which a
-/// computer never writes: it still runs, because nothing it carries can refuse a Stop. CONTROL:
-/// each premise is asserted (the start waited, the off half or the Stop ran first).
+/// ⛔ A start admitted before an unkey (the off half of a switch), or a Stop that names one over,
+/// does not run after it either. An unkey halts nothing, so only the link moving the starts-voided
+/// generation as it reads it voids what was waiting; the voice keyer's Stop moves the stand-down as
+/// it is read. Each case on a link with no Stop on the road: Enable TX's off half behind a CQ (TX
+/// stays off, no CQ armed); and behind the voice keyer's play (nothing queued to play), its Stop,
+/// the PTT let go (also what Phone's Lock and leaving Phone send), Tune off (also the end of the
+/// setup wizard's Prove TX) and the contest screen's S&P chip. The off half goes with an `afar` of
+/// its own, which a computer never writes: it still runs, because nothing it carries can refuse a
+/// Stop. CONTROL: each premise is asserted (the start waited, the unkey or the Stop ran first).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_admitted_before_an_off_half_or_the_keyers_stop_does_not_run_after_it() {
     let mut stood = Vec::new();
@@ -203,6 +205,13 @@ async fn a_start_admitted_before_an_off_half_or_the_keyers_stop_does_not_run_aft
             json!({"enabled": false, "afar": {"standDown": 0}}),
         ),
         ("play_voice_message", "stop_voice", json!({})),
+        ("play_voice_message", "set_ptt", json!({"on": false})),
+        ("play_voice_message", "set_tune", json!({"on": false})),
+        (
+            "play_voice_message",
+            "set_mode",
+            json!({"mode": "fieldday-sp"}),
+        ),
     ] {
         let app = App::new();
         let mut r = roadside(&app);
@@ -224,7 +233,7 @@ async fn a_start_admitted_before_an_off_half_or_the_keyers_stop_does_not_run_aft
             ran(&record).len() == 2
         })
         .await;
-        let said = seat.call(3, stop, stop_args).await;
+        let said = seat.call(3, stop, stop_args.clone()).await;
         assert_eq!(said["value"]["ran"], stop, "premise {start}: {said}");
         if stop == "set_tx_enabled" {
             assert!(
@@ -241,7 +250,7 @@ async fn a_start_admitted_before_an_off_half_or_the_keyers_stop_does_not_run_aft
             _ => e.poll_voice().is_some(),
         };
         if on_air || said["refused"] != "stopped" {
-            stood.push(format!("{start} behind {stop}: {said}"));
+            stood.push(format!("{start} behind {stop} {stop_args}: {said}"));
         }
     }
     assert!(

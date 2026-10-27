@@ -2,8 +2,8 @@
 //!
 //! Each fault is a positive control. A guard in Nexus's TCI client is proven by a test that runs it
 //! against the simulator with the matching fault and goes red when the guard is removed: a check
-//! that has never been seen to fire is not yet a check. The guards are not in this crate. Each
-//! variant names the one it is for, by the plan's invariant (§6.1) or mutation (§6.3, M1–M15).
+//! that has never been seen to fire is not yet a check. The guards are not in this crate.
+//! Each variant names the one it is for.
 //!
 //! Faults combine: each acts on its own part of the session. Where one says "once", it fires for
 //! the first matching event in the simulator's life; a reconnect then meets the radio it left.
@@ -22,20 +22,20 @@ pub enum Fault {
     /// the command opens the next message, which follows at once.
     ///
     /// *Guard:* the client's codec. Several commands per message are all read (Thetis fixed its
-    /// parser for exactly that, plan §2.1), and a command cut across messages is never read as a
+    /// parser for exactly that), and a command cut across messages is never read as a
     /// different, complete command.
     SplitConcat { cut: Option<Cut> },
 
     /// **No `ready;`.** The init burst ends without it.
     ///
-    /// *Guard:* nothing is latched and nothing is admitted before `ready` (§6.1 item 2: refused
-    /// when not `ready`); the connect times out and says so.
+    /// *Guard:* nothing is latched and nothing is admitted before `ready`;
+    /// the connect times out and says so.
     NoReady,
 
     /// **`trx` never echoes.** The radio keys and unkeys as asked (TX_CHRONO included), but no
     /// `trx:` line is sent after the init burst: no echo, no answer to a read.
     ///
-    /// *Guard:* the PTT readback (§6.1 item 8: keyed clears only on the server's `trx:<n>,false`
+    /// *Guard:* the PTT readback (keyed clears only on the server's `trx:<n>,false`
     /// echo). With no echo the client neither believes the key it asked for nor clears its keyed
     /// belief on an unkey; it times out, unkeys again and tells the operator.
     NoEcho,
@@ -44,7 +44,7 @@ pub enum Fault {
     /// a dropped or closed client does not unkey it either, so a reconnect's burst says
     /// `trx:<n>,true;`. TX_CHRONO keeps coming for a `tci` key.
     ///
-    /// *Guard:* the unkey readback and its escalation (§6.1 item 8; the stuck-TX incident's
+    /// *Guard:* the unkey readback and its escalation (the stuck-TX incident's
     /// invariants): keyed is never cleared on the client's own say-so, and an unkey not confirmed
     /// in time is sent again, the link is dropped and the operator is told the radio may still be
     /// transmitting.
@@ -54,7 +54,7 @@ pub enum Fault {
     /// frames, and the stream is not running, so a `tci` key on a dialect with `mic_fallback`
     /// takes the microphone (spec §4.2).
     ///
-    /// *Guard:* M1. Never a digital over on the SDR's microphone (§6.1 item 3): a `tci` key only
+    /// *Guard:* never a digital over on the SDR's microphone: a `tci` key only
     /// while the server has acknowledged `audio_start`. With the guard removed the key goes out and
     /// the log shows [`crate::Event::MicFallback`].
     NoAudioAck,
@@ -63,22 +63,22 @@ pub enum Fault {
     /// while the server still counts it as running (it was acknowledged, and a `tci` key still
     /// takes TCI audio).
     ///
-    /// *Guard:* §6.1 item 3's second term: a `tci` key only while receive frames arrived within the
-    /// last second. Also the receive floor that falls back to the sound card and says why.
+    /// *Guard:* the audio rule's second term: a `tci` key only while receive frames arrived within
+    /// the last second. Also the receive floor that falls back to the sound card and says why.
     RxAudioStall { after: Duration },
 
     /// **No TX_CHRONO.** A key that takes TCI audio is accepted and echoed, and the server never
     /// asks for audio.
     ///
-    /// *Guard:* M2. After the key, no TX_CHRONO within the window: unkey and say the server is not
-    /// taking Nexus's audio (§6.1 item 3).
+    /// *Guard:* after the key, no TX_CHRONO within the window: unkey and say the server is not
+    /// taking Nexus's audio.
     NoChrono,
 
     /// **A late first TX_CHRONO.** Each key's first TX_CHRONO comes `delay` after the echo (on
     /// top of the dialect's `first_chrono`); the rest follow at the cadence from there.
     ///
-    /// *Guard:* the chrono window (M2) must not fire on a merely slow server below its limit, and
-    /// must above it. The over's timing (U3; gate 2) is measured, never assumed.
+    /// *Guard:* the chrono window must not fire on a merely slow server below its limit, and
+    /// must above it. The over's timing is measured, never assumed.
     ChronoLate { delay: Duration },
 
     /// **TX_CHRONO in bursts.** Chronos come `burst` at a time, every `burst` periods: the same
@@ -92,22 +92,22 @@ pub enum Fault {
     /// **TX_CHRONO stops mid-over.** Each key's chronos stop `after` its first one. The radio stays
     /// keyed and silent.
     ///
-    /// *Guard:* never a silent over (§6.1 item 4): a route that stops taking audio ends the over
+    /// *Guard:* never a silent over: a route that stops taking audio ends the over
     /// the way the Flex route does, and says why.
     ChronoStall { after: Duration },
 
     /// **`length` as frames.** Every frame the server sends counts `length` in frames (per
     /// channel) instead of sample values, and its TX_CHRONO then asks for `length` frames.
     ///
-    /// *Guard:* M15. The frame codec accepts the reading the payload fits and rejects, counts and
-    /// survives a frame that fits neither (plan §2.3 item 2).
+    /// *Guard:* the frame codec accepts the reading the payload fits and rejects, counts and
+    /// survives a frame that fits neither.
     LengthAsFrames,
 
     /// **Format code 4.** Every receive and IQ frame says `format: 4` for its float32 samples, as
     /// the Go client writes its transmit frames.
     ///
-    /// *Guard:* an unknown format is never read as a known one: the frame is rejected and counted
-    /// (plan §2.3 item 3), and the receive floor notices the audio has stopped.
+    /// *Guard:* an unknown format is never read as a known one: the frame is rejected and counted,
+    /// and the receive floor notices the audio has stopped.
     FormatCode4,
 
     /// **Another program keys.** `after` the first connection's `ready;`, the SDR keys for another
@@ -115,7 +115,7 @@ pub enum Fault {
     /// unkeys with `trx:<trx>,false;`. With `chrono_to_all`, TX_CHRONO goes meanwhile to every
     /// client whose audio stream runs, as a server that broadcasts its chronos would. Once.
     ///
-    /// *Guard:* M6. Audio only for our key (§6.1 item 5): a chrono during another program's key is
+    /// *Guard:* audio only for our key: a chrono during another program's key is
     /// answered with nothing, so the log shows no [`crate::Event::FrameIn`] from the client during
     /// it. Also: `owner_transmitting` tells another program's key from ours.
     ForeignKey {
@@ -128,7 +128,7 @@ pub enum Fault {
     /// broadcasts `stop;` and stops: no frames of any kind, the transmitter released with no
     /// `trx:false` echo, every key refused until a `start;`. Once.
     ///
-    /// *Guard:* M12. `stop;` while keyed halts the over and shows the reason; the client does not
+    /// *Guard:* `stop;` while keyed halts the over and shows the reason; the client does not
     /// wait for an echo that will not come.
     ServerStop { after: Duration },
 
@@ -136,14 +136,14 @@ pub enum Fault {
     /// and every key (`trx`, `tune`, CW, `keyer`) is refused: no echo, nothing keyed, the refusal
     /// logged.
     ///
-    /// *Guard:* M14. Admission refuses a key while `tx_enable` is false (§6.1 item 2).
+    /// *Guard:* admission refuses a key while `tx_enable` is false.
     TxEnableFalse,
 
     /// **A band change restores the band's settings.** Each `vfo` write that moves a transceiver
     /// to another band is echoed, then followed by the band's restored settings, broadcast:
     /// `drive`, `tune_drive` and, with `modulation`, the mode (spec §3.5).
     ///
-    /// *Guard:* M7. Admission compares the server's `drive` (and `tune_drive` for Tune) with
+    /// *Guard:* admission compares the server's `drive` (and `tune_drive` for Tune) with
     /// Nexus's ceiling by readback, so after a restore to 100 the key is refused until the ceiling
     /// is asserted again and read back.
     BandRestore {
@@ -171,12 +171,11 @@ pub enum Fault {
 
     /// **A disconnect mid-over.** `after` the radio first keys for a client (its key echoed), that
     /// client's TCP connection is dropped with no close frame. With `radio_stays_keyed` the radio
-    /// stays keyed whatever the dialect does on a lost client (U1, U2: the worse answer), and the
+    /// stays keyed whatever the dialect does on a lost client (the worse answer), and the
     /// next connection's burst says `trx:<n>,true;`. Once.
     ///
-    /// *Guard:* M4. A lost link never clears the keyed belief: the client halts TX, raises "may
-    /// still be transmitting", reconnects at once and sends `trx:<n>,false;` first after `ready`
-    /// (§6.1 item 8).
+    /// *Guard:* a lost link never clears the keyed belief: the client halts TX, raises "may
+    /// still be transmitting", reconnects at once and sends `trx:<n>,false;` first after `ready`.
     DisconnectMidOver {
         after: Duration,
         radio_stays_keyed: bool,
@@ -186,7 +185,7 @@ pub enum Fault {
     /// message holding one unknown command with a huge argument, or with `binary` a receive audio
     /// frame whose payload is that long.
     ///
-    /// *Guard:* outside data is bounded (§6.1 item 11): a size limit on messages and arguments,
+    /// *Guard:* outside data is bounded: a size limit on messages and arguments,
     /// no panic, and the session goes on or ends cleanly.
     Oversized { bytes: usize, binary: bool },
 
@@ -195,20 +194,20 @@ pub enum Fault {
     /// and formats, and frames that fit neither reading of `length`. The session then goes on as
     /// if nothing had happened.
     ///
-    /// *Guard:* M15 and §6.1 item 11. An invalid command is ignored (spec §3.1); a bad frame is
+    /// *Guard:* an invalid command is ignored (spec §3.1); a bad frame is
     /// rejected and counted; nothing panics; the next good command is still read.
     Garbage,
 
     /// **A receive-only device.** The burst says `receive_only:true;` and every key is refused,
     /// as [`Fault::TxEnableFalse`] refuses them.
     ///
-    /// *Guard:* M14 (§6.1 item 2: refused when `receive_only:true`).
+    /// *Guard:* admission refuses a key while `receive_only` is true.
     ReceiveOnly,
 
     /// **The radio holds after CW.** A `cw_macros` or `cw_msg` keys the radio as usual, but it
     /// stays keyed when the text is done and through `cw_macros_stop;`, until `trx:<n>,false;`.
     ///
-    /// *Guard:* T10's Stop TX mid-word. If the radio still shows our CW keyed just after the stop,
+    /// *Guard:* Stop TX mid-word. If the radio still shows our CW keyed just after the stop,
     /// the client sends `trx:<n>,false;`, and if that is not echoed it escalates and tells the
     /// operator.
     HoldsCw,
@@ -216,7 +215,7 @@ pub enum Fault {
     /// **An unknown version.** The burst's protocol line says `protocol:<program>,<version>;`
     /// with these values instead of the dialect's.
     ///
-    /// *Guard:* behave by what the server does, never by its name (plan §2.1): an unknown program
+    /// *Guard:* behave by what the server does, never by its name: an unknown program
     /// or version is neither refused outright nor assumed to be one the client knows; features are
     /// learned from what the server sends.
     UnknownVersion { program: String, version: String },

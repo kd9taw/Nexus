@@ -5,6 +5,11 @@
 //! - **Both targets, always.** pota.app is where POTA hunters look; the cluster is where DX
 //!   chasers do. Each press tries both and reports each on its own, so one failing never hides
 //!   the other.
+//! - **The comment is the operator's,** "QRV" when left blank and "QRT" when Stop offers it;
+//!   it goes to both targets, so a QRT never reads on the cluster as a fresh spot.
+//! - **Each park its own pota.app spot.** A two-fer's parks are posted one by one, each under
+//!   the repeat limit and the login latch on its own, as a hunter's list shows one park a row;
+//!   the cluster takes one line naming them all ("POTA US-1234 US-5678 QRV").
 //! - **Own call, current park, dial and mode only.** [`Context::confirmed`] reads all four from the
 //!   station, and refuses when the park or dial is no longer the one the operator confirmed. A
 //!   caller cannot name a different call: there is no field for one.
@@ -28,10 +33,21 @@ use tempo_app::{dto::Tier, engine::Engine, settings::OperatingMode};
 /// Logger", hunterlog "hunterlog"; each names the app that posted it.
 pub const SOURCE: &str = "Nexus";
 
-/// pota.app's form requires a comment ("Comment is required"). A plain "on the air": no mode word
-/// (the website reads one out of a comment to change the spot's mode) and never "QRT", which ends
-/// the spot.
-const COMMENTS: &str = "QRV";
+/// pota.app's form requires a comment ("Comment is required"), so a blank one is this: a plain
+/// "on the air", with no mode word (the website reads one out of a comment to change the spot's
+/// mode) and never "QRT", which ends the spot.
+const DEFAULT_COMMENT: &str = "QRV";
+
+/// The longest comment taken: kept short, because a cluster node shows only the start of a spot's
+/// comment, and the cluster's carries the program and park ahead of it.
+const COMMENT_MAX: usize = 30;
+
+/// How much of a spot's comment a cluster node shows (a DXSpider-style node's comment column). The
+/// cluster line's program, parks and comment are fitted to it ([`cluster_comment`]).
+const CLUSTER_COLUMN: usize = 30;
+
+/// The comment that ends a spot.
+const QRT: &str = "QRT";
 
 /// A target that took a spot for a park and frequency is not sent the same one again for this long.
 pub const REPEAT: Duration = Duration::from_secs(60);
@@ -50,10 +66,14 @@ const POTA_APP_MODES: [&str; 14] = [
 pub struct Context {
     pub call: String,
     pub program: String,
+    /// The activation's reference as the contacts carry it: one park, or a two-fer's as a comma
+    /// list.
     pub reference: String,
     pub dial_hz: u64,
     /// The pota.app name for the mode the station is on, if pota.app lists one.
     pub mode: Option<&'static str>,
+    /// The spot's comment, already through [`spot_comment`].
+    pub comment: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,28 +84,89 @@ pub enum Refusal {
     /// A contest that allows spotting only over amateur RF is running (Winter Field Day:
     /// *"You may spot yourself and others only via amateur RF."*), so nothing is posted.
     RfOnly,
+    /// The comment holds something other than printable ASCII, or is longer than [`COMMENT_MAX`].
+    Comment,
 }
 
 impl Context {
+    /// Each park of the activation, in the order the operator gave them.
+    fn parks(&self) -> Vec<&str> {
+        self.reference
+            .split(',')
+            .map(str::trim)
+            .filter(|park| !park.is_empty())
+            .collect()
+    }
+
     /// Everything comes from the station; `reference` and `dial_hz` are only what the operator's
-    /// confirm showed, checked against it.
-    pub fn confirmed(engine: &Engine, reference: &str, dial_hz: u64) -> Result<Self, Refusal> {
+    /// confirm showed, checked against it. `comment` is the operator's own words.
+    ///
+    /// One frequency other than the dial is taken: a QRT on the frequency this activation was
+    /// last spotted on, which is where the spot it ends stands — after a QSY, a QRT on the new
+    /// dial would read on the cluster as a fresh spot there.
+    pub fn confirmed(
+        engine: &Engine,
+        reference: &str,
+        dial_hz: u64,
+        comment: &str,
+    ) -> Result<Self, Refusal> {
+        Self::confirmed_in(&GATE, engine, reference, dial_hz, comment)
+    }
+
+    fn confirmed_in(
+        gate: &Gate,
+        engine: &Engine,
+        reference: &str,
+        dial_hz: u64,
+        comment: &str,
+    ) -> Result<Self, Refusal> {
         // Before anything else: during such a contest no target is tried at all.
         if engine.internet_spot_block().is_some() {
             return Err(Refusal::RfOnly);
         }
         let (program, active) = engine.activation().ok_or(Refusal::NoActivation)?;
-        if active != reference || engine.settings().dial_hz() != dial_hz {
+        if active != reference {
             return Err(Refusal::Moved);
         }
+        let comment = spot_comment(comment);
+        if engine.settings().dial_hz() != dial_hz {
+            let spotted = gate
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .spotted
+                .clone();
+            let ends_the_spot = comment.as_deref() == Some(QRT)
+                && spotted.is_some_and(|(at, hz)| at == active && hz == dial_hz);
+            if !ends_the_spot {
+                return Err(Refusal::Moved);
+            }
+        }
+        let comment = comment.ok_or(Refusal::Comment)?;
         Ok(Self {
             call: engine.settings().mycall.clone(),
             program,
             reference: active,
             dial_hz,
             mode: pota_mode(engine),
+            comment,
         })
     }
+}
+
+/// The comment as it is sent: upper case, one space between words, [`DEFAULT_COMMENT`] when
+/// blank. `None` for anything but printable ASCII (a line break would end the cluster's line and
+/// start a command) or for more than [`COMMENT_MAX`] characters.
+fn spot_comment(raw: &str) -> Option<String> {
+    if !raw.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) {
+        return None;
+    }
+    let words = raw.split(' ').filter(|w| !w.is_empty()).collect::<Vec<_>>();
+    if words.is_empty() {
+        return Some(DEFAULT_COMMENT.into());
+    }
+    let comment = words.join(" ").to_ascii_uppercase();
+    (comment.len() <= COMMENT_MAX).then_some(comment)
 }
 
 fn pota_mode(engine: &Engine) -> Option<&'static str> {
@@ -113,10 +194,10 @@ fn pota_mode(engine: &Engine) -> Option<&'static str> {
         }
         OperatingMode::Cw => Some("CW"),
         OperatingMode::Rtty => Some("RTTY"),
-        OperatingMode::Keyboard => Some(match engine.psk_mode().0 {
-            tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
-            tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
-        }),
+        // PSK31, QPSK31 or JTTY: the Keyboard section is all three, and pota.app lists no JTTY.
+        OperatingMode::Keyboard => {
+            Some(engine.keyboard_mode_name()).filter(|m| POTA_APP_MODES.contains(m))
+        }
     }
 }
 
@@ -150,16 +231,25 @@ pub enum ClusterResult {
     Invalid,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Report {
+/// What pota.app did with one park's spot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ParkReport {
+    pub reference: String,
     pub pota: PotaResult,
+}
+
+/// One press: pota.app's answer for each park, in the activation's order, and the cluster's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Report {
+    pub parks: Vec<ParkReport>,
     pub cluster: ClusterResult,
 }
 
 impl Report {
     #[cfg(test)]
-    pub fn any_posted(self) -> bool {
-        self.pota == PotaResult::Posted || self.cluster == ClusterResult::Queued
+    pub fn any_posted(&self) -> bool {
+        self.parks.iter().any(|p| p.pota == PotaResult::Posted)
+            || self.cluster == ClusterResult::Queued
     }
 }
 
@@ -176,7 +266,12 @@ pub struct Gate(Mutex<GateState>);
 
 struct GateState {
     pota_off: bool,
-    recent: Vec<(Target, String, String, Instant)>,
+    /// Target, park (the cluster's: every park of the line), frequency and comment: a QRT is
+    /// not a repeat of the spot it ends.
+    recent: Vec<(Target, String, String, String, Instant)>,
+    /// The activation (as [`Context::reference`]) and dial a target last took a spot for, other
+    /// than a QRT: where a QRT is sent ([`Context::confirmed`]).
+    spotted: Option<(String, u64)>,
 }
 
 impl Default for Gate {
@@ -190,62 +285,98 @@ impl Gate {
         Self(Mutex::new(GateState {
             pota_off: false,
             recent: Vec::new(),
+            spotted: None,
         }))
+    }
+
+    fn forget_spotted(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .spotted = None;
     }
 }
 
 impl GateState {
-    fn repeat(&mut self, target: Target, reference: &str, freq: &str, now: Instant) -> bool {
+    fn repeat(
+        &mut self,
+        target: Target,
+        park: &str,
+        ctx: &Context,
+        freq: &str,
+        now: Instant,
+    ) -> bool {
         self.recent
             .retain(|(.., at)| now.saturating_duration_since(*at) < REPEAT);
         self.recent
             .iter()
-            .any(|(t, r, f, _)| *t == target && r == reference && f == freq)
+            .any(|(t, r, f, c, _)| *t == target && r == park && f == freq && *c == ctx.comment)
     }
-    fn took(&mut self, target: Target, reference: &str, freq: &str, now: Instant) {
+    fn took(&mut self, target: Target, park: &str, ctx: &Context, freq: &str, now: Instant) {
         self.recent
-            .push((target, reference.into(), freq.into(), now));
+            .push((target, park.into(), freq.into(), ctx.comment.clone(), now));
+        if ctx.comment != QRT {
+            self.spotted = Some((ctx.reference.clone(), ctx.dial_hz));
+        }
     }
 }
 
 /// The process's one gate: the desktop and the Remote station share a session.
 static GATE: Gate = Gate::new();
 
+/// Stop: the activation's spot is over, so no QRT may later go on the frequency it was spotted
+/// on — the same park started again in this session is a new activation, spotted afresh.
+pub fn activation_ended() {
+    GATE.forget_spotted();
+}
+
 /// Post one press through the real doors (the refusing ones in a test build).
 pub fn send(ctx: &Context) -> Report {
     send_with(&GATE, Instant::now(), ctx, post_pota, post_cluster)
 }
 
-/// One press. The cluster goes first (it only queues), then pota.app; neither result changes
-/// whether the other is tried.
+/// One press. The cluster goes first (it only queues), then pota.app, park by park; no result
+/// changes whether another is tried.
 pub fn send_with(
     gate: &Gate,
     now: Instant,
     ctx: &Context,
-    post_pota: impl FnOnce(&SpotPost) -> Result<SpotAnswer, String>,
+    mut post_pota: impl FnMut(&SpotPost) -> Result<SpotAnswer, String>,
     post_cluster: impl FnOnce(f64, &str, &str) -> Result<(), String>,
 ) -> Report {
     let mut gate = gate.0.lock().unwrap_or_else(PoisonError::into_inner);
     let call = ctx.call.trim().to_ascii_uppercase();
     let freq = khz_text(ctx.dial_hz);
     let freq_mhz = ctx.dial_hz as f64 / 1e6;
+    let parks = ctx.parks();
+    let every_park = |pota: PotaResult| {
+        parks
+            .iter()
+            .map(|park| ParkReport {
+                reference: (*park).into(),
+                pota,
+            })
+            .collect()
+    };
     if tempo_app::bandplan::band_for_dial(freq_mhz).is_none() {
         return Report {
-            pota: PotaResult::Invalid,
+            parks: every_park(PotaResult::Invalid),
             cluster: ClusterResult::Invalid,
         };
     }
+    // The cluster's line names every park, space-separated as a hunter reads them.
+    let line_parks = parks.join(" ");
     // Each target by its own call rule: a long portable call pota.app takes may be too long for
     // the cluster's, and that must not cost the pota.app spot.
     let cluster = if !crate::is_real_call(&call) {
         ClusterResult::Invalid
-    } else if gate.repeat(Target::Cluster, &ctx.reference, &freq, now) {
+    } else if gate.repeat(Target::Cluster, &line_parks, ctx, &freq, now) {
         ClusterResult::Throttled
     } else {
-        let comment = format!("{} {}", ctx.program, ctx.reference);
+        let comment = cluster_comment(&ctx.program, &parks, &ctx.comment);
         match post_cluster(freq_mhz, &call, &comment) {
             Ok(()) => {
-                gate.took(Target::Cluster, &ctx.reference, &freq, now);
+                gate.took(Target::Cluster, &line_parks, ctx, &freq, now);
                 ClusterResult::Queued
             }
             // `post_spot` names the cluster only when no node is connected.
@@ -259,25 +390,26 @@ pub fn send_with(
             }
         }
     };
-    let pota = match ctx.mode.filter(|m| POTA_APP_MODES.contains(m)) {
+    let mode = ctx.mode.filter(|m| POTA_APP_MODES.contains(m));
+    let mut pota_park = |park: &str| match mode {
         _ if ctx.program != "POTA" => PotaResult::NotPark,
-        _ if !website_call(&call) || !website_reference(&ctx.reference) => PotaResult::Invalid,
+        _ if !website_call(&call) || !website_reference(park) => PotaResult::Invalid,
         None => PotaResult::UnknownMode,
         Some(_) if gate.pota_off => PotaResult::LoginRequired,
-        Some(_) if gate.repeat(Target::Pota, &ctx.reference, &freq, now) => PotaResult::Throttled,
+        Some(_) if gate.repeat(Target::Pota, park, ctx, &freq, now) => PotaResult::Throttled,
         Some(mode) => {
             let spot = SpotPost {
                 activator: call.clone(),
-                spotter: call,
+                spotter: call.clone(),
                 frequency: freq.clone(),
-                reference: ctx.reference.clone(),
+                reference: park.into(),
                 mode: mode.into(),
                 source: SOURCE.into(),
-                comments: COMMENTS.into(),
+                comments: ctx.comment.clone(),
             };
             match post_pota(&spot) {
                 Ok(SpotAnswer::Posted) => {
-                    gate.took(Target::Pota, &ctx.reference, &freq, now);
+                    gate.took(Target::Pota, park, ctx, &freq, now);
                     PotaResult::Posted
                 }
                 Ok(SpotAnswer::LoginRequired) => {
@@ -298,7 +430,35 @@ pub fn send_with(
             }
         }
     };
-    Report { pota, cluster }
+    let parks = parks
+        .iter()
+        .map(|park| ParkReport {
+            reference: (*park).into(),
+            pota: pota_park(park),
+        })
+        .collect();
+    Report { parks, cluster }
+}
+
+/// The cluster line's comment: the program, the parks and the operator's comment, fitted to the
+/// node's comment column ([`CLUSTER_COLUMN`]) by naming the later parks as a count ("POTA US-1234
+/// +2 QRT") — never by cutting the comment, so a QRT always reads. The first park is always named;
+/// a comment too long for the column after it is the operator's, and goes as typed.
+fn cluster_comment(program: &str, parks: &[&str], comment: &str) -> String {
+    let line = |named: usize| {
+        let mut words = vec![program.to_string()];
+        words.extend(parks[..named].iter().map(|park| park.to_string()));
+        if named < parks.len() {
+            words.push(format!("+{}", parks.len() - named));
+        }
+        words.push(comment.to_string());
+        words.join(" ")
+    };
+    (1..=parks.len())
+        .rev()
+        .map(line)
+        .find(|text| text.len() <= CLUSTER_COLUMN)
+        .unwrap_or_else(|| line(parks.len().min(1)))
 }
 
 /// kHz as text at 100 Hz, the way pota.app's feed carries it ("14222", "10120.5").
@@ -380,6 +540,7 @@ mod tests {
             reference: "US-0001".into(),
             dial_hz: 14_285_000,
             mode: Some("SSB"),
+            comment: DEFAULT_COMMENT.into(),
         }
     }
 
@@ -398,9 +559,10 @@ mod tests {
             gate,
             now,
             ctx,
+            // Every park of the press is answered alike.
             |spot| {
                 posts.borrow_mut().0.push(spot.clone());
-                pota
+                pota.clone()
             },
             |freq, call, comment| {
                 posts
@@ -412,11 +574,19 @@ mod tests {
         )
     }
 
-    fn both() -> Report {
+    /// A one-park press's report, the park [`ctx`]'s.
+    fn one(pota: PotaResult, cluster: ClusterResult) -> Report {
         Report {
-            pota: PotaResult::Posted,
-            cluster: ClusterResult::Queued,
+            parks: vec![ParkReport {
+                reference: "US-0001".into(),
+                pota,
+            }],
+            cluster,
         }
+    }
+
+    fn both() -> Report {
+        one(PotaResult::Posted, ClusterResult::Queued)
     }
 
     #[test]
@@ -441,11 +611,14 @@ mod tests {
         );
         assert_eq!(
             cluster,
-            vec![(14.285, "W9XYZ".into(), "POTA US-0001".into())]
+            vec![(14.285, "W9XYZ".into(), "POTA US-0001 QRV".into())]
         );
         assert_eq!(
             serde_json::to_value(report).unwrap(),
-            serde_json::json!({"pota": "posted", "cluster": "queued"})
+            serde_json::json!({
+                "parks": [{"reference": "US-0001", "pota": "posted"}],
+                "cluster": "queued"
+            })
         );
     }
 
@@ -460,7 +633,7 @@ mod tests {
             Ok(SpotAnswer::LoginRequired),
             Ok(()),
         );
-        assert_eq!(first.pota, PotaResult::LoginRequired);
+        assert_eq!(first.parks[0].pota, PotaResult::LoginRequired);
         assert_eq!(first.cluster, ClusterResult::Queued);
         // Later, elsewhere (no repeat limit in play): pota.app is not even asked, the cluster is.
         let elsewhere = Context {
@@ -476,7 +649,7 @@ mod tests {
             Ok(SpotAnswer::Posted),
             Ok(()),
         );
-        assert_eq!(second.pota, PotaResult::LoginRequired);
+        assert_eq!(second.parks[0].pota, PotaResult::LoginRequired);
         assert_eq!(second.cluster, ClusterResult::Queued);
         let (pota, cluster) = posts.into_inner();
         assert_eq!((pota.len(), cluster.len()), (1, 2));
@@ -507,26 +680,14 @@ mod tests {
             Err("timed out".into()),
             Ok(()),
         );
-        assert_eq!(
-            unreachable,
-            Report {
-                pota: PotaResult::Failed,
-                cluster: ClusterResult::Queued
-            }
-        );
+        assert_eq!(unreachable, one(PotaResult::Failed, ClusterResult::Queued));
         let refused = Ok(SpotAnswer::Refused {
             status: 500,
             excerpt: "oops".into(),
         });
         let no_cluster = Err("no DX cluster connected — set a cluster host in Settings".into());
         let report = press(&Gate::new(), now, &ctx(), &posts, refused, no_cluster);
-        assert_eq!(
-            report,
-            Report {
-                pota: PotaResult::Failed,
-                cluster: ClusterResult::Unavailable
-            }
-        );
+        assert_eq!(report, one(PotaResult::Failed, ClusterResult::Unavailable));
         let cluster_down = press(
             &Gate::new(),
             now,
@@ -535,13 +696,7 @@ mod tests {
             Ok(SpotAnswer::Posted),
             Err("queue".into()),
         );
-        assert_eq!(
-            cluster_down,
-            Report {
-                pota: PotaResult::Posted,
-                cluster: ClusterResult::Failed
-            }
-        );
+        assert_eq!(cluster_down, one(PotaResult::Posted, ClusterResult::Failed));
         assert!(!report.any_posted() && cluster_down.any_posted() && unreachable.any_posted());
     }
 
@@ -582,10 +737,7 @@ mod tests {
             );
             assert_eq!(
                 report,
-                Report {
-                    pota: PotaResult::Invalid,
-                    cluster: ClusterResult::Invalid
-                },
+                one(PotaResult::Invalid, ClusterResult::Invalid),
                 "{bad:?}"
             );
             assert_eq!(posts.into_inner(), (vec![], vec![]));
@@ -624,13 +776,7 @@ mod tests {
             Ok(SpotAnswer::Posted),
             Ok(()),
         );
-        assert_eq!(
-            report,
-            Report {
-                pota: PotaResult::Posted,
-                cluster: ClusterResult::Invalid
-            }
-        );
+        assert_eq!(report, one(PotaResult::Posted, ClusterResult::Invalid));
         assert_eq!(posts.borrow().1.len(), 0);
     }
 
@@ -686,7 +832,7 @@ mod tests {
                 Ok(SpotAnswer::Posted),
                 Ok(()),
             );
-            assert_eq!(report.pota, expected, "{bad:?}");
+            assert_eq!(report.parks[0].pota, expected, "{bad:?}");
             assert_eq!(report.cluster, ClusterResult::Queued, "{bad:?}");
             let (pota, cluster) = posts.into_inner();
             assert!(pota.is_empty(), "{bad:?}");
@@ -709,13 +855,7 @@ mod tests {
             Ok(SpotAnswer::Posted),
             Ok(()),
         );
-        assert_eq!(
-            again,
-            Report {
-                pota: PotaResult::Throttled,
-                cluster: ClusterResult::Throttled
-            }
-        );
+        assert_eq!(again, one(PotaResult::Throttled, ClusterResult::Throttled));
         assert_eq!(posts.borrow().0.len() + posts.borrow().1.len(), 2);
         // A QSY is a new spot, and so is the same one a minute later.
         let qsy = Context {
@@ -748,13 +888,110 @@ mod tests {
         let (gate, posts) = (Gate::new(), Posts::default());
         press(&gate, now, &ctx(), &posts, Err("timed out".into()), Ok(()));
         let retry = press(&gate, now, &ctx(), &posts, Ok(SpotAnswer::Posted), Ok(()));
+        assert_eq!(retry, one(PotaResult::Posted, ClusterResult::Throttled));
+    }
+
+    #[test]
+    fn a_two_fer_posts_each_park_to_pota_app_on_its_own_and_both_on_one_cluster_line() {
+        let (gate, posts, now) = (Gate::new(), Posts::default(), Instant::now());
+        let two_fer = Context {
+            reference: "US-1234,US-5678".into(),
+            ..ctx()
+        };
+        let parks = |pota: [PotaResult; 2], cluster| Report {
+            parks: vec![
+                ParkReport {
+                    reference: "US-1234".into(),
+                    pota: pota[0],
+                },
+                ParkReport {
+                    reference: "US-5678".into(),
+                    pota: pota[1],
+                },
+            ],
+            cluster,
+        };
+        let posted = PotaResult::Posted;
         assert_eq!(
-            retry,
-            Report {
-                pota: PotaResult::Posted,
-                cluster: ClusterResult::Throttled
-            }
+            press(&gate, now, &two_fer, &posts, Ok(SpotAnswer::Posted), Ok(())),
+            parks([posted, posted], ClusterResult::Queued)
         );
+        let (pota, cluster) = posts.take();
+        assert_eq!(
+            pota.iter()
+                .map(|p| p.reference.as_str())
+                .collect::<Vec<_>>(),
+            ["US-1234", "US-5678"]
+        );
+        assert!(pota
+            .iter()
+            .all(|p| p.comments == "QRV" && p.frequency == "14285"));
+        assert_eq!(
+            cluster,
+            vec![(14.285, "W9XYZ".into(), "POTA US-1234 US-5678 QRV".into())]
+        );
+        // The repeat limit holds each park, and the cluster's line, on its own.
+        let held = PotaResult::Throttled;
+        let later = now + Duration::from_secs(30);
+        assert_eq!(
+            press(
+                &gate,
+                later,
+                &two_fer,
+                &posts,
+                Ok(SpotAnswer::Posted),
+                Ok(())
+            ),
+            parks([held, held], ClusterResult::Throttled)
+        );
+        let only_second = Context {
+            reference: "US-5678".into(),
+            ..ctx()
+        };
+        let report = press(
+            &gate,
+            later,
+            &only_second,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        assert_eq!(report.parks[0].pota, held);
+        assert_eq!(report.cluster, ClusterResult::Queued);
+        // A QRT ends each park's spot.
+        let qrt = Context {
+            comment: "QRT".into(),
+            ..two_fer.clone()
+        };
+        assert_eq!(
+            press(&gate, later, &qrt, &posts, Ok(SpotAnswer::Posted), Ok(())),
+            parks([posted, posted], ClusterResult::Queued)
+        );
+        let (pota, cluster) = posts.take();
+        assert_eq!(
+            pota.iter()
+                .map(|p| (p.reference.as_str(), p.comments.as_str()))
+                .collect::<Vec<_>>(),
+            [("US-1234", "QRT"), ("US-5678", "QRT")]
+        );
+        assert_eq!(cluster.last().unwrap().2, "POTA US-1234 US-5678 QRT");
+        // A login refusal at the first park leaves the second unasked.
+        let (gate, posts) = (Gate::new(), Posts::default());
+        assert_eq!(
+            press(
+                &gate,
+                now,
+                &two_fer,
+                &posts,
+                Ok(SpotAnswer::LoginRequired),
+                Ok(())
+            ),
+            parks(
+                [PotaResult::LoginRequired, PotaResult::LoginRequired],
+                ClusterResult::Queued
+            )
+        );
+        assert_eq!(posts.borrow().0.len(), 1);
     }
 
     #[test]
@@ -764,13 +1001,7 @@ mod tests {
             dial_hz: 21_285_000,
             ..ctx()
         });
-        assert_eq!(
-            report,
-            Report {
-                pota: PotaResult::Failed,
-                cluster: ClusterResult::Failed
-            }
-        );
+        assert_eq!(report, one(PotaResult::Failed, ClusterResult::Failed));
         assert!(!report.any_posted());
     }
 
@@ -787,21 +1018,33 @@ mod tests {
         let mut engine = Engine::new("W9XYZ", "EN52", 0);
         let dial = engine.settings().dial_hz();
         assert_eq!(
-            Context::confirmed(&engine, "US-0001", dial),
+            Context::confirmed(&engine, "US-0001", dial, "QRV"),
             Err(Refusal::NoActivation)
         );
         engine
             .set_activation("POTA", "US-0001", Vec::new())
             .unwrap();
         assert_eq!(
-            Context::confirmed(&engine, "US-0002", dial),
+            Context::confirmed(&engine, "US-0002", dial, "QRV"),
             Err(Refusal::Moved)
         );
         assert_eq!(
-            Context::confirmed(&engine, "US-0001", dial + 1000),
+            Context::confirmed(&engine, "US-0001", dial + 1000, "QRV"),
             Err(Refusal::Moved)
         );
-        let confirmed = Context::confirmed(&engine, "US-0001", dial).unwrap();
+        // A two-fer is confirmed as the contacts carry it, and spotted park by park.
+        let mut two_fer = Engine::new("W9XYZ", "EN52", 0);
+        two_fer
+            .set_activation("POTA", "us-1234, US-5678", Vec::new())
+            .unwrap();
+        let both = Context::confirmed(&two_fer, "US-1234,US-5678", dial, "").unwrap();
+        assert_eq!(both.parks(), ["US-1234", "US-5678"]);
+        assert_eq!(
+            Context::confirmed(&two_fer, "US-1234", dial, ""),
+            Err(Refusal::Moved),
+            "a press naming one park of a two-fer is not the activation the operator confirmed"
+        );
+        let confirmed = Context::confirmed(&engine, "US-0001", dial, " qrv  ").unwrap();
         assert_eq!(
             confirmed,
             Context {
@@ -810,7 +1053,177 @@ mod tests {
                 reference: "US-0001".into(),
                 dial_hz: dial,
                 mode: Some("FT8"),
+                comment: "QRV".into(),
             }
+        );
+    }
+
+    /// The cluster line fits the node's comment column by naming the later parks as a count,
+    /// never by cutting the comment: a QRT always reads.
+    #[test]
+    fn the_cluster_line_fits_the_comment_column_by_counting_parks_never_cutting_the_comment() {
+        assert_eq!(
+            cluster_comment("POTA", &["US-1234", "US-5678"], "QRT"),
+            "POTA US-1234 US-5678 QRT"
+        );
+        let three = ["US-1234", "US-5678", "US-9012"];
+        assert_eq!(
+            cluster_comment("POTA", &three, "QRT"),
+            "POTA US-1234 US-5678 +1 QRT"
+        );
+        assert!(cluster_comment("POTA", &three, "QRT").len() <= CLUSTER_COLUMN);
+        assert_eq!(
+            cluster_comment("POTA", &three, "CW 20 WPM"),
+            "POTA US-1234 +2 CW 20 WPM"
+        );
+        let long = "A".repeat(COMMENT_MAX);
+        assert_eq!(
+            cluster_comment("POTA", &three, &long),
+            format!("POTA US-1234 +2 {long}"),
+            "the operator's words go whole"
+        );
+        // Through a press: the queued line is the fitted one.
+        let (gate, posts) = (Gate::new(), Posts::default());
+        let qrt = Context {
+            reference: "US-1234,US-5678,US-9012".into(),
+            comment: "QRT".into(),
+            ..ctx()
+        };
+        press(
+            &gate,
+            Instant::now(),
+            &qrt,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        assert_eq!(posts.borrow().1[0].2, "POTA US-1234 US-5678 +1 QRT");
+    }
+
+    /// ⭐ The QRT goes where the spot it ends stands: the frequency a target last took this
+    /// activation's spot on, though the dial has moved since. Only a QRT, only that frequency.
+    #[test]
+    fn a_qrt_goes_on_the_frequency_last_spotted_and_nothing_else_leaves_the_dial() {
+        let mut engine = Engine::new("W9XYZ", "EN52", 0);
+        engine
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
+        let dial = engine.settings().dial_hz();
+        let spotted = dial + 10_000;
+        let gate = Gate::new();
+        let confirm = |hz: u64, comment: &str| {
+            Context::confirmed_in(&gate, &engine, "US-0001", hz, comment).map(|c| c.dial_hz)
+        };
+        assert_eq!(
+            confirm(spotted, "QRT"),
+            Err(Refusal::Moved),
+            "never spotted"
+        );
+        let posts = Posts::default();
+        let at = Context {
+            dial_hz: spotted,
+            ..ctx()
+        };
+        press(
+            &gate,
+            Instant::now(),
+            &at,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        assert_eq!(confirm(spotted, "qrt"), Ok(spotted));
+        assert_eq!(confirm(spotted, "QRV"), Err(Refusal::Moved), "only a QRT");
+        assert_eq!(confirm(spotted + 1_000, "QRT"), Err(Refusal::Moved));
+        assert_eq!(confirm(dial, "QRT"), Ok(dial), "the dial, as always");
+        // Stop, and the same park started again later: its old spot is not this activation's.
+        gate.forget_spotted();
+        assert_eq!(
+            confirm(spotted, "QRT"),
+            Err(Refusal::Moved),
+            "a stopped activation's spot"
+        );
+        assert_eq!(confirm(dial, "QRT"), Ok(dial));
+        press(
+            &gate,
+            Instant::now(),
+            &at,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        engine
+            .set_activation("POTA", "US-0002", Vec::new())
+            .unwrap();
+        assert_eq!(
+            Context::confirmed_in(&gate, &engine, "US-0002", spotted, "QRT"),
+            Err(Refusal::Moved),
+            "another activation's spot"
+        );
+    }
+
+    #[test]
+    fn the_comment_is_the_operators_own_and_blank_is_qrv() {
+        let mut engine = Engine::new("W9XYZ", "EN52", 0);
+        let dial = engine.settings().dial_hz();
+        engine
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
+        let comment = |c: &str| Context::confirmed(&engine, "US-0001", dial, c).map(|x| x.comment);
+        assert_eq!(comment(""), Ok("QRV".into()));
+        assert_eq!(comment("   "), Ok("QRV".into()));
+        assert_eq!(comment("qrt"), Ok("QRT".into()));
+        assert_eq!(comment(" CW  20 wpm "), Ok("CW 20 WPM".into()));
+        assert_eq!(
+            comment(&"A".repeat(COMMENT_MAX)),
+            Ok("A".repeat(COMMENT_MAX))
+        );
+        // Nothing that could end a cluster line or that either form would not take.
+        for bad in [
+            "QRV\r\nSET/NAME X",
+            "QRV\n",
+            "tab\there",
+            "caf\u{e9}",
+            &"A".repeat(COMMENT_MAX + 1),
+        ] {
+            assert_eq!(comment(bad), Err(Refusal::Comment), "{bad:?}");
+        }
+        // A moved park is still reported as moved, whatever the comment.
+        assert_eq!(
+            Context::confirmed(&engine, "US-0002", dial, "\n"),
+            Err(Refusal::Moved)
+        );
+    }
+
+    #[test]
+    fn the_comment_goes_to_both_targets_and_a_qrt_is_not_a_repeat_of_the_spot() {
+        let (gate, posts, now) = (Gate::new(), Posts::default(), Instant::now());
+        assert_eq!(
+            press(&gate, now, &ctx(), &posts, Ok(SpotAnswer::Posted), Ok(())),
+            both()
+        );
+        let qrt = Context {
+            comment: "QRT".into(),
+            ..ctx()
+        };
+        let later = now + Duration::from_secs(20);
+        assert_eq!(
+            press(&gate, later, &qrt, &posts, Ok(SpotAnswer::Posted), Ok(())),
+            both()
+        );
+        // The same QRT again inside the minute is a repeat, held as before.
+        assert_eq!(
+            press(&gate, later, &qrt, &posts, Ok(SpotAnswer::Posted), Ok(())),
+            one(PotaResult::Throttled, ClusterResult::Throttled)
+        );
+        let (pota, cluster) = posts.into_inner();
+        assert_eq!(
+            pota.iter().map(|p| p.comments.as_str()).collect::<Vec<_>>(),
+            ["QRV", "QRT"]
+        );
+        assert_eq!(
+            cluster.iter().map(|c| c.2.as_str()).collect::<Vec<_>>(),
+            ["POTA US-0001 QRV", "POTA US-0001 QRT"]
         );
     }
 
@@ -832,6 +1245,14 @@ mod tests {
             engine.set_operating_mode(section, false);
             assert_eq!(mode(&engine), Some(expected), "{section}");
         }
+        // JTTY is the Keyboard section too, and pota.app lists no JTTY: no mode, never PSK31.
+        engine.set_operating_mode("jtty", false);
+        assert_eq!(mode(&engine), None, "JTTY");
+        engine.set_operating_mode("keyboard", false);
+        engine
+            .set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .unwrap();
+        assert_eq!(mode(&engine), Some("QPSK31"), "control: PSK's own sub-mode");
         // Every name Nexus can send is one pota.app lists.
         for tier in Tier::ALL {
             let mut e = Engine::new("W9XYZ", "EN52", 0);

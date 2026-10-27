@@ -242,7 +242,7 @@ describe('the shared sliders take the wheel only where their host asks', () => {
   })
 
   it('the Sub strip with no wheel step (CW’s)', () => {
-    render(<SubReceiverStrip radio={snapWith({ ...RIG, receivers: DUAL }).radio} radioId={1} catOk />)
+    render(<SubReceiverStrip radio={snapWith({ ...RIG, receivers: DUAL }).radio} catOk />)
     expect(notch(slider('phone.sub.af.aria')), 'the Sub row stopped the scroll').toBe(true)
     expect(slider('phone.sub.af.aria').value).toBe('50')
     expect(setSubLevel).not.toHaveBeenCalled()

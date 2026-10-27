@@ -4,7 +4,7 @@
 //! all (the TX-enable latch, licence privileges on the emitted RF, identity, the watchdog, the
 //! one transmitter arbiter), and nothing in the app calls this module yet; the change that wires
 //! the Flex client into the engine puts those gates in front of it. Admission adds what only the
-//! radio's own status can say, and every check is a reason to refuse (port plan §3.2):
+//! radio's own status can say, and every check is a reason to refuse:
 //!
 //! - the session is registered, on a TCP API version reviewed for transmit (1.4), and has a
 //!   client handle;

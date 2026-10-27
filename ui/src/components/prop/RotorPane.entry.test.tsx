@@ -9,7 +9,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { RotorPane } from './RotorPane'
-import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import type { CallBearing, PointedAt, RotatorState } from '../../types'
 
@@ -173,20 +172,5 @@ describe('Point', () => {
     type(elBox(), '30')
     await waitFor(() => expect(api.pointRotatorElevation).toHaveBeenCalledTimes(1))
     expect(api.pointRotatorElevation).toHaveBeenCalledWith(30)
-  })
-})
-
-describe('a seat without station control', () => {
-  it('gets no line 2, no live Point, and asks the station for no bearing', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RotorPane entryCall="EC1DD" />
-      </StationControlContext.Provider>,
-    )
-    // The pane is there, with the browser's own read of the heading (the control that it rendered).
-    await waitFor(() => expect(screen.queryByText('123°T')).not.toBeNull())
-    expect(line2()).toBeNull()
-    expect(pointButton()).toBeNull()
-    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
   })
 })

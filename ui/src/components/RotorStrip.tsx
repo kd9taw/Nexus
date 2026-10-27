@@ -14,7 +14,6 @@
 // azimuth in degrees and the true/magnetic marks are data, and the three annunciator plates
 // below are the instrument's own vocabulary.
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { useStationControl } from '../stationAccess'
 import {
   getDeclination,
   getSatTrackStatus,
@@ -96,7 +95,6 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   // FT cockpit).
   const [configured, setConfigured] = useState(false)
   const alive = useRef(true)
-  const local = useStationControl()
 
   useEffect(() => {
     if (!active) return
@@ -106,11 +104,6 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         if (alive.current) setConfigured((st.rotatorModel ?? 0) > 0 || st.rotatorHost.trim() !== '')
       })
       .catch(() => {})
-    if (!local) {
-      return () => {
-        alive.current = false
-      }
-    }
     // One single-flight poll (#335): `read_rotator` and `get_sat_transponder` take the engine
     // mutex, so a tick skips while any of the last set is still out.
     const stop = pollSingleFlight('rotor', 2_000, (owns) =>
@@ -129,7 +122,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
       alive.current = false
       stop()
     }
-  }, [active, local])
+  }, [active])
 
   // Is Doppler driving a radio surface at all? Read from the DTO's `mode` —
   // the engine's own per-tick answer (a pass-only track drives nothing and

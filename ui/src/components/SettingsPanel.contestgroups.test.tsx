@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
+import type { FieldDayStatus } from '../types'
 import { CONTESTS, CONTESTS_SENDING_POWER, isFieldDay } from '../fdEvent'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 // ⭐ A whole settings file as this release's Rust `Settings` serialises it (every key, 335 of
@@ -62,10 +63,11 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel() {
+/** `fieldDay` is the live snapshot's contest block: a running session, or none. */
+function renderPanel(fieldDay: FieldDayStatus | null = null) {
   return render(
     <SettingsPanel
-      fieldDay={null}
+      fieldDay={fieldDay}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -193,7 +195,9 @@ describe('the groups, in the order an entry is set up', () => {
     const where: Record<string, Element | null> = {
       'the contest picker': screen.getByRole('group', { name: 'Which contest you are entering' }),
       'Your role': fieldLabelled('Your role'),
-      'the Contest mode switch': screen.getByRole('switch', { name: /^(Enable|Disable) Contest mode: / }),
+      // Start contest… / Stop contest…: it opens the setup or the end-of-contest checklist; the form
+      // no longer saves the mode.
+      'the Contest mode switch': screen.getByRole('button', { name: /^(Start|Stop) contest…$/ }),
       'Check for rules updates': screen.getByRole('button', { name: 'Check for rules updates' }),
       County: boxLabelled('County'),
       'State or province': boxLabelled('State or province'),
@@ -354,7 +358,13 @@ describe('a stored settings file, every Contesting value set', () => {
       ) as HTMLSelectElement | null)?.value ?? null
     return {
       contest: pressedIn('Which contest you are entering'),
-      'Contest mode': checked(/ Contest mode: /),
+      // On shows Stop contest…, off shows Start contest… (the live station's state, which the file's
+      // fdActive puts the station in).
+      'Contest mode': screen.queryByRole('button', { name: 'Stop contest…' })
+        ? 'true'
+        : screen.queryByRole('button', { name: 'Start contest…' })
+          ? 'false'
+          : null,
       County: value('County'),
       'State or province': value('State or province'),
       Check: value('Check'),
@@ -473,7 +483,8 @@ describe('a stored settings file, every Contesting value set', () => {
         ...DECLARES[pick],
       } as never),
     )
-    renderPanel()
+    // The file saves Contest mode on, so the station runs its pick.
+    renderPanel({ event: pick, log: [] } as unknown as FieldDayStatus)
     await openTab('Contesting')
     await screen.findByRole('group', { name: 'Which contest you are entering' })
     if (pick === 'ilqp') await waitFor(() => expect(boxLabelled('Entry class')).not.toBeNull())

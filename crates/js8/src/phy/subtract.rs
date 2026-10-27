@@ -23,7 +23,7 @@
 //! 701..1400 (a 1401-sample delay of half the window; subtractft8.f90:35
 //! cshifts the whole buffer instead); (2) there is no end correction
 //! (subtractft8.f90:39-41, :81-82 has one). A future change to either is an
-//! A/B on the lab corpus (Task B3.11), not a drive-by fix.
+//! A/B on the lab corpus, not a drive-by fix.
 //!
 //! Runs in the decoder's outer passes 1–2 (JS8Call: 3 outer passes,
 //! subtract on 1–2) so later passes find weaker stations under strong ones.

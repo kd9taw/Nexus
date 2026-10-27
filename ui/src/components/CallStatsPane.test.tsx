@@ -12,12 +12,14 @@ import { getCallStats } from '../api'
 
 vi.mock('../api', () => ({ getCallStats: vi.fn() }))
 
-const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m']
+const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '33cm', '23cm']
+/** The bands DXCC keeps no slot on, as the station answers them. */
+const NO_DXCC_SLOT = new Set(['60m', '4m', '70cm', '33cm', '23cm'])
 const NONE: QslChannels = { card: false, lotw: false, eqsl: false, eqslAg: false, qrz: false }
 
-/** A row of slots: every band unworked but the ones named (60 m and 4 m no credit when `dxcc`). */
+/** A row of slots: every band unworked but the ones named (no credit where DXCC keeps no slot, when `dxcc`). */
 function row(dxcc: boolean, filled: Record<string, StatsSlot> = {}): StatsSlot[] {
-  return BANDS.map((b) => filled[b] ?? (dxcc && (b === '60m' || b === '4m') ? 'noCredit' : 'unworked'))
+  return BANDS.map((b) => filled[b] ?? (dxcc && NO_DXCC_SLOT.has(b) ? 'noCredit' : 'unworked'))
 }
 
 /** Navassa, as the station answers for KP1AA on 20 m in CW after K1N's 2015 contact (DXCC 182). */
@@ -77,8 +79,8 @@ function shape(): number[] {
   ]
 }
 /** Two parts and three flags; a head row and two source rows; a head row and three awards' three mode
- *  rows; nine rows of thirteen bands. */
-const SHAPE = [2, 3, 3, 10, 117]
+ *  rows; nine rows of sixteen bands. */
+const SHAPE = [2, 3, 3, 10, 9 * BANDS.length]
 
 describe('the Stats pane', () => {
   it('asks nothing and says what it is for while the log entry holds no call', () => {
@@ -99,11 +101,11 @@ describe('the Stats pane', () => {
       ['band', 'true'],
       ['mode', 'false'],
     ])
-    // The grids: DXCC (60 m and 4 m no credit) and WAZ; WAS keeps its lines for a station outside the
+    // The grids: DXCC (no credit where it keeps no band slot) and WAZ; WAS keeps its lines for a station outside the
     // family, marked and explained.
     expect(slots('DXCC')).toEqual([row(true, { '20m': 'confirmed' }), row(true, { '40m': 'worked' }), row(true)])
     expect(slots('WAZ')).toEqual([row(false, { '20m': 'confirmed', '60m': 'worked' }), row(false), row(false)])
-    expect(slots('WAS')).toEqual(Array(3).fill(Array(13).fill('none')))
+    expect(slots('WAS')).toEqual(Array(3).fill(Array(BANDS.length).fill('none')))
     expect(heads()).toEqual([
       ['DXCC', '182', null],
       ['WAS', '—', 'WAS: KP1AA is not a station in the United States.'],
@@ -158,6 +160,13 @@ describe('the Stats pane', () => {
       )
     expect(cells(EN['callStats.src.country'])).toEqual(['none', 'none', 'none', 'none'])
     expect(cells(EN['callStats.src.call'])).toEqual(['false', 'true', 'false', 'false'])
+  })
+
+  it('heads each band column with its number, a centimetre band keeping its unit', () => {
+    render(<CallStatsPane call="" band="70cm" mode="CW" />)
+    const heads = [...document.querySelectorAll('.cstats-grid thead th')].map((th) => th.textContent)
+    expect(heads).toEqual(['160', '80', '60', '40', '30', '20', '17', '15', '12', '10', '6', '4', '2', '70cm', '33cm', '23cm'])
+    expect(document.querySelector('.cstats-grid thead th[data-here]')?.textContent, 'the band on the dial').toBe('70cm')
   })
 
   it('draws the same lines whatever it has to say, so nothing beside it moves', async () => {

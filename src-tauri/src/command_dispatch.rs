@@ -29,7 +29,10 @@
 //! Stop wins over a start that was in flight. The command link binds each start to the transmit
 //! stand-down generation as it reads it ([`Afar`]), and its handler checks that generation under the
 //! Engine lock it then runs in ([`still_bound`]): a Stop taken in between, by either road, or any
-//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]). A Stop that
+//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]). An unkey
+//! (the off half of a switch: `tempo_client::dispatch::is_unkey`) voids the starts read before it
+//! the same way, by a generation of its own, but halts nothing: it ends its own over, as at the
+//! shack's own screen, and what other starts from afar began goes on. A Stop, or an unkey, that
 //! overtook the start on the way (by the second road, or ahead of it on the link) is caught by its
 //! number: every call says how many Stops its computer had pressed when it was made ([`Call`]), and
 //! a start made before a Stop the shack has taken is refused as it is read.
@@ -70,8 +73,8 @@
 //!   copy is checked on its own list too.
 //! - **The one mixed store**, `ui-state.json`, splits by key: the station's data ([`STATION_KEYS`])
 //!   lives at the shack, every other key on the computer the operator sits at.
-//! - **Events.** An alert (`crate::alert`, Pounce's today) is the one event the shack sends on, and
-//!   the only one the other computer takes ([`FORWARDED_EVENTS`]).
+//! - **Events.** An alert (`crate::alert`: Pounce's, the decode alerts, new parks) is the one event
+//!   the shack sends on, and the only one the other computer takes ([`FORWARDED_EVENTS`]).
 //!
 //! The operator's other rulings of 2026-10-07 live in the table and in [`argument_refusal`]: a whole
 //! Settings save from afar saves every field, as the stream window's does; a settings restore, a
@@ -102,8 +105,9 @@ use std::time::{Duration, Instant};
 pub(crate) use tempo_client::dispatch::contract_text;
 use tempo_client::dispatch::{argument_refusal, runs_as_stop, Access, STORES};
 pub(crate) use tempo_client::dispatch::{
-    forwards, is_stop, join_ui_state, press_from_afar, route, split_ui_state, store_access,
-    transmit_from_afar, Outcome, Profile, Refusal, Route, Store, Wired, FORWARDED_EVENTS,
+    forwards, is_stop, is_unkey, join_ui_state, press_from_afar, route, split_ui_state,
+    store_access, transmit_from_afar, Outcome, Profile, Refusal, Route, Store, Wired,
+    FORWARDED_EVENTS,
 };
 #[cfg(test)]
 pub(crate) use tempo_client::dispatch::{off_args, Off, OFF_HALVES, STATION_KEYS, WIRED};
@@ -134,14 +138,20 @@ const ERROR_BYTES: usize = 512;
 
 /// What the shack's command lane writes into a call it admitted from another computer that a
 /// handler must run as from afar, under the argument [`AFAR`]: the transmit stand-down generation
-/// as the lane read the call off the link. A start runs only under it ([`still_bound`]); a section
-/// entry arms nothing with it ([`ENTRIES`]). The lane alone writes it; anything the other computer
-/// sends under that name goes before any call is admitted. The shack's own screen never sends it,
-/// so its calls are as they always were.
+/// and the starts-voided generation as the lane read the call off the link. A start runs only under
+/// both ([`still_bound`]); a section entry arms nothing with it ([`ENTRIES`]). The lane alone
+/// writes it; anything the other computer sends under that name goes before any call is admitted.
+/// The shack's own screen never sends it, so its calls are as they always were.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Afar {
+    /// Moved by a Stop on either road and by every halt at the station: what a start from afar
+    /// that has run is ended by ([`started_from_afar`]).
     pub(crate) stand_down: u64,
+    /// Moved by an unkey from afar, which halts nothing (`Engine::remote_starts_voided`). Absent
+    /// reads as the first generation, so once any unkey is taken a start without it is refused.
+    #[serde(default)]
+    pub(crate) starts_voided: u64,
 }
 
 /// The argument [`Afar`] goes under: the name each handler that takes it gives its parameter.
@@ -175,7 +185,7 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the line that keys the transmitter), the one setting that names a program for the shack to run
+/// the lines that key the transmitter), the one setting that names a program for the shack to run
 /// (the TQSL path), and the TCI server's settings. From afar a save keeps the shack's own value of
 /// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
 /// shack only. So are the addresses Nexus sends a stored key or password to
@@ -256,6 +266,21 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
+    // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
+    // them), and how RTTY keys, with true FSK's port and line.
+    save.cw_keyer = shack.cw_keyer;
+    save.cw_key_port = shack.cw_key_port.clone();
+    save.cw_key_line = shack.cw_key_line.clone();
+    save.winkeyer_port = shack.winkeyer_port.clone();
+    save.rtty_backend = shack.rtty_backend.clone();
+    save.rtty_fsk_port = shack.rtty_fsk_port.clone();
+    save.rtty_fsk_line = shack.rtty_fsk_line.clone();
+    // The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed: the
+    // radio's own, as its PTT is.
+    save.flex_native_unbenched = edited.map_or(shack.flex_native_unbenched, |radio| {
+        radio.flex_native_unbenched
+    });
     // ⛔ The one setting that names a program for the shack to run: TQSL, which signs a LoTW upload
     // from the Upload button (which runs from afar too) or the automatic batch, with nobody at the
     // shack to see what it was. Every other path a save carries is data: a voice-keyer slot's WAV,
@@ -264,8 +289,9 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, put back into `patch` as the shack has them for radio `id`. From the shack's own screen
-/// (`None`), or for a radio the shack does not have, the patch is taken as it came.
+/// port, and the Flex client's Beta for CW, Tune and the ATU, put back into `patch` as the shack has
+/// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
+/// have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
     shack: &tempo_app::settings::Settings,
     id: u32,
@@ -278,6 +304,7 @@ pub(crate) fn keep_the_shacks_radio_ptt(
     if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
+        patch.flex_native_unbenched = radio.flex_native_unbenched;
     }
 }
 
@@ -420,7 +447,7 @@ pub(crate) fn keep_the_shacks_settings(
 /// addresses the shack sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 53] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -461,6 +488,14 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
     "catSerialHandshake",
     "pttMethod",
     "pttSerialPort",
+    "cwKeyer",
+    "cwKeyPort",
+    "cwKeyLine",
+    "winkeyerPort",
+    "rttyBackend",
+    "rttyFskPort",
+    "rttyFskLine",
+    "flexNativeUnbenched",
     "tqslPath",
     "cloudlogUrl",
     "fdJoinAddr",
@@ -500,6 +535,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
             | Wired::Tune
             | Wired::Rtty
             | Wired::Psk
+            | Wired::Jtty
             | Wired::Aprs
             | Wired::Sstv
             | Wired::Chat)
@@ -510,19 +546,23 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
-/// stand-down generation is the one the command lane read it under ([`Afar`]). Asked by the
-/// start's own handler, first, under the Engine lock the start then runs in: a Stop on either road,
-/// the off half of a switch on the link, presence lapsing, or any halt at the station, taken after
-/// the start was read, has moved it, so the start does not run at all. One taken once the start has
-/// run waits for the same lock, and stops what it began. Asked before the start's own work, so a
-/// start whose work halts (a QSY's change of context) never trips on itself. `None`, the shack's own
+/// stand-down generation and the starts-voided generation are the ones the command lane read it
+/// under ([`Afar`]). Asked by the start's own handler, first, under the Engine lock the start then
+/// runs in: a Stop on either road, presence lapsing, or any halt at the station has moved the
+/// stand-down, and an unkey on the link (the off half of a switch) has moved the starts-voided
+/// generation, so a start read before either does not run at all. One taken once the start has run
+/// waits for the same lock, and stops what it began. Asked before the start's own work, so a start
+/// whose work halts (a QSY's change of context) never trips on itself. `None`, the shack's own
 /// screen, runs as it always has.
 pub(crate) fn still_bound(
     engine: &tempo_app::engine::Engine,
     afar: Option<&Afar>,
 ) -> Result<(), String> {
     match afar {
-        Some(afar) if engine.remote_transmit_stand_down_generation() != afar.stand_down => {
+        Some(afar)
+            if engine.remote_transmit_stand_down_generation() != afar.stand_down
+                || engine.remote_starts_voided_generation() != afar.starts_voided =>
+        {
             Err(STOPPED_SINCE.to_string())
         }
         _ => Ok(()),
@@ -531,8 +571,9 @@ pub(crate) fn still_bound(
 
 /// ⛔ Note at the station that a start from afar ran under its stand-down, so a revocation of that
 /// stand-down with no halt (the computer's permission to transmit withdrawn) still ends what it
-/// started, queued or turned on, on the radio loop's next tick. `None`, the shack's own screen,
-/// notes nothing. Called after the start's work, in the same hold as [`still_bound`].
+/// started, queued or turned on, on the radio loop's next tick. The starts-voided generation is not
+/// noted: an unkey ends its own over, never what other starts began. `None`, the shack's own
+/// screen, notes nothing. Called after the start's work, in the same hold as [`still_bound`].
 pub(crate) fn started_from_afar(engine: &mut tempo_app::engine::Engine, afar: Option<&Afar>) {
     if let Some(afar) = afar {
         engine.note_started_from_afar(afar.stand_down);
@@ -726,12 +767,17 @@ impl Stores for ShackStores {
 // --- The one mixed store -------------------------------------------------------------------------
 
 /// ⛔ The saved config profiles, one of the station's keys: each a whole Settings, its stored keys
-/// ([`SECRET_SETTINGS`]) included. A read from afar blanks them ([`station_answer`]) and a save
-/// from afar keeps the shack's own ([`merged_save`]), as the settings themselves do.
+/// ([`SECRET_SETTINGS`]) and every setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// included, and the shack's own screen applies what a profile holds when it is loaded there. A
+/// read from afar blanks the stored keys, and leaves out a list that does not read here
+/// ([`station_answer`]). A save from afar keeps the shack's own of both, as the settings themselves
+/// do, leaves the shack's list as it is when it carries none, and is refused where a list does not
+/// read here ([`merged_save`]).
 const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
-/// `None` when `text` is no list, which goes as it came: the screen cannot load it either.
+/// `None` when `text` does not read here as a list. The shack's screen reads more than this does,
+/// so such a list may still load there with every setting it holds.
 fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Option<String> {
     let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
     for profile in &mut profiles {
@@ -745,6 +791,42 @@ fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Opt
                 if settings.contains_key(key) {
                     settings.insert(key.into(), Value::String(kept(&name, key)));
                 }
+            }
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// The saved profiles `text` with each setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// as the shack's own profile of the same name holds it (`shack`, the shack's saved profiles), and
+/// left out where that profile does not hold it or the shack has no profile of that name: a setting
+/// a profile leaves out keeps the station's current value when the profile is loaded
+/// (`mergeProfile`). `None` when `text`, or the shack's own list, does not read here as a list:
+/// the shack's own settings cannot then be kept.
+fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<String> {
+    let shack: Vec<Value> = match shack {
+        Some(t) => serde_json::from_str(t).ok()?,
+        None => Vec::new(),
+    };
+    let held: BTreeMap<String, serde_json::Map<String, Value>> = shack
+        .into_iter()
+        .filter_map(|profile| {
+            let name = profile.get("name")?.as_str()?.to_string();
+            Some((name, profile.get("settings")?.as_object()?.clone()))
+        })
+        .collect();
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let own = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| held.get(name));
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            for key in STATION_ONLY_SETTINGS {
+                match own.and_then(|own| own.get(key)) {
+                    Some(value) => settings.insert(key.into(), value.clone()),
+                    None => settings.remove(key),
+                };
             }
         }
     }
@@ -772,35 +854,44 @@ fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> 
 }
 
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
-/// sends nothing. The saved profiles go without their stored keys.
+/// sends nothing. The saved profiles go without their stored keys, and a list that does not read
+/// here, whose keys cannot be blanked, does not go at all.
 fn station_answer(value: Value) -> Value {
     let map: BTreeMap<String, String> = serde_json::from_value(value).unwrap_or_default();
     let mut station = split_ui_state(map).0;
-    if let Some(text) = station.get_mut(PROFILES) {
-        if let Some(blanked) = profiles_with_secrets(text, |_, _| String::new()) {
-            *text = blanked;
+    if let Some(text) = station.remove(PROFILES) {
+        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new()) {
+            station.insert(PROFILES.into(), blanked);
         }
     }
     serde_json::to_value(station).unwrap_or_else(|_| Value::Object(Default::default()))
 }
 
 /// What a `ui_state_save` from afar writes at the shack: the shack's own keys as they are, and the
-/// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
-/// stored keys stay the shack's: never changed, blanked or planted from afar. `None` when the
-/// arguments carry no map of strings.
+/// station's keys as the other computer sent them, so a key it removed is removed; but a save that
+/// carries no saved profiles keeps the shack's as they are, since a read from afar leaves out a
+/// list that does not read here ([`station_answer`]). A saved profile's stored keys stay the
+/// shack's: never changed, blanked or planted from afar. ⛔ So does each setting set at the station
+/// only, which a profile loaded at the shack would apply as if typed there
+/// ([`profiles_with_station_settings`]). The shack's own list sent back as it is goes as it is.
+/// `None` when the arguments carry no map of strings, or carry another profile list where that list
+/// or the shack's own does not read here: the keeps cannot run, so the whole save is refused.
 fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
     let mut sent: BTreeMap<String, String> =
         serde_json::from_value(args.get("state")?.clone()).ok()?;
-    let held = profile_secrets(shack.get(PROFILES));
-    if let Some(text) = sent.get_mut(PROFILES) {
+    let own = shack.get(PROFILES);
+    let held = profile_secrets(own);
+    if let Some(own) = own {
+        sent.entry(PROFILES.into()).or_insert_with(|| own.clone());
+    }
+    if let Some(text) = sent.get_mut(PROFILES).filter(|text| Some(&**text) != own) {
         let kept = |profile: &str, key: &str| {
             held.get(&(profile.to_string(), key.to_string()))
                 .cloned()
                 .unwrap_or_default()
         };
-        if let Some(restored) = profiles_with_secrets(text, kept) {
-            *text = restored;
-        }
+        *text = profiles_with_secrets(text, kept)?;
+        *text = profiles_with_station_settings(text, own)?;
     }
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))
 }
@@ -1047,6 +1138,12 @@ impl<S: Stores> Dispatcher<S> {
         self.outcomes_at(caller, ids, Instant::now())
     }
 
+    /// The journals held, as a burst of admissions holds them: a test's stand-in.
+    #[cfg(test)]
+    pub(crate) fn hold_journals(&self) -> impl Sized + '_ {
+        lock(&self.inner.journals)
+    }
+
     fn outcomes_at(&self, caller: &CallerKey, ids: &[u64], now: Instant) -> Vec<Outcome> {
         let mut journals = lock(&self.inner.journals);
         match journals.get_mut(caller) {
@@ -1066,9 +1163,14 @@ fn class_refusal(
     cmd: &str,
     args: &Value,
 ) -> Option<Refusal> {
-    // Every profile this build serves is admitted by class alone. A second one stops this binding
-    // from compiling until its own rule is written here.
-    let Profile::Desktop = caller.profile;
+    // Every profile this build serves is admitted by class alone. A new one stops this match from
+    // compiling until its own rule is written here. A phone is admitted nothing: no command is
+    // classed for it yet (the shack refuses its `open` before any call, so this is the second
+    // wall).
+    match caller.profile {
+        Profile::Desktop => {}
+        Profile::Mobile => return Some(Refusal::Unclassed),
+    }
     match class {
         None => Some(Refusal::Unclassed),
         Some(_) if !args.is_object() => Some(Refusal::BadArguments),
@@ -1087,6 +1189,7 @@ fn class_refusal(
                 | Wired::Tune
                 | Wired::Rtty
                 | Wired::Psk
+                | Wired::Jtty
                 | Wired::Aprs
                 | Wired::Sstv
                 | Wired::Chat,

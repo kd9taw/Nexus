@@ -1,20 +1,17 @@
 // @vitest-environment jsdom
 //
-// The Remote stations window's entry in Settings ▸ Station ▸ Remote access (the operator,
-// 2026-10-04, "Stream client window"): the PC an operator works FROM opens the Remote page in a
-// Nexus window of its own. Pinned here: it is offered on Windows only, at the END of the card (the
-// beta line and the streaming switch stay first, as ordered on 2026-10-02), one click asks Rust to
-// open the window once, a failure says so in words, and the Remote page's own copy of Settings
-// never shows it — the page cannot open windows in this app, and must not appear to.
+// The one Connect to my station… entry in Settings ▸ Remote access, on the PC an operator works FROM:
+// it opens the window that finds the station on this network first and otherwise signs in to reach it
+// over the internet. It replaced the two entries that were here (Remote stations… and Stations on
+// this network…). Pinned here: it is offered on Windows only, at the END of the card (the beta line
+// and the streaming switch stay first, as ordered on 2026-10-02), one click asks Rust to open the
+// window once, in the app's language, and a failure says so in words.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { navigationPages } from '../remote-web/__fixtures__/navigation-page'
-import configuration from '../remote-web/__fixtures__/configuration-settings.json'
 
 const platform = vi.hoisted(() => ({ windows: true }))
 vi.mock('../platform', async (importOriginal) => {
@@ -57,11 +54,7 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel(remote = false) {
-  const page = vi.fn(async () => {
-    const pages = navigationPages('settings', configuration)
-    return { ...pages[0], rows: pages.flatMap((p) => p.rows), nextCursor: null }
-  })
+function renderPanel() {
   const panel = (
     <SettingsPanel
       activeRadioId={0}
@@ -76,25 +69,17 @@ function renderPanel(remote = false) {
       features={features}
     />
   )
-  return render(
-    remote ? (
-      <RemoteCollectionsContext.Provider value={{ page } as unknown as RemoteCollections}>
-        {panel}
-      </RemoteCollectionsContext.Provider>
-    ) : (
-      panel
-    ),
-  )
+  return render(panel)
 }
 
-async function openStationTab() {
-  fireEvent.click(await screen.findByRole('tab', { name: 'Station' }))
+async function openRemoteTab() {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Remote' }))
   await waitFor(() => expect(document.getElementById('settings-remote-access')).toBeTruthy())
 }
 
 const card = () => document.getElementById('settings-remote-access')!
-const theButton = () => screen.queryByRole('button', { name: EN['settings.remoteStations.open'] })
-const opens = () => api.get('openRemoteStationsWindow')
+const theButton = () => screen.queryByRole('button', { name: EN['settings.connectStation.open'] })
+const opens = () => api.get('openLanStationsWindow')
 
 beforeEach(() => {
   platform.windows = true
@@ -119,12 +104,12 @@ afterEach(cleanup)
 describe('on Windows', () => {
   it('is offered at the end of Remote access, after the streaming switch, and says what F11 and Esc do', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     expect(card().contains(button)).toBe(true)
     const streaming = screen.getByRole('switch', { name: EN['settings.remoteStream.label'] })
     expect(streaming.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING, 'after the switch').toBeTruthy()
-    const hint = screen.getByText(EN['settings.remoteStations.hint'])
+    const hint = screen.getByText(EN['settings.connectStation.hint'])
     expect(hint.closest('.settings-field')?.contains(button)).toBe(true)
     expect(hint.textContent).toMatch(/F11 switches the window to full screen and back, and Esc over the picture still stops transmitting/)
   })
@@ -133,29 +118,38 @@ describe('on Windows', () => {
     let finish: () => void = () => {}
     opens().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     expect(opens()).toHaveBeenCalledTimes(1)
-    expect(opens().mock.calls[0]).toEqual([])
+    expect(opens().mock.calls[0]).toEqual(['en'])
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true))
     finish()
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
-    expect(screen.queryByText(EN['settings.remoteStations.failed'])).toBeNull()
+    expect(screen.queryByText(EN['settings.connectStation.failed'])).toBeNull()
+  })
+
+  it('is the only way in: the two entries it replaced are gone', async () => {
+    renderPanel()
+    await openRemoteTab()
+    await waitFor(() => theButton()!)
+    // Their old labels, written out: the strings themselves left the catalogs with the entries.
+    expect(screen.queryByRole('button', { name: 'Remote stations…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Stations on this network…' })).toBeNull()
   })
 
   it('says so in words when the window could not be opened, and lets the operator try again', async () => {
     opens().mockImplementation(() => Promise.reject(new Error('remoteUnreachable')))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe(EN['settings.remoteStations.failed'])
+    expect(alert.textContent).toBe(EN['settings.connectStation.failed'])
     expect((button as HTMLButtonElement).disabled).toBe(false)
     opens().mockImplementation(() => Promise.resolve(null))
     fireEvent.click(button)
-    await waitFor(() => expect(screen.queryByText(EN['settings.remoteStations.failed'])).toBeNull())
+    await waitFor(() => expect(screen.queryByText(EN['settings.connectStation.failed'])).toBeNull())
     expect(opens()).toHaveBeenCalledTimes(2)
   })
 })
@@ -164,7 +158,7 @@ describe('where the window is not offered', () => {
   it('says to use a browser on Linux and macOS, with no button', async () => {
     platform.windows = false
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() => expect(screen.getByText(EN['settings.remoteStations.unavailable'])).toBeTruthy())
     expect(card().contains(screen.getByText(EN['settings.remoteStations.unavailable']))).toBe(true)
     expect(theButton()).toBeNull()

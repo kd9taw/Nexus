@@ -12,8 +12,7 @@
 #
 # SCOPE: this publishes to GitHub. SourceForge FRS upload and the version.json update
 # endpoint are a deliberate fast-follow (each needs its own secret + external system);
-# the SF *git* mirror is scripts/mirror-to-sourceforge.sh. See
-# nexus-notes/single-repo-pipeline-plan.md.
+# the SF *git* mirror is scripts/mirror-to-sourceforge.sh.
 #
 # WHY THE GATES: on 2026-07-20 a fully-green build shipped a .deb with the AI CW model
 # silently absent (14 MB light, no error anywhere). "Automatic on tag" here does NOT mean
@@ -32,7 +31,8 @@
 # PINNED DOWNLOADS. Everything this workflow fetches to build with is pinned to a digest or a
 # commit: actions from outside GitHub's own (by commit SHA), the DeepCW model, FFTW, Hamlib, the
 # tauri bundler's AppImage tools and the AppImage runtime (scripts/build-linux.sh), epubcheck,
-# the manual's Python packages, and the Pi container's images, Node.js and rustup-init
+# the manual's Python packages, the x86_64 Linux job's container image and rustup-init, and the Pi
+# container's images, Node.js and rustup-init
 # (scripts/Dockerfile.pi, which also takes npm at an exact version). A branch, a `continuous`
 # release or a floating version lets a release change with no commit here.
 # scripts/release-secrets.test.mjs refuses a download it cannot see pinned, here, in ci.yml and in
@@ -62,9 +62,15 @@ env:
   MODEL_SHA: a7b3b4aa2610d3e88b8c7d4420eceee31be2d0ae595b3413264334f3ffb1eab5
   MODEL_JSON_SHA: b4342157b90229ee7380e165f3d8036179b80d1e6ae02f2557388b7fcd558c01
   # The highest glibc symbol version the published x86_64 Linux binaries may require, and
-  # therefore the oldest distro they run on. 2.39 = Ubuntu 24.04, which is what the pinned
-  # `ubuntu-24.04` runner below produces today; docs/install.md states the same floor to
-  # operators and the two must be changed together.
+  # therefore the oldest distro they run on. 2.35 = Ubuntu 22.04, which is what the pinned
+  # `ubuntu:22.04` container the linux-x86 job builds in produces; that covers Ubuntu 22.04+,
+  # Mint 21+ and Debian 12 (2.36) and 13. docs/install.md, LINUX.md and README.md state the
+  # same floor to operators and they must be changed together.
+  #
+  # It was 2.39 from 1.0.5 until 2026-10, the glibc of the `ubuntu-24.04` RUNNER the job used to
+  # build on directly, and that shut out Debian 12 bookworm, Ubuntu 22.04 and Mint 21 — operators
+  # whose installed Nexus stopped updating ("every new release requires you upgrade your perfectly
+  # good running version"). Building in a container instead makes the floor ours, not GitHub's.
   #
   # WHY THIS IS A GATE AND NOT A COMMENT. Before it, the floor was an emergent property of the
   # string `ubuntu-latest`: nothing pinned it, nothing declared it, and nothing checked it. It
@@ -79,7 +85,7 @@ env:
   # createUpdaterArtifacts, never depends — so an x86 floor stamped there would make the Pi
   # bookworm package (glibc 2.36) refuse to install on the Pis it serves today. Any declared
   # floor has to be per-target.
-  GLIBC_FLOOR: '2.39'
+  GLIBC_FLOOR: '2.35'
 
 jobs:
   # ---------------------------------------------------------------------------------------
@@ -156,14 +162,46 @@ jobs:
   # ---------------------------------------------------------------------------------------
   linux-x86:
     name: Linux x86_64 (.deb + AppImage)
-    # PINNED, not `ubuntu-latest`. The build host's glibc IS the floor of every published
-    # x86_64 artifact, so an unpinned label makes the supported-distro list move on GitHub's
-    # schedule rather than ours. The arm64 jobs below have always been pinned AND containerised
-    # (`debian:${BASE}`) and name their base in the filename; this is the same discipline for
-    # x86_64. Changing this line changes who can run Nexus — keep it in step with GLIBC_FLOOR
-    # and docs/install.md.
+    # BUILT IN A PINNED CONTAINER, not on the runner. The build host's glibc IS the floor of every
+    # published x86_64 artifact, so the image below decides who can run Nexus: ubuntu:22.04 is
+    # glibc 2.35 (GLIBC_FLOOR). Pinned by digest, like the Pi jobs' `debian:${BASE}` images, so
+    # neither GitHub's runner list nor Docker Hub's tag can move the floor. Changing this line
+    # changes who can run Nexus — keep it in step with GLIBC_FLOOR and docs/install.md. To move
+    # it, take the index digest from `docker buildx imagetools inspect ubuntu:22.04`.
+    #
+    # Every step runs in the container, as root, with nothing the runner image preinstalls: no
+    # sudo, no gh, no git, no Rust, and none of the GStreamer plugins build-linux.sh copies into
+    # the AppImage from the build host. "Install build dependencies" names each of those, and it
+    # runs first so that checkout has git.
     runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+    # In a container a `run:` step's default shell is `sh` (dash), not the runner's bash, and dash
+    # has no `-o pipefail`: the first such step stopped this job with "Illegal option".
+    defaults:
+      run:
+        shell: bash
     steps:
+      # Three the runner image happened to carry, which the bundle takes from the build host:
+      # gstreamer1.0-plugins-base/-good (the app, autodetect and coreelements plugins build-linux.sh
+      # copies in, and Verify requires) and xdg-utils (tauri's AppImage bundler refuses to build
+      # without /usr/bin/xdg-open, which it ships as usr/bin/xdg-open). gh is jammy's own (2.4.0),
+      # for the model download below.
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl wget file git xz-utils python3 gh \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
+            build-essential cmake ninja-build gfortran pkg-config \
+            libfftw3-dev libboost-dev libasound2-dev libudev-dev \
+            libusb-1.0-0-dev \
+            libfuse2 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -175,30 +213,31 @@ jobs:
       - name: Stamp the tag's version into tauri.conf.json
         run: bash scripts/stamp-version.sh
 
+      # No --clobber here: jammy's gh predates it, and a fresh checkout has no model to overwrite
+      # (it is gitignored). The digests below are the check either way.
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release download "$DEEPCW_RELEASE" --repo "${{ github.repository }}" \
-            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
+            --pattern 'model.onnx*' --dir src-tauri/resources/deepcw
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
 
-      - name: Install build dependencies
+      # The container has no Rust, and rust-toolchain would fetch rustup from sh.rustup.rs, a script
+      # that installs whichever rustup is current. So rustup-init is pinned as scripts/Dockerfile.pi
+      # pins it (the x86_64 build of the same rustup 1.29.1; the sha256 static.rust-lang.org
+      # publishes beside it), and installs the toolchain CI pins. Move the version and the sum together.
+      - name: Install Rust 1.93.1
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
-            build-essential cmake ninja-build gfortran \
-            libfftw3-dev libboost-dev libasound2-dev libudev-dev \
-            libusb-1.0-0-dev \
-            libfuse2
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
-        with:
-          toolchain: 1.93.1
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSfLo /tmp/rustup-init https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init
+          echo "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init" | sha256sum -c -
+          chmod +x /tmp/rustup-init
+          /tmp/rustup-init -y --default-toolchain 1.93.1 --profile minimal
+          rm -f /tmp/rustup-init
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - uses: actions/setup-node@v7
         with:
@@ -217,11 +256,17 @@ jobs:
       # The one secret here is the ClubLog key, because it is compiled in (see the Windows job).
       # Without it the .deb and the AppImage shipped with no key, and ClubLog uploads failed on
       # every official Linux build (#388).
+      #
+      # The checkout belongs to the runner's user and this container runs as root, so git refuses
+      # the tree as "dubious ownership", and build-linux.sh's guard over the tracked Hamlib licence
+      # texts would skip itself without a word. Hence the safe.directory line.
       - name: Build .deb + AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
-        run: bash scripts/build-linux.sh
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash scripts/build-linux.sh
 
       - name: Verify artifacts
         run: |
@@ -468,8 +513,7 @@ jobs:
         # compiles every crates.io crate and runs the UI build. Only referenced in this
         # tag/dispatch-triggered workflow — NEVER in a pull_request job — so a fork PR cannot
         # reach it. The key is extractable from any shipped binary regardless (it is a
-        # read-only ClubLog most-wanted token); the proper fix is a proxy — see
-        # nexus-notes/clublog-key-proxy-plan.md.
+        # read-only ClubLog most-wanted token); the proper fix is a proxy.
         env:
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: bash scripts/build-windows-cross.sh

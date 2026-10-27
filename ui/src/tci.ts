@@ -8,7 +8,7 @@
 import { t } from './i18n'
 import type { TciProbeResult } from './api'
 
-/** The rig model a TCI radio stores: Hamlib's own number for TCI (plan §5.2), so the radio reads
+/** The rig model a TCI radio stores: Hamlib's own number for TCI, so the radio reads
  *  "TCI" where a model is shown. Nexus's TCI client serves it, and nothing else may: the rigctld
  *  Nexus ships cannot load 7 (`rigmodels.rs`), which is why leaving the TCI connection takes the
  *  number back off. */

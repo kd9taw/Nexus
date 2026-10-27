@@ -1,5 +1,4 @@
 import type { Ref } from 'react'
-import { useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The six rows are
 // WSJT-X's Tx1–Tx6 slots: the row NAME (`Tx 3`), the generated message text, the DX call and
 // grid, and the 73/RR73 macro suggestions are tokens and stay in the code. What moved is the
@@ -7,6 +6,7 @@ import { useStationCapability } from '../stationAccess'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import type { StdMessages } from '../txMessages'
+import { upperTyped } from '../typedInput'
 
 /** WSJT-X's own name for a message slot — `Tx 1`…`Tx 6`, the token the Alt+N hints and the
  *  panel's own accessible name point at. */
@@ -90,8 +90,6 @@ export function TxPanel({
   grip,
   stripRef,
 }: Props) {
-  const messagesControl = useStationCapability('ftMessages')
-  const cqControl = useStationCapability('ftOperate')
   const canTx = dxCall.trim().length > 0
   const rows: { n: number; text: string }[] = [
     { n: 1, text: messages.tx1 },
@@ -126,7 +124,7 @@ export function TxPanel({
             autoCapitalize="characters"
             placeholder="—"
             aria-label={t('operate.tx.dxCall.aria')}
-            onChange={(e) => onDxCall(e.target.value.toUpperCase())}
+            onChange={(e) => onDxCall(upperTyped(e.target))}
           />
         </label>
         <label className="txp-field">
@@ -139,7 +137,7 @@ export function TxPanel({
             autoCapitalize="characters"
             placeholder="—"
             aria-label={t('operate.tx.dxGrid.aria')}
-            onChange={(e) => onDxGrid(e.target.value.toUpperCase())}
+            onChange={(e) => onDxGrid(upperTyped(e.target))}
           />
         </label>
         {/* THE PANE'S OWN ✕, last on the DX row — `.cockpit-popout` carries
@@ -183,7 +181,7 @@ export function TxPanel({
                     list="txp-tx5-macros"
                     placeholder={t('operate.tx.tx5.placeholder')}
                     aria-label={t('operate.tx.tx5.aria')}
-                    onChange={(e) => onTx5(e.target.value.toUpperCase())}
+                    onChange={(e) => onTx5(upperTyped(e.target))}
                   />
                   <datalist id="txp-tx5-macros">
                     {tx5Options.map((m) => (
@@ -202,7 +200,7 @@ export function TxPanel({
                     spellCheck={false}
                     placeholder={t('operate.tx.tx6.placeholder')}
                     aria-label={tx6Contest != null ? t('operate.tx.tx6.contest.aria') : t('operate.tx.tx6.aria')}
-                    onChange={(e) => onTx6(e.target.value.toUpperCase())}
+                    onChange={(e) => onTx6(upperTyped(e.target))}
                   />
                   <div className="txp-cq-hint">
                     {tx6Contest != null ? t('operate.tx.tx6.contest.hint') : t('operate.tx.tx6.hint')}
@@ -214,7 +212,7 @@ export function TxPanel({
               <button
                 type="button"
                 className={`txp-btn${n === 6 ? ' txp-cq' : ''}`}
-                disabled={!(n === 6 ? cqControl : messagesControl) || disabled}
+                disabled={disabled}
                 onClick={() => onTx(n)}
                 title={
                   n === 6

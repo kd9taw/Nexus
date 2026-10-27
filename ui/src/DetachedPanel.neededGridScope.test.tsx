@@ -47,6 +47,7 @@ vi.mock('./api', async (importOriginal) => {
     getKc2gMuf: vi.fn(async () => []),
     getDxpedWindows: vi.fn(async () => []),
     getOtaMapSpots: vi.fn(async () => []),
+    getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
     getContests: vi.fn(async () => []),
     getWindowBehind: vi.fn(async () => ({ supported: false, on: false })),
     workSpot: vi.fn(async () => snapshot),

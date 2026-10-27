@@ -104,7 +104,7 @@ it('tells a signed-out visitor about the emailed sign-up code, and drops the hin
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
   // Said in the service's own words, not inferred from enabled plus an expiry against our clock.
-  await screen.findByText(/pair a station from the shack/i, { selector: '[role="status"]' })
+  await screen.findByText(/sign your station in from the shack/i, { selector: '[role="status"]' })
   // The self-serve path: the pairing form has to be reachable by exactly the account that has
   // never had a trial. Gating it on entitlement made it unreachable for those people.
   expect(await screen.findByLabelText('Pairing code')).toBeTruthy()
@@ -377,6 +377,41 @@ it('refuses a malformed pairing code locally instead of spending a rate-limited 
   await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/claim', { code: '0123456789abcdef' }))
 })
 
+// FREE DURING THE BETA: the service says `beta`, and the page counts no trial's days and promises no trial.
+it('during the beta, says free during the beta where the trial line was, and counts no days', async () => {
+  for (const beta of [true, false]) {
+    const session = account()
+    session.entitlement.plan = { kind: 'trial', status: null, periodEnd: null, renews: false }
+    // The service dates beta access a day ahead; a trial line would read "Days remaining: 1".
+    session.entitlement.expiresAt = session.serverNow + 86400000
+    session.beta = beta
+    // With billing on, the trial's own "keeps the rest of your trial" / "charged now" lines are not shown either.
+    Object.assign(client(session), { billing: true })
+    const view = render(<RemoteApp />)
+    const line = await screen.findByText(beta ? /Free during the beta/ : /Trial access is running/, { selector: '[role="status"]' })
+    if (beta) {
+      expect(line.textContent).toBe('Free during the beta. Paid plans for use over the internet come later.')
+      expect(screen.queryByText(/Days remaining|Trial access|trial ended|rest of your trial|48 hours left/i)).toBeNull()
+    } else {
+      expect(line.textContent).toMatch(/Days remaining: 1\./)
+      expect(screen.getByText(/48 hours left/)).toBeTruthy()
+    }
+    view.unmount()
+  }
+})
+it('during the beta, the consent to attach a station promises no trial', async () => {
+  const session = account(), id = crypto.randomUUID()
+  session.pending = { id, name: 'KD9TAW Home', expiresAt: session.serverNow + 9 * 60000, confirmed: false }
+  session.beta = true
+  const service = client(session)
+  render(<RemoteApp />)
+  const asked = await screen.findByText(/attach/i, { selector: '[role="status"]' })
+  expect(asked.textContent).toBe('Attach “KD9TAW Home” to your account? Remote is free during the beta.')
+  expect(screen.getByText(/your own copy of Nexus/i)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /attach this station/i }))
+  await waitFor(() => expect(service.post).toHaveBeenCalledWith('pair/confirm', { id }))
+})
+
 // Dates are rendered as invariant UTC calendar dates, and the pilot branch must never invent one.
 it('shows the trial window, and leaves a pilot account\'s unknown start unknown', async () => {
   const started = Date.UTC(2026, 8, 12, 3, 0, 0)
@@ -506,6 +541,16 @@ it('goes back to the stations page and names the end when an open session is ref
   expect(document.querySelector('.remote-station-state')?.textContent).toMatch(/^Your trial ended/)
   expect(screen.queryByText(/check the connection|check that Nexus is running/i)).toBeNull()
   expect(h.stop).toHaveBeenCalled()
+})
+it('during the beta, a refused session sends the operator to their stations, not their trial', async () => {
+  const h = openableStation()
+  h.session.beta = true
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
+  await screen.findByRole('button', { name: 'Disconnect and return to stations' })
+  act(() => h.refuse(new RemoteError(403, 'stationUnavailable')))
+  expect((await screen.findByRole('alert')).textContent)
+    .toBe('Remote access to this station ended, so this browser was disconnected. Check your stations below.')
 })
 
 // LAN STAYS FREE. An account whose internet use has ended (the service says `access: 'lan'`) keeps

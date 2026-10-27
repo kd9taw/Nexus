@@ -1,4 +1,4 @@
-// THE LEFT SIDE (operator's pick, 2026-10-03; Phone only) — a full-height column beside the scope that
+// THE LEFT SIDE (operator's pick, 2026-10-03; Phone only) — a column beside the region, under the scope (2026-10-26), that
 // ⊞ Panels ▸ Arrange fills with Band Activity, Spots or Needed (features/panelPlace). The cockpit
 // decides WHEN it shows (a window about 1280 px wide or more, and a pane on it to show) and renders its
 // frames as children; this draws the column and the divider on its right edge.

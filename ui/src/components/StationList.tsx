@@ -11,7 +11,6 @@ import { confirmOnlyOnWorkedBand, tagsForSurface } from '../features/needs'
 import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { useStationControl } from '../stationAccess'
 import { useWatchMatch } from '../watchlist'
 
 type Presence = Station['presence'] | 'offline'
@@ -117,7 +116,6 @@ export function StationList({
   query: keptQuery,
   onQuery,
 }: Props) {
-  const control = useStationControl()
   const [ownFilter, setOwnFilter] = useState<StationFilter>('all')
   const filter = keptFilter ?? ownFilter
   const setFilter = onFilter ?? setOwnFilter
@@ -267,8 +265,7 @@ export function StationList({
               <button
                 type="button"
                 className="recent-archive"
-                disabled={!control}
-                onClick={() => { if (control) onArchive(r.peer) }}
+                onClick={() => onArchive(r.peer)}
                 title={t('roster.recents.archive.title')}
                 aria-label={t('roster.recents.archive.aria', { call: r.peer })}
               >

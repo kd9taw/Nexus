@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { RotorPane } from './RotorPane'
-import { StationControlContext } from '../../stationAccess'
 import { t } from '../../i18n'
 import type { RotatorState } from '../../types'
 
@@ -160,21 +159,6 @@ describe('a rotator with no elevation axis is unchanged', () => {
     expect(screen.queryByText(/^EL /)).toBeNull()
     expect(screen.queryByText(t('rotor.pane.hint'))).not.toBeNull()
     // …and its bearing goes out exactly as it always did: the azimuth alone.
-    type(bearingBox(), '200')
-    await waitFor(() => expect(api.pointRotator).toHaveBeenCalledWith(200))
-  })
-})
-
-describe('a browser on Nexus Remote', () => {
-  it('keeps the azimuth-only pane it had', async () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RotorPane />
-      </StationControlContext.Provider>,
-    )
-    await waitFor(() => expect(screen.queryByText(/123°T/)).not.toBeNull())
-    expect(api.readRotatorState).not.toHaveBeenCalled()
-    expect(elBox()).toBeNull()
     type(bearingBox(), '200')
     await waitFor(() => expect(api.pointRotator).toHaveBeenCalledWith(200))
   })

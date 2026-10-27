@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // THE JS8 TX DOCK — what each control asks the engine, and the three faces of a second-act
-// chip. The invariant this file exists for (spec TX-safety 1 and 11): a switch that is ON
+// chip. The invariant this file exists for: a switch that is ON
 // while the session TX latch is OFF must never LOOK armed — the APRS rule — and a pending
 // auto-reply is visible and asks Yes / No before it can go (JS8Call's confirmation box). Nothing here can key:
 // every handler is an engine call, and the engine refuses on a receive-only tier (B6) or on

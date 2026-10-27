@@ -184,6 +184,15 @@ pub fn ft8_tones(msg: &str) -> Option<Vec<i32>> {
 /// The 103 tones the vendored `ft4_encode` makes of `msg`, empty where it refuses a bad message.
 /// `None` where the vendored result is not a function of the text: encode it with `ft4::encode`.
 pub fn ft4_tones(msg: &str) -> Option<Vec<i32>> {
+    match pack::pack(&ft4_message(msg)?) {
+        Err(pack::Vendored) => None,
+        Ok(None) => Some(Vec::new()),
+        Ok(Some(bits)) => Some(ft4_map(&bits)),
+    }
+}
+
+/// The 37 characters `genft4` packs: [`c_message`]'s, its leading blanks stripped.
+fn ft4_message(msg: &str) -> Option<[u8; 37]> {
     let mut message = c_message(msg)?;
     // genft4 strips leading blanks with `message=message(i+1:)` on its loop index, so a second
     // blank in a row takes the character after it too. Kept as it is.
@@ -195,11 +204,41 @@ pub fn ft4_tones(msg: &str) -> Option<Vec<i32>> {
         next[..37 - i].copy_from_slice(&message[i..]);
         message = next;
     }
-    match pack::pack(&message) {
-        Err(pack::Vendored) => None,
-        Ok(None) => Some(Vec::new()),
-        Ok(Some(bits)) => Some(ft4_map(&bits)),
+    Some(message)
+}
+
+/// Why the FT8 / FT4 encoder cannot send a text: Nexus never keys such an over
+/// ([`ft8_refusal`], [`ft4_refusal`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// `genft8` / `genft4` call it a bad message (`*** bad message ***`): FT8's encoder answers
+    /// with 79 zero tones, one steady carrier for 12.64 s, and FT4's with none.
+    BadMessage,
+    /// The packer builds its frame from a field it never set ([`pack::reads_unassigned`]), so
+    /// what would go on the air is not decided by the text. WSJT-X 3.0.2 made `W9XYZ K1ABC TNX
+    /// 73` a bad message this way (`packjt77.f90` 1353-1357, 1369-1380: the serial is set only
+    /// after a 5x9 report, and the report read fails out of the routine with the frame unwritten)
+    /// and `W9XYZ/M K1ABC TNX` a frame naming `<...>`, nobody (1412-1456: neither call is in
+    /// brackets, so the hash and the call it writes were never set).
+    NoFrame,
+}
+
+/// Why FT8 cannot send `msg`, or `None` where it can. Where only the vendored encoder can tell
+/// (`ft8_tones` is `None`), `Ft8Mode::encode` refuses its bad message by its all-zero tones.
+pub fn ft8_refusal(msg: &str) -> Option<Refusal> {
+    refusal(&c_message(msg)?)
+}
+
+/// [`ft8_refusal`] for FT4, whose encoder strips the text's leading blanks first.
+pub fn ft4_refusal(msg: &str) -> Option<Refusal> {
+    refusal(&ft4_message(msg)?)
+}
+
+fn refusal(msg37: &[u8; 37]) -> Option<Refusal> {
+    if pack::reads_unassigned(msg37) {
+        return Some(Refusal::NoFrame);
     }
+    matches!(pack::pack(msg37), Ok(None)).then_some(Refusal::BadMessage)
 }
 
 #[cfg(test)]
@@ -211,6 +250,52 @@ mod tests {
     fn the_generator_is_read_from_the_vendored_table() {
         assert_eq!(GENERATOR[0], 0x8329ce11bf31eaf509f27fc >> 1);
         assert_eq!(GENERATOR[82], 0x608cc857594bfbb55d69600 >> 1);
+    }
+
+    /// ⛔ The texts the encoder cannot send, by what it does with them, and the same answer for
+    /// FT8 and FT4. `CQ <K1ABC> FN42` is a bad message to `genft8` (a CQ never carries a hash);
+    /// the others the packer would build from fields it never set: an RTTY Roundup serial after a
+    /// report that is no 5x9 (`TNX 73`, `73 GL`, `5NN 001`), an RTTY report that is no number, an
+    /// unknown Field Day section, two calls with a nonstandard one and neither in brackets, and a
+    /// WSPR suffix of four. Controls: the texts the packer carries, as free text, a hashed
+    /// message, an RTTY exchange or a WSPR one, and the bracketed call it cannot look up.
+    #[test]
+    fn the_encoder_refuses_a_bad_message_and_a_text_with_no_frame() {
+        use Refusal::{BadMessage, NoFrame};
+        for (msg, why) in [
+            ("CQ <K1ABC> FN42", BadMessage),
+            ("W9XYZ K1ABC TNX 73", NoFrame),
+            ("W9XYZ/M K1ABC TNX 73", NoFrame),
+            ("W9XYZ K1ABC 73 GL", NoFrame),
+            ("W9XYZ K1ABC 5NN 001", NoFrame),
+            ("W9XYZ K1ABC TNX 599 001", NoFrame),
+            ("W9XYZ K1ABC 2B XYZ", NoFrame),
+            ("W9XYZ/M K1ABC TNX", NoFrame),
+            ("W9XYZ/M K1ABC/P", NoFrame),
+            ("<...> PJ4/K1ABC RR73", NoFrame),
+            ("K1ABC/ABCD 37", NoFrame),
+        ] {
+            assert_eq!(
+                (ft8_refusal(msg), ft4_refusal(msg)),
+                (Some(why), Some(why)),
+                "{msg:?}"
+            );
+        }
+        for msg in [
+            "TNX 73",
+            "W9XYZ K1ABC TNX",
+            "W9XYZ/M <K1ABC> 73",
+            "W9XYZ K1ABC 599 001",
+            "W9XYZ K1ABC 2B EMA",
+            "PJ4/K1ABC 37",
+            "<...> W9XYZ -10",
+        ] {
+            assert_eq!(
+                (ft8_refusal(msg), ft4_refusal(msg)),
+                (None, None),
+                "{msg:?}"
+            );
+        }
     }
 
     /// genft4's leading-blank loop, quirk and all: two blanks lose the character after them.

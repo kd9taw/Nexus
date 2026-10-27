@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoriesView } from './MemoriesView'
 import { ConfirmHost } from '../confirm'
-import { addMemory, emptyBank, memoriesStore, type MemoriesBank } from '../features/memories'
+import { addGroup, addMemory, emptyBank, memoriesStore, setMemoryGroups, type MemoriesBank } from '../features/memories'
 
 // THE BUDGET (2026-10-09). The slowest case here, "counts what is selected and deletes exactly that", takes 0.33 s
 // and 0.56 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
@@ -272,5 +272,40 @@ describe('deleting a single row can be taken back', () => {
     deleteRow('Delta rptr')
     expect(screen.queryByText(/Delete 1 memory\?/)).toBeNull()
     expect(names()).toEqual(['Alpha net', 'Bravo net', 'Charlie rptr'])
+  })
+})
+
+// #360: a memory joined a group only from its own editor, one at a time — thirty repeaters, thirty
+// editor visits. The selection bar now adds every ticked row ON SCREEN to a group in one action,
+// under the same "what you can see" rule as Delete, and leaves the rows' other groups alone.
+describe('adding the selected rows to a group', () => {
+  const seedWithGroups = (): MemoriesBank => {
+    let b = addGroup(addGroup(seedFour(), 'Trip'), 'Home')
+    const trip = b.groups[0].id
+    const home = b.groups[1].id
+    b = setMemoryGroups(b, b.memories[2].id, [home]) // Charlie is already in Home
+    expect(trip).not.toBe(home)
+    return b
+  }
+  const groupsOf = (name: string) => {
+    const b = memoriesStore.get()
+    const m = b.memories.find((x) => x.name === name)!
+    return m.groups.map((g) => b.groups.find((x) => x.id === g)!.name).sort()
+  }
+
+  it('adds every selected row on screen to the group in one go, keeping their other groups', () => {
+    memoriesStore.set(seedWithGroups())
+    render(view())
+    pick('Charlie rptr')
+    pick('Delta rptr')
+    pick('Alpha net')
+    search('rptr') // Alpha is still ticked, but out of view
+    fireEvent.change(screen.getByRole('combobox', { name: 'Add the selected memories to a group' }), {
+      target: { value: memoriesStore.get().groups[0].id },
+    })
+    expect(groupsOf('Charlie rptr')).toEqual(['Home', 'Trip'])
+    expect(groupsOf('Delta rptr')).toEqual(['Trip'])
+    expect(groupsOf('Alpha net'), 'a row out of view is never changed').toEqual([])
+    expect(groupsOf('Bravo net')).toEqual([])
   })
 })

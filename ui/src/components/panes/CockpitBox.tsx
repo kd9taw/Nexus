@@ -72,6 +72,7 @@ export type BoxSource = Pick<
   | 'otaBoard'
   | 'neededBoard'
   | 'fieldDay'
+  | 'activation'
   | 'entryCall'
 > & {
   /** The dashboard rail beside this cockpit, while it is on screen (App lends it the cockpit on screen only). */

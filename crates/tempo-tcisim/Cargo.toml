@@ -12,6 +12,6 @@ workspace = true
 
 [dependencies]
 # The WebSocket under TCI: the simulator's server side, and the recorder's client side. Already in
-# the lock through tempo-client (operator ruling 554, 2026-10-19), so this is an edge and no new
+# the lock through tempo-client, so this is an edge and no new
 # crate. Only the handshake: TCI has no TLS.
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }

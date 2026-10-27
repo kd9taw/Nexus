@@ -11,14 +11,14 @@ import { EN } from '../i18n/en'
 
 let desktop = true
 const mockStatus = vi.fn<() => Promise<ClientStatus | null>>()
-const mockLeave = vi.fn<() => Promise<void>>()
+const mockLeave = vi.fn<(pairAgain?: boolean) => Promise<void>>()
 const mockSwitch = vi.fn<(to: BenchPosition) => Promise<BenchPosition>>()
 const mockStillHere = vi.fn<() => Promise<void>>()
 const mockTake = vi.fn<() => Promise<void>>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   clientStatus: () => mockStatus(),
-  leaveClientMode: () => mockLeave(),
+  leaveClientMode: (pairAgain?: boolean) => mockLeave(pairAgain),
   benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
   clientStillHere: () => mockStillHere(),
   clientTakeControl: () => mockTake(),
@@ -152,7 +152,33 @@ describe('on a computer driving a station', () => {
     const leave = screen.getByRole('button', { name: EN['client.banner.leave'] })
     fireEvent.click(leave)
     expect(mockLeave).toHaveBeenCalledTimes(1)
+    expect(mockLeave).toHaveBeenCalledWith(undefined)
     expect((leave as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a station that no longer knows this computer, or answers with another key, offers Pair again: Leave, to pair again', async () => {
+    for (const reason of ['notPaired', 'keyChanged'] as const) {
+      mockLeave.mockClear()
+      mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason })
+      await shown()
+      const again = screen.getByRole('button', { name: EN['client.banner.pairAgain'] })
+      fireEvent.click(again)
+      expect(mockLeave, reason).toHaveBeenCalledWith(true)
+      expect((again as HTMLButtonElement).disabled).toBe(true)
+      expect((screen.getByRole('button', { name: EN['client.banner.leave'] }) as HTMLButtonElement).disabled).toBe(true)
+      cleanup()
+    }
+    // CONTROL: any other refusal, and a station signed in to from elsewhere, offer only Leave.
+    for (const status of [
+      { station: AT, phase: 'refused', reason: 'updateStation' },
+      { station: AT, phase: 'live', reason: null },
+      { station: AT, phase: 'refused', reason: 'notPaired', away: true },
+    ] as const) {
+      mockStatus.mockResolvedValue(status as ClientStatus)
+      await shown()
+      expect(screen.queryByRole('button', { name: EN['client.banner.pairAgain'] }), JSON.stringify(status)).toBeNull()
+      cleanup()
+    }
   })
 })
 
@@ -396,6 +422,15 @@ describe('over the internet road', () => {
       cleanup()
     }
   })
+
+  it('says a road held for the station’s key, or turned off for another one, in its own words', async () => {
+    for (const reason of ['stationKeyUnconfirmed', 'stationKeyDisagrees'] as const) {
+      mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason })
+      await shown()
+      expect(screen.getByRole('status').textContent, reason).toContain(EN[`client.reason.${reason}`])
+      cleanup()
+    }
+  })
 })
 
 
@@ -454,5 +489,140 @@ describe('Take control, while another device holds the station', () => {
     })
     expect(screen.queryByRole('group', { name: EN['client.banner.takeControl'] })).toBeNull()
     expect(mockTake).not.toHaveBeenCalled()
+  })
+})
+
+describe('signing in again for the station', () => {
+  it('says while Operate’s launch signs in again, and by what day to sign in when it did not; nothing otherwise', async () => {
+    // 1 802 592 000 s is 2027-02-14 UTC.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: 1_802_592_000, signingAgain: true })
+    await shown()
+    let banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(EN['client.banner.signingAgain'])
+    expect(banner, 'one line at a time').not.toContain(fill(EN['client.banner.signInBy'], { date: '2027-02-14' }))
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: 1_802_592_000, signingAgain: false })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(fill(EN['client.banner.signInBy'], { date: '2027-02-14' }))
+    expect(banner).not.toContain(EN['client.banner.signingAgain'])
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: null, signingAgain: false })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).not.toContain(EN['client.banner.signingAgain'])
+    expect(banner).not.toContain(fill(EN['client.banner.signInBy'], { date: '' }).slice(0, 12))
+  })
+})
+
+describe('a station kept by its service id (signed in to from elsewhere)', () => {
+  const AWAY = '20000000-0000-4000-8000-0000000000a1'
+  it('says the internet is its road while it connects and when it is refused, and never shows its id', async () => {
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'connecting', reason: null, away: true })
+    await shown()
+    let banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(EN['client.banner.internet.connecting'])
+    expect(banner).not.toContain(AWAY)
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'refused', reason: 'internetNotIncluded', away: true })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(fill(EN['client.banner.internet.refused'], { reason: EN['client.reason.internetNotIncluded'] }))
+    expect(banner).not.toContain(AWAY)
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'live', reason: null, away: true, internet: true })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(EN['client.banner.internet.live'])
+  })
+
+  it('CONTROL: a station on this network still says where it is', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason: 'keyChanged', away: false })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(
+      fill(EN['client.banner.refused'], { station: AT, reason: EN['lanWindow.reason.keyChanged'] }),
+    )
+  })
+})
+
+describe('why a PTT press here did not key the station (the client-status refusal reason)', () => {
+  it('renders a plain message for each refusal value, beside the over line', async () => {
+    const cases: Array<[NonNullable<ClientStatus['pttRefusal']>, string]> = [
+      ['notPhone', EN['client.ptt.refusal.notPhone']],
+      ['txDisabled', EN['client.ptt.refusal.txDisabled']],
+      ['outsideLicence', EN['client.ptt.refusal.outsideLicence']],
+      ['tuning', EN['client.ptt.refusal.tuning']],
+      ['otherOwner', EN['client.ptt.refusal.otherOwner']],
+      ['clockRepair', EN['client.ptt.refusal.clockRepair']],
+      ['onHold', EN['client.ptt.refusal.onHold']],
+      ['noPresence', EN['client.ptt.refusal.noPresence']],
+      ['noFeed', EN['client.ptt.refusal.noFeed']],
+      ['noAudio', EN['client.ptt.refusal.noAudio']],
+    ]
+    for (const [refusal, text] of cases) {
+      mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: refusal })
+      const container = await shown()
+      const line = container.querySelector(`.client-banner-over[data-ptt-refusal="${refusal}"]`)
+      expect(line?.textContent, refusal).toBe(text)
+      cleanup()
+    }
+  })
+
+  it('shows nothing when a press would key (null) or the station build does not send the field', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: null })
+    let container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+    cleanup()
+    // Older station build: the field is simply absent.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
+    container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+  })
+})
+
+describe('the station holding this computer from transmit (the client-status hold)', () => {
+  const holdLine = (container: HTMLElement) =>
+    container.querySelector('.client-banner-over[data-tx-hold]')?.textContent
+
+  it('says Allow to transmit at the shack, in any mode, with no time when the station sent none', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, txHold: { ownerNotified: false } })
+    const container = await shown()
+    expect(holdLine(container)).toBe(EN['client.ptt.refusal.onHold'])
+  })
+
+  it('adds the minutes left, rounded up, only when the station sent them', async () => {
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      txHold: { ownerNotified: true, leftSecs: 541 },
+    })
+    const container = await shown()
+    expect(holdLine(container)).toBe(fill(EN['client.ptt.refusal.onHoldLeft'], { minutes: '10' }))
+  })
+
+  it('stands in for the PTT on-hold line rather than saying it twice', async () => {
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      pttRefusal: 'onHold',
+      txHold: { ownerNotified: true, leftSecs: 60 },
+    })
+    const container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+    expect(holdLine(container)).toBe(fill(EN['client.ptt.refusal.onHoldLeft'], { minutes: '1' }))
+  })
+
+  it('shows nothing when not held, or from a station build that does not say', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, txHold: null })
+    let container = await shown()
+    expect(container.querySelector('[data-tx-hold]')).toBeNull()
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: 'onHold' })
+    container = await shown()
+    expect(container.querySelector('[data-tx-hold]')).toBeNull()
+    expect(container.querySelector('[data-ptt-refusal="onHold"]')?.textContent).toBe(
+      EN['client.ptt.refusal.onHold'],
+    )
   })
 })

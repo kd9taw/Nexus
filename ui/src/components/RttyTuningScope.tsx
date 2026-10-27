@@ -1,9 +1,10 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts): every word on screen comes
 // from the catalog. Hertz figures are invariant tokens and go through `t()`'s number params.
 //
-// THE RTTY TUNING SCOPE — the crossed-ellipse XY display of a classic terminal unit, beside the
-// decoded text (operator's placement: a square column LEFT of the RX text, the text shrinking to
-// fit, ⊞ id `tuning`, shown by default).
+// THE RTTY TUNING SCOPE — the crossed-ellipse XY display of a classic terminal unit, RIGHT of the
+// waterfall in the waterfall's strip (operator's placement since 2026-10-26: the waterfall keeps the
+// common height, the scope its size, and the waterfall gives up the width; ⊞ id `tuning`, shown by
+// default). The nudges and the words stand beside the square, not under it: the strip is short and wide.
 //
 // WHAT IT DRAWS. The engine runs two resonators on the decoder's AFC-corrected mark and space
 // (`tempo_core::rtty::scope`); the mark resonator is X and the space resonator Y. A tuned signal
@@ -73,7 +74,6 @@ export function RttyTuningScope({
   active,
   armed,
   keyed,
-  control,
   markHz,
   spaceHz,
   onNet,
@@ -85,8 +85,6 @@ export function RttyTuningScope({
   armed: boolean
   /** Our own over, a latched stream or a tune — the cockpit's `keyed`. Nudges are off. */
   keyed: boolean
-  /** This screen may move the station's decoder (`useStationCapability('decoder')`). */
-  control: boolean
   markHz: number
   spaceHz: number
   /** Net the decoder (and the AFSK transmitter) onto a new centre — `rtty_net`. */
@@ -234,7 +232,7 @@ export function RttyTuningScope({
   // ◀ ▶ with hold-to-repeat. The target accumulates across a hold (each step is 5 Hz from the
   // last one asked for, not from a centre the poll has yet to bring back).
   const centre = (markHz + spaceHz) / 2
-  const nudgeOff = keyed || !control || !armed
+  const nudgeOff = keyed || !armed
   const target = useRef<number | null>(null)
   const timer = useRef<number | null>(null)
   const keyedRef = useRef(keyed)
@@ -299,8 +297,8 @@ export function RttyTuningScope({
   const title = t('rtty.tuning.title')
   return (
     <div className="rtty-tuning" role="group" aria-label={title}>
-      {/* The square. It YIELDS (cockpit-panes.css): on a short pane it gives up height so the nudges
-          and the words stay on screen, and the picture is drawn as the largest square that fits. Its
+      {/* The square (cockpit-panes.css): the window's share, capped by the strip's height where the
+          operator drags the strip shorter, and the picture is drawn as the largest square that fits. Its
           ✕ sits in its corner rather than on a head row of its own, which would cost the picture. */}
       <div className="rtty-tuning-box">
         <div className="rtty-tuning-picture" role="img" aria-label={t('rtty.tuning.scope.aria', { state: nextWords })}>

@@ -26,7 +26,7 @@ pub const MAX_TX_PER_STEP: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    /// Monitoring; will answer the first CQ heard.
+    /// Monitoring; answers nobody until the operator picks a station.
     Listening,
     /// Calling CQ; awaiting a grid reply addressed to me.
     CallingCq,
@@ -192,7 +192,7 @@ impl Station {
         }
     }
 
-    /// A station that listens and answers the first CQ it hears.
+    /// A station that listens and calls nobody until the operator picks a station.
     pub fn monitoring(mycall: &str, mygrid: &str) -> Self {
         let mygrid = &air_grid(mygrid);
         Self {
@@ -514,10 +514,11 @@ impl Station {
     /// and the other in full, so **both callsigns come back off the air exactly as
     /// queued**. The ADDRESSEE is the one hashed, except in the report and the roger of
     /// a nonstandard sender opposite a plain c28 call, where the SENDER is — WSJT-X's
-    /// own form, which keeps the number (see the arms). A no-op for a pair the plain
-    /// forms can carry — which includes every `/P` and `/R` station working a standard
-    /// or same-suffixed partner, so their overs are left exactly as the sequencer built
-    /// them.
+    /// own form, which keeps the number — and in RR73, RRR and 73 from a standard call to a
+    /// nonstandard one, where the sender is hashed as WSJT-X writes them (see the arms).
+    /// A no-op for a pair the plain forms can carry — which includes every `/P` and `/R`
+    /// station working a standard or same-suffixed partner, so their overs are left
+    /// exactly as the sequencer built them.
     ///
     /// **What the hashed form costs, stated here so it is not rediscovered:** a grid or
     /// a numeric report rides only beside a plain c28 call
@@ -544,6 +545,15 @@ impl Station {
         // MY call fails `stdCall`).
         let hashes_sender = |de: &str, to: &str| {
             !crate::message::is_std_call(de) && crate::message::packs_beside_hash(to)
+        };
+        // A standard sender closing to a nonstandard call: WSJT-X's RR73 (or RRR) and 73 put THAT
+        // call whole and mine hashed (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and
+        // bMyCall) t=hisCall + " <" + my_callsign + "> " …`), a type 4 message. `stdCall` passes
+        // `/P` and `/R`, and so does this. A Tx panel row clicked back in may bring either call
+        // bracketed already, so both are read without their brackets.
+        let closes_to_nonstandard = |de: &str, to: &str| {
+            crate::message::is_std_call(crate::message::unhash_call(de))
+                && crate::message::is_nonstandard_call(crate::message::unhash_call(to))
         };
         match msg {
             // A CQ has no addressee to hash, and a hashed CQ is unusable anyway:
@@ -621,6 +631,24 @@ impl Station {
                 to: brk(&to),
                 de,
                 snr,
+            },
+            // RR73, the RRR sent in its place (one expression in WSJT-X, `m_send_RR73 ? "RR73" :
+            // "RRR"`) and 73 to a nonstandard call, `W9XYZ/M <K1ABC> RR73` (`closes_to_nonstandard`
+            // above). The other way round, `<W9XYZ/M> K1ABC RR73` names the same two stations in
+            // a type 1 message, which is not WSJT-X's. The RRR that stands in for a roger no
+            // number can ride (the `RReport` arms above) is our Tx3, not WSJT-X's Tx4, and keeps
+            // its form.
+            Msg::Rr73 { to, de } if closes_to_nonstandard(&de, &to) => Msg::Rr73 {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
+            },
+            Msg::Rrr { to, de } if closes_to_nonstandard(&de, &to) => Msg::Rrr {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
+            },
+            Msg::Bye73 { to, de } if closes_to_nonstandard(&de, &to) => Msg::Bye73 {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
             },
             Msg::Rr73 { to, de } => Msg::Rr73 { to: brk(&to), de },
             Msg::Rrr { to, de } => Msg::Rrr { to: brk(&to), de },
@@ -774,6 +802,29 @@ impl Station {
         self.rv_count = 0;
     }
 
+    /// The message a Tx panel row the operator clicked stands for: `text` read back, except our
+    /// roger where no number can ride it. [`Self::hashed_form`] sends that Tx3 as a bare `RRR`
+    /// (`<W9XYZ/M> K1ABC/P RRR`), and an `RRR` read back is the Tx4 roger, which `hashed_form`
+    /// writes in WSJT-X's Tx4 form (`W9XYZ/M <K1ABC/P> RRR`): another over than the row shows.
+    /// WSJT-X keys the text of the Tx box clicked (`on_txb3_clicked`, `widgets/mainwindow.cpp`
+    /// 8771-8777, then `ui->tx3->text()`, 7901), so that row stands for our roger, which goes
+    /// out as the row shows it.
+    pub fn tx_row(&self, text: &str) -> Msg {
+        let msg = Msg::parse(text);
+        if let (Msg::Rrr { .. }, Some(dx)) = (&msg, &self.dxcall) {
+            // No number rides this roger: `hashed_form` drops it.
+            let roger = Msg::RReport {
+                to: dx.clone(),
+                de: self.mycall.clone(),
+                snr: 0,
+            };
+            if self.hashed_form(roger.clone()) == msg {
+                return roger;
+            }
+        }
+        msg
+    }
+
     /// Called after I transmit `pending`. Escalates the IR-HARQ redundancy
     /// version for the next retransmission of the SAME step (0→1→2→0), and counts
     /// transmissions of this step. (A partner advance in [`observe`] resets both,
@@ -822,13 +873,19 @@ impl Station {
                 // unsolicited transmission is unacceptable, and it's not how WSJT-X
                 // works). The operator works a station explicitly by double-clicking
                 // a decode, which builds an `answering`/`start(..)` station.
+                //
+                // ⛔ Never a caller the decoder could not resolve: `<...>` names nobody, and
+                // WSJT-X builds no message to it. Its messages go to the call in its DX call box
+                // (`genStdMsgs`, `widgets/mainwindow.cpp` 9567-9577), which takes only a
+                // callsign (`Radio::is_callsign`, 9402), and the caller's call word
+                // (`deCallAndGrid`, `Decoder/decodedtext.cpp` 212-224) cannot be `...`. The run
+                // keeps calling CQ, and the next caller in the period is answered.
                 (State::CallingCq, Msg::Grid { to, de, grid })
-                    if crate::message::same_call(to, &self.mycall) =>
+                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
-                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
-                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
-                    // be laundered into one).
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
+                    // UNRESOLVED `<...>` is left as it is, and passed by above).
                     self.dxcall = Some(de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
@@ -907,7 +964,7 @@ impl Station {
                 // Enable Tx on (:8105-8139). "Our RRR" is the over we put on the air, so a roger
                 // the packer had to render as RRR counts too. Never as a Hound (the Fox's RR73
                 // ends the QSO in silence; a 73 would land in its segment). A CQ run that still
-                // holds the contact answers it too (ruling 544): the run calls CQ only once the 73
+                // holds the contact answers it too: the run calls CQ only once the 73
                 // has gone (`done()`), so an RRR still on the air becomes the 73, never the CQ.
                 (State::Confirming, Msg::Rr73 { to, de })
                 | (State::Confirming, Msg::Rrr { to, de })
@@ -1029,14 +1086,14 @@ impl Station {
                     self.log("got 73 → QSO complete".into());
                 }
                 // We're calling CQ and a station answers with a bare report (grid skipped):
-                // lock onto them, capture the report, and roger with R + our report.
+                // lock onto them, capture the report, and roger with R + our report. Never
+                // `<...>`, as the grid's arm above.
                 (State::CallingCq, Msg::Report { to, de, snr })
-                    if crate::message::same_call(to, &self.mycall) =>
+                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
-                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
-                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
-                    // be laundered into one).
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
+                    // UNRESOLVED `<...>` is left as it is, and passed by above).
                     self.dxcall = Some(de.clone());
                     self.rx_report = Some(*snr);
                     self.pending = Some(Msg::RReport {
@@ -1552,7 +1609,7 @@ mod start_context_tests {
         // The DX rogers → I send the final 73; the QSO completes.
         s.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
         assert_eq!(s.state, State::Done);
-        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW 73"));
+        assert_eq!(s.pending_text().as_deref(), Some("PJ4/K1ABC <KD9TAW> 73"));
         assert_eq!(
             s.dxcall.as_deref(),
             Some("PJ4/K1ABC"),
@@ -1776,9 +1833,45 @@ mod start_context_tests {
             Some("..."),
             "an unknown station must never be adopted as the literal ellipsis"
         );
-        // It stays visibly unresolved rather than becoming a plausible-looking call — which is
-        // the pre-existing behaviour, and the right one: nothing downstream can mistake it.
-        assert_eq!(s.dxcall.as_deref(), Some("<...>"));
+        // Nor as `<...>`: the run passes it by (`a_cq_run_never_answers_an_unresolved_caller`).
+        assert_eq!(s.dxcall, None);
+    }
+
+    /// ⛔ A CQ RUN NEVER ANSWERS A CALLER WHOSE CALL THE DECODER COULD NOT RESOLVE. `<...>` names
+    /// nobody, and WSJT-X 3.0.2 builds no message to it: its messages go to the call in its DX
+    /// call box (`genStdMsgs`, `widgets/mainwindow.cpp` 9567-9577), which takes only a callsign
+    /// (`Radio::is_callsign`, 9402), and the caller's call word (`deCallAndGrid`,
+    /// `Decoder/decodedtext.cpp` 212-224, `[A-Z0-9/]+`) cannot be `...`. A grid or a report from
+    /// one leaves the run calling CQ; the next caller in the same period, its call resolved, is
+    /// answered.
+    #[test]
+    fn a_cq_run_never_answers_an_unresolved_caller() {
+        for (caller, resolved, answer) in [
+            (
+                "KD9TAW <...> EN37",
+                "KD9TAW <W9XYZ/M> EN37",
+                "<W9XYZ/M> KD9TAW -05",
+            ),
+            (
+                "KD9TAW <...> -12",
+                "KD9TAW <W9XYZ/M> -12",
+                "<W9XYZ/M> KD9TAW R-05",
+            ),
+        ] {
+            let mut s = Station::calling_cq(ME, MY_GRID);
+            s.observe(&[dec(caller, -5)]);
+            assert_eq!(
+                (s.state, s.dxcall.clone(), s.pending_text()),
+                (State::CallingCq, None, Some("CQ KD9TAW EN61".into())),
+                "{caller}: passed by"
+            );
+            s.observe(&[dec(caller, -5), dec(resolved, -5)]);
+            assert_eq!(
+                (s.dxcall.as_deref(), s.pending_text().as_deref()),
+                (Some("<W9XYZ/M>"), Some(answer)),
+                "{caller}: the next caller, resolved, is answered"
+            );
+        }
     }
 
     /// FIELD REPORT 2026-08-23: calling RI1FJL, a Franz Josef Land DXpedition working a pileup.
@@ -2011,7 +2104,7 @@ mod start_context_tests {
 
     /// No 73 as a Hound: the pair has no room for a number, so our roger went out as RRR, and the
     /// Fox's RR73 ends the QSO in silence, as every Hound QSO ends (a 73 would land in the Fox's
-    /// segment). (A CQ run answers it, ruling 544: the engine's run scenes.)
+    /// segment). (A CQ run answers it, by the operator's rule: the engine's run scenes.)
     #[test]
     fn a_hound_closes_on_the_roger_to_our_rrr_without_a_73() {
         let mut hound = Station::answering("KD9TAW/P", MY_GRID, "F4CYH/R");

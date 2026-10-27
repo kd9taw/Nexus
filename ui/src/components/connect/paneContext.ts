@@ -8,6 +8,7 @@ import type { MapIntent } from '../MapView'
 import type { SpotsPanelProps } from '../SpotsPanel'
 import type { NeededPanelProps } from '../NeededPanel'
 import type { OtaSpotClickArg } from '../PotaSotaView'
+import type { ActivationBoard } from '../ActivationPane'
 import type {
   AlertView,
   AmpStatus,
@@ -107,6 +108,9 @@ export interface PaneContext {
   /** The running contest, off the snapshot the window already polls (the Operators box). Null when no
    *  contest runs; absent where the window has none to lend, and the box then shows its one line. */
   fieldDay?: FieldDayStatus | null
+  /** The running activation and the log tick, off the snapshot the window already polls (the
+   *  Activation box). Absent where the window has none to lend, and the box then shows its one line. */
+  activation?: ActivationBoard
   // callbacks
   onSelectCall: (call: string | null) => void
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void

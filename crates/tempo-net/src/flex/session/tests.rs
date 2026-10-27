@@ -904,7 +904,7 @@ fn answer_gui(s: &mut Session, wire: &mut LoggingWire, reply: &str) {
 }
 
 /// ⭐ THE UDP REGISTRATION'S DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
-/// upstream sends it (port plan §4.5, step 7). The radio learns the client's UDP endpoint from its
+/// upstream sends it. The radio learns the client's UDP endpoint from its
 /// source, which firmware that answers `client udpport` with "not supported" needs. Its owner sent
 /// it after the whole bring-up (about 46 ms after the command), and then before the session even
 /// connected. The datagram is its owner's to send (the session has no I/O of its own); here it is

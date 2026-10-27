@@ -12,7 +12,7 @@
 // real GPU, and no WebGL 2 one. The GPU gate, QsoGlobe, react-globe.gl and three.js are the real ones, inside
 // App's real section boundary; only the canvas contexts are fakes.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { render, waitFor, fireEvent, cleanup, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ErrorBoundary } from './ErrorBoundary'
 import * as api from '../api'
@@ -26,7 +26,7 @@ vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
     askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
-    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(), previewImport: noop(), importLog: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
@@ -144,8 +144,18 @@ describe('the Logbook on a computer with WebGL 1 and no WebGL 2', () => {
   it('searches, edits and imports while the band shows the note', async () => {
     const editQsoById = vi.mocked(api.editQsoById)
     editQsoById.mockResolvedValue({ kind: 'applied' } as never)
-    const importAdif = vi.mocked(api.importAdif)
-    importAdif.mockResolvedValue({ added: 1, skipped: 0, updated: 0 } as never)
+    vi.mocked(api.previewImport).mockResolvedValue({
+      format: 'adif', template: null, records: 1, contacts: 1, firstUnix: null, lastUnix: null,
+      new: 1, duplicates: 0, updates: 0, notes: [], coverage: [], unmapped: [],
+    })
+    const importLog = vi.mocked(api.importLog)
+    importLog.mockResolvedValue({
+      stats: { added: 1, skipped: 0, updated: 0, total: 4, run: 'import-run' },
+      report: {
+        format: 'adif', template: null, records: 1, contacts: 1, added: 1, duplicates: 0, updated: 0,
+        newOnly: false, fields: [], unmapped: [], notes: [], accounted: true,
+      },
+    })
     const c = await open()
     expect(crash(c), 'the Logbook is the error page').toBeNull()
 
@@ -167,8 +177,15 @@ describe('the Logbook on a computer with WebGL 1 and no WebGL 2', () => {
     fireEvent.change(c.querySelector('.log-actions input[type="file"]') as HTMLInputElement, {
       target: { files: [new File([adif], 'log.adi')] },
     })
-    await waitFor(() => expect(importAdif).toHaveBeenCalledWith(adif))
-    await waitFor(() => expect(vi.mocked(toast.pushToast)).toHaveBeenCalledWith(t('logbook.import.imported', { count: 1 }), 'success'))
+    await waitFor(() => expect(api.previewImport).toHaveBeenCalledWith(adif))
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.import') }))
+    await waitFor(() => expect(importLog).toHaveBeenCalledWith(adif, false))
+    await waitFor(() => expect(vi.mocked(toast.pushToast)).toHaveBeenCalledWith(
+      t('logbook.import.imported', { count: 1 }),
+      'success',
+      10_000,
+      expect.objectContaining({ actionLabel: t('logbook.undo') }),
+    ))
     expect(crash(c), 'the Logbook is the error page').toBeNull()
   }, 30_000)
 

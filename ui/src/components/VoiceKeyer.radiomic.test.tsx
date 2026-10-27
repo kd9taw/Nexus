@@ -45,7 +45,7 @@ afterEach(() => {
 
 describe('the voice keyer and the radio’s mic', () => {
   it('plays by click and by F-key, with nothing to say', async () => {
-    const view = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    const view = render(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
     await act(async () => {})
     const slot = view.container.querySelector<HTMLButtonElement>('.vk-play')
     expect(slot, 'precondition: F1 holds a message').not.toBeNull()

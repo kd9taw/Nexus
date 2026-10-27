@@ -52,8 +52,8 @@ pub struct ChatMessage {
     pub directed_to_me: bool,
     /// `Some((have, tot))` when this is a message that NEVER fully arrived — the chunks that
     /// did land, surfaced so the thread shows "2 of 3 received" instead of the message simply
-    /// never appearing. A chat client does not silently swallow a message
-    /// ([[feedback-tempo-chat-trillian]]); the operator hit exactly that on the first
+    /// never appearing. A chat client does not silently swallow a message;
+    /// the operator hit exactly that on the first
     /// two-station QSO, seeing fragments in band activity and an empty chat window.
     pub incomplete: Option<(usize, usize)>,
 }
@@ -220,7 +220,7 @@ impl Inbox {
     /// Retire chunk sets that never completed, pushing each into the conversation as a visibly
     /// INCOMPLETE message rather than letting it vanish.
     ///
-    /// A chat client never silently swallows a message ([[feedback-tempo-chat-trillian]]). On the
+    /// A chat client never silently swallows a message. On the
     /// first two-station QSO the operator watched fragments arrive in band activity while the chat
     /// window stayed empty and nothing explained it — the set was one chunk short and buffered
     /// forever. Now it surfaces with what did arrive and a "2 of 3" marker.

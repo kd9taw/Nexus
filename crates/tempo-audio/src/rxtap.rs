@@ -11,8 +11,7 @@
 //! Two earlier attempts treated the symptom: 0.17.13 moved the row behind its own lock (that
 //! fixed READER contention — the wrong half), and 0.17.14 backed off the worst-offending CAT
 //! read's retry cadence (a frequency reducer that left every other blocking read exposed). The
-//! first-order fix is that the row must not be produced on the blocking thread at all. See
-//! `tasks/plan-spectrum-cat-split.md`.
+//! first-order fix is that the row must not be produced on the blocking thread at all.
 //!
 //! THE SPLIT THAT WAS CHOSEN, AND THE ONE THAT WAS NOT. Splitting the RADIO LOOP (moving CAT
 //! telemetry or the transmitter itself onto another thread) was designed and rejected: a

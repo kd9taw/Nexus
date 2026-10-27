@@ -17,7 +17,7 @@ impl RadioLoop {
             let Some(request) = eng.take_remote_radio() else {
                 return;
             };
-            let mut want = Transport::from_settings(eng.settings());
+            let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
             self.apply_port_alias(&mut want);
             let ready = request.validate(&eng).and_then(|()| {
                 if self.tx_until_ms.is_some()

@@ -79,6 +79,27 @@ impl QrzSession {
                 .is_some_and(|e| e.to_ascii_lowercase().contains("session"))
     }
 
+    /// True iff QRZ refused service to the account: its spec's `Connection refused` error, after
+    /// which "successful login will not be possible for at least 24 hours".
+    ///
+    /// ⚠️ This reads QRZ's wording, which the note below says not to do for a missing record. The
+    /// difference: that note is about two answers QRZ words alike; this is one literal the spec
+    /// names for exactly one meaning, and it is matched as that literal (the whole error, any
+    /// case), never as a phrase inside a longer one.
+    pub fn refuses_service(&self) -> bool {
+        self.error
+            .as_deref()
+            .is_some_and(|e| e.trim().eq_ignore_ascii_case("connection refused"))
+    }
+
+    /// True iff the account has no XML subscription: `<SubExp>` is the spec's literal
+    /// `non-subscriber`.
+    pub fn non_subscriber(&self) -> bool {
+        self.sub_exp
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("non-subscriber"))
+    }
+
     // ⛔ THERE IS DELIBERATELY NO `holds_no_record` HERE, AND THERE CANNOT BE ONE.
     //
     // QRZ delivers an authoritative miss and a REFUSAL in the same shape: an `<Error>`
@@ -123,6 +144,42 @@ pub struct QrzLookup {
     /// see [`parse_callsign`] for why the other provenances are refused.
     pub lat: Option<f64>,
     pub lon: Option<f64>,
+    /// The fields below are what a contact can hold beside the ones above (the log copies each
+    /// into an empty field at log time). Their tag names are QRZ's published XML spec (1.34):
+    /// no captured response carried them when they were added, so each is read as optional and
+    /// an unreadable value is absence.
+    ///
+    /// County (QRZ `county`), the bare name: the log writes ADIF's `ST,County` from it.
+    pub county: Option<String>,
+    /// IOTA island-group reference (QRZ `iota`), as given; the log validates it.
+    pub iota: Option<String>,
+    pub email: Option<String>,
+    /// Web page (QRZ `url`).
+    pub web: Option<String>,
+    /// QSL manager (QRZ `qslmgr`) — ADIF's `QSL_VIA`.
+    pub qsl_via: Option<String>,
+    /// Will confirm by LoTW / eQSL / paper card (QRZ `lotw` / `eqsl` / `mqsl`, `1` or `0`).
+    pub lotw: Option<bool>,
+    pub eqsl: Option<bool>,
+    pub paper_qsl: Option<bool>,
+    /// The station's offset from UTC in hours (QRZ `GMTOffset`), -12 to +14.
+    pub utc_offset: Option<f32>,
+}
+
+/// A callbook's yes/no field: `1`/`Y` yes, `0`/`N` no, anything else (blank, absent) unknown.
+pub(crate) fn callbook_flag(v: Option<String>) -> Option<bool> {
+    match v?.trim().to_ascii_uppercase().as_str() {
+        "1" | "Y" | "YES" => Some(true),
+        "0" | "N" | "NO" => Some(false),
+        _ => None,
+    }
+}
+
+/// A callbook's UTC offset in hours ("-5", "+5.5"), or `None` when it is not one: outside
+/// -12..=+14 no place on Earth keeps it.
+pub(crate) fn callbook_utc_offset(v: Option<String>) -> Option<f32> {
+    let h: f32 = v?.trim().trim_start_matches('+').parse().ok()?;
+    (h.is_finite() && (-12.0..=14.0).contains(&h)).then_some(h)
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved set). Same encoder as the
@@ -152,12 +209,14 @@ pub fn build_login_url(l: &QrzLogin) -> String {
     )
 }
 
-/// Build a lookup URL (carries the session key — secret).
-pub fn build_lookup_url(session_key: &str, callsign: &str) -> String {
+/// Build a lookup URL (carries the session key — secret). `agent` is the product identifier the
+/// login sends too: QRZ's spec "strongly recommended" it, to help its support tell programs apart.
+pub fn build_lookup_url(session_key: &str, callsign: &str, agent: &str) -> String {
     format!(
-        "{QRZ_XML_URL}?s={}&callsign={}",
+        "{QRZ_XML_URL}?s={}&callsign={}&agent={}",
         pct(session_key.trim()),
         pct(callsign.trim()),
+        pct(agent.trim()),
     )
 }
 
@@ -238,6 +297,15 @@ pub fn parse_callsign(xml: &str) -> Option<QrzLookup> {
         cq_zone: tag(xml, "cqzone").and_then(|d| d.parse().ok()),
         itu_zone: tag(xml, "ituzone").and_then(|d| d.parse().ok()),
         image: tag(xml, "image"),
+        county: tag(xml, "county"),
+        iota: tag(xml, "iota"),
+        email: tag(xml, "email"),
+        web: tag(xml, "url"),
+        qsl_via: tag(xml, "qslmgr"),
+        lotw: callbook_flag(tag(xml, "lotw")),
+        eqsl: callbook_flag(tag(xml, "eqsl")),
+        paper_qsl: callbook_flag(tag(xml, "mqsl")),
+        utc_offset: callbook_utc_offset(tag(xml, "GMTOffset")),
     })
 }
 
@@ -1168,11 +1236,41 @@ mod tests {
 
     #[test]
     fn lookup_url_encodes_key_and_call() {
-        let url = build_lookup_url("KEY 123", "dl1abc");
+        let url = build_lookup_url("KEY 123", "dl1abc", "Nexus-1.2.3");
         assert_eq!(
             url,
-            "https://xmldata.qrz.com/xml/current/?s=KEY%20123&callsign=dl1abc"
+            "https://xmldata.qrz.com/xml/current/?s=KEY%20123&callsign=dl1abc&agent=Nexus-1.2.3"
         );
+    }
+
+    /// The spec's `Connection refused`, as the whole error in any case, and nothing else.
+    #[test]
+    fn connection_refused_is_the_specs_literal_only() {
+        let refused = |e: &str| QrzSession {
+            error: Some(e.into()),
+            ..QrzSession::default()
+        };
+        assert!(parse_session(
+            "<QRZDatabase><Session><Error>Connection refused</Error></Session></QRZDatabase>"
+        )
+        .refuses_service());
+        assert!(refused(" connection REFUSED ").refuses_service());
+        assert!(!refused("Not found: connection refused").refuses_service());
+        assert!(!refused("Session Timeout").refuses_service());
+        assert!(!QrzSession::default().refuses_service());
+    }
+
+    /// `<SubExp>non-subscriber</SubExp>` is a non-subscriber; an expiry date is not.
+    #[test]
+    fn a_non_subscriber_is_the_specs_literal() {
+        let s = |x: &str| {
+            parse_session(&format!(
+                "<QRZDatabase><Session><Key>k</Key><SubExp>{x}</SubExp></Session></QRZDatabase>"
+            ))
+        };
+        assert!(s("non-subscriber").non_subscriber());
+        assert!(!s("Wed Jan 1 12:34:03 2027").non_subscriber());
+        assert!(!QrzSession::default().non_subscriber());
     }
 
     #[test]
@@ -1243,6 +1341,36 @@ mod tests {
         // The exact position QRZ computes ITS OWN distance/bearing from.
         assert_eq!(r.lat, Some(33.634));
         assert_eq!(r.lon, Some(-111.887));
+    }
+
+    /// Every field a contact can hold is read, not just the ones the callsign card shows: county,
+    /// IOTA, e-mail, web page, QSL manager, the LoTW/eQSL/paper-card flags and the UTC offset.
+    /// The tag names are QRZ's published XML spec (1.34); no live response carried them yet.
+    #[test]
+    fn parses_the_fields_a_contact_can_hold() {
+        let xml = "<QRZDatabase version=\"1.34\"><Callsign><call>W1ABC</call>\
+<county>Hartford</county><iota>na-001</iota><email>w1abc@example.org</email>\
+<url>https://example.org/w1abc</url><qslmgr>W1MGR</qslmgr><lotw>1</lotw><eqsl>0</eqsl>\
+<mqsl>1</mqsl><GMTOffset>-5</GMTOffset></Callsign></QRZDatabase>";
+        let r = parse_callsign(xml).unwrap();
+        assert_eq!(r.county.as_deref(), Some("Hartford"));
+        assert_eq!(r.iota.as_deref(), Some("na-001"));
+        assert_eq!(r.email.as_deref(), Some("w1abc@example.org"));
+        assert_eq!(r.web.as_deref(), Some("https://example.org/w1abc"));
+        assert_eq!(r.qsl_via.as_deref(), Some("W1MGR"));
+        assert_eq!(
+            (r.lotw, r.eqsl, r.paper_qsl),
+            (Some(true), Some(false), Some(true))
+        );
+        assert_eq!(r.utc_offset, Some(-5.0));
+        // Absent, blank or unreadable: absence, never a guess.
+        let bare = parse_callsign(
+            "<Callsign><call>W1ABC</call><lotw></lotw><eqsl>maybe</eqsl>\
+<GMTOffset>99</GMTOffset></Callsign>",
+        )
+        .unwrap();
+        assert_eq!((bare.lotw, bare.eqsl, bare.paper_qsl), (None, None, None));
+        assert_eq!((bare.utc_offset, bare.county.as_deref()), (None, None));
     }
 
     /// The `<geoloc>` gate: QRZ hands back coordinates for every record, but only

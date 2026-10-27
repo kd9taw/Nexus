@@ -632,9 +632,11 @@ function unhandledKeys(node, handled, ignored) {
 // where the answer is unambiguous for a local run; every other expression reads
 // GitHub event context this script does not have, and guessing in either
 // direction is a false green, so it blocks the step by name instead.
+// `!cancelled()` is true here: nothing cancels a local run, and a local run
+// goes on past a red gate anyway, which is what CI does for a step asking it.
 function ifVerdict(expr) {
   const e = String(expr).trim().replace(/^\$\{\{/, '').replace(/\}\}$/, '').trim();
-  if (/^(success\(\)|always\(\)|true)$/i.test(e)) return null;
+  if (/^(success\(\)|always\(\)|!cancelled\(\)|true)$/i.test(e)) return null;
   if (/^(failure\(\)|cancelled\(\))$/i.test(e)) {
     return `\`if: ${expr}\` — false in a run where nothing has failed, so CI would skip it too`;
   }

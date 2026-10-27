@@ -18,7 +18,9 @@
 //!   again at each hold that reaches it after, so a lost report is heard at the next hold; it is
 //!   taken once, for the press live here. Every hold names how many Stops had been pressed when its
 //!   press began, so the station never keys a press the network delivers after a Stop pressed after
-//!   it.
+//!   it. The station holds one press for at most Phone's Lock cap, so a Lock its operator answers
+//!   goes on under a new press ([`StopRoad::renew`]): the station hands the key straight over to
+//!   it, and the microphone goes on as it was.
 //! - **The heartbeat**, every [`HEARTBEAT`] while the link is open: the lease, and the number of
 //!   the last snapshot this computer's main window fetched (client mode keeps it, [`StopRoad::fetched`]).
 //!   The number comes from the screen's own poll, so a window that hangs stops moving it, and
@@ -79,6 +81,9 @@ pub const ENDED_SHOWN: Duration = Duration::from_secs(10);
 pub struct OnAir {
     /// The press live at this computer, 0 for none.
     press: AtomicU64,
+    /// The press the live one went on from ([`StopRoad::renew`]), its microphone with it; 0 for
+    /// none.
+    went_on_from: AtomicU64,
     /// The station's microphone over, as Stop's road last heard it: keyed.
     over_keyed: AtomicBool,
     /// The station's rig, as the command link's status line last said: keyed.
@@ -97,6 +102,7 @@ impl Default for OnAir {
     fn default() -> Self {
         Self {
             press: AtomicU64::new(0),
+            went_on_from: AtomicU64::new(0),
             over_keyed: AtomicBool::new(false),
             rig_keyed: AtomicBool::new(false),
             ended: AtomicU64::new(0),
@@ -123,7 +129,22 @@ impl OnAir {
 
     /// A press is live (its number, never 0), or none is. An atomic store: never waits.
     pub fn pressing(&self, press: Option<u64>) {
+        self.went_on_from.store(0, Ordering::Release);
         self.press.store(press.unwrap_or(0), Ordering::Release);
+    }
+
+    /// The press `press` goes on as `renewed`, if it is the live one: whether it was. Never waits.
+    pub(crate) fn renew(&self, press: u64, renewed: u64) -> bool {
+        self.went_on_from.store(press, Ordering::Release);
+        self.press
+            .compare_exchange(press, renewed, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// The press the live one went on from, when it went on from one: the microphone carries on
+    /// from that press's frames, numbered on, rather than starting afresh.
+    pub fn went_on_from(&self) -> Option<u64> {
+        Some(self.went_on_from.load(Ordering::Acquire)).filter(|press| *press != 0)
     }
 
     /// The press `press` is over here, if it is the live one: another press, or none, is left as
@@ -380,6 +401,23 @@ impl StopRoad {
         let stops = self.shared.press_stops.load(Ordering::SeqCst);
         self.shared.say(&Up::Hold { press, stops });
         true
+    }
+
+    /// The live press `press` goes on as the new press `renewed`, begun when this run had pressed
+    /// `stops` Stops, as an answer to "Still talking?" keeps a Lock on: the new press's first hold
+    /// written now, and it is the press live here. The station hands its key straight over from
+    /// the old press, and the microphone goes on, its frames numbered on, so the over carries on as
+    /// it was. `false`, and nothing sent, once `press` has ended here.
+    pub fn renew(&self, press: u64, renewed: u64, stops: u64) -> bool {
+        if self.shared.on_air.press() != Some(press) {
+            return false;
+        }
+        self.shared.press_stops.store(stops, Ordering::SeqCst);
+        self.shared.say(&Up::Hold {
+            press: renewed,
+            stops,
+        });
+        self.shared.on_air.renew(press, renewed)
     }
 
     /// The press `press` let go: its release written now, and the press over here.

@@ -30,13 +30,13 @@ server, see [TCI: connect to an SDR program's TCI server](tci.md).
 | The dial: programs read it and tune the radio | Works |
 | The mode: programs read it and switch the sideband | Works |
 | Power: programs read it and may lower it | Works. A program never raises it. |
-| Receive audio to programs | Works, except a Flex's own DAX audio: with **Flex native DAX audio** on, programs hear the sound card under **Audio** instead. |
+| Receive audio to programs | Works. Programs hear what Nexus hears: a Flex's own DAX audio with **Flex native DAX audio** on, the SDR program's audio on a TCI connection with **Audio over TCI** on, and otherwise the sound card under **Audio**. |
 | Tune from a program | Works with **Programs on TCI may transmit** on |
 | A program keying the radio's own microphone, on the Phone screen | Works with **Programs on TCI may transmit** on |
-| A program's own transmit audio | Not yet |
+| A program's own transmit audio, on the Phone screen | Works with **Programs on TCI may transmit** on, once the program asks for a voice mode (see below) |
 | FT8, FT4 and the other slot-timed modes from a program | Refused for now (see below) |
 | CW macros from a logger's TCI keyer | Works on the CW screen, with **Programs on TCI may transmit** on |
-| Spots from programs on Nexus's band map | Not yet |
+| Spots from programs, on Nexus's band map and band activity | Works with **Spots from programs** on |
 | IQ for skimmers | Not offered |
 
 ---
@@ -61,7 +61,7 @@ If the port is taken, a sentence saying so takes the address's place. Give
 | **TCI server port** | The port it listens on. | 40001 |
 | **Programs on TCI may transmit** | Lets programs key the transmitter at all. Turning it off ends whatever a program is transmitting. Shown and set only at the station: from a computer driving the station, it reads "Set at the station". | Off |
 | **CW macros from programs** | Lets a logger's TCI keyer send CW through Nexus's own CW keyer, on the CW screen only, and only while programs may transmit. | On |
-| **Spots from programs** | Shows programs' spots on Nexus's band map and passes your clicks on spots back to them. A spot or a click never transmits. Not yet in effect. | On |
+| **Spots from programs** | Shows programs' spots on Nexus's band map and in the Phone and CW screens' band activity, and passes your clicks on spots back to them. A click on a program's spot only tunes Nexus. A spot or a click never transmits. | On |
 
 Every one of these belongs to the station and is set only there.
 
@@ -145,6 +145,18 @@ transmissions still applies:
   and the other way round. Run one FT8 program at a time.
 - A program that disconnects or stops answering stops transmitting at once.
 
+A program's own audio, a logger's voice macro for one, goes out on the Phone
+screen only, and only once the program has asked Nexus for a voice mode: USB,
+LSB, AM or FM. A program that has asked for no mode, or for CW, is refused.
+WSJT-X and JTDX ask for a mode only when it differs from the one Nexus is in,
+so set to USB while Nexus is already in USB they ask for nothing and are
+refused too. Nexus keys the radio when the program's audio starts, and when
+the program lets go, the last of its audio plays out before the radio
+unkeys. Stop TX, Esc and every other stop end it at once, and so do 0.3
+seconds with no audio from the program and 10 minutes on the air. With
+**Flex native DAX audio** on, a Flex takes its own microphone on the Phone
+screen, so a program's audio is refused there.
+
 A logger's CW macros (Log4OM's TCI keyer, 5MContest) go out on Nexus's own
 CW keyer, whichever one you use, on the CW screen only, and only while **CW
 macros from programs** is on as well. They go at the speed the program sets;
@@ -156,7 +168,9 @@ end it.
 A program times its own transmissions, and Nexus adds a short delay of its
 own on the way to the radio. Until that delay has been measured and the
 transmissions shown to decode, Nexus refuses a program's digital
-transmissions. Receiving and decoding work.
+transmissions. A program whose last mode request was a data mode (DIGU or
+DIGL) is held the same way, whatever screen Nexus is on. Receiving and
+decoding work.
 
 ---
 
@@ -177,7 +191,10 @@ password and no encryption, which is why it stays on this computer.
   nothing else uses.
 - **A program connects but does not transmit.** Look under it in **Programs
   connected**: "Last refused" says why, for example "programs on TCI may not
-  transmit" or "transmit is not enabled".
+  transmit" or "transmit is not enabled". "A program may transmit its own
+  audio only after it asks for a voice mode" means the program has not asked
+  for USB, LSB, AM or FM: see
+  [Transmitting through Nexus](#transmitting-through-nexus).
 - **WSJT-X says "TCI Audio could not be switched on".** Nexus has no receive
   audio to send at that moment, usually because the sound card under
   **Audio** did not open. Check Nexus's audio settings, or untick **Use TCI

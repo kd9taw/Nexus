@@ -60,7 +60,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_log_manual') return snapshot()
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history|get_sat_transponder)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history|get_sat_transponder)$/.test(cmd)) return null
   return {}
 }
 
@@ -135,7 +135,7 @@ describe("the logger window's entry-only layout", () => {
   it('shares the entry: the call goes to the shared contact, and Enter logs it under the shared claim', async () => {
     localStorage.setItem(LOGGER_LAYOUT_KEY, 'entry')
     await mountLogger()
-    const call = within(entry()).getByPlaceholderText('W1AW')
+    const call = within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
     fireEvent.change(call, { target: { value: 'W1AW' } })
     fireEvent.change(within(entry()).getByLabelText('Class'), { target: { value: '2A' } })
     fireEvent.change(within(entry()).getByLabelText('Section'), { target: { value: 'WI' } })

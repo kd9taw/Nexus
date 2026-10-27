@@ -189,9 +189,6 @@ export function TciServerSettings({
       </span>
       {on && (
         <>
-          <p className="settings-note" data-tci-server-notyet>
-            <T k="settings.transmit.tciServer.notYet" tags={{ b: <strong /> }} />
-          </p>
           <label className="settings-field">
             <span className="settings-label">{t('settings.transmit.tciServer.port.label')}</span>
             <input disabled={locked('tciServerPort')} data-setting="tciServerPort"

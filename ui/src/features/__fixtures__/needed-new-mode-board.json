@@ -36,5 +36,24 @@
       "NewMode"
     ],
     "zone": 5
+  },
+  {
+    "admittedAt": 1780000000,
+    "band": "20m",
+    "call": "K4JTY",
+    "entity": "United States",
+    "evidence": "heard by K9RX (EN52, {km:0})",
+    "exactMode": "JTTY",
+    "freqMhz": null,
+    "gridRarity": null,
+    "headline": "New mode — JTTY United States (any band)",
+    "mode": "JTTY",
+    "park": null,
+    "priority": 30,
+    "stateFrom": null,
+    "tags": [
+      "NewMode"
+    ],
+    "zone": 5
   }
 ]

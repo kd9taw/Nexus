@@ -2,7 +2,6 @@
 // per-row actions on decodes/roster in P2). Accessible roving focus for free.
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { useState, type ReactNode } from 'react'
-import { useStationData } from '../../stationAccess'
 
 export interface MenuItem {
   label: string
@@ -14,17 +13,13 @@ export interface MenuItem {
 interface MenuProps {
   trigger: ReactNode
   items: MenuItem[]
-  /** Navigation can remain available while station readings are stale. Station
-   * action menus retain their existing data requirement by default. */
-  requiresStationData?: boolean
   className?: string
 }
 
-export function Menu({ trigger, items, requiresStationData = true, className }: MenuProps) {
-  const available = useStationData()
+export function Menu({ trigger, items, className }: MenuProps) {
   const [open, setOpen] = useState(false)
   return (
-    <RM.Root open={open && (!requiresStationData || available)} onOpenChange={setOpen}>
+    <RM.Root open={open} onOpenChange={setOpen}>
       <RM.Trigger asChild>{trigger}</RM.Trigger>
       <RM.Portal>
         <RM.Content className={['ui-menu', className].filter(Boolean).join(' ')} sideOffset={4} align="end" collisionPadding={8}>

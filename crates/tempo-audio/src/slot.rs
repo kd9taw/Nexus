@@ -862,7 +862,7 @@ mod tests {
     use tempo_app::engine::{run_decode_job, DecodeApplied, DecodePass};
 
     #[test]
-    fn remote_ft_keying_rechecks_authority_before_and_after_ptt_io() {
+    fn remote_presence_keying_rechecks_authority_before_and_after_ptt_io() {
         use crate::rig::remote_tests::{retuning_peer, writes};
         use std::sync::Arc;
         use std::time::{Duration, Instant};
@@ -894,17 +894,17 @@ mod tests {
             );
             e.set_tx_enabled(false);
             e.take_immediate_retune();
-            // Authority that cannot lapse mid-test: the 5 s window the host mints
-            // bounds its own commit, and a whole-process stall inside it makes the
-            // product refuse correctly. Revocation, not the clock, is this case's
+            // A streamed operator's Call CQ: the native verb, under the session's presence.
+            // Presence that cannot lapse mid-test: revocation, not the clock, is this case's
             // subject — `authority.revoke()` drives all three scenes.
-            e.start_remote_ft_cq(
+            e.start_cq(None).unwrap();
+            let now = Instant::now();
+            assert!(e.hold_remote_presence(
                 authority
-                    .permit(Instant::now() + Duration::from_secs(24 * 60 * 60))
+                    .permit(now + Duration::from_secs(24 * 60 * 60))
                     .unwrap(),
-                None,
-            )
-            .unwrap();
+                now,
+            ));
             let mut rig = Rig::rigctld(&peer.address);
             let mut backend = MockBackend::new();
             let mut rx = RxRing::with_capacity(120);

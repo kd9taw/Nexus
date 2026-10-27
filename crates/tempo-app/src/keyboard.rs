@@ -1,7 +1,7 @@
 //! Keyboard modes — the shared transmit-safety machinery.
 //!
 //! A keyboard mode is one the operator TYPES into while the transmitter is up:
-//! RTTY today, PSK31 and the others to come. They differ in everything a modem
+//! RTTY, PSK31 and JTTY. They differ in everything a modem
 //! cares about (Baudot over FSK vs varicode over BPSK) and in nothing that
 //! transmit safety cares about, so the safety machinery is written ONCE here and
 //! instantiated per mode through [`KeyboardMode`], rather than re-derived —
@@ -47,6 +47,14 @@ pub enum Charset {
     /// (and any other control character) is dropped rather than mangled, the
     /// same rule as ITA2's.
     Varicode,
+    /// JTTY's source alphabet, by WSJT-X's own rule (`Jtty::prepareTransmitText`,
+    /// `widgets/JttyMessages.hpp`): digits, letters of either case (the encoder
+    /// sends them upper case), the space and `+-./?!"#$%,&*()_'=[]{}<>|:;`. A CR
+    /// or LF is a line break (WSJT-X starts a new segment there), a NUL or `~` a
+    /// space, and anything else `#`, which is what the far end decodes. Unlike
+    /// the two above nothing is dropped: WSJT-X substitutes, so the text keeps
+    /// its length and the operator's notice can say what changed.
+    Jtty,
 }
 
 /// Everything the shared transmit-safety machinery needs to know about ONE
@@ -147,6 +155,26 @@ pub const PSK31: KeyboardMode = KeyboardMode {
     stream_max_chunk: 2,
 };
 
+/// JTTY — WSJT-X's keyboard mode, the third. Its unit on the air is not a
+/// character but a FRAME: 59 symbols at 31.25 Bd (1.888 s), one 34-bit atom of
+/// up to five characters. So its numbers are in frames: `frame_bits` is the 59
+/// symbol times of one frame, which makes [`KeyboardMode::char_ms`] at 31.25 Bd
+/// one frame's air time, `stream_ahead_chars` a look-ahead of ONE frame (a loop
+/// that stops ticking unkeys within a frame and the tail) and
+/// `stream_max_chunk` one frame a tick. The ceiling is RTTY's and PSK's. Its
+/// typed text is committed in segments of up to 80 characters (WSJT-X's
+/// encoder width) by its own planner rather than drained from the type-ahead,
+/// which `type_buf_cap` bounds at one such segment.
+pub const JTTY: KeyboardMode = KeyboardMode {
+    name: "JTTY",
+    charset: Charset::Jtty,
+    max_latch_ms: 10 * 60 * 1000,
+    type_buf_cap: 80,
+    frame_bits: 59.0,
+    stream_ahead_chars: 1.0,
+    stream_max_chunk: 1,
+};
+
 /// Reduce operator text to what `mode` can actually put on the air — the ONE
 /// filter every keyboard-mode TX path runs, so what is queued (or typed into a
 /// latched stream) is exactly what keys, and no two paths can disagree about
@@ -166,8 +194,22 @@ pub fn kb_filter(mode: KeyboardMode, text: &str) -> String {
             .chars()
             .filter(|&c| c.is_ascii() && (c == '\r' || c == '\n' || !c.is_ascii_control()))
             .collect(),
+        Charset::Jtty => text
+            .chars()
+            .map(|c| match c {
+                '\0' | '~' => ' ',
+                '\r' | '\n' => '\n',
+                c if c.is_ascii_alphanumeric() || JTTY_PUNCTUATION.contains(c) => c,
+                _ => '#',
+            })
+            .collect(),
     }
 }
+
+/// The punctuation in JTTY's source alphabet, the space included
+/// (`lib/jtty/jtty_source_codec.f90`'s `ALPHABET`, which WSJT-X's
+/// `Jtty::sourceAlphabet` mirrors).
+const JTTY_PUNCTUATION: &str = " +-./?!\"#$%,&*()_'=[]{}<>|:;";
 
 /// What the radio loop should key this tick on behalf of a continuous-TX latch.
 ///
@@ -691,6 +733,30 @@ mod tests {
         assert_eq!(kb_filter(RTTY, "abc\u{263A}123"), "ABC123");
         // The filter follows the CHARSET, not the mode's name.
         assert_eq!(kb_filter(TESTMODE, "cq"), kb_filter(RTTY, "cq"));
+    }
+
+    #[test]
+    fn the_jtty_filter_is_wsjtxs_prepare_transmit_text() {
+        // WSJT-X's whole alphabet passes, lower case included (the encoder sends it upper
+        // case), and nothing is dropped: what the alphabet lacks becomes `#`, a NUL or `~` a
+        // space, and CR or LF the line break WSJT-X splits a message at.
+        let alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ +-./?!\"#$%,&*()_'=[]{}<>|:;";
+        assert_eq!(kb_filter(JTTY, alphabet), alphabet);
+        assert_eq!(kb_filter(JTTY, "cq de k1abc"), "cq de k1abc");
+        assert_eq!(kb_filter(JTTY, "a@b\\c^d`e"), "a#b#c#d#e");
+        assert_eq!(kb_filter(JTTY, "a~b\0c"), "a b c");
+        assert_eq!(kb_filter(JTTY, "TU\r\nQRZ\rDE"), "TU\n\nQRZ\nDE");
+        assert_eq!(kb_filter(JTTY, "73\u{263A}"), "73#");
+        assert_eq!(kb_filter(JTTY, "x\u{263A}").chars().count(), 2);
+    }
+
+    #[test]
+    fn jttys_look_ahead_is_one_frame() {
+        // 59 symbols at 31.25 Bd: the 1.888 s frame, and a look-ahead of exactly one.
+        assert_eq!(JTTY.char_ms(31.25), 1888.0);
+        assert_eq!(JTTY.stream_ahead_ms(31.25), 1888.0);
+        assert_eq!(JTTY.stream_max_chunk, 1);
+        assert_eq!(JTTY.max_latch_ms, RTTY.max_latch_ms);
     }
 
     #[test]

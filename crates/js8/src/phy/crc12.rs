@@ -43,7 +43,7 @@ mod tests {
     use super::*;
 
     /// Six inputs computed by the real `boost::augmented_crc<12, 0xc06>` (the call JS8Call
-    /// makes) via ~/work/twowayfd/paritylab/js8/crc12_boost_oracle.cpp on 2026-09-05. Values are
+    /// makes) via a small C++ oracle on 2026-09-05. Values are
     /// AFTER the `^ 42`. A wrong bit order, a wrong polynomial, a wrong register width or a
     /// missing augmentation each break at least one of these.
     const BOOST_VECTORS: [([u8; 11], u16); 6] = [

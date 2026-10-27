@@ -531,6 +531,54 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
     }
 }
 
+/// ★ The Logbook's added columns read what the STORE holds. A page row, read from a real store,
+/// carries everything those columns print: the contest block (on the row since the columns came),
+/// the IOTA reference, the passthrough tags — county, zones, continent, distance, the QSL
+/// received dates — and each service's upload stamp. `ui/src/components/Logbook.columns.test.tsx`
+/// renders a row of this shape.
+#[test]
+fn a_page_row_carries_what_the_logbook_columns_show() {
+    let mut records = tempo_core::logbook::parse_adif(
+        "<CALL:6>DL1ABC<QSO_DATE:8>20250102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<FREQ:6>14.025\
+         <CONTEST_ID:8>CQ-WW-CW<STX:2>12<SRX:3>345<SRX_STRING:2>14<IOTA:6>EU-005\
+         <CNTY:12>MA,MIDDLESEX<CQZ:2>14<ITUZ:2>28<CONT:2>EU<DISTANCE:6>6512.4\
+         <QSLRDATE:8>20250105<LOTW_QSLRDATE:8>20250203<EQSL_QSLRDATE:8>20250304<EOR>",
+    );
+    records[0].upload.lotw = Some(accepted(1_736_000_000));
+    let d = Dir::new("logbook-columns");
+    let engine = on_store(&d, &records);
+    let a = ask(
+        &LogQueries::default(),
+        &engine,
+        json!({"kind": "page", "query": {"sort": "time", "asc": false, "search": "",
+            "needsConfirmOnly": false}, "offset": 0, "limit": 5}),
+        &|_| None,
+    );
+    let row = &a["rows"][0];
+    assert_eq!(row["call"], "DL1ABC", "premise: the contact is on the page");
+    assert_eq!(row["contest"]["contestId"], "CQ-WW-CW");
+    assert_eq!(row["contest"]["stx"], 12);
+    assert_eq!(row["contest"]["srx"], 345);
+    assert_eq!(row["contest"]["srxString"], "14");
+    assert_eq!(row["ota"]["iota"], "EU-005");
+    assert_eq!(row["upload"]["lotw"]["outcome"], "accepted");
+    let extra: HashMap<String, String> = serde_json::from_value(row["extra"].clone())
+        .map(|v: Vec<(String, String)>| v.into_iter().collect())
+        .expect("extra pairs");
+    for (tag, value) in [
+        ("CNTY", "MA,MIDDLESEX"),
+        ("CQZ", "14"),
+        ("ITUZ", "28"),
+        ("CONT", "EU"),
+        ("DISTANCE", "6512.4"),
+        ("QSLRDATE", "20250105"),
+        ("LOTW_QSLRDATE", "20250203"),
+        ("EQSL_QSLRDATE", "20250304"),
+    ] {
+        assert_eq!(extra.get(tag).map(String::as_str), Some(value), "{tag}");
+    }
+}
+
 /// Whether a change by id with the edit key `key` would be taken now: the contact `id` is still
 /// the version whose key it is — asked of the store with the Engine lock released, as a change
 /// asks it.
@@ -2201,9 +2249,14 @@ fn ask_log_is_async_registered_and_its_state_managed() {
         .expect("its end")
         .0;
     assert!(list.lines().any(|l| l.trim() == "log_queries::ask_log,"));
+    // Managed with the app's own whole-log tallies, so the award-need filter reads the award fold
+    // the Awards view keeps rather than folding a second copy.
     assert!(lib
         .lines()
-        .any(|l| l.trim() == ".manage(log_queries::LogQueries::default())"));
+        .any(|l| l.trim() == ".manage(log_queries::LogQueries::with_tallies(log_tallies))"));
+    assert!(lib
+        .lines()
+        .any(|l| l.trim() == ".manage(log_tallies.clone())"));
 }
 
 /// The questions the UI asks parse exactly: a field the question does not have, or a kind that
@@ -2415,6 +2468,224 @@ fn the_diagnosis_names_its_contacts_by_id_and_the_remote_report_is_unchanged() {
 
 // ── the bench ───────────────────────────────────────────────────────────────────────────────────
 
+// ── the field filters, the saved sort keys ──────────────────────────────────────────────────────
+
+/// Records from ADIF, one per line.
+fn adif_rows(rows: &[&str]) -> Vec<QsoRecord> {
+    rows.iter()
+        .map(|r| tempo_core::logbook::parse_adif(r).remove(0))
+        .collect()
+}
+
+/// The calls a page of `filter` (newest first) holds, asked with the app's resolvers.
+fn filtered_calls(queries: &LogQueries, engine: &SharedEngine, filter: Value) -> Vec<String> {
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "page", "offset": 0, "limit": 100,
+        "query": {"sort": "call", "asc": true, "search": "", "needsConfirmOnly": false, "filter": filter}}))
+    .expect("a question");
+    let deadline = std::time::Instant::now() + tempo_app::test_util::TEST_WAIT;
+    let page = loop {
+        match queries.answer(engine, &q, &shown, &on_card, &counted) {
+            Ok(a) => break a,
+            Err(why) if why.starts_with(NOT_ANSWERED) && std::time::Instant::now() < deadline => {}
+            Err(why) => panic!("{q:?}: refused: {why}"),
+        }
+    };
+    page["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|r| r["call"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// ★ The fields SQL cannot decide are decided by the engine on the rows SQL hands back: the
+/// entity the Logbook SHOWS (a number set by hand wins over the call), the continent and CQ zone
+/// the contact counts in (its record's own first) — and every filter combines with AND, the
+/// search among them.
+#[test]
+fn the_engine_decides_entity_continent_and_zone_as_the_logbook_shows_them() {
+    let d = Dir::new("filter-decide");
+    let records = adif_rows(&[
+        "<CALL:6>JA1ABC<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<MODE:3>FT8<EOR>",
+        "<CALL:6>DL1ABC<QSO_DATE:8>20240102<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+        // A W1 licensee in California: zone 3 by the record, not 5 by the prefix.
+        "<CALL:5>W1ABC<QSO_DATE:8>20240103<TIME_ON:4>0100<BAND:3>40m<MODE:3>SSB<CQZ:1>3<EOR>",
+        // K1N set to Navassa by its number.
+        "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>20m<MODE:2>CW<DXCC:3>182<EOR>",
+        // A CONT the record carries wins over cty.dat's.
+        "<CALL:6>VK2ABC<QSO_DATE:8>20240104<TIME_ON:4>0100<BAND:3>15m<MODE:3>FT8<CONT:2>AN<EOR>",
+    ]);
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let calls = |f: Value| filtered_calls(&queries, &engine, f);
+    assert_eq!(calls(json!({"entity": "japan"})), ["JA1ABC"]);
+    assert_eq!(calls(json!({"entity": "Navassa Island"})), ["K1N"]);
+    assert_eq!(calls(json!({"entity": "United States"})), ["W1ABC"]);
+    assert_eq!(calls(json!({"continent": "EU"})), ["DL1ABC"]);
+    assert_eq!(calls(json!({"continent": "AN"})), ["VK2ABC"]);
+    assert_eq!(calls(json!({"continent": "OC"})), Vec::<String>::new());
+    assert_eq!(calls(json!({"cqZone": 3})), ["W1ABC"]);
+    assert_eq!(calls(json!({"cqZone": 25})), ["JA1ABC"]);
+    // AND: with SQL's band, and with the search box.
+    assert_eq!(calls(json!({"band": "20m", "continent": "NA"})), ["K1N"]);
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "page", "offset": 0, "limit": 9,
+        "query": {"sort": "time", "asc": false, "search": "cw", "needsConfirmOnly": false,
+                  "filter": {"band": "20m"}}}))
+    .unwrap();
+    let page = queries
+        .answer(&engine, &q, &shown, &on_card, &counted)
+        .unwrap();
+    assert_eq!(page["total"], json!(2), "{page}");
+    // A filter on nothing is no filter: the page is the unfiltered one, echoed without it.
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "page", "offset": 0, "limit": 9,
+        "query": {"sort": "time", "asc": false, "search": "", "needsConfirmOnly": false,
+                  "filter": {}, "then": []}}))
+    .unwrap();
+    let page = queries
+        .answer(&engine, &q, &shown, &on_card, &counted)
+        .unwrap();
+    assert_eq!(page["total"], json!(5));
+    assert_eq!(
+        page["query"],
+        json!({"sort": "time", "asc": false, "search": "", "needsConfirmOnly": false})
+    );
+}
+
+/// ★ "Award need": the contacts whose band slot is worked and not yet confirmed, as the award fold
+/// counts it — a slot another contact already confirmed is not needed, a satellite contact fills
+/// no terrestrial slot, and VUCC's squares are held to the fold's own per-band counts.
+#[test]
+fn award_need_keeps_the_contacts_whose_slot_is_still_open() {
+    let d = Dir::new("filter-need");
+    let records = adif_rows(&[
+        // Japan on 20 m: confirmed by JA1BBB, so JA1AAA is not needed there.
+        "<CALL:6>JA1AAA<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<MODE:3>FT8<EOR>",
+        "<CALL:6>JA1BBB<QSO_DATE:8>20240101<TIME_ON:4>0200<BAND:3>20m<MODE:3>FT8<LOTW_QSL_RCVD:1>Y<EOR>",
+        // Germany: open on 20 m and on 40 m.
+        "<CALL:6>DL1AAA<QSO_DATE:8>20240102<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:6>DL1AAA<QSO_DATE:8>20240103<TIME_ON:4>0100<BAND:3>40m<MODE:2>CW<EOR>",
+        // WAS: Connecticut open on 6 m; the 6 m grids for VUCC and FFMA.
+        "<CALL:5>W1AAA<QSO_DATE:8>20240104<TIME_ON:4>0100<BAND:2>6m<MODE:3>FT8<STATE:2>CT<GRIDSQUARE:6>FN31pr<EOR>",
+        "<CALL:5>W1BBB<QSO_DATE:8>20240104<TIME_ON:4>0200<BAND:2>6m<MODE:3>FT8<STATE:2>MA<GRIDSQUARE:4>FN42<QSL_RCVD:1>Y<EOR>",
+        "<CALL:5>W1CCC<QSO_DATE:8>20240104<TIME_ON:4>0300<BAND:2>6m<MODE:3>FT8<GRIDSQUARE:4>FN42<EOR>",
+        // A satellite contact: no terrestrial DXCC slot, no VUCC band square.
+        "<CALL:6>JA2SAT<QSO_DATE:8>20240105<TIME_ON:4>0100<BAND:2>2m<MODE:2>FM<PROP_MODE:3>SAT<GRIDSQUARE:4>PM95<EOR>",
+    ]);
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let calls = |need: &str| filtered_calls(&queries, &engine, json!({"need": need}));
+    // The United States on 6 m is confirmed by W1BBB's card: neither W1 contact is needed.
+    assert_eq!(calls("dxcc"), ["DL1AAA", "DL1AAA"]);
+    assert_eq!(calls("was"), ["W1AAA"]);
+    assert_eq!(calls("vucc"), ["W1AAA"]);
+    assert_eq!(calls("ffma"), ["W1AAA"]);
+    // The positive control: JA1AAA is needed once nothing confirms Japan on 20 m.
+    let d2 = Dir::new("filter-need-control");
+    let engine2 = on_store(&d2, &records[..1]);
+    assert_eq!(
+        filtered_calls(&LogQueries::default(), &engine2, json!({"need": "dxcc"})),
+        ["JA1AAA"]
+    );
+    // WAZ: zone 25 on 20 m is confirmed, zone 14 (Germany) is open on two bands, and CQ counts a
+    // satellite contact's zone (zone 25 on 2 m), as the fold does.
+    assert_eq!(calls("waz"), ["DL1AAA", "DL1AAA", "JA2SAT"]);
+    // The VUCC squares counted here agree with the award fold, band by band.
+    let summary = crate::log_folds::awards_kept(&engine, &crate::LogTallies::default()).unwrap();
+    let six = summary
+        .vucc
+        .awards
+        .iter()
+        .find(|a| a.band == "6m")
+        .expect("6 m");
+    let slots = queries.need_slots(&engine, AwardNeed::Vucc).unwrap();
+    assert_eq!((six.worked, six.confirmed), (2, 1), "premise");
+    assert_eq!(
+        slots.open.values().map(HashSet::len).sum::<usize>(),
+        six.worked - six.confirmed
+    );
+}
+
+/// ★ A filter on what was SENT follows an upload stamp: a stamp moves no order (`index_rev`
+/// holds), so an order kept for "LoTW not sent" must be keyed on `content_rev` as well, or the
+/// contact just uploaded stays listed as unsent.
+#[test]
+fn a_sent_filter_follows_an_upload_stamp() {
+    let d = Dir::new("filter-sent");
+    let records = adif_rows(&[
+        "<CALL:6>JA1AAA<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<MODE:3>FT8<EOR>",
+        "<CALL:6>DL1AAA<QSO_DATE:8>20240102<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+    ]);
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let unsent = || filtered_calls(&queries, &engine, json!({"qsl": {"lotw": "notSent"}}));
+    let by_call = || filtered_calls(&queries, &engine, json!({"call": "JA"}));
+    assert_eq!(unsent(), ["DL1AAA", "JA1AAA"]);
+    assert_eq!(by_call(), ["JA1AAA"]);
+    let built = || queries.0.built.load(Ordering::Relaxed);
+    let before = built();
+    let id = engine.lock().unwrap().stored_log()[0].id.expect("an id");
+    let signed = tempo_app::station::LotwSigned::of(&logged(&engine, id)).expect("an id");
+    tempo_app::logwrite::stamp_lotw_batch(&engine, &[signed], &accepted(1_790_000_000));
+    engine.caught_up();
+    assert_eq!(unsent(), ["DL1AAA"], "the stamped contact is sent now");
+    assert_eq!(
+        built(),
+        before + 1,
+        "only the sent filter's order was built again"
+    );
+    assert_eq!(by_call(), ["JA1AAA"]);
+    assert_eq!(
+        built(),
+        before + 1,
+        "an order that reads nothing sent is kept through a stamp"
+    );
+}
+
+/// The keys after the first and the field filters reach the order: the page is the reference
+/// order of the rows the filter keeps, each key in its own direction.
+#[test]
+fn a_page_orders_by_every_key_it_names() {
+    let d = Dir::new("filter-keys");
+    let records = adif_rows(&[
+        "<CALL:5>K1AAA<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<STATE:2>CT<EOR>",
+        "<CALL:5>K1BBB<QSO_DATE:8>20240101<TIME_ON:4>0200<BAND:3>40m<FREQ:5>7.074<MODE:3>FT8<STATE:2>MA<EOR>",
+        "<CALL:5>K1CCC<QSO_DATE:8>20240101<TIME_ON:4>0300<BAND:3>20m<FREQ:6>14.074<MODE:2>CW<STATE:2>MA<EOR>",
+        "<CALL:5>K1DDD<QSO_DATE:8>20240101<TIME_ON:4>0400<BAND:3>40m<FREQ:5>7.074<MODE:2>CW<STATE:2>CT<EOR>",
+        "<CALL:5>W9ZZZ<QSO_DATE:8>20240101<TIME_ON:4>0500<BAND:3>40m<FREQ:5>7.074<MODE:2>CW<STATE:2>IL<EOR>",
+    ]);
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let page = |query: Value| -> Vec<String> {
+        let q: LogQuestion = serde_json::from_value(
+            json!({"kind": "page", "offset": 0, "limit": 9, "query": query}),
+        )
+        .unwrap();
+        let a = queries
+            .answer(&engine, &q, &shown, &on_card, &counted)
+            .unwrap();
+        a["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["call"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        page(
+            json!({"sort": "state", "asc": true, "search": "", "needsConfirmOnly": false,
+            "then": [{"sort": "band", "asc": false}], "filter": {"call": "K1"}})
+        ),
+        ["K1AAA", "K1DDD", "K1CCC", "K1BBB"]
+    );
+    assert_eq!(
+        page(
+            json!({"sort": "mode", "asc": false, "search": "", "needsConfirmOnly": false,
+            "then": [{"sort": "state", "asc": true}, {"sort": "time", "asc": false}]})
+        ),
+        ["K1AAA", "K1BBB", "K1DDD", "W9ZZZ", "K1CCC"]
+    );
+}
+
 /// A synthetic lifetime log of `n` contacts, written as `log.adi`: a pool of calls worked many
 /// times each, the common bands and modes, countries, grids and a spread of years.
 fn synthetic_log(d: &Dir, n: usize) {
@@ -2461,6 +2732,26 @@ fn synthetic_log(d: &Dir, n: usize) {
             1 + i % 12,
             country.len(),
         );
+        // What the Logbook's field filters read: a state on every row, a county on a third, a
+        // comment on a seventh, a contest on an eleventh, LoTW confirming a fifth.
+        adif.pop(); // the newline
+        adif.truncate(adif.len() - "<EOR>".len());
+        let state = ["CT", "MA", "NY", "IL", "CA", "TX", "OH"][i % 7];
+        let _ = write!(adif, "<STATE:2>{state}");
+        if i % 3 == 0 {
+            let county = format!("{state},COUNTY{:02}", i % 40);
+            let _ = write!(adif, "<CNTY:{}>{county}", county.len());
+        }
+        if i % 7 == 0 {
+            let _ = write!(adif, "<COMMENT:14>pileup at dusk");
+        }
+        if i % 11 == 0 {
+            let _ = write!(adif, "<CONTEST_ID:8>CQ-WW-CW");
+        }
+        if i % 5 == 0 {
+            let _ = write!(adif, "<LOTW_QSL_RCVD:1>Y");
+        }
+        let _ = writeln!(adif, "<EOR>");
     }
     std::fs::write(d.log(), adif).expect("log.adi");
 }
@@ -2488,6 +2779,7 @@ mod lock_watch;
 fn log_query_bench() {
     use lock_watch::{Holds, Watcher};
     use std::cell::RefCell;
+    use std::fmt::Write as _;
     use std::time::{Duration, Instant};
     /// Whether the cut has removed the log in memory: the hold bound is asserted from then on.
     const AFTER_THE_CUT: bool = true;
@@ -2632,6 +2924,77 @@ fn log_query_bench() {
     });
     let (_, backlog_after_stamp) = run("lotw_backlog_after_stamp", json!({"kind": "lotwBacklog"}));
     let (_, grids_after_stamp) = run("worked_grids_after_stamp", json!({"kind": "workedGrids"}));
+    // The field filters and the extra sort keys, each a cold order (a first page).
+    let filtered = |f: Value| {
+        page(
+            json!({"sort": "time", "asc": false, "search": "", "needsConfirmOnly": false, "filter": f}),
+            0,
+        )
+    };
+    let year = 1_420_070_400u64; // 2015-01-01
+    let filter_steps: Vec<(&'static str, Value)> = vec![
+        ("call_prefix", filtered(json!({"call": "K3B"}))),
+        ("call_pattern", filtered(json!({"call": "K?B00*"}))),
+        ("band_mode", filtered(json!({"band": "20m", "mode": "FT8"}))),
+        (
+            "dates_one_year",
+            filtered(json!({"fromUnix": year, "toUnix": year + 365 * 86_400})),
+        ),
+        ("entity", filtered(json!({"entity": "United States"}))),
+        ("continent", filtered(json!({"continent": "NA"}))),
+        ("cq_zone", filtered(json!({"cqZone": 5}))),
+        ("itu_zone", filtered(json!({"ituZone": 8}))),
+        ("grid", filtered(json!({"grid": "FN3"}))),
+        ("state", filtered(json!({"state": "CT"}))),
+        ("county", filtered(json!({"county": "MA,"}))),
+        ("iota", filtered(json!({"iota": "NA-001"}))),
+        ("reference", filtered(json!({"reference": "K-0001"}))),
+        (
+            "lotw_confirmed",
+            filtered(json!({"qsl": {"lotw": "confirmed"}})),
+        ),
+        (
+            "lotw_not_sent",
+            filtered(json!({"qsl": {"lotw": "notSent"}})),
+        ),
+        ("card_sent", filtered(json!({"qsl": {"card": "sent"}}))),
+        ("contest", filtered(json!({"contest": "CQ-WW-CW"}))),
+        ("text_ascii", filtered(json!({"text": "pileup"}))),
+        ("text_unicode", filtered(json!({"text": "dämmerung"}))),
+        ("need_dxcc", filtered(json!({"need": "dxcc"}))),
+        ("need_vucc", filtered(json!({"need": "vucc"}))),
+        // The fold kept by then, as the Awards view keeps it in the app: the pass alone.
+        (
+            "need_dxcc_fold_kept",
+            filtered(json!({"need": "dxcc", "mode": "FT8"})),
+        ),
+        (
+            "everything",
+            filtered(
+                json!({"call": "K", "band": "20m", "state": "CT", "qsl": {"lotw": "notSent"}, "need": "was"}),
+            ),
+        ),
+        (
+            "sort_three_keys",
+            page(
+                json!({"sort": "state", "asc": true, "search": "", "needsConfirmOnly": false,
+            "then": [{"sort": "band", "asc": false}, {"sort": "call", "asc": true}]}),
+                0,
+            ),
+        ),
+        (
+            "sort_county",
+            page(
+                json!({"sort": "county", "asc": true, "search": "", "needsConfirmOnly": false}),
+                0,
+            ),
+        ),
+    ];
+    let mut filter_line = format!("LOG_QUERY_BENCH_FILTERS rows={n}");
+    for (name, q) in filter_steps {
+        let (a, took) = run(name, q);
+        let _ = write!(filter_line, " {name}={took:.1}ms(total={})", a["total"]);
+    }
     drop(watcher);
     println!(
         "LOG_QUERY_BENCH_FOLDS rows={n} worked_grids_cold={grids_cold:.1}ms worked_grids_warm={grids_warm:.3}ms \
@@ -2688,6 +3051,7 @@ fn log_query_bench() {
             ));
         }
     }
+    println!("{filter_line}");
     assert!(
         broken.is_empty(),
         "§4.11's hold bound, broken at {n} rows:\n  {}",

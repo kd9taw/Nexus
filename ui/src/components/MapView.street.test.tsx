@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   // The transmit-capable surface, spied so a street double-click is PROVEN never to reach it.
   callStation: vi.fn(async () => ({})),
   setPtt: vi.fn(async () => ({})),

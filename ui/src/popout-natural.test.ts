@@ -80,6 +80,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
     // Rust's title match knows nothing of `memories`/`sats` — they take its `other =>`
     // arm — so the components are the only complete list.
     expect(openableSlugs()).toEqual([
+      'activation',
       'bandmapCw',
       'bandmapPhone',
       'connect',
@@ -164,6 +165,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
         }),
     )
     expect(opened).toEqual({
+      activation: 100,
       bandmapCw: 100,
       bandmapPhone: 100,
       connect: 100,

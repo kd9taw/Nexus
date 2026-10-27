@@ -11,8 +11,7 @@
 // them — the column headings, the filters, and everything a row says out loud.
 import { useEffect, useMemo, useState } from 'react'
 import { t } from '../i18n'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import {
@@ -36,9 +35,9 @@ import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../feat
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
 import { WatchTile } from './WatchTile'
+import { WorkedWindowSelect, workedWithin } from './WorkedWindowSelect'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { useStationControl, useStationCapability } from '../stationAccess'
 
 interface Props {
   /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
@@ -182,11 +181,6 @@ export function OperateRoster({
   sort: keptSort,
   onSort,
 }: Props) {
-  const control = useStationControl()
-  // A public spot of another station posts from the station's own cluster login, so it rides
-  // STATION CONTROL rather than the logging grant; a browser without it sees the button dead.
-  const spotControl = control
-  const callControl = useStationCapability('ftCall')
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
   const units = useUnits()
@@ -330,8 +324,15 @@ export function OperateRoster({
     // ever, not per band and emphatically not per park (dto.rs) — which is why it could never
     // have answered this on its own. A bare LoTW confirmation on a station already worked on
     // this band is NOT one (#350): that was the station just worked, back on the list. A
-    // watched station IS one, even just worked — the operator asked to see it.
-    if (hideWorked) f = f.filter((x) => !x.s.worked || x.stillNeeded)
+    // watched station IS one, even just worked — the operator asked to see it. #324 — with a
+    // window chosen, a station last worked before it shows again: a special-event call (13
+    // Colonies, Route 66) is on the air all week, and the Spots panel's windows are the ones
+    // offered. No window is any time, as Hide worked always was here.
+    const workedWindow = filters.workedWindow
+    if (hideWorked)
+      f = f.filter(
+        (x) => !x.s.worked || x.stillNeeded || (workedWindow != null && !workedWithin(x.s, workedWindow)),
+      )
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same
     // self-own the country exclusion guards against.
@@ -409,6 +410,7 @@ export function OperateRoster({
     sort,
     neededOnly,
     hideWorked,
+    filters.workedWindow,
     filters.hideBlocked,
     filters.maxDistanceKm,
     hideCalls.entries,
@@ -423,7 +425,6 @@ export function OperateRoster({
   const roving = useRovingList(rows.length, (i, mods) => {
     const s = rows[i]?.s
     if (!s) return
-    if ((!control && mods.alt) || (!callControl && mods.shift)) return
     if (mods.alt) onToggleIgnore?.(s.call)
     else if (mods.shift) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
     else onSelect(s.call)
@@ -486,6 +487,12 @@ export function OperateRoster({
             onChange={(e) => setFilter({ hideWorked: e.target.checked })}
           /> {t('operate.roster.filter.hideWorked')}
         </label>
+        <WorkedWindowSelect
+          className="or-worked-window"
+          value={filters.workedWindow ?? null}
+          onChange={(w) => setFilter({ workedWindow: w ?? undefined })}
+          anyTime
+        />
           <label className="or-filter" title={t('operate.roster.filter.hideBlocked.title')}>
             <input
               type="checkbox"
@@ -525,8 +532,8 @@ export function OperateRoster({
           <button
             type="button"
             className="or-filter or-spot"
-            disabled={!spotControl || !selectedCall}
-            onClick={() => spotControl && selectedCall && onSpot(selectedCall)}
+            disabled={!selectedCall}
+            onClick={() => selectedCall && onSpot(selectedCall)}
             title={
               selectedCall
                 ? t('operate.roster.spot.title', { call: selectedCall })
@@ -610,13 +617,12 @@ export function OperateRoster({
                 }}
                 onDoubleClick={(e) => {
                   if (e.altKey) {
-                    if (onToggleIgnore) { if (control) onToggleIgnore(s.call); return }
-                    if (!control) return
+                    if (onToggleIgnore) { onToggleIgnore(s.call); return }
                   }
-                  if (callControl) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
+                  onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
                 }}
                 title={
-                  !callControl ? s.call : ignoredRow
+                  ignoredRow
                     ? t('operate.row.ignored.title')
                     : t('operate.roster.row.work.title', { call: s.call })
                 }
@@ -640,18 +646,12 @@ export function OperateRoster({
                       L
                     </span>
                   )}
+                  {/* The station's card, where its QRZ button opens the page this one used to. */}
                   <button
                     type="button"
                     className="qrz-link"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void withErrorToast(
-                        () => openQrzPage(s.call),
-                        t('callbook.qrzPage.failed', { call: s.call }),
-                      )
-                    }}
+                    {...callCardTrigger(s.call, qrzPageOf(s.call), true)}
                     onDoubleClick={(e) => e.stopPropagation()}
-                    title={t('callbook.qrzPage.title', { call: s.call })}
                   >
                     ↗
                   </button>

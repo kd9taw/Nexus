@@ -7,6 +7,7 @@
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
 import type { ContestDupeVerdict } from '../features/contestDupe'
+import type { PotaDupe } from '../features/potaActivation'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { useCallBearings } from '../features/callBearing'
@@ -117,6 +118,13 @@ interface Props {
    *  rule meant `(call, band, mode class)`, and a host outside a contest passes nothing and gets
    *  the sentence this card has always shown. */
   contestDupeByBand?: boolean
+  /** An activation is running: the "worked ever on this band" Dupe badge is hidden, because a
+   *  hunter worked last week is no dupe for today's activation — `potaDupe` is the one that
+   *  speaks. Default false: the card is unchanged outside an activation. */
+  activating?: boolean
+  /** The warn-only POTA dupe ([`potaDupe`](../features/potaActivation.ts)): this call already
+   *  worked today from the activation's park on this band and mode. Never blocks. */
+  potaDupe?: PotaDupe | null
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -125,6 +133,12 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 function fmtDate(unix: number): string {
   const d = new Date(unix * 1000)
   return `${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`
+}
+
+/** UTC "HHMM" for the POTA dupe badge's earlier contact. */
+function fmtTime(unix: number): string {
+  const d = new Date(unix * 1000)
+  return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`
 }
 
 /** "59/59" sent/received, or "" when neither is present. */
@@ -168,7 +182,7 @@ export function recallCardClass(bounded?: boolean, kept?: boolean): string {
   return `recall-card${bounded ? ' cockpit-recall' : ''}${bounded && kept ? ' cockpit-recall-kept' : ''}`
 }
 
-export function RecallPanel({ call, band, name, qth, state, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, activating = false, potaDupe = null, hasLookup = true, bounded = false, kept = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle, grip }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -379,7 +393,20 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
               {t('recall.clubDupe.label')}
             </span>
           )}
-          {hist.dupeThisBand && band && (
+          {potaDupe && (
+            <span
+              className="recall-badge dupe"
+              title={t('recall.potaDupe.title', {
+                park: potaDupe.park,
+                band: potaDupe.qso.band ?? '',
+                mode: potaDupe.qso.mode ?? '',
+                time: fmtTime(potaDupe.qso.whenUnix),
+              })}
+            >
+              {t('recall.potaDupe.label', { park: potaDupe.park })}
+            </span>
+          )}
+          {!activating && hist.dupeThisBand && band && (
             <span className="recall-badge dupe" title={t('recall.dupe.title', { band })}>
               {t('recall.dupe.label', { band })}
             </span>

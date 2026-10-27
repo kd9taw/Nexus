@@ -398,14 +398,19 @@ fn without_the_feature_there_is_no_switch() {
     assert_eq!(
         keys,
         [
+            "away",
             "computerBuild",
             "internet",
             "over",
             "phase",
+            "pttRefusal",
             "reason",
+            "signInBy",
+            "signingAgain",
             "station",
             "stationBuild",
             "stillThere",
+            "txHold",
             "udpBlocked"
         ]
     );

@@ -12,7 +12,7 @@ mod fm;
 mod fm_receiver;
 mod level;
 mod phone_mode;
-mod selection;
+pub(super) mod selection;
 mod spot;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -64,22 +64,30 @@ impl Station {
         state.last_dial = 14_074_000;
         state.last_mode = engine_lock(&engine).rig_mode_effective();
         state.rig_asserted = true;
-        let read = state.remote_read(&engine).unwrap();
-        {
-            let mut e = engine_lock(&engine);
-            e.remote_observe_cat(Some(&read), Some(true));
-            e.remote_observe_dial(Some(&read), Some(14_074_000));
-            e.remote_observe_mode(Some(&read), Some(&state.last_mode));
-            e.remote_observe_ptt(Some(&read), Some(false));
-        }
-        Self {
+        let mut station = Self {
             engine,
             state,
             rig: Rig::rigctld(&peer.address),
             backend: MockBackend::new(),
             authority: Revocation::default(),
             path,
-        }
+        };
+        station.read_now();
+        station
+    }
+    /// The station's readings as the live loop keeps them, on a fresh read: CAT up, the dial and
+    /// mode the loop last set, PTT off. The live loop reads the radio every second; `step` runs at
+    /// t = 0 here, so those reads never come round and a reading only ages, and a request is
+    /// refused on one a second old. So a test takes them again just before a request that follows
+    /// its own saves or steps: a settings save's fsync that a loaded disk holds up for a second
+    /// must not age what the request is judged on.
+    fn read_now(&mut self) {
+        let read = self.state.remote_read(&self.engine).unwrap();
+        let mut e = engine_lock(&self.engine);
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(self.state.last_dial));
+        e.remote_observe_mode(Some(&read), Some(&self.state.last_mode));
+        e.remote_observe_ptt(Some(&read), Some(false));
     }
     fn queue(&mut self) -> Completion {
         self.queue_dial(7.074, "40m")
@@ -371,7 +379,7 @@ fn mode_worker_adopts_confirmed_power_without_raising_or_reissuing_it() {
         } else {
             assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
         }
-        let mut expected = vec!["M PKTUSB 3000", "F 14074000"];
+        let mut expected = vec!["M PKTUSB -1", "F 14074000"];
         if initial > 0.4 {
             expected.push("L RFPOWER 0.400");
         }
@@ -409,7 +417,7 @@ fn unconfirmed_power_does_not_commit_mode_or_defer_a_radio_retry() {
     let receipt = s.queue_mode("digital", false);
     s.step();
     assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
-    let expected = ["M PKTUSB 3000", "F 14074000", "L RFPOWER 0.400"];
+    let expected = ["M PKTUSB -1", "F 14074000", "L RFPOWER 0.400"];
     assert_eq!(writes(&peer), expected);
     s.authority.revoke();
     for _ in 0..3 {
@@ -449,7 +457,7 @@ fn frequency_crosses_the_actual_worker_once_then_persists_without_native_replay(
         );
         assert_eq!(Settings::load(&s.path).dial_hz(), hz);
         assert_eq!(Settings::load(&s.path).band, band);
-        let expected = vec!["M PKTUSB 3000".to_string(), format!("F {hz}")];
+        let expected = vec!["M PKTUSB -1".to_string(), format!("F {hz}")];
         assert_eq!(writes(&peer), expected);
         s.authority.revoke();
         for _ in 0..3 {
@@ -474,7 +482,7 @@ fn failed_frequency_does_not_leave_a_target_for_ordinary_worker_retries() {
     for _ in 0..3 {
         s.step();
     }
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 7074000"]);
     assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
     assert!(!s.path.exists());
 }
@@ -491,7 +499,7 @@ fn worker_save_failure_is_unknown_and_does_not_reissue_the_confirmed_qsy() {
         s.step();
     }
     assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 7_074_000);
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 7074000"]);
 }
 
 #[test]
@@ -625,6 +633,7 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
         let mut expected = Engine::with_settings(engine_lock(&s.engine).settings().clone());
         expected.set_tx_enabled(false);
         for (index, band) in ["40m", "20m", "40m"].into_iter().enumerate() {
+            s.read_now();
             let receipt = {
                 let mut e = engine_lock(&s.engine);
                 let connection = e
@@ -680,87 +689,65 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
     }
 }
 
+/// A streamed session's presence revoked while its FT over is on the air: the radio loop's next
+/// tick unkeys and flushes it. The over is the native Call CQ a streamed operator's click is.
 #[test]
-fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
+fn remote_presence_loss_flushes_the_over_on_the_air() {
     use tempo_app::remote_control::transmit::TransmitAuthority;
-    let mut native_writes = None;
-    for (remote, local_rearm) in [(false, true), (true, false), (true, true)] {
-        let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
-            if line == "T 1" {
-                state.keyed = true;
-                Some("RPRT 0\n".into())
-            } else {
-                None
-            }
-        });
-        let mut s = Station::configured(&peer, |settings| {
-            settings.mycall = "KD9TAW".into();
-            settings.mygrid = "EN52".into();
-        });
-        let authority = TransmitAuthority::default();
-        {
-            let mut e = engine_lock(&s.engine);
-            e.take_immediate_retune();
-            if remote {
-                e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
-                    .unwrap();
-            } else {
-                e.start_cq(None).unwrap();
-            }
-            if local_rearm {
-                e.set_tx_enabled(true);
-            }
-            // Represent the already-asserted, currently playing FT over.
-            e.take_immediate_retune();
-            e.take_slot_tx_abort();
-            e.take_immediate_tx();
-            s.state.cur_tier = e.tier();
-            s.state.cur_slot_secs = e.active_slot_secs();
-            s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
-            s.state.last_slot = Some(s.state.clock.slot_index(100.0));
-        }
-        s.rig.ptt(true).unwrap();
-        s.state.tx_until_ms = Some(999_999.0);
-        s.state.slot_tx_until_ms = 999_000.0;
-        authority.revoke();
-        s.state
-            .step(
-                &s.engine,
-                &mut s.backend,
-                &mut s.rig,
-                &no_sinks(),
-                100.0,
-                &mut |_| panic!("this test must not stop TX through a device rebuild"),
-                &mut |_, _| panic!("this test must not stop TX through a radio rebuild"),
-                &mut StationSinks::new(),
-            )
-            .unwrap();
-        assert_eq!(s.rig.keyed, local_rearm);
-        assert_eq!(s.state.tx_until_ms.is_some(), local_rearm);
-        assert_eq!(engine_lock(&s.engine).tx_enabled(), local_rearm);
-        if local_rearm {
-            assert_eq!(s.backend.flush_calls, 0);
-            // Compare the real native loop: its ordinary PTT reconciliation
-            // can reassert an already-held key. Remote ownership must not
-            // change those writes or flush that native transmission.
-            let sent = writes(&peer);
-            if remote {
-                assert_eq!(Some(&sent), native_writes.as_ref());
-            } else {
-                assert!(!sent.is_empty());
-                assert!(sent.iter().all(|line| line == "T 1"));
-                native_writes = Some(sent);
-            }
+    let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
+        if line == "T 1" {
+            state.keyed = true;
+            Some("RPRT 0\n".into())
         } else {
-            assert!(s.backend.flush_calls > 0);
-            assert_eq!(writes(&peer), ["T 1", "T 0"]);
+            None
         }
-        assert!(s.backend.played.is_empty());
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings.mycall = "KD9TAW".into();
+        settings.mygrid = "EN52".into();
+    });
+    let authority = TransmitAuthority::default();
+    {
+        let mut e = engine_lock(&s.engine);
+        e.take_immediate_retune();
+        e.start_cq(None).unwrap();
+        let now = Instant::now();
+        assert!(e.hold_remote_presence(authority.permit(unexpired_deadline()).unwrap(), now));
+        // Represent the already-asserted, currently playing FT over.
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+        e.take_immediate_tx();
+        s.state.cur_tier = e.tier();
+        s.state.cur_slot_secs = e.active_slot_secs();
+        s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+        s.state.last_slot = Some(s.state.clock.slot_index(100.0));
     }
+    s.rig.ptt(true).unwrap();
+    s.state.tx_until_ms = Some(999_999.0);
+    s.state.slot_tx_until_ms = 999_000.0;
+    authority.revoke();
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &no_sinks(),
+            100.0,
+            &mut |_| panic!("this test must not stop TX through a device rebuild"),
+            &mut |_, _| panic!("this test must not stop TX through a radio rebuild"),
+            &mut StationSinks::new(),
+        )
+        .unwrap();
+    assert!(!s.rig.keyed);
+    assert!(s.state.tx_until_ms.is_none());
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.flush_calls > 0);
+    assert_eq!(writes(&peer), ["T 1", "T 0"]);
+    assert!(s.backend.played.is_empty());
 }
 
 #[test]
-fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
+fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
     use tempo_app::remote_control::transmit::TransmitAuthority;
     for scene in ["valid", "beforeTick", "duringKey"] {
         let authority = Arc::new(TransmitAuthority::default());
@@ -784,8 +771,9 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
             let mut e = engine_lock(&s.engine);
             e.set_tx_even(true);
             e.take_immediate_retune();
-            e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
-                .unwrap();
+            e.start_cq(None).unwrap();
+            let now = Instant::now();
+            assert!(e.hold_remote_presence(authority.permit(unexpired_deadline()).unwrap(), now));
             e.take_immediate_retune();
             e.take_slot_tx_abort();
             s.state.cur_tier = e.tier();
@@ -828,69 +816,57 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
     }
 }
 
+/// Remote's Stop ends an FT over with `halt_tx`, as every local stop does (`transmit_stop::stop`):
+/// the radio loop's next tick unkeys and flushes what is on the air.
 #[test]
-fn remote_ft_tx_off_finishes_the_owned_over_and_stop_cuts_it() {
-    use tempo_app::remote_control::transmit::TransmitAuthority;
-    for stop in [false, true] {
-        let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
-            if line == "T 1" {
-                state.keyed = true;
-                Some("RPRT 0\n".into())
-            } else {
-                None
-            }
-        });
-        let mut s = Station::configured(&peer, |settings| {
-            settings.mycall = "KD9TAW".into();
-            settings.mygrid = "EN52".into();
-        });
-        let authority = TransmitAuthority::default();
-        let permit = authority.permit(unexpired_deadline()).unwrap();
-        {
-            let mut e = engine_lock(&s.engine);
-            e.take_immediate_retune();
-            e.start_remote_ft_cq(permit.clone(), None).unwrap();
-            e.take_immediate_retune();
-            e.take_slot_tx_abort();
-            e.take_immediate_tx();
-            s.state.cur_tier = e.tier();
-            s.state.cur_slot_secs = e.active_slot_secs();
-            s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
-            s.state.last_slot = Some(0);
-        }
-        s.rig.ptt(true).unwrap();
-        s.state.tx_until_ms = Some(14_000.0);
-        s.state.slot_tx_until_ms = 14_000.0;
-        {
-            let mut e = engine_lock(&s.engine);
-            if stop {
-                e.stop_remote_ft(&permit).unwrap();
-            } else {
-                e.set_remote_ft_tx_enabled(permit, false).unwrap();
-            }
-        }
-        s.state
-            .step(
-                &s.engine,
-                &mut s.backend,
-                &mut s.rig,
-                &no_sinks(),
-                100.0,
-                &mut |_| panic!("unexpected device rebuild"),
-                &mut |_, _| panic!("unexpected radio rebuild"),
-                &mut StationSinks::new(),
-            )
-            .unwrap();
-        assert_eq!(s.rig.keyed, !stop);
-        assert_eq!(s.state.tx_until_ms.is_some(), !stop);
-        assert!(!engine_lock(&s.engine).tx_enabled());
-        assert!(s.backend.played.is_empty());
-        if stop {
-            assert!(s.backend.flush_calls > 0);
-            assert_eq!(writes(&peer), ["T 1", "T 0"]);
+fn remote_stops_halt_cuts_the_over_on_the_air() {
+    let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
+        if line == "T 1" {
+            state.keyed = true;
+            Some("RPRT 0\n".into())
         } else {
-            assert_eq!(s.backend.flush_calls, 0);
-            assert_eq!(writes(&peer), ["T 1"]);
+            None
         }
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings.mycall = "KD9TAW".into();
+        settings.mygrid = "EN52".into();
+    });
+    {
+        let mut e = engine_lock(&s.engine);
+        e.take_immediate_retune();
+        e.start_cq(None).unwrap();
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+        e.take_immediate_tx();
+        s.state.cur_tier = e.tier();
+        s.state.cur_slot_secs = e.active_slot_secs();
+        s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+        s.state.last_slot = Some(0);
     }
+    s.rig.ptt(true).unwrap();
+    s.state.tx_until_ms = Some(14_000.0);
+    s.state.slot_tx_until_ms = 14_000.0;
+    {
+        let mut e = engine_lock(&s.engine);
+        e.halt_tx();
+    }
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &no_sinks(),
+            100.0,
+            &mut |_| panic!("unexpected device rebuild"),
+            &mut |_, _| panic!("unexpected radio rebuild"),
+            &mut StationSinks::new(),
+        )
+        .unwrap();
+    assert!(!s.rig.keyed);
+    assert!(s.state.tx_until_ms.is_none());
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.played.is_empty());
+    assert!(s.backend.flush_calls > 0);
+    assert_eq!(writes(&peer), ["T 1", "T 0"]);
 }

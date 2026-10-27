@@ -115,6 +115,8 @@ fn power_category_is_what_each_contests_log_declares() {
             let lines = match event.as_str() {
                 // The sponsor's log lists CATEGORY-POWER.
                 "nyqp" => format!("CATEGORY-POWER: {power}"),
+                // The ARRL RTTY Roundup's QRP, LP and HP sub-categories (HCAT.1.3, HCAT.2.4).
+                "arrlrtty" => format!("CATEGORY-POWER: {power}"),
                 // Winter Field Day takes QRP or LOW, and HIGH claims nothing.
                 "wfd" if power != "HIGH" => format!("CATEGORY-POWER: {power}"),
                 // The Illinois QSO Party certifies a QRP entry instead.

@@ -9,7 +9,7 @@
 [package]
 publish = false
 name = "tempo"
-version = "1.19.0"
+version = "1.21.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["KD9TAW <kd9taw@protonmail.com>"]
@@ -175,7 +175,7 @@ gdk = "0.18"
 
 # The windows' keys: WebView2's own browser accelerators switched off in every Nexus window
 # (`ICoreWebView2Settings3::SetAreBrowserAcceleratorKeysEnabled`, `src/browser_keys.rs`), and F11
-# kept for the Remote stations window's full screen (`AcceleratorKeyPressed`,
+# kept for the Stations on this network window's full screen (`AcceleratorKeyPressed`,
 # `src/remote_window.rs`). Tauri 2.11 does not pass wry's switch for
 # the first through; it hands out the raw WebView2 controller, and the types to call it with live
 # in these two crates. WINDOWS ONLY and NOT NEW PACKAGES: both are already in this tree at these
@@ -193,8 +193,9 @@ webview2-com = "0.38"
 windows-core = "0.61"
 # The shack PC's identifiers for the Remote trial (`remote_service::pc_identity`): the firmware's
 # SMBIOS table and the registry's MachineGuid. Already in the build through tempo-audio and
-# street-map at this version (MIT OR Apache-2.0), so this adds features, not a crate.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_SystemInformation"] }
+# street-map at this version (MIT OR Apache-2.0), so this adds features, not a crate. Dwm: the
+# main window cloaked while a launch maximises it hidden (`window_state::maximize_hidden`).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Registry", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 # The same crate as above with one more feature, for this crate's tests only: `test_util`, the log

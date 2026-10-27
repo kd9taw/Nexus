@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { CONTROL_RESUME_MS, OperationClient } from './operation-client'
+import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import { manualRecord, operationRequest, operationValue } from './operation-protocol'
 import type { OperationState } from './operation-protocol'
@@ -67,6 +67,11 @@ it('closes the logging grammar around plain QSO fields and no arbitrary action',
   // granted, and never refuses the state (that refusal broke control for every older page).
   expect((operationValue({ ...s, actions: ['tx'] }) as OperationState).actions).toEqual([])
 })
+it("reads the station's TX latch from txArmed by value, only beside the lease and stop token", () => {
+  const s = { ...state(true), transmitEpoch: '000000000000002a' }
+  for (const txArmed of [true, false]) expect((operationValue({ ...s, txArmed }) as OperationState).txArmed).toBe(txArmed)
+  expect(() => operationValue({ ...s, txArmed: true, transmitEpoch: null })).toThrow()
+})
 it('tolerates a future station action type without widening what this page may send', () => {
   const s = state(true)
   const future = operationValue({ ...s, actions: ['log.manual', 'log.edit', 'otaHunt'] }) as OperationState
@@ -83,20 +88,9 @@ it('tolerates a future station action type without widening what this page may s
 })
 function setup() {
   vi.useFakeTimers()
-  const sent: Record<string, any>[] = [],
-    saved: { id: string | null } = { id: null }
+  const sent: Record<string, any>[] = []
   let now = 1000
-  const c = new OperationClient(
-    (s) => sent.push(JSON.parse(s)),
-    true,
-    () => now,
-    {
-      read: () => saved.id,
-      write: (id) => {
-        saved.id = id
-      }
-    }
-  )
+  const c = new OperationClient((s) => sent.push(JSON.parse(s)), true, () => now)
   c.open()
   const reply = (value: unknown) =>
     c.receive({
@@ -108,123 +102,12 @@ function setup() {
   return {
     c,
     sent,
-    saved,
     reply,
     advance: (ms: number) => {
       now += ms
     }
   }
 }
-it('requires an explicit acquisition and rejects overlap while preserving the operation id', async () => {
-  const { c, sent, saved, reply } = setup()
-  await expect(c.log(record())).rejects.toThrow('notController')
-  expect(sent.map((m) => m.request.type)).toEqual(['state'])
-  const acquiring = c.acquire()
-  reply(state(true))
-  await acquiring
-  const result = c.log(record()),
-    request = sent[sent.length - 1]!.request
-  expect(saved.id).toBe(request.requestId)
-  await expect(c.log(record())).rejects.toThrow('operationUnknown')
-  expect(sent.filter((m) => m.request.type === 'logManual')).toHaveLength(1)
-  reply({
-    outcome: 'applied',
-    evidence: 'fileSynced',
-    uploads: 'stationPipeline',
-    operationId: request.requestId
-  })
-  expect((await result).outcome).toBe('applied')
-  expect(saved.id).toBeNull()
-  c.disconnected()
-})
-it('keeps an unknown receipt across disconnect and a fresh client, never resubmitting', async () => {
-  const { c, sent, saved, reply } = setup()
-  const a = c.acquire()
-  reply(state(true))
-  await a
-  const action = c.log(record()).catch((e) => e.message),
-    operationId = sent[sent.length - 1]!.request.requestId
-  c.disconnected()
-  expect(await action).toBe('operationUnknown')
-  expect(saved.id).toBe(operationId)
-  const nextSent: Record<string, any>[] = [],
-    next = new OperationClient(
-      (s) => nextSent.push(JSON.parse(s)),
-      true,
-      () => 2000,
-      {
-        read: () => saved.id,
-        write: (id) => {
-          saved.id = id
-        }
-      }
-    )
-  next.open()
-  next.receive({
-    type: 'operationResponse',
-    requestId: nextSent[nextSent.length - 1]!.request.requestId,
-    value: state()
-  })
-  await expect(next.log(record())).rejects.toThrow('operationUnknown')
-  const check = next.resolve()
-  expect(nextSent[nextSent.length - 1]!.request).toMatchObject({ type: 'result', operationId })
-  next.receive({
-    type: 'operationResponse',
-    requestId: nextSent[nextSent.length - 1]!.request.requestId,
-    value: { outcome: 'applied', evidence: 'fileSynced', uploads: 'stationPipeline', operationId }
-  })
-  expect((await check).outcome).toBe('applied')
-  expect(saved.id).toBeNull()
-  expect(nextSent.some((m) => m.request.type === 'logManual')).toBe(false)
-  next.disconnected()
-})
-it('expires the browser command window and makes a timed-out write uncertain', async () => {
-  const { c, sent, reply, advance } = setup()
-  const a = c.acquire()
-  reply(state(true))
-  await a
-  advance(1300)
-  await vi.advanceTimersByTimeAsync(250)
-  // A lapsed command window with the lease still held: the log waits for current control (at most
-  // CONTROL_RESUME_MS), and when none comes it is refused unsent.
-  const stale = c.log(record()).catch((e) => e)
-  await vi.advanceTimersByTimeAsync(CONTROL_RESUME_MS)
-  expect(await stale).toMatchObject({ message: 'notController', sent: false })
-  expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
-  // A new explicit station state makes a later action available, not a retry.
-  reply(state(true))
-  const action = c.log(record()).catch((e) => e.message)
-  const operationId = sent[sent.length - 1]!.request.requestId
-  await vi.advanceTimersByTimeAsync(7500)
-  expect(await action).toBe('operationUnknown')
-  expect(c.getSnapshot().unresolved).toBe(operationId)
-  expect(sent.filter((m) => m.request.type === 'logManual')).toHaveLength(1)
-  c.disconnected()
-})
-it('refuses to send a mutation when its receipt id cannot be retained', async () => {
-  vi.useFakeTimers()
-  const sent: Record<string, any>[] = [],
-    c = new OperationClient(
-      (s) => sent.push(JSON.parse(s)),
-      true,
-      () => 1000,
-      {
-        read: () => null,
-        write: () => {
-          throw Error('storage denied')
-        }
-      }
-    )
-  c.open()
-  c.receive({
-    type: 'operationResponse',
-    requestId: sent[sent.length - 1]!.request.requestId,
-    value: state(true)
-  })
-  await expect(c.log(record())).rejects.toThrow('receiptStorageUnavailable')
-  expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
-  c.disconnected()
-})
 function relaySetup() {
   const station = { send: vi.fn<(s: string) => void>(), close: vi.fn() },
     browser = { send: vi.fn<(s: string) => void>(), close: vi.fn() },
@@ -320,30 +203,26 @@ it('bounds pending requests, expires outcomes and refuses unsupported stations',
   expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('stationUnsupported')
 })
 
-it('coordinates a click with its in-flight heartbeat without changing context or retrying', async () => {
+// This page sends only reads, acquire and release, each answered with a station state. A log outcome,
+// a log change's outcome or a Stop's acceptance under one of their ids is a crossed reply: refused,
+// and the read stays pending for its own answer.
+it('refuses any answer to a read but a station state, and keeps waiting for the state', async () => {
   const { c, sent, reply, advance } = setup()
-  const a = c.acquire(),
-    owned = state(true)
-  reply(owned)
-  await a
   advance(1000)
   await vi.advanceTimersByTimeAsync(250)
-  expect(sent[sent.length - 1]!.request.type).toBe('heartbeat')
-  const action = c.log(record())
-  await expect(c.log(record())).rejects.toThrow('remoteBusy')
-  expect(sent.filter((m) => m.request.type === 'logManual')).toHaveLength(0)
-  reply({ ...owned, commandWindowId: id() })
-  await Promise.resolve()
-  const request = sent[sent.length - 1]!.request
-  expect(request.type).toBe('logManual')
-  expect(request.commandWindowId).toBe(owned.commandWindowId)
-  reply({
-    outcome: 'applied',
-    evidence: 'fileSynced',
-    uploads: 'stationPipeline',
-    operationId: request.requestId
-  })
-  expect((await action).outcome).toBe('applied')
+  const read = sent[sent.length - 1]!.request
+  expect(read.type).toBe('state')
+  for (const value of [
+    { outcome: 'applied', evidence: 'fileSynced', uploads: 'stationPipeline', operationId: read.requestId },
+    { operation: 'logChange', operationId: read.requestId, outcome: 'applied', evidence: 'fileSynced' },
+    { stop: 'accepted' }
+  ]) {
+    expect(() => c.receive({ type: 'operationResponse', requestId: read.requestId, value })).toThrow('invalidOperation')
+    expect(c.getSnapshot().busy).toBe(true)
+  }
+  // Positive control: the state itself is still taken.
+  reply(state())
+  expect(c.getSnapshot()).toMatchObject({ busy: false, fresh: true })
   c.disconnected()
 })
 // The station refuses a heartbeat `stationBusy` while one of its own operation tasks is in flight
@@ -387,27 +266,6 @@ it('keeps the lease and the last state through a heartbeat the station was too b
   expect(sent[sent.length - 1]!.request.type).toBe('state')
   c.disconnected()
 })
-it('refuses a heartbeat wait that crosses a native context change or the click deadline', async () => {
-  for (const change of ['context', 'deadline']) {
-    const { c, sent, reply, advance } = setup()
-    const a = c.acquire(),
-      owned = state(true)
-    reply(owned)
-    await a
-    advance(1000)
-    await vi.advanceTimersByTimeAsync(250)
-    const action = c.log(record()).catch((e) => e.message)
-    if (change === 'context') reply({ ...owned, revision: owned.revision + 1 })
-    else {
-      advance(201)
-      await vi.advanceTimersByTimeAsync(201)
-    }
-    expect(await action).toBe(change === 'context' ? 'staleContext' : 'windowExpired')
-    expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
-    c.disconnected()
-  }
-})
-
 it('finishes revocation when disconnected peers can no longer accept close notifications', () => {
   const { station, browser, sessionId, relay, peers } = relaySetup()
   relay.receiveBrowser(
@@ -479,34 +337,4 @@ it('refuses a command once the entitlement behind the session has lapsed, and on
   send(control())
   expect(forwarded()).toEqual([])
   expect(refusals()).toEqual(['stationUnavailable'])
-})
-
-it('records whether a failed manual log left the browser', async () => {
-  for (const answered of [true, false]) {
-    const { c, sent, reply, advance } = setup()
-    const a = c.acquire(),
-      owned = state(true)
-    reply(owned)
-    await a
-    advance(1000)
-    await vi.advanceTimersByTimeAsync(250)
-    expect(sent[sent.length - 1]!.request.type).toBe('heartbeat')
-    const action = c.log(record()).catch((e) => e)
-    if (answered) {
-      // Positive control for the spy: the heartbeat returns in time, so the QSO IS sent.
-      reply({ ...owned })
-      await Promise.resolve()
-      await Promise.resolve()
-      const request = sent.filter((m) => m.request.type === 'logManual')
-      expect(request).toHaveLength(1)
-      c.receive({ type: 'operationResponse', requestId: request[0]!.request.requestId, error: 'staleContext' })
-      expect(await action).toMatchObject({ message: 'staleContext', sent: true })
-    } else {
-      advance(201)
-      await vi.advanceTimersByTimeAsync(201)
-      expect(await action).toMatchObject({ message: 'windowExpired', sent: false })
-      expect(sent.some((m) => m.request.type === 'logManual')).toBe(false)
-    }
-    c.disconnected()
-  }
 })

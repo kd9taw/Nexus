@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { RttyCockpit } from './RttyCockpit'
-import { StationControlContext } from '../stationAccess'
 import * as api from '../api'
 import * as toast from '../toast'
 import { frameForAir } from '../features/rttyMacros'
@@ -110,11 +109,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderCockpit(props: Partial<Parameters<typeof RttyCockpit>[0]> = {}, control = true) {
+async function renderCockpit(props: Partial<Parameters<typeof RttyCockpit>[0]> = {}) {
   const r = render(
-    <StationControlContext.Provider value={control}>
-      <RttyCockpit snap={snap} active {...props} />
-    </StationControlContext.Provider>,
+    <RttyCockpit snap={snap} active {...props} />,
   )
   await act(async () => {
     await Promise.resolve()
@@ -183,9 +180,7 @@ describe('F-keys go through the same send() a click does', () => {
     expect(rttySend).not.toHaveBeenCalled()
     await act(async () => {
       rerender(
-        <StationControlContext.Provider value>
-          <RttyCockpit snap={snap} active />
-        </StationControlContext.Provider>,
+        <RttyCockpit snap={snap} active />,
       )
     })
     press('F1')
@@ -206,16 +201,6 @@ describe('F-keys go through the same send() a click does', () => {
     press('F5')
     await act(async () => {})
     expect(rttySend).not.toHaveBeenCalled()
-  })
-
-  it('a Remote observer gets no F-keys and no editing', async () => {
-    await renderCockpit({}, false)
-    press('F1')
-    await act(async () => {})
-    expect(rttySend).not.toHaveBeenCalled()
-    expect(document.querySelectorAll('.rtty-macro-edit')).toHaveLength(0)
-    fireEvent.click(key('F5'))
-    expect(editor()).toBeNull()
   })
 
   it('refuses {EXCH} with nothing to fill it — a toast, and nothing on the air', async () => {

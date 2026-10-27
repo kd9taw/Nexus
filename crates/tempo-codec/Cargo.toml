@@ -27,8 +27,8 @@ hound = "3.5"
 # 24 kbit/s speech link does not want. Leave them off.
 #
 # NOT feature-gated, deliberately. Putting it behind a feature would keep the encoder out of
-# `cargo test --workspace` — the exact blind spot `reference-build-verify-limits` exists to
-# warn about — and it buys nothing: `opusic-sys` needs CMake, and CMake is ALREADY a build
+# `cargo test --workspace` — the blind spot of feature-gated code
+# — and it buys nothing: `opusic-sys` needs CMake, and CMake is ALREADY a build
 # dependency of every Nexus target (ci.yml test/msrv/windows-cross/macOS, Dockerfile.pi,
 # release.yml, build-windows.sh), because libtempo is a CMake project.
 opus = "0.4"

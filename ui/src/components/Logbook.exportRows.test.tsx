@@ -25,7 +25,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
-const HEADER = 'Nexus logbook\n<ADIF_VER:5>3.1.4\n<PROGRAMID:5>Nexus\n<EOH>\n'
+const HEADER = 'Nexus logbook\n<ADIF_VER:5>3.1.8\n<PROGRAMID:5>Nexus\n<EOH>\n'
 
 const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {

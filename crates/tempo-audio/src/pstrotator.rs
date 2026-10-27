@@ -56,6 +56,19 @@ const STOP_GAP: Duration = Duration::from_millis(50);
 /// How often the listener and each connection look at the halt flag.
 const TICK: Duration = Duration::from_millis(50);
 
+/// The most bytes one command line may hold before its newline. A line past it ends the
+/// connection before any of it is answered or sent to PstRotatorAz ([`serve`]).
+///
+/// A rotctld command is a letter or a long name and at most four short arguments: the longest
+/// line Nexus's own rotator code sends, `P <az> <el>`, is under twenty bytes. Hamlib's rotctld
+/// bounds each field it reads rather than the line — a long name of at most 32 characters, an
+/// argument of at most 127 bytes (`MAXNAMSIZ`, `MAXARGSZ` in `tests/rotctl_parse.c`, 4.7.1) — so
+/// it never holds more than one field. This link reads whole lines, so it caps the line instead,
+/// at the 4 KiB the rigctld ports allow: well above the longest command Hamlib reads without
+/// cutting a field (about 550 bytes), and far below a size that lets one client make the link
+/// hold memory without bound by sending a line and never its newline.
+const MAX_LINE_BYTES: usize = 4 * 1024;
+
 /// Stop the rotor and switch PstRotatorAz to manual mode (manual p. 12).
 ///
 /// ⚠️ **It is sent twice.** The manual documents one; it is sent twice because UDP has no
@@ -289,7 +302,8 @@ fn answer(peer: &Peer, line: &str) -> Option<String> {
     Some(reply)
 }
 
-/// One rotctld client, served until it hangs up or the link is dropped.
+/// One rotctld client, served until it hangs up, sends a line longer than [`MAX_LINE_BYTES`] or an
+/// HTTP request line, or the link is dropped.
 fn serve(mut conn: TcpStream, peer: Arc<Peer>, halt: Arc<AtomicBool>) {
     // An accepted socket inherits the listener's non-blocking mode on Windows.
     if conn.set_nonblocking(false).is_err() || conn.set_read_timeout(Some(TICK)).is_err() {
@@ -302,14 +316,44 @@ fn serve(mut conn: TcpStream, peer: Arc<Peer>, halt: Arc<AtomicBool>) {
             Ok(0) => return,
             Ok(n) => {
                 pending.extend_from_slice(&buf[..n]);
-                while let Some(end) = pending.iter().position(|b| *b == b'\n') {
+                // A newline is looked for only where it can end a line within the cap.
+                while let Some(end) = pending
+                    .iter()
+                    .take(MAX_LINE_BYTES + 1)
+                    .position(|b| *b == b'\n')
+                {
                     let line: Vec<u8> = pending.drain(..=end).collect();
-                    let Some(reply) = answer(&peer, String::from_utf8_lossy(&line).trim()) else {
+                    let line = String::from_utf8_lossy(&line);
+                    // A web page the operator visits can POST here with no preflight, as it can
+                    // to the shared CAT port. Hang up at its request line, answering nothing, so
+                    // no part of the request is ever read as a command.
+                    if crate::rigctld_server::looks_like_http(&line) {
+                        tempo_core::applog::info(
+                            "rotator",
+                            "an HTTP request on the rotctld port: a web page, not a rotator \
+                             program, so the link hung up on it",
+                        );
+                        return;
+                    }
+                    let Some(reply) = answer(&peer, line.trim()) else {
                         return;
                     };
                     if conn.write_all(reply.as_bytes()).is_err() {
                         return;
                     }
+                }
+                // Past the cap with no newline: not a rotctld client. Hang up rather than hold
+                // the line, so a connection never holds more than the cap and one read.
+                if pending.len() > MAX_LINE_BYTES {
+                    tempo_core::applog::info(
+                        "rotator",
+                        &format!(
+                            "a client on the rotctld port sent a line longer than \
+                             {MAX_LINE_BYTES} bytes: not a rotator program, so the link hung up \
+                             on it"
+                        ),
+                    );
+                    return;
                 }
             }
             Err(e)
@@ -474,6 +518,11 @@ mod tests {
         /// Every datagram heard so far, other than `AZ?`.
         fn commands(&self) -> Vec<String> {
             self.heard.try_iter().filter(|d| d != AZ_QUERY).collect()
+        }
+
+        /// Every datagram heard until `quiet` passes without one, `AZ?` included.
+        fn hears(&self, quiet: Duration) -> Vec<String> {
+            std::iter::from_fn(|| self.heard.recv_timeout(quiet).ok()).collect()
         }
     }
 
@@ -737,5 +786,261 @@ mod tests {
         drop(link);
         UdpSocket::bind(("0.0.0.0", pst.port + 1)).expect("the reply port is free again");
         TcpListener::bind(tcp).expect("the rotctld port is free again");
+    }
+
+    /// A line that begins as a real command, `P 90 0 `, filled out with `x` to `len` bytes, no
+    /// newline. Read whole, its first three words turn the antenna to 90°.
+    fn begins_p_90(len: usize) -> Vec<u8> {
+        let mut line = b"P 90 0 ".to_vec();
+        line.resize(len, b'x');
+        line
+    }
+
+    /// A client on the link's rotctld port. Each write goes out as it is made (no coalescing), so
+    /// a line sent in pieces arrives in pieces.
+    fn client(link: &PstRotatorLink) -> TcpStream {
+        let s = TcpStream::connect(link.rotctld_addr()).expect("the rotctld port");
+        s.set_nodelay(true).expect("writes sent as made");
+        s
+    }
+
+    /// Send `bytes` `chunk` at a time with a millisecond between writes, the way a slow (or
+    /// deliberate) client sends one line in pieces. A write that fails means the link hung up:
+    /// the rest is moot.
+    fn send(s: &mut TcpStream, bytes: &[u8], chunk: usize) {
+        for part in bytes.chunks(chunk.max(1)) {
+            if s.write_all(part).is_err() {
+                return;
+            }
+            if part.len() < bytes.len() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// What the link says until it hangs up or stays quiet for `quiet`: whether it hung up, and
+    /// its words.
+    fn answers(s: &mut TcpStream, quiet: Duration) -> (bool, String) {
+        s.set_read_timeout(Some(quiet)).expect("a read timeout");
+        let (mut said, mut buf) = (Vec::new(), [0u8; 512]);
+        let closed = loop {
+            match s.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => said.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break false
+                }
+                // A reset: the link hung up with part of the line unread.
+                Err(_) => break true,
+            }
+        };
+        (closed, String::from_utf8_lossy(&said).into_owned())
+    }
+
+    /// `bytes` sent to a fresh link `chunk` at a time: everything PstRotatorAz heard, whether the
+    /// link hung up, and what it answered.
+    fn sent(bytes: &[u8], chunk: usize) -> (Vec<String>, bool, String) {
+        let (pst, link) = fake(Some("AZ:12\r"));
+        let mut s = client(&link);
+        send(&mut s, bytes, chunk);
+        let (closed, said) = answers(&mut s, Duration::from_secs(2));
+        (pst.hears(Duration::from_millis(300)), closed, said)
+    }
+
+    /// `line` sent to a fresh link with no newline and then, once the link has had time to act on
+    /// it, the newline it was waiting for: everything PstRotatorAz heard, whether the link hung up
+    /// before the newline came, and everything it answered.
+    fn held_then_ended(line: &[u8]) -> (Vec<String>, bool, String) {
+        let (pst, link) = fake(Some("AZ:12\r"));
+        let mut s = client(&link);
+        send(&mut s, line, line.len());
+        let (closed, mut said) = answers(&mut s, Duration::from_secs(2));
+        // A link still holding the line reads it whole now; one that hung up hears nothing.
+        send(&mut s, b"\n", 1);
+        said += &answers(&mut s, Duration::from_secs(1)).1;
+        (pst.hears(Duration::from_millis(300)), closed, said)
+    }
+
+    /// An over-long line is refused whole: the link hangs up and nothing in it reaches
+    /// PstRotatorAz, though it begins exactly like a command that turns the antenna to 90°. Read
+    /// whole, as every line was before the cap, it turned the antenna, and the command after it
+    /// turned it again, to 180°.
+    #[test]
+    fn a_line_past_the_length_cap_never_reaches_the_rotator() {
+        let mut bytes = begins_p_90(MAX_LINE_BYTES + 64);
+        bytes.extend_from_slice(b"\nP 180 0\n");
+        let (heard, closed, said) = sent(&bytes, bytes.len());
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "nothing in the over-long line, or after it, reached PstRotatorAz"
+        );
+        assert!(closed, "a line past the cap hangs up: {said:?}");
+        assert_eq!(said, "", "the over-long line was answered nothing");
+    }
+
+    /// A line that never ends is dropped once it passes the cap, not held. Before the cap the link
+    /// kept every byte of it, waiting for a newline, and when one came it read the line whole and
+    /// turned the antenna. Now it hangs up long before, and the newline goes nowhere.
+    #[test]
+    fn a_line_that_never_ends_is_dropped_not_held() {
+        let (heard, closed, said) = held_then_ended(&begins_p_90(64 * 1024));
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "nothing in the line reached PstRotatorAz, even when its newline came"
+        );
+        assert!(closed, "the link hung up before the newline: {said:?}");
+        assert_eq!(said, "", "the line was answered nothing");
+    }
+
+    /// The cap counts the bytes the link holds, not where a write ended: the same over-long line,
+    /// sent 64 bytes at a time, is refused exactly as one write is.
+    #[test]
+    fn a_line_past_the_cap_split_across_many_writes_is_still_dropped() {
+        let mut bytes = begins_p_90(MAX_LINE_BYTES + 64);
+        bytes.extend_from_slice(b"\nP 180 0\n");
+        let (heard, closed, said) = sent(&bytes, 64);
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "nothing in the dripped over-long line, or after it, reached PstRotatorAz"
+        );
+        assert!(closed, "a dripped line past the cap hangs up too: {said:?}");
+        assert_eq!(said, "", "the dripped over-long line was answered nothing");
+    }
+
+    /// The boundary is one byte: a line one byte longer than the cap is refused, though its
+    /// newline arrives with it.
+    #[test]
+    fn a_line_one_byte_over_the_cap_is_refused() {
+        let mut bytes = begins_p_90(MAX_LINE_BYTES + 1);
+        bytes.push(b'\n');
+        let (heard, closed, said) = sent(&bytes, bytes.len());
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "the one-byte-over line never reached PstRotatorAz"
+        );
+        assert!(closed, "a line one byte over the cap hangs up: {said:?}");
+    }
+
+    /// One byte past the cap with no newline yet, the link hangs up there and then: it does not
+    /// wait to see how the line ends.
+    #[test]
+    fn a_line_one_byte_past_the_cap_is_dropped_before_its_newline() {
+        let (heard, closed, said) = held_then_ended(&begins_p_90(MAX_LINE_BYTES + 1));
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "the one-byte-over line never reached PstRotatorAz"
+        );
+        assert!(
+            closed,
+            "one byte past the cap, the link hangs up before any newline: {said:?}"
+        );
+    }
+
+    /// CONTROL: the cap does not cut a legal line. A real command whose line is exactly the cap
+    /// long turns the antenna and is answered, in one write and 64 bytes at a time alike, and the
+    /// `q` after it is read too.
+    #[test]
+    fn a_command_whose_line_is_exactly_the_cap_is_served() {
+        let mut bytes = begins_p_90(MAX_LINE_BYTES);
+        bytes.extend_from_slice(b"\nq\n");
+        for chunk in [bytes.len(), 64] {
+            let (heard, closed, said) = sent(&bytes, chunk);
+            assert_eq!(
+                heard,
+                [azimuth_datagram(90.0), AZ_QUERY.to_string()],
+                "a line of exactly the cap reaches PstRotatorAz ({chunk} bytes a write)"
+            );
+            assert_eq!(said, "RPRT 0\n", "and is answered ({chunk} bytes a write)");
+            assert!(closed, "the `q` after it is read ({chunk} bytes a write)");
+        }
+    }
+
+    /// CONTROL: a line exactly the cap long with no newline yet may still be a command, so the
+    /// link holds it and waits; when the newline comes, it is served.
+    #[test]
+    fn a_line_of_exactly_the_cap_is_waited_on_until_its_newline() {
+        let (heard, closed, said) = held_then_ended(&begins_p_90(MAX_LINE_BYTES));
+        assert!(
+            !closed,
+            "the link waited for the newline of a line exactly the cap long"
+        );
+        assert_eq!(said, "RPRT 0\n", "and served the line when it came");
+        assert_eq!(heard, [azimuth_datagram(90.0), AZ_QUERY.to_string()]);
+    }
+
+    /// CONTROL: what rotctld clients send is answered exactly as it was before the cap: every
+    /// command the link serves and its long form, an elevation it refuses, `M` (which it does not
+    /// serve), a CRLF line ending and `q`, in one write and one byte at a time alike.
+    #[test]
+    fn real_rotctld_commands_are_answered_as_before() {
+        let script: &[u8] = b"P 90 0\np\n\\get_pos\n\\set_pos 180 0\nP 90 30\nS\n\\stop\nK\n\
+                              \\park\nM 2 50\n\\dump_state\np\r\nq\n";
+        let at = "12.000000\n0.000000\n";
+        let want = format!(
+            "RPRT 0\n{at}{at}RPRT 0\nRPRT -1\nRPRT 0\nRPRT 0\nRPRT 0\nRPRT 0\nRPRT -11\n\
+             {DUMP_STATE}{at}"
+        );
+        let commands = [
+            azimuth_datagram(90.0),
+            azimuth_datagram(180.0),
+            STOP_DATAGRAM.into(),
+            STOP_DATAGRAM.into(),
+            STOP_DATAGRAM.into(),
+            STOP_DATAGRAM.into(),
+            PARK_DATAGRAM.into(),
+            PARK_DATAGRAM.into(),
+        ];
+        for chunk in [script.len(), 1] {
+            let (heard, closed, said) = sent(script, chunk);
+            assert_eq!(said, want, "the answers ({chunk} bytes a write)");
+            let heard: Vec<String> = heard.into_iter().filter(|d| d != AZ_QUERY).collect();
+            assert_eq!(
+                heard, commands,
+                "what PstRotatorAz was sent ({chunk} bytes a write)"
+            );
+            assert!(closed, "`q` ends the session ({chunk} bytes a write)");
+        }
+    }
+
+    /// A web page the operator visits can POST to this port: a `text/plain` form is a request a
+    /// browser sends with no preflight. The link hangs up at the request line, answers nothing,
+    /// and nothing in the body reaches PstRotatorAz.
+    #[test]
+    fn an_http_post_from_a_web_page_is_hung_up_on_at_its_request_line() {
+        let bytes = b"POST / HTTP/1.1\r\n\
+                      Host: 127.0.0.1:4533\r\n\
+                      Content-Type: text/plain\r\n\
+                      Content-Length: 14\r\n\
+                      \r\n\
+                      P 90 0\nS\nK\n";
+        let (heard, closed, said) = sent(bytes, bytes.len());
+        assert_eq!(heard, Vec::<String>::new(), "nothing reached PstRotatorAz");
+        assert!(closed, "the link hung up on the web page: {said:?}");
+        assert_eq!(said, "", "a web page is answered nothing");
+    }
+
+    /// The hang-up is the request line's own, not the blank line that ends a request's headers:
+    /// a command right after an HTTP request line never runs.
+    #[test]
+    fn an_http_request_line_alone_is_hung_up_on() {
+        let (heard, closed, said) = sent(b"GET / HTTP/1.1\r\nP 90 0\n", 64);
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "the command after it never ran"
+        );
+        assert!(closed, "an HTTP request line hangs up: {said:?}");
+        assert_eq!(said, "", "nothing is answered to a web page");
     }
 }

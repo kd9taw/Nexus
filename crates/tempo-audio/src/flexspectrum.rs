@@ -40,7 +40,14 @@ use tempo_net::flexvita::{
 
 /// Panadapter span: a 200 kHz window centered on the dial.
 const SPAN_HZ: f64 = 200_000.0;
-const FPS: u32 = 15;
+/// Frame rate we command the Flex pan to stream at. 30 fps (operator ruling 2026-10-23 — up from
+/// 15): the commanded rate is the Flex path's dominant latency term, and 15 fps held the
+/// panadapter well below the radio's own SmartSDR cadence, which was the "less responsive on a
+/// Flex" feel. ⚠️ NEEDS-BENCH: ships only after a bench check on a real Flex (6300/6400M) confirms
+/// the extra UDP/FFT traffic (~2×, roughly 60→120 KB/s at 2048 u16 bins) does not starve a
+/// monitored radio's CAT poll. Pairs with a UI poll at least this fast (the phone scope polls at
+/// 20 Hz today, which under-samples 30 fps).
+const FPS: u32 = 30;
 /// The pan's width in FFT bins; the UI downsamples to its pixel width.
 const X_PIXELS: u32 = 2048;
 /// The pan's height in rows: the scale its FFT bins are counted on, row 0 at the top. Upstream's
@@ -404,7 +411,7 @@ pub fn fft_is_ours(packet_stream: Option<u32>, pan_id: Option<u32>) -> bool {
 ///
 /// - **Each value is its row's place in the pan's window**, 1 at `max_dbm` and 0 at `min_dbm`
 ///   ([`FftFrame::levels`]): a bin is a pixel row counted from the top of a display `y_pixels`
-///   rows tall (A, port plan §4.7). Until 2026-10 this read `bin / 65535`, which put a carrier at
+///   rows tall (A). Until 2026-10 this read `bin / 65535`, which put a carrier at
 ///   the floor and the floor at the top, squashed into the bottom percent of the scale.
 /// - **The scale stays RELATIVE.** The values are exact fractions of the window, so a dBm axis is
 ///   one label away; that label also needs the window the radio encoded each frame with, which
@@ -1209,7 +1216,7 @@ mod tests {
         assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
     }
 
-    // ── The shipped path's display defects (port plan §4.8) ─────────────────────────────────
+    // ── The shipped path's display defects ──────────────────────────────────────────────────
     //
     // Each test below was first run against the code it replaces, reached through thin adapters,
     // and failed there on the defect it names.
@@ -1270,7 +1277,7 @@ mod tests {
                 "display pan set 0x40000000 xpixels=2048 ypixels=700",
                 "display pan set 0x40000000 center=14.100000",
                 "display pan set 0x40000000 bandwidth=0.050000",
-                "display pan set 0x40000000 fps=15",
+                "display pan set 0x40000000 fps=30",
                 "display pan set 0x40000000 max_dbm=-40 min_dbm=-140",
             ]
         );

@@ -32,7 +32,6 @@
 // the mode classes' short forms are invariant tokens (INVARIANT, below), as the Awards view's are.
 import { useEffect, useState } from 'react'
 import { getCallStats } from '../api'
-import { remoteApplicationTransport } from '../applicationTransport'
 import type { CallStats, QslChannels, StatsGrid, StatsSlot } from '../types'
 import { t } from '../i18n'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -67,19 +66,6 @@ export function withStatsRoom<P extends string>(panels: PanelLayoutApi<P>, room:
     ...panels,
     stateOf: (id) => (id === 'stats' && panels.layout.state[id] == null && room ? 'docked' : panels.stateOf(id)),
   }
-}
-
-/** Whether this window shows the Stats pane: the station's own. A browser on Nexus Remote reads the
- *  station through a transport that does not carry the pane's question, so a cockpit there leaves
- *  the pane out rather than drawing a box that can only say so. */
-export function statsHere(): boolean {
-  return remoteApplicationTransport() == null
-}
-
-/** A cockpit's ⊞ Panels list, the Stats entry kept only where the pane can be drawn (`statsHere`): a
- *  tick that could show nothing is not offered. */
-export function withStats<P extends string>(menu: readonly P[]): readonly P[] {
-  return statsHere() ? menu : menu.filter((id) => id !== 'stats')
 }
 
 /** The pane as every cockpit draws it under its `stats` id: a content-height frame (a grid cannot
@@ -175,12 +161,13 @@ const MODE_ABBR: Record<string, string> = { CW: 'CW', Phone: 'PH', Digital: 'DIG
 /** A grid row's mode class in its short form (the station sends CW / Phone / Digital). */
 const modeLabel = (m: string) => MODE_ABBR[m] ?? m
 
-/** A band's column head: its number, the metres left off (`160m` → `160`). */
-const bandHead = (band: string) => band.replace(/m$/, '')
+/** A band's column head: its number, the metres left off (`160m` → `160`); a centimetre band keeps
+ *  its unit (`70cm`), which a bare number would pass off as metres. */
+const bandHead = (band: string) => (band.endsWith('cm') ? band : band.replace(/m$/, ''))
 
 /** The grids' columns and rows while there is no answer to draw them from: the award model's bands
  *  and mode classes, as every answer carries them (an answer's own win). */
-const BANDS: readonly string[] = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m']
+const BANDS: readonly string[] = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '33cm', '23cm']
 const MODES: readonly string[] = ['CW', 'Phone', 'Digital']
 
 /** What an award's head shows in place of an entity, state or zone the call earns no grid for:

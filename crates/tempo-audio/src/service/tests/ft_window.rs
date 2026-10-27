@@ -718,6 +718,29 @@ fn steer_to_before(over: &mut Over, boundary: f64, before_ms: f64) {
     over.state.clock_offset_ms = offset;
 }
 
+/// Step the steered clock back when it has run past the early pass in the odd slot before
+/// `boundary`: to a moment after that pass (FT8 11.808 s, FT4's only pass 6.048 s) and short of the
+/// next (FT8's 47 step, 13.536 s). The busy scenes wait here for the early pass's decode to come
+/// back, and every decode in this test binary waits for one process-wide modem lock: under load
+/// another test's decode holds this one past the boundary, the loop keys that boundary while the
+/// scene is still setting it up, and the scene's own boundary keys a second time. Held, the
+/// boundary keys only in the tick the scene measures.
+fn hold_after_the_early_pass(over: &mut Over, boundary: f64) {
+    let (period, held_at) = {
+        let e = over.engine.lock().unwrap();
+        let held_at = match e.tier() {
+            Tier::Ft8 => 12_000.0,
+            Tier::Ft4 => 6_300.0,
+            tier => panic!("no early pass to hold after on {tier:?}"),
+        };
+        (e.active_slot_secs() * 1000.0, held_at)
+    };
+    let before_ms = period - held_at;
+    if now_unix_ms() - over.state.clock_offset_ms as f64 > boundary - before_ms {
+        steer_to_before(over, boundary, before_ms);
+    }
+}
+
 impl Over {
     /// One loop tick on the real clock; returns when the tick ended.
     fn tick_now(&mut self) -> std::time::Instant {
@@ -798,7 +821,11 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
         let boundary = steer_into_the_odd_slot(&mut s, 11_700.0);
         let slot = (boundary / 15_000.0) as u64;
         let give_up = std::time::Instant::now() + Duration::from_secs(10);
-        let tick_until = |s: &mut Over, done: &dyn Fn(&Over) -> bool, why: &str| loop {
+        // Until the boundary's own tick the clock is held after the early pass (`held`).
+        let tick_until = |s: &mut Over, done: &dyn Fn(&Over) -> bool, why: &str, held: bool| loop {
+            if held {
+                hold_after_the_early_pass(s, boundary);
+            }
             let ended = s.tick_now();
             if done(s) {
                 break ended;
@@ -810,7 +837,7 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
         for _ in 0..400 {
             s.backend.queue_capture(vec![0.0; 240]);
         }
-        tick_until(&mut s, &|s| s.state.decode_in_flight, "no early pass");
+        tick_until(&mut s, &|s| s.state.decode_in_flight, "no early pass", true);
         // The early pass dispatched its decode in that tick, and built the CQ before it.
         let hint = s
             .engine
@@ -827,6 +854,7 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
             &mut s,
             &|s| !s.state.decode_in_flight,
             "the early decode never came back",
+            true,
         );
         if !built_ahead {
             s.engine.lock().unwrap().set_tx_offset(1_600.0);
@@ -845,8 +873,12 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
         s.state.last_freq_poll = later;
         s.state.last_smeter_poll = later;
         s.state.last_ptt_poll = later;
-        let keyed_tick_ended =
-            tick_until(&mut s, &|s| s.state.last_slot == Some(slot), "no boundary");
+        let keyed_tick_ended = tick_until(
+            &mut s,
+            &|s| s.state.last_slot == Some(slot),
+            "no boundary",
+            false,
+        );
         let tick_end_wall = now_unix_ms();
         let _ = go.send(());
         let decode_let_go = decode.join().unwrap();
@@ -909,7 +941,11 @@ fn an_over_changed_after_the_early_pass_keys_on_time_while_a_decode_holds_the_mo
             let boundary = steer_into_the_odd_slot(&mut s, early_at);
             let slot = (boundary / period) as u64;
             let give_up = std::time::Instant::now() + Duration::from_secs(10);
-            let tick_until = |s: &mut Over, done: &dyn Fn(&Over) -> bool, why: &str| loop {
+            // Until the boundary's own tick the clock is held after the early pass (`held`).
+            let tick_until = |s: &mut Over, done: &dyn Fn(&Over) -> bool, why: &str, held: bool| loop {
+                if held {
+                    hold_after_the_early_pass(s, boundary);
+                }
                 let ended = s.tick_now();
                 if done(s) {
                     break ended;
@@ -921,11 +957,12 @@ fn an_over_changed_after_the_early_pass_keys_on_time_while_a_decode_holds_the_mo
             for _ in 0..400 {
                 s.backend.queue_capture(vec![0.0; 240]);
             }
-            tick_until(&mut s, &|s| s.state.decode_in_flight, "no early pass");
+            tick_until(&mut s, &|s| s.state.decode_in_flight, "no early pass", true);
             tick_until(
                 &mut s,
                 &|s| !s.state.decode_in_flight,
                 "the early decode never came back",
+                true,
             );
             if called_late {
                 s.cq();
@@ -954,8 +991,12 @@ fn an_over_changed_after_the_early_pass_keys_on_time_while_a_decode_holds_the_mo
             s.state.last_freq_poll = later;
             s.state.last_smeter_poll = later;
             s.state.last_ptt_poll = later;
-            let keyed_tick_ended =
-                tick_until(&mut s, &|s| s.state.last_slot == Some(slot), "no boundary");
+            let keyed_tick_ended = tick_until(
+                &mut s,
+                &|s| s.state.last_slot == Some(slot),
+                "no boundary",
+                false,
+            );
             let tick_end_wall = now_unix_ms();
             let _ = go.send(());
             let decode_let_go = decode.join().unwrap();

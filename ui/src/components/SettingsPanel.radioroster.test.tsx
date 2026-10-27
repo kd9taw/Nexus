@@ -199,3 +199,59 @@ describe('the roster Remove button', () => {
     await waitFor(() => expect(screen.queryByText(/Editing /)).toBeNull())
   })
 })
+
+describe('the roster Disable button', () => {
+  it('disables a radio not in use, marks it, and enables it again', async () => {
+    api.get('setRadioEnabled').mockImplementation(() => Promise.resolve({ ok: true }))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+
+    const disables = await screen.findAllByRole('button', { name: 'Disable' })
+    expect(disables).toHaveLength(2)
+    const operating = disables.find((b) => (b as HTMLButtonElement).disabled)!
+    expect(operating.title).toMatch(/make another radio active first/i)
+    const other = disables.find((b) => !(b as HTMLButtonElement).disabled)!
+
+    // The re-pull after the change serves the IC-9700 disabled.
+    api
+      .get('getSettings')
+      .mockImplementation(() =>
+        Promise.resolve(settingsWith([FTDX10, { ...IC9700, enabled: false }])),
+      )
+    fireEvent.click(other)
+    await waitFor(() => expect(api.get('setRadioEnabled')).toHaveBeenCalledWith(1, false))
+    expect(await screen.findByText('Disabled')).toBeTruthy()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+    await waitFor(() => expect(api.get('setRadioEnabled')).toHaveBeenLastCalledWith(1, true))
+  })
+})
+
+describe('a disabled radio cannot be made active', () => {
+  it('renders Make active disabled on its card, saying to enable it first', async () => {
+    api
+      .get('getSettings')
+      .mockImplementation(() =>
+        Promise.resolve(settingsWith([FTDX10, { ...IC9700, enabled: false }])),
+      )
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+
+    const makeActive = (await screen.findByRole('button', {
+      name: 'Make active',
+    })) as HTMLButtonElement
+    expect(makeActive.disabled).toBe(true)
+    expect(makeActive.title).toMatch(/enable it first/i)
+    fireEvent.click(makeActive)
+    expect(api.get('setActiveRadio')).not.toHaveBeenCalled()
+  })
+
+  it('leaves Make active usable on an enabled radio', async () => {
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    const makeActive = (await screen.findByRole('button', {
+      name: 'Make active',
+    })) as HTMLButtonElement
+    expect(makeActive.disabled).toBe(false)
+  })
+})

@@ -31,6 +31,7 @@ vi.mock('./toast', () => ({
   subscribeToasts: vi.fn(() => () => {}),
   subscribePopups: vi.fn(() => () => {}),
   setPopupNotifications: vi.fn(),
+  setPopupMinSeconds: vi.fn(),
   dismissToast: vi.fn(),
 }))
 

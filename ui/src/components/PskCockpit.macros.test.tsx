@@ -14,7 +14,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
-import { StationControlContext } from '../stationAccess'
 import * as api from '../api'
 import * as toast from '../toast'
 import type { AppSnapshot, PskState, Settings } from '../types'
@@ -114,11 +113,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderCockpit(props: Partial<Parameters<typeof PskCockpit>[0]> = {}, control = true) {
+async function renderCockpit(props: Partial<Parameters<typeof PskCockpit>[0]> = {}) {
   const r = render(
-    <StationControlContext.Provider value={control}>
-      <PskCockpit snap={snap} active {...props} />
-    </StationControlContext.Provider>,
+    <PskCockpit snap={snap} active {...props} />,
   )
   await act(async () => {
     await Promise.resolve()
@@ -213,9 +210,7 @@ describe('F-keys go through the same send() a click does', () => {
     expect(pskSend).not.toHaveBeenCalled()
     await act(async () => {
       rerender(
-        <StationControlContext.Provider value>
-          <PskCockpit snap={snap} active />
-        </StationControlContext.Provider>,
+        <PskCockpit snap={snap} active />,
       )
     })
     press('F1')
@@ -246,16 +241,6 @@ describe('F-keys go through the same send() a click does', () => {
     // POSITIVE CONTROL: the keyboard is live — F1 on the same row goes.
     press('F1')
     await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(1))
-  })
-
-  it('a Remote observer gets no F-keys and no editing', async () => {
-    await renderCockpit({}, false)
-    press('F1')
-    await act(async () => {})
-    expect(pskSend).not.toHaveBeenCalled()
-    expect(document.querySelectorAll('.rtty-macro-edit')).toHaveLength(0)
-    fireEvent.click(key('F5'))
-    expect(editor()).toBeNull()
   })
 
   it('refuses {EXCH} with nothing to fill it — a toast, and nothing on the air', async () => {

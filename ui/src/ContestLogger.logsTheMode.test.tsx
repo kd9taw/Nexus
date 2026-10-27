@@ -95,7 +95,7 @@ function respond(cmd: string, args: Record<string, unknown> | undefined): unknow
   }
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -129,9 +129,9 @@ const entry = () => screen.getByRole('region', { name: t('contestLogger.entry.ar
 
 /** Log K9ABC in Cook County from the window's line, and say what reached the engine. */
 async function logOne() {
-  fireEvent.change(within(entry()).getByPlaceholderText('W1AW'), { target: { value: 'K9ABC' } })
+  fireEvent.change(within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'K9ABC' } })
   fireEvent.change(within(entry()).getByLabelText('County / State'), { target: { value: 'COOK' } })
-  fireEvent.keyDown(within(entry()).getByPlaceholderText('W1AW'), { key: 'Enter' })
+  fireEvent.keyDown(within(entry()).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { key: 'Enter' })
   await settle()
   await settle()
   return logged

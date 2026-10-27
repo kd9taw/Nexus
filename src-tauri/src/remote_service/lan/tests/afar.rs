@@ -179,6 +179,8 @@ impl Afar for Service {
         let said = *self.renewal.lock().unwrap();
         Box::pin(async move { said })
     }
+
+    fn heard_key(&self, _: &str, _: &str) {}
 }
 
 /// The shack, running, with its tunnel taking this computer; client mode on this computer with its
@@ -207,6 +209,12 @@ impl Afield {
 
     /// The same, with an internet road kept for the station or none.
     fn kept(label: &str, udp: bool, timing: Timing, kept: bool) -> Self {
+        Self::with(label, udp, timing, kept, true)
+    }
+
+    /// The same, with this network's record of the station kept or none: none for a station kept by
+    /// its service id, which this computer has never reached on its network.
+    fn with(label: &str, udp: bool, timing: Timing, kept: bool, on_this_network: bool) -> Self {
         let app = App::new();
         let s = running(&app);
         // The tunnel grants no control of its own: the shack gives it, as to any computer.
@@ -246,7 +254,7 @@ impl Afield {
                 s.device.clone(),
             );
             Arc::new(move |_| {
-                Ok(Some(PairedStation {
+                Ok(on_this_network.then(|| PairedStation {
                     station_id: STATION.into(),
                     device_id: device.clone(),
                     station_key: key.clone(),
@@ -362,6 +370,35 @@ fn off_this_network_client_mode_drives_the_station_over_the_internet() {
         !status.internet && status.phase != Phase::Live,
         "{status:?}"
     );
+    t.end();
+}
+
+/// ★ Signed in from elsewhere: a station kept by its service id (this computer has no record of it on this
+/// network, never having reached it there) is driven over the internet road from the first try, as
+/// a station off this network is: control taken through the room, the shack's snapshot answering
+/// the screens' poll, the banner told the internet is the station's only road. Operate needs no
+/// LAN record for it. CONTROL: with no internet road kept either, the station is unknown here and
+/// nothing is opened.
+#[test]
+fn a_station_kept_by_its_service_id_is_driven_over_the_internet_road() {
+    let _alone = alone();
+    let t = Afield::with("afar-away", true, quick(), true, false);
+    t.live_over_the_internet();
+    eventually("the shack's snapshot here", || {
+        ask(&t.screens.main, "get_snapshot", json!({})).is_ok_and(|s| s["n"].is_u64())
+    });
+    let status = t.client.status();
+    assert!(status.away, "{status:?}");
+    assert_eq!(t.service.opens.load(Ordering::SeqCst), 1);
+    t.end();
+
+    let t = Afield::with("afar-away-none", true, quick(), false, false);
+    eventually("said to be unknown here", || {
+        t.client.status().reason.as_deref() == Some("unknownStation")
+    });
+    let status = t.client.status();
+    assert!(!status.away && status.phase == Phase::Refused, "{status:?}");
+    assert_eq!(t.service.opens.load(Ordering::SeqCst), 0);
     t.end();
 }
 
@@ -559,6 +596,18 @@ fn off_after(ticks: &[(Instant, bool)], since: Instant) -> Option<Instant> {
 /// A press held on this computer's screen, as the screen holds one: the shack in Phone, the first
 /// press taken, then re-asserted every 100 ms until `done`, each answer kept, while the screen
 /// keeps reading the shack's state (presence wants it fresh); and the shack's loop.
+///
+/// The screen keeps its two timers apart, as the screen's are: the press is re-asserted every
+/// 100 ms from the last re-assertion's start, and the state is read every 300 ms on a thread of
+/// its own. So the time a call takes, the state's included, never lengthens the gap between two
+/// holds, which the shack ends a press at (200 ms, `ptt_hold::GAP`). Paced by a sleep after its
+/// calls, with the state read in line every third time, a loaded run stretched one gap past that
+/// and the shack, rightly, ended the press under a screen still holding it.
+///
+/// The first re-assertion is due 100 ms after the press that took was sent, as the screen's timer
+/// starts with the press itself. Timed from the screen thread's start instead, the first gap also
+/// held the press's answer on its way back and the thread starting, and a starved run stretched it
+/// past 200 ms the same way.
 struct Held {
     done: Arc<AtomicBool>,
     screen: std::thread::JoinHandle<Said>,
@@ -576,20 +625,36 @@ impl Held {
         }
         let done = Arc::new(AtomicBool::new(false));
         let shack = shack_loop(t.s.shared.engine.clone(), done.clone());
+        let mut pressed = Instant::now();
         eventually("presence live for a press", || {
             let _ = ask(&t.screens.main, "get_snapshot", json!({}));
+            pressed = Instant::now();
             ask(&t.screens.main, "set_ptt", json!({"on": true})).is_ok()
         });
         let (window, until) = (t.screens.main.clone(), done.clone());
+        let poll = {
+            let (window, until) = (window.clone(), until.clone());
+            std::thread::spawn(move || {
+                while !until.load(Ordering::SeqCst) {
+                    let _ = ask(&window, "get_snapshot", json!({}));
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            })
+        };
         let screen = std::thread::spawn(move || {
             let mut said = Vec::new();
-            while !until.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(100));
-                if said.len() % 3 == 0 {
-                    let _ = ask(&window, "get_snapshot", json!({}));
+            let mut last = pressed;
+            loop {
+                std::thread::sleep(
+                    (last + Duration::from_millis(100)).saturating_duration_since(Instant::now()),
+                );
+                if until.load(Ordering::SeqCst) {
+                    break;
                 }
+                last = Instant::now();
                 said.push(ask(&window, "set_ptt", json!({"on": true})));
             }
+            poll.join().unwrap();
             said
         });
         eventually("the press armed at the shack", || {

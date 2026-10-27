@@ -73,7 +73,7 @@ const strip = (fieldDay: FieldDayStatus, remote?: Parameters<typeof LogEntry>[0]
 
 /** Let the mount's two station calls (check, then read) settle. */
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const shown = () => [...document.querySelectorAll('.le-scp button')].map((b) => b.textContent)
 
 afterEach(() => {

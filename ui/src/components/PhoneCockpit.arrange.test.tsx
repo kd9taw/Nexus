@@ -6,7 +6,7 @@
 // over and discards its recording; of the log form, loses a half-typed contact). jsdom lays nothing
 // out: widths are stubbed as in PhoneCockpit.structure.test.tsx, whose mocks this file shares.
 //
-// THE LEFT SIDE (2026-10-03): the record's `leftSide` renders beside the scope on a window about 1280 px
+// THE LEFT SIDE (2026-10-03): the record's `leftSide` renders beside the region, under the scope, on a window about 1280 px
 // wide or wider, falls back into the columns below that with the record untouched, and comes back; the
 // sweep then runs the side's moves and the window crossing that width as well.
 import { useRef } from 'react'
@@ -289,7 +289,7 @@ const sideFrames = () => (side() ? framesIn(side()!.querySelector('.cockpit-left
 describe('Phone renders the left side', () => {
   const RECORD = { v: 2, state: { spots: 'docked', needed: 'docked' }, share: {}, leftSide: ['spots', 'bandActivity'] }
 
-  it('opens where the operator left it on a wide window: full height beside the scope, out of the region', async () => {
+  it('opens where the operator left it on a wide window: under the full-width scope, beside the region, out of it', async () => {
     localStorage.setItem(panelStorageKey('phone'), JSON.stringify(RECORD))
     await windowWidth(1600)
     render(<LiveFeeds />)
@@ -297,16 +297,19 @@ describe('Phone renders the left side', () => {
     expect(sideFrames()).toEqual(['spots', 'bandActivity'])
     expect(rendered().flat(), 'a pane on the side is not in the region as well').not.toContain('bandActivity')
     expect(rendered().flat()).not.toContain('spots')
-    // The shell: header, the row (side | stage), the dock — the dock after the row, full width.
+    // The shell: header, the scope, its divider, the TX strip, the row (side | stage), the dock — the
+    // scope and the strip full width above the row (2026-10-26), the dock after it, full width.
     const shell = document.querySelector('main.phone-cockpit')!
     const row = shell.querySelector(':scope > .cockpit-leftrow')!
     expect(row, 'the side shows but the row is not a box').not.toBeNull()
     expect([...row.children].map((c) => c.className)).toEqual(['cockpit-left', 'cockpit-stage'])
     expect(row.nextElementSibling?.className).toMatch(/^cockpit-txdock/)
-    // Nothing that stops a transmission is on the side; the strip is in the stage, under the scope.
+    // Nothing that stops a transmission is on the side; the strip is a shell child, under the scope.
     expect(side()!.querySelector('.cockpit-txstrip, .cockpit-txdock, .ph-ptt')).toBeNull()
-    const strip = row.querySelector(':scope > .cockpit-stage > .cockpit-txstrip')!
+    const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the strip left its place under the scope').toBe(true)
+    expect(strip.nextElementSibling, 'the side does not start under the strip').toBe(row)
+    expect(shell.querySelector(':scope > .ph-scope-panel'), 'the scope is not full width above the side').not.toBeNull()
   })
 
   it('below about 1280 px its panes stand in their usual columns, the record untouched — and come back when the window widens', async () => {

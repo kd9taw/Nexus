@@ -165,7 +165,6 @@ async fn a_lan_computer_keeps_control_through_hosted_turn_off_and_on() {
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })

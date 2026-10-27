@@ -1,0 +1,56 @@
+/* THE IMPORT PREVIEW (ImportPreview.tsx). A portaled .ui-dialog: the box is the dialog's own, capped
+   to the real window and scrolling inside itself (the .ui-dialog rule), so nothing here sizes a
+   cockpit pane. Only its width is set, in real window pixels as the dialog contract says. */
+.ui-dialog.import-preview-dialog {
+  width: min(720px, calc(100vw - 2 * var(--space-4)));
+}
+.import-preview h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.import-preview-format {
+  margin: 0 0 var(--space-2);
+  color: var(--text-dim);
+}
+.import-preview-counts,
+.import-preview-notes,
+.import-preview-unmapped {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.import-preview-notes ul {
+  margin: 2px 0 var(--space-2);
+  padding-left: var(--space-4);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.import-preview-new {
+  font-weight: 600;
+}
+.import-preview-ok {
+  color: var(--state-good);
+}
+.import-preview-error {
+  color: var(--alert-warning);
+}
+.import-preview-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-micro);
+}
+.import-preview-count {
+  color: var(--text-faint);
+}
+.import-preview-more {
+  margin-top: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}

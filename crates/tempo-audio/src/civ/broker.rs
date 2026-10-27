@@ -379,6 +379,27 @@ impl CivBackend {
         Some(m)
     }
 
+    /// Is Main already in `base` with DATA `want_data` (`0` off, else the DATA mode the write
+    /// would select)? Read fresh with ONE `26 00` — Main by name on the IC-7610, the selected VFO
+    /// on the radios [`commands::selected_mode_by_26`] names — never from the state cache, because
+    /// a stale "yes" would leave the radio in the wrong mode with nothing written. `26` replies are
+    /// not folded into that cache, so asking changes no reported mode. Any other radio, and any read
+    /// that fails, answers `false`, so the caller writes as it always did. Callers hold the band
+    /// lock, with Main selected.
+    fn main_already_in(&self, base: Mode, want_data: u8) -> bool {
+        if !(self.main_dial_by_name() || self.model.is_some_and(commands::selected_mode_by_26)) {
+            return false;
+        }
+        let band = commands::BAND_MAIN; // `00`: MAIN by name, or the selected VFO
+        self.read(commands::read_band_mode(self.addr, band), 0x26, Some(band))
+            .ok()
+            .and_then(|f| {
+                let (m, _) = commands::parse_band_mode(&f, band)?;
+                Some((m, commands::parse_band_data_mode(&f, band)?))
+            })
+            == Some((base, want_data))
+    }
+
     /// Select a band/VFO by token (`Main`/`Sub`), acked. Callers hold the band lock.
     fn select(&self, vfo: &str) -> bool {
         commands::select_vfo(self.addr, vfo).is_some_and(|f| self.ack(f))
@@ -611,12 +632,31 @@ impl CivBackend {
 
     /// Read a `15 <sub>` transmit meter and format it through `cal` (raw 0–255 → engineering
     /// unit) to `decimals` places. Returns None if the rig doesn't answer (e.g. not keyed).
-    fn tx_meter(&self, sub: u8, cal: fn(u16) -> f32, decimals: usize) -> Option<String> {
+    fn tx_meter(&self, sub: u8, cal: impl Fn(u16) -> f32, decimals: usize) -> Option<String> {
         let f = self
             .read(commands::read_meter(self.addr, sub), 0x15, Some(sub))
             .ok()?;
         let raw = commands::parse_meter_raw(&f, sub)?;
         Some(format!("{:.*}", decimals, cal(raw)))
+    }
+
+    /// The frequency the radio is transmitting on, for the Po meter's per-band scale: the dial
+    /// the engine's state already holds, so the meter costs no extra frame. `None` when that
+    /// dial may not be the transmitting one — a split riding satellite mode transmits out of the
+    /// Sub band, and a stray selection may have left Sub's dial in the state — or when a Main/Sub
+    /// sequence holds the band lock right now (mid-sequence the state can hold either band, and
+    /// a meter read must not queue behind tuning).
+    fn po_tx_hz(&self) -> Option<u64> {
+        let g = match self.band.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        if g.engaged || g.sel_stray {
+            return None;
+        }
+        drop(g);
+        self.h.state().freq_hz
     }
 
     /// Read a `14 <sub>` DSP level as a 0..1 fraction string (the rigctld level convention),
@@ -812,8 +852,15 @@ impl CivBackend {
             // 0..1 fraction while _WATTS is watts, and Nexus polls _WATTS so the reading is watts
             // on any rig. The native daemon has only the one calibrated Po meter, so it serves
             // watts for either name (a Hamlib rig lacking _WATTS returns None → the row hides).
+            // The meter is a percentage of THIS radio's output on THIS band; with no figure for
+            // either, nothing is asked and nothing answered ([`commands::po_full_scale_watts`]).
             "RFPOWER_METER" | "RFPOWER_METER_WATTS" => {
-                self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1)
+                let full = commands::po_full_scale_watts(self.model?, self.po_tx_hz())?;
+                self.tx_meter(
+                    commands::METER_PO,
+                    |raw| commands::po_watts_from_raw(raw, full),
+                    1,
+                )
             }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
             // ATTENUATOR and PREAMP — INTEGER DECIBELS, not the 0..1 fractions everything
@@ -1013,10 +1060,12 @@ impl CivBackend {
 
     // ---- THE IF FILTER WIDTH (`1A 03`), Main's — the passband the scope's filter edges move ----
     //
-    // ⚠️ DELIBERATELY NOT THROUGH `M` / `m`. The rigctld mode verb carries a width, and the radio
-    // loop sends one with every DATA-mode assert (`M PKTUSB 3000`): honouring it there would
-    // rewrite the operator's DATA filter on every FT8 arm, which this daemon has never done.
-    // `m` keeps answering width 0 for the same reason — the FT8 arm's width check reads it. So
+    // ⚠️ DELIBERATELY NOT THROUGH `M` / `m`. The rigctld mode verb carries a width, and a client
+    // may send one with a DATA-mode assert (the radio loop itself sent `M PKTUSB 3000` until it
+    // stopped asking for widths, #82/#107): honouring it there would rewrite the operator's DATA
+    // filter on every FT8 arm, which this daemon has never done.
+    // `m` keeps answering width 0 for the same reason, so nothing reading it argues with that
+    // filter. So
     // these two are the daemon's own verbs, called by the radio loop beside its scope controls.
 
     /// Main's IF filter width in `mode`, the name the `m` read just reported.
@@ -1272,6 +1321,15 @@ impl RigBackend for CivBackend {
                 None => return Err(SetFault::Refused),
             },
         };
+        // ⛔ A MODE THE RADIO IS ALREADY IN IS NOT WRITTEN (#417). Every write below skips the
+        // filter byte, and an Icom answers that by selecting the mode's DEFAULT filter, so each
+        // forced retune — which re-asserts an unchanged mode — moved the operator's FIL1 to FIL2.
+        // Read first and leave the radio alone when nothing would change, as WSJT-X does. A read
+        // that fails is no answer: the write goes out as it always did.
+        let want_data = if data { self.data_mode_on_wire() } else { 0 };
+        if self.main_already_in(base, want_data) {
+            return Ok(());
+        }
         if self.main_dial_by_name() {
             // IC-7610: MAIN's mode by name — ONE `26 00` frame that leaves the radio where the
             // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
@@ -3556,7 +3614,12 @@ mod tests {
                 let n = regs.lock().unwrap().wire.len();
                 assert!(b.set_mode(mode, 0), "M {mode}, Sub selected = {sel_sub}");
                 let r = regs.lock().unwrap();
-                assert_eq!(hex_frames(&r.wire[n..]), [frame], "M {mode} on the wire");
+                // MAIN's mode read by name first (#417: a mode it is already in is not written).
+                assert_eq!(
+                    hex_frames(&r.wire[n..]),
+                    ["FE FE 98 E0 26 00 FD", frame],
+                    "M {mode} on the wire"
+                );
                 assert_eq!(
                     (r.main_mode, r.sub_mode, r.data_mode),
                     (main_mode, 0x00, data_on),
@@ -3586,7 +3649,7 @@ mod tests {
         assert!(b2.set_mode("PKTUSB", 0));
         assert_eq!(
             hex_frames(&regs2.lock().unwrap().wire[n..]),
-            ["FE FE 98 E0 26 00 01 02 01 FD"],
+            ["FE FE 98 E0 26 00 FD", "FE FE 98 E0 26 00 01 02 01 FD"],
             "D2 on the wire"
         );
     }
@@ -3676,6 +3739,150 @@ mod tests {
         }
     }
 
+    /// ⛔ ISSUE #417 (IC-7300): "When you set the radio frequency using Nexus, it unilaterally
+    /// changes the FIL setting to 2." Every forced retune re-asserts the mode, and the mode went
+    /// out as `06 <mode>` with no filter byte — which the radio answers by selecting "the default
+    /// filter setting of the operating mode" (IC-7300 Full Manual A7292-4EX-12, p. 19-9; the same
+    /// rule for a `26` with both bytes skipped, p. 19-11). So a QSY that changed nothing about the
+    /// mode moved the operator's FIL1 to FIL2.
+    ///
+    /// A mode the radio is ALREADY in is now not written at all — the radio keeps its own filter,
+    /// exactly as WSJT-X leaves it (it reads the mode and calls `rig_set_mode` only when the mode
+    /// differs, `HamlibTransceiver.cpp:926`). Every radio and both write forms: the `06` + `1A 06`
+    /// pair, and the IC-7610's one `26 00` frame. The fake radio keeps FIL3 here, so a write that
+    /// skipped the filter byte would show up as its FIL2 ([`super::super::engine::tests_support::DEFAULT_FIL`]).
+    #[test]
+    fn a_mode_the_radio_is_already_in_is_not_rewritten_so_its_filter_stays() {
+        use crate::civ::engine::tests_support::DEFAULT_FIL;
+        assert_ne!(
+            DEFAULT_FIL, 0x03,
+            "the control must differ from the planted filter"
+        );
+        for (addr, model) in [
+            (0x94u8, Some(IcomModel::Ic7300)),
+            (0xA2, Some(IcomModel::Ic9700)),
+            (0xA4, Some(IcomModel::Ic705)),
+            (0xAC, Some(IcomModel::Ic905)),
+            (0x98, Some(IcomModel::Ic7610)),
+            (0xB6, Some(IcomModel::Ic7300Mk2)),
+        ] {
+            for (mode, mode_byte, data) in [
+                ("USB", 0x01u8, false),
+                ("LSB", 0x00, false),
+                ("CW", 0x03, false),
+                ("PKTUSB", 0x01, true),
+                ("FM", 0x05, false),
+                ("PKTFM", 0x05, true),
+            ] {
+                let (_e, b, regs) = backend_on(addr, model);
+                {
+                    let mut r = regs.lock().unwrap();
+                    (r.main_mode, r.data_mode, r.fil) = (mode_byte, data, 0x03);
+                }
+                let n = regs.lock().unwrap().log.len();
+                assert!(b.set_mode(mode, 0), "{model:?}: M {mode} refused");
+                let r = regs.lock().unwrap();
+                assert_eq!(
+                    (r.main_mode, r.data_mode, r.fil),
+                    (mode_byte, data, 0x03),
+                    "{model:?}: M {mode} on a radio already in it moved its mode or its FIL3"
+                );
+                let writes: Vec<_> = r.log[n..]
+                    .iter()
+                    .filter(|(c, d)| {
+                        *c == 0x06
+                            || (*c == 0x26 && d.len() > 1)
+                            || (*c == 0x1A && d.first() == Some(&0x06) && d.len() > 1)
+                    })
+                    .collect();
+                assert!(
+                    writes.is_empty(),
+                    "{model:?}: M {mode} re-wrote a mode the radio was already in: {writes:?}"
+                );
+            }
+        }
+    }
+
+    /// The other half of [`a_mode_the_radio_is_already_in_is_not_rewritten_so_its_filter_stays`]:
+    /// a mode the radio is NOT in is still written, with the bytes it always had. Plain USB on a
+    /// radio in USB-D (only DATA differs), USB-D on one in plain USB, and the IC-7610 in DATA1
+    /// while the operator's Data mode is D2 — the same mode byte, a different DATA mode. And the
+    /// radios with no read that names the written VFO (the IC-7760, whose `26 00` is MAIN while
+    /// `06` writes the selected band; a model the daemon was not told) write as before even when
+    /// already in the mode — the #417 fix does not reach them (NEEDS a reading of the IC-7760).
+    #[test]
+    fn a_mode_the_radio_is_not_in_is_still_written() {
+        for (addr, model, choice, from_data, mode, want) in [
+            (
+                0x94u8,
+                Some(IcomModel::Ic7300),
+                1u8,
+                true,
+                "USB",
+                vec!["06 01", "1A 06 00 00"],
+            ),
+            (
+                0x94,
+                Some(IcomModel::Ic7300),
+                1,
+                false,
+                "PKTUSB",
+                vec!["06 01", "1A 06 01 01"],
+            ),
+            (
+                0xA2,
+                Some(IcomModel::Ic9700),
+                1,
+                false,
+                "PKTFM",
+                vec!["06 05", "1A 06 01 01"],
+            ),
+            (
+                0x98,
+                Some(IcomModel::Ic7610),
+                2,
+                true,
+                "PKTUSB",
+                vec!["26 00 01 02 01"],
+            ),
+            (
+                0xB2,
+                Some(IcomModel::Ic7760),
+                1,
+                false,
+                "USB",
+                vec!["06 01", "1A 06 00 00"],
+            ),
+            (0x94, None, 1, false, "USB", vec!["06 01", "1A 06 00 00"]),
+        ] {
+            let (_e, b, regs) = backend_with_data_mode(addr, model, choice);
+            {
+                let mut r = regs.lock().unwrap();
+                r.main_mode = if mode == "PKTFM" { 0x05 } else { 0x01 };
+                r.data_mode = from_data;
+            }
+            let n = regs.lock().unwrap().log.len();
+            assert!(b.set_mode(mode, 0), "{model:?}: M {mode} refused");
+            let r = regs.lock().unwrap();
+            let writes: Vec<String> = r.log[n..]
+                .iter()
+                .filter(|(c, d)| {
+                    *c == 0x06
+                        || (*c == 0x26 && d.len() > 1)
+                        || (*c == 0x1A && d.first() == Some(&0x06) && d.len() > 1)
+                })
+                .map(|(c, d)| {
+                    std::iter::once(c)
+                        .chain(d.iter())
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect();
+            assert_eq!(writes, want, "{model:?}: M {mode} from DATA={from_data}");
+        }
+    }
+
     /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —
     /// the one-receiver Icoms, a build that does not know its model, and the IC-9700, whose
     /// `25 00` would name its SELECTED VFO (A7508-3EX-4 p. 24). The frames are the ones the tree
@@ -3690,22 +3897,33 @@ mod tests {
             (0xA2, Some(IcomModel::Ic9700)),
         ] {
             let (_e, b, regs) = backend_on(addr, model);
+            // In LSB, so each mode below is a change and is written (#417: one the radio is
+            // already in is not — `a_mode_the_radio_is_already_in_is_not_rewritten_so_its_filter_stays`).
+            regs.lock().unwrap().main_mode = 0x00;
             let n = regs.lock().unwrap().wire.len();
             let _ = b.set_freq(14_080_000);
             let _ = b.set_mode("USB", 0);
             let _ = b.set_mode("PKTUSB", 0);
             let _ = b.set_mode("FM", 0);
+            // Each write is preceded by the `26 00` read of the selected VFO's mode, on the radios
+            // whose guide defines it (`commands::selected_mode_by_26`); the writes are unchanged.
+            let read: Vec<String> = model
+                .filter(|&m| commands::selected_mode_by_26(m))
+                .map(|_| format!("FE FE {addr:02X} E0 26 00 FD"))
+                .into_iter()
+                .collect();
+            let mut want = vec![format!("FE FE {addr:02X} E0 05 00 00 08 14 00 FD")];
+            for writes in [
+                ["06 01", "1A 06 00 00"],
+                ["06 01", "1A 06 01 01"],
+                ["06 05", "1A 06 00 00"],
+            ] {
+                want.extend(read.iter().cloned());
+                want.extend(writes.iter().map(|w| format!("FE FE {addr:02X} E0 {w} FD")));
+            }
             assert_eq!(
                 hex_frames(&regs.lock().unwrap().wire[n..]),
-                [
-                    format!("FE FE {addr:02X} E0 05 00 00 08 14 00 FD"),
-                    format!("FE FE {addr:02X} E0 06 01 FD"),
-                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
-                    format!("FE FE {addr:02X} E0 06 01 FD"),
-                    format!("FE FE {addr:02X} E0 1A 06 01 01 FD"),
-                    format!("FE FE {addr:02X} E0 06 05 FD"),
-                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
-                ],
+                want,
                 "{model:?}: the dial and mode writes moved"
             );
         }
@@ -3794,8 +4012,10 @@ mod tests {
                 sent.push((model, d, hex_frames(&regs.lock().unwrap().wire[n..])));
             }
         }
+        // A named radio reads `26 00` first (#417); a radio the caller did not name does not.
         let usb_d = |addr: u8, d: u8| {
             vec![
+                format!("FE FE {addr:02X} E0 26 00 FD"),
                 format!("FE FE {addr:02X} E0 06 01 FD"),
                 format!("FE FE {addr:02X} E0 1A 06 {d:02X} 01 FD"),
             ]
@@ -3815,11 +4035,14 @@ mod tests {
             want.push((
                 Some(IcomModel::Ic7610),
                 d,
-                vec![format!("FE FE 98 E0 26 00 01 {d:02X} 01 FD")],
+                vec![
+                    "FE FE 98 E0 26 00 FD".to_string(),
+                    format!("FE FE 98 E0 26 00 01 {d:02X} 01 FD"),
+                ],
             ));
         }
         for d in [2u8, 3] {
-            want.push((None, d, usb_d(0x94, d)));
+            want.push((None, d, usb_d(0x94, d)[1..].to_vec()));
         }
         assert_eq!(sent, want, "the DATA mode each radio was sent");
     }
@@ -3845,13 +4068,16 @@ mod tests {
                 format!("FE FE {addr:02X} E0 1A 06 {d:02X} 01 FD"),
             ]
         };
+        // The IC-7300MK2 reads its selected VFO's mode (`26 00`) first (#417); the IC-7760's
+        // `26 00` names MAIN rather than the VFO `06` writes, so it does not.
+        let mk2 = |d: u8| [vec!["FE FE B6 E0 26 00 FD".to_string()], usb_d(0xB6, d)].concat();
         let want = vec![
             (IcomModel::Ic7760, 1, usb_d(0xB2, 1)),
             (IcomModel::Ic7760, 2, usb_d(0xB2, 2)),
             (IcomModel::Ic7760, 3, usb_d(0xB2, 3)),
-            (IcomModel::Ic7300Mk2, 1, usb_d(0xB6, 1)),
-            (IcomModel::Ic7300Mk2, 2, usb_d(0xB6, 1)),
-            (IcomModel::Ic7300Mk2, 3, usb_d(0xB6, 1)),
+            (IcomModel::Ic7300Mk2, 1, mk2(1)),
+            (IcomModel::Ic7300Mk2, 2, mk2(1)),
+            (IcomModel::Ic7300Mk2, 3, mk2(1)),
         ];
         assert_eq!(sent, want, "the DATA mode each network Icom was sent");
     }
@@ -4570,8 +4796,18 @@ mod tests {
         let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
         regs.lock().unwrap().no_satmode = true; // a real 7300 NAKs `16 5A`
         drive_every_touched_verb(&b);
+        // The Po meter (`15 11`) is asked only where its watts are known, and on the IC-7300,
+        // the IC-905 and an unknown model that takes the dial, which this script never reads
+        // (`the_po_meter_reads_watts_on_the_radios_own_scale`). The IC-705's needs no band.
+        let without_po = |frames: &[&'static str]| -> Vec<&'static str> {
+            frames
+                .iter()
+                .copied()
+                .filter(|f| !f.ends_with(" 15 11 FD"))
+                .collect()
+        };
         let got = hex_frames(&regs.lock().unwrap().wire);
-        assert_eq!(got, IC7300_WIRE_BEFORE, "IC-7300 bytes moved");
+        assert_eq!(got, without_po(IC7300_WIRE_BEFORE), "IC-7300 bytes moved");
         assert_eq!(b.attenuator_steps_db(), vec![20]);
         assert_eq!(b.preamp_steps_db(), vec![1, 2]);
 
@@ -4612,7 +4848,7 @@ mod tests {
             drive_every_touched_verb(&b);
             assert_eq!(
                 hex_frames(&regs.lock().unwrap().wire),
-                at(addr, no_pads.as_slice()),
+                at(addr, &without_po(&no_pads)),
                 "{model:?} bytes moved"
             );
         }
@@ -5325,6 +5561,103 @@ mod tests {
             wire,
             vec![(0x1C, vec![0x00, 0x00])],
             "the key-up, once, and nothing else"
+        );
+    }
+
+    // ===== THE Po METER IN WATTS, PER RADIO AND BAND =====
+    //
+    // Icom's own CI-V references give the Po meter as a PERCENTAGE of the radio's output
+    // (`0000=0% ~ 0143=50% ~ 0213=100%`), and the manuals call it "the relative RF output
+    // power". So the same raw reading is a different number of watts on a 10 W radio and on
+    // a 100 W one — and on the IC-9700 and IC-905, on a different band. Citations at
+    // [`commands::po_full_scale_watts`].
+
+    /// The watts the daemon answers for a Po meter reading of `raw`, with the radio's dial
+    /// at `hz` (read back, so the engine's state holds it, as the dial poll leaves it).
+    fn po_watts_at(addr: u8, model: Option<IcomModel>, hz: u64, raw: u16) -> Option<String> {
+        let (_e, b, regs) = backend_on(addr, model);
+        assert!(b.set_freq(hz), "the fixture tunes {hz}");
+        assert_eq!(b.freq_hz(), hz);
+        regs.lock().unwrap().po_raw = raw;
+        b.level("RFPOWER_METER_WATTS")
+    }
+
+    #[test]
+    fn the_po_meter_reads_watts_on_the_radios_own_scale() {
+        let ic705 = Some(IcomModel::Ic705);
+        let ic9700 = Some(IcomModel::Ic9700);
+        let ic905 = Some(IcomModel::Ic905);
+        let ic7300 = Some(IcomModel::Ic7300);
+        // THE REPORT: a 10 W IC-705 at full output read about 100 W.
+        assert_eq!(
+            po_watts_at(0xA4, ic705, 14_074_000, 213).as_deref(),
+            Some("10.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA4, ic705, 144_174_000, 143).as_deref(),
+            Some("5.0")
+        );
+        // IC-9700: 100 W on 2 m, 75 W on 70 cm, 10 W on 23 cm, all at the meter's 100%.
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 144_174_000, 213).as_deref(),
+            Some("100.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 432_174_000, 213).as_deref(),
+            Some("75.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 1_296_174_000, 213).as_deref(),
+            Some("10.0")
+        );
+        // IC-905: 10 W up to 23 cm, 2 W on 2.4/5.6 GHz, and no rated figure for 10 GHz
+        // (an option transverter's), so no watts at all rather than a guessed number.
+        assert_eq!(
+            po_watts_at(0xAC, ic905, 432_174_000, 213).as_deref(),
+            Some("10.0")
+        );
+        assert_eq!(
+            po_watts_at(0xAC, ic905, 2_304_100_000, 213).as_deref(),
+            Some("2.0")
+        );
+        assert_eq!(po_watts_at(0xAC, ic905, 10_368_100_000, 213), None);
+        // The IC-7300 is unchanged on HF and 6 m — and 50 W on its 70 MHz band.
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 14_074_000, 213).as_deref(),
+            Some("100.0")
+        );
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 50_313_000, 143).as_deref(),
+            Some("50.0")
+        );
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 70_200_000, 213).as_deref(),
+            Some("50.0")
+        );
+        // A radio this build cannot name has no known scale: no watts.
+        assert_eq!(po_watts_at(0x94, None, 14_074_000, 213), None);
+    }
+
+    #[test]
+    fn the_po_meter_has_no_band_to_scale_by_while_a_satellite_split_transmits_on_sub() {
+        // Satellite mode transmits out of the SUB band, whose dial the state does not hold:
+        // downlink 435 MHz (75 W) on Main, uplink 145 MHz (100 W) on Sub. Either scale could
+        // be wrong, so no watts. The positive control: the same radio, same reading, before
+        // the split, answers.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "f\n"), "435640000\n");
+        regs.lock().unwrap().po_raw = 213;
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "l RFPOWER_METER_WATTS\n"),
+            "75.0\n"
+        );
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT 0\n");
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "l RFPOWER_METER_WATTS\n"),
+            "RPRT -11\n"
         );
     }
 }

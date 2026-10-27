@@ -49,6 +49,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 
 /** A ResizeObserver that records which element each callback was given, so a test can drive

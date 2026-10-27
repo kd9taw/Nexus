@@ -1,4 +1,3 @@
-import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
 // SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
@@ -118,8 +117,6 @@ export function BandStrip({
   wheelSensitivity,
   onSnap,
 }: Props) {
-  const control = useStationControl()
-  const workAllowed = useStationCapability('workSpot')
   // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
   // stays out of the way. Default ON the first time so the key is discoverable.
   const [showLegend, setShowLegend] = useState(
@@ -141,7 +138,7 @@ export function BandStrip({
   useWheelTune(trackEl, {
     dialMhz,
     sideband: sideband || 'USB',
-    enabled: control && tuneEnabled === true,
+    enabled: tuneEnabled === true,
     stepHz: stepHz ?? 1000,
     sensitivity: wheelSensitivity,
     onSnap,
@@ -167,7 +164,7 @@ export function BandStrip({
       <div className="bandstrip">
         <div className="bandstrip-head">
           <span className="bandstrip-count">{t('bandStrip.offPlan', { band: band || '—' })}</span>
-          {control && onPopOut && (
+          {onPopOut && (
             <button
               type="button"
               className="bandstrip-popout"
@@ -235,7 +232,7 @@ export function BandStrip({
         >
           {t('bandStrip.legend.label')}
         </button>
-        {control && onPopOut && (
+        {onPopOut && (
           <button
             type="button"
             className="bandstrip-popout"
@@ -251,7 +248,7 @@ export function BandStrip({
         ref={trackEl}
         className="bandstrip-track"
         title={
-          control && tuneEnabled === true
+          tuneEnabled === true
             ? t('bandStrip.track.title.tunable', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
             : t('bandStrip.track.title', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
         }
@@ -308,25 +305,24 @@ export function BandStrip({
             s.state,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
-            program != null && TCI,
-            program != null && t('settings.transmit.tciServer.program.name', { id: program }),
+            program != null && t('bandStrip.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandStrip.spot.tci.title', { detail }) : t('bandStrip.spot.title', { detail })
           return (
             <button
               key={repeat ? `${key}#${repeat}` : key}
               type="button"
               className={`bandstrip-spot${program != null ? ' from-tci' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              title={tip}
               aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
-              disabled={!workAllowed}
               // ⛔ A program's spot only tunes: never the Work, whatever it names.
               onClick={() => {
-                if (!workAllowed) return
                 if (program != null) onTciSpot?.(s)
                 else onWorkSpot(s)
               }}

@@ -65,7 +65,17 @@ fn declared() -> StationData {
 /// Every shipped ruleset whose exchange declares a serial. A sixth that ships without
 /// joining this list is the gap this file cannot see, which is why the count is asserted
 /// against the seed below.
-const SERIAL_EVENTS: [&str; 5] = ["cqwpx_cw", "cqwpx_ssb", "arrlss_cw", "arrlss_ssb", "cqp"];
+///
+/// The ARRL RTTY Roundup is one of them for its DX role only (W/VE stations send a state,
+/// Special Rules 4.2), so it is composed here from a DX entrant.
+const SERIAL_EVENTS: [&str; 6] = [
+    "cqwpx_cw",
+    "cqwpx_ssb",
+    "arrlss_cw",
+    "arrlss_ssb",
+    "cqp",
+    "arrlrtty",
+];
 
 #[test]
 fn every_shipped_serial_ruleset_composes_a_serial_to_send() {
@@ -73,7 +83,16 @@ fn every_shipped_serial_ruleset_composes_a_serial_to_send() {
     for event in SERIAL_EVENTS {
         let rs = ruleset_by_id(event, CURRENT_RULES_YEAR)
             .unwrap_or_else(|| panic!("{event} is a shipped ruleset"));
-        let s = ContestSession::for_ruleset(rs, &declared())
+        let entrant = if event == "arrlrtty" {
+            StationData {
+                mycall: "DL9XYZ".into(),
+                contest_qth_state: String::new(),
+                ..declared()
+            }
+        } else {
+            declared()
+        };
+        let s = ContestSession::for_ruleset(rs, &entrant)
             .unwrap_or_else(|e| panic!("{event}: a fully declared entrant builds: {e}"));
 
         // The role sends a serial…

@@ -168,7 +168,7 @@ describe('each change names its contact by id and the edit key on screen', () =>
       call: 'K2ABC', grid: 'EN37', state: null, band: '20m', freqMhz: 14.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: 'Nice signal', notes: null,
       txPower: null, whenUnix: 1_700_000_120, timeOffUnix: null,
-      ota: { myProgram: null, myRef: null, theirProgram: null, theirRef: null },
+      ota: { myProgram: null, myRef: null, theirProgram: null, theirRef: null, iota: null },
       myGrid: null, myRig: null, qslSentVia: 'D', qslCard: true,
     })
     await waitFor(() => expect(toasts()).toContain(t('logbook.form.updated', { call: 'K2ABC' })))

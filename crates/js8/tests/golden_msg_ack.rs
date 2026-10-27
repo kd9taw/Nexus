@@ -1,4 +1,4 @@
-//! Golden test of the MSG ACK against JS8Call's own ALL.TXT (sanitised, Task B4.1's fixture).
+//! Golden test of the MSG ACK against JS8Call's own ALL.TXT (sanitised).
 //!
 //! The log holds two MSGs sent to the @SITREP group, each followed by the ACK of every station
 //! that answered it: thirteen for KJ5MIW's, one for KD8NOA's. Each logged ACK is the frame a

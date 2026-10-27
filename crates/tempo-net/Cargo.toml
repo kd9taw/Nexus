@@ -25,7 +25,7 @@ serde_json = "1"
 # The WebSocket under TCI: the server's handshake, framing and masking (`tci::server`), and the client
 # side of one connection to an SDR program (`tci::session`). Already in the tree at this exact version
 # through tokio-tungstenite (tempo-client, src-tauri) and tempo-tcisim, with the same one feature
-# tempo-client turns on (operator ruling 554, 2026-10-19), so nothing new enters the lock. Only the
+# tempo-client turns on, so nothing new enters the lock. Only the
 # handshake: TCI has no TLS.
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 

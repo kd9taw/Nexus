@@ -18,6 +18,11 @@ import { ASK_AGAIN_AFTER_MS, ASK_AGAIN_TIMES, NOT_ANSWERED } from '../features/n
 import { t } from '../i18n'
 
 vi.mock('../api', () => ({
+  // The Awards view's own panels (AwardsMore) read these; left reading, they change nothing here.
+  getDxccChart: vi.fn(() => new Promise(() => {})),
+  getWhatToQsl: vi.fn(() => new Promise(() => {})),
+  getPotaActivator: vi.fn(() => new Promise(() => {})),
+  getCustomAwards: vi.fn(() => new Promise(() => {})),
   getAwards: vi.fn(),
   getConfirmationDiagnostics: vi.fn(),
   uploadLotwReportByIds: vi.fn(),

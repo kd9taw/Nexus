@@ -102,7 +102,7 @@ function renderStrip(fieldDay: FieldDayStatus = fdStatus()) {
 }
 
 const box = (label: string) => screen.getByText(label).closest('label')!.querySelector('input')!
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 
 afterEach(() => {
   cleanup()

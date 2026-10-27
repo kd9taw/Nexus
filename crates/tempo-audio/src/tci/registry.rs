@@ -18,7 +18,7 @@
 //! mid-over, an unkey the server never confirmed, a teardown it did not confirm in time) leaves that
 //! belief here, and the next session for the same server and transceiver takes it with its claim:
 //! its stops go out first after `ready;`, and it holds the belief until the server reports the
-//! transmitter off (plan §6.1 item 8). Nothing else clears it: a connect that fails puts it back.
+//! transmitter off. Nothing else clears it: a connect that fails puts it back.
 //!
 //! Time is passed in, in milliseconds, so the ladder runs on a fake clock in the tests.
 

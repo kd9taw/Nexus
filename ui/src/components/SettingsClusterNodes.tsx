@@ -100,9 +100,6 @@ export interface SettingsClusterNodesProps {
   onHostsChange: (edit: (hosts: string[]) => string[]) => void
   /** Each node's standing; null until `get_cluster_nodes` has answered. */
   standings: ClusterNodes | null
-  disabled: boolean
-  /** The example node address shown in an empty row — an invariant token, not prose. */
-  placeholder: string
 }
 
 export function SettingsClusterNodes({
@@ -111,8 +108,6 @@ export function SettingsClusterNodes({
   hosts,
   onHostsChange,
   standings,
-  disabled,
-  placeholder,
 }: SettingsClusterNodesProps) {
   const nodes = standings?.nodes ?? []
   const builtIn = nodes.filter((n) => n.callsign)
@@ -132,7 +127,6 @@ export function SettingsClusterNodes({
             type="radio"
             name="cluster-node-mode"
             checked={auto}
-            disabled={disabled}
             onChange={() => onAutoChange(true)}
           />
           {t('settings.integrations.clusterNodes.mode.auto')}
@@ -142,7 +136,6 @@ export function SettingsClusterNodes({
             type="radio"
             name="cluster-node-mode"
             checked={!auto}
-            disabled={disabled}
             onChange={() => onAutoChange(false)}
           />
           {t('settings.integrations.clusterNodes.mode.manual')}
@@ -181,16 +174,13 @@ export function SettingsClusterNodes({
             hosts.map((host, i) => (
               <div key={i} className="cluster-node-row">
                 <input
-                  disabled={disabled}
                   className="settings-input"
                   value={host}
                   onChange={(e) => onHostsChange((hs) => hs.map((h, j) => (j === i ? e.target.value : h)))}
-                  placeholder={placeholder}
                   spellCheck={false}
                 />
                 <Standing node={standingOf(host)} auto={false} />
                 <button
-                  disabled={disabled}
                   type="button"
                   className="cluster-node-remove"
                   title={t('settings.integrations.clusterNodes.remove.title')}
@@ -208,7 +198,6 @@ export function SettingsClusterNodes({
           )}
           <div className="cluster-node-add">
             <select
-              disabled={disabled}
               className="settings-input"
               value=""
               onChange={(e) => {
@@ -233,7 +222,6 @@ export function SettingsClusterNodes({
               ))}
             </select>
             <button
-              disabled={disabled}
               type="button"
               className="cluster-node-add-blank"
               title={t('settings.integrations.clusterNodes.addCustom.title')}

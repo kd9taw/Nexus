@@ -1,19 +1,19 @@
 //! The internet road, this computer's half of the Remote service (`remote/src/index.ts`, THE NATIVE
-//! CLIENT): adding the road to a station paired here, and opening it again each time client mode
-//! needs it.
+//! CLIENT): registering the road for a station, and opening it again each time client mode needs
+//! it.
 //!
-//! ## Adding the road ([`add`])
+//! ## Registering the road ([`Service::register`])
 //!
-//! Once, from Stations on this network, for a station already paired here. The operator signs in
-//! through the system browser to the service's Native application ([`sign_in`]: PKCE and a redirect
-//! to this computer's loopback address, RFC 8252), whose issuer and client id the service names
-//! (`GET /api/remote/config`), so neither is built in here. With the token, which is kept in memory
-//! for this one exchange and then dropped, this computer reads the account's stations (asking the
-//! operator which one, when there are more than one), makes a new key for the road (N3: a key of
-//! its own, never the LAN road's), and registers it as a device of that station, signed by that key. The station then shows it for approval like a browser. What is
-//! kept is the road's record (`vault::InternetRoad`), in the OS credential store beside the
-//! station's: the service's station id, the device id it gave, the station key it listed (pinned
-//! from then on) and the road's key. No account credential is ever kept.
+//! In the same step as signing in with the station's account (`super::account`), with the token
+//! that sign-in gave, kept in memory for that one exchange and then dropped: this computer's key for
+//! the road (N3: a key of its own, never the LAN road's) registered as a device of the account's
+//! station, signed by that key, with its LAN key and its sign-in's proof, which approve it at once.
+//! A station paired with a code whose owner has not signed in at the shack lists no proof; there
+//! the road is registered without one, for the station the operator picks ([`chosen`]), and waits
+//! for Approve at the station as before. What is kept is the road's record (`vault::InternetRoad`),
+//! in the OS credential store beside the station's: the service's station id, the device id it
+//! gave, the station key (pinned from then on) and the road's key. No account credential is ever
+//! kept.
 //!
 //! The station asks the operator to approve this computer only if the key it shows matches the one
 //! Nexus shows on this computer, so the window shows this computer's key for each road too
@@ -27,6 +27,14 @@
 //! roads (audio and Stop) beside it; the pipe lives a minute unless renewed, so it is renewed every
 //! [`RENEW_EVERY`] while the link lives.
 //!
+//! ## Held roads
+//!
+//! A road whose station key this computer has not heard from the station itself, nor seen bound to
+//! its own account's sign-in, is held (`Stations::road_held`): client mode opens nothing for it, not
+//! a request to the service, until the operator confirms the key, or a station paired here with a
+//! code names that key on its own network; and one the station disowned on its own network stays
+//! off (`stationKeyUnconfirmed`, `stationKeyDisagrees`).
+//!
 //! ## Refusals
 //!
 //! The service names what it refused; only the names below are taken from it ([`named`]), as the
@@ -38,10 +46,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tempo_client::native::{self, Pkce, SignIn, TurnServer};
+use tempo_client::native::{self, TurnServer};
 use tempo_client::ComputerKey;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -49,11 +56,6 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use super::Stations;
 use crate::remote_service::vault::InternetRoad;
 
-/// The loopback port the sign-in's redirect comes back to: the Native application's allowed
-/// callback is exactly `http://127.0.0.1:42078/callback`.
-pub(crate) const SIGN_IN_PORT: u16 = 42078;
-/// How long the browser has to come back with the code.
-const SIGN_IN_WAIT: Duration = Duration::from_secs(5 * 60);
 /// How often an open pipe is renewed. The room gives it a minute at a time.
 pub(crate) const RENEW_EVERY: Duration = Duration::from_secs(20);
 /// How long the pipe's socket may take to open: the room waits 10 s for the station's end.
@@ -65,18 +67,6 @@ use tempo_client::tunnel::PIPE_MESSAGE_BYTES;
 
 /// The pipe's socket, as it is opened.
 pub(crate) type PipeSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-/// Adding the internet road to a paired station, from the Stations on this network window: the
-/// station's id here, and what the page is told ([`Added`]), or why not.
-pub(crate) type AddInternet = Arc<
-    dyn Fn(String, Choose) -> Pin<Box<dyn Future<Output = Result<Added, &'static str>> + Send>>
-        + Send
-        + Sync,
->;
-
-/// What the page is told once the road is added (`internetAdded`): whether the device still waits for
-/// approval at the station, and this computer's key for the road as the station shows it.
-pub(crate) type Added = (bool, String);
 
 /// An account with more than one station asks the operator which is the one being added: each
 /// station's id and name are offered, and the one picked comes back, or none (cancelled, or the
@@ -92,7 +82,7 @@ pub(crate) struct Choice {
 }
 
 /// How long the operator has to pick the station, as for the sign-in.
-pub(crate) const CHOOSE_WAIT: Duration = SIGN_IN_WAIT;
+pub(crate) const CHOOSE_WAIT: Duration = crate::account_sign_in::SIGN_IN_WAIT;
 
 /// The longest station name offered, in characters: the service's bound for a name (`label`).
 const CHOICE_NAME_CHARS: usize = 48;
@@ -143,19 +133,6 @@ impl Service {
     /// The path a request's signature covers: the URL's own.
     fn path(verb: &str) -> String {
         format!("/api/remote/{verb}")
-    }
-
-    /// The service's sign-in: its issuer, the Native application, and its API. `internetNotReady`
-    /// while it names no Native application.
-    async fn config(&self) -> Result<SignIn, &'static str> {
-        let response = self
-            .http
-            .get(format!("{}/api/remote/config", self.origin))
-            .send()
-            .await
-            .map_err(|_| "serviceUnavailable")?;
-        let config = answer(response).await?;
-        SignIn::from_config(&config).ok_or("internetNotReady")
     }
 
     /// A POST of `body` to `verb`, with `headers`: its answer, or the refusal it names.
@@ -288,9 +265,9 @@ impl Service {
         }
     }
 
-    /// The account's stations, each with its station key, and its entitlement, for the signed-in
-    /// account `token` is for.
-    async fn session(&self, token: &str) -> Result<Value, &'static str> {
+    /// The account's stations, each with its station key, its LAN key and the proof that vouches
+    /// for both, and its entitlement, for the signed-in account `token` is for.
+    pub(crate) async fn session(&self, token: &str) -> Result<Value, &'static str> {
         let bearer = format!("Bearer {token}");
         self.post(
             "client/session",
@@ -300,30 +277,30 @@ impl Service {
         .await
     }
 
-    /// This computer registered as a device of the account's station `station` (as `session`
-    /// listed it), named `name`, with a new key of its own: the road to keep, and whether it is
-    /// approved already (a key registered before and approved since).
-    async fn register(
+    /// This computer registered as a device of the account's station `station_id`, named `name`,
+    /// by its road key `key`, signed by that key; with `vouched`, also its LAN key and its sign-in's
+    /// proof, which approve it at once when the proof is the station owner's or an invited person's.
+    /// The device id the service gave, and whether it is approved already (on the proof, or a key
+    /// registered before and approved since).
+    pub(crate) async fn register(
         &self,
         token: &str,
-        station: &Value,
+        station_id: &str,
+        key: &ComputerKey,
+        vouched: Option<(&ComputerKey, &str)>,
         name: &str,
-    ) -> Result<(InternetRoad, bool), &'static str> {
-        let station_id = station["id"]
-            .as_str()
-            .filter(|id| tempo_stream::protocol::identifier(id))
-            .ok_or("invalidResponse")?;
-        // The station key the service lists, pinned from now on: without one the station has not
-        // yet said it to the service, and the road could prove nothing.
-        let station_key = station["stationKey"]
-            .as_str()
-            .filter(|key| tempo_stream::protocol::device_key(key))
-            .ok_or("updateStation")?;
-        let (key, pkcs8) = ComputerKey::generate().ok_or("serviceUnavailable")?;
+    ) -> Result<(String, bool), &'static str> {
+        if !tempo_stream::protocol::identifier(station_id) {
+            return Err("invalidResponse");
+        }
         let verb = format!("stations/{station_id}/client/device");
-        let body = serde_json::to_vec(&json!({"name":name,"kind":"computer","platform":platform(),
-            "publicKey":key.public_key()}))
-        .map_err(|_| "serviceUnavailable")?;
+        let mut asked = json!({"name":name,"kind":"computer","platform":platform(),
+            "publicKey":key.public_key()});
+        if let Some((lan, proof)) = vouched {
+            asked["lanKey"] = lan.public_key().into();
+            asked["proof"] = proof.into();
+        }
+        let body = serde_json::to_vec(&asked).map_err(|_| "serviceUnavailable")?;
         let challenge = self.challenge(Some(token), None).await?;
         let signature = key
             .sign_request(&challenge, "POST", &Self::path(&verb), &body)
@@ -344,13 +321,10 @@ impl Service {
             .as_str()
             .filter(|id| tempo_stream::protocol::identifier(id))
             .ok_or("invalidResponse")?;
-        let road = InternetRoad {
-            station_id: station_id.to_string(),
-            device_id: device_id.to_string(),
-            station_key: station_key.to_string(),
-            pkcs8,
-        };
-        Ok((road, registered["approved"].as_bool() == Some(true)))
+        Ok((
+            device_id.to_string(),
+            registered["approved"].as_bool() == Some(true),
+        ))
     }
 }
 
@@ -423,152 +397,10 @@ pub(crate) fn lasting(reason: &str) -> bool {
             | "stationUnavailable"
             | "internetNotReady"
             | "accessDenied"
+            // Held until the operator checks the station's key, or for good (`Stations::road_held`).
+            | "stationKeyUnconfirmed"
+            | "stationKeyDisagrees"
     )
-}
-
-/// The first sign-in, through the system browser: the service's sign-in read, this computer's
-/// loopback port opened for the redirect, the browser sent to the issuer by `open`, and the code it
-/// brings back exchanged for a token. The token, kept in memory by the caller for this one
-/// exchange. `signInPortBusy` when the port is taken, `signInTimedOut` after [`SIGN_IN_WAIT`].
-pub(crate) async fn sign_in(
-    service: &Service,
-    open: impl FnOnce(&str) -> Result<(), String>,
-) -> Result<String, &'static str> {
-    let sign = service.config().await?;
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, SIGN_IN_PORT))
-        .await
-        .map_err(|_| "signInPortBusy")?;
-    let redirect = format!("http://127.0.0.1:{SIGN_IN_PORT}{}", native::CALLBACK_PATH);
-    let pkce = Pkce::new().ok_or("signInFailed")?;
-    open(&native::authorize_url(&sign, &redirect, &pkce)).map_err(|_| "signInFailed")?;
-    let code = tokio::time::timeout(SIGN_IN_WAIT, redirected(&listener, &pkce.state))
-        .await
-        .map_err(|_| "signInTimedOut")??;
-    drop(listener);
-    let form = native::token_form(&sign, &redirect, &pkce, &code);
-    let response = service
-        .http
-        .post(format!("{}oauth/token", sign.issuer))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form)
-        .send()
-        .await
-        .map_err(|_| "signInFailed")?;
-    let given = answer(response).await.map_err(|_| "signInFailed")?;
-    native::token(&given)
-        .map(|(token, _)| token)
-        .ok_or("signInFailed")
-}
-
-/// The browser's redirect to this computer's loopback port: the code it brought for this sign-in's
-/// `state`, or the issuer's refusal. A request for anything else (a favicon, a redirect this
-/// sign-in did not start) is answered and the wait goes on.
-pub(crate) async fn redirected(
-    listener: &TcpListener,
-    state: &str,
-) -> Result<String, &'static str> {
-    loop {
-        let Ok((mut stream, peer)) = listener.accept().await else {
-            continue;
-        };
-        if !peer.ip().is_loopback() {
-            continue;
-        }
-        let target = read_target(&mut stream).await;
-        let result = match target.as_deref() {
-            Some(target) => native::callback(target, state),
-            None => Err("signInFailed"),
-        };
-        let page = match result {
-            Ok(_) => "Nexus is signed in. You can close this tab and go back to Nexus.",
-            Err("signInRefused") => "The sign-in was cancelled. You can close this tab.",
-            Err(_) => "This is not the sign-in Nexus is waiting for.",
-        };
-        let body =
-            format!("<!doctype html><meta charset=\"utf-8\"><title>Nexus</title><p>{page}</p>");
-        let reply = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\n\
-             cache-control: no-store\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(reply.as_bytes()).await;
-        let _ = stream.shutdown().await;
-        match result {
-            Ok(code) => return Ok(code),
-            Err("signInRefused") => return Err("signInRefused"),
-            Err(_) => continue,
-        }
-    }
-}
-
-/// A GET's request target from the first line of a request read within a second, or `None`.
-async fn read_target(stream: &mut TcpStream) -> Option<String> {
-    let mut head = Vec::new();
-    let mut chunk = [0u8; 1024];
-    let read = async {
-        while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 8192 {
-            let n = stream.read(&mut chunk).await.ok()?;
-            if n == 0 {
-                break;
-            }
-            head.extend_from_slice(&chunk[..n]);
-        }
-        Some(())
-    };
-    tokio::time::timeout(Duration::from_secs(1), read)
-        .await
-        .ok()??;
-    let line = std::str::from_utf8(&head).ok()?.lines().next()?.to_string();
-    let mut parts = line.split(' ');
-    match (parts.next(), parts.next()) {
-        (Some("GET"), Some(target)) => Some(target.to_string()),
-        _ => None,
-    }
-}
-
-/// Adds the internet road to the station paired here as `id`: signed in through `open`'s browser,
-/// the account's station chosen, this computer registered as its device, and the road kept. Whether
-/// the device still waits for approval at the station, and this computer's key for the road as the
-/// station shows it ([`keep_road`]), or why not.
-///
-/// The station is the account's only one, or, when it has more, the one the operator picks from its
-/// list through `choose` (`stationNotChosen` when none is). The token is held, in memory only, while
-/// the operator picks. `internetNotIncluded` when the account's entitlement does not take in the internet road (N4):
-/// nothing is registered then.
-pub(crate) async fn add(
-    service: &Service,
-    stations: Arc<Stations>,
-    id: String,
-    name: String,
-    open: impl FnOnce(&str) -> Result<(), String>,
-    choose: Choose,
-) -> Result<Added, &'static str> {
-    let kept = stations.clone();
-    let lan_id = id.clone();
-    tokio::task::spawn_blocking(move || kept.get(&lan_id))
-        .await
-        .unwrap_or(Err("storeUnavailable"))?
-        .ok_or("unknownStation")?;
-    let token = sign_in(service, open).await?;
-    let (road, approved) = register_with(service, &token, &name, choose).await?;
-    drop(token);
-    keep_road(stations, id, road, approved).await
-}
-
-/// The road [`register_with`] gave, kept for the station paired here as `id`: whether the device
-/// still waits for approval at the station (not `approved` there already), and this computer's key
-/// for the road as the station shows it ([`shown_key`]).
-pub(crate) async fn keep_road(
-    stations: Arc<Stations>,
-    id: String,
-    road: InternetRoad,
-    approved: bool,
-) -> Result<Added, &'static str> {
-    let key = shown_key(&road).ok_or("notStation")?;
-    tokio::task::spawn_blocking(move || stations.keep_internet(&id, &road))
-        .await
-        .unwrap_or(Err("storeUnavailable"))?;
-    Ok((!approved, key))
 }
 
 /// This computer's key for `road` as the station shows it when it asks to approve this computer,
@@ -579,15 +411,11 @@ pub(crate) fn shown_key(road: &InternetRoad) -> Option<String> {
     crate::remote_service::fingerprint(ComputerKey::restore(&road.pkcs8)?.public_key())
 }
 
-/// With the signed-in `token`: the account's station (its only one, or the one the operator picks
-/// through `choose`), and this computer registered as its device, named `name`. See [`add`].
-pub(crate) async fn register_with(
-    service: &Service,
-    token: &str,
-    name: &str,
-    choose: Choose,
-) -> Result<(InternetRoad, bool), &'static str> {
-    let session = service.session(token).await?;
+/// For a road registered without a proof (see the header), from the account's `session`: the
+/// station, its only one, or the one the operator picks through `choose`, as the service listed it.
+/// `internetNotIncluded` when the account's entitlement does not take in the internet road (N4):
+/// nothing is registered then.
+pub(crate) async fn chosen(session: &Value, choose: Choose) -> Result<Value, &'static str> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -596,9 +424,9 @@ pub(crate) async fn register_with(
         return Err("internetNotIncluded");
     }
     let listed = session["stations"].as_array().cloned().unwrap_or_default();
-    let station = match listed.as_slice() {
-        [] => return Err("stationUnavailable"),
-        [only] => only.clone(),
+    match listed.as_slice() {
+        [] => Err("stationUnavailable"),
+        [only] => Ok(only.clone()),
         _ => {
             // Only a station the service listed can be picked: the answer is looked up in the
             // list, never taken as an id of its own.
@@ -624,10 +452,9 @@ pub(crate) async fn register_with(
                         && tempo_stream::protocol::identifier(&picked)
                 })
                 .cloned()
-                .ok_or("stationNotChosen")?
+                .ok_or("stationNotChosen")
         }
-    };
-    service.register(token, &station, name).await
+    }
 }
 
 /// The internet road as client mode opens it (`client_mode::Afar`): each road's record read from
@@ -639,10 +466,26 @@ pub(crate) struct Roads {
 
 impl Roads {
     pub(crate) fn new(stations: Arc<Stations>) -> Result<Self, &'static str> {
+        Self::at(stations, crate::remote_service::REMOTE_ORIGIN)
+    }
+
+    /// The same, with the Remote service at `origin` (a test's stand-in).
+    pub(crate) fn at(stations: Arc<Stations>, origin: &str) -> Result<Self, &'static str> {
         Ok(Self {
             stations,
-            service: Service::new(crate::remote_service::REMOTE_ORIGIN)?,
+            service: Service::new(origin)?,
         })
+    }
+
+    /// The road kept for the station paired here as `id`, unless it is held, read off the async
+    /// threads.
+    async fn unheld(stations: Arc<Stations>, id: String) -> Result<InternetRoad, &'static str> {
+        tokio::task::spawn_blocking(move || match stations.road_held(&id)? {
+            Some(why) => Err(why),
+            None => stations.internet(&id)?.ok_or("unknownStation"),
+        })
+        .await
+        .unwrap_or(Err("storeUnavailable"))
     }
 
     /// The road kept for the station paired here as `id`, read off the async threads.
@@ -665,8 +508,9 @@ impl crate::client_mode::Afar for Roads {
         headset: Option<Arc<dyn tempo_client::audio_road::Headset>>,
     ) -> Pin<Box<dyn Future<Output = Result<tempo_client::link::Link, &'static str>> + Send>> {
         let (stations, service) = (Arc::clone(&self.stations), self.service.clone());
+        // A held road opens nothing: not a request to the service, let alone the pipe.
         Box::pin(async move {
-            let road = Self::road(stations, id).await?;
+            let road = Self::unheld(stations, id).await?;
             open(&service, &road, headset).await
         })
     }
@@ -677,6 +521,15 @@ impl crate::client_mode::Afar for Roads {
             let road = Self::road(stations, id).await?;
             service.renew(&road).await
         })
+    }
+
+    fn heard_key(&self, id: &str, key: &str) {
+        if let Ok(true) = self.stations.disown_road(id, key) {
+            tempo_core::applog::warn(
+                "client",
+                "the station named another key for the internet road than the one kept here: that road is off",
+            );
+        }
     }
 }
 

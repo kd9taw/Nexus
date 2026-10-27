@@ -137,7 +137,7 @@ pub const LO_DB: f32 = -160.0;
 pub const HI_DB: f32 = 0.0;
 
 /// What a row's values mean, said on every frame.
-const SCALE: SpectrumScale = SpectrumScale::Dbfs {
+pub(crate) const SCALE: SpectrumScale = SpectrumScale::Dbfs {
     lo_db: LO_DB,
     hi_db: HI_DB,
 };
@@ -322,29 +322,45 @@ impl Intake {
     /// One IQ block of our transceiver, arrived at `now`, with the centre the server reported
     /// before it. Never sized by a header field: the block's samples are what its payload held.
     pub(crate) fn push(&mut self, block: &Block<'_>, centre: Option<Hz>, now: u64) {
+        let header = block.header;
+        let iq = header.kind == BlockKind::Iq
+            && header.channels == Channels::Two
+            && IqRate::new(header.sample_rate).is_some();
+        self.push_pairs(
+            iq.then_some(header.sample_rate),
+            centre.map(Hz::get),
+            block.frames(),
+            block.samples(),
+            now,
+        );
+    }
+
+    /// `pairs` IQ pairs (`samples`, I then Q, full scale 1) arrived at `now`, at `rate` around
+    /// `centre`, each as the source last reported them before the samples: any IQ source's
+    /// way in. No rate (not IQ at a rate this source streams) or no pairs is malformed; no centre
+    /// is unplaced.
+    pub(crate) fn push_pairs(
+        &mut self,
+        rate: Option<u32>,
+        centre: Option<i64>,
+        pairs: usize,
+        samples: impl Iterator<Item = f32>,
+        now: u64,
+    ) {
         if !self.accepting {
             self.counts.ignored += 1;
             return;
         }
         self.seen.any = Some(now);
-        let header = block.header;
-        let pairs = block.frames();
-        if header.kind != BlockKind::Iq
-            || header.channels != Channels::Two
-            || IqRate::new(header.sample_rate).is_none()
-            || pairs == 0
-        {
+        let Some(rate) = rate.filter(|r| *r > 0 && pairs > 0) else {
             self.counts.malformed += 1;
             return;
-        }
+        };
         let Some(centre) = centre else {
             self.counts.unplaced += 1;
             return;
         };
-        let geometry = Geometry {
-            rate: header.sample_rate,
-            centre: centre.get(),
-        };
+        let geometry = Geometry { rate, centre };
         if self.geometry != Some(geometry) {
             // A retune or a new rate: what is held was taken somewhere else. A new rate also counts
             // the stream's time in other units, so its clock starts again at this block.
@@ -407,12 +423,27 @@ impl Intake {
         }
         self.counts.overflow += (pairs - keep) as u64;
         self.samples
-            .extend(block.samples().skip(2 * (pairs - keep)).take(2 * keep));
+            .extend(samples.skip(2 * (pairs - keep)).take(2 * keep));
         if let Some(c) = self.clock.as_mut() {
             c.pairs = c.pairs.saturating_add(pairs as u64);
         }
         self.seen.kept = Some(now);
         self.counts.blocks += 1;
+    }
+
+    /// When IQ last arrived, and was last kept.
+    pub(crate) fn seen(&self) -> Seen {
+        self.seen
+    }
+
+    /// What was done with the IQ so far.
+    pub(crate) fn counts(&self) -> Counts {
+        self.counts
+    }
+
+    /// Where the samples held sit.
+    pub(crate) fn geometry(&self) -> Option<Geometry> {
+        self.geometry
     }
 
     /// Hand the samples kept so far to the pan's thread, through `into`: the two buffers swap, so
@@ -440,6 +471,8 @@ fn row_value(power: f32) -> f32 {
 
 /// The pan thread's half: windows, their power, and the rows, on a clock passed in.
 pub(crate) struct Rows {
+    /// The feed label the rows carry: [`SOURCE`] for TCI's.
+    source: &'static str,
     geometry: Option<Geometry>,
     /// The pairs of a window not yet whole, I then Q.
     rest: Vec<f32>,
@@ -457,6 +490,7 @@ pub(crate) struct Rows {
 impl Default for Rows {
     fn default() -> Rows {
         Rows {
+            source: SOURCE,
             geometry: None,
             rest: Vec::with_capacity(2 * N),
             power: vec![0.0; N],
@@ -469,6 +503,14 @@ impl Default for Rows {
 }
 
 impl Rows {
+    /// Rows labelled `source` in the feed (the UI reads the label as an RF scope source).
+    pub(crate) fn labelled(source: &'static str) -> Rows {
+        Rows {
+            source,
+            ..Rows::default()
+        }
+    }
+
     /// Drop what is summed and the partial window: the next row starts from what comes next.
     pub(crate) fn restart(&mut self) {
         self.rest.clear();
@@ -535,7 +577,7 @@ impl Rows {
             row,
             lo_hz,
             hi_hz,
-            source: SOURCE.to_string(),
+            source: self.source.to_string(),
         })
     }
 }

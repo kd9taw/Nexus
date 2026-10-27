@@ -42,6 +42,10 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+/// The Logbook's field filters — what SQL answers, and what it leaves to the caller.
+pub mod filter;
+pub use filter::{AwardNeed, LogFilter, QslFilter, QslState, SentState};
+
 // ── JavaScript's string semantics ──────────────────────────────────────────────────────────────
 
 /// Whether ECMAScript's `trim()` removes `c`: WhiteSpace (TAB, VT, FF, ZWNBSP U+FEFF and every
@@ -174,7 +178,7 @@ pub fn mode_key(mode: &str) -> String {
 }
 
 /// The UI's band table (`ui/src/band.ts` `BAND_RANGES`), low to high: `(lo, hi, label)` in MHz.
-const UI_BANDS: [(f64, f64, &str); 22] = [
+pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
     (1.8, 2.0, "160m"),
     (3.5, 4.0, "80m"),
     (5.3, 5.41, "60m"),
@@ -198,6 +202,25 @@ const UI_BANDS: [(f64, f64, &str); 22] = [
     (10000.0, 10500.0, "3cm"),
     (24000.0, 24250.0, "1.25cm"),
 ];
+
+/// Every band label of the UI's table, in its order.
+pub(crate) const UI_BAND_LABELS: [&str; 22] = {
+    let mut out = [""; 22];
+    let mut i = 0;
+    while i < 22 {
+        out[i] = UI_BANDS[i].2;
+        i += 1;
+    }
+    out
+};
+
+/// The edges of the UI band `label` (lower case), in MHz.
+pub(crate) fn ui_band_edges(label: &str) -> Option<(f64, f64)> {
+    UI_BANDS
+        .iter()
+        .find(|(_, _, l)| *l == label)
+        .map(|(lo, hi, _)| (*lo, *hi))
+}
 
 /// `bandLabelForMhz(mhz)`: the first band whose edges hold `mhz`, or `""`.
 fn ui_band_for_mhz(mhz: f64) -> &'static str {
@@ -265,7 +288,39 @@ pub enum SortKey {
     Time,
     Park,
     Qsl,
+    Grid,
+    State,
+    Iota,
+    Contest,
+    /// ADIF `CNTY`, which the log keeps only as passthrough.
+    County,
 }
+
+impl SortKey {
+    /// The `qso` columns this key reads beyond the Logbook's own ([`super::sqlite::ORDER_COLUMNS`]),
+    /// and the passthrough field it reads, if any.
+    pub fn reads(self) -> (&'static [&'static str], Option<&'static str>) {
+        match self {
+            // A merged contest contact's exchange STATE beside the column ([`super::record_field`]).
+            SortKey::State => (&["state"], Some("STATE")),
+            SortKey::Iota => (&["ota_iota"], None),
+            SortKey::Contest => (&["contest_id"], None),
+            SortKey::County => (&[], Some("CNTY")),
+            _ => (&[], None),
+        }
+    }
+}
+
+/// A sort key after the first (`LogSortTerm`), in its own direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SortTerm {
+    pub sort: SortKey,
+    pub asc: bool,
+}
+
+/// How many keys may order the list: the first and two more.
+pub const MAX_SORT_KEYS: usize = 3;
 
 /// What the Logbook list shows: the rows the search and the chip let through, in the order the
 /// sorted column gives (`LogQuery`). The same four fields name an order everywhere.
@@ -277,6 +332,13 @@ pub struct LogQuery {
     /// The search box as typed: trimmed and lower-cased when matched, never before.
     pub search: String,
     pub needs_confirm_only: bool,
+    /// The keys after `sort`, each in its own direction (at most [`MAX_SORT_KEYS`] in all; any
+    /// past that are not read). Absent: `sort` alone, as before there were more.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub then: Vec<SortTerm>,
+    /// The field filters ([`filter`]). Absent: none.
+    #[serde(default, skip_serializing_if = "LogFilter::is_empty")]
+    pub filter: LogFilter,
 }
 
 impl LogQuery {
@@ -287,6 +349,13 @@ impl LogQuery {
             && !self.asc
             && self.search.is_empty()
             && !self.needs_confirm_only
+            && self.then.is_empty()
+            && self.filter.is_empty()
+    }
+
+    /// The keys after the first that are read.
+    pub fn then_keys(&self) -> &[SortTerm] {
+        &self.then[..self.then.len().min(MAX_SORT_KEYS - 1)]
     }
 }
 
@@ -325,6 +394,16 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
         } else {
             0.0
         }),
+        SortKey::Grid => text(r.grid.as_deref().unwrap_or("")),
+        SortKey::State => text(super::record_field(r, "STATE").unwrap_or("")),
+        SortKey::Iota => text(r.ota.iota.as_deref().unwrap_or("")),
+        SortKey::Contest => text(r.contest.as_deref().map_or("", |c| c.contest_id.as_str())),
+        SortKey::County => text(
+            r.extra
+                .iter()
+                .find(|(k, _)| k == "CNTY")
+                .map_or("", |(_, v)| v.as_str()),
+        ),
     }
 }
 
@@ -435,6 +514,13 @@ where
 pub struct OrderBuilder<'a, H> {
     sort: SortKey,
     asc: bool,
+    /// The keys after the first.
+    then: Vec<SortTerm>,
+    /// The field filters, for the one part of them a row is tested on here: free text outside
+    /// ASCII ([`LogFilter::text_matches`]). SQL answered the rest before the row arrived.
+    filter: LogFilter,
+    /// The caller's test of the fields it decides ([`LogFilter::decided_by_caller`]).
+    keep: Option<&'a dyn Fn(&QsoRecord) -> bool>,
     needs_confirm_only: bool,
     /// The search, trimmed and lower-cased once.
     t: String,
@@ -443,7 +529,7 @@ pub struct OrderBuilder<'a, H> {
     /// the statistics ask theirs ([`LogStatCounter`]).
     resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
     entity_of: HashMap<(String, Option<u32>), Option<String>>,
-    kept: Vec<(H, SortVal, u64)>,
+    kept: Vec<(H, SortVal, Box<[SortVal]>, u64)>,
 }
 
 impl<'a, H> OrderBuilder<'a, H> {
@@ -451,6 +537,9 @@ impl<'a, H> OrderBuilder<'a, H> {
         Self {
             sort: query.sort,
             asc: query.asc,
+            then: query.then_keys().to_vec(),
+            filter: query.filter.clone(),
+            keep: None,
             needs_confirm_only: query.needs_confirm_only,
             t: js_lower(js_trim(&query.search)),
             resolve,
@@ -466,35 +555,76 @@ impl<'a, H> OrderBuilder<'a, H> {
         !self.t.is_empty()
     }
 
+    /// Test each row with `keep` as well: the caller's answer to the fields it decides.
+    pub fn keep(mut self, keep: &'a dyn Fn(&QsoRecord) -> bool) -> Self {
+        self.keep = Some(keep);
+        self
+    }
+
+    /// The `qso` columns a row must carry for this order: `base` (the Logbook's own,
+    /// [`super::sqlite::ORDER_COLUMNS`]), the columns of every sort key, and the free text's where
+    /// it is decided here — and the passthrough fields its keys read.
+    pub fn reads(&self, base: &[&'static str]) -> (Vec<&'static str>, Vec<&'static str>) {
+        let mut columns: Vec<&'static str> = base.to_vec();
+        let mut extras = Vec::new();
+        let keys = std::iter::once(self.sort).chain(self.then.iter().map(|t| t.sort));
+        for k in keys {
+            let (more, extra) = k.reads();
+            columns.extend(more.iter().copied().filter(|c| !base.contains(c)));
+            extras.extend(extra);
+        }
+        if self.filter.text_in_rust().is_some() {
+            columns.extend(LogFilter::TEXT_COLUMNS);
+        }
+        columns.dedup();
+        extras.sort_unstable();
+        extras.dedup();
+        (columns, extras)
+    }
+
     /// The next row, in LOG ORDER after every row pushed before it.
     pub fn push(&mut self, h: H, r: &QsoRecord) {
         let resolve = self.resolve;
         let cache = &mut self.entity_of;
         if !shown(r, self.needs_confirm_only, &self.t, || {
             entity_of(cache, resolve, r).map(str::to_string)
-        }) {
+        }) || !self.filter.text_matches(r)
+            || self.keep.is_some_and(|keep| !keep(r))
+        {
             return;
         }
-        let entity = match self.sort {
-            SortKey::Country => entity_of(&mut self.entity_of, resolve, r),
-            _ => None,
+        let by_country =
+            self.sort == SortKey::Country || self.then.iter().any(|t| t.sort == SortKey::Country);
+        let entity = if by_country {
+            entity_of(&mut self.entity_of, resolve, r)
+        } else {
+            None
         };
+        let then: Box<[SortVal]> = self
+            .then
+            .iter()
+            .map(|t| sort_val(r, t.sort, entity))
+            .collect();
         self.kept
-            .push((h, sort_val(r, self.sort, entity), r.when_unix));
+            .push((h, sort_val(r, self.sort, entity), then, r.when_unix));
     }
 
     /// The handles of the rows shown, in display order.
+    ///
+    /// Each key after the first compares in its own direction; the time breaks a tie of every
+    /// key in the FIRST key's direction, so one key alone orders exactly as it always did.
     pub fn finish(mut self) -> Vec<H> {
         let asc = self.asc;
+        let dirs: Vec<bool> = self.then.iter().map(|t| t.asc).collect();
+        let way = |cmp: Ordering, asc: bool| if asc { cmp } else { cmp.reverse() };
         self.kept.sort_by(|a, b| {
-            let cmp = sort_val_cmp(&a.1, &b.1).then(a.2.cmp(&b.2));
-            if asc {
-                cmp
-            } else {
-                cmp.reverse()
+            let mut cmp = way(sort_val_cmp(&a.1, &b.1), asc);
+            for (i, &up) in dirs.iter().enumerate() {
+                cmp = cmp.then_with(|| way(sort_val_cmp(&a.2[i], &b.2[i]), up));
             }
+            cmp.then_with(|| way(a.3.cmp(&b.3), asc))
         });
-        self.kept.into_iter().map(|(h, _, _)| h).collect()
+        self.kept.into_iter().map(|(h, _, _, _)| h).collect()
     }
 }
 
@@ -994,7 +1124,8 @@ fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
     if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
     }
-    let code = js_upper(js_trim(r.state.as_deref()?));
+    // The state its upload carries: a merged contest contact's exchange's (`record_field`).
+    let code = js_upper(js_trim(super::record_field(r, "STATE")?));
     WAS_STATES.contains(&code.as_str()).then_some(code)
 }
 

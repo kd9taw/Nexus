@@ -112,6 +112,9 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 /// `ap_cq_only` restricts AP to the CQ hypothesis (`lapcqonly`, iaptype 1);
 /// ignored while `ap` is `false`. `(true, false)` is stock WSJT-X behaviour.
 ///
+/// A frame under 0.5 LSB rms decodes nothing and leaves the modem untouched, as in WSJT-X
+/// (`decoder.f90:92-93`); every entry below shares that floor.
+///
 /// This is the a7-inert legacy entry: it delegates to [`decode_frame_a7`] with a constant
 /// `nutc = 0` AND `a7_final = false`. Callers that thread real slot time (the engine) use
 /// [`decode_frame_a7`] to get WSJT-X's iaptype=7 recovery. It also pins the two
@@ -227,19 +230,267 @@ pub fn decode_frame_a7(
     ap: bool,
     ap_cq_only: bool,
 ) -> Vec<Decode> {
+    decode_frame_impl(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        None,
+    )
+}
+
+/// What [`decode_frame_a7_streaming`] tells its caller while the pass runs.
+pub enum Progress<'a> {
+    /// A decode the pass has just accepted. It is also in the list the call returns, in the same
+    /// place: the decodes come in the pass's own order, the sync candidates within 10 Hz of
+    /// `nfqso` first (WSJT-X `sync8.f90:155-163`), then by sync, the a7 replay's last.
+    Found(&'a Decode),
+    /// A sync candidate of the direct passes has been tried. Answering `true` stops the pass there,
+    /// with what it has found: no further candidate, pass or a7 replay. WSJT-X asks its early
+    /// pass's give-up at exactly this point (`ft8_decode.f90:240-242`).
+    Candidate,
+    /// [`decode_frame_carry`]'s rescue pass, after a full pass from the residual: asked before it
+    /// starts and after each of its sync candidates. Answering `true` gives the rescue up there,
+    /// keeping what it found; before it starts, the pass's result is the full pass's alone.
+    Rescue,
+}
+
+/// [`decode_frame_a7`], telling `progress` of each decode the moment the pass accepts it, as
+/// WSJT-X's decoder hands each new decode to its callback (`ft8_decode.f90:233-238`) for jt9 to
+/// write and flush at once. The answer to [`Progress::Found`] is ignored; to
+/// [`Progress::Candidate`], `true` stops the pass.
+///
+/// `progress` runs on this thread inside the modem (the modem lock is held): it must not decode,
+/// encode or otherwise call into the modem. A panic in it stops the pass and is raised again here
+/// once the modem has returned.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `progress` panicked.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_a7_streaming(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: &mut dyn FnMut(Progress<'_>) -> bool,
+) -> Vec<Decode> {
+    decode_frame_impl(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        Some(progress),
+    )
+}
+
+/// The caller's [`Progress`] closure behind the modem's callback pointer, and a panic it raised.
+struct Stream<'a> {
+    progress: &'a mut dyn FnMut(Progress<'_>) -> bool,
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+/// The modem's callback (`tempo_decode_cb`). A panic must not unwind into the Fortran: it is kept
+/// and the pass is asked to stop at its next candidate, and [`decode_frame_impl`] raises it again.
+unsafe extern "C" fn on_progress(
+    user: *mut std::os::raw::c_void,
+    rec: *const tempo_fast_sys::Ft8DecodeT,
+) -> std::os::raw::c_int {
+    // SAFETY: `user` is the `Stream` `decode_frame_impl` passed for this call, alive and not
+    // otherwise borrowed until the modem returns; `rec`, when not null, points at a record the
+    // modem has just written.
+    let stream = unsafe { &mut *user.cast::<Stream<'_>>() };
+    if stream.panic.is_some() {
+        return 1;
+    }
+    let found = (!rec.is_null()).then(|| from_record(unsafe { &*rec }));
+    let progress = &mut *stream.progress;
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &found {
+        Some(d) => {
+            progress(Progress::Found(d));
+            false
+        }
+        None => progress(Progress::Candidate),
+    })) {
+        Ok(stop) => std::os::raw::c_int::from(stop),
+        Err(panic) => {
+            stream.panic = Some(panic);
+            1
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_frame_impl(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
+) -> Vec<Decode> {
+    decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        progress,
+        Carried::None,
+        false,
+    )
+    .0
+    .iter()
+    .map(from_record)
+    .collect()
+}
+
+/// What a pass is handed from the period's earlier passes ([`decode_records`]).
+#[derive(Clone, Copy)]
+enum Carried<'a> {
+    /// Nothing: the raw audio.
+    None,
+    /// The early pass's decodes and the 47 step's residual: the full pass starts from it.
+    Residual(&'a Early, &'a Residual),
+    /// The rescue pass: the raw audio, and the records the period's passes already reported,
+    /// which it dedupes against, never hands on and never saves into the a7 table again.
+    Reported(&'a [tempo_fast_sys::Ft8DecodeT]),
+}
+
+/// The one call into the modem's decode (`ft8_decode_frame_dp`): the records it wrote, and, when
+/// `want_subs`, what the full pass needs to subtract each one ([`Carry`]). `carried` is what the
+/// period's earlier passes hand this one ([`Carried`]).
+#[allow(clippy::too_many_arguments)]
+fn decode_records(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
+    carried: Carried<'_>,
+    want_subs: bool,
+) -> (
+    Vec<tempo_fast_sys::Ft8DecodeT>,
+    Vec<tempo_fast_sys::Ft8SubT>,
+) {
     assert!(
         iwave.len() >= NMAX,
         "decode_frame needs at least {NMAX} samples, got {}",
         iwave.len()
     );
+    if below_level_floor(iwave) {
+        return (Vec::new(), Vec::new());
+    }
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
     let mut out = vec![tempo_fast_sys::Ft8DecodeT::default(); MAX_DECODES];
+    let mut subs = if want_subs {
+        vec![tempo_fast_sys::Ft8SubT::default(); MAX_DECODES]
+    } else {
+        Vec::new()
+    };
+    // WSJT-X's m_earlyDecode / m_hsymStop for FT8 (mainwindow.h:533,
+    // mainwindow.cpp:1678). The wrapper treats anything but 41 as 50.
+    let nzhsym = if partial { 41 } else { 50 };
+    let (nearly, early, early_subs, resid) = match carried {
+        Carried::Residual(e, r) => (
+            e.records.len() as i32,
+            e.records.as_ptr(),
+            e.subs.as_ptr(),
+            r.dd1.as_ptr(),
+        ),
+        Carried::Reported(records) => (
+            records.len() as i32,
+            records.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+        ),
+        Carried::None => (0, std::ptr::null(), std::ptr::null(), std::ptr::null()),
+    };
+    // The modem's rescue mode (`ft8_cabi.f90`, la7final 2): the a7 replay runs, and only decodes
+    // new to the period are saved.
+    let la7final = match carried {
+        Carried::Reported(_) if a7_final => 2,
+        _ => a7_final as i32,
+    };
 
+    let mut stream = progress.map(|progress| Stream {
+        progress,
+        panic: None,
+    });
+    let (cb, user): (
+        Option<tempo_fast_sys::DecodeCallback>,
+        *mut std::os::raw::c_void,
+    ) = match stream.as_mut() {
+        Some(stream) => (Some(on_progress), (stream as *mut Stream<'_>).cast()),
+        None => (None, std::ptr::null_mut()),
+    };
     let n = {
         let _guard = modem_lock();
+        // SAFETY: every pointer is to a live buffer of the length the modem reads: `iwave` holds
+        // NMAX samples (asserted), `out` and `subs` MAX_DECODES records (or `subs` is null), the
+        // carried early records and subs `nearly` each and the residual NMAX samples (`Carry`
+        // builds them so), or the `nearly` reported records with null subs and residual, and
+        // `user` is the `Stream` `on_progress` reads, alive until the modem returns.
         unsafe {
-            tempo_fast_sys::ft8_decode_frame(
+            tempo_fast_sys::ft8_decode_frame_dp(
                 iwave.as_ptr(),
                 nfa,
                 nfb,
@@ -249,33 +500,372 @@ pub fn decode_frame_a7(
                 nqso_progress,
                 nfqso,
                 nftx,
-                // WSJT-X's m_earlyDecode / m_hsymStop for FT8 (mainwindow.h:533,
-                // mainwindow.cpp:1678). The wrapper treats anything but 41 as 50.
-                if partial { 41 } else { 50 },
+                nzhsym,
                 nutc,
-                a7_final as i32,
+                la7final,
                 ap as i32,
                 ap_cq_only as i32,
                 out.as_mut_ptr(),
                 out.len() as i32,
+                cb,
+                user,
+                if want_subs {
+                    subs.as_mut_ptr()
+                } else {
+                    std::ptr::null_mut()
+                },
+                nearly,
+                early,
+                early_subs,
+                resid,
             )
         }
     };
-    if n <= 0 {
-        return Vec::new();
+    if let Some(panic) = stream.and_then(|s| s.panic) {
+        std::panic::resume_unwind(panic);
     }
-    out.into_iter()
-        .take(n as usize)
-        .map(|r| Decode {
-            message: cstr_field(&r.message),
-            sync: r.sync,
-            snr: r.snr,
-            dt: r.dt,
-            freq: r.freq,
-            nap: r.nap,
-            qual: r.qual,
-        })
-        .collect()
+    let n = n.max(0) as usize;
+    out.truncate(n);
+    subs.truncate(n.min(subs.len()));
+    (out, subs)
+}
+
+/// The early pass's audio a carry is checked against: WSJT-X's early moment, 41 x 3456 samples
+/// (11.808 s, `m_earlyDecode`).
+const EARLY_SAMPLES: usize = 41 * 3456;
+
+/// The samples WSJT-X's 47 step reads and its full pass takes from the residual: 47 x 3456
+/// (13.536 s, `m_earlyDecode2`; `lib/ft8_decode.f90:153`).
+pub const RESIDUAL_SAMPLES: usize = 47 * 3456;
+
+/// What WSJT-X's FT8 decoder keeps between the passes of one period, so that its full pass starts
+/// from audio with the early pass's decodes already subtracted, and neither searches for nor
+/// reports them again (`lib/ft8_decode.f90`: the SAVEd `dd1`, `ndec_early`, `itone_save`,
+/// `f1_save`, `xdt_save`, `lsubtracted`, `allmessages` at :72-73; the 47 step at :124-150; the full
+/// pass at :121 and :152-162). A weak decode under a strong one then surfaces in the full pass's
+/// first subtraction pass, and new decodes are handed on first.
+///
+/// WSJT-X keeps this in process-wide SAVE storage. Here the caller owns one per decoder (one per
+/// radio chain), and nothing of it is kept in the modem. Its life, period by period:
+/// - an early pass ([`decode_frame_carry`] with `partial`) replaces it with its decodes, what is
+///   needed to subtract each, and the audio they were decoded from (none at depth 1, where WSJT-X
+///   runs no early pass, `:102-105`, or when it decoded nothing);
+/// - [`subtract_early`] turns that into the residual, only over audio that starts with the very
+///   samples the early pass decoded;
+/// - a full pass (`a7_final`, not `partial`) takes it, whatever it holds, and starts from the
+///   residual only when its own first [`RESIDUAL_SAMPLES`] samples are the very samples the
+///   residual was made from. Any other full pass decodes the raw audio, exactly as before: a carry
+///   from another period, band or mode, or a step that never ran, can never be spliced onto audio
+///   it was not made from;
+/// - every other pass (the F6 re-decode) leaves it alone.
+#[derive(Default)]
+pub struct Carry {
+    state: CarryState,
+}
+
+#[derive(Default)]
+enum CarryState {
+    #[default]
+    Empty,
+    Early(Early),
+    Residual(Early, Residual),
+}
+
+/// An early pass's decodes, as it returned them.
+struct Early {
+    records: Vec<tempo_fast_sys::Ft8DecodeT>,
+    subs: Vec<tempo_fast_sys::Ft8SubT>,
+    /// The first [`EARLY_SAMPLES`] samples it decoded.
+    audio: Vec<i16>,
+}
+
+/// The 47 step's residual.
+struct Residual {
+    /// [`NMAX`] samples; the full pass takes the first [`RESIDUAL_SAMPLES`].
+    dd1: Vec<f32>,
+    /// The first [`RESIDUAL_SAMPLES`] samples it was made from.
+    audio: Vec<i16>,
+}
+
+impl Carry {
+    /// Forget everything carried.
+    pub fn clear(&mut self) {
+        self.state = CarryState::Empty;
+    }
+
+    /// How many early decodes are carried.
+    pub fn early_len(&self) -> usize {
+        match &self.state {
+            CarryState::Empty => 0,
+            CarryState::Early(e) | CarryState::Residual(e, _) => e.records.len(),
+        }
+    }
+
+    /// Whether the 47 step's residual is ready for a full pass.
+    pub fn has_residual(&self) -> bool {
+        matches!(self.state, CarryState::Residual(..))
+    }
+
+    /// How many of the carried early decodes the residual already has subtracted; the full pass
+    /// subtracts the rest.
+    pub fn early_subtracted(&self) -> usize {
+        match &self.state {
+            CarryState::Residual(e, _) => e.subs.iter().filter(|s| s.done != 0).count(),
+            _ => 0,
+        }
+    }
+}
+
+/// [`decode_frame_a7_streaming`] for a caller that keeps WSJT-X's carry between the passes of a
+/// period ([`Carry`]): an early pass (`partial`) leaves its decodes in `carry`; a full pass
+/// (`a7_final`) takes `carry` and, when [`subtract_early`] made a residual from this very audio,
+/// starts from it: the early decodes are subtracted and come first in the returned list, as the
+/// early pass returned them, and only the decodes new to this pass reach `progress`, in the pass's
+/// own order (the RX frequency's first). Without such a residual the full pass is exactly
+/// [`decode_frame_a7_streaming`]'s. Any other pass is too, and leaves `carry` alone.
+///
+/// A full pass that started from the residual is followed by a rescue pass, unless the full pass
+/// was given up or `progress` answers `true` to [`Progress::Rescue`] before it starts: the full
+/// pass once more on the raw audio, as it ran before the carry, handing on only the messages the
+/// period's passes have not reported, which follow them in the returned list. Subtracting the
+/// early decodes at the 47 step damages a few signals under or beside them that the raw search
+/// finds; the rescue keeps every decode the raw full pass finds, at the cost of a second full
+/// pass. It saves only its new decodes into the a7 table, and runs the a7 replay. It asks
+/// [`Progress::Rescue`] after each sync candidate, never [`Progress::Candidate`].
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `progress` panicked.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_carry(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: &mut dyn FnMut(Progress<'_>) -> bool,
+    carry: &mut Carry,
+) -> Vec<Decode> {
+    if partial {
+        carry.clear();
+        let (records, subs) = decode_records(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            nutc,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            Some(progress),
+            Carried::None,
+            true,
+        );
+        let decodes = records.iter().map(from_record).collect();
+        if effective_depth(ndepth) >= 2 && !records.is_empty() && subs.len() == records.len() {
+            carry.state = CarryState::Early(Early {
+                records,
+                subs,
+                audio: iwave[..EARLY_SAMPLES].to_vec(),
+            });
+        }
+        return decodes;
+    }
+    let taken = if a7_final {
+        std::mem::take(&mut carry.state)
+    } else {
+        CarryState::Empty
+    };
+    let carried = match &taken {
+        CarryState::Residual(e, r)
+            if iwave.len() >= NMAX && iwave[..RESIDUAL_SAMPLES] == r.audio[..] =>
+        {
+            Carried::Residual(e, r)
+        }
+        _ => Carried::None,
+    };
+    let from_residual = matches!(carried, Carried::Residual(..));
+    let mut given_up = false;
+    let (records, _) = decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        Some(&mut |p: Progress<'_>| {
+            let candidate = matches!(p, Progress::Candidate);
+            let stop = progress(p);
+            given_up |= candidate && stop;
+            stop
+        }),
+        carried,
+        false,
+    );
+    let mut decodes: Vec<Decode> = records.iter().map(from_record).collect();
+    if !from_residual || given_up || records.is_empty() || progress(Progress::Rescue) {
+        return decodes;
+    }
+    // The rescue: the raw audio, deduped against what the period has reported.
+    let (rescued, _) = decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        Some(&mut |p: Progress<'_>| match p {
+            Progress::Candidate => progress(Progress::Rescue),
+            p => progress(p),
+        }),
+        Carried::Reported(&records),
+        false,
+    );
+    decodes.extend(rescued.iter().skip(records.len()).map(from_record));
+    decodes
+}
+
+/// WSJT-X's 47 step (`lib/ft8_decode.f90:124-149`, run at 47 x 3456 samples, 13.536 s): subtract
+/// the carried early decodes from the period's first [`RESIDUAL_SAMPLES`] samples of `iwave`, so
+/// the full pass can start from the residual ([`Carry`]). Only those that end inside them (dt
+/// under 0.396 s) are subtracted here, DT-refined at depth 3; the full pass subtracts the rest.
+/// `give_up` is asked after each early decode and `true` stops there, keeping what was done:
+/// WSJT-X bails out at 14.3 s into the period (`:140-145`).
+///
+/// Does nothing, and leaves no carry, unless `carry` holds an early pass's decodes and `iwave`
+/// starts with the very samples that pass decoded. Returns how many early decodes were reached.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `give_up` panicked.
+pub fn subtract_early(
+    iwave: &[i16],
+    ndepth: i32,
+    carry: &mut Carry,
+    give_up: &mut dyn FnMut() -> bool,
+) -> usize {
+    assert!(
+        iwave.len() >= NMAX,
+        "subtract_early needs at least {NMAX} samples, got {}",
+        iwave.len()
+    );
+    let CarryState::Early(mut early) = std::mem::take(&mut carry.state) else {
+        return 0;
+    };
+    if iwave[..EARLY_SAMPLES] != early.audio[..] {
+        return 0;
+    }
+    let mut dd1 = vec![0f32; NMAX];
+    let mut asked = |p: Progress<'_>| matches!(p, Progress::Candidate) && give_up();
+    let mut stream = Stream {
+        progress: &mut asked,
+        panic: None,
+    };
+    let n = {
+        let _guard = modem_lock();
+        // SAFETY: `iwave` holds NMAX samples (asserted), `dd1` NMAX, `early.subs` exactly the
+        // `nearly` records passed, and `stream` is alive until the modem returns.
+        unsafe {
+            tempo_fast_sys::ft8_subtract_early(
+                iwave.as_ptr(),
+                ndepth,
+                early.subs.len() as i32,
+                early.subs.as_mut_ptr(),
+                dd1.as_mut_ptr(),
+                Some(on_progress),
+                (&mut stream as *mut Stream<'_>).cast(),
+            )
+        }
+    };
+    if let Some(panic) = stream.panic {
+        std::panic::resume_unwind(panic);
+    }
+    if n < 0 {
+        return 0;
+    }
+    carry.state = CarryState::Residual(
+        early,
+        Residual {
+            dd1,
+            audio: iwave[..RESIDUAL_SAMPLES].to_vec(),
+        },
+    );
+    n as usize
+}
+
+/// The decode depth the modem runs: anything at or below 0 is 3 (`ft8_cabi.f90`).
+fn effective_depth(ndepth: i32) -> i32 {
+    if ndepth <= 0 {
+        3
+    } else {
+        ndepth
+    }
+}
+
+/// WSJT-X's level floor: a frame under half an LSB rms is not decoded at all. WSJT-X 3.0.2,
+/// `lib/decoder.f90:92-93`, at the top of `multimode_decoder`, before any decoder runs:
+///
+/// ```text
+/// rms=sqrt(dot_product(float(id2(1:180000)),float(id2(1:180000)))/180000.0)
+/// if(rms.lt.0.5) go to 800
+/// ```
+///
+/// `id2` is the period's 12 kHz int16 audio, the frame each pass hands the decoder, as `iwave` is
+/// here, and label 800 is past every decoder call: no pass, no a7 replay, no a7 bookkeeping. Same
+/// samples (the first [`NMAX`]), same scale, same threshold. The sum is exact here; upstream's
+/// single-precision one is exact below 2^24, far above the threshold's 45000, so the two agree on
+/// every frame.
+///
+/// Without it a near-silent period (a muted rig, a dead cable) after a busy one gave the a7 replay
+/// stations to "hear": its metrics are normalised, so one stray LSB scores like a signal.
+fn below_level_floor(iwave: &[i16]) -> bool {
+    let sum_sq: f64 = iwave[..NMAX]
+        .iter()
+        .map(|&s| f64::from(s) * f64::from(s))
+        .sum();
+    (sum_sq / NMAX as f64).sqrt() < 0.5
+}
+
+/// One modem record as a [`Decode`].
+fn from_record(r: &tempo_fast_sys::Ft8DecodeT) -> Decode {
+    Decode {
+        message: cstr_field(&r.message),
+        sync: r.sync,
+        snr: r.snr,
+        dt: r.dt,
+        freq: r.freq,
+        nap: r.nap,
+        qual: r.qual,
+    }
 }
 
 /// Clear the a7 cross-cycle decode table (prior-slot call pairs + slot
@@ -283,6 +873,14 @@ pub fn decode_frame_a7(
 /// probed with stale prior-cycle hypotheses. Mirrors `tempo_fast::harq_reset`.
 pub fn a7_reset() {
     A7ResetGuard(modem_lock()).reset();
+}
+
+/// How many decodes the slot decoded last has saved into the a7 table: each station once, however
+/// many passes decoded it.
+pub fn a7_saved() -> usize {
+    let _guard = modem_lock();
+    // SAFETY: reads one integer of the modem's table, under the modem lock.
+    unsafe { tempo_fast_sys::ft8_a7_saved() }.max(0) as usize
 }
 
 /// Exclusive permission to reset FT8's prior-cycle decode table. This holds the
@@ -476,6 +1074,222 @@ mod tests {
             !decs_e.iter().any(|d| d.message == msg_b),
             "ap = false must suppress the a7 cross-cycle replay; got {decs_e:?}"
         );
+    }
+
+    /// Several signals in one 15 s frame over the light noise floor: `(msg, f0, amplitude)`.
+    fn frame_of(signals: &[(&str, f32, f32)]) -> Vec<i16> {
+        let mut seed = 0x51A7_u32;
+        let mut iwave: Vec<i16> = (0..NMAX)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                ((seed >> 8) % 31) as i16 - 15
+            })
+            .collect();
+        for &(msg, f0, amp) in signals {
+            let wave = gen_wave(&encode(msg), SAMPLE_RATE, f0);
+            for (i, &v) in wave.iter().enumerate() {
+                if let Some(s) = iwave.get_mut(6_000 + i) {
+                    *s = s.saturating_add((v * amp) as i16);
+                }
+            }
+        }
+        iwave
+    }
+
+    /// Three loud stations and a weaker one on the RX frequency (1500 Hz).
+    const BAND: [(&str, f32, f32); 4] = [
+        ("CQ K1ABC FN31", 700.0, 3000.0),
+        ("W9XYZ K2DEF EM79", 1100.0, 3000.0),
+        ("CQ N3GHI FM19", 2200.0, 3000.0),
+        ("W9XYZ K4JKL R-07", 1500.0, 600.0),
+    ];
+
+    /// Every decode the pass accepts is handed on at once, the RX frequency's first (WSJT-X's
+    /// `sync8.f90:155-163` puts the candidates within 10 Hz of nfqso at the top), and the handed-on
+    /// list IS the returned one; the streaming call returns exactly what the plain call returns.
+    #[test]
+    fn streaming_hands_on_each_decode_as_found_the_rx_frequency_first() {
+        let iwave = frame_of(&BAND);
+        // nutc 0 and no a7 save: the a7 table a sibling test drives is left alone.
+        let plain = decode_frame_a7(
+            &iwave, 200, 2900, 3, "W9XYZ", "", 0, 1500, 1500, 0, false, false, true, false,
+        );
+        let mut found = Vec::new();
+        let mut candidates = 0;
+        let streamed = decode_frame_a7_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            1500,
+            1500,
+            0,
+            false,
+            false,
+            true,
+            false,
+            &mut |p| {
+                match p {
+                    Progress::Found(d) => found.push(d.clone()),
+                    Progress::Candidate => candidates += 1,
+                    Progress::Rescue => {}
+                }
+                false
+            },
+        );
+        let fields = |v: &[Decode]| -> Vec<String> { v.iter().map(|d| format!("{d:?}")).collect() };
+        assert_eq!(
+            fields(&streamed),
+            fields(&plain),
+            "the same decodes, field for field"
+        );
+        assert_eq!(
+            fields(&found),
+            fields(&streamed),
+            "each decode handed on, in the returned order"
+        );
+        assert_eq!(found.len(), 4, "all four decoded: {found:?}");
+        assert_eq!(
+            found[0].message, "W9XYZ K4JKL R-07",
+            "the RX frequency's decode is handed on first"
+        );
+        assert!(
+            candidates > found.len(),
+            "asked after every candidate, not only the decoded ones: {candidates}"
+        );
+        // The order follows the RX frequency, not the signals: moved to 2200 Hz, that station's
+        // decode is the first one handed on.
+        let mut first = None;
+        decode_frame_a7_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            2200,
+            2200,
+            0,
+            false,
+            false,
+            true,
+            false,
+            &mut |p| {
+                if let (Progress::Found(d), None) = (p, &first) {
+                    first = Some(d.message.clone());
+                }
+                false
+            },
+        );
+        assert_eq!(
+            first.as_deref(),
+            Some("CQ N3GHI FM19"),
+            "with the RX frequency on 2200 Hz, its decode is handed on first"
+        );
+    }
+
+    /// A `true` answer to [`Progress::Candidate`] stops the pass there, with what it found: no
+    /// further candidate or pass (WSJT-X's early-pass give-up, `ft8_decode.f90:240-242`).
+    #[test]
+    fn a_give_up_answer_stops_the_pass_at_that_candidate() {
+        let iwave = frame_of(&BAND);
+        let mut found = Vec::new();
+        let mut candidates = 0;
+        let got = decode_frame_a7_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            1500,
+            1500,
+            0,
+            false,
+            true,
+            true,
+            false,
+            &mut |p| match p {
+                Progress::Found(d) => {
+                    found.push(d.message.clone());
+                    false
+                }
+                Progress::Candidate => {
+                    candidates += 1;
+                    true
+                }
+                Progress::Rescue => false,
+            },
+        );
+        assert_eq!(candidates, 1, "asked once, then stopped");
+        assert_eq!(
+            found,
+            ["W9XYZ K4JKL R-07"],
+            "the first candidate's decode, nothing after it"
+        );
+        assert_eq!(
+            got.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(),
+            ["W9XYZ K4JKL R-07"],
+            "the pass returns what it found before it stopped"
+        );
+        // Control: never giving up runs the whole pass.
+        let all = decode_frame_a7_streaming(
+            &iwave,
+            200,
+            2900,
+            3,
+            "W9XYZ",
+            "",
+            0,
+            1500,
+            1500,
+            0,
+            false,
+            true,
+            true,
+            false,
+            &mut |_| false,
+        );
+        assert_eq!(all.len(), 4, "control: the whole pass: {all:?}");
+    }
+
+    /// A panic in the caller's closure never unwinds into the modem: the pass stops, the modem
+    /// returns, and the panic is raised here. The modem works on after it.
+    #[test]
+    fn a_panic_in_progress_is_raised_once_the_modem_returns() {
+        let iwave = frame_of(&BAND);
+        let caught = std::panic::catch_unwind(|| {
+            decode_frame_a7_streaming(
+                &iwave,
+                200,
+                2900,
+                3,
+                "",
+                "",
+                0,
+                1500,
+                1500,
+                0,
+                false,
+                false,
+                true,
+                false,
+                &mut |p| match p {
+                    Progress::Found(_) => panic!("the caller's bug"),
+                    Progress::Candidate | Progress::Rescue => false,
+                },
+            )
+        });
+        assert!(caught.is_err(), "the panic reached the caller");
+        let after = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 1500, true, false);
+        assert_eq!(after.len(), 4, "the modem decodes on: {after:?}");
     }
 
     /// The i3=4 nonstandard/compound-call forms Nexus generates must round-trip through

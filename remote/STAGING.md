@@ -44,9 +44,11 @@ In `kd9taw/Nexus` → Settings → Environments → **production**, add these **
 | `REMOTE_AUTH0_NATIVE_CLIENT_ID` | Optional: the Native application's public Client ID, for the desktop's account sign-in. Never the SPA's; a deploy refuses that |
 | `REMOTE_TRIAL_IDENTITY_REQUIRED` | Optional: `1`, or unset (below) |
 | `REMOTE_MOVED_TO`, `REMOTE_MOVE_STAGE` | Optional, set together: another environment's origin, and `announce`, `pairing-closed` or `closed` |
+| `REMOTE_BETA_FREE` | Optional, staging only: `1` while Remote is free during the beta, or unset (below) |
 
 An unset variable writes nothing to the Worker; any other value than the ones above stops the
-deploy before it writes. The optional secret `REMOTE_TRIAL_KEY` (below) goes under **secrets**.
+deploy before it writes. The optional secrets `REMOTE_TRIAL_KEY`, `REMOTE_OWNER_NOTICE_API_KEY` and
+`REMOTE_OWNER_NOTICE_FROM` (below) go under **secrets**.
 
 The staging API audience is fixed in the tooling. The preflight checks public OIDC
 discovery and signing keys; it cannot read the app's callback list or prove a real
@@ -205,6 +207,10 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
 - `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
   (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+- `REMOTE_BETA_FREE=1` (staging only; a production deploy refuses it): free during the beta. A trial or
+  a grant no longer ends; the page says "Free during the beta" instead of counting days. Everything
+  else is unchanged: an account still starts its one trial through the same checks, and a ban,
+  deletion, the rate limits and the LAN rules still apply. Unset it to bring the trial's own end back.
 
 The relay holds no payment key. It reads `subscriptions`, which only the separate, private billing
 Worker writes (it binds the same D1 database and receives the payment provider's webhook). The relay
@@ -214,6 +220,24 @@ The US licence copy is refreshed by `scripts/uls-import.mjs` from the FCC's publ
 daily changes); it writes SQL to apply with `wrangler d1 execute`. With `TRIAL_KEY` set and the copy
 more than three days old, US callsigns are refused a trial (`serviceUnavailable`) rather than waved
 through. Running the import with the production key is credential handling.
+
+## New-device email notice (optional)
+
+When a sign-in adds a device to an account, the Worker emails the account owner through Resend. It
+needs two Worker secrets, both optional; with either one unset no mail is sent and nothing else
+changes. A device added then stays unable to transmit past its 15 minutes until the owner approves it
+at the shack, because the notice is what lets that hold lift.
+
+- `OWNER_NOTICE_API_KEY`: a Resend API key with permission to send. Create it in the Resend dashboard
+  under API Keys.
+- `OWNER_NOTICE_FROM`: the address the notice is sent as, on a domain verified in Resend, for example
+  `Nexus Remote <noreply@your-domain>`.
+
+Add them in the same GitHub environment as the other secrets, as `REMOTE_OWNER_NOTICE_API_KEY` and
+`REMOTE_OWNER_NOTICE_FROM`. They are carried exactly like `REMOTE_TRIAL_KEY`: a deploy whose
+environment holds one declares it in the artifact, applies it as an encrypted secret, and checks it
+reads back encrypted. Set both or neither. A Worker that already holds either one is refused before
+any write while the environment does not supply it.
 
 ## Cloudflare and deployment
 
@@ -349,7 +373,12 @@ protection, the first time a job names one that does not exist, so nothing names
 until the guard passes. It never uses the shared `production` environment. There is no `grant-trial`
 operation in production; trials there go through the Worker's admin route.
 
-Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`
-only once that row's `billing.deployed` is true, and the upload check then demands exactly that
-binding. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
+Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`, on
+that Worker's `BillingService` entrypoint, only once that row's `billing.deployed` is true, and the upload
+check then demands exactly that binding and entrypoint. Until then `/api/remote/billing/checkout` and
+`/api/remote/billing/portal` answer `billingNotAvailable`, `config` says `billing: false`, and the page shows
+no Subscribe or Manage button. Account deletion (`/api/remote/account/delete`) works either way: with the
+binding it asks the billing Worker's `cancel` first and deletes nothing unless that answers `{ cancelled }`;
+without it, an account whose subscription has not ended is refused `subscriptionNotCancelled`, because
+nothing here can end it. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
 with any of them on fails its own verification.

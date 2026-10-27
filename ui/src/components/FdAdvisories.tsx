@@ -1,4 +1,4 @@
-// The warn-only Field Day rule advisories (design §4 — operator ruling: WARN,
+// The warn-only Field Day rule advisories (the operator's rule: WARN,
 // NEVER remove or disable a surface; `enforcement` is a ruleset parameter and
 // ships 'warn').
 //

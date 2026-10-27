@@ -1,12 +1,13 @@
 /* The Remote site's outer screens, in hamradiotools.io's look: signed out, confirm your email,
-   the account and trial states, the station list, pairing, refusals, and the header and footer.
+   the account and trial states, the station list, pairing, refusals, the first-visit landing and the
+   no-station card, and the header and footer.
 
    SCOPE — every selector in this file starts at `.remote-site`, a class only RemoteApp's own
-   account shell carries. The connected views (MonitorApp, BrowserApplication and the Nexus App
-   inside it) never have it, so nothing here can reach them. That matters because this sheet is
-   global once loaded, and the classes it restyles are shared: `.remote-button`, `.remote-actions`
-   and `.remote-section` also render in SessionStatus, the hosted logging controls and the native
-   Remote station panel, and `.rm-header`/`.rm-card`/`.rm-scroll` are the observer's own.
+   account shell carries. The stream page never has it, so nothing here can reach it. That matters
+   because this sheet is global once loaded, and the classes it restyles are shared:
+   `.remote-button`, `.remote-actions` and `.remote-section` also render in SessionStatus, the
+   hosted logging controls and the native Remote station panel, and `.rm-header`/`.rm-card`/
+   `.rm-scroll` are the shared shell's (monitor.css).
 
    TOKENS — dark is hamradiotools.io's palette verbatim (the site is dark-only:
    src/styles/global.css @theme). Light is derived for the same family, checked to WCAG AA:
@@ -299,6 +300,42 @@
 .remote-site .remote-station-state { margin: 0; }
 .remote-site .remote-beta { color: var(--rs-muted); font-size: 0.8125rem; }
 .remote-site .remote-beta-mark { border-color: var(--rs-ink); color: var(--rs-ink); border-radius: var(--rs-radius-control); font-family: var(--font-mono); }
+
+/* ── The signed-out landing's four sections, and the no-station card's steps. The cards sit two
+   across where there is room and stack where there is not; the floor yields, so a phone at 175%
+   zoom gets one column with no sideways scroll. */
+.remote-site .remote-site-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+  gap: 1.25rem;
+  min-width: 0;
+}
+/* A card in a row with a taller one keeps its own rows at their content height, top-aligned. */
+.remote-site .remote-site-guide > .remote-section { align-content: start; }
+.remote-site .remote-section :is(ol, ul) {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding-left: 1.25rem;
+  line-height: 1.6;
+}
+.remote-site .remote-section li::marker { color: var(--rs-ink); font-family: var(--font-mono); }
+.remote-site .remote-section h3 {
+  margin: 0.25rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--rs-muted);
+}
+.remote-site .remote-site-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
 
 /* ── Disclosures: a ▸ in the site's signal green that turns when open. */
 .remote-site details > summary {

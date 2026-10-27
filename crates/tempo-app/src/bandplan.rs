@@ -118,6 +118,10 @@ pub fn band_plan() -> Vec<BandChannel> {
         ch("80m", "HF", 3.5935, "USB", "80 m", "above the PSK31/RTTY hole 3.580–3.590 (~5 kHz) and below the 3.600 data edge; clear of FT8/FT4 3.573/3.575"),
         ch("40m", "HF", 7.0430, "USB", "40 m", "in the notch between QRP CW 7.040 (~4.5 kHz below emission) and FT4 7.0475 (~3 kHz above); IARU NB segment"),
         ch("30m", "HF", 10.1425, "USB", "30 m", "data half, ~3 kHz above FT4 10.140 / PSK 10.141, ~6 kHz below the 10.150 edge; secondary band — tread lightly"),
+        // ⚠️ JTTY (WSJT-X's keyboard mode) calls on 14.090 and 21.090 ([`jtty_band_plan`]), so its
+        // passband now covers this channel's and the 15 m one's: the ".09 shoulder" became a shared
+        // calling frequency. Left where they are by the operator's ruling (2026-10-08), to revisit
+        // once JTTY's real occupancy is seen; moving them is a Tempo protocol change.
         ch("20m", "HF", 14.0905, "USB", "20 m", "the .09 shoulder: ~9 kHz above the 14.074–14.083 cluster, ~3.6 kHz below WSPR 14.0956"),
         ch("17m", "HF", 18.0955, "USB", "17 m", "cramped band — in the only notch (~3 kHz below FT8 18.100, ~1 kHz above QRP CW 18.096), clear of the FT4/JS8/WSPR pileup at 18.104+; DX1 (50 Hz) only"),
         ch("15m", "HF", 21.0905, "USB", "15 m", "~14 kHz above JS8 21.078, ~2.6 kHz below WSPR 21.0946; FT4 is far away at 21.140"),
@@ -133,7 +137,16 @@ pub fn band_plan() -> Vec<BandChannel> {
         ch("1.25m", "VHF", 222.1300, "USB", "1.25 m · SSB/weak-signal", "alt: 222.10–222.15 weak-signal segment, above 222.100 call + FT8 222.065"),
         // --- 70 cm ---
         ch("70cm", "UHF", 432.4500, "USB", "70 cm · SSB/weak-signal", "in 432.40–433.00 mixed-mode; far from SSB call 432.100, sat 435–438, beacons 432.3–432.4"),
-        ch("23cm", "UHF", 1296.2000, "USB", "23 cm · SSB/weak-signal", "in the 1296.2 SSB segment; clear of the 1296.100 call, FT8 1296.174, beacons 1296.300+"),
+        // --- 33 cm --- (ARRL band plan, arrl.org/band-plan: 903.100 is the CW/SSB weak-signal
+        // calling frequency, 903.000–903.100 beacons, 903.100–903.400 CW/SSB weak signal.)
+        ch("33cm", "UHF", 903.2000, "USB", "33 cm · SSB/weak-signal", "in the 903.100–903.400 weak-signal segment; clear of the 903.100 call and the 903.000–903.100 beacons. 902.100 is the other regional calling option — check your area"),
+        // --- 23 cm --- (ARRL band plan, arrl.org/band-plan: 1295.800–1296.080 EME,
+        // 1296.080–1296.200 CW/SSB weak signal with the 1296.100 calling frequency,
+        // 1296.200–1296.400 beacons.) Moved off 1296.200, the beacon segment's bottom edge.
+        // 1296.185 keeps a 3 kHz USB passband ~5 kHz above FT2's (1296.177) and ~12 kHz below
+        // the beacons. The channel is this fixed table, not negotiated on the air, so a build
+        // from before the move still calls on 1296.200 and the two do not hear each other.
+        ch("23cm", "UHF", 1296.1850, "USB", "23 cm · SSB/weak-signal", "in the 1296.080–1296.200 weak-signal segment, below the 1296.200–1296.400 beacons; clear of the 1296.100 call, FT8 1296.174 and FT2 1296.177. Older Nexus builds called on 1296.200"),
         ch("70cm-fm", "UHF", 445.9500, "FM", "70 cm · FM simplex (HT)", "local-option only — 70 cm has no national digital segment; below 446.000 call. Check your coordinator"),
     ]
 }
@@ -207,13 +220,15 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         // 70.154 is inside DL's 70.150–70.210 by 4 kHz and OUTSIDE CT, I and LY
         // altogether — and the US has NO 4 m allocation at any class. The dial is
         // WSJT-X's own R1 default (`models/FrequencyList.cpp`, flagged `preferred`;
-        // it is row 52 of `paritylab/wsjtx_freqs.txt`, the table this plan is
+        // it is row 52 of that default table, the one this plan is
         // generated from, and was simply dropped in transcription — the other three
         // 4 m rows from that file ship in the MSK144/JT65/WSPR plans below). The note
         // is the tooltip an operator reads before keying, so it says so.
         ch("4m", "VHF", 70.154, "USB", "4 m · FT8", "standard FT8 calling frequency (WSJT-X default) — IARU Region 1 only, no US allocation; 4 m band edges vary widely by country, confirm yours before transmitting"),
         ch("2m", "VHF", 144.174, "USB", "2 m · FT8", n),
         ch("70cm", "UHF", 432.065, "USB", "70 cm · FT8", n),
+        // No 33 cm row: neither the ARRL band plan nor the FT8 default frequency list names an
+        // FT8 frequency between 902 and 928 MHz, and this table does not invent one.
         ch("23cm", "UHF", 1296.174, "USB", "23 cm · FT8", n),
     ]
 }
@@ -328,7 +343,7 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
 ///   * JT65 is 14.076 on 20 m, not 14.074.
 ///
 /// The per-mode plans below are GENERATED from WSJT-X's own frequency table —
-/// see `paritylab/parse_wsjtx_freqs.py`, which reads the FrequenciesForRegionModes
+/// by a script that reads the FrequenciesForRegionModes
 /// blob out of a real WSJT-X.ini — rather than typed from memory. Roughly ninety
 /// amateur frequencies is exactly the volume where one transposed digit hides in
 /// a table and looks authoritative.
@@ -423,6 +438,31 @@ pub fn ft2_band_plan() -> Vec<BandChannel> {
         ch("70cm", "UHF", 432.177000, "USB", "70cm · FT2", n),
         // :367
         ch("23cm", "UHF", 1296.177000, "USB", "23cm · FT2", n),
+    ]
+}
+
+/// **JTTY** (WSJT-X's keyboard mode): WSJT-X's own frequency list, taken as it is (operator ruling,
+/// 2026-10-08) — the eleven `Modes::JTTY` rows of `models/FrequencyList.cpp` at WSJT-X
+/// 3.3.0-beta4, one worldwide table with no region split. Interoperating with WSJT-X's stations is
+/// the point of the mode, so no dial here moves for any other reason. Dials are USB (the Keyboard
+/// section's PKTUSB); the signal sits at the audio offset above the dial, about 125 Hz wide.
+///
+/// Where the table meets Nexus's other plans: 40 m is JS8's dial, 30 m FT4's, 17 m FT4's and
+/// JS8's, 12 m the RTTY/PSK31 spot, and on 20 m and 15 m the passband covers Tempo's own channels
+/// (see [`band_plan`]).
+pub fn jtty_band_plan() -> Vec<BandChannel> {
+    vec![
+        ch("160m", "HF", 1.839, "USB", "160 m · JTTY", "WSJT-X's JTTY dial, shared with JT9's (now quiet) and FST4's"),
+        ch("80m", "HF", 3.572, "USB", "80 m · JTTY", "WSJT-X's JTTY dial, on JT9's; 1 kHz below FT8 3.573"),
+        ch("40m", "HF", 7.078, "USB", "40 m · JTTY", "WSJT-X's JTTY dial, on JT9's; the same dial as JS8 7.078"),
+        ch("30m", "HF", 10.140, "USB", "30 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the 10.150 band edge leaves no room above); the same dial as FT4"),
+        ch("20m", "HF", 14.090, "USB", "20 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 20 m channel (14.0905) shares this passband"),
+        ch("17m", "HF", 18.104, "USB", "17 m · JTTY", "WSJT-X's JTTY dial, on JT9's: off FT8 18.100 and clear of the 18.110 beacon; the same dial as FT4 and JS8"),
+        ch("15m", "HF", 21.090, "USB", "15 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 15 m channel (21.0905) shares this passband"),
+        ch("12m", "HF", 24.920, "USB", "12 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the US narrow data segment 24.920–24.925 leaves no room above)"),
+        ch("10m", "HF", 28.090, "USB", "10 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot — Technician-accessible"),
+        ch("6m", "VHF", 50.160, "USB", "6 m · JTTY", "WSJT-X's JTTY dial — Tech-OK"),
+        ch("2m", "VHF", 144.160, "USB", "2 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above MSK144 144.150"),
     ]
 }
 
@@ -666,8 +706,14 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
         "4m" => 70.200,
         "2m" => 144.050,
         "1.25m" => 222.050,
-        "70cm" => 432.050,
-        "23cm" => 1296.050,
+        // 70 cm, 33 cm and 23 cm: the ARRL band plan's CW/SSB calling frequencies
+        // (arrl.org/band-plan), each clear of the band's EME segment — 432.00–432.07 and
+        // 1295.800–1296.080, where the 432.050 and 1296.050 these replaced sat. On 33 cm the
+        // plan lists 902.100 and 903.100 as regional options; 903.100 is the one the band
+        // picker's listening dial already uses.
+        "70cm" => 432.100,
+        "33cm" => 903.100,
+        "23cm" => 1296.100,
         _ => return None,
     })
 }
@@ -750,7 +796,7 @@ mod tests {
                 .map(|c| c.dial_mhz)
         };
         // The four WSJT-X modes with a 70 MHz row in their default table, and only
-        // those four (WSJT-X `models/FrequencyList.cpp`; `paritylab/wsjtx_freqs.txt`).
+        // those four (WSJT-X `models/FrequencyList.cpp`).
         assert_eq!(dial(Tier::Ft8), Some(70.154));
         assert_eq!(dial(Tier::Jt65), Some(70.102));
         assert_eq!(dial(Tier::Msk144), Some(70.230));
@@ -775,11 +821,7 @@ mod tests {
     fn no_us_license_class_may_key_a_4m_channel() {
         use crate::privileges::{phone_home, segment_start, tx_allowed};
         use crate::settings::{LicenseClass, OperatingMode};
-        let us = [
-            LicenseClass::Technician,
-            LicenseClass::General,
-            LicenseClass::Extra,
-        ];
+        let us = crate::privileges::US_CLASSES;
         // Judge the EMISSION, not the dial: USB data sits ~1.5 kHz above the dial.
         let off = 0.0015;
         for class in us {
@@ -851,11 +893,107 @@ mod tests {
         // IC-9700 support: dial→band, the FT8 channel at the verified 1296.174,
         // and a CW dial — a band missing any of these is invisible to QSY/UI.
         assert_eq!(super::band_for_dial(1296.174), Some("23cm"));
-        assert_eq!(super::cw_activity_mhz("23cm"), Some(1296.05));
+        assert_eq!(super::cw_activity_mhz("23cm"), Some(1296.1));
         let has_ft8_23 = super::ft8_band_plan()
             .iter()
             .any(|c| c.band == "23cm" && (c.dial_mhz - 1296.174).abs() < 1e-6);
         assert!(has_ft8_23, "23cm FT8 channel at 1296.174");
+    }
+
+    /// 33 cm (902–928 MHz) and 23 cm (1240–1300 MHz) both ways: every dial inside the US
+    /// allocation names the band and nothing just outside does, and the dials a band pick
+    /// parks on name the band back. The CW and weak-signal dials are the ARRL band plan's
+    /// (arrl.org/band-plan): the CW/SSB calling frequencies 903.100, 1296.100 and 432.100,
+    /// each clear of its band's EME segment (432.00–432.07, 1295.800–1296.080).
+    #[test]
+    fn the_33cm_and_23cm_bands_map_both_ways() {
+        for (lo, hi, band) in [(902.0, 927.999, "33cm"), (1240.0, 1299.999, "23cm")] {
+            assert_eq!(band_for_dial(lo), Some(band), "{lo} MHz");
+            assert_eq!(band_for_dial(hi), Some(band), "{hi} MHz");
+            assert_eq!(band_for_dial(lo - 0.001), None, "just below {band}");
+            assert_eq!(band_for_dial(hi + 0.001), None, "the top edge of {band}");
+        }
+        for (band, cw) in [("70cm", 432.1), ("33cm", 903.1), ("23cm", 1296.1)] {
+            assert_eq!(cw_activity_mhz(band), Some(cw), "{band} CW calling dial");
+            assert_eq!(band_for_dial(cw), Some(band));
+            let weak = band_plan()
+                .into_iter()
+                .find(|c| canonical_band(&c.band) == band && c.mode == "USB")
+                .unwrap_or_else(|| panic!("{band} has a weak-signal channel"));
+            assert_eq!(band_for_dial(weak.dial_mhz), Some(band), "{}", weak.label);
+            assert!(
+                (weak.dial_mhz - cw).abs() > 0.05,
+                "{band}: the Tempo channel sits clear of the calling frequency"
+            );
+        }
+    }
+
+    /// The 23 cm Tempo channel is in the ARRL plan's CW/SSB weak-signal segment,
+    /// 1296.080–1296.200 (arrl.org/band-plan), judged on a whole 3 kHz USB passband: not
+    /// in the 1296.200–1296.400 beacon segment above it, not in the 1295.800–1296.080 EME
+    /// segment below it, and not on the FT2 passband just under it.
+    #[test]
+    fn the_23cm_tempo_channel_sits_below_the_beacons_and_above_eme() {
+        let c = band_plan()
+            .into_iter()
+            .find(|c| c.band == "23cm")
+            .expect("a 23 cm Tempo channel");
+        let (lo, hi) = (c.dial_mhz, c.dial_mhz + 0.003);
+        assert!(hi < 1296.200, "{lo} MHz reaches the beacon segment");
+        assert!(lo > 1296.080, "{lo} MHz is in the EME segment");
+        assert!(
+            (lo - 1296.100).abs() > 0.05,
+            "{lo} MHz is on the calling frequency"
+        );
+        let ft2 = ft2_band_plan()
+            .into_iter()
+            .find(|c| c.band == "23cm")
+            .unwrap()
+            .dial_mhz;
+        assert!(
+            lo > ft2 + 0.003,
+            "{lo} MHz overlaps the FT2 passband at {ft2}"
+        );
+        // Both ways: the dial names the band and the channel, and the old dial no longer
+        // names a Tempo channel.
+        assert_eq!(band_for_dial(c.dial_mhz), Some("23cm"));
+        assert_eq!(channel_for_dial(c.dial_mhz).unwrap().band, "23cm");
+        assert!(channel_for_dial(1296.200).is_none());
+    }
+
+    /// Every Tempo channel's dial and mode, pinned. Only 23 cm moved (1296.200 → 1296.185);
+    /// a change to any other row is a Tempo protocol change and has to be made here on purpose.
+    #[test]
+    fn the_tempo_plan_is_the_golden_table() {
+        let golden: &[(&str, f64, &str)] = &[
+            ("160m", 1.8460, "USB"),
+            ("80m", 3.5935, "USB"),
+            ("40m", 7.0430, "USB"),
+            ("30m", 10.1425, "USB"),
+            ("20m", 14.0905, "USB"),
+            ("17m", 18.0955, "USB"),
+            ("15m", 21.0905, "USB"),
+            ("12m", 24.9115, "USB"),
+            ("10m", 28.1000, "USB"),
+            ("6m", 50.3450, "USB"),
+            ("2m", 144.2350, "USB"),
+            ("2m-fm", 145.5600, "FM"),
+            ("1.25m-fm", 223.5600, "FM"),
+            ("1.25m", 222.1300, "USB"),
+            ("70cm", 432.4500, "USB"),
+            ("33cm", 903.2000, "USB"),
+            ("23cm", 1296.1850, "USB"),
+            ("70cm-fm", 445.9500, "FM"),
+        ];
+        let plan: Vec<(String, f64, String)> = band_plan()
+            .into_iter()
+            .map(|c| (c.band, c.dial_mhz, c.mode))
+            .collect();
+        let want: Vec<(String, f64, String)> = golden
+            .iter()
+            .map(|(b, f, m)| (b.to_string(), *f, m.to_string()))
+            .collect();
+        assert_eq!(plan, want);
     }
 
     use super::*;
@@ -870,7 +1008,7 @@ mod tests {
     /// and `Tier::ALL` is asserted complete against that match below. That is a
     /// real guarantee.
     ///
-    /// `rtty_band_plan`, `sstv_band_plan` and `psk_band_plan` are appended BY
+    /// `rtty_band_plan`, `sstv_band_plan`, `psk_band_plan` and `jtty_band_plan` are appended BY
     /// NAME because no tier reaches them — RTTY, SSTV and the Keyboard Modes
     /// are sections, not tiers. So a plan added for some future section IS
     /// guarded only if somebody adds it here, exactly as the whole list used
@@ -885,6 +1023,7 @@ mod tests {
         plans.push(rtty_band_plan());
         plans.push(sstv_band_plan());
         plans.push(psk_band_plan());
+        plans.push(jtty_band_plan());
         plans.into_iter().flatten().collect()
     }
 
@@ -1006,6 +1145,46 @@ mod tests {
             ["1.25cm", "13cm", "23cm", "33cm", "3cm", "6cm", "70cm", "9cm"],
             "the centimetre channels Nexus ships"
         );
+    }
+
+    /// The JTTY plan IS WSJT-X's frequency list (`models/FrequencyList.cpp`, the `Modes::JTTY`
+    /// rows at 3.3.0-beta4), dial for dial, all USB, every band once, every dial inside its band.
+    #[test]
+    fn the_jtty_plan_is_wsjtxs_frequency_list() {
+        let plan = jtty_band_plan();
+        let rows: Vec<(&str, f64, &str)> = plan
+            .iter()
+            .map(|c| (c.band.as_str(), c.dial_mhz, c.mode.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("160m", 1.839, "USB"),
+                ("80m", 3.572, "USB"),
+                ("40m", 7.078, "USB"),
+                ("30m", 10.140, "USB"),
+                ("20m", 14.090, "USB"),
+                ("17m", 18.104, "USB"),
+                ("15m", 21.090, "USB"),
+                ("12m", 24.920, "USB"),
+                ("10m", 28.090, "USB"),
+                ("6m", 50.160, "USB"),
+                ("2m", 144.160, "USB"),
+            ]
+        );
+        for c in &plan {
+            assert_eq!(
+                band_for_dial(c.dial_mhz),
+                Some(c.band.as_str()),
+                "{}",
+                c.label
+            );
+            assert!(
+                !c.note.is_empty() && c.label.ends_with("· JTTY"),
+                "{}",
+                c.label
+            );
+        }
     }
 
     /// The Keyboard Modes (PSK31) plan against the privilege model — the

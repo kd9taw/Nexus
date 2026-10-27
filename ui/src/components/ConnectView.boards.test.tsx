@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// CONNECT'S SPOTS, POTA/SOTA AND NEEDED BOXES ARE THE BOARDS THEMSELVES (plan piece H8; Needed 2026-10-07).
+// CONNECT'S SPOTS, POTA/SOTA AND NEEDED BOXES ARE THE BOARDS THEMSELVES (Needed 2026-10-07).
 //
 // The REAL ConnectView, the REAL SpotsPanel and the REAL PotaSotaView are mounted; only the backend
 // is stubbed. A stubbed box would prove that a prop reaches it, and nothing about what is on screen:
@@ -34,6 +34,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   getContests: vi.fn(async () => []),
   getOtaSpots: api.getOtaSpots,
   getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),

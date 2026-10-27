@@ -37,7 +37,7 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
   setLogFormGrid: vi.fn(() => Promise.resolve()),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -124,7 +124,7 @@ const qthBox = (): HTMLInputElement => {
   if (!cap) throw new Error('no received QTH box')
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 /** Every line under the strip: the warnings (`alert`) and the club's notes (`status`). */
 const hints = () => [...document.querySelectorAll('.le-fd-verdicts .le-fd-hint')].map((n) => n.textContent)
 

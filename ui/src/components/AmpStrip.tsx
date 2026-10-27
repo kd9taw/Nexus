@@ -3,7 +3,6 @@ import { ampCommand } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { AmpStatus } from '../types'
-import { useStationCapability, useStationControl } from '../stationAccess'
 
 /**
  * The amplifier's own controls, in every cockpit header that has an amplifier behind it.
@@ -36,8 +35,6 @@ export function AmpStrip({
   // A command the queue refused. Shown once, cleared on the next successful click, because a
   // keystroke the operator watched themselves make and that silently vanished reads as broken.
   const [refused, setRefused] = useState(false)
-  const control = useStationControl()
-  const amplifierControl = useStationCapability('amplifier')
   const amp = snapshotAmp
 
   // Almost every station. No amplifier configured → this surface does not exist.
@@ -51,18 +48,16 @@ export function AmpStrip({
   // transmit flag; an SPE idle flag must never override a keyed exciter either.
   // The backend also checks current measurements before issuing a command.
   const keyed = amp.transmitting === true || radioTransmitting
-  const usable = amplifierControl && live && !keyed && control
+  const usable = live && !keyed
   const bandUsable = usable
 
   const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
     if (!usable || (which !== 'operate' && !bandUsable)) return
     try {
-      if (control) {
-        const ok = await ampCommand(which)
-        setRefused(!ok)
-      }
+      const ok = await ampCommand(which)
+      setRefused(!ok)
     } catch {
-      if (control) setRefused(true)
+      setRefused(true)
     }
   }
 
@@ -77,7 +72,7 @@ export function AmpStrip({
       <button
         type="button"
         className={`amp-op${amp.operate ? ' on' : ''}`}
-        disabled={!usable || (!control && amp.operate == null)}
+        disabled={!usable}
         aria-label={amp.operate == null ? t('amp.strip.statusUnknown') : undefined}
         onClick={() => void send('operate')}
         title={
@@ -95,7 +90,7 @@ export function AmpStrip({
         <button
           type="button"
           className="amp-band-step"
-          disabled={!bandUsable || (!control && !amp.bandLabel)}
+          disabled={!bandUsable}
           onClick={() => void send('bandDown')}
           // A bare "◀" names nothing to a screen reader, and this one moves a kilowatt.
           aria-label={t('amp.strip.bandDown.aria')}
@@ -109,7 +104,7 @@ export function AmpStrip({
         <button
           type="button"
           className="amp-band-step"
-          disabled={!bandUsable || (!control && !amp.bandLabel)}
+          disabled={!bandUsable}
           onClick={() => void send('bandUp')}
           aria-label={t('amp.strip.bandUp.aria')}
           title={keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandUp.aria')}

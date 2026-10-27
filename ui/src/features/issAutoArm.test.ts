@@ -223,6 +223,50 @@ describe('tickIssAutoArm and the screen in use', () => {
   })
 })
 
+// A SATELLITE PASS THE OPERATOR IS WORKING HAS THE RADIO TOO. With a transponder held, Doppler steers
+// the dial back to that bird within seconds, so the park on 145.800 was taken straight back, after
+// interrupting the bird. Under a held pass the auto-arm moves nothing on any screen, announces the ISS
+// as it does on another screen, and arms if the hold ends while the ISS is still up.
+describe('tickIssAutoArm under a held satellite pass', () => {
+  const overhead = () => t('sat.iss.overhead', { dial: '145.800', mode: 'FM' })
+  const now = 1_900_000_000
+
+  it('on SSTV or Satellites announces the pass once and touches nothing', () => {
+    // With SSTV already open, the notice says why the radio stayed rather than asking for SSTV.
+    const onSstv = 'ISS overhead: SSTV on 145.800 FM. A satellite pass has the radio, so it was not retuned.'
+    for (const [screen, notice] of [
+      ['sstv', onSstv],
+      ['sats', overhead()],
+    ] as const) {
+      resetIssAutoArm()
+      toasts.mockClear()
+      const d = deps()
+      const p = pass(now - 60)
+      tickIssAutoArm(p, OFF_FREQ, true, d, now, screen, false, true)
+      tickIssAutoArm(p, OFF_FREQ, true, d, now + 30, screen, false, true) // the next 30 s poll
+      tickIssAutoArm(p, OFF_FREQ, true, d, p.losUnix + 60, screen, false, true) // LOS
+      expect({
+        screen,
+        tuned: d.tuneChannel.mock.calls,
+        armed: d.sstvArm.mock.calls,
+        restored: d.setFrequency.mock.calls,
+        disarmed: d.sstvAutoDisarm.mock.calls.length,
+        notices: toasts.mock.calls.map((c) => c[0]),
+      }).toEqual({ screen, tuned: [], armed: [], restored: [], disarmed: 0, notices: [notice] })
+    }
+  })
+
+  it('arms when the hold ends while the ISS is still up', () => {
+    const d = deps()
+    const p = pass(now - 60)
+    tickIssAutoArm(p, OFF_FREQ, true, d, now, 'sats', false, true)
+    expect(d.tuneChannel, 'held: nothing tuned').not.toHaveBeenCalled()
+    tickIssAutoArm(p, OFF_FREQ, true, d, now + 30, 'sats', false, false)
+    expect(d.tuneChannel).toHaveBeenCalledWith(145.8, '2m', 'FM')
+    expect(d.sstvArm).toHaveBeenCalledWith(true)
+  })
+})
+
 // ⭐ NO RADIO HERE CAN RECEIVE 145.800 (operator, 2026-10-13: "say it once per session"). An FT-710
 // alone, HF + 6 m: every pass announced the ISS and that the radio was not retuned, and on SSTV or
 // Satellites the auto-arm tuned a channel the radio refuses. Now one notice a session says the

@@ -348,7 +348,7 @@ def main(argv):
 
     print()
     print('No problems found. Every slot, marker and technical term survived. Thank you — send it '
-          'to kd9taw@protonmail.com whenever you are ready.')
+          'to contact@hamradiotools.io whenever you are ready.')
     return 0
 
 

@@ -8,7 +8,7 @@
 // The split also makes an existing lie visible and has to answer it. A record imported from a
 // source that carried no time of day is stored with `timeKnown: false` and `whenUnix` anchored
 // at midnight FOR ORDERING ONLY — the combined column printed "00:58Z"-shaped text for it and
-// read as fact, which is the same mistake `QsoDetail` already refuses to make. A Time column of
+// read as fact, which is the same mistake the contact card already refuses to make. A Time column of
 // its own cannot print 00:00 for a contact whose time nobody recorded.
 //
 // jsdom lays nothing out: nothing here asserts a column WIDTH or that a cell fits. The track

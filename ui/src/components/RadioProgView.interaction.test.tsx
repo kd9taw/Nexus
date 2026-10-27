@@ -112,6 +112,8 @@ describe('(1) one place says where; the list filter is a filter of the list', ()
     const near = screen.getByRole('group', { name: t('program.origin.aria') })
     expect(within(near).queryByRole('button', { name: /^Grid$|^City$/ })).toBeNull()
     expect(within(near).getAllByRole('textbox')).toHaveLength(1)
+    // The empty box says what it takes, with no sample grid or town in it.
+    expect(placeBox().getAttribute('placeholder')).toBe('Grid or city')
     // CONTROL: with the box empty, the search is around the station.
     fireEvent.click(fetchButton())
     await waitFor(() => expect(repeaterSearch).toHaveBeenCalledTimes(1))

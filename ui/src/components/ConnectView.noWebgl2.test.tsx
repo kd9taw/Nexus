@@ -30,6 +30,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 /** The 3-D globe: drawn, or failing as three.js fails when it cannot make its context. */
 const globe = vi.hoisted(() => ({ fails: false }))

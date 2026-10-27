@@ -45,6 +45,10 @@ use super::transport::{credential, identifier};
 // The largest message either end of the pipe may send: the room's bound.
 use tempo_client::tunnel::PIPE_MESSAGE_BYTES;
 
+/// What a test runs as the list of approved computers changes ([`Approved::on_set`]).
+#[cfg(test)]
+pub(crate) type OnSet = Box<dyn Fn(&[String]) + Send>;
+
 /// Tunnels one station carries at once: the room's bound on a station's pipes.
 pub const MAX_TUNNELS: usize = 4;
 /// How long the station's end of the pipe has to open.
@@ -58,6 +62,10 @@ pub(crate) struct Approved {
     keys: Mutex<BTreeMap<[u8; 32], (String, u64)>>,
     revision: watch::Sender<u64>,
     revisions: AtomicU64,
+    /// For a test: run with the names on it each time it changes, before [`Approved::set`] returns,
+    /// so a test sees what the rest of the station holds at the moment a name joins or leaves it.
+    #[cfg(test)]
+    pub(crate) on_set: Mutex<Option<OnSet>>,
 }
 
 impl Default for Approved {
@@ -66,6 +74,8 @@ impl Default for Approved {
             keys: Mutex::default(),
             revision: watch::channel(0).0,
             revisions: AtomicU64::new(0),
+            #[cfg(test)]
+            on_set: Mutex::default(),
         }
     }
 }
@@ -90,7 +100,13 @@ impl Approved {
             .map(|(name, _)| name.clone())
             .collect();
         *held = keys;
+        #[cfg(test)]
+        let names: Vec<String> = held.values().map(|(name, _)| name.clone()).collect();
         drop(held);
+        #[cfg(test)]
+        if let Some(on_set) = self.on_set.lock().ok().as_deref().and_then(Option::as_ref) {
+            on_set(&names);
+        }
         self.revisions.fetch_add(1, Ordering::SeqCst);
         self.revision.send_modify(|r| *r = r.wrapping_add(1));
         dropped

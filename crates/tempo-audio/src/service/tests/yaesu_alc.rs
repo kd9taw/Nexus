@@ -78,6 +78,14 @@ fn radio_after_an_over(
     raw: u16,
     p3: &'static str,
 ) -> (tempo_app::dto::RadioStatus, Vec<String>) {
+    let (addr, log) = alc_rigctld(raw, p3);
+    let radio = run_an_over(&engine_for(model), &addr);
+    let sent = log.lock().unwrap().clone();
+    (radio, sent)
+}
+
+/// An engine set to Hamlib `model`.
+fn engine_for(model: u32) -> Arc<Mutex<Engine>> {
     let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
     {
         let mut e = engine.lock().unwrap();
@@ -85,10 +93,16 @@ fn radio_after_an_over(
         s.rig_model = model;
         e.apply_settings(s);
     }
-    let (addr, log) = alc_rigctld(raw, p3);
-    let mut rig = Rig::rigctld(&addr);
+    engine
+}
+
+/// Four seconds of an over through the rigctld at `addr`: the radio status the meters are drawn
+/// from.
+fn run_an_over(engine: &Arc<Mutex<Engine>>, addr: &str) -> tempo_app::dto::RadioStatus {
+    let model = engine.lock().unwrap().settings().rig_model;
+    let mut rig = Rig::rigctld(addr);
     let mut backend = MockBackend::new();
-    let mut state = loop_state_for(&engine);
+    let mut state = loop_state_for(engine);
     let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
     let mut station = StationSinks::new();
     let mut t = 0.0;
@@ -96,7 +110,7 @@ fn radio_after_an_over(
         t += 50.0;
         state
             .step(
-                &engine,
+                engine,
                 &mut backend,
                 &mut rig,
                 &sinks,
@@ -111,9 +125,7 @@ fn radio_after_an_over(
         state.rig_keyed,
         "model {model}: control: the radio must be keyed, or no meter is read at all"
     );
-    let radio = engine.lock().unwrap().snapshot().radio;
-    let sent = log.lock().unwrap().clone();
-    (radio, sent)
+    engine.lock().unwrap().snapshot().radio
 }
 
 /// ⭐ THE FT-991A, THE FT-710 AND THE FTDX10 SHOW THE RADIO'S OWN BAR. Raw 64 is a quarter of the radio's bar
@@ -169,6 +181,79 @@ fn an_ft991a_an_ft710_and_an_ftdx10_show_alc_where_the_radios_own_bar_is() {
             }
         }
     }
+}
+
+/// A rigctld from before Hamlib 4.6 in front of an FT-991 whose ALC meter reads `raw`, 0 to 255.
+///
+/// Measured against the real Hamlib 4.5.5 `rigctld -m 1035`, the radio answering `RM4;` with
+/// `RM4100;`: `w RM4;` comes back with NOTHING. Its send_cmd waits for a CR or LF the radio never
+/// sends, gives up after the FT-991's 2 s timeout and prints no reply at all (4.6 added the `;`
+/// terminator for Yaesu and Kenwood; 4.7.1 has it). `l ALC` answers at once, on Hamlib's scale.
+/// Every other line gets `RPRT 0`, as in [`alc_rigctld`].
+fn hamlib_45_rigctld(raw: u16) -> (String, Arc<Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log2 = Arc::clone(&log);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut reader = BufReader::new(match stream.try_clone() {
+                Ok(r) => r,
+                Err(_) => continue,
+            });
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let l = line.trim().to_string();
+                log2.lock().unwrap().push(l.clone());
+                let reply = match l.as_str() {
+                    "f" => "14074000\n".to_string(),
+                    "t" => "1\n".to_string(),
+                    "w RM4;" => continue, // no reply at all
+                    "l ALC" => format!("{:.6}\n", hamlib_alc(raw)),
+                    _ => "RPRT 0\n".to_string(),
+                };
+                if stream.write_all(reply.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    (addr, log)
+}
+
+/// ⭐ AN FT-991 BEHIND ITS OWN OLDER RIGCTLD KEEPS ITS ALC METER (the 1.19.0 regression). Network
+/// connection, `127.0.0.1:4532`, where the operator's own rigctld runs: Nexus shares it, and a
+/// Hamlib before 4.6 never answers the raw `w RM4;`. Three misses parked the meter, ⊘ "not
+/// reported", where 1.18.0's `l ALC` read it. The raw read that never answered on this link gives
+/// way to `l ALC`, on Hamlib's scale and so with no zone of the radio's own. By value: raw 32 is
+/// 0.5 on Hamlib's scale and 0.125 on the radio's.
+#[test]
+fn an_ft991_behind_a_rigctld_that_never_answers_raw_cat_reads_alc_through_hamlib() {
+    let (addr, log) = hamlib_45_rigctld(32);
+    let radio = run_an_over(&engine_for(1035), &addr);
+    let sent = log.lock().unwrap().clone();
+    assert_eq!(
+        (radio.tx_alc, radio.tx_alc_zone),
+        (Some(0.5), None),
+        "the meter shows Hamlib's ALC, with Hamlib's zone — {sent:?}"
+    );
+    let first_l_alc = sent.iter().position(|l| l == "l ALC");
+    let raw_asks = sent.iter().filter(|l| *l == "w RM4;").count();
+    assert_eq!(
+        raw_asks, 3,
+        "the raw read is tried, three strikes as every meter gets — {sent:?}"
+    );
+    assert!(
+        first_l_alc.is_some_and(|at| !sent[at..].iter().any(|l| l == "w RM4;")),
+        "once it has given way, the raw read is not sent again — {sent:?}"
+    );
 }
 
 /// …and every other radio reads its ALC as it did: another Yaesu (the FTDX101D, whose Hamlib
@@ -246,12 +331,12 @@ fn a_tune_ups_alc_read_gives_up_at_the_tune_deadline() {
     let mut rig = Rig::rigctld(&late_rm4_rigctld(std::time::Duration::from_millis(1_000)));
     rig.set_slow_transport(true);
     assert_eq!(
-        read_tx_meter(&mut rig, "ALC", 1035, None),
+        read_tx_meter(&mut rig, "ALC", 1035, true, None),
         Some(64.0 / 255.0),
         "control: with the normal deadline the late answer is read"
     );
     assert_eq!(
-        read_tx_meter(&mut rig, "ALC", 1035, Some(TUNE_METER_DEADLINE_MS)),
+        read_tx_meter(&mut rig, "ALC", 1035, true, Some(TUNE_METER_DEADLINE_MS)),
         None,
         "a tune-up does not wait a second for its ALC"
     );

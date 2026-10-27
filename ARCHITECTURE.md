@@ -18,294 +18,101 @@ libtempo/      CMake-built native cores   — vendored WSJT-X Fortran/C + FT1 mo
 Data flows down as commands, up as Tauri events. The UI holds no domain truth; snapshots are
 rebuilt from Rust state (do not assume a UI field is stale-frozen — it usually is not).
 
-The hosted Remote pilot reuses `App.tsx` through `applicationTransport.ts` beneath
-`api.ts`. `remote/` supplies the authenticated Cloudflare station room; the outbound
-native session in `src-tauri/src/remote_service/` owns closed, versioned reads and
-a separate versioned operation contract. Nexus at the shack owns distinct local
-logging and station-control grants, the shared controller lease, expiring
-context-bound commands, deduplication and durable append receipts. The shack can also
-listen on its own network for a paired computer (`remote_service/lan`): TLS 1.3 with
-both ends' raw keys pinned, on a private IPv4 address only, never on a virtual or VPN
-adapter, beside the relay's road, and is found by name through Windows' own DNS-SD calls,
-looked up at run time (`tempo_stream::lan::dnssd`). The
-two roads share one authority and one lease, bound to the connection that took it. A
-computer pairs with a one-time code made at the shack, proved over both keys and the TLS
-session; the shack's LAN key and its paired computers live in the OS keychain. The computer's
-end (`lan_client`) keeps a key of its own for each station beside the station's pinned key,
-signs its offers and checks the station's answers in Rust, and serves its window's page from a
-loopback origin that Tauri treats as remote, behind a launch secret, `Host` and `Origin`; that
-page's pairing dialog offers the stations found by name, through the same socket. The
-computer's command link, the two roads beside it and what both ends of them read and write are
-a crate of their own (`crates/tempo-client`, no Tauri and no webview), which client mode drives
-and the shack's listener speaks with. Without its `device` feature it builds on no crate of the
-engine: the app's log and what Stop's road carries of the engine's state are `crates/tempo-base`,
-and the Opus codecs, resamplers and headset rings both ends use are `crates/tempo-codec`. Over the
-internet the two roads beside the link each get a socket of their own at both ends, find their
-pair by ICE (`is`, the agent str0m runs; `tempo-client`'s `ice`) and, at the computer, a relayed
-address from a TURN client of the crate's own (`turn`); their credentials and candidates cross
-inside the command link, each road hears only the pair ICE selected, and its checks go only to an
-address of the internet. The station's room carries the command link itself over the internet as a
-pipe (`remote/src/pipe.ts`): a second station socket it passes binary on unread, asked for only of a
-station that advertised it, so the station's main socket keeps its message shapes. At the station
-(`src-tauri/src/remote_service/tunnel.rs`) the LAN road's own channel runs inside it from its TLS
-on, the station proving its hosted key and taking only a computer approved at the shack by the key
-pinned then (as a computer, under that same approval, until it ends), named from that key and never
-by the service's id, with internet roads in place of the LAN's and nothing that pairs or streams. Receiver
-gestures call native Engine verbs; amplifier commands reach the existing port
-owner with revocable permission and later readback receipts. Frequency and mode intents
-run through the active RadioLoop before normal settings reconciliation: fresh
-CAT readback precedes the native QSY and atomic settings save under the Engine
-mutex. Explicit section entry shares native memories and power policy, remains
-disarmed, and confirms any power reduction within the same CAT transaction.
-Decoder selection shares native tier/channel policy and the stable decoder
-mutex; a busy decode refuses the remote transition without blocking the Engine.
-Same-tier selection remains a complete no-op. Operation v3 adds the radio
-capabilities while preserving v1 logging and v2 receiver/amplifier clients.
-The explicit `workspace` capability enters FT, Tempo or JS8 through the same
-native area, mode, channel-memory and session helpers. Preparation is passive;
-the existing radio owner commits after CAT/power readback. Decoder installation
-and HARQ reset use the same held serialization guard, avoiding a nested lock
-while preserving the native transition effects. Newer valid local operating
-specs retire older remote work even when the dial and CAT mode are unchanged.
-The separate `decoderSettings` capability connects the existing JS8 speed chips
-and MSK144 period selector. Exact prior values and idle native context guard an
-atomic one-field Settings save before the shared native runtime setter. JS8
-installation uses the same stable source lock without blocking Engine; MSK144
-keeps its narrow period semantics. A failed save publishes no runtime change,
-and a receipt never substitutes for the later station sample.
-The separate `receiverSettings` capability connects decode depth and RX-only
-audio offsets through the same atomic persistence path. It binds the displayed
-tier and prior value, then uses the native narrow setters without replacing the
-decoder or changing TX offsets, timing, queues or permission. FT/JS8/Tempo keep
-their existing waterfall gestures, and FT's RX field discards a draft if the
-local value changes or authority is lost. TX and combined-marker gestures
-use the separate ftSettings capability below; receive permission cannot enable them.
-Native amplifier buttons and saved follow-band also validate the exact completed
-serial poll after I/O. Current settings, observed physical PTT and read expiry
-bound each write; local gestures take precedence over automatic steps. These
-checks never use an amplifier as a transmitter stop or alter FT sequencing.
+## Nexus Remote
 
-Amplifier follow-band is a dedicated operation-v3 capability. The actual Settings
-checkbox retains its checkbox-then-Save interaction; the request carries only
-the desired boolean, displayed radio, prior choice and bounded public Settings
-revision. The native host checks authority and fresh idle hardware before enabling,
-then atomically saves the narrow change under the existing Engine owner. Disabling
-needs no hardware reading. A saved-setting receipt does not claim hardware readback
-or RF state, and lease loss never resets a saved preference. Settings captures
-invalidate on their own projected revision without invalidating unrelated planning
-documents. The amplifier strip uses the existing aged observation stream and its
-connection identity, rather than borrowing authority for an older displayed radio.
-Unconfirmed targets never become deferred local retunes. Login, entitlement and
-browser approval remain separate checks.
+The shack PC keeps the radio and stays the authority. Everything a remote operator sees is the
+station's own Nexus, and everything they do reaches it as input to that Nexus or as one of a
+handful of lease and Stop requests; the station decides what is legal and what transmits. The
+hosted half (`remote/`: a Cloudflare Worker, one Durable Object room per station, D1 for accounts,
+stations, devices and entitlement) carries pictures, sound, signalling and ciphertext and nothing
+else. The trust model, routes and limits are in [remote/README.md](remote/README.md).
 
-The `radioLevels` operation-v3 capability connects existing RF power, mic gain,
-noise-reduction depth, compressor depth and notch-frequency controls. The active
-radio owner compares the displayed prior value and physical position, checks idle
-PTT/split state, then performs one permitted CAT write and reads the actual level.
-Native limits and per-mode power ceilings still apply. A local setter retires old
-remote work, including an away-and-back change. Only confirmed readback enters
-native desired/observed state and the owner's caches; uncertain writes never become
-retries. Browser drags and held adjustment keys retain a context-bound draft and submit
-the released target once. Lost authority, changed readings/context or canceled
-input discard that draft permanently. Inputs return to station samples after
-release; a receipt does not fabricate readback. This capability grants neither
-audio-drive control nor permission to transmit.
+**Three ways in, one authority.**
 
-The `subReceiverLevels` capability (operation v3, a hint added after v3 froze)
-connects the Sub row of a dual-receiver radio — RF gain, AF gain and squelch —
-through one `radio.subLevel` intent. The station hands it to the same engine verb
-the desktop row calls, so it meets the same refusals: no Sub offered, a stage the
-capability table does not credit to the Sub, or a CAT path that cannot name the
-Sub. Before that it takes the receive-display admission of the rig-scope
-settings: permission, a native source, a fresh unkeyed CAT link to the displayed
-radio and no owned transmitter. The radio loop applies the level at receive time
-and withholds it while keyed. The receipt is `stationState`: nothing reads the Sub
-back, so the page shows what the radio accepted in the next snapshot. As with the
-Main levels, a browser drag or held adjustment key keeps a draft and submits the
-released value once; a pointer cancel, blur, lost permission or radio change
-discards it for good. A station older than the `receivers` field draws no Sub row
-on the page; one older than the action never advertises the capability, so the
-row's sliders stay disabled. This capability grants no Main level and no
-permission to transmit.
+- **The hosted page is a stream.** `ui/src/remote-web` builds a page whose operating surface is
+  `StreamView.tsx`: the station's own window over WebRTC (VP8 picture, data channels for input,
+  PTT and the operation requests, Opus audio both ways), plus Listen (receive audio on the room's
+  audio lane) and Stop TX. The station's side is `src-tauri/src/remote_service/stream.rs` over
+  `crates/tempo-stream` (`session`, `offer`, `video`, `stun`, `keep_awake`). The old command page,
+  which drove the station through its own forms, and its separate FT8/FT4 transmit and logging
+  permissions are gone: `remote_service/operations.rs` answers anything that page sent
+  `stationUnsupported`, and nothing runs.
+- **Nexus on another computer, the full client.** Client mode (`src-tauri/src/client_mode.rs`)
+  restarts Nexus with no station of its own and sends every command its screens make to the shack,
+  routed and admitted at both ends by one class table (`crates/tempo-client/src/classes.rs`,
+  enforced by `src-tauri/src/command_dispatch.rs`; `command_classes.rs` fails a registered command
+  with no row). The command link (`tempo-client`'s `link`, `wire`, `tls`) is TLS 1.3 with both raw
+  keys pinned. On the shack's own
+  network it is a direct connection to `remote_service/lan.rs`, which listens only on one private
+  IPv4 address, never a VPN or virtual adapter, and is found by name through Windows' DNS-SD
+  (`tempo_stream::lan`). Over the internet the same TLS channel runs inside a pipe through the
+  station's room (`remote/src/pipe.ts`, `remote_service/tunnel.rs`), which the room passes on
+  unread; the station proves its pairing key and admits only a computer approved at the shack.
+  Beside the link run Stop's road and the audio road, each a UDP socket keyed from the link's TLS
+  session, found by ICE with a TURN fallback on the internet (`tempo-client`'s `stop_road`,
+  `audio_road`, `ice`, `turn`). `still_there.rs` ends an idle internet link after fifteen minutes
+  without operator input and a minute more without an answer. `tempo-client` has no Tauri, webview
+  or engine in it: without its `device` feature it builds on no engine crate (the log and what
+  Stop's road carries of the engine's state are `crates/tempo-base`; the Opus codecs, resamplers
+  and headset rings both ends use are `crates/tempo-codec`).
+- **A stream window on the shack's network.** A paired computer's Stations on this network window
+  (`ui/src/lan`, served by `src-tauri/src/lan_client.rs` from a loopback origin with no Nexus
+  command) shows the same stream over the LAN listener.
 
-Radio selection has a passive native Settings projection sharing the local
-handoff's outgoing-profile banking, daemon-port separation and monitored-or-saved
-tune resolution. The projection grants no hardware access and cannot be applied
-wholesale; actual selection still owns context retirement and hardware completion.
-The native selector also accepts an already-held FT8 reset guard, acquired without
-waiting on the same process-wide modem mutex. Local selection keeps its blocking
-reset at the same lifecycle point. An incoming-radio CAT transaction can combine
-retuning, requested levels, AGC and FM shift/offset/tone under the original permit,
-then re-read the complete result. Unset controls remain unset. Internal selection
-admission binds the original station and projected incoming profile. Temporary
-connection acquisition keeps its radio claim through adoption or returns the
-connection read-only on cancellation. The Engine commit checks fresh incoming
-position and original authority, uses the native guarded selector, installs the
-prepared connection before saving, and consumes its retune. Failed persistence
-retains the actual selection with an unknown receipt. Read-only position probes
-and permission-bearing idle PTT release support the owner transaction; serial
-port opens recheck permission at each baud attempt and always perform idle cleanup.
-The active radio worker consumes selection before local handoff. It claims the
-incoming connection, releases idle PTT through the configured backend, performs
-native keyer cleanup and verifies the complete incoming configuration under the
-original permission. Installation transfers the connection and desired-value
-caches before persistence, clears outgoing observations, and retires old receive
-audio. The next native tick rebuilds capture and retains its ordinary unkey
-cleanup without replaying the completed tuning transaction. Preparation samples
-are not relabeled as live incoming readings: the next read binds the new
-connection before I/O. Pending local hardware commands keep their original owner.
-After adoption, a bounded host notification reconciles the current rotator
-profile outside the radio loop. Host synchronization acquires its daemon owner
-before reading current Engine settings, then releases Engine before device I/O;
-local Settings saves and selection use the same ordering. The operation-v3
-`radioSelection` capability connects the existing radio pills and Settings Make
-active action to this owner transaction. Browser completion requires a later
-snapshot and Settings projection naming the selected radio. This capability
-neither grants peg-lock nor arms TX. It currently requires an idle native station;
-shared-port/keyer, physical capture, slow CAT and WAN behavior still need acceptance.
-Monitor connection opens now take a per-radio ownership token before releasing
-the pool lock for I/O. Reconciliation and local handoff respect that token, so
-an in-flight open finishes before another caller can open or adopt that radio.
-Other radios remain available. Failed-open entries retain their retry deadline
-and failure count, increasing the wait to one minute; configuration changes retry
-immediately and successful opens clear the backoff. These tokens cover temporary
-pool/open ownership, not the complete Remote selection transaction.
-No arbitrary Tauri bridge exists.
-See [the Remote contract and limits](remote/README.md#bounds).
+**Sign-in, pairing and keys.** A station is paired by a code made and approved at the shack, and
+can be bound to its owner's account by a sign-in at the shack (`remote_service/account.rs`); the
+station checks the issuer's proof itself, with the issuer's keys cached for when the internet is
+down. A device listed by the service on the strength of a sign-in is still granted nothing until it
+is approved at the shack (`GRANTS_ON_SIGN_IN` is off). Each pairing has a station signing key
+(P-256, kept in the OS credential store, `remote_service/station_key.rs`) whose public half is
+pinned at the service: the station signs every stream answer with it, and a page checks each
+answer against the key the service lists, refuses one without a good signature, keeps the first key
+it saw for the station (refusing the stream while the service lists another) and shows that key's
+fingerprint for comparison with the shack's. In the other direction, the browser's own device key,
+pinned when it was approved, signs its stream offer, and its DTLS certificate must match; the
+relay's operation and audio lanes carry a per-message proof from the same key
+(`remote_service/lanes.rs`), except `state` and `stopTransmit`.
 
-Remote Phone and CW contact forms mount on first visit and retain their component
-identity across workspace navigation. Hidden hosts pause scopes, meters, CW display
-polls and collection reads, and cannot acquire gesture authority from the shared
-session. Returning resumes display interest without logging, retuning or replacing
-the controller lease. Drafts stay in the existing forms; this does not add durable
-draft storage. Native cockpit mounting and transmitter cleanup remain unchanged.
+**Grants, the lease and presence** (`remote_service/operations.rs`). Only a control grant given at
+the shack (or restored after a restart for a device still approved) lets a device take the one
+controller lease. The lease is five seconds, renewed by heartbeats, bound to the connection that
+took it, and shared by every road; a computer driving the station (on the LAN or through the room)
+can take control from the one holding it, whose over ends as a Stop ends it. No grant and no lease
+arms TX. While a streamed or client session is attached, the engine holds a transmit presence
+permit for it (`crates/tempo-app/src/engine/remote_stream.rs`), minted from the lease and renewed
+only by a heartbeat that names a fresh picture (for the full client, a heartbeat on Stop's road
+naming a snapshot pushed under two seconds before). When it lapses, the next radio-loop poll runs
+`halt_tx`, which ends every transmission at the station, however it started. Presence only ever
+stops. A PTT held from afar is honoured only while presence is live, in Phone, and only with the
+operator's microphone audio arriving (`engine/remote_mic.rs`); a 200 ms gap in either ends the
+over.
 
-Full Nexus remains the hosted default. Optional Quick Operate is browser-local
-presentation state above that same App, with Operate, Hunt and Log destinations
-and a return to the full interface. Phone/CW prioritize the existing contact form,
-keep amplifier readbacks and stop controls outside optional radio detail, and
-pause folded scopes. Presentation changes neither pane preferences nor authority,
-and cannot resubmit an unconfirmed QSO. Other modes retain their existing layouts;
-Quick is not yet complete mobile or operating parity.
+**Stop.** Any device holding station control may stop, and an admitted Stop stops everything
+transmitting at the station, however it started; it is never refused for its age. Stop's admission
+does not wait on the Engine, a file write, D1 or an ordinary command
+(`crates/tempo-app/src/remote_control.rs`, `remote_service/operations/transmit_stop.rs`). Each
+road has its own way to it: the room's operation lane (no proof needed), the stream's data channel,
+and for the full client both the command link and Stop's road, either of which alone stops the
+station.
 
-A native Remote FT authority foundation uses a distinct transmit permit type,
-separate from receiver/CAT write permission. It can enter CQ through the existing
-FT8/FT4 native verb and binds renewal to the original unexpired authority. The
-radio loop and both FT plan/commit boundaries check expiry; native halt supplies
-the existing abort and unkey path. Explicit native rearming takes ownership, so
-a previous Remote session cannot stop a later local transmission. The native local-service API now
-holds a separate, boot-scoped transmit grant that also requires station-control
-permission. Only a valid controller heartbeat can renew an existing permit;
-release, disconnect, connection replacement and local revocation retire it.
-Grant admission shares the local Disable lock, preventing a stale status snapshot
-from installing a grant after local shutdown. FT boundary and immediate keying
-recheck authority before and after blocking PTT I/O, and deny audio on loss.
-Operation v4 adds a dedicated Stop request scoped to the station boot and controller
-lease. It carries the transmit generation its browser was shown, never refused for
-its age (operator ruling, 2026-10-03): a Stop pressed before the last halt still
-stops, and retires the current generation. Browser receipt storage and pending commands do
-not block Stop. The relay retains one extra bounded Stop route across hibernation;
-native transport admits it without waiting for the Engine or a file operation.
-The acknowledgement confirms permission revocation, not RF cessation. A separate
-FT extension advertisement preserves v2/v3 negotiation for older peers. Native
-Call, TX On/Off and Stop wrappers reuse the existing FT verbs. The FT8/FT4 CQ
-and enable latch now use a dedicated `ftOperate` capability and the existing
-cockpit buttons. Arming includes the displayed transmit generation, current tier
-and radio connection; revocation invalidates even a previously captured command
-whose ordinary window remains valid. The separate local transmit permission is
-managed in the existing Remote settings section, remains boot-scoped and can be
-revoked during a pending refresh. Older refresh results cannot restore its display.
-Stop remains independent of stale observations and command/storage locks. The
-stale-workspace visibility rule preserves an enabled Stop while hiding readings;
-a compiled-browser click checks its actual hit target. The `ftCall` capability
-connects existing decode, roster and station-card work gestures. Selected decode
-arguments are checked against native history; roster arguments against current
-station data. Desktop identity checks precede the same native call verb, retaining
-message choice, parity, offsets and the operator's manual-arming preference.
-Plain decode selection fills browser fields without RF authority; modified RX
-gestures require receiver permission. Older displayed history, remaining QSO options and hardware/WAN acceptance
-remain pending. Typed message targets use the ftMessages capability below.
-The browser budgets ordinary requests against the relay limit, retaining each
-slot until one rate window after its reply. Automatic reads leave capacity for
-an operator action; pending results can use that capacity because new actions
-are already blocked. Controls reflect admission capacity, and unsent commands
-write no receipt. Polling cannot overtake a control waiting for browser storage.
-Stop keeps its independent route and budget; no command is retried or moved to a
-newer authority window.
-Successful commands invalidate the browser's command context while retaining
-the existing lease solely for heartbeat renewal and release. The next refresh
-renews that lease rather than allowing continuous operating gestures to starve
-heartbeats. New actions still require a fresh state response; renewal cannot
-acquire a lease or restore permission revoked at the station.
-The separate `ftExchange` capability connects existing S&P, Resend and in-QSO
-free-text controls. Each gesture captures its rendered partner, exchange state,
-queued text and CQ-run flag before any asynchronous read, along with the original
-control window. The Engine compares that exchange before calling its existing
-verb; it preserves the TX latch, settings and slot behavior. S&P takes the stable
-decoder lock without waiting and uses the shared native reset callback. Remote
-free-text drafts clear only after confirmation and retain edits made while a
-request is pending. Tx-message selection, offset/period settings and QSO logging use the
-separate capabilities described below.
-The `ftMessages` capability connects the existing Tx1–Tx5 choices to a checked
-form of the same native message override, including deliberate typed targets,
-manual-arming preference, parity and immediate-slot policy. Tx6 uses `ftOperate`
-and the existing directed-CQ parser. Draft edits and Generate/Clear are browser
-presentation; each button or Alt+number gesture separately checks its capability
-and captures the displayed exchange. A changed native exchange refuses that
-gesture. Remote next-message indicators follow station snapshots, not an
-optimistic local selection. Native calls keep their original argument shape.
+**Audio.** `crates/tempo-codec/src/receive_audio.rs` holds bounded, device-rate copies of the
+station's receive audio, published by the RX DSP thread (`crates/tempo-audio/src/rxdsp.rs`)
+without draining its capture ring, and copies nothing while no one reads it. One Opus encoder
+(`receive_encode.rs`, fanned out by `remote_service/audio.rs`) exists only while someone listens
+and feeds every listener: Listen on the relay's audio lane, a stream's audio channel, the client's
+audio road. Each listener has its own bounded backlog and
+loses its own oldest frames when it falls behind. Listen and a stream's audio need the control
+grant and a live lease.
 
-The `qsoLogging` capability uses the existing Log QSO and confirmation dialog
-with local logging permission, independently of transmit permission. Remote
-snapshots carry opaque current/pending contact identities captured under the
-same Engine lock as their records. The host binds each gesture to that identity
-and reuses native eligibility, contact construction and connector queues. A
-pending contact remains recoverable until its append is synchronized; completion
-cannot clear a newer hold, even one with identical fields. Only the four existing
-dialog fields are editable remotely. Storage synchronization releases Engine,
-and Stop keeps its independent route and a control inside the pending dialog.
-These operations use the existing lease, result recovery and no-replay contract.
+**Entitlement and billing.** Access is the account's entitlement as the Worker reads it from D1: a
+trial that starts when a station is approved at the radio, a grant made by hand, or a subscription.
+Subscriptions go through a separate, private billing Worker that holds the payment keys. Its
+binding is written into a deploy only when that environment's `billing.deployed` is true in
+`remote/scripts/staging-common.mjs`, and both environments ship with it false, so billing is off
+by default and the `billing/checkout` and `billing/portal` routes answer `billingNotAvailable`.
 
-
-The separate `ftRuntime` capability connects RX offset entry, plain waterfall
-selection and Skip Tx1 for FT8/FT4, including during an owned Remote FT session.
-It captures the displayed settings and session flag, validates the current
-transmit permission and native ownership, and calls the existing native setters.
-RX saves only its own preference before changing runtime state; TX frequency is
-unchanged even when Hold is off. Skip Tx1 remains session-only and follows station
-snapshots in the browser. Local changes retire captured gestures, including changes
-away and back. Neither action acquires or renews transmit ownership. The existing
-receiver-only path remains available when transmit permission is absent.
-
-The separate `ftSettings` capability connects the existing TX offset field,
-Shift/right-click TX marker, Ctrl/Command combined markers, Hold and Auto/1st/2nd
-period controls for FT8/FT4. It requires the local transmit grant but cannot arm
-or renew TX. The gesture captures its displayed tier, values and opaque native
-context before asynchronous work. Local changes away and back retire it. Narrow
-Settings projections use the native atomic save, then the existing setters;
-a failed save changes no runtime choice. Auto-period selection remains runtime-only,
-as in the desktop command. Hold belongs to decoded-station selection; a plain
-waterfall click remains RX-only. Combined marker changes save together before
-applying both native setters. Receipts distinguish saved preferences from runtime
-state, and the browser waits for a later station snapshot. These controls preserve
-native parity, offsets and slot behavior; they do not complete the remaining FT
-options, other-mode operation, media or hardware/WAN acceptance.
-
-
-The receive-audio foundation is local to `tempo-audio`: the sole `RxDsp` capture
-consumer offers bounded device-rate mono copies through `receive_audio.rs`, before
-display resampling. It never consumes the decoder ring or gives media a CAT/TX
-handle. Inactive readers copy nothing; congestion drops media, and capture-source
-replacement ends subscriptions. Its age limit measures DSP publication, not physical
-capture time. This seam does not authorize a browser or provide playback, signaling,
-codecs or a relay. A future media adapter must bind the actual input and radio to a
-local grant, including the service's possible System default recovery fallback.
-Capture descriptions now retain the radio and requested input from the open
-request alongside the resolved backend label and explicit System default flag.
-They travel atomically with the source epoch, stay local and grant no access.
-Capture teardown retires media before releasing the old device; an unsuccessful
-reopen keeps local retry behavior and cannot resume the old media reader. An OS
-endpoint label does not prove the physical source behind virtual/default routing.
+No arbitrary Tauri bridge exists: a page reaches the station only through the requests above, and
+the station's native routes refuse any request carrying an `Origin` header.
 
 ## Crates (roles, not an exhaustive list)
 

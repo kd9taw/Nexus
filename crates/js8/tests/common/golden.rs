@@ -1,4 +1,4 @@
-//! Readers for the two sanitised JS8Call log fixtures (Task B4.1).
+//! Readers for the two sanitised JS8Call log fixtures.
 //!
 //! `js8call_frames.txt` — one ALL.TXT decode line per row: `<letter> <snr> <dt> <freq_hz>
 //! <sixbit12> <i3> <rendered text>`; the rendered text is EVERYTHING after the sixth space,
@@ -40,7 +40,7 @@ impl GoldenFrame {
 pub fn read_frames() -> Vec<GoldenFrame> {
     super::verify_fixture_pins();
     let raw = std::fs::read_to_string(super::fixture_dir().join("js8call_frames.txt"))
-        .expect("crates/js8/tests/fixtures/js8call_frames.txt (Task B4.1)");
+        .expect("crates/js8/tests/fixtures/js8call_frames.txt");
     let mut out = Vec::new();
     let mut clock_ms: u64 = 0;
     for (n, line) in raw.lines().enumerate() {
@@ -103,7 +103,7 @@ pub struct GoldenDirected {
 pub fn read_directed() -> Vec<GoldenDirected> {
     super::verify_fixture_pins();
     let raw = std::fs::read_to_string(super::fixture_dir().join("js8call_directed.txt"))
-        .expect("crates/js8/tests/fixtures/js8call_directed.txt (Task B4.1)");
+        .expect("crates/js8/tests/fixtures/js8call_directed.txt");
     raw.lines()
         .filter(|l| !l.is_empty())
         .enumerate()

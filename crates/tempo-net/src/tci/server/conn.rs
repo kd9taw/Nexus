@@ -1,5 +1,5 @@
 //! One program's connection, after its handshake: two threads, an outbox between them, and every
-//! bound design §4.4 puts on a program.
+//! bound the server puts on a program.
 //!
 //! # Threads
 //!
@@ -7,15 +7,16 @@
 //! timeout, so it also notices a close asked for elsewhere, a silent peer and a flood. It runs each
 //! command ([`super::dispatch`]) and hands a transmit frame on, never blocking on the program. The
 //! **writer** owns a second handle on the socket and is the only thread that writes to it: the
-//! outbox's frames, the pings, the sensors. Nothing else waits on a program: the app's publisher,
-//! its audio pump and the other programs' readers only push to the outbox, which is bounded.
+//! outbox's frames, the pings, the sensors. Each of its writes has [`WRITE_STALL`] in all, or the
+//! program is taken for gone. Nothing else waits on a program: the app's publisher, its audio pump
+//! and the other programs' readers only push to the outbox, which is bounded.
 //!
 //! tungstenite answers a ping or a close itself, from inside the reader's `read`. Its writes go to
 //! [`Wire`], which hands each one to the outbox whole (one write is whole frames: tungstenite
 //! formats a frame, then writes its buffer in one call), so the writer stays the socket's only
 //! writer and a pong never lands inside another frame.
 //!
-//! # The outbox (design §4.4)
+//! # The outbox
 //!
 //! Control frames first, then TX_CHRONO, then text, then receive audio. At most
 //! [`Limits::outbox`] bytes a program: receive audio goes first when it is full. A text backlog
@@ -33,7 +34,7 @@
 //! row that hold nothing the codec could even split ([`Limits::garbage`]) close it too.
 //!
 //! Transmit audio is taken only from the program holding an admitted `tci` key; every other
-//! binary frame is dropped and counted, never queued for a later key (design §3.1 item 8). A frame
+//! binary frame is dropped and counted, never queued for a later key. A frame
 //! must claim at least one whole frame, carry all it claims in whole samples, and carry no more
 //! than twice it (WSJT-X sends twice and fills the first half): otherwise its claim and its payload
 //! disagree, and it is refused as bad. The backend is handed the claimed values alone, and they are
@@ -48,9 +49,9 @@
 //! The end ([`Conn::end_transmit`], from the program's own reader, the operator's Disconnect or
 //! the server's stop) takes the same gate to mark it begun and tell the backend. So a call in
 //! flight finishes first and its end ends what it admitted, and nothing the program sends can
-//! transmit after its end began. Its spots pass the same gate, so none is kept for a program whose
-//! end began: the end takes away what it had. The reader also stops running a message the moment
-//! its program's end or close has begun.
+//! transmit after its end began. Its spots and its mode asks pass the same gate, so none is kept for
+//! a program whose end began: the end takes away what it had. The reader also stops running a
+//! message the moment its program's end or close has begun.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -76,8 +77,10 @@ use super::{Limits, Shared};
 /// silent program and a flood.
 const READ_WAKE: Duration = Duration::from_millis(100);
 
-/// How long a write may stall before the program is taken for gone.
-const WRITE_STALL: Duration = Duration::from_secs(5);
+/// How long one write to a program may take, all of it, before the program is taken for gone: one
+/// that takes it a few bytes at a time is cut off here, not at a timeout on each write of the
+/// socket ([`Stall`]).
+pub(super) const WRITE_STALL: Duration = Duration::from_secs(5);
 
 /// How long a closing connection is read (and discarded) for the program's own close, and how much
 /// of it.
@@ -306,7 +309,7 @@ impl Read for Wire {
         let Some(deadline) = self.deadline else {
             return self.tcp.read(buf);
         };
-        // The whole handshake inside the deadline, however the bytes trickle in (design §4.4).
+        // The whole handshake inside the deadline, however the bytes trickle in.
         let timed_out = || io::Error::new(io::ErrorKind::TimedOut, "handshake deadline");
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -654,7 +657,7 @@ impl Bucket {
     }
 }
 
-/// The command rate (design §4.4): a bucket, the run of seconds over it, and the stops that get
+/// The command rate: a bucket, the run of seconds over it, and the stops that get
 /// through anyway.
 #[derive(Debug)]
 pub(super) struct Limiter {
@@ -1041,9 +1044,42 @@ impl Timers {
     }
 }
 
-fn write_loop(conn: &Conn, mut tcp: TcpStream, shared: &Shared) {
+/// The writer's socket for one of its writes (the frames it gathered, the close frame, a ping and
+/// the sensor lines): each write of the socket gets only the time left before `deadline`, and none
+/// starts once that has run out. A timeout on each alone would bound one write of the socket and no
+/// more, so a program taking a few bytes inside each could hold one of the writer's writes as long
+/// as it kept reading, and the farewell that ends its transmissions would wait as long.
+struct Stall<'a> {
+    tcp: &'a TcpStream,
+    deadline: Instant,
+}
+
+impl Write for Stall<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "write stall"));
+        }
+        self.tcp.set_write_timeout(Some(left))?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
+/// Write all of `bytes` within [`WRITE_STALL`], or fail.
+fn write_whole(tcp: &TcpStream, bytes: &[u8]) -> io::Result<()> {
+    Stall {
+        tcp,
+        deadline: Instant::now() + WRITE_STALL,
+    }
+    .write_all(bytes)
+}
+
+fn write_loop(conn: &Conn, tcp: TcpStream, shared: &Shared) {
     let limits = shared.limits;
-    let _ = tcp.set_write_timeout(Some(WRITE_STALL));
     let ping_every = |conn: &Conn| {
         if conn.holds_key() {
             limits.keyed_ping
@@ -1077,16 +1113,16 @@ fn write_loop(conn: &Conn, mut tcp: TcpStream, shared: &Shared) {
                 // The close frame, then our half of the connection. The read half is the
                 // reader's: it reads on until the program closes too (`drain`), so the program
                 // reads the close frame rather than a reset.
-                let _ = tcp.write_all(&bytes);
+                let _ = write_whole(&tcp, &bytes);
                 let _ = tcp.shutdown(Shutdown::Write);
                 continue;
             }
             Job::Finish => break,
             Job::Timer => timer_bytes(conn, shared, &mut timers, keyed),
         };
-        if !bytes.is_empty() && tcp.write_all(&bytes).is_err() {
-            // The program is gone, or stopped reading for WRITE_STALL: the reader is woken at
-            // once, and the program's transmissions end with it (`farewell`).
+        if !bytes.is_empty() && write_whole(&tcp, &bytes).is_err() {
+            // The program is gone, or did not take this write in WRITE_STALL: the reader is woken
+            // at once, and the program's transmissions end with it (`farewell`).
             conn.close(Closing::new(Closed::Lost));
             let _ = tcp.shutdown(Shutdown::Both);
             return;

@@ -303,6 +303,7 @@ The panes you can assign:
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
 | Needed | the [Needed](needed-dx.md) board's list of the stations you still need that are on the air now, with its filters; a click works the station exactly as it does there |
 | Operators | while a contest runs, who is at the key and each operator's contacts, points and last-hour rate ([Statistics per operator](contesting-pota.md#statistics-per-operator)); with none, it says so |
+| Activation | while you activate a park or summit, each park's count today, park to park, the time on the park and to 0000Z, the rate and the activation's contacts ([The Activation pane](contesting-pota.md#the-activation-pane)); with none, it says so |
 
 The **Spots**, **Needed** and **POTA / SOTA** boxes are those screens' own lists, so a click on a
 spot, a need or **HUNT** does what it does there, and nothing transmits. In Conditions' own window

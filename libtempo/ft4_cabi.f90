@@ -52,6 +52,24 @@ module ft4_cabi
   type(ft4_result_rec), save :: g4_results(F4_MAXDEC)
   integer,              save :: g4_count = 0
 
+  ! The caller's callback for ft4_decode_frame_cb (tempo_decode_cb in libtempo.h): `rec` points at
+  ! a decode the pass has just accepted. Its answer is ignored (FT4 has no give-up).
+  abstract interface
+     function ft4_decode_cb(user, rec) bind(C) result(istop)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: user
+       type(c_ptr), value :: rec
+       integer(c_int)     :: istop
+     end function ft4_decode_cb
+  end interface
+
+  ! The vendored decoder hands each decode to its callback with itself as `this`, so the caller's
+  ! callback rides on the decoder object, one per ft4_decode_frame_cb call: no module state.
+  type, extends(ft4_decoder) :: ft4_stream_decoder
+     type(c_funptr) :: cb
+     type(c_ptr)    :: user
+  end type ft4_stream_decoder
+
 contains
 
   !-------------------------------------------------------------------------
@@ -125,6 +143,10 @@ contains
     integer,           intent(in) :: nap
     real,              intent(in) :: qual
 
+    procedure(ft4_decode_cb), pointer :: fcb
+    type(ft4_decode_t), target :: rec
+    integer(c_int) :: istop
+
     if (g4_count >= F4_MAXDEC) return
     g4_count = g4_count + 1
     g4_results(g4_count)%sync    = sync
@@ -134,7 +156,39 @@ contains
     g4_results(g4_count)%message = decoded
     g4_results(g4_count)%nap     = nap
     g4_results(g4_count)%qual    = qual
+    ! The decode, the moment the decoder found it (ft4_decode.f90:456), to the caller's callback.
+    select type (this)
+    type is (ft4_stream_decoder)
+       if (c_associated(this%cb)) then
+          call c_f_procpointer(this%cb, fcb)
+          call ft4_fill_rec(g4_results(g4_count), rec)
+          istop = fcb(this%user, c_loc(rec))
+       end if
+    end select
   end subroutine ft4_collect_cb
+
+  !-------------------------------------------------------------------------
+  ! ft4_fill_rec : one collected decode as the interop record.
+  !-------------------------------------------------------------------------
+  subroutine ft4_fill_rec(r, rec)
+    type(ft4_result_rec), intent(in)  :: r
+    type(ft4_decode_t),   intent(out) :: rec
+    integer :: j, n
+    rec%sync = r%sync
+    rec%snr  = r%snr
+    rec%dt   = r%dt
+    rec%freq = r%freq
+    rec%nap  = r%nap
+    rec%qual = r%qual
+    do j = 1, 38
+       rec%message(j) = c_null_char
+    end do
+    n = len_trim(r%message)
+    if (n > 37) n = 37
+    do j = 1, n
+       rec%message(j) = r%message(j:j)
+    end do
+  end subroutine ft4_fill_rec
 
   !-------------------------------------------------------------------------
   ! ft4_decode_frame : decode EVERY FT4 signal in a 72576-sample frame.
@@ -170,14 +224,44 @@ contains
     type(ft4_decode_t),     intent(out) :: out(*)
     integer(c_int)                      :: ndec
 
-    type(ft4_decoder) :: decoder
+    ndec = ft4_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+         nqso_progress, nfqso_in, lapcqonly_in, out, max_out, c_null_funptr, c_null_ptr)
+  end function ft4_decode_frame
+
+  !-------------------------------------------------------------------------
+  ! ft4_decode_frame_cb : ft4_decode_frame, handing each decode to `cb` the moment the decoder
+  !                       finds it, as WSJT-X's FT4 decoder hands each one to its callback
+  !                       (ft4_decode.f90:456). The candidates within 20 Hz of nfqso are tried
+  !                       first (getcandidates4.f90:70-81).
+  !
+  !   cb      : tempo_decode_cb, or NULL for no callback (exactly ft4_decode_frame). Called with
+  !             a pointer to a copy of each decode as `out` will hold it; never with NULL, and its
+  !             answer is ignored.
+  !   cb_user : handed back to `cb` untouched.
+  !-------------------------------------------------------------------------
+  function ft4_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+       nqso_progress, nfqso_in, lapcqonly_in, out, max_out, cb, cb_user) result(ndec) &
+       bind(C, name="ft4_decode_frame_cb")
+    integer(c_int16_t),     intent(in)  :: iwave(F4_NMAX)
+    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in, max_out
+    integer(c_int), value,  intent(in)  :: lapcqonly_in
+    character(kind=c_char), intent(in)  :: mycall(*)
+    character(kind=c_char), intent(in)  :: hiscall(*)
+    type(ft4_decode_t),     intent(out) :: out(*)
+    type(c_funptr), value,  intent(in)  :: cb
+    type(c_ptr),    value,  intent(in)  :: cb_user
+    integer(c_int)                      :: ndec
+
+    type(ft4_stream_decoder) :: decoder
     integer(kind=2)   :: iwave_l(F4_NMAX)
     character(len=12) :: mycall_f, hiscall_f
-    integer           :: nfqso, ndepth_l, ncontest, i, j, n, ncopy
+    integer           :: nfqso, ndepth_l, ncontest, i, ncopy
     logical           :: lapcqonly
 
     ndec = 0
     if (max_out <= 0) return
+    decoder%cb = cb
+    decoder%user = cb_user
 
     g4_count = 0
     iwave_l(1:F4_NMAX) = int(iwave(1:F4_NMAX), kind=2)
@@ -205,24 +289,11 @@ contains
     ! dropped: raise F4_MAXDEC and the Rust MAX_DECODES (crates/ft4) together.
     ncopy = min(g4_count, max_out)
     do i = 1, ncopy
-       out(i)%sync = g4_results(i)%sync
-       out(i)%snr  = g4_results(i)%snr
-       out(i)%dt   = g4_results(i)%dt
-       out(i)%freq = g4_results(i)%freq
-       out(i)%nap  = g4_results(i)%nap
-       out(i)%qual = g4_results(i)%qual
-       do j = 1, 38
-          out(i)%message(j) = c_null_char
-       end do
-       n = len_trim(g4_results(i)%message)
-       if (n > 37) n = 37
-       do j = 1, n
-          out(i)%message(j) = g4_results(i)%message(j:j)
-       end do
+       call ft4_fill_rec(g4_results(i), out(i))
     end do
 
     ndec = g4_count
-  end function ft4_decode_frame
+  end function ft4_decode_frame_cb
 
   !-------------------------------------------------------------------------
   ! c_to_fstr12 : marshal a NUL/space-terminated C string into character(12).

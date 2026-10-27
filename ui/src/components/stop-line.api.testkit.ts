@@ -8,7 +8,7 @@
 // so every file answers alike, as the one file did before the sweeps were split by cockpit. It imports
 // nothing of the app but types: it is loaded while the api module is being mocked, before any cockpit.
 import { vi } from 'vitest'
-import type { Js8State, PskState, RttyState, SstvState } from '../types'
+import type { Js8State, JttyState, PskState, RttyState, SstvState } from '../types'
 
 export const decodeState = {
   text: 'CQ CQ DE KD9TAW',
@@ -57,6 +57,17 @@ export const pskState = {
   latched: false,
   keyerError: null,
 } as unknown as PskState
+
+export const jttyState: JttyState = {
+  armed: true,
+  rxHz: 1500,
+  ftolHz: 20,
+  lowHz: 200,
+  highHz: 3000,
+  lines: [],
+  heard: [],
+  notice: null,
+}
 
 export const js8State = {
   speed: 'normal',
@@ -196,6 +207,13 @@ export function stopLineApi(actual: Record<string, unknown>): Record<string, unk
     rttyAutoCq: vi.fn(async () => rttyState),
     rttyAutoAnswer: vi.fn(async () => rttyState),
     rttyAutoAbort: vi.fn(async () => rttyState),
+    getJttyState: vi.fn(async () => jttyState),
+    jttyArm: vi.fn(async () => jttyState),
+    // `jtty_auto_arm` fires on the rising edge of `active`.
+    jttyAutoArm: vi.fn(async () => jttyState),
+    jttySetRx: vi.fn(async () => jttyState),
+    jttySetBand: vi.fn(async () => jttyState),
+    jttyClear: vi.fn(async () => jttyState),
     getPskState: vi.fn(async () => pskState),
     pskArm: vi.fn(async () => pskState),
     pskAutoArm: vi.fn(async () => pskState),

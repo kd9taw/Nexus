@@ -118,7 +118,7 @@ describe('the contact comes back with the strip', () => {
     type(rcvd, '55')
     type(input('le-name'), 'Pedro')
     type(input('le-qth'), 'Las Palmas')
-    type(input('le-comment'), 'first QSO')
+    fireEvent.change(document.querySelector('textarea.le-comment')!, { target: { value: 'first QSO' } })
     fireEvent.change(document.querySelector('textarea.le-notes')!, { target: { value: 'heard on 20m' } })
     comeBack(view)
     expect(call().value, 'the call did not come back').toBe('EA8XX')
@@ -126,7 +126,7 @@ describe('the contact comes back with the strip', () => {
     expect([sent2.value, rcvd2.value]).toEqual(['57', '55'])
     expect(input('le-name').value).toBe('Pedro')
     expect(input('le-qth').value).toBe('Las Palmas')
-    expect(input('le-comment').value).toBe('first QSO')
+    expect(document.querySelector<HTMLTextAreaElement>('textarea.le-comment')!.value).toBe('first QSO')
     expect(document.querySelector<HTMLTextAreaElement>('textarea.le-notes')!.value).toBe('heard on 20m')
   })
 
@@ -245,7 +245,7 @@ describe('whose draft it is', () => {
   it('a contest strip keeps nothing, not even a station clicked to work: its contact is the session’s', async () => {
     // A click-to-work makes the call the operator's (settled), so this is the contest guard alone.
     const view = render(strip({ fieldDay, fdMode: 'PH', pendingWork: { call: 'EA8XX', ts: 1 } }))
-    await waitFor(() => expect((screen.getByPlaceholderText('W1AW') as HTMLInputElement).value).toBe('EA8XX'))
+    await waitFor(() => expect((screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement).value).toBe('EA8XX'))
     view.unmount()
     render(strip())
     expect(call().value, 'a contest strip’s call came back into the ordinary strip').toBe('')
@@ -256,7 +256,7 @@ describe('whose draft it is', () => {
     type(call(), 'EA8XX')
     view.unmount()
     render(strip({ fieldDay, fdMode: 'PH' }))
-    expect((screen.getByPlaceholderText('W1AW') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement).value).toBe('')
   })
 
   it('with the other-radio override open nothing is kept; closed again, the contact is', async () => {

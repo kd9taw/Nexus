@@ -5,8 +5,8 @@
 // is cut from a file under the operator's Windows profile. Two things must therefore be
 // provable without opening the real log: (1) the parse is byte-faithful (trailing spaces in
 // the rendered text are wire truth — "KD2UWR: @HB HEARTBEAT FN30 " ends in a space), and
-// (2) the leak check has a positive control (feedback-negative-results-need-a-positive-control:
-// "grep found nothing" proves nothing unless the same grep finds a planted leak).
+// (2) the leak check has a positive control:
+// "grep found nothing" proves nothing unless the same grep finds a planted leak.
 //
 // Run: node --test scripts/js8-sanitise-logs.test.mjs
 import test from 'node:test'

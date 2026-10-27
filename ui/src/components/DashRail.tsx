@@ -154,6 +154,8 @@ export interface DashRailProps {
   rigBand?: string | null
   /** The running contest, for the Operators box (PaneContext `fieldDay`). */
   fieldDay?: FieldDayStatus | null
+  /** The running activation, for the Activation box (PaneContext `activation`). */
+  activation?: PaneContext['activation']
   onWorkSpot?: PaneContext['onWorkSpot']
   onPoint?: (call: string) => void
   /** The window's Spots board and its feed, the POTA/SOTA board's hunt wiring and the Needed board, lent
@@ -308,6 +310,7 @@ function DashRailBody(p: DashRailProps) {
     otaBoard: p.otaBoard,
     neededBoard,
     fieldDay: p.fieldDay,
+    activation: p.activation,
     entryCall: p.entryCall,
   })
   const frames = useMemo(

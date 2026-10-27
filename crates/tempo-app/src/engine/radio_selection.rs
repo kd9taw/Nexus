@@ -46,7 +46,8 @@ impl Engine {
         original: &Settings,
         id: u32,
     ) -> Option<RadioSelection> {
-        if id == original.active_radio || !original.radios.iter().any(|p| p.id == id) {
+        // A disabled radio is never selected: its port is released for another program.
+        if id == original.active_radio || !original.radios.iter().any(|p| p.id == id && p.enabled) {
             return None;
         }
         let mut settings = original.clone();

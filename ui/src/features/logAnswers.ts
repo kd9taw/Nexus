@@ -25,7 +25,7 @@ import {
   type EntitySlots,
 } from './callHistory'
 import { computeLogStats, type LogStats } from './logStats'
-import { logOrder, type LogQuery } from './logQuery'
+import { extraKey, logOrder, type LogQuery } from './logQuery'
 import { lotwBacklog } from './lotwBacklog'
 import { qsoGridCounts, type QsoGridCount } from './qsoPoints'
 
@@ -161,7 +161,7 @@ export function questionKey(q: LogQuestion): string {
 }
 
 function orderKey(query: LogQuery): string {
-  return `${query.sort}|${query.asc ? 'asc' : 'desc'}|${query.needsConfirmOnly ? 1 : 0}|${query.search}`
+  return `${query.sort}|${query.asc ? 'asc' : 'desc'}|${query.needsConfirmOnly ? 1 : 0}|${query.search}${extraKey(query)}`
 }
 
 /** The answer to `q` from a whole log held in memory, computed by the functions the views used.

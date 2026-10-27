@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { operatingTime, formatOpTime, OFF_TIME_MIN_SEC } from './contestOpTime'
+import { operatingTime, formatOpTime, offTimeRule, OFF_TIME_MIN_SEC } from './contestOpTime'
 
 const at = (...mins: number[]) => mins.map((m) => ({ whenUnix: 1_800_000_000 + m * 60 }))
 
@@ -36,5 +36,25 @@ describe('formatOpTime', () => {
     expect(formatOpTime(59)).toBe('0:00')
     expect(formatOpTime(65 * 60)).toBe('1:05')
     expect(formatOpTime(36 * 3600 + 7 * 60)).toBe('36:07')
+  })
+})
+
+describe('offTimeRule — the contest’s own minimum break', () => {
+  it('is 60 minutes in CQ WW and CQ WPX, 30 in Sweepstakes, and 30 not from the rules elsewhere', () => {
+    for (const e of ['cqww_cw', 'cqww_ssb', 'cqww_rtty', 'cqwpx_cw', 'cqwpx_ssb']) {
+      expect(offTimeRule(e), e).toEqual({ minOffSec: 3600, fromRules: true })
+    }
+    for (const e of ['arrlss_cw', 'arrlss_ssb']) expect(offTimeRule(e), e).toEqual({ minOffSec: 1800, fromRules: true })
+    for (const e of ['ilqp', 'arrlfd', 'wfd', 'arrlvhf_jun', '', undefined]) {
+      expect(offTimeRule(e), String(e)).toEqual({ minOffSec: OFF_TIME_MIN_SEC, fromRules: false })
+    }
+  })
+
+  it('in CQ WW, a 45-minute gap is on time and a 61-minute gap is a break', () => {
+    const { minOffSec } = offTimeRule('cqww_cw')
+    expect(operatingTime(at(0, 45), minOffSec)).toEqual({ onSec: 45 * 60, offSec: 0, breaks: 0 })
+    expect(operatingTime(at(0, 61), minOffSec)).toEqual({ onSec: 0, offSec: 61 * 60, breaks: 1 })
+    // CONTROL: the same 45-minute gap is a break under the 30-minute default.
+    expect(operatingTime(at(0, 45), offTimeRule('ilqp').minOffSec)).toEqual({ onSec: 0, offSec: 45 * 60, breaks: 1 })
   })
 })

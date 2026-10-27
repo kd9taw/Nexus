@@ -19,6 +19,7 @@
 
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DECODE_FILTERS, type DecodeFilter } from './decodeHistory'
+import { isWorkedWindow, type WorkedWindow } from './components/WorkedWindowSelect'
 
 /** The Call Roster's visibility checkboxes and its distance cap. */
 export interface RosterFilters {
@@ -32,6 +33,10 @@ export interface RosterFilters {
    *  the picker shows it in the operator's own units. ABSENT = no limit, the default, so a value
    *  stored before the cap existed reads exactly as it did. */
   maxDistanceKm?: number
+  /** #324 — how far back Hide worked reaches, the Spots panel's windows. ABSENT = any time, the
+   *  behaviour Hide worked always had here, so a value stored before the window existed reads
+   *  exactly as it did. */
+  workedWindow?: WorkedWindow
 }
 
 /** Both off — the behaviour every build so far has started with, so an operator who never
@@ -41,6 +46,7 @@ export const DEFAULT_ROSTER_FILTERS: RosterFilters = { neededOnly: false, hideWo
 export const ROSTER_FILTER_KEY = 'nexus.roster.filters'
 export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
 export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
+export const DECODE_HIDE_B4_SCOPE_KEY = 'nexus.decodes.hideB4Scope'
 export const DECODE_HIDE_BLOCKED_KEY = 'nexus.decodes.hideBlocked'
 export const DECODE_HIDE_CONFIRMED_KEY = 'nexus.decodes.hideConfirmed'
 export const DECODE_NEWEST_TOP_KEY = 'nexus.decodes.newestTop'
@@ -76,6 +82,28 @@ export function saveDecodeHideB4(on: boolean): void {
   surfaceSet(DECODE_HIDE_B4_KEY, on ? '1' : '0')
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent<boolean>(DECODE_HIDE_B4_EVENT, { detail: on }))
+  }
+}
+
+/** #409: which worked stations −B4 hides. `'any'` (the default, and −B4 as it always was) is
+ *  "worked before" on any band; `'band'` is worked on THIS band only (`workedBand`, which also
+ *  takes the mode when B4 matches by mode), so a station worked only elsewhere stays on screen
+ *  for a new band slot. Anything else stored reads as `'any'`. */
+export type DecodeHideB4Scope = 'any' | 'band'
+
+export function loadDecodeHideB4Scope(): DecodeHideB4Scope {
+  return surfaceGet(DECODE_HIDE_B4_SCOPE_KEY) === 'band' ? 'band' : 'any'
+}
+
+/** Same-window change signal for the scope, carrying it in `detail` — −B4's own #268 shape, for
+ *  the same reason: the Rx Frequency pane applies −B4 too, and must not keep the scope it read at
+ *  mount. */
+export const DECODE_HIDE_B4_SCOPE_EVENT = 'nexus-decodes-hideb4scope-changed'
+
+export function saveDecodeHideB4Scope(scope: DecodeHideB4Scope): void {
+  surfaceSet(DECODE_HIDE_B4_SCOPE_KEY, scope)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<DecodeHideB4Scope>(DECODE_HIDE_B4_SCOPE_EVENT, { detail: scope }))
   }
 }
 
@@ -120,6 +148,8 @@ export function loadRosterFilters(): RosterFilters {
       // Only a real distance is a cap. Anything else (a zero, a string, a number too big to be
       // finite) is no limit — the key left out, not set to a value the picker cannot show.
       ...(typeof km === 'number' && Number.isFinite(km) && km > 0 ? { maxDistanceKm: km } : {}),
+      // An unknown window is any time: the key left out, never a window the picker cannot show.
+      ...(isWorkedWindow(o.workedWindow) ? { workedWindow: o.workedWindow } : {}),
     }
   } catch {
     return { ...DEFAULT_ROSTER_FILTERS }

@@ -56,8 +56,8 @@ use tempo_app::dto::LoggedQso;
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::logstore::{LogRows, StoreReads};
 use tempo_core::logbook::query::{
-    self, BandsInLog, CallSummary, EntityIndex, GridCount, GridCounts, LogFold, LogQuery,
-    LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
+    self, AwardNeed, BandsInLog, CallSummary, EntityIndex, GridCount, GridCounts, LogFilter,
+    LogFold, LogQuery, LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
 };
 use tempo_core::logbook::sqlite::{self, Narrow, Order, Scope, ENTITY_COLUMNS, ORDER_COLUMNS};
 use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId, AWARD_EXTRAS};
@@ -297,6 +297,9 @@ fn json<T: Serialize>(answer: T) -> Result<Value, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OrderKey {
     index_rev: u64,
+    /// The `content_rev` too, for a filter on what was SENT: an upload stamp and a card marked
+    /// sent move only `content_rev`, and the rows such a filter lets through move with them.
+    content_rev: Option<u64>,
     query: LogQuery,
 }
 
@@ -336,6 +339,9 @@ struct Inner {
     bands: Tally<(), Vec<String>>,
     backlog: Tally<(), LotwBacklog>,
     statistics: Tally<(), LogStatCounts>,
+    /// The app's whole-log tallies, for the award fold the award-need filter reads — the one the
+    /// Awards view keeps, not a second.
+    tallies: crate::LogTallies,
     #[cfg(test)]
     built: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -348,6 +354,14 @@ struct Inner {
 pub struct LogQueries(Arc<Inner>);
 
 impl LogQueries {
+    /// The answers, reading the award fold through the app's own `tallies`.
+    pub(crate) fn with_tallies(tallies: crate::LogTallies) -> Self {
+        Self(Arc::new(Inner {
+            tallies,
+            ..Inner::default()
+        }))
+    }
+
     /// Answer `q`: take what it needs under the Engine lock, release it, read, answer. `resolve`
     /// is a row's DXCC entity — in the app [`shown`]: its call's, or the one its record's DXCC
     /// number names — what each row the UI is handed carries and what the country column sorts
@@ -459,7 +473,22 @@ impl LogQueries {
                 LotwBacklog::default(),
             )?),
             _ => {
+                // An award-need filter reads the award fold, which reads the log itself: asked
+                // before the capture, so the order is cut no earlier than the fold it reads.
+                let need = match q {
+                    LogQuestion::Page { query, .. } | LogQuestion::Locate { query, .. } => {
+                        match query.filter.need {
+                            Some(award) => Some(self.need_slots(engine, award)?),
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                };
                 let c = Capture::take(&engine_lock(engine));
+                let order = OrderInputs {
+                    resolve,
+                    need: need.as_ref(),
+                };
                 match q {
                     LogQuestion::LogSize {} => json(self.log_size(&c)?),
                     LogQuestion::RowsAt { indices } => json(self.rows_at(&c, indices, resolve)?),
@@ -468,12 +497,36 @@ impl LogQueries {
                         query,
                         offset,
                         limit,
-                    } => self.page(&c, query, *offset, *limit, resolve),
-                    LogQuestion::Locate { query, id } => self.locate(&c, query, id, resolve),
+                    } => self.page(&c, query, *offset, *limit, &order),
+                    LogQuestion::Locate { query, id } => self.locate(&c, query, id, &order),
                     _ => unreachable!("answered above"),
                 }
             }
         }
+    }
+
+    /// The ids of every row the order `query` gives, in that order: what a bulk change of "the
+    /// contacts the filter shows" acts on (`crate::log_tools`). Read with the Engine lock
+    /// released, as a page is.
+    pub(crate) fn ids_of(
+        &self,
+        engine: &SharedEngine,
+        query: &LogQuery,
+    ) -> Result<Vec<RecordId>, String> {
+        let need = match query.filter.need {
+            Some(award) => Some(self.need_slots(engine, award)?),
+            None => None,
+        };
+        let c = Capture::take(&engine_lock(engine));
+        let inputs = OrderInputs {
+            resolve: &shown,
+            need: need.as_ref(),
+        };
+        let order = self.order_of(&c, query, &inputs)?;
+        let found = match &c.rows {
+            LogRows::Store(reads) => read(reads, |db| db.rows_at(&order))?,
+        };
+        Ok(found.into_iter().flatten().filter_map(|r| r.id).collect())
     }
 
     // ── the Logbook: order vectors, pages, places ────────────────────────────────────────────
@@ -484,10 +537,11 @@ impl LogQueries {
         &self,
         c: &Capture,
         query: &LogQuery,
-        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+        inputs: &OrderInputs<'_>,
     ) -> Result<Arc<Vec<u32>>, String> {
         let key = OrderKey {
             index_rev: c.index_rev,
+            content_rev: query.filter.reads_sent().then_some(c.content_rev),
             query: query.clone(),
         };
         let slot = {
@@ -505,7 +559,7 @@ impl LogQueries {
         let mut not_kept = None;
         let kept = slot
             .0
-            .get_or_init(|| match self.build_order(c, query, resolve) {
+            .get_or_init(|| match self.build_order(c, query, inputs) {
                 Ok(order) => Some(Arc::new(order)),
                 Err(e) => {
                     not_kept = Some(e);
@@ -519,7 +573,7 @@ impl LogQueries {
                 match not_kept {
                     Some(e) => Err(e),
                     // Another asker's build was not kept: this one reads for itself.
-                    None => self.build_order(c, query, resolve).map(Arc::new),
+                    None => self.build_order(c, query, inputs).map(Arc::new),
                 }
             }
         }
@@ -527,13 +581,16 @@ impl LogQueries {
 
     /// Build the order vector: off the index for the default order, else one narrow pass in log
     /// order through the UI's filter and comparator — with each row's SUBMODE when the query
-    /// searches, since the search looks there too and nothing else reads it.
+    /// searches, since the search looks there too and nothing else reads it. The field filters
+    /// ride in the pass's own `WHERE` (`LogDb::each_filtered`), so the store hands back only the
+    /// rows they let through; the fields SQL cannot decide are tested here ([`decide`]).
     fn build_order(
         &self,
         c: &Capture,
         query: &LogQuery,
-        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+        inputs: &OrderInputs<'_>,
     ) -> Result<Vec<u32>, String> {
+        let resolve = inputs.resolve;
         #[cfg(test)]
         self.0
             .built
@@ -543,13 +600,51 @@ impl LogQueries {
                 if query.is_default() {
                     db.rowids_newest_first()
                 } else {
+                    let decider = Decider::new(&query.filter, resolve, inputs.need);
+                    let keep = |r: &QsoRecord| decider.keeps(r);
                     let mut b = OrderBuilder::new(query, resolve);
-                    if b.searches() {
-                        db.each_narrow_after_with_submode(ORDER_COLUMNS, 0, &mut |rowid, r| {
-                            b.push(rowid, r)
-                        })?;
+                    if query.filter.decided_by_caller() {
+                        b = b.keep(&keep);
+                    }
+                    let (mut columns, mut extras) = b.reads(ORDER_COLUMNS);
+                    // What the caller's test reads, and only that: each passthrough field is one
+                    // more lookup per contact. The entity needs the call and the DXCC number,
+                    // which every order reads.
+                    let f = &query.filter;
+                    if !js_field(&f.continent).is_empty() {
+                        extras.push("CONT");
+                    }
+                    if f.cq_zone.is_some() {
+                        extras.push("CQZ");
+                    }
+                    if f.need.is_some() {
+                        columns
+                            .extend(DECIDE_COLUMNS.iter().filter(|c| !ORDER_COLUMNS.contains(c)));
+                        extras.extend(AWARD_EXTRAS);
+                    }
+                    extras.sort_unstable();
+                    extras.dedup();
+                    if query.filter.is_empty() && extras.is_empty() && columns == ORDER_COLUMNS {
+                        // Exactly the pass the Logbook always made.
+                        if b.searches() {
+                            db.each_narrow_after_with_submode(
+                                ORDER_COLUMNS,
+                                0,
+                                &mut |rowid, r| b.push(rowid, r),
+                            )?;
+                        } else {
+                            db.each_narrow_after(ORDER_COLUMNS, 0, &mut |rowid, r| {
+                                b.push(rowid, r)
+                            })?;
+                        }
                     } else {
-                        db.each_narrow_after(ORDER_COLUMNS, 0, &mut |rowid, r| b.push(rowid, r))?;
+                        db.each_filtered(
+                            &columns,
+                            &extras,
+                            b.searches(),
+                            &query.filter,
+                            &mut |rowid, r| b.push(rowid, r),
+                        )?;
                     }
                     Ok(b.finish())
                 }
@@ -564,9 +659,10 @@ impl LogQueries {
         query: &LogQuery,
         offset: usize,
         limit: usize,
-        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+        inputs: &OrderInputs<'_>,
     ) -> Result<Value, String> {
-        let order = self.order_of(c, query, resolve)?;
+        let resolve = inputs.resolve;
+        let order = self.order_of(c, query, inputs)?;
         let slice: Vec<u32> = order.iter().skip(offset).take(limit).copied().collect();
         let (rows, log_size): (Vec<(u32, QsoRecord)>, u64) = match &c.rows {
             LogRows::Store(reads) => {
@@ -607,9 +703,9 @@ impl LogQueries {
         c: &Capture,
         query: &LogQuery,
         id: &str,
-        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+        inputs: &OrderInputs<'_>,
     ) -> Result<Value, String> {
-        let order = self.order_of(c, query, resolve)?;
+        let order = self.order_of(c, query, inputs)?;
         let handle = match id.parse::<RecordId>() {
             Err(()) => None,
             Ok(id) => match &c.rows {
@@ -868,6 +964,259 @@ impl LogQueries {
             }
         }
         Ok(built)
+    }
+}
+
+// ── the fields a filter leaves to the caller ───────────────────────────────────────────────────
+
+/// What an order is built with beside its query: a row's DXCC entity (`q.entity`), and for an
+/// award-need filter the slots it asks about.
+struct OrderInputs<'a> {
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    need: Option<&'a NeedSlots>,
+}
+
+/// The columns [`Decider`] reads beyond the Logbook's own: what the award fold reads of a contact.
+const DECIDE_COLUMNS: &[&str] = &[
+    "call",
+    "dxcc",
+    "band",
+    "grid",
+    "state",
+    "prop_mode",
+    "qsl_card_rcvd_raw",
+    "lotw_rcvd_raw",
+    "eqsl_rcvd_raw",
+    "qrz_status_raw",
+];
+
+/// An award's band slots that are worked and not confirmed, as the award fold counts them —
+/// keyed `(band label, entity / state / zone / square)` — and, for VUCC, which the fold does not
+/// list square by square, the squares confirmed on each VUCC band.
+pub(crate) struct NeedSlots {
+    award: AwardNeed,
+    /// By band label (lower case), the keys open on it.
+    open: HashMap<String, HashSet<String>>,
+    vucc_bands: HashSet<String>,
+}
+
+/// A grid SQUARE as VUCC counts it (the award fold's rule): a valid four-character locator,
+/// upper-cased; `None` for anything else.
+fn vucc_square(grid: &str) -> Option<String> {
+    let g = grid.trim().to_ascii_uppercase();
+    let b = g.as_bytes();
+    let ok = b.len() >= 4
+        && (b'A'..=b'R').contains(&b[0])
+        && (b'A'..=b'R').contains(&b[1])
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit();
+    ok.then(|| g[..4].to_string())
+}
+
+impl LogQueries {
+    /// The open slots of `award`, read off the award fold the Awards view keeps
+    /// ([`crate::log_folds::awards_kept`]). VUCC's open squares are not in the fold's answer, so
+    /// they are counted here by its rule — a terrestrial contact's valid square on a VUCC band,
+    /// confirmed by LoTW or a card — and held to the fold's own per-band counts by a test.
+    fn need_slots(&self, engine: &SharedEngine, award: AwardNeed) -> Result<NeedSlots, String> {
+        let summary = crate::log_folds::awards_kept(engine, &self.0.tallies)?;
+        let mut open: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut put = |needs: &[propagation::awards::BandNeed]| {
+            for n in needs {
+                for key in &n.unconfirmed {
+                    open.entry(n.band.to_ascii_lowercase())
+                        .or_default()
+                        .insert(key.clone());
+                }
+            }
+        };
+        let mut vucc_bands = HashSet::new();
+        match award {
+            AwardNeed::Dxcc => put(&summary.band_needs.dxcc),
+            AwardNeed::Was => put(&summary.band_needs.was),
+            AwardNeed::Waz => put(&summary.band_needs.waz),
+            AwardNeed::Ffma => {
+                for g in &summary.ffma.unconfirmed {
+                    open.entry("6m".to_string()).or_default().insert(g.clone());
+                }
+            }
+            AwardNeed::Vucc => {
+                vucc_bands = summary
+                    .vucc
+                    .awards
+                    .iter()
+                    .map(|a| a.band.to_ascii_lowercase())
+                    .collect();
+                // Every terrestrial square worked on a VUCC band, less the confirmed ones.
+                let rows = engine_lock(engine).log_rows();
+                tempo_core::logbook::io_fence::whole_log_off_engine_lock("the VUCC need");
+                let mut worked = HashSet::new();
+                let mut confirmed = HashSet::new();
+                const VUCC: Narrow = Narrow {
+                    columns: &[
+                        "band",
+                        "grid",
+                        "prop_mode",
+                        "qsl_card_rcvd_raw",
+                        "lotw_rcvd_raw",
+                        "eqsl_rcvd_raw",
+                        "qrz_status_raw",
+                    ],
+                    uploads: false,
+                };
+                rows.each_with(VUCC, &[], Scope::All, Order::Log, &mut |r| {
+                    let band = r.band.trim().to_ascii_lowercase();
+                    if !crate::qso_is_sat(r.prop_mode.as_deref()) && vucc_bands.contains(&band) {
+                        if let Some(sq) = r.grid.as_deref().and_then(vucc_square) {
+                            if r.award_confirmed {
+                                confirmed.insert((band.clone(), sq.clone()));
+                            }
+                            worked.insert((band, sq));
+                        }
+                    }
+                    ControlFlow::Continue(())
+                })
+                .map_err(unreadable)?;
+                for (band, sq) in worked.difference(&confirmed) {
+                    open.entry(band.clone()).or_default().insert(sq.clone());
+                }
+            }
+        }
+        Ok(NeedSlots {
+            award,
+            open,
+            vucc_bands,
+        })
+    }
+}
+
+/// A call and the DXCC number its record carries: what the entity a row is shown under turns on.
+type ShownKey = (String, Option<u32>);
+
+/// The test of the fields of a filter SQL cannot decide: the entity the Logbook shows
+/// (`resolve`), the continent and CQ zone the contact counts in (its record's `CONT` / `CQZ`
+/// first, else cty.dat's), and whether its band slot is still open for the award asked (`need`).
+///
+/// cty.dat's answer and the shown entity are asked once per call (and DXCC number) and kept for
+/// the pass: a lifetime log works most of its calls many times, and the lookups are the cost.
+struct Decider<'a> {
+    f: &'a LogFilter,
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    need: Option<&'a NeedSlots>,
+    cty: std::cell::RefCell<HashMap<String, Option<propagation::dxcc::DxccInfo>>>,
+    shown: std::cell::RefCell<HashMap<ShownKey, Option<String>>>,
+}
+
+impl<'a> Decider<'a> {
+    fn new(
+        f: &'a LogFilter,
+        resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+        need: Option<&'a NeedSlots>,
+    ) -> Self {
+        Self {
+            f,
+            resolve,
+            need,
+            cty: Default::default(),
+            shown: Default::default(),
+        }
+    }
+
+    fn cty(&self, call: &str) -> Option<propagation::dxcc::DxccInfo> {
+        if let Some(found) = self.cty.borrow().get(call) {
+            return *found;
+        }
+        let found = propagation::dxcc::resolve(call);
+        self.cty.borrow_mut().insert(call.to_string(), found);
+        found
+    }
+
+    fn keeps(&self, r: &QsoRecord) -> bool {
+        let f = self.f;
+        let entity = js_field(&f.entity);
+        if !entity.is_empty() {
+            let key = (r.call.clone(), r.dxcc);
+            let cached = self.shown.borrow().get(&key).cloned();
+            let shown = cached.unwrap_or_else(|| {
+                let shown = (self.resolve)(r);
+                self.shown.borrow_mut().insert(key, shown.clone());
+                shown
+            });
+            if !shown.is_some_and(|e| e.trim().eq_ignore_ascii_case(entity)) {
+                return false;
+            }
+        }
+        let continent = js_field(&f.continent);
+        if continent.is_empty() && f.cq_zone.is_none() && self.need.is_none() {
+            return f.need.is_none();
+        }
+        let resolved = self.cty(&r.call);
+        if !continent.is_empty() {
+            let own = r
+                .extra
+                .iter()
+                .find(|(k, _)| k == "CONT")
+                .map(|(_, c)| c.trim().to_ascii_uppercase())
+                .filter(|c| !c.is_empty());
+            let cont = own.or_else(|| resolved.as_ref().map(|i| i.cont.to_string()));
+            if !cont.is_some_and(|c| c.eq_ignore_ascii_case(continent)) {
+                return false;
+            }
+        }
+        let fields = crate::log_folds::award_fields(r);
+        if let Some(zone) = f.cq_zone {
+            if propagation::awards::counted_zone(resolved.as_ref(), &fields) != Some(zone) {
+                return false;
+            }
+        }
+        match self.need {
+            None => f.need.is_none(),
+            Some(n) => needed(r, n, resolved.as_ref(), &fields),
+        }
+    }
+}
+
+/// `s` trimmed — a filter field as it is read.
+fn js_field(s: &str) -> &str {
+    query::js_trim(s)
+}
+
+/// Whether `r` fills a slot of `n`'s award that is worked and not confirmed: confirming it would
+/// add credit. The same gates the award fold counts the contact through.
+fn needed(
+    r: &QsoRecord,
+    n: &NeedSlots,
+    resolved: Option<&propagation::dxcc::DxccInfo>,
+    fields: &propagation::RecordFields,
+) -> bool {
+    use propagation::model::Band;
+    let sat = crate::qso_is_sat(r.prop_mode.as_deref());
+    let on = |label: &str| n.open.get(label);
+    let slots = Band::from_label(&r.band).and_then(|b| on(b.label()));
+    let slot = |key: &str| slots.is_some_and(|open| open.contains(key));
+    let counted = propagation::awards::counted_entity(resolved, fields);
+    match n.award {
+        AwardNeed::Dxcc => !sat && counted.is_some_and(|c| !c.deleted && slot(c.name)),
+        AwardNeed::Was => {
+            counted.is_some_and(|c| c.is_us_state())
+                && tempo_core::logbook::record_field(r, "STATE")
+                    .and_then(propagation::awards::valid_state)
+                    .is_some_and(slot)
+        }
+        AwardNeed::Waz => propagation::awards::counted_zone(resolved, fields)
+            .is_some_and(|z| slot(&z.to_string())),
+        AwardNeed::Ffma | AwardNeed::Vucc => {
+            let label = r.band.trim().to_ascii_lowercase();
+            let on_band = match n.award {
+                AwardNeed::Ffma => label == "6m",
+                _ => n.vucc_bands.contains(&label),
+            };
+            !sat && on_band
+                && r.grid
+                    .as_deref()
+                    .and_then(vucc_square)
+                    .is_some_and(|sq| on(&label).is_some_and(|open| open.contains(&sq)))
+        }
     }
 }
 

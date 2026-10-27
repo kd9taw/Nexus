@@ -102,8 +102,7 @@ export type SelfUpdateAnswer =
 let selfUpdate: (() => Promise<SelfUpdateAnswer>) | null = null
 
 /** The self-updater offers its check here while it is mounted: the hook lives in App and the
- * button in SettingsPanel, the way `installApplicationTransport` offers a transport. Returns
- * the disposer. */
+ * button in SettingsPanel. Returns the disposer. */
 export function installSelfUpdate(check: () => Promise<SelfUpdateAnswer>): () => void {
   selfUpdate = check
   return () => {

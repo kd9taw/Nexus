@@ -179,8 +179,9 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
       && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === TARGET.name),
     'Uploaded Worker service bindings differ from the artifact')
     // The billing Worker binding, exactly as the artifact declares it (none until the row says it is deployed).
-    requireValue(services.every(({ binding, service }) => bindings.get(binding)?.type === 'service'
-      && bindings.get(binding).service === service), 'Uploaded Worker billing binding differs from the artifact')
+    requireValue(services.every(({ binding, service, entrypoint }) => bindings.get(binding)?.type === 'service'
+      && bindings.get(binding).service === service && bindings.get(binding).entrypoint === entrypoint),
+    'Uploaded Worker billing binding differs from the artifact')
     // Observability is non-versioned. Read its dedicated endpoint; the combined
     // version settings response can omit it. Wrangler normalizes absent settings
     // to disabled, but explicit log/trace overrides must also remain disabled.

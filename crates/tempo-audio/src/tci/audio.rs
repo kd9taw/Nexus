@@ -37,8 +37,7 @@
 //! - **Only for an over of ours that takes Nexus's audio.** Audio is queued only while one is open
 //!   on the session ([`Connection::audio_over_open`]); anything handed over otherwise is dropped with
 //!   whatever was queued, never held for a later key. The session asks for audio only for such an
-//!   over, answers silence after our stop, and nothing at all for another program's key (plan §6.1
-//!   item 5).
+//!   over, answers silence after our stop, and nothing at all for another program's key.
 //! - **Stop TX empties it** ([`crate::backend::TxTee::flush`]), the resampler's samples ahead
 //!   included, so nothing of a stopped over leaves after the stop, at this key or the next.
 //! - **When it is the route** is the radio loop's to say: it installs it once the session's

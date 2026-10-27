@@ -42,7 +42,7 @@ function rigModeMap(): Record<string, string> {
   const body = MODEMAP.slice(start, MODEMAP.indexOf('}', start))
   const out: Record<string, string> = {}
   // [a-z0-9]+, not [a-z]+: JS8 is a view key with a digit in it.
-  for (const m of body.matchAll(/^\s*([a-z0-9]+):\s*'(cw|phone|rtty|keyboard|digital)'/gm)) out[m[1]] = m[2]
+  for (const m of body.matchAll(/^\s*([a-z0-9]+):\s*'(cw|phone|rtty|keyboard|jtty|digital)'/gm)) out[m[1]] = m[2]
   return out
 }
 
@@ -54,6 +54,7 @@ describe('which views may command the rig mode', () => {
       phone: 'phone',
       rtty: 'rtty',
       psk: 'keyboard',
+      jtty: 'jtty',
       operate: 'digital',
       chat: 'digital',
       js8: 'digital',

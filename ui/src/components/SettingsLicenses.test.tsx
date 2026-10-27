@@ -3,8 +3,7 @@
 // Settings ▸ Licenses: Nexus's own NOTICE, then the license texts of the npm packages built into
 // the desktop app's interface and of the Rust crates the app is built from, which the desktop build
 // emits as NOTICE.txt, THIRD-PARTY.txt and rust/THIRD-PARTY.txt (ui/vite.config.ts). Pinned here:
-// the button sits in the Settings header beside Check for updates on the desktop and is absent
-// from the Remote page's copy of Settings (that page links its own file); nothing is read until it
+// the button sits in the Settings header beside Check for updates; nothing is read until it
 // is pressed; the dialog shows the three files as they came, NOTICE first, and gives the keyboard
 // back to the button when it closes; and a build without any one of them says so in words instead
 // of showing whatever a dev server answered with, or part of the texts as if they were all of them.
@@ -15,9 +14,6 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { navigationPages } from '../remote-web/__fixtures__/navigation-page'
-import configuration from '../remote-web/__fixtures__/configuration-settings.json'
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -49,11 +45,7 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel(remote = false) {
-  const page = vi.fn(async () => {
-    const pages = navigationPages('settings', configuration)
-    return { ...pages[0], rows: pages.flatMap((p) => p.rows), nextCursor: null }
-  })
+function renderPanel() {
   const panel = (
     <SettingsPanel
       activeRadioId={0}
@@ -68,15 +60,7 @@ function renderPanel(remote = false) {
       features={features}
     />
   )
-  return render(
-    remote ? (
-      <RemoteCollectionsContext.Provider value={{ page } as unknown as RemoteCollections}>
-        {panel}
-      </RemoteCollectionsContext.Provider>
-    ) : (
-      panel
-    ),
-  )
+  return render(panel)
 }
 
 /** What fetch() answers: the file itself, or what a dev server sends for a path it lacks. */

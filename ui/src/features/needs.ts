@@ -351,10 +351,10 @@ export function boardNeeds(alerts: NeedAlert[], scopes?: NeedBandScopes): NeedAl
 export interface WorkTarget {
   call: string
   /** Cockpit view to open. 'operate' = the digital (FT8/FT4) cockpit; its operating-mode
-   * argument is 'digital'. CW/Phone/RTTY map 1:1 to their cockpit + operating mode. 'js8' and
-   * 'psk' are those modes' own screens, for a row heard in one of them ([`ownScreen`]);
-   * [`WORK_SECTION`] says what each view tells `work_spot`. */
-  view: 'cw' | 'phone' | 'rtty' | 'operate' | 'js8' | 'psk'
+   * argument is 'digital'. CW/Phone/RTTY map 1:1 to their cockpit + operating mode. 'js8',
+   * 'psk' and 'jtty' are those modes' own screens, for a row heard in one of them
+   * ([`ownScreen`]); [`WORK_SECTION`] says what each view tells `work_spot`. */
+  view: 'cw' | 'phone' | 'rtty' | 'operate' | 'js8' | 'psk' | 'jtty'
   freqMhz: number
   band: string
 }
@@ -515,15 +515,17 @@ function modeDefaultMhz(band: string, mode: string): number | null {
   return null // Digital → the tier's FT8 dial is correct
 }
 
-/** The screen of a row's OWN mode, where that mode has one besides the FT screen: JS8's, and the
+/** The screen of a row's OWN mode, where that mode has one besides the FT screen: JS8's, the
  * PSK screen for the PSK modes a contact is logged in (operator ruling 2026-10-12: "JS8 rows open
- * the JS8 screen, PSK rows the PSK screen"). Read from `exactMode`, the one mode the station was
- * heard in. `mode` cannot say: it is the class ("Digital") unless the source named FT8, FT4 or
- * RTTY, so a JS8 or PSK31 row read Digital and opened the FT screen. A row that names only a
- * class has no own screen, and neither has any other mode: its class opens the screen it did. */
-export function ownScreen(alert: Pick<NeedAlert, 'exactMode'>): 'js8' | 'psk' | null {
+ * the JS8 screen, PSK rows the PSK screen"), and JTTY's. Read from `exactMode`, the one mode the
+ * station was heard in. `mode` cannot say: it is the class ("Digital") unless the source named
+ * FT8, FT4, RTTY or JTTY, so a JS8 or PSK31 row read Digital and opened the FT screen. A row that
+ * names only a class has no own screen, and neither has any other mode: its class opens the
+ * screen it did. */
+export function ownScreen(alert: Pick<NeedAlert, 'exactMode'>): 'js8' | 'psk' | 'jtty' | null {
   const m = modeKey(alert.exactMode)
   if (m === 'JS8') return 'js8'
+  if (m === 'JTTY') return 'jtty'
   return m === 'PSK31' || m === 'PSK63' || m === 'PSK125' || m === 'QPSK31' ? 'psk' : null
 }
 
@@ -531,7 +533,7 @@ export function ownScreen(alert: Pick<NeedAlert, 'exactMode'>): 'js8' | 'psk' | 
  * with that screen's channels (`getLicensedBandPlan(view)`, what its own band control offers),
  * which place a row that has no frequency of its own. */
 export interface OwnScreen {
-  view: 'js8' | 'psk'
+  view: 'js8' | 'psk' | 'jtty'
   plan: BandChannel[]
 }
 
@@ -555,15 +557,17 @@ export function pskSubmode(alert: Pick<NeedAlert, 'exactMode'>): string | null {
 /** What `work_spot` is told for each screen a Work opens: the engine's section for it, which the
  * engine also hands back as the hint every window follows (`workView`), so a Work from a torn-off
  * board lands the main window on the same screen. 'keyboard' is the PSK section: 'psk' is not a
- * section the engine knows, and would be read as Digital. JS8 has no section of its own and rides
- * Digital: 'js8' takes the engine's Digital arm, as every name it does not list does, and comes
- * back as itself, so the hint says JS8 rather than the FT screen. */
+ * section the engine knows, and would be read as Digital. 'jtty' is the same Keyboard section with
+ * JTTY as its modem. JS8 has no section of its own and rides Digital: 'js8' takes the engine's
+ * Digital arm, as every name it does not list does, and comes back as itself, so the hint says JS8
+ * rather than the FT screen. */
 export const WORK_SECTION = {
   operate: 'digital',
   cw: 'cw',
   phone: 'phone',
   rtty: 'rtty',
   psk: 'keyboard',
+  jtty: 'jtty',
   js8: 'js8',
 } as const satisfies Record<WorkTarget['view'], string>
 

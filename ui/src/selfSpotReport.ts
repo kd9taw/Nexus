@@ -7,10 +7,18 @@
 // browser half of the app being dragged into the Worker's type-check and its bundle.
 // Add nothing to this file that touches the DOM, the i18n catalog or React.
 
-/** What each target did — mirrors `self_spot::Report` in src-tauri. */
+/** What each target did — `self_spot::PotaResult` and `self_spot::ClusterResult` in src-tauri. */
 export const POTA_SPOT_RESULTS = ['posted', 'loginRequired', 'failed', 'throttled', 'notPark', 'unknownMode', 'invalid'] as const
 export const CLUSTER_SPOT_RESULTS = ['queued', 'unavailable', 'failed', 'throttled', 'invalid'] as const
+/** A one-park spot's receipt, as the Remote page's protocol carries it. */
 export type SelfSpotReport = {
   pota: (typeof POTA_SPOT_RESULTS)[number]
   cluster: (typeof CLUSTER_SPOT_RESULTS)[number]
+}
+/** The desktop's press — mirrors `self_spot::Report`: pota.app's answer for each park of the
+ *  activation, in its order (a two-fer's parks are spotted one by one), and the cluster's for its
+ *  one line naming them all. */
+export type ActivationSpotReport = {
+  parks: { reference: string; pota: SelfSpotReport['pota'] }[]
+  cluster: SelfSpotReport['cluster']
 }

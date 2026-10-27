@@ -13,7 +13,7 @@
 //
 // These RENDER the cockpit and read the DOM. jsdom does not lay out, so nothing here says the
 // columns are readable at any window size — only that they exist, carry the right values, and
-// sit inside the pane region. The layout half is a human sweep (tasks/js8-activity-parity.md).
+// sit inside the pane region. The layout half is a human sweep.
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'

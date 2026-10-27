@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
 }))
 const basemapCalls = { n: 0 }
 vi.mock('../basemap', async (importOriginal) => {

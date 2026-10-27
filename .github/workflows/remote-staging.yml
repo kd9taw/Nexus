@@ -147,8 +147,12 @@ jobs:
           REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
           REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
           REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
-          # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
+          # Free during the beta (staging only): 1, or unset for the trial's own end.
+          REMOTE_BETA_FREE: ${{ vars.REMOTE_BETA_FREE }}
+          # Presence only: the artifact declares each optional secret (TRIAL_KEY, OWNER_NOTICE_*) this environment holds.
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
+          REMOTE_OWNER_NOTICE_API_KEY_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_API_KEY != '' }}
+          REMOTE_OWNER_NOTICE_FROM_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_FROM != '' }}
           REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
           REMOTE_RECOVERY_WORKER_SHA256: ${{ inputs.recovery_worker_sha256 }}
           REMOTE_RECOVERY_DATABASE_ID: ${{ inputs.recovery_database_id }}
@@ -182,6 +186,8 @@ jobs:
           # Presence only ('true'/'false'). Its value goes to the upload step and nowhere else.
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
+          REMOTE_OWNER_NOTICE_API_KEY_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_API_KEY != '' }}
+          REMOTE_OWNER_NOTICE_FROM_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_FROM != '' }}
           # The relay key's values, for the one credential this step mints with them.
           REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
           REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
@@ -228,8 +234,12 @@ jobs:
           REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
           REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
           REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
-          # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
+          # Free during the beta (staging only): 1, or unset for the trial's own end.
+          REMOTE_BETA_FREE: ${{ vars.REMOTE_BETA_FREE }}
+          # Presence only: the artifact declares each optional secret (TRIAL_KEY, OWNER_NOTICE_*) this environment holds.
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
+          REMOTE_OWNER_NOTICE_API_KEY_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_API_KEY != '' }}
+          REMOTE_OWNER_NOTICE_FROM_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_FROM != '' }}
           REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
         run: node remote/scripts/staging-artifact.mjs prepare
 
@@ -255,6 +265,8 @@ jobs:
           REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
           REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
+          REMOTE_OWNER_NOTICE_API_KEY_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_API_KEY != '' }}
+          REMOTE_OWNER_NOTICE_FROM_PRESENT: ${{ secrets.REMOTE_OWNER_NOTICE_FROM != '' }}
         run: node remote/scripts/deploy-staging.mjs migrate
 
       # The only step that applies a Worker secret's value (the preflight holds the relay key's too, to
@@ -271,6 +283,8 @@ jobs:
           REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
           REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
           REMOTE_TRIAL_KEY: ${{ secrets.REMOTE_TRIAL_KEY }}
+          REMOTE_OWNER_NOTICE_API_KEY: ${{ secrets.REMOTE_OWNER_NOTICE_API_KEY }}
+          REMOTE_OWNER_NOTICE_FROM: ${{ secrets.REMOTE_OWNER_NOTICE_FROM }}
         run: node remote/scripts/deploy-staging.mjs deploy
 
       # These two run whenever the upload step RAN, passed or failed. Once wrangler has uploaded, the

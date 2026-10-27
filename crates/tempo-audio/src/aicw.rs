@@ -130,6 +130,8 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                 // between words on their own. The provisional tail replaces the last one.
                 // Dropped by the engine if a QSY started a new stream during the pass.
                 e.push_ai_cw_pass(epoch, &pass.confirmed, &pass.pending);
+                // …and the same letters with the time each was heard, for the CW turn cue.
+                e.push_ai_cw_times(epoch, end_abs, &pass.confirmed_at, &pass.pending_at);
             }
             Err(e) => {
                 eprintln!("ai-cw: decode failed: {e}");

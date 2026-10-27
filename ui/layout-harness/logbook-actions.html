@@ -94,20 +94,30 @@ const SAT_OPTS = {
   de: [SAT_MENU_LABEL, 'AO-10', 'AO-91', 'AO-123', 'ARISS', 'SO-50', 'TEV2-1', 'Nicht über Satellit'],
 };
 
-// The eleven compact columns that precede the actions cell, with representative content —
+// The twelve default columns that precede the actions cell, with representative content —
 // the track sizing is `fr`-based, so what is IN the other cells does not move the actions
-// track, but the row has to be real for the grid to resolve at all.
+// track, but the row has to be real for the grid to resolve at all. (Date and Time are two
+// columns since #239; this list had one until the column model, so its tail cell sat in the
+// Notes track.)
 const CELLS = [
   ['log-cell mono', 'KD9TAW'], ['log-cell log-country', 'United States'], ['log-cell', '20m'],
   ['log-cell mono', '14.0740'], ['log-cell', 'FT8'], ['log-cell mono', '-12'],
-  ['log-cell mono', '-09'], ['log-cell mono', '2026-09-16 14:32Z'], ['log-cell mono', '—'],
+  ['log-cell mono', '-09'], ['log-cell mono', '2026-09-16'], ['log-cell mono', '14:32'],
+  ['log-cell mono', '—'],                  // Park
   ['log-cell', '—'],                       // QSL  — the cell the report says collides
   ['log-cell log-note', '—'],              // Notes
 ];
+// THE COLUMN MODEL'S TEMPLATES (ui/src/features/logColumns.ts; logColumns.test.ts pins the same
+// strings). The sheet takes the row's tracks from `--log-cols`, which the Logbook sets from the
+// columns it renders, so this page sets it the same way. Narrow (`sm`/`xs`) the Logbook renders
+// only Call, Country, Band, QSL and Notes before the actions — by index into CELLS here.
+const COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr)';
+const NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr)';
+const NARROW_CELLS = [0, 1, 2, 10, 11];
 
-function buildRow(row, lang) {
+function buildRow(row, lang, narrow = false) {
   row.replaceChildren();
-  for (const [cls, text] of CELLS) {
+  for (const [cls, text] of CELLS.filter((_, i) => !narrow || NARROW_CELLS.includes(i))) {
     const s = document.createElement('span');
     s.className = cls;
     if (cls.includes('log-note')) s.innerHTML = '<span class="log-note-text">' + text + '</span>';
@@ -116,7 +126,7 @@ function buildRow(row, lang) {
     row.appendChild(s);
   }
   // The QSL cell's own mark, so the reported collision can be measured rather than guessed.
-  row.children[9].innerHTML = '<span class="log-qsl none">—</span>';
+  row.children[row.children.length - 2].innerHTML = '<span class="log-qsl none">—</span>';
   const act = document.createElement('span');
   act.className = 'log-cell log-rowactions';
   for (const label of BTNS) {
@@ -166,7 +176,13 @@ function starvedTracks(host, row) {
 }
 
 function measure(opts) {
-  const { width, viewport, zoom, theme, lang, font } = opts;
+  const { width, viewport, zoom, theme, lang, font, resized } = opts;
+  // The template the Logbook would hand this row: the narrow one at `sm`/`xs`, and a dragged
+  // Country width (`resized`, px) in place of its share, as the column model writes one.
+  const narrow = viewport === 'sm' || viewport === 'xs';
+  const tracks0 = (narrow ? NARROW : COMPACT).split(/ (?![^(]*\))/);
+  if (resized) tracks0[1] = resized + 'px';
+  document.querySelectorAll('.logbook-table').forEach(t => t.style.setProperty('--log-cols', tracks0.join(' ')));
   // The labels are text, so the requirement is a FONT metric, and `--font-sans` resolves to
   // Segoe UI on the operator's Windows box but to whatever fontconfig serves here. Sweeping
   // the faces this box HAS turns the margin over the measurement from a guess into a range.
@@ -182,8 +198,8 @@ function measure(opts) {
   // the effective content width, which is exactly what useViewport classifies on.
   document.getElementById('host').style.width = (width / zoom) + 'px';
 
-  const act = buildRow(document.getElementById('row'), lang);
-  const free = buildRow(document.getElementById('freerow'), lang);
+  const act = buildRow(document.getElementById('row'), lang, narrow);
+  const free = buildRow(document.getElementById('freerow'), lang, narrow);
 
   // getBoundingClientRect is in VISUAL px under `zoom`; divide back to layout px so every
   // number below is comparable with the px floor written in the sheet.
@@ -261,7 +277,7 @@ function measure(opts) {
   const tracks = starvedTracks(document.getElementById('host'), rowEl);
 
   return {
-    case: `${width}@${Math.round(zoom * 100)}% ${viewport} ${theme} ${lang}${font ? ' ' + font : ''}`,
+    case: `${width}@${Math.round(zoom * 100)}% ${viewport} ${theme} ${lang}${font ? ' ' + font : ''}${resized ? ` country=${resized}px` : ''}`,
     width, zoom, viewport, theme, lang, font: font || '(default)',
     controls: live.length,
     gap: +gap.toFixed(1),
@@ -306,6 +322,7 @@ function run() {
   // A sheet that did not load makes every number below meaningless and every assertion
   // pass. Refuse loudly instead.
   const row = document.getElementById('row');
+  document.querySelectorAll('.logbook-table').forEach(t => t.style.setProperty('--log-cols', COMPACT));
   buildRow(row, 'en');
   if (getComputedStyle(row).display !== 'grid') {
     document.getElementById('out').textContent =
@@ -327,6 +344,11 @@ function run() {
     const vp = classify(w / z);
     rows.push(measure({ width: w, zoom: z, viewport: vp, theme: 'dark', lang: 'en' }));
     rows.push(measure({ width: w, zoom: z, viewport: vp, theme: 'light', lang: 'en' }));
+  }
+  // A DRAGGED COLUMN: Country at half the window, the widest a saved width is allowed
+  // (logColumns.ts `maxColumnPx`), at the sizes the operator runs. The cluster must still fit.
+  for (const w of [1024, 1366, 1920]) {
+    rows.push(measure({ width: w, zoom: 1.0, viewport: classify(w), theme: 'dark', lang: 'en', resized: Math.floor(w / 2) }));
   }
   // The widest catalog, at the floor — the QSL menu's options are translated prose.
   rows.push(measure({ width: 1024, zoom: 1.0, viewport: classify(1024), theme: 'dark', lang: 'de' }));

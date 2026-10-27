@@ -11,7 +11,7 @@
 //!   split by key ([`split_ui_state`], [`join_ui_state`], [`STATION_KEYS`]).
 //! - **The starts wired from afar** ([`WIRED`], [`transmit_from_afar`]) and **Stop's rules**
 //!   ([`is_stop`]: a command that stops a transmission, or the off half of a transmit switch,
-//!   [`OFF_HALVES`]).
+//!   [`OFF_HALVES`]), and which of those only unkey ([`is_unkey`]).
 //! - **The stores** a whole save replaces ([`STORES`]), **the events that cross** ([`forwards`]),
 //!   **the kinds of client** ([`Profile`]), and all of it as **the contract's text**
 //!   ([`contract_text`]), so two builds that differ in any table are two builds.
@@ -197,6 +197,11 @@ pub enum Wired {
     /// One of the PSK cockpit's starts: a send, and continuous TX switched on and typed into, under
     /// the same per-tick gates as RTTY's.
     Psk,
+    /// One of the JTTY cockpit's starts: a send, an F-key, live entry started and typed into, and
+    /// the sign-off. The shack's JTTY gate decides each when it is planned and again when it is
+    /// queued, and the radio loop re-checks every transmit gate on each frame; a live session keeps
+    /// its own ceiling and the watchdog there.
+    Jtty,
     /// APRS: a beacon or a message, which the shack renders and keys behind its own APRS gates, or
     /// Monitor armed by hand, which lets the shack's automatic ack key. That ack ends when the
     /// computer that armed it is no longer there (src-tauri's `command_dispatch::PRESENCE_BOUND`).
@@ -219,8 +224,10 @@ pub enum Wired {
 /// the yes to an automatic reply. The CW rows are keyboard CW and the macros, sent as text for the
 /// shack's keyer. The tune rows are the tune carrier and the rig's own tuner; the RTTY and PSK rows
 /// are the two keyboard cockpits' sends, continuous TX switched on and typed into, and RTTY's auto
-/// CQ and answer. Continuous TX and an auto run go on transmitting after the press, so each ends
-/// with the rest when the computer's presence lapses (the shack's halt ends the latch and the run).
+/// CQ and answer. The JTTY rows are its cockpit's send, F-keys, live entry started and typed into,
+/// and sign-off. Continuous TX, JTTY's live entry and an auto run go on transmitting after the
+/// press, so each ends with the rest when the computer's presence lapses (the shack's halt ends the
+/// latch, the live session and the run).
 /// The APRS, SSTV and chat rows are each cockpit's sends and what it turns on that transmits by
 /// itself, which ends with the presence of the computer that turned it on. Phone's PTT and its Lock
 /// are each a held press on Stop's road, never a command at the shack.
@@ -241,6 +248,11 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("js8_send", Wired::Js8),
     ("js8_send_command", Wired::Js8),
     ("js8_typeahead", Wired::Js8),
+    ("jtty_fkey", Wired::Jtty),
+    ("jtty_live_commit", Wired::Jtty),
+    ("jtty_live_start", Wired::Jtty),
+    ("jtty_send", Wired::Jtty),
+    ("jtty_sign_off", Wired::Jtty),
     ("override_next_tx", Wired::Ft),
     ("play_voice_message", Wired::VoiceKeyer),
     ("psk_send", Wired::Psk),
@@ -351,17 +363,26 @@ pub fn is_stop(cmd: &str, args: &Value) -> bool {
 /// Whether a call runs under Stop's rules: its command stops a transmission, or it is the off half
 /// of a transmit switch.
 pub fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
-    class == Some(Class::StopsTx)
-        || OFF_HALVES.iter().any(|(name, arg, off)| {
-            *name == cmd
-                && match (off, args.get(*arg)) {
-                    (Off::False, Some(Value::Bool(false))) => true,
-                    (Off::OneOf(values), Some(Value::String(value))) => {
-                        values.contains(&value.as_str())
-                    }
-                    _ => false,
+    class == Some(Class::StopsTx) || is_unkey(cmd, args)
+}
+
+/// ⛔ Whether a call under Stop's rules only unkeys: the off half of a transmit switch
+/// ([`OFF_HALVES`]). An unkey goes by the link alone, ahead of everything, and ends its own over at
+/// once, as at the shack's own screen. It voids every start from afar the station took before it,
+/// whichever computer made it (the counter is the station's), as a Stop does, but halts nothing
+/// else: what other starts from afar began goes on. A command that stops a transmission is a Stop,
+/// by both roads, and halts everything at the station.
+pub fn is_unkey(cmd: &str, args: &Value) -> bool {
+    OFF_HALVES.iter().any(|(name, arg, off)| {
+        *name == cmd
+            && match (off, args.get(*arg)) {
+                (Off::False, Some(Value::Bool(false))) => true,
+                (Off::OneOf(values), Some(Value::String(value))) => {
+                    values.contains(&value.as_str())
                 }
-        })
+                _ => false,
+            }
+    })
 }
 
 // --- Stores and their revisions ------------------------------------------------------------------
@@ -460,9 +481,9 @@ pub fn join_ui_state(
 // --- Events --------------------------------------------------------------------------------------
 
 /// The shack's events that another computer is sent, and the only ones it takes in: the alert
-/// (`crate::alert`), made once where it is raised (the pounce detector's today), the app's one push
-/// (everything else polls), so both computers' screens hear it under the same id. Any other event
-/// stays where it was raised.
+/// (`crate::alert`), made once where it is raised (the pounce detector's, the decode alerts', the
+/// new parks'), the app's one push (everything else polls), so both computers' screens hear it under
+/// the same id. Any other event stays where it was raised.
 pub const FORWARDED_EVENTS: &[&str] = &[crate::alert::EVENT];
 
 /// Whether the event `name` crosses between the two computers.
@@ -477,18 +498,35 @@ pub fn forwards(name: &str) -> bool {
 pub enum Profile {
     /// The desktop app, the same build at both ends: every classed command, by its class.
     Desktop,
+    /// A phone's Nexus. Known by name, so a station recognises one, and refused: this build serves
+    /// it nothing ([`Profile::served`]), and the shack tells it to update the station.
+    Mobile,
 }
 
 impl Profile {
-    /// The profile a hello names, or `None` for one this build does not serve.
+    /// The profile a hello names, or `None` for a name this build does not know.
     pub fn named(name: &str) -> Option<Self> {
-        (name == "desktop").then_some(Profile::Desktop)
+        match name {
+            "desktop" => Some(Profile::Desktop),
+            "mobile" => Some(Profile::Mobile),
+            _ => None,
+        }
     }
 
     /// Its name in the hello.
     pub fn name(self) -> &'static str {
         match self {
             Profile::Desktop => "desktop",
+            Profile::Mobile => "mobile",
+        }
+    }
+
+    /// Whether this build opens a lane for it. Only the served profiles are in the build's
+    /// contract, so naming a refused one changes nothing a desktop of another build compares.
+    pub fn served(self) -> bool {
+        match self {
+            Profile::Desktop => true,
+            Profile::Mobile => false,
         }
     }
 }

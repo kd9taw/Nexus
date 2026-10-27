@@ -338,3 +338,57 @@ describe('the filters and a need that is only a confirmation (#350)', () => {
     expect(row.querySelector('.need-chip.need-confirm')?.textContent).toBe('LoTW')
   })
 })
+
+// #324 — the Spots panel's worked windows on the Call Roster's Hide worked. A special-event call
+// (13 Colonies, Route 66) is on the air all week: worked yesterday, it is new again today.
+describe('Hide worked reaches back as far as its window', () => {
+  const WINDOW_STATIONS = [
+    station('PLAIN1'),
+    station('HOURAGO1', { worked: true, workedAgoSecs: 3_000, workedTodayUtc: true }),
+    station('YESTERDAY1', { worked: true, workedAgoSecs: 30 * 3_600, workedTodayUtc: false }),
+    // An older station sends no age: worked, with nothing to judge a window by.
+    station('NOAGE1', { worked: true }),
+  ]
+  const mountWindows = () =>
+    render(
+      <OperateRoster
+        stations={WINDOW_STATIONS}
+        myGrid="EN52"
+        currentSlot={SLOT}
+        needByCall={new Map()}
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={() => {}}
+      />,
+    )
+  const windowSelect = () => screen.getByLabelText('Worked within') as HTMLSelectElement
+  const shown = () =>
+    ['PLAIN1', 'HOURAGO1', 'YESTERDAY1', 'NOAGE1'].filter((c) => screen.queryByText(c) != null)
+
+  it('hides every worked station with no window, as Hide worked always did', () => {
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true }))
+    mountWindows()
+    expect(windowSelect().value).toBe('')
+    expect(shown()).toEqual(['PLAIN1'])
+  })
+
+  it('shows a station again once its last contact is outside the window, and stores the choice', () => {
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ neededOnly: false, hideWorked: true }))
+    mountWindows()
+    fireEvent.change(windowSelect(), { target: { value: 'utcDay' } })
+    expect(shown()).toEqual(['PLAIN1', 'YESTERDAY1', 'NOAGE1'])
+    expect(loadRosterFilters().workedWindow).toBe('utcDay')
+    fireEvent.change(windowSelect(), { target: { value: '86400' } })
+    expect(shown()).toEqual(['PLAIN1', 'YESTERDAY1', 'NOAGE1'])
+    fireEvent.change(windowSelect(), { target: { value: '604800' } })
+    expect(shown()).toEqual(['PLAIN1', 'NOAGE1'])
+    fireEvent.change(windowSelect(), { target: { value: '' } })
+    expect(loadRosterFilters().workedWindow).toBeUndefined()
+    expect(shown()).toEqual(['PLAIN1'])
+  })
+
+  it('reads an unknown stored window as any time', () => {
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ hideWorked: true, workedWindow: 120 }))
+    expect(loadRosterFilters().workedWindow).toBeUndefined()
+  })
+})

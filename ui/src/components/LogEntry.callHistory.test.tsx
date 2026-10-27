@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
   contestWorking: vi.fn(() => Promise.resolve({})),
   contestEntryReset: vi.fn(() => Promise.resolve({})),
   contestIMoved: vi.fn(() => Promise.resolve({})),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -79,7 +80,7 @@ const strip = (fieldDay: FieldDayStatus) => (
 )
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const qthBox = () => document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')[1]
 const qthMarked = () =>
   qthBox().classList.contains('le-fd-input-history') &&

@@ -4,7 +4,7 @@
 //! the rigctld wire is still produced by [`crate::rigctld_server::handle_command`], the encoder every
 //! backend shares.
 //!
-//! ## The verb map (plan §5.3)
+//! ## The verb map
 //!
 //! | rigctld | TCI | Gate |
 //! |---|---|---|
@@ -49,8 +49,8 @@
 //! reports: moving the dial to another band makes ExpertSDR restore that band's own mode and drive
 //! (§3.5), and a digital over keyed on a restored phone mode would go out on the SDR's microphone.
 //! So before a key the shim puts the asked-for mode back when the server reports another, and the
-//! drive Nexus last set when admission finds the server's above it (plan §9 B2, "re-assertion
-//! before a key"), each bounded ([`REASSERT_WAIT`]) so the key still answers inside the radio
+//! drive Nexus last set when admission finds the server's above it, each bounded
+//! ([`REASSERT_WAIT`]) so the key still answers inside the radio
 //! loop's PTT deadline. Only a value Nexus itself asked for is ever put back, and the drive only
 //! ever down, to Nexus's own. A key the shim keeps off the air sends nothing and says why
 //! ([`super::TciDaemon::key_refused_since`]): the rigctld answer, `RPRT -1`, carries no reason.
@@ -211,8 +211,8 @@ pub(crate) fn filter_for(
 /// A TCI radio's capabilities, AUTHORED rather than read out of Hamlib:
 /// - **receive coverage**: the server's own `vfo_limits` (TCI 2.0 §4.1), or none known;
 /// - **split not readable for the privilege gate**: VFO B is where `I` writes the split
-///   frequency, but servers map a transceiver's second channel differently (AetherSDR's notes,
-///   plan §5.3), so a read of it is not trusted to grant permission until a bench shows it;
+///   frequency, but servers map a transceiver's second channel differently (AetherSDR's notes),
+///   so a read of it is not trusted to grant permission until a bench shows it;
 /// - **drive floor 0**: `drive` runs 0–100, so a reading of zero is a real zero;
 /// - **native VFO read**: the VFO this shim answers is the server's report, never a cache.
 pub fn authored_caps(rx_coverage: Vec<(u64, u64)>) -> RigCaps {

@@ -127,6 +127,8 @@ pub(crate) mod audio_road;
 mod book;
 mod channel;
 pub(crate) mod commands;
+/// Enrolling a computer on this network by its own sign-in to the station's account.
+pub(crate) mod enrol;
 /// The datagram layer of the roads beside the link (the client core's, which both ends read).
 pub(crate) use tempo_client::datagram;
 mod gate;
@@ -144,6 +146,8 @@ pub use book::Book;
 pub(crate) use book::{device_id, tunnel_device_id, valid_name, NAME_CHARS};
 /// Who may hold a session on a listener: the LAN's paired computers, or the room's tunnel's own.
 pub(crate) use channel::Roster;
+/// Where a connection reads this station's key for the internet road, its public half alone.
+pub(crate) use channel::StationKeyOf;
 
 /// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
 /// them: the shack's own, and the ones its paired computers' window says.
@@ -333,6 +337,8 @@ pub(super) struct Deps {
     pub feeds: Feeds,
     /// The LAN key and the paired computers.
     pub book: Arc<Book>,
+    /// Whether, and against what, a computer may enrol by its own sign-in (`enrol`).
+    pub enrolment: Arc<enrol::Enrolment>,
     pub resolve: Resolve,
     pub advertise: Advertise,
     pub firewall: FirewallSays,
@@ -341,6 +347,8 @@ pub(super) struct Deps {
     pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
     /// How the lane runs a call, and the events it may forward.
     pub commands: commands::Commands,
+    /// This station's key for the internet road, its public half, as each `opened` names it.
+    pub station_key: channel::StationKeyOf,
 }
 
 struct State {
@@ -350,10 +358,14 @@ struct State {
     on: AtomicBool,
     status: Mutex<LanStatus>,
     path: PathBuf,
+    /// Held while the switch is written to `path`, so presses in a row are written in turn and the
+    /// newest is the one left on disk.
+    saving: Mutex<()>,
     wake: Notify,
     closed: AtomicBool,
     authority: Arc<Authority>,
     book: Arc<Book>,
+    enrolment: Arc<enrol::Enrolment>,
     /// The gate of the listener started last, for a test to read ([`Lan::open_from`]).
     #[cfg(test)]
     gate: Mutex<Option<Arc<gate::Gate>>>,
@@ -364,18 +376,22 @@ impl State {
         self.switch.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
-    /// Change the switch, keep it, and wake the listener's thread. Said at once, so a status read
-    /// straight after a press shows it; the listener then says where it listens.
+    /// Change the switch, wake the listener's thread, and then keep it. Said at once, so a status
+    /// read straight after a press shows it; the listener then says where it listens.
     ///
     /// Off, however it went off: the pairing window closes, and no paired computer keeps station
     /// control. The authority stops reading them (`on`) before they are revoked, so the revoke
     /// stands.
+    ///
+    /// ⛔ OFF NEVER WAITS FOR THE DISK. The switch's file is written last, outside the switch's
+    /// lock, once the listener has been told and the paired computers revoked: written first, under
+    /// that lock, a write the disk held up (a busy disk, a scanner opening the file) kept the port
+    /// open, every session running and whatever it kept on the air going until it was through, and
+    /// a status read waited with it. Each write is of the switch as it stands then, one at a time,
+    /// so the newest press is the one left on disk.
     fn decide(&self, change: impl FnOnce(&mut Switch)) {
         if let Ok(mut switch) = self.switch.lock() {
             change(&mut switch);
-            if switch.save(&self.path).is_err() {
-                tempo_core::applog::warn("remote", "on this network: the switch was not saved");
-            }
             self.on.store(switch.on, Ordering::SeqCst);
             // The networks stay listed while it is on, so a pick does not take the picker away.
             let networks = match (switch.on, self.status.lock()) {
@@ -395,6 +411,16 @@ impl State {
             release(&self.authority, &self.book.ids());
         }
         self.wake.notify_one();
+        let _saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(switch) = self.switch.lock().map(|switch| switch.clone()) else {
+            return;
+        };
+        if switch.save(&self.path).is_err() {
+            tempo_core::applog::warn("remote", "on this network: the switch was not saved");
+        }
     }
 
     fn report(&self, status: LanStatus) {
@@ -422,10 +448,12 @@ impl Lan {
             switch: Mutex::new(switch),
             status: Mutex::new(LanStatus::default()),
             path,
+            saving: Mutex::new(()),
             wake: Notify::new(),
             closed: AtomicBool::new(false),
             authority: deps.authority.clone(),
             book: deps.book.clone(),
+            enrolment: deps.enrolment.clone(),
             #[cfg(test)]
             gate: Mutex::new(None),
         });
@@ -522,6 +550,20 @@ impl Lan {
         self.state.book.keep()
     }
 
+    /// Take out every computer enrolled on its own sign-in whose proof is past the offline age
+    /// (`enrol`), as a removal at the shack takes it out, and then out of the LAN's device cache: it
+    /// signs in again to come back. At launch before anything listens, and after each list the
+    /// station reads. The store can block, as for [`Lan::revoke`].
+    pub fn expire(&self) {
+        // As the station keeps them now: the list may have changed them.
+        self.state.enrolment.reread();
+        expire(
+            &self.state.book,
+            &self.state.authority,
+            &self.state.enrolment,
+        );
+    }
+
     /// Reset this station's network identity, at the shack: every paired computer out at once as a
     /// removal is, then a new LAN key with nobody paired to it, and the listener on the new key.
     /// The store can block, as for [`Lan::revoke`].
@@ -531,6 +573,14 @@ impl Lan {
         let renewed = self.state.book.renew();
         self.state.wake.notify_one();
         renewed
+    }
+
+    /// The LAN key's public half, SPKI as lowercase hex, made now if the store holds none: what
+    /// binding the station to its account names beside its signing key. `None` while the store
+    /// will not give one up.
+    pub fn public_key(&self) -> Option<String> {
+        let (identity, _) = self.state.book.identity()?;
+        Some(identity.public_key().to_string())
     }
 
     pub fn status(&self) -> LanStatus {
@@ -574,6 +624,32 @@ fn release(authority: &Authority, devices: &[String]) {
     }
 }
 
+/// [`Lan::expire`]. A computer the book does not hold now (not read yet, or never in it) stays in the
+/// cache, as does every one when the store will not keep the book: the LAN still refuses each at
+/// every admission. A computer removed at the shack whose removal the book's store did not keep
+/// (`enrol::Enrolment::is_removed`) is taken out with them.
+fn expire(book: &Book, authority: &Authority, enrolment: &enrol::Enrolment) {
+    let removed = book
+        .view(Instant::now())
+        .devices
+        .into_iter()
+        .filter_map(|computer| pairing::hex32(&computer.key))
+        .filter(|pin| enrolment.is_removed(pin));
+    let gone: Vec<[u8; 32]> = enrolment
+        .expired()
+        .into_iter()
+        .chain(removed)
+        .filter(|pin| book.forget(&device_id(pin)))
+        .collect();
+    if gone.is_empty() {
+        return;
+    }
+    release(authority, &gone.iter().map(device_id).collect::<Vec<_>>());
+    if book.keep().is_ok() {
+        enrolment.forget(&gone);
+    }
+}
+
 impl Drop for Lan {
     fn drop(&mut self) {
         self.state.closed.store(true, Ordering::SeqCst);
@@ -594,8 +670,11 @@ fn off_by_itself(state: &State, why: Off) {
 
 /// Keep the listener in step with the switch and the network, until the service goes.
 async fn supervise(state: Arc<State>, deps: Deps) {
-    // The LAN key and the paired computers, from the credential store, before anything listens.
+    // The LAN key and the paired computers, from the credential store, before anything listens; and
+    // the computers among them enrolled on their own sign-in, any past its proof's age taken out.
     deps.book.load();
+    deps.enrolment.load();
+    expire(&deps.book, &deps.authority, &deps.enrolment);
     let mut running: Option<Listener> = None;
     let mut looks: u32 = 0;
     while !state.closed.load(Ordering::SeqCst) {
@@ -789,6 +868,8 @@ impl Tunnel {
     ) -> Option<Self> {
         // No pairing window ever opens here.
         let tls = tls::server(&identity, roster.paired.clone(), Arc::new(|| false)).ok()?;
+        // The room's TLS proves the station's key itself, so its `opened` restates the pin.
+        let station_key = identity.public_key().to_string();
         let powers = road_powers(
             &deps.authority,
             &deps.engine,
@@ -826,6 +907,7 @@ impl Tunnel {
                     bind,
                     stun,
                 }),
+                station_key: Arc::new(move || Some(station_key.clone())),
             },
         })
     }
@@ -892,8 +974,17 @@ impl Listener {
             return Err("noNetwork");
         }
         let (paired, pairing) = deps.book.verifier();
-        let tls = tls::server(&identity, paired, pairing).map_err(|_| "unavailable")?;
-        let desk = pairing::Desk::new(deps.book.clone(), &identity).ok_or("unavailable")?;
+        // A computer enrolled on its own sign-in is admitted only within its proof's age: at the
+        // handshake, at its hello and at each of its session's ticks. Read before anything listens,
+        // and until it has been, nobody is admitted.
+        deps.enrolment.load();
+        let paired = deps.enrolment.bounded(paired);
+        // An unknown key is taken for a pairing-only or an enrol-only connection: while the pairing
+        // window is open, or while the station can check an enrolment.
+        let unknown = deps.enrolment.or_pairing(pairing);
+        let tls = tls::server(&identity, paired.clone(), unknown).map_err(|_| "unavailable")?;
+        let desk = pairing::Desk::new(deps.book.clone(), &identity, deps.enrolment.clone())
+            .ok_or("unavailable")?;
         let socket = tokio::net::TcpListener::bind(SocketAddr::new(network.address().into(), port))
             .await
             .map_err(|e| match e.kind() {
@@ -938,7 +1029,10 @@ impl Listener {
             feeds: deps.feeds.clone(),
             tls,
             identity: Arc::new(identity),
-            roster: channel::Roster::lan(&deps.book),
+            roster: channel::Roster {
+                paired,
+                ..channel::Roster::lan(&deps.book)
+            },
             desk: Some(desk),
             network: Some(network),
             port,
@@ -953,6 +1047,7 @@ impl Listener {
             audio_road: audio.as_ref().map(audio_road::Running::road),
             // This listener's roads are the LAN's: a computer reaching it is on its subnet.
             internet: None,
+            station_key: deps.station_key.clone(),
         };
         let (stop, stopped) = watch::channel(false);
         #[cfg(test)]

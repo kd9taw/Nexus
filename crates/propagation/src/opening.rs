@@ -687,6 +687,16 @@ pub fn band_features(
     // feed the `regional_gate` census and the classifier, which are about the shape of
     // the last two hours, not about whether the band is open this minute.
     let vhf = band.is_vhf();
+    // MOONBOUNCE IS NOT AN OPENING. On the UHF bands a path past the terrestrial ceiling
+    // (`needalert::vhf_max_terrestrial_km`, 2400 km) is an EME contact between two big
+    // stations — routine there, and nothing to do with the band being open — so such a
+    // path is no gate evidence. Applied to UHF only: 2 m and 4 m keep the gate they have.
+    let uhf_ceiling = if band.is_uhf() {
+        crate::needalert::vhf_max_terrestrial_km(band)
+    } else {
+        None
+    };
+    let terrestrial = |d: &f64| uhf_ceiling.is_none_or(|max| *d <= max);
 
     for s in band_spots {
         // Is this spot fresh enough to be VHF gate evidence? (Always true on HF.)
@@ -714,7 +724,8 @@ pub fn band_features(
                     let d = s
                         .rx_grid
                         .as_deref()
-                        .and_then(|g| grid_distance_km(me_grid, g));
+                        .and_then(|g| grid_distance_km(me_grid, g))
+                        .filter(terrestrial);
                     // Gate rungs only: fresh on VHF, whole window on HF.
                     if gate_fresh {
                         if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
@@ -736,7 +747,8 @@ pub fn band_features(
                     let d = s
                         .tx_grid
                         .as_deref()
-                        .and_then(|g| grid_distance_km(me_grid, g));
+                        .and_then(|g| grid_distance_km(me_grid, g))
+                        .filter(terrestrial);
                     // Gate rungs only — see the HeardMe arm.
                     if gate_fresh {
                         if d.is_some_and(|d| d >= cfg.vhf_dx_km) {
@@ -766,7 +778,8 @@ pub fn band_features(
                             let path = s
                                 .tx_grid
                                 .as_deref()
-                                .and_then(|txg| grid_distance_km(txg, rxg));
+                                .and_then(|txg| grid_distance_km(txg, rxg))
+                                .filter(terrestrial);
                             if gate_fresh {
                                 if path.is_some_and(|p| p >= cfg.vhf_dx_km) {
                                     near_dx_rx.insert(s.rx_call.to_ascii_uppercase());
@@ -904,7 +917,8 @@ pub fn classify(
     // band should read "Tropo", not "Unknown". The mode only SURFACES on bands the
     // gate opened, so the gate's evidence bar (2 distinct ≥500 km stations + the
     // rate anomaly) carries the honesty. (70 cm "≥ 2 m" loss test is Phase 2.)
-    if band == Band::B2
+    // The UHF bands open the same way and only this way, so they classify here too.
+    if (band == Band::B2 || band.is_uhf())
         && kp < 4.0
         && !bf.skip_hole
         && (500.0..=1600.0).contains(&bf.median_km)
@@ -932,8 +946,10 @@ pub fn classify(
     }
 
     // F2 / TEP — HF…6 m, high SFI, geomagnetically quiet-ish, no skip hole, long
-    // N–S / equator-crossing paths.
-    if sfi >= cfg.sfi_tep
+    // N–S / equator-crossing paths. Never UHF: the ionosphere does not return it, so a
+    // UHF opening that is not tropo stays Unknown rather than claiming a mode it cannot be.
+    if !band.is_uhf()
+        && sfi >= cfg.sfi_tep
         && kp < 5.0
         && !bf.skip_hole
         && (bf.equator_crossing_frac > 0.3 || bf.ns_fraction > 0.5)
@@ -949,7 +965,7 @@ pub fn classify(
     // no skip-hole and no equator-crossing geometry), so it is held to low
     // confidence (≤ Marginal) — an honest "long-haul F2, low certainty", not a
     // confident classification.
-    if bf.max_km > 4500.0 && !bf.skip_hole && sfi >= cfg.sfi_tep {
+    if !band.is_uhf() && bf.max_km > 4500.0 && !bf.skip_hole && sfi >= cfg.sfi_tep {
         return (PropMode::F2, 0.25, 0.4);
     }
 
@@ -2367,6 +2383,76 @@ mod tests {
             two.raw_open(&cfg),
             "2 m keeps its single-DX-station rung — the 6 m tightening is 6 m only"
         );
+    }
+
+    /// A UHF station heard past the terrestrial ceiling is moonbounce, not an opening: a
+    /// 70 cm EME contact into Europe (~7000 km from EN52) must not open 70 cm, while the
+    /// same evidence from a station at tropo distance (EM12, 1316 km) does — the positive
+    /// control, through the same single-DX-station rung 2 m uses.
+    #[test]
+    fn moonbounce_does_not_open_a_uhf_band_but_tropo_does() {
+        let cfg = OpeningConfig::default();
+        for band in [Band::B70cm, Band::B33cm, Band::B23cm] {
+            let at = |grid: &str| {
+                let spots = [
+                    i_heard("W5DDD", grid, band, 20),
+                    i_heard("W5DDD", grid, band, 70),
+                    i_heard("W5DDD", grid, band, 130),
+                ];
+                let bs: Vec<&PathSpot> = spots.iter().collect();
+                band_features(band, &bs, ME, ME_GRID, NOW, &cfg)
+            };
+            let eme = at("JO62");
+            assert_eq!(
+                eme.unique_far_dx, 0,
+                "{band:?}: an EME path is no DX evidence"
+            );
+            assert!(
+                !eme.raw_open(&cfg),
+                "{band:?}: moonbounce is not an opening"
+            );
+            let tropo = at("EM12");
+            assert!(
+                tropo.raw_open(&cfg),
+                "{band:?}: a 1316 km tropo station opens it"
+            );
+        }
+    }
+
+    /// The UHF bands open by tropo only: tropo geometry classifies Tropo there as on 2 m,
+    /// and a long quiet path that would read as F2 on HF stays Unknown.
+    #[test]
+    fn uhf_openings_are_tropo_and_never_f2() {
+        let cfg = OpeningConfig::default();
+        let calm = SpaceWx {
+            sfi: 200.0,
+            kp: 1.0,
+            ..Default::default()
+        };
+        for band in [Band::B70cm, Band::B33cm, Band::B23cm] {
+            let mut f = feats(band);
+            f.median_km = 1100.0;
+            f.max_km = 1400.0;
+            f.skip_hole = false;
+            f.bearing_concentration = 0.8;
+            assert_eq!(
+                classify(&f, band, &calm, &cfg).0,
+                PropMode::Tropo,
+                "{band:?}"
+            );
+            let mut long = feats(band);
+            long.median_km = 5000.0;
+            long.max_km = 6000.0;
+            long.skip_hole = false;
+            long.ns_fraction = 0.9;
+            assert_eq!(
+                classify(&long, band, &calm, &cfg).0,
+                PropMode::Unknown,
+                "{band:?}"
+            );
+            // Control: the same long path on 10 m is F2.
+            assert_eq!(classify(&long, Band::B10, &calm, &cfg).0, PropMode::F2);
+        }
     }
 
     /// THE TRUE POSITIVE. A real 6 m Es opening: fourteen distinct stations both

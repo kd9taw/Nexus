@@ -33,18 +33,11 @@ import { t } from '../i18n'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { DEFAULT_LOG_QUERY, fmtUtc } from '../features/logQuery'
 import { useLogAnswer } from '../features/logSource'
-import { statsHere } from './CallStatsPane'
 
 /** How many contacts the pane lists (see HOW MANY, above). */
 export const RECENT_QSOS = 5
 
 const QUESTION = { kind: 'page', query: DEFAULT_LOG_QUERY, offset: 0, limit: RECENT_QSOS } as const
-
-/** A cockpit's ⊞ Panels list, the Recent entry kept only where the pane can be drawn: the station's own
- *  window, as for the Stats pane (`statsHere`). */
-export function withRecent<P extends string>(menu: readonly P[]): readonly P[] {
-  return statsHere() ? menu : menu.filter((id) => id !== 'recent')
-}
 
 /** The pane as every cockpit draws it under its `recent` id, inside the log pane under the form (WHERE IT
  *  STANDS, above): a content-height frame, its ✕ the cockpit's own ⊞ tick. */

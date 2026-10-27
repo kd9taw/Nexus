@@ -26,21 +26,11 @@
 //     showing the value the RADIO ACCEPTED, never a reading;
 //   · one line for each honest "no": a level NOT CONFIRMED for the Sub (never "not on this
 //     radio"), and that these levels are set, not read back.
-//
-// The Remote page draws it too (the hosted page reuses these cockpits): its sliders call the same
-// `setSubLevel`, which the page's transport turns into one `radio.subLevel` station intent, and
-// they are live only while this browser holds control of a station that advertises
-// `subReceiverLevels` at operation v3 or later. An older station never sends `receivers`, so the
-// page draws nothing for it. There a drag, or a held adjustment key, is a DRAFT sent ONCE on
-// release — the contract of every Remote slider (the Main levels' `useRadioLevels`): the station
-// confirms one command at a time, so a command per movement would be refused while the first
-// confirms. A pointer cancel, a blur, lost permission or a radio change drops the draft for good.
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, RadioStatus, ReceiverStatus } from '../types'
 import { setSubLevel } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
-import { useStationCapability, useStationControl } from '../stationAccess'
 import { formatDialMhz } from './FrequencyReadout'
 import { WheelRange } from './WheelRange'
 import {
@@ -58,7 +48,7 @@ const SUB = 'SUB'
 const MAIN = 'MAIN'
 /** Not known. */
 const DASH = '—'
-/** The keys that move a range input — a held one is a drag, sent on release (Remote). */
+/** The keys that move a range input — a held one is a drag. */
 const ADJUSTMENT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'])
 
 /** The Sub rows Nexus has built, each with its wire name, the snapshot field its accepted value
@@ -75,15 +65,12 @@ const LEVELS: Record<
 
 export function SubReceiverStrip({
   radio,
-  radioId,
   catOk,
   describedBy,
   onSnap,
   wheelStep,
 }: {
   radio: RadioStatus
-  /** The snapshot's active radio: a Remote drag begun on one radio's Sub never lands on another's. */
-  radioId?: number
   catOk: boolean
   /** The pane's no-CAT banner, which a dead row points at rather than repeating it. */
   describedBy?: string
@@ -115,7 +102,6 @@ export function SubReceiverStrip({
           key={c.id}
           control={c}
           sub={sub}
-          radioId={radioId}
           dead={subCauseFor(c, state) === 'noCat'}
           describedBy={describedBy}
           onSnap={onSnap}
@@ -170,7 +156,6 @@ export function MainReceiverPlate({ radio, catOk }: { radio: RadioStatus; catOk:
 function SubLevelRow({
   control,
   sub,
-  radioId,
   dead,
   describedBy,
   onSnap,
@@ -178,7 +163,6 @@ function SubLevelRow({
 }: {
   control: RigControl
   sub: ReceiverStatus
-  radioId?: number
   dead: boolean
   describedBy?: string
   onSnap?: (s: AppSnapshot) => void
@@ -186,63 +170,25 @@ function SubLevelRow({
 }) {
   const spec = LEVELS[control.id]
   const accepted = spec ? sub[spec.field] : null
-  // Permission, not capability: always true at the desktop; on the Remote page, true only while
-  // this browser holds control of a station that takes the intent.
-  const permitted = useStationCapability('subReceiverLevels')
-  const local = useStationControl()
   const [pct, setPct] = useState(accepted != null ? Math.round(accepted * 100) : 50)
   const dragging = useRef(false)
-  // The Remote page's drag: where it began, where the hand is, and — once canceled — a tombstone
-  // that only a NEW gesture replaces, so returning permission or radio cannot revive it.
-  const draft = useRef<{ start: number; value: number; radioId?: number; canceled: boolean } | null>(null)
   useEffect(() => {
     if (accepted != null && !dragging.current) setPct(Math.round(accepted * 100))
   }, [accepted])
-  const cancel = () => {
-    const d = draft.current
-    if (!d || d.canceled) return
-    d.canceled = true
-    setPct(d.start)
-  }
-  useEffect(() => {
-    if (!permitted || draft.current?.radioId !== radioId) cancel()
-  }, [permitted, radioId])
   // A row the table offers that this strip has no wiring for is a table/strip mismatch, and it
   // draws nothing rather than a control that commands nothing.
   if (!spec) return null
-  const send = (value: number) => {
-    void setSubLevel(spec.level, value / 100)
-      .then((s) => onSnap?.(s))
-      .catch(() => pushToast(t('phone.sub.failed', { plate: control.plate }), 'error'))
-  }
   const begin = () => {
     dragging.current = true
-    if (!local && permitted && (!draft.current || draft.current.canceled)) {
-      draft.current = { start: pct, value: pct, radioId, canceled: false }
-    }
   }
   const finish = () => {
     dragging.current = false
-    const d = draft.current
-    draft.current = null
-    if (!d) return
-    if (!d.canceled && permitted && d.radioId === radioId) {
-      if (d.value !== d.start) send(d.value)
-    } else setPct(d.start)
   }
   const change = (value: number) => {
-    if (!permitted) return
-    const d = draft.current
-    if (d) {
-      if (!d.canceled) {
-        d.value = value
-        setPct(value)
-      }
-      return
-    }
-    // The desktop, or one change with no gesture around it (assistive technology): at once.
     setPct(value)
-    send(value)
+    void setSubLevel(spec.level, value / 100)
+      .then((s) => onSnap?.(s))
+      .catch(() => pushToast(t('phone.sub.failed', { plate: control.plate }), 'error'))
   }
   return (
     <div className="ph-chain-item" data-chain={control.id}>
@@ -250,7 +196,7 @@ function SubLevelRow({
         <span>{control.plate}</span>
         <WheelRange
           wheelStep={wheelStep}
-          {...(dead ? deadControlProps('input', describedBy) : { disabled: !permitted })}
+          {...(dead ? deadControlProps('input', describedBy) : {})}
           type="range"
           min={0}
           max={100}
@@ -260,8 +206,6 @@ function SubLevelRow({
           onChange={(e) => change(Number(e.target.value))}
           onPointerDown={begin}
           onPointerUp={finish}
-          onPointerCancel={cancel}
-          onBlur={cancel}
           onKeyDown={(e) => {
             if (!e.repeat && ADJUSTMENT_KEYS.has(e.key)) begin()
           }}

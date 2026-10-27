@@ -114,7 +114,7 @@ beforeEach(() => {
   mockedWorkSpot.mockClear()
   mockedSetFrequency.mockClear()
   mockedReadEnabledModes.mockReset()
-  mockedReadEnabledModes.mockReturnValue({ cw: true, phone: true, psk: true, js8: true })
+  mockedReadEnabledModes.mockReturnValue({ cw: true, phone: true, psk: true, js8: true, jtty: true })
 })
 
 // Unmount between cases — this project runs vitest without globals, so RTL's
@@ -224,7 +224,7 @@ describe('DetachedPanel Needed board work-guard', () => {
   // and the rig silently enters a hidden mode with no UI. The detached board's onWork had
   // no such guard; it must mirror App.tsx handleWorkNeeded.
   it('phone-disabled: QSYs to the spot instead of switching the rig into the hidden Phone cockpit', async () => {
-    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: false, psk: true, js8: true })
+    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: false, psk: true, js8: true, jtty: true })
     render(<DetachedPanel panel="needed" />)
     // Let the mount pollers settle (getBandPlan → setBandPlan) so qsyBand can resolve the dial.
     await act(async () => {
@@ -237,7 +237,7 @@ describe('DetachedPanel Needed board work-guard', () => {
   })
 
   it('phone-enabled: works the spot (band + mode + freq) as before', async () => {
-    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: true, psk: true, js8: true })
+    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: true, psk: true, js8: true, jtty: true })
     render(<DetachedPanel panel="needed" />)
     await act(async () => {
       await Promise.resolve()
@@ -362,7 +362,7 @@ describe('DetachedPanel POTA/SOTA board', () => {
   })
 
   it('phone-disabled: QSYs to the spot instead of switching the rig into a hidden cockpit (the Needed-arm guard)', async () => {
-    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: false, psk: true, js8: true })
+    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: false, psk: true, js8: true, jtty: true })
     render(<DetachedPanel panel="pota" />)
     await act(async () => {
       await Promise.resolve()

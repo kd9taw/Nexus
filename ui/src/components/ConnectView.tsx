@@ -13,6 +13,7 @@
 import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense, type ReactNode } from 'react'
 import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { AmpStatus, FieldDayStatus } from '../types'
+import type { ActivationBoard } from './ActivationPane'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
 import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
@@ -132,7 +133,7 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
 }
 
 /** What the Layout picker offers: Standard first — every pane open at the usual widths, applied by a tap
- * like any layout's and undone the same way (the operator's batch 63), so trying a layout and going back
+ * like any layout's and undone the same way (the operator's pick), so trying a layout and going back
  * is one tap each way — then, when the one-time switch to Frame + bar kept one, the operator's own
  * earlier layout (`kept`, below), then the presets (features/connectPresets). */
 type LayoutChoice = ConnectPresetId | 'standard' | 'kept'
@@ -384,6 +385,8 @@ interface Props {
   amp?: AmpStatus | null
   /** The running contest, off the same snapshot poll, for the Operators box. Null when none runs. */
   fieldDay?: FieldDayStatus | null
+  /** The running activation and the log tick, off the same snapshot, for the Activation box. */
+  activation?: ActivationBoard
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
   /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
@@ -427,6 +430,7 @@ export function ConnectView({
   needAlerts,
   amp,
   fieldDay,
+  activation,
   onPoint,
   onSelectSat,
   onPopOut,
@@ -555,6 +559,7 @@ export function ConnectView({
     otaBoard,
     neededBoard,
     fieldDay,
+    activation,
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The one flux value the map renders (dev-override > fast lane > snapshot).

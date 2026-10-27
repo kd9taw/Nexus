@@ -215,7 +215,7 @@ impl LogDb {
     /// [`record_from_row`] reads the row unchanged — with those `columns` does not name selected
     /// as the value an empty field decodes from ([`LogDb::empty_values`], the one C14's narrow
     /// reads use). The id is always read. A name the schema does not have is an error.
-    fn narrow_projection(&self, columns: &[&str]) -> Result<String> {
+    pub(super) fn narrow_projection(&self, columns: &[&str]) -> Result<String> {
         if let Some(unknown) = columns.iter().find(|c| !QSO_COLUMNS.contains(c)) {
             return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
                 (*unknown).to_string(),
@@ -291,6 +291,8 @@ mod tests {
             asc: false,
             search: String::new(),
             needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
         };
         let expected: Vec<u32> = order(rowids.iter().copied().zip(all.iter()), &default, &|_| None);
         assert_eq!(db.rowids_newest_first().unwrap(), expected);
@@ -487,6 +489,8 @@ mod tests {
                 asc: true,
                 search: search.to_string(),
                 needs_confirm_only: false,
+                then: Vec::new(),
+                filter: Default::default(),
             };
             let whole = order(rowids.iter().copied().zip(all.iter()), &query, &|_| None);
             let mut b = OrderBuilder::new(&query, &|_| None);

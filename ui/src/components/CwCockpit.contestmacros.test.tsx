@@ -229,6 +229,7 @@ const EXCHANGE_HAS_REPORT: Record<string, boolean> = {
   arrlvhf_jan: false, // grid
   arrlvhf_jun: false,
   arrlvhf_sep: false,
+  arrlrtty: true, // RST, and a W/VE station's state or a DX station's serial
 }
 
 /** `dto::field_kind_tag`: the seed's `one_of` is the wire's `oneOf`; every other tag is spelled

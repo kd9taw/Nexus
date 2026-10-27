@@ -69,8 +69,8 @@ function plate(over: Partial<RadioStatus>): Element {
   return el!
 }
 
-/** The cockpit's ON AIR sign as Phone and CW render it — the TX strip's caption since operator
- *  batch 60 (it was the header's passive pill, which moved into the strip with the latch).
+/** The cockpit's ON AIR sign as Phone and CW render it — the TX strip's caption since the
+ *  operator's pick (it was the header's passive pill, which moved into the strip with the latch).
  *  `tx` on the caption is the strip's ON AIR state; the helper answers in the old pill's terms. */
 function headerSign(over: Partial<RadioStatus>): Element {
   const { container } = render(<CockpitTxStrip radio={radio(over)} onStopTx={() => {}} />)

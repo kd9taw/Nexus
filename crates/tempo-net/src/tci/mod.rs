@@ -1,7 +1,7 @@
 //! TCI, Expert Electronics' Transceiver Control Interface: the protocol core. One WebSocket
 //! carries text commands (CAT, CW, spots, meters, stream control) and binary frames (receive
 //! audio, transmit audio, IQ). The SDR program is the server; Nexus is a client, and later a
-//! server too (operator ruling 553).
+//! server too.
 //!
 //! **The client core.** The codecs, and the client session built on them: the status model, the
 //! dialect learned from a server, the admission a key must pass and the reconnect ladder. Nothing
@@ -159,15 +159,15 @@ pub enum SMeter {
     Poll,
 }
 
-/// What one server family does differently on the wire (plan §2.5), as data. The encoders and the
+/// What one server family does differently on the wire, as data. The encoders and the
 /// session read these fields; nothing branches on a server's name. A server is never identified
 /// by its `protocol:` line alone (piHPSDR announces `ExpertSDR3,2.0` and AetherSDR
 /// `ExpertSDR3,1.5`), so the session learns the dialect from what the server does and starts from
 /// [`EXPERT_SDR3`], the spec.
 ///
-/// Only the differences that change bytes on the wire are here. The rest of §2.5 (when `trx:true`
-/// is echoed, when the first TX_CHRONO comes, whether a dropped client is unkeyed, who owns the
-/// transmitter, transmit full scale) is the session's and the bench's.
+/// Only the differences that change bytes on the wire are here. The rest of what differs (when
+/// `trx:true` is echoed, when the first TX_CHRONO comes, whether a dropped client is unkeyed, who
+/// owns the transmitter, transmit full scale) is the session's and the bench's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dialect {
     pub name: &'static str,
@@ -184,7 +184,7 @@ pub struct Dialect {
 /// ExpertSDR3, the spec's own server (TCI 2.0). TX_CHRONO `length` counts values: WSJT-X answers
 /// each request with that many values (`TCITransceiver.cpp:869-891` with `readAudioData` at
 /// `:1529-1544`, two per stereo frame) and its transmit audio works on ExpertSDR3. Not measured
-/// here (plan U4).
+/// here.
 pub const EXPERT_SDR3: Dialect = Dialect {
     name: "ExpertSDR3 (TCI 2.0)",
     drive: DriveForm::PerTrx,
@@ -194,7 +194,7 @@ pub const EXPERT_SDR3: Dialect = Dialect {
 };
 
 /// ExpertSDR2 (TCI 1.x), as WSJT-X speaks to it: drive without a receiver, no source on a key,
-/// the S-meter polled. Its own behaviour is not measured (plan U13).
+/// the S-meter polled. Its own behaviour is not measured.
 pub const EXPERT_SDR2: Dialect = Dialect {
     name: "ExpertSDR2 (TCI 1.x)",
     drive: DriveForm::Global,

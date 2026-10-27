@@ -61,11 +61,9 @@ interface Props {
   /** Offer the analysis window. The rig scope's row has one; a waterfall drawing the wide audio row,
    *  whose window is fixed, must not offer a control that changes nothing. */
   windowControl: boolean
-  /** Whether this window drives the station's scope. Without it the window buttons are disabled. */
-  control: boolean
 }
 
-export function ScaleStrip({ settings, onChange, windowControl, control }: Props) {
+export function ScaleStrip({ settings, onChange, windowControl }: Props) {
   return (
     <div className="ph-scope-strip" role="group" aria-label={t('scope.strip.aria')}>
       {windowControl && (
@@ -76,8 +74,7 @@ export function ScaleStrip({ settings, onChange, windowControl, control }: Props
               type="button"
               className={`ph-scope-btn${settings.window === w.id ? ' on' : ''}`}
               aria-pressed={settings.window === w.id}
-              disabled={!control}
-              title={control ? windowTitle(w.id) : t('remote.scopeFollowsStation')}
+              title={windowTitle(w.id)}
               onClick={() => onChange({ window: w.id })}
             >
               {w.label}
