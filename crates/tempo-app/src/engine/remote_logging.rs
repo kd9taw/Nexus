@@ -386,6 +386,7 @@ impl Engine {
         self.qso_logged = false;
         self.qso_log_epoch = next_identity();
         self.roger_click = None;
+        self.queued_73_click = None;
     }
 
     pub fn current_qso_log_key(&self) -> Option<String> {

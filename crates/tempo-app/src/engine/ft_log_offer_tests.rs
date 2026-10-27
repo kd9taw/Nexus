@@ -689,3 +689,249 @@ fn with_auto_log_off_the_popup_opens_at_a_band_change() {
     assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
     assert!(c.pending_logs[0].confirm_only);
 }
+
+/// An S&P contact with `DX` from their CQ (decoded at `slot`) up to their RR73, decoded at
+/// `slot + 8`: reports both ways, and our 73 queued but not yet on the air.
+fn work_dx_to_their_rr73(e: &mut Engine, slot: u64) {
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG30", -12)], slot);
+    e.call_station(DX);
+    key_once(e, slot + 1);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU -15", -9)], slot + 4);
+    assert_eq!(
+        key_once(e, slot + 5),
+        "7P8RU KR4FQG R-09",
+        "premise: our roger"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], slot + 8);
+}
+
+/// How the operator re-works the station on its RR73 in the window before our 73 airs.
+#[derive(Clone, Copy, Debug)]
+enum ReClick {
+    /// A double-click in Nexus.
+    Click,
+    /// A logger program's WSJT-X UDP Reply on that RR73 line.
+    Reply,
+}
+
+fn re_click(e: &mut Engine, how: ReClick) {
+    match how {
+        ReClick::Click => e.call_station(DX),
+        ReClick::Reply => e
+            .answer_udp_reply(DX, "KR4FQG 7P8RU RR73", -9, None)
+            .expect("premise: the Reply is taken"),
+    }
+}
+
+/// A click or a logger's Reply on the DX's RR73 BEFORE our 73 to them airs is that same 73, as
+/// in WSJT-X, where the log prompt comes as the 73 is sent: the contact logs once, with its
+/// reports, and no report-less copy is offered, under every Auto-log / Prompt combination.
+/// With both off, Log QSO logs the contact with its reports.
+#[test]
+fn a_reclick_on_their_rr73_before_our_73_airs_logs_the_contact_once() {
+    for how in [ReClick::Click, ReClick::Reply] {
+        for (auto_log, prompt) in [(true, false), (true, true), (false, true), (false, false)] {
+            let case = format!("{how:?}, auto-log {auto_log}, prompt {prompt}");
+            let mut e = ft8();
+            e.settings.auto_log = auto_log;
+            e.settings.prompt_to_log = prompt;
+            work_dx_to_their_rr73(&mut e, 11);
+            re_click(&mut e, how);
+            assert_eq!(
+                key_once(&mut e, 20),
+                "7P8RU KR4FQG 73",
+                "{case}: premise: one 73 goes out"
+            );
+            e.ingest_decodes_for_test(&[], 23);
+            if !auto_log && !prompt {
+                assert!(e.pending_logs.is_empty(), "{case}: nothing offered");
+                assert!(e.log_current_qso(), "{case}: Log QSO logs it");
+                assert!(!e.log_current_qso(), "{case}: once");
+            }
+            let mut rows: Vec<(String, Option<String>, Option<String>)> = e
+                .stored_log()
+                .iter()
+                .map(|r| (r.call.clone(), r.rst_sent.clone(), r.rst_rcvd.clone()))
+                .collect();
+            rows.extend(e.pending_logs.iter().map(|h| {
+                (
+                    h.record.call.clone(),
+                    h.record.rst_sent.clone(),
+                    h.record.rst_rcvd.clone(),
+                )
+            }));
+            assert_eq!(
+                rows,
+                [(DX.to_string(), Some("-09".into()), Some("-15".into()))],
+                "{case}: one contact, with its reports, logged or held"
+            );
+            assert_eq!(e.stored_log().len(), usize::from(!prompt), "{case}: logged");
+            assert!(
+                e.pending_logs.iter().all(|h| !h.confirm_only),
+                "{case}: no offer-only copy"
+            );
+        }
+    }
+}
+
+/// INVARIANT (A) in that window: with Auto-log on and the popup off, the contact still logs
+/// itself and no popup opens when the operator double-clicks their RR73 before our 73 airs.
+#[test]
+fn invariant_a_holds_when_their_rr73_is_clicked_before_our_73_airs() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_their_rr73(&mut e, 11);
+    e.call_station(DX);
+    e.call_station(DX);
+    assert_eq!(key_once(&mut e, 20), "7P8RU KR4FQG 73", "premise: our 73");
+    e.ingest_decodes_for_test(&[], 23);
+    assert_eq!(calls_logged(&e), [DX], "logged by itself, once");
+    assert!(e.snapshot().pending_log.is_none(), "no popup");
+    assert!(e.pending_logs.is_empty());
+}
+
+/// A double-click repeated on a roger before the 73 it queued airs is still that one first 73:
+/// offered once.
+#[test]
+fn a_roger_clicked_twice_before_our_73_airs_is_offered_once() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    e.call_station(DX);
+    e.call_station(DX);
+    assert_eq!(key_once(&mut e, 22), "7P8RU KR4FQG 73", "premise: our 73");
+    e.ingest_decodes_for_test(&[], 25);
+    assert_eq!(e.pending_logs.len(), 1, "offered once");
+    assert!(e.pending_logs[0].confirm_only);
+    assert!(e.stored_log().is_empty());
+}
+
+/// A logger program replying to the same station's RR73 again after another over (our CQ),
+/// while the first offer still waits in the popup: the queue does not hold a second offer for
+/// that station on that band.
+#[test]
+fn a_repeated_logger_reply_does_not_queue_a_second_offer_for_the_same_station_and_band() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    e.answer_udp_reply(DX, "KR4FQG 7P8RU RR73", -9, None)
+        .expect("premise: the Reply is taken");
+    assert_eq!(key_once(&mut e, 22), "7P8RU KR4FQG 73", "premise: our 73");
+    e.ingest_decodes_for_test(&[], 25);
+    assert_eq!(e.pending_logs.len(), 1, "premise: offered");
+    e.set_mode("qso-run").expect("premise: the CQ run starts");
+    assert!(
+        key_once(&mut e, 31).starts_with("CQ KR4FQG"),
+        "premise: our CQ goes out"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 41);
+    e.answer_udp_reply(DX, "KR4FQG 7P8RU RR73", -9, None)
+        .expect("premise: the Reply is taken");
+    assert_eq!(key_once(&mut e, 42), "7P8RU KR4FQG 73", "premise: our 73");
+    e.ingest_decodes_for_test(&[], 45);
+    let calls: Vec<_> = e
+        .pending_logs
+        .iter()
+        .map(|h| h.record.call.clone())
+        .collect();
+    assert_eq!(calls, [DX], "one offer for that station and band");
+    assert!(e.stored_log().is_empty());
+}
+
+/// A CQ run sends RR73 to W1AW, and before the next fold the operator double-clicks a station
+/// decoded the slot before. With Auto-log on the contact with W1AW logs, with its reports; with
+/// the popup on it waits there. It is never lost.
+#[test]
+fn a_click_right_after_our_rr73_logs_or_offers_the_finished_contact() {
+    for (auto_log, prompt) in [(true, false), (true, true), (false, true)] {
+        let case = format!("auto-log {auto_log}, prompt {prompt}");
+        let mut e = ft8();
+        e.settings.auto_log = auto_log;
+        e.settings.prompt_to_log = prompt;
+        e.set_mode("qso-run").expect("the run starts");
+        assert!(key_once(&mut e, 0).starts_with("CQ KR4FQG"), "premise: CQ");
+        e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 2);
+        assert_eq!(key_once(&mut e, 2), "W1AW KR4FQG -07", "premise: report");
+        e.ingest_decodes_for_test(
+            &[
+                dec_snr("KR4FQG W1AW R-10", -7),
+                dec_snr("CQ K2ABC FN20", -11),
+            ],
+            4,
+        );
+        assert_eq!(key_once(&mut e, 4), "W1AW KR4FQG RR73", "premise: RR73");
+        e.call_station("K2ABC");
+        let mut rows: Vec<(String, Option<String>, Option<String>)> = e
+            .stored_log()
+            .iter()
+            .map(|r| (r.call.clone(), r.rst_sent.clone(), r.rst_rcvd.clone()))
+            .collect();
+        rows.extend(e.pending_logs.iter().map(|h| {
+            (
+                h.record.call.clone(),
+                h.record.rst_sent.clone(),
+                h.record.rst_rcvd.clone(),
+            )
+        }));
+        assert_eq!(
+            rows,
+            [("W1AW".to_string(), Some("-07".into()), Some("-10".into()))],
+            "{case}: logged or held, with its reports"
+        );
+        assert_eq!(
+            e.stored_log().len(),
+            usize::from(!prompt),
+            "{case}: logged by itself only with the popup off"
+        );
+        e.ingest_decodes_for_test(&[], 6);
+        assert_eq!(
+            e.stored_log().len() + e.pending_logs.len(),
+            1,
+            "{case}: once"
+        );
+    }
+}
+
+/// With both off, a click that sets aside a finished contact while an older one is already set
+/// aside for Log QSO does not drop the older one: both go to the popup, for the operator's
+/// confirm.
+#[test]
+fn a_click_set_aside_never_drops_an_older_set_aside_contact() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    let made_on = (e.settings.band.clone(), e.log_frequencies());
+    e.qso_report_sent = Some(-3);
+    e.stalled_qso = Some(e.set_aside("W9OLD".into(), None, Some(-4), made_on));
+    e.qso_report_sent = None;
+    work_dx_to_73(&mut e, 11);
+    e.ingest_decodes_for_test(&[dec_snr("CQ W2XYZ FN31", -12)], 31);
+    e.call_station("W2XYZ");
+    let mut calls: Vec<String> = e
+        .pending_logs
+        .iter()
+        .map(|h| h.record.call.clone())
+        .chain(e.stalled_qso.iter().map(|st| st.dxcall.clone()))
+        .chain(e.band_change_qso.iter().map(|st| st.dxcall.clone()))
+        .collect();
+    calls.sort();
+    assert_eq!(calls, [DX, "W9OLD"], "neither contact is lost");
+    assert!(e.stored_log().is_empty(), "nothing logged by itself");
+}
+
+/// With both off, Log QSO pressed while a new station is shown logs the contact set aside
+/// behind it, and names that station, so the toast can say which was logged.
+#[test]
+fn log_qso_names_the_set_aside_station_it_logged() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    e.ingest_decodes_for_test(&[dec_snr("CQ W2XYZ FN31", -12)], 31);
+    e.call_station("W2XYZ");
+    assert_eq!(e.log_current_qso_call().as_deref(), Some(DX));
+    assert_eq!(calls_logged(&e), [DX]);
+}

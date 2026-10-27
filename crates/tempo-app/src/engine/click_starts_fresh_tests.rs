@@ -267,7 +267,9 @@ fn e_a_roster_click_on_the_new_band_starts_fresh_there() {
     assert_fresh_contact(e, backdated, "15m", "roster click on 15m");
 }
 
-/// F — control: a QSO already finished.
+/// F — control: a QSO already finished, and claimed by the auto-log as its fold does. (One
+/// finished and not yet claimed is logged by the click itself, with Auto-log on:
+/// `ft_log_offer_tests::a_click_right_after_our_rr73_logs_or_offers_the_finished_contact`.)
 #[test]
 fn f_a_finished_qso_reclicked_starts_fresh() {
     let (mut e, backdated) = stale_attempt(true);
@@ -275,6 +277,7 @@ fn f_a_finished_qso_reclicked_starts_fresh() {
         station.state = tempo_core::qso::State::Done;
         station.pending = None;
     }
+    e.qso_logged = true;
     e.call_station(DX);
     assert_fresh_contact(e, backdated, "20m", "re-click after Done");
 }
