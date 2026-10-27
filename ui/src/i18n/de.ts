@@ -8200,7 +8200,7 @@ export const DE: PartialCatalog = {
   "js8.lists.clear": "Leeren",
   "js8.lists.clearAll": "Alle Listen leeren…",
   "js8.lists.clearAll.confirm.title": "Alle JS8-Aktivität leeren?",
-  "js8.lists.clearAll.confirm.body": "RX-Fenster, Bandaktivität und Rufzeichenliste beginnen leer und füllen sich wieder, sobald Stationen gehört werden. Posteingang, Einstellungen und die eigene Liste der Station, wen sie gehört hat, bleiben erhalten.",
+  "js8.lists.clearAll.confirm.body": "RX-Fenster, Bandaktivität und Rufzeichenliste beginnen leer und füllen sich wieder, sobald Stationen gehört werden, und das Eingabefeld wird geleert, wie in JS8Call. Posteingang, Einstellungen und die eigene Liste der Station, wen sie gehört hat, bleiben erhalten.",
   "js8.lists.clearAll.confirm.label": "Alle Listen leeren",
   "js8.lists.jumpOffset": "Zu {{offset}} Hz springen",
   "js8.lists.jumpSpeed": "Zu Tempo {{speed}} wechseln",

@@ -7727,7 +7727,7 @@ export const JA: PartialCatalog = {
   "js8.lists.clear": "クリア",
   "js8.lists.clearAll": "すべてのリストをクリア…",
   "js8.lists.clearAll.confirm.title": "JS8 のアクティビティをすべてクリアしますか?",
-  "js8.lists.clearAll.confirm.body": "RX 欄、バンドアクティビティ、コールサイン一覧は空になり、局を受信するとまた埋まります。受信箱、設定、局自身が記録している受信局はそのまま残ります。",
+  "js8.lists.clearAll.confirm.body": "RX 欄、バンドアクティビティ、コールサイン一覧は空になり、局を受信するとまた埋まります。JS8Call と同じく、入力欄も空になります。受信箱、設定、局自身が記録している受信局はそのまま残ります。",
   "js8.lists.clearAll.confirm.label": "すべてのリストをクリア",
   "js8.lists.jumpOffset": "{{offset}} Hz へ移動",
   "js8.lists.jumpSpeed": "{{speed}} の速度に切り替え",

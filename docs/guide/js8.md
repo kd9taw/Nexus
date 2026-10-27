@@ -44,8 +44,10 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   arrive ("time · offset · text"), closed by **♢** after its last frame. **……** stands where a
   frame did not come within one and a half periods. Your own transmissions print here too,
   tinted, and lines addressed to you carry a bar. Double-click a line to write to the station
-  that opens it. **⋯** ▸ **Clear** empties it; **Clear all lists…** empties the three lists after
-  asking.
+  that opens it. **⋯** ▸ **Clear** empties it and the compose box with it, as JS8Call's does;
+  **Clear all lists…** empties the three lists and the compose box after asking. The text and the
+  command go, the call in **To** stays; while a message of the compose box is going out, the box
+  keeps what is still to go and the message goes on.
 - **Band activity** — one row per audio offset holding every frame heard there (the last ten),
   joined, with ♢ after each message. Columns: offset, age, SNR, and from **⋯ ▸ Show columns**
   time delta and speed too, as JS8Call's; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show

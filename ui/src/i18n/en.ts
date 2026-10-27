@@ -12104,7 +12104,7 @@ export const EN = {
   'js8.lists.clearAll': 'Clear all lists…',
   'js8.lists.clearAll.confirm.title': 'Clear all JS8 activity?',
   'js8.lists.clearAll.confirm.body':
-    'The RX pane, Band activity and the call list start empty and fill again as stations are heard. Your Inbox, your settings and the station’s own record of who it heard are kept.',
+    'The RX pane, Band activity and the call list start empty and fill again as stations are heard, and the compose box is emptied, as in JS8Call. Your Inbox, your settings and the station’s own record of who it heard are kept.',
   'js8.lists.clearAll.confirm.label': 'Clear all lists',
   'js8.lists.jumpOffset': 'Jump to {{offset}} Hz',
   'js8.lists.jumpSpeed': 'Jump to {{speed}} speed',

@@ -2787,7 +2787,7 @@ export const FR: PartialCatalog = {
   "js8.lists.clear": "Vider",
   "js8.lists.clearAll": "Vider toutes les listes…",
   "js8.lists.clearAll.confirm.title": "Vider toute l’activité JS8 ?",
-  "js8.lists.clearAll.confirm.body": "Le volet RX, Activité de bande et la liste d’indicatifs repartent vides et se remplissent à nouveau à mesure que des stations sont entendues. Votre boîte, vos paramètres et le relevé propre de la station de qui elle a entendu sont conservés.",
+  "js8.lists.clearAll.confirm.body": "Le volet RX, Activité de bande et la liste d’indicatifs repartent vides et se remplissent à nouveau à mesure que des stations sont entendues, et la zone de saisie est vidée, comme dans JS8Call. Votre boîte, vos paramètres et le relevé propre de la station de qui elle a entendu sont conservés.",
   "js8.lists.clearAll.confirm.label": "Vider toutes les listes",
   "js8.lists.jumpOffset": "Aller à {{offset}} Hz",
   "js8.lists.jumpSpeed": "Passer à la vitesse {{speed}}",

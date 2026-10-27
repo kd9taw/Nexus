@@ -3569,7 +3569,7 @@
 "5","js8.lists.clear","Clear","","","Menu entry that empties one JS8 list (the RX pane, Band activity or the call list)."
 "5","js8.lists.clearAll","Clear all lists…","","",""
 "5","js8.lists.clearAll.confirm.title","Clear all JS8 activity?","","JS8",""
-"5","js8.lists.clearAll.confirm.body","The RX pane, Band activity and the call list start empty and fill again as stations are heard. Your Inbox, your settings and the station’s own record of who it heard are kept.","","RX",""
+"5","js8.lists.clearAll.confirm.body","The RX pane, Band activity and the call list start empty and fill again as stations are heard, and the compose box is emptied, as in JS8Call. Your Inbox, your settings and the station’s own record of who it heard are kept.","","RX | JS8Call",""
 "5","js8.lists.clearAll.confirm.label","Clear all lists","","",""
 "5","js8.lists.jumpOffset","Jump to {{offset}} Hz","","{{offset}} | Hz","Menu entry: move your receive and transmit audio offsets to this one. {{offset}} is in Hz."
 "5","js8.lists.jumpSpeed","Jump to {{speed}} speed","","{{speed}}","Menu entry: switch your JS8 transmit speed to this station’s. {{speed}} is a speed name (Slow, Normal, Fast, Turbo)."

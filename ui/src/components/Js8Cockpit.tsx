@@ -1212,7 +1212,19 @@ export function Js8Cockpit({
 
   // ---- THE LISTS' MENUS (js8ListMenus): JS8Call's View and header menus, each pane's ⋯, and its
   // right-click menus, each row's ⋯ or a right-click on the row. Nothing in them keys. ----
-  const clearList = (which: 'rx' | 'band' | 'call') => changeMarks((m) => clearJs8Lists(m, which, Date.now()))
+  /** JS8Call's RX Clear empties its compose box too (`clearRXActivity`, mainwindow.cpp:3001-3014),
+   *  and Clear All Lists runs it (:2970-2990): the text and the command go, the To box (JS8Call's
+   *  selected call) stays. Not while the box's own message goes out: the box then holds what is still
+   *  to go (typeahead), and that goes on, as JS8Call's empty box changes no frame (:3598-3600). */
+  const clearCompose = () => {
+    if (typeahead.active) return
+    setText('')
+    setCmdId(null)
+  }
+  const clearList = (which: 'rx' | 'band' | 'call') => {
+    changeMarks((m) => clearJs8Lists(m, which, Date.now()))
+    if (which === 'rx') clearCompose()
+  }
   /** "Clear All Lists", after JS8Call's question (UI_Constructor.cpp:783-795). */
   const clearAll = () => {
     void confirmDialog({
@@ -1221,7 +1233,9 @@ export function Js8Cockpit({
       confirmLabel: t('js8.lists.clearAll.confirm.label'),
       danger: true,
     }).then((yes) => {
-      if (yes) changeMarks((m) => clearJs8Lists(m, 'all', Date.now()))
+      if (!yes) return
+      changeMarks((m) => clearJs8Lists(m, 'all', Date.now()))
+      clearCompose()
     })
   }
   const clears = (which: 'rx' | 'band' | 'call') => js8ClearEntries(() => clearList(which), clearAll)

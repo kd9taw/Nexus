@@ -2787,7 +2787,7 @@ export const ES: PartialCatalog = {
   "js8.lists.clear": "Vaciar",
   "js8.lists.clearAll": "Vaciar todas las listas…",
   "js8.lists.clearAll.confirm.title": "¿Vaciar toda la actividad JS8?",
-  "js8.lists.clearAll.confirm.body": "El panel RX, Actividad de banda y la lista de indicativos empiezan vacíos y se llenan de nuevo al oír estaciones. Se conservan tu bandeja, tus ajustes y el registro propio de la estación de a quién ha oído.",
+  "js8.lists.clearAll.confirm.body": "El panel RX, Actividad de banda y la lista de indicativos empiezan vacíos y se llenan de nuevo al oír estaciones, y la caja de redacción se vacía, como en JS8Call. Se conservan tu bandeja, tus ajustes y el registro propio de la estación de a quién ha oído.",
   "js8.lists.clearAll.confirm.label": "Vaciar todas las listas",
   "js8.lists.jumpOffset": "Saltar a {{offset}} Hz",
   "js8.lists.jumpSpeed": "Pasar a la velocidad {{speed}}",
