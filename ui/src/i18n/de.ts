@@ -8449,6 +8449,7 @@ export const DE: PartialCatalog = {
   "shell.log.discard.failed": "QSO konnte nicht verworfen werden",
   "shell.toast.logged": "QSO geloggt",
   "shell.toast.loggedCall": "QSO mit {{call}} geloggt",
+  "shell.toast.logWaiting": "{{call}} wartet bereits im Log-Fenster",
   "shell.toast.nothingToLog": "Nichts zu loggen — das QSO ist bereits abgeschlossen oder es wurde kein Rapport getauscht",
   "shell.logStore.network": "Nexus hat die Logbuch-Datenbank nicht geöffnet, weil dein Datenordner auf einem Netzlaufwerk liegt, wo eine Datenbank durch die Art der Dateisperren über das Netz beschädigt werden kann. Es geht nichts verloren: Diese Sitzung führt dein Log wie bisher in log.adi. Um die Datenbank zu nutzen, verschiebe den Datenordner auf ein Laufwerk in diesem Computer, unter Einstellungen ▸ Konfig ▸ Daten- und Logordner.",
   "shell.logStore.failed": "Nexus konnte die Logbuch-Datenbank nicht öffnen. Grund: {{reason}}. Es geht nichts verloren: Diese Sitzung führt dein Log wie bisher in log.adi. Die Einzelheiten stehen im Diagnoseprotokoll, unter Einstellungen ▸ Logbuch & Konnektoren ▸ Integrationen & Feeds ▸ Diagnostic log.",

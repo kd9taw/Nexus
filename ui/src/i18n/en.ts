@@ -13233,6 +13233,9 @@ export const EN = {
   // The station the Log button logged or held: with Auto-log and the popup off, the press can
   // log a contact set aside behind the station now shown.
   'shell.toast.loggedCall': 'Logged QSO with {{call}}',
+  // Log pressed on a contact whose offer for that station, band and mode already waits in the
+  // log popup: nothing new was held.
+  'shell.toast.logWaiting': '{{call}} is already waiting in the log popup',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',
   // The logbook database could not be opened at launch, so this session keeps the log in

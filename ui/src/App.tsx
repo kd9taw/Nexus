@@ -2544,7 +2544,10 @@ function App() {
         // The engine's verdict, not the call returning (#100): every false is a deliberate
         // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
         // and a green "Logged QSO" over one claimed a write that never happened.
-        if (r.logged) {
+        if (r.logged && r.alreadyWaiting && r.call) {
+          // Nothing new was held: that station's offer already waits in the popup.
+          pushToast(t('shell.toast.logWaiting', { call: r.call }), 'info', 4000)
+        } else if (r.logged) {
           pushToast(r.call ? t('shell.toast.loggedCall', { call: r.call }) : t('shell.toast.logged'), 'success', 2500)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now

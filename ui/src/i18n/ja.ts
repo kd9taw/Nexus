@@ -8376,6 +8376,7 @@ export const JA: PartialCatalog = {
   "shell.log.discard.failed": "QSOを破棄できませんでした",
   "shell.toast.logged": "QSOを記録しました",
   "shell.toast.loggedCall": "{{call}} とのQSOを記録しました",
+  "shell.toast.logWaiting": "{{call}} はすでにログのポップアップで待機中です",
   "shell.toast.nothingToLog": "記録するものがありません — QSOは既に終了しているか、レポートが交換されていません",
   "shell.logStore.network": "データフォルダーがネットワークドライブ上にあるため、Nexusはログブックのデータベースを開きませんでした。ネットワーク上のデータベースは、ネットワーク越しのファイルロックの仕組みによって壊れることがあります。データは失われていません。このセッションでは、これまでどおりログをlog.adiに記録します。データベースを使うには、設定 ▸ 構成 ▸ データとログのフォルダー で、データフォルダーをこのコンピューター内部のドライブに移してください。",
   "shell.logStore.failed": "Nexusはログブックのデータベースを開けませんでした。理由: {{reason}}。データは失われていません。このセッションでは、これまでどおりログをlog.adiに記録します。詳細は診断ログ（設定 ▸ ログと連携 ▸ 連携とフィード ▸ Diagnostic log）にあります。",

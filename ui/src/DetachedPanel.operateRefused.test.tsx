@@ -101,4 +101,20 @@ describe('the popped-out Operate window', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log' }))
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith('Logged QSO with 7P8RU', 'success', 2500))
   })
+
+  it('says the contact already waits in the popup when nothing new was held, not that it logged', async () => {
+    vi.mocked(api.logCurrentQso).mockResolvedValueOnce({
+      logged: true,
+      call: '7P8RU',
+      alreadyWaiting: true,
+      snapshot: SNAP as never,
+    })
+    render(<DetachedPanel panel="operate" />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    await waitFor(() =>
+      expect(pushToast).toHaveBeenCalledWith('7P8RU is already waiting in the log popup', 'info', 4000),
+    )
+    expect(pushToast).not.toHaveBeenCalledWith('Logged QSO with 7P8RU', 'success', 2500)
+  })
 })

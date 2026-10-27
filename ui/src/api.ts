@@ -1408,9 +1408,10 @@ export async function qsoFreetext(text: string): Promise<AppSnapshot> {
  *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
  *  the UI must not claim success then. Snapshot is fresh either way. */
 /** `call` names the station logged or held, which with Auto-log and the popup off can be a
- *  contact set aside behind the station now shown. */
-export async function logCurrentQso(): Promise<{ logged: boolean; call?: string | null; pending?: boolean; snapshot: AppSnapshot }> {
-  return invoke<{ logged: boolean; call?: string | null; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
+ *  contact set aside behind the station now shown. `alreadyWaiting`: that station's offer was
+ *  already waiting in the log popup, so nothing new was held. */
+export async function logCurrentQso(): Promise<{ logged: boolean; call?: string | null; alreadyWaiting?: boolean; pending?: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; call?: string | null; alreadyWaiting?: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
 }
 
 /** Where a log form's STATE came from: typed or picked by the operator, filled in by a callbook

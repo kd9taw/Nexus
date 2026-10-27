@@ -8499,6 +8499,7 @@ export const FR: PartialCatalog = {
   "shell.tier.failed": "Impossible de changer de niveau",
   "shell.toast.logged": "QSO enregistré",
   "shell.toast.loggedCall": "QSO avec {{call}} enregistré",
+  "shell.toast.logWaiting": "{{call}} attend déjà dans la fenêtre d'enregistrement",
   "shell.toast.nothingToLog": "Rien à enregistrer — le QSO est déjà clos ou aucun report n'a été échangé",
   "shell.tune.failed": "Impossible de basculer Tune",
   "shell.tx.announce.off": "En réception",
