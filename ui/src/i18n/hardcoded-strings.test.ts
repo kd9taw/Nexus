@@ -317,6 +317,10 @@ const MIGRATED = [
   // The radio switch notice (2026-10-27): born migrated. The radio name, the band and the routing
   // mode name in it are data.
   'useRadioSwitchNotice.ts',
+  // The first-contact walk-through and the experience answers (2026-10-27): born migrated. The TX
+  // buttons' names in the walk are the strip's own untranslated labels, quoted as data.
+  'components/FirstContactWalk.tsx',
+  'settings/experience.ts',
   'components/ContestView.tsx',
   'components/ContestOperators.tsx',
   // The activator's pane and its Stop checklist (2026-10-25): born migrated.

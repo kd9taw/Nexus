@@ -20184,6 +20184,22 @@ fn set_radio_switch_policy(
     Ok(eng.snapshot())
 }
 
+/// The first-run wizard's experience answer (also Settings ▸ Station ▸ Your experience), and the
+/// ONE write path for it: narrow for `set_radio_switch_policy`'s stale-snapshot reason, and
+/// `Engine::apply_settings` keeps the live value. Returns the snapshot.
+#[tauri::command(async)]
+fn set_experience_level(
+    state: State<'_, SharedEngine>,
+    level: tempo_app::settings::ExperienceLevel,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_experience_level(level);
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: set_experience_level save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// Where a `(band, mode class)` WOULD route right now, as the radio's id + name — the Settings rule
 /// editor's "test" affordance. Read-only: it never moves a rig.
 #[tauri::command(async)]
@@ -40610,6 +40626,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_routing_rules,
         set_default_radio,
         set_radio_switch_policy,
+        set_experience_level,
         route_preview,
         update_radio_profile,
         set_tune,

@@ -2128,6 +2128,14 @@ pub struct Settings {
     /// band dropdown. `Open` (default) = no restrictions (non-US). See [`LicenseClass`].
     #[serde(default)]
     pub license_class: LicenseClass,
+    /// The first-run wizard's "How much have you done?" answer ([`ExperienceLevel`]). `None` =
+    /// never asked: a file from before the question and a first run read the same, and an
+    /// existing file is never given one by an update (nothing is written for `None`). It only
+    /// picks the UI's starting features and how much of Settings opens; nothing on the Rust side
+    /// reads it, and it touches no transmit path. Written only by `Engine::set_experience_level`;
+    /// a settings form save keeps the live value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experience_level: Option<ExperienceLevel>,
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
     /// rig-mode: CAT → CW, Soundcard → a DATA submode, PKTUSB/PKTLSB (audio tone). See [`rig_mode`].
     pub cw_keyer: CwKeyerBackend,
@@ -4402,6 +4410,20 @@ impl Macros {
     }
 }
 
+/// The answer to the first-run wizard's one question, "How much have you done?" (Settings ▸
+/// Station ▸ Your experience changes it later). The UI uses it to pick the starting feature set,
+/// how much of Settings starts open, the starter packs and the first-contact walk-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExperienceLevel {
+    /// New to the hobby.
+    NewToHobby,
+    /// Experienced on phone or CW, new to the digital modes.
+    NewToDigital,
+    /// Experienced: everything on, Settings as it always was.
+    Experienced,
+}
+
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
 /// routing hands to another radio ([`Settings::route_radio`]). The switch is the same either way;
 /// this only says whether the screen tells the operator about it.
@@ -6016,7 +6038,9 @@ impl Default for Settings {
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             keyboard_modem: KeyboardModem::Psk,
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
-            cw_keyer: CwKeyerBackend::Cat,     // rig keyer via send_morse (zero hardware)
+            // Not asked until the first-run wizard asks it (see the field).
+            experience_level: None,
+            cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_key_port: String::new(),
             cw_key_line: default_cw_key_line(),
@@ -8236,6 +8260,58 @@ mod tests {
         ] {
             std::fs::write(&path, file.to_string()).unwrap();
             assert_eq!(Settings::load(&path).write_all_txt, want, "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The experience answer is asked of a new install only, and an existing file never grows
+    /// one.** A first run and a file without the key both read "not asked" (`None`): the answer
+    /// is the first-run wizard's to give, never a default. A full stored file (the UI's fixture
+    /// of every key) saves back WITHOUT the key, so an update writes nothing new into it.
+    /// CONTROL: each saved answer reads back as itself.
+    #[test]
+    fn experience_level_is_unset_until_answered_and_an_existing_file_stays_without_it() {
+        let dir = scratch_dir("experience_level");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert_eq!(
+            Settings::load(&path).experience_level,
+            None,
+            "a first run has not been asked"
+        );
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            !full.contains("experienceLevel"),
+            "fixture predates the key"
+        );
+        std::fs::write(&path, full).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.experience_level, None,
+            "an existing file was not asked"
+        );
+        loaded.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !saved.contains("experienceLevel"),
+            "saving an existing file wrote the new key into it"
+        );
+        for (word, want) in [
+            ("newToHobby", ExperienceLevel::NewToHobby),
+            ("newToDigital", ExperienceLevel::NewToDigital),
+            ("experienced", ExperienceLevel::Experienced),
+        ] {
+            let file = serde_json::json!({ "mycall": "KD9TAW", "experienceLevel": word });
+            std::fs::write(&path, file.to_string()).unwrap();
+            let s = Settings::load(&path);
+            assert_eq!(s.experience_level, Some(want), "{word}");
+            s.save(&path).unwrap();
+            assert_eq!(
+                Settings::load(&path).experience_level,
+                Some(want),
+                "{word} saved"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

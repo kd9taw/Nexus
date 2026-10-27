@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|firstrun
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -132,6 +132,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Why? opens Settings at the Radios cards, whose routing lines and switch
                         choice are on screen with nothing sideways, with a planted overflow in
                         the notice and in a card that must be caught (ui/probe/radioswitch-probe.mjs)
+  --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
+                        1920×1080: the About-you question and its answers on screen, Finish
+                        writes the answer, the Getting started guide then the first-contact
+                        walk on screen, and Settings folded for a new operator with Show all
+                        opening it, with a planted overflow in an answer and in the walk that
+                        must be caught (ui/probe/firstrun-probe.mjs)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -148,7 +154,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters or radioswitch" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|firstrun) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch or firstrun" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -176,6 +182,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = waterfalls ] && exec node "$ROOT/ui/probe/waterfalls-probe.mjs"
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
+  [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

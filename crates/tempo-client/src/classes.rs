@@ -484,6 +484,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_default_radio",              RunsAtShack, "The shack's band routing."),
     ("set_dxcc_by_id",                 RunsAtShack, "Edits a contact in the shack's logbook."),
     ("set_eqsl_password",              RefusedHere, "Credentials are set at the shack only."),
+    ("set_experience_level",           RunsAtShack, "The shack's answer to how much its operator has done; it picks starting screens and keys nothing."),
     ("set_fd_operator",                RunsAtShack, "Who is at the key in the shack's contest session."),
     ("set_filter_width",               RunsAtShack, "The shack's rig control."),
     ("set_flex_pan_ref",               RunsAtShack, "The shack's FlexRadio panadapter."),

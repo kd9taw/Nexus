@@ -44,6 +44,7 @@ import type {
   RadioStatus,
   RouteMode,
   RadioSwitchPolicy,
+  ExperienceLevel,
   RoutingRule,
   Settings,
   DataFolderInfo,
@@ -97,6 +98,7 @@ import {
   setRoutingRules,
   setDefaultRadio,
   setRadioSwitchPolicy,
+  setExperienceLevel,
   routePreview,
   updateRadioProfile,
   type RadioProfilePatch,
@@ -251,7 +253,8 @@ import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
-import { resolveTarget } from '../settings/registry'
+import { resolveTarget, sectionsForTab, type SettingsTabId } from '../settings/registry'
+import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, startsFolded } from '../settings/experience'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
 import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
@@ -1788,6 +1791,19 @@ export function SettingsPanel({
   // The section a deep link is pointing at, published to collapsed `SettingsGroup`s so one
   // containing the target opens itself — a target the operator still cannot see is not found.
   const [openTarget, setOpenTarget] = useState<string | null>(resolvedTarget?.section ?? null)
+  // The experience answer's folding (`settings/experience.ts`): a section no first-hour operator
+  // needs shows its heading only, for the two "new" answers. No answer, or Experienced: nothing
+  // folds, the panel exactly as it always was. Show all unfolds the tab for this visit; a search
+  // pick or deep link opens its own section whatever the fold.
+  const [unfoldedTabs, setUnfoldedTabs] = useState<Set<string>>(() => new Set())
+  const fold = (sectionId: string): { 'data-folded'?: 'true' } =>
+    startsFolded(sectionId, form?.experienceLevel) && !unfoldedTabs.has(tab) && openTarget !== sectionId
+      ? { 'data-folded': 'true' }
+      : {}
+  const foldingTab =
+    foldsSettings(form?.experienceLevel) &&
+    !unfoldedTabs.has(tab) &&
+    sectionsForTab(tab as SettingsTabId).some((x) => startsFolded(x.id, form?.experienceLevel) && x.id !== openTarget)
   // A later target (the operator clicks a second pointer while Settings is already open) must
   // move the panel, not be swallowed because the component is already mounted.
   useEffect(() => {
@@ -2834,6 +2850,31 @@ export function SettingsPanel({
       // App reads the policy from its settings to decide whether to show the notice.
       onSaved?.()
     })
+  }
+  // The experience answer: ONE writer (`setExperienceLevel`), saved on change. It picks the
+  // starting feature set as the wizard does, so a hand-tuned set is confirmed first, the way a
+  // profile chip in Settings ▸ Appearance ▸ Features confirms it. Declined, nothing changes.
+  const handleSetExperience = (level: ExperienceLevel) => {
+    void (async () => {
+      const label = EXPERIENCE_LEVELS.find((l) => l.value === level)?.label ?? level
+      if (
+        features.profile === 'custom' &&
+        !(await confirmDialog({
+          title: t('settings.features.profile.confirm.title', { profile: label }),
+          body: t('settings.features.profile.confirm.body'),
+          confirmLabel: t('settings.features.profile.confirm.action'),
+          danger: true,
+        }))
+      )
+        return
+      const s = await withErrorToast(() => setExperienceLevel(level), t('settings.station.experience.failed'))
+      if (!s) return
+      setForm((prev) => (prev ? { ...prev, experienceLevel: level } : prev))
+      if (savedRef.current) savedRef.current = { ...savedRef.current, experienceLevel: level }
+      const preset = featurePreset(level)
+      features.applyProfiles(preset.profiles, preset.extraOn)
+      onSaved?.()
+    })()
   }
   const handleSetDefaultRadio = (id: number | null) => {
     void withErrorToast(() => setDefaultRadio(id), t('settings.radios.default.failed')).then(
@@ -4162,9 +4203,24 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
+          {/* For the two "new" experience answers, a tab opens on the sections a first-hour
+              operator needs; the rest show their heading only, until Show all (or a search or
+              deep link to one of them, which opens that one). */}
+          {foldingTab && (
+            <div className="settings-fold-note" role="note">
+              <span>{t('settings.fold.note')}</span>
+              <button
+                type="button"
+                className="settings-linkbtn"
+                onClick={() => setUnfoldedTabs((prev) => new Set(prev).add(tab))}
+              >
+                {t('settings.fold.showAll')}
+              </button>
+            </div>
+          )}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && (
-            <fieldset className="settings-section" id="settings-data-folder">
+            <fieldset className="settings-section" id="settings-data-folder" {...fold('data-folder')}>
               <legend>{t('settings.dataFolder.legend')}</legend>
               {/* The warning first: a synced folder is the reason most operators come here, and it
                   is also the one way to lose contacts — two machines writing one log.adi through
@@ -4269,7 +4325,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'configurations' && (
-            <fieldset className="settings-section" id="settings-configurations">
+            <fieldset className="settings-section" id="settings-configurations" {...fold('configurations')}>
               <legend>{t('settings.configurations.legend')}</legend>
               <p className="settings-note">
                 <T k="settings.configurations.note" tags={{ em: <em /> }} />
@@ -4361,7 +4417,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-workspace">
+          <fieldset className="settings-section" id="settings-workspace" {...fold('workspace')}>
             <legend>{t('settings.workspace.legend')}</legend>
             {/* THE ONE-TAP LOOKS, first on the tab and the full width of it: each look is a set of
                 the rows below and in Theme (features/looks.ts), named by reading them back. Offered
@@ -4639,7 +4695,7 @@ export function SettingsPanel({
               High contrast, Night and Field mode moved here from Workspace with their rows
               unchanged (the look-and-feel redesign's Display sections), in the order they had. */}
           {tab === 'appearance' && ((theme && onThemeChange) || onHighContrastChange || onNightChange || onFieldModeChange) && (
-          <fieldset className="settings-section" id="settings-theme">
+          <fieldset className="settings-section" id="settings-theme" {...fold('theme')}>
             <legend>{t('settings.theme.legend')}</legend>
             {/* Theme lives in Settings, not the top bar (operator, 2026-08-10): Light/Dark/System
                 is a set-once preference, and the bar keeps only the Field quick toggle. Three
@@ -4792,7 +4848,7 @@ export function SettingsPanel({
               pre-checked presets, no hex field ("presets first, hex later", operator 2026-09-26);
               the transmit red, the alert orange and the Needed colours have no row at all. */}
           {tab === 'appearance' && palette && onPaletteChange && (
-          <fieldset className="settings-section" id="settings-colours">
+          <fieldset className="settings-section" id="settings-colours" {...fold('colours')}>
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
             <SettingsColours palette={palette} skin={skin} paintedTheme={paintedTheme} onChange={onPaletteChange} />
@@ -4807,7 +4863,7 @@ export function SettingsPanel({
               Remote they are read-only like the rest of its Settings page (BrowserApplication.test's
               contract); the pickers in the cockpit headers still change the palette there. */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-waterfall-scopes">
+          <fieldset className="settings-section" id="settings-waterfall-scopes" {...fold('waterfall-scopes')}>
             <legend>{t('settings.waterfallScopes.legend')}</legend>
             <div className="settings-grid">
               <p className="settings-note">{t('settings.waterfallScopes.note')}</p>
@@ -4834,7 +4890,7 @@ export function SettingsPanel({
 
           {/* ---- Map & globe: the Logbook globe, and where the Connect map's own choices live ---- */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-map-globe">
+          <fieldset className="settings-section" id="settings-map-globe" {...fold('map-globe')}>
             <legend>{t('settings.mapGlobe.legend')}</legend>
             <div className="settings-grid settings-grid--lone">
               <p className="settings-note">{t('settings.mapGlobe.note')}</p>
@@ -4861,7 +4917,7 @@ export function SettingsPanel({
               `useMotion` (App owns it) had no control in Settings before this: Reduce was reachable
               only through the computer's own reduce-motion setting. Per machine, like the theme. */}
           {tab === 'appearance' && onMotionChange && (
-          <fieldset className="settings-section" id="settings-performance">
+          <fieldset className="settings-section" id="settings-performance" {...fold('performance')}>
             <legend>{t('settings.performance.legend')}</legend>
             <div className="settings-grid settings-grid--lone">
               <div className="settings-field">
@@ -4902,7 +4958,7 @@ export function SettingsPanel({
               conditions picture. It carries the callsign, the grid and the
               propagation nowcast — never the dial, the log or the needs board. */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-connect-web">
+          <fieldset className="settings-section" id="settings-connect-web" {...fold('connect-web')}>
             <legend>{t('settings.connectWeb.legend')}</legend>
             <label className="settings-field">
               <span className="settings-label">{t('settings.connectWeb.label')}</span>
@@ -4970,7 +5026,7 @@ export function SettingsPanel({
 
           {/* ---- Features (modular toggles + goal profiles) ---- */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-features">
+          <fieldset className="settings-section" id="settings-features" {...fold('features')}>
             <legend>{t('settings.features.legend')}</legend>
             <div className="settings-field">
               <span className="settings-label">{t('settings.features.profile.label')}</span>
@@ -5065,7 +5121,7 @@ export function SettingsPanel({
 
           {/* ---- App updates: the beta (pre-release) channel opt-in ---- */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-app-updates">
+          <fieldset className="settings-section" id="settings-app-updates" {...fold('app-updates')}>
             <legend>{t('settings.betaUpdates.legend')}</legend>
             <label className="settings-field">
               <span className="settings-label">{t('settings.betaUpdates.label')}</span>
@@ -5090,7 +5146,7 @@ export function SettingsPanel({
 
           {/* ---- Start at sign-in: launch Nexus when the operator signs in to this computer ---- */}
           {tab === 'appearance' && (
-          <fieldset className="settings-section" id="settings-start-at-sign-in">
+          <fieldset className="settings-section" id="settings-start-at-sign-in" {...fold('start-at-sign-in')}>
             <legend>{t('settings.launchAtLogin.legend')}</legend>
             <label className="settings-field">
               <span className="settings-label">{t('settings.launchAtLogin.label')}</span>
@@ -5118,7 +5174,7 @@ export function SettingsPanel({
               station over this network (client mode), kept here and never sent to the station. Its
               Audio is the headset the station's audio plays on and the microphone. ---- */}
           {tab === 'appearance' && driving && (
-          <fieldset className="settings-section" id="settings-this-computer">
+          <fieldset className="settings-section" id="settings-this-computer" {...fold('this-computer')}>
             <legend>{t('settings.thisComputer.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.thisComputer.audio.title')}</span>
@@ -5137,11 +5193,12 @@ export function SettingsPanel({
             bandPlan={bandPlan}
             onUpdate={update}
             onSetFreq={setFreq}
+            onSetExperience={handleSetExperience}
           />
           )}
 
           {tab === 'remote' && (
-          <fieldset className="settings-section" id="settings-remote-access">
+          <fieldset className="settings-section" id="settings-remote-access" {...fold('remote-access')}>
             <legend>{t('remote.settingsLegend')}</legend>
             {/* One card (the operator, 2026-10-02): the streaming switch first, with the beta line beside
                 it ("access could be revoked at any time"), then where this station stands with the
@@ -5247,7 +5304,7 @@ export function SettingsPanel({
           {/* Dual-radio roster (P2). Always shown — the "+ Add radio" button is the discovery
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}
-          <fieldset className="settings-section" id="settings-radios">
+          <fieldset className="settings-section" id="settings-radios" {...fold('radios')}>
             <legend>{t('settings.radios.legend')}</legend>
             {editingRadioId != null && editingRadioId !== form.activeRadio && (
               <p className="settings-note radio-editing-note">
@@ -5698,7 +5755,7 @@ export function SettingsPanel({
               </label>
             )}
           </fieldset>
-          <fieldset className="settings-section" id="settings-profiles">
+          <fieldset className="settings-section" id="settings-profiles" {...fold('profiles')}>
             <legend>{t('settings.profiles.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -5762,7 +5819,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-rig-control">
+          <fieldset className="settings-section" id="settings-rig-control" {...fold('rig-control')}>
             <legend>{t('settings.rigControl.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -7033,7 +7090,7 @@ export function SettingsPanel({
               />
             </div>
           )}
-          <fieldset className="settings-section" id="settings-audio">
+          <fieldset className="settings-section" id="settings-audio" {...fold('audio')}>
             <legend>{t('settings.audio.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -7170,7 +7227,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-headphone-monitor">
+          <fieldset className="settings-section" id="settings-headphone-monitor" {...fold('headphone-monitor')}>
             <legend>{t('settings.headphoneMonitor.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -7238,7 +7295,7 @@ export function SettingsPanel({
           {/* ---- Scope source: the radio's own panadapter, or an SDRplay receiver through
               SDRconnect. The station's, not a radio's: the SDR follows whichever radio is in use.
               Receive only — nothing here reaches the transmitter or the rig's CAT. ---- */}
-          <fieldset className="settings-section" id="settings-scope-source">
+          <fieldset className="settings-section" id="settings-scope-source" {...fold('scope-source')}>
             <legend>{t('settings.scopeSource.legend')}</legend>
             <p className="settings-note">{t('settings.scopeSource.note')}</p>
             <div className="settings-grid">
@@ -7306,7 +7363,7 @@ export function SettingsPanel({
           </fieldset>
 
           {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
-          <fieldset className="settings-section" id="settings-satellite-doppler">
+          <fieldset className="settings-section" id="settings-satellite-doppler" {...fold('satellite-doppler')}>
             <legend>{t('settings.satelliteDoppler.legend')}</legend>
             <p className="settings-note">{t('settings.satelliteDoppler.note')}</p>
             <div className="settings-grid">
@@ -7431,7 +7488,7 @@ export function SettingsPanel({
 
           {/* ---- Orbital elements (the TLE currency pipeline's operator surface;
                   cloned from the FCC callsign→state fieldset) ---- */}
-          <fieldset className="settings-section" id="settings-orbital-elements">
+          <fieldset className="settings-section" id="settings-orbital-elements" {...fold('orbital-elements')}>
             <legend>{t('settings.orbitalElements.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
@@ -7553,7 +7610,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-rotator">
+          <fieldset className="settings-section" id="settings-rotator" {...fold('rotator')}>
             <legend>{t('settings.rotator.legend')}</legend>
             <p className="settings-note">{t('settings.rotator.note')}</p>
             <div className="settings-grid">
@@ -7870,7 +7927,7 @@ export function SettingsPanel({
           {/* Amplifier configuration belongs to the active radio profile. Remote
               can save only the follow-band choice here; model and port remain
               local settings. Guarded operate and band steps live in AmpStrip. */}
-          <fieldset className="settings-section" id="settings-amplifier">
+          <fieldset className="settings-section" id="settings-amplifier" {...fold('amplifier')}>
             <legend>{t('settings.amplifier.legend')}</legend>
             <p className="settings-note">{t('settings.amplifier.note')}</p>
             <div className="settings-grid">
@@ -7996,7 +8053,7 @@ export function SettingsPanel({
               operator hunting a COM port had to scroll past. These are real settings and they
               keep working exactly as before; they are transmit POLICY and station plumbing, not
               the CAT link, so they get a heading that says so and stop burying it. */}
-          <fieldset className="settings-section" id="settings-transmit-limits">
+          <fieldset className="settings-section" id="settings-transmit-limits" {...fold('transmit-limits')}>
             <legend>{t('settings.transmit.legend')}</legend>
             {/* Band-edge tones live with the RIG, not with Digital: useBandEdgeTones is
                 called at App top level off snap.radio.txAllowed (App.tsx:739), so the cue
@@ -8316,7 +8373,7 @@ export function SettingsPanel({
 
           {/* ---- Digital (FT8/FT4) — was "Operating"; ~90% FT8 sequencing/decoder knobs ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-digital-ft8-ft4">
+          <fieldset className="settings-section" id="settings-digital-ft8-ft4" {...fold('digital-ft8-ft4')}>
             <legend>{t('settings.digital.legend')}</legend>
             {/* ⚠️ THE NEXT TWO SUB-GROUPS ARE DELIBERATELY NOT MIGRATED, and stay in English
                 here until the transmit-path batch moves them. "Transmit & Sequencing" and
@@ -9016,7 +9073,7 @@ export function SettingsPanel({
 
           {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-jt65">
+          <fieldset className="settings-section" id="settings-jt65" {...fold('jt65')}>
             <legend>{t('settings.jt65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9041,7 +9098,7 @@ export function SettingsPanel({
 
           {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-msk144">
+          <fieldset className="settings-section" id="settings-msk144" {...fold('msk144')}>
             <legend>{t('settings.msk144.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9075,7 +9132,7 @@ export function SettingsPanel({
           const rrActive = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) >= 2
           const rrDegenerate = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) < 2
           return (
-          <fieldset className="settings-section" id="settings-beacons-wspr-fst4w">
+          <fieldset className="settings-section" id="settings-beacons-wspr-fst4w" {...fold('beacons-wspr-fst4w')}>
             <legend>{t('settings.beacons.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9152,7 +9209,7 @@ export function SettingsPanel({
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-fst4">
+          <fieldset className="settings-section" id="settings-fst4" {...fold('fst4')}>
             <legend>{t('settings.fst4.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9184,7 +9241,7 @@ export function SettingsPanel({
           {/* ---- Q65: period + submode. Both change the on-air signal AND the
                decode frame length, so they belong with the mode, not the radio. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-q65">
+          <fieldset className="settings-section" id="settings-q65" {...fold('q65')}>
             <legend>{t('settings.q65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9228,7 +9285,7 @@ export function SettingsPanel({
 
           {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-quick-reply-macros">
+          <fieldset className="settings-section" id="settings-quick-reply-macros" {...fold('quick-reply-macros')}>
             <legend>{t('settings.quickReply.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -9276,7 +9333,7 @@ export function SettingsPanel({
                and the rest of the per-mode sections. The <select> VALUES are persisted tokens
                and stay here, as do the CTCSS tones and their unit. */}
           {tab === 'phone' && (
-          <fieldset className="settings-section" id="settings-phone">
+          <fieldset className="settings-section" id="settings-phone" {...fold('phone')}>
             <legend>{t('settings.phone.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.phone.mode.title')}</span>
@@ -9355,7 +9412,7 @@ export function SettingsPanel({
 
           {/* ---- CW — the standalone CW home (keyer + F-key macros) ---- */}
           {tab === 'cw' && (
-          <fieldset className="settings-section" id="settings-cw">
+          <fieldset className="settings-section" id="settings-cw" {...fold('cw')}>
             <legend>{t('settings.cw.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.cw.keyer.title')}</span>
@@ -9646,7 +9703,7 @@ export function SettingsPanel({
 
           {/* ---- RTTY — keying backend + signal parameters (TX + RX demod both) ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-rtty">
+          <fieldset className="settings-section" id="settings-rtty" {...fold('rtty')}>
             <legend>{t('settings.rtty.legend')}</legend>
             {/* RTTY was the ONLY decode mode without an auto-arm — PSK, APRS and SSTV all arm on
                 entering their view, and RTTY's decoder only ever started from the Arm RX button
@@ -9829,7 +9886,7 @@ export function SettingsPanel({
                open the screen, click a trace, read the text — so everything else
                (netted frequency, AFC, squelch) is cockpit/decoder state, not schema. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-psk">
+          <fieldset className="settings-section" id="settings-psk" {...fold('psk')}>
             <legend>{t('settings.psk.legend')}</legend>
             <div className="settings-field">
               <label className="settings-toggle">
@@ -9880,7 +9937,7 @@ export function SettingsPanel({
                deliberately NOT here: it is session-only (the cockpit's HB chip) and never
                persists (spec G3). Speed names are the mode's own vocabulary (js8Vocab). ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-js8">
+          <fieldset className="settings-section" id="settings-js8" {...fold('js8')}>
             <legend>{t('settings.js8.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.js8.receiving.title')}</span>
@@ -10274,7 +10331,7 @@ export function SettingsPanel({
                switch used to live in Rig & CAT, where nothing about it is a rig model, port,
                baud, framing or keying; it is here now, beside the rest of SSTV. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-sstv">
+          <fieldset className="settings-section" id="settings-sstv" {...fold('sstv')}>
             <legend>{t('settings.sstv.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.sstv.receiving.title')}</span>
@@ -10395,7 +10452,7 @@ export function SettingsPanel({
                the other per-mode settings, because that is where operators look for it: the first
                person to go hunting for these went to APRS, not to Integrations & Feeds. ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-aprs">
+          <fieldset className="settings-section" id="settings-aprs" {...fold('aprs')}>
             <legend>{t('settings.aprs.legend')}</legend>
             {/* The RF side. ⚠️ NOTHING HERE MAY CARRY `disabled={!form.aprsIsEnabled}` — that is
                 the internet feed's gate, and copying it down would put RF APRS behind an
@@ -10715,7 +10772,7 @@ export function SettingsPanel({
 
           {/* ---- Frequencies (working-frequency table overrides) ---- */}
           {tab === 'digital' && (
-          <fieldset className="settings-section" id="settings-working-frequencies">
+          <fieldset className="settings-section" id="settings-working-frequencies" {...fold('working-frequencies')}>
             <legend>{t('settings.workingFrequencies.legend')}</legend>
             <p className="settings-note">
               <T k="settings.workingFrequencies.note" tags={{ b: <strong /> }} />
@@ -10879,7 +10936,7 @@ export function SettingsPanel({
               and alert panels this section configures, so the wording matches on both sides.
               The <select> VALUES are persisted tokens and stay here. The rest of this file is
               NOT migrated — see the guard's scope note. */}
-          <fieldset className="settings-section" id="settings-pounce">
+          <fieldset className="settings-section" id="settings-pounce" {...fold('pounce')}>
             <legend>{t('settings.pounce.legend')}</legend>
             <p className="settings-note">
               <T k="settings.pounce.note" tags={{ em: <em /> }} />
@@ -10910,7 +10967,7 @@ export function SettingsPanel({
           <>
           {/* MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the rest of
               the Appearance tab. The <select> VALUES are persisted tokens and stay here. */}
-          <fieldset className="settings-section" id="settings-accessibility">
+          <fieldset className="settings-section" id="settings-accessibility" {...fold('accessibility')}>
             <legend>{t('settings.accessibility.legend')}</legend>
             <p className="settings-note">{t('settings.accessibility.note')}</p>
             <div className="settings-grid">
@@ -11000,7 +11057,7 @@ export function SettingsPanel({
           {/* MIGRATED to the string catalog — see the note on the Pounce section above. The
               band-scope <option> VALUES are persisted tokens; the four labels are one shared
               vocabulary because the same four choices mean the same thing on all three. */}
-          <fieldset className="settings-section" id="settings-alerts">
+          <fieldset className="settings-section" id="settings-alerts" {...fold('alerts')}>
             <legend>{t('settings.alerts.legend')}</legend>
             <div className="settings-grid">
               {/* #391: the corner's pop-ups. ON unless the file says false, so an old settings
@@ -11307,7 +11364,7 @@ export function SettingsPanel({
               three reference lists from Logging & Connectors. */}
           {tab === 'logbook' && (
           <>
-          <fieldset className="settings-section" id="settings-logbook-display">
+          <fieldset className="settings-section" id="settings-logbook-display" {...fold('logbook-display')}>
             <legend>{t('settings.logbookDisplay.legend')}</legend>
             <div className="settings-grid settings-grid--lone">
               <div className="settings-field">
@@ -11340,7 +11397,7 @@ export function SettingsPanel({
               </label>
             </div>
           </fieldset>
-          <fieldset className="settings-section" id="settings-logbook-history">
+          <fieldset className="settings-section" id="settings-logbook-history" {...fold('logbook-history')}>
             <legend>{t('settings.logbookHistory.legend')}</legend>
             {/* How long the Logbook's history keeps a deleted contact whole (Recently deleted, the Undo
                 of a delete, an import or a purge). Edits are kept for good. */}
@@ -11363,7 +11420,7 @@ export function SettingsPanel({
               <span className="settings-hint">{t('settings.dataFolder.snapshots.hint')}</span>
             </label>
           </fieldset>
-          <fieldset className="settings-section" id="settings-callbook">
+          <fieldset className="settings-section" id="settings-callbook" {...fold('callbook')}>
             <legend>{t('settings.callbook.legend')}</legend>
             <div className="settings-featgroup">
               {/* ⚠️ Every featgroup title here is a service's own name and nothing else — invariant,
@@ -11623,7 +11680,7 @@ export function SettingsPanel({
               </div>
             </div>
           </fieldset>
-          <fieldset className="settings-section" id="settings-connections-b4">
+          <fieldset className="settings-section" id="settings-connections-b4" {...fold('connections-b4')}>
             <legend>{t('settings.b4.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -11641,7 +11698,7 @@ export function SettingsPanel({
               </label>
             </div>
           </fieldset>
-          <fieldset className="settings-section" id="settings-lotw-users">
+          <fieldset className="settings-section" id="settings-lotw-users" {...fold('lotw-users')}>
             <legend>{t('settings.lotwUsers.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
@@ -11709,7 +11766,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-callsign-state">
+          <fieldset className="settings-section" id="settings-callsign-state" {...fold('callsign-state')}>
             <legend>{t('settings.callsignState.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
@@ -11758,7 +11815,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-country-file">
+          <fieldset className="settings-section" id="settings-country-file" {...fold('country-file')}>
             <legend>{t('settings.countryFile.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
@@ -11832,7 +11889,7 @@ export function SettingsPanel({
 
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
           {tab === 'logging' && (
-          <fieldset className="settings-section" id="settings-connections">
+          <fieldset className="settings-section" id="settings-connections" {...fold('connections')}>
             <legend>{t('settings.connections.legend')}</legend>
             <div className="conn-status-grid">
               {creds.map((c) => {
@@ -11916,7 +11973,7 @@ export function SettingsPanel({
 
           {/* ---- Network integrations ---- */}
           {tab === 'logging' && (
-          <fieldset className="settings-section" id="settings-integrations-feeds">
+          <fieldset className="settings-section" id="settings-integrations-feeds" {...fold('integrations-feeds')}>
             <legend>{t('settings.integrations.legend')}</legend>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">
@@ -12379,7 +12436,7 @@ export function SettingsPanel({
           {/* ---- N3FJP + N1MM loggers (moved from Field Day — they serve everyday club logging) ---- */}
           {tab === 'logging' && (
           <>
-          <fieldset className="settings-section" id="settings-dxkeeper">
+          <fieldset className="settings-section" id="settings-dxkeeper" {...fold('dxkeeper')}>
             {/* ⚠️ The legend is two product names and nothing else — invariant, and it stays
                 here for the same reason the mode-name tab labels do. */}
             <legend>DXKeeper (DXLab Suite)</legend>
@@ -12451,7 +12508,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-n3fjp">
+          <fieldset className="settings-section" id="settings-n3fjp" {...fold('n3fjp')}>
             <legend>{t('settings.n3fjp.legend')}</legend>
             <p className="settings-note">
               <T k="settings.n3fjp.note" tags={{ b: <strong /> }} />
@@ -12567,7 +12624,7 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset className="settings-section" id="settings-n1mm">
+          <fieldset className="settings-section" id="settings-n1mm" {...fold('n1mm')}>
             <legend>{t('settings.n1mm.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
@@ -12627,7 +12684,7 @@ export function SettingsPanel({
           {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
           {tab === 'logging' && (
           <>
-          <fieldset className="settings-section" id="settings-confirmations">
+          <fieldset className="settings-section" id="settings-confirmations" {...fold('confirmations')}>
             <legend>{t('settings.confirmations.legend')}</legend>
             <div className="settings-featgroup">
               {/* ⚠️ Every featgroup title in this fieldset is a service's own name and nothing
@@ -13566,7 +13623,7 @@ export function SettingsPanel({
                (1D, 2O, WI), the section list itself, and the event names, which are the
                events' own (FD_EVENT_NAMES). The rest of this file is NOT migrated — see the
                guard's scope note. */
-            <fieldset className="settings-section" id="settings-contest-pick">
+            <fieldset className="settings-section" id="settings-contest-pick" {...fold('contest-pick')}>
               <legend>{t('settings.contestPick.legend')}</legend>
               {/* ⭐ THE CONTEST PICKER (§9). It is the event chips, one level up: the
                   contest is what decides the exchange, the dupe rule, the multiplier
@@ -13785,7 +13842,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'contesting' && (
-            <fieldset className="settings-section" id="settings-contest-station">
+            <fieldset className="settings-section" id="settings-contest-station" {...fold('contest-station')}>
               <legend>{t('settings.contestStation.legend')}</legend>
               {/* ⭐ THE STATION DATA A SENT EXCHANGE NEEDS (§3.4).
 
@@ -13902,7 +13959,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'contesting' && (
-            <fieldset className="settings-section" id="settings-contest-category">
+            <fieldset className="settings-section" id="settings-contest-category" {...fold('contest-category')}>
               <legend>{t('settings.contestCategory.legend')}</legend>
               {/* ⭐ CATEGORY-OPERATOR is a DECLARATION, so the operator makes it. It is
                   the header that shipped as the string literal `MULTI-OP`: every solo
@@ -14266,7 +14323,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'contesting' && (
-            <fieldset className="settings-section" id="settings-scp-call-history">
+            <fieldset className="settings-section" id="settings-scp-call-history" {...fold('scp-call-history')}>
               <legend>{t('settings.contestAids.legend')}</legend>
               {/* Both are help finding and copying stations, so Unassisted mode turns them off,
                   overriding these switches rather than rewriting them (`Settings::scp_active`).
@@ -14441,7 +14498,7 @@ export function SettingsPanel({
           )}
 
           {tab === 'contesting' && (
-            <fieldset className="settings-section" id="settings-contest-keys">
+            <fieldset className="settings-section" id="settings-contest-keys" {...fold('contest-keys')}>
               <legend>{t('settings.contestKeys.legend')}</legend>
               {/* ENTER SENDS MESSAGE — off in every cockpit until the operator turns it on here, one
                   switch per cockpit, then the steps each cockpit's set sends (the role picker). It
@@ -14578,7 +14635,7 @@ export function SettingsPanel({
               prompting for a Field Day class there would be asking for a value nothing
               transmits. The switch and the rules data serve every contest and sit in Contest. */}
           {tab === 'contesting' && isFieldDay(form.fdEvent) && (
-          <fieldset className="settings-section" id="settings-field-day">
+          <fieldset className="settings-section" id="settings-field-day" {...fold('field-day')}>
             <legend>{t('settings.fieldDay.legend')}</legend>
             {form.fdActive &&
               (!form.fdClass.trim() || !form.fdSection.trim()) && (
@@ -14685,7 +14742,7 @@ export function SettingsPanel({
               position name MOVED here from the club-sync section below: a second control
               for the same field on the same tab would have deepened the confusion. */}
           {tab === 'contesting' && (
-          <fieldset className="settings-section" id="settings-field-day-identity">
+          <fieldset className="settings-section" id="settings-field-day-identity" {...fold('field-day-identity')}>
             <legend>{t('settings.fdWho.legend')}</legend>
             <p className="settings-note">{t('settings.fdWho.note')}</p>
             <div className="settings-grid">
@@ -14735,7 +14792,7 @@ export function SettingsPanel({
               says so, and the inbound surface is data-plane only (rows into
               the club log; nothing can key TX, touch CAT, or change settings). */}
           {tab === 'contesting' && (
-          <fieldset className="settings-section" id="settings-field-day-club">
+          <fieldset className="settings-section" id="settings-field-day-club" {...fold('field-day-club')}>
             <legend>{t('settings.fdClub.legend')}</legend>
             {/* Club sync runs the picked contest's own rules, and the engine refuses it for a
                 contest whose merged log would be wrong whoever built it

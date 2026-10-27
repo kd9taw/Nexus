@@ -43,9 +43,13 @@ What the app needs from you before it can do anything:
 - **A sound card the radio is connected to**, for any mode that decodes or
   transmits audio — [Settings ▸ Radio ▸ Audio](settings-reference.md#audio).
 
-On first launch a four-step wizard — Station, Rig, Log, Finish — walks those.
-Every step is skippable and everything it sets stays editable later in Settings.
-Every section and mode starts ON; turn any section on or off in
+On first launch a wizard walks those. It first asks how much you have done (new to
+the hobby, new to digital, or experienced), then Station, Rig, Log, Finish. The
+answer picks which sections start on: experienced starts with every section and mode
+ON, the two "new" answers with fewer, and a new ham is offered a short walk through a
+first FT8 contact (also under Help). Every step is skippable and everything it sets
+stays editable later: the answer in
+[Settings ▸ Station](settings-reference.md#operator--radio), any section on or off in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
 
 The supported window floor is **1024×768**. Everything is reachable there — some

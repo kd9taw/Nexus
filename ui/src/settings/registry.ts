@@ -115,7 +115,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'class', 'extra', 'general', 'technician', 'novice', 'advanced',
       'operator name', 'state', 'my call',
       'units', 'miles', 'km', 'kilometres', 'kilometers', 'imperial', 'metric', 'distance',
-      'temperature', 'fahrenheit', 'celsius', 'wind speed'],
+      'temperature', 'fahrenheit', 'celsius', 'wind speed',
+      'experience', 'new to the hobby', 'new ham', 'beginner', 'new to digital', 'experienced'],
   },
 
   // ---- Remote ------------------------------------------------------------------

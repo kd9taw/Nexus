@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, BandChannel, ExperienceLevel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
@@ -158,6 +158,7 @@ import {
   pskSetMode,
   setHuntTarget,
   setLicenseClass,
+  setExperienceLevel as apiSetExperienceLevel,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -233,6 +234,7 @@ import { useStationAlerts } from './useStationAlerts'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
+import { FirstContactWalk } from './components/FirstContactWalk'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
@@ -372,6 +374,12 @@ function App() {
   // walkthrough offer. Pure documentation: it writes nothing and is never
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
+  // The first-run question ("How much have you done?") is asked only when the wizard opens by
+  // itself on a fresh install; re-opened from Settings it does not ask again.
+  const [wizardAsks, setWizardAsks] = useState(showWizard)
+  // The first-contact walk-through (Help ▸ Your first FT8 contact, and the wizard's offer). Like
+  // the guide it writes nothing; asked for together with the guide, it opens once the guide closes.
+  const [showWalk, setShowWalk] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
@@ -2805,7 +2813,14 @@ function App() {
   )
 
   const handleWizardApply = useCallback(
-    (ids: ProfileId[], landing: View, modes: FeatureId[], license: string, draft: WizardDraft) => {
+    (
+      ids: ProfileId[],
+      landing: View,
+      modes: FeatureId[],
+      license: string,
+      draft: WizardDraft,
+      experience: ExperienceLevel | null,
+    ) => {
       // SEQUENCED, not concurrent: set_settings writes the WHOLE struct
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
@@ -2814,6 +2829,14 @@ function App() {
       void applyWizardDraft(draft)
         .then(() => setLicenseClass(license))
         .then((s) => s && setSnap(s))
+        // The experience answer has its own writer; a later form save keeps it. Only an answer
+        // given in this run is written: none leaves the station's (absent = never asked).
+        .then(() => (experience ? apiSetExperienceLevel(experience) : null))
+        .then((s) => {
+          if (!s || !experience) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, experienceLevel: experience } : prev))
+        })
         .catch((e) =>
           pushToast(
             t('shell.wizard.saveFailed', { error: `${e instanceof Error ? e.message : e}` }),
@@ -3632,7 +3655,10 @@ function App() {
             onLocalClockChange={setLocalClock}
             onResetLayout={resetWidths}
             features={features}
-            onRerunWizard={() => setShowWizard(true)}
+            onRerunWizard={() => {
+              setWizardAsks(false)
+              setShowWizard(true)
+            }}
             theme={themeChoice}
             onThemeChange={setTheme}
             skin={skin}
@@ -3991,6 +4017,7 @@ function App() {
         tier={tier}
         onTierChange={handleTier}
         onOpenGuide={() => setShowGuide(true)}
+        onOpenWalk={() => setShowWalk(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}
         // Who is at the key (#25). Absent/empty renders nothing — the single-op case —
@@ -4366,6 +4393,8 @@ function App() {
           onProveTx={handleProveTx}
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
+          onOpenWalk={() => setShowWalk(true)}
+          askExperience={wizardAsks}
         />
       )}
 
@@ -4375,6 +4404,8 @@ function App() {
           onOpenSettings={openSettingsAt}
         />
       )}
+
+      {showWalk && !showGuide && <FirstContactWalk onClose={() => setShowWalk(false)} />}
 
       {snap.pendingLog && (
         // KEYED ON THE HOLD, on every transport (operator ruling 2026-09-19: completed contacts

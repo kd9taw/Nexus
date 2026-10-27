@@ -1,7 +1,9 @@
 // Goal profiles — a profile is a named bundle of enabled features + a default
 // landing view + a Now-Bar emphasis. Profiles are SWITCHABLE presets over the
 // toggle system (operators change hats), not a one-time fork, and they're driven
-// by GOAL/intent, never by self-rated experience. See feature-modularity.md §4.2.
+// by GOAL/intent. See feature-modularity.md §4.2. Since 2026-10-27 the first-run wizard asks
+// one experience question (`settings/experience.ts`), and the answer only PICKS the first
+// profile; the profiles themselves still describe goals and stay the mechanism underneath.
 //
 // Pure data + a pure resolver (no React / storage) — node-testable.
 //

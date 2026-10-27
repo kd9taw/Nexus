@@ -14,7 +14,8 @@
 import type { ReactNode } from 'react'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
-import type { BandChannel, Settings } from '../types'
+import type { BandChannel, ExperienceLevel, Settings } from '../types'
+import { EXPERIENCE_LEVELS } from '../settings/experience'
 import { FrequencyControl } from './FrequencyControl'
 
 type FieldKey = keyof Settings
@@ -89,9 +90,12 @@ interface Props {
    *  it shows read-only, and `setAtStation` says so. Absent at the station. */
   locked?: (key: FieldKey) => boolean
   setAtStation?: (key: FieldKey) => ReactNode
+  /** Saves a new experience answer through its one writer (and re-picks the starting features).
+   *  Absent: the select is not shown. */
+  onSetExperience?: (level: ExperienceLevel) => void
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation, onSetExperience }: Props) {
   return (
     // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
     // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
@@ -138,6 +142,32 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
           {setAtStation?.('licenseClass')}
           <span className="settings-hint">{t('settings.station.licenseClass.hint')}</span>
         </label>
+        {/* The first-run wizard's question, changeable here. Saved on change (its own writer),
+            not on Save. "Not set" is offered only while it is: an existing station that updated
+            has never been asked, and nothing changes until it picks one. */}
+        {onSetExperience && (
+          <label className="settings-field">
+            <span className="settings-label">{t('settings.station.experience.label')}</span>
+            <select
+              aria-label={t('settings.station.experience.label')}
+              className="settings-input"
+              value={form.experienceLevel ?? ''}
+              onChange={(e) => e.target.value && onSetExperience(e.target.value as ExperienceLevel)}
+            >
+              {!form.experienceLevel && (
+                <option value="" disabled>
+                  {t('settings.station.experience.notSet')}
+                </option>
+              )}
+              {EXPERIENCE_LEVELS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+            <span className="settings-hint">{t('settings.station.experience.hint')}</span>
+          </label>
+        )}
       </div>
       </fieldset>
       {/* #248: km or miles, °C or °F, for the whole app. It sat under Digital ▸ Station

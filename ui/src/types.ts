@@ -5712,7 +5712,14 @@ export interface Settings {
    *  a new install's default) or `act` (silent, what an existing settings file keeps). Not written
    *  by a settings save: write it with `setRadioSwitchPolicy` (api.ts), its one writer. */
   radioSwitchPolicy?: RadioSwitchPolicy
+  /** The first-run wizard's answer to "How much have you done?". Absent = never asked (an
+   *  existing station, or a skipped wizard), which behaves as every earlier build did. Not
+   *  written by a settings save: write it with `setExperienceLevel` (api.ts), its one writer. */
+  experienceLevel?: ExperienceLevel
 }
+
+/** Mirrors the Rust `ExperienceLevel`. */
+export type ExperienceLevel = 'newToHobby' | 'newToDigital' | 'experienced'
 
 /** The mode granularity radio routing decides on — a refinement of the app's CW/Phone/Digital
  * classes (FM and SSB are both Phone; digital and RTTY are both Digital). The refinement is what
