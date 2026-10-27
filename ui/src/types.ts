@@ -4838,6 +4838,9 @@ export interface Settings {
   /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
    *  directed, inbox, callNew, callOld. */
   js8Sounds: string[]
+  /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (off by
+   *  default): the cockpit starts each run with its three lists empty. Display only. */
+  js8ResetActivity: boolean
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean

@@ -1484,6 +1484,14 @@ pub struct Settings {
     /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
     #[serde(default)]
     pub js8_sounds: Vec<String>,
+    // --- JS8 screen options: JS8Call 3.0.3's own, at its defaults ---
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (`ResetActivity`,
+    /// OFF by default, Configuration.ui:429-433, Configuration.cpp:2303): on, the cockpit starts each
+    /// run with its RX pane, Band activity and call list empty, as JS8Call reads none of them back
+    /// (mainwindow.cpp:505-508, :607-609) and clears them at its first band (:1281-1285). Display
+    /// only, as the lists' Clear All is: the station's own record of who it heard is kept.
+    #[serde(default)]
+    pub js8_reset_activity: bool,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -5898,6 +5906,7 @@ impl Default for Settings {
             js8_eot: default_js8_eot(),
             js8_mfi: default_js8_mfi(),
             js8_sounds: Vec::new(),
+            js8_reset_activity: false,
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -13125,6 +13134,43 @@ mod tests {
         }
         assert!(
             !typed("js8RxBlockList"),
+            "control: a near miss is not found"
+        );
+    }
+
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup": off by
+    /// default (`ResetActivity`, Configuration.cpp:2303), its camelCase wire key, an upgrader's
+    /// file, a round trip of the choice, and the TS mirror.
+    #[test]
+    fn js8_reset_activity_defaults_off_as_js8call_and_round_trips() {
+        assert!(
+            !Settings::default().js8_reset_activity,
+            "ResetActivity: off"
+        );
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8ResetActivity\":false"), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.js8_reset_activity, "an upgrader's lists are kept");
+        let on: Settings = serde_json::from_str(r#"{"js8ResetActivity":true}"#).unwrap();
+        assert!(on.js8_reset_activity);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8ResetActivity"),
+            "ui/src/types.ts Settings is missing `js8ResetActivity`"
+        );
+        assert!(
+            !typed("js8ResetActivities"),
             "control: a near miss is not found"
         );
     }

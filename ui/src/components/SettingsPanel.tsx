@@ -10260,7 +10260,13 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
               </label>
             </div>
-            <Js8ListsSettings form={form} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+            <Js8ListsSettings
+              form={form}
+              setList={setJs8Words}
+              setMark={setJs8Mark}
+              setSounds={setJs8Sounds}
+              setReset={(on) => updateBool('js8ResetActivity', on)}
+            />
 
             {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
                 sides off by default (its own file says what keeps each promise). Never on the

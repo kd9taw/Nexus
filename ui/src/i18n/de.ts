@@ -8239,6 +8239,9 @@ export const DE: PartialCatalog = {
   "js8.col.speed.minimal": "Tp",
   "js8.calls.col.callsign.minimal": "Ruf({{count}})",
   "js8.calls.col.distance.minimal": "Entf.",
+  // JS8 screen options, the startup reset: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.resetActivity.label": "Bandaktivität, Rufzeichenliste und RX-Fenster beim Start leeren",
+  "settings.js8.resetActivity.hint": "Standardmäßig aus, wie in JS8Call. An, beginnen die drei JS8-Listen bei jedem Start von Nexus leer, wie „Alle Listen leeren“ sie hinterlässt. Posteingang und die eigene Liste der Station, wen sie gehört hat, bleiben erhalten.",
   "sstv.refuse.heic": "HEIC-Fotos vom iPhone lassen sich hier nicht lesen — Nexus hat keinen HEVC-Dekoder. Am iPhone: Einstellungen → Kamera → Formate → Maximale Kompatibilität (neue Fotos sind dann JPEG) oder Einstellungen → Fotos → Auf Mac oder PC übertragen → Automatisch (wandelt beim Senden um). Danach dieses Bild erneut senden.",
   "sstv.refuse.avif": "Das ist eine AVIF-Datei. SSTV sendet JPEG, PNG, WebP, BMP oder GIF — in eines dieser Formate exportieren oder speichern.",
   "sstv.refuse.tiff": "Das ist eine TIFF-Datei. SSTV sendet JPEG, PNG, WebP, BMP oder GIF — in eines dieser Formate exportieren oder speichern.",

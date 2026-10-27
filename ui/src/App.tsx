@@ -1861,6 +1861,7 @@ function App() {
         sounds: settings.js8Sounds ?? [],
         groups: settings.js8Groups ?? [],
         avoidAllcall: settings.js8AvoidAllcall ?? false,
+        resetActivity: settings.js8ResetActivity === true,
         setRxBlocklist: async (calls: string[]) => {
           const saved = await withErrorToast(() => js8SetRxBlocklist(calls), t('js8.lists.saveFailed'))
           if (saved) setSettings((prev) => (prev ? { ...prev, js8RxBlocklist: saved } : prev))

@@ -1,9 +1,9 @@
 // Settings ▸ Digital ▸ JS8: what JS8Call 3.0.3 keeps for its lists and sounds, at its defaults —
 // the RX block list ("Hide messages from these callsigns in the RX pane", empty), the primary and
 // secondary highlight lists (words or callsigns, empty), the end-of-transmission and missing-frame
-// marks (♢ and ……) and the notification sounds (all off). Rendered inside the JS8 section with the
-// panel's own form and setters, so a Save writes them with every other field. The call list's "Block
-// this station" writes the block list too, on the click.
+// marks (♢ and ……), the notification sounds (all off) and JS8Call's startup reset of the lists (off).
+// Rendered inside the JS8 section with the panel's own form and setters, so a Save writes them with
+// every other field. The call list's "Block this station" writes the block list too, on the click.
 //
 // Nothing here transmits.
 //
@@ -72,11 +72,14 @@ export function Js8ListsSettings({
   setList,
   setMark,
   setSounds,
+  setReset,
 }: {
   form: Settings
   setList: (key: ListKey, list: string[]) => void
   setMark: (key: MarkKey, value: string) => void
   setSounds: (events: string[]) => void
+  /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup". */
+  setReset: (on: boolean) => void
 }) {
   const lists: [ListKey, string, string][] = [
     ['js8RxBlocklist', t('settings.js8.rxBlocklist.label'), t('settings.js8.rxBlocklist.hint')],
@@ -88,10 +91,27 @@ export function Js8ListsSettings({
     ['js8Mfi', form.js8Mfi ?? JS8_MFI_DEFAULT, t('settings.js8.mfi.label'), t('settings.js8.mfi.hint'), 8],
   ]
   const sounds = form.js8Sounds ?? []
+  const reset = form.js8ResetActivity === true
   return (
     <>
       <div className="settings-featgroup">
         <span className="settings-featgroup-title">{t('settings.js8.lists.title')}</span>
+        {/* JS8Call's General tab (Configuration.ui:429-433), off by default (Configuration.cpp:2303). */}
+        <div className="settings-field">
+          <label className="settings-toggle">
+            <span className="settings-label">{t('settings.js8.resetActivity.label')}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={reset}
+              className={`toggle${reset ? ' on' : ''}`}
+              onClick={() => setReset(!reset)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <span className="settings-hint">{t('settings.js8.resetActivity.hint')}</span>
+        </div>
         {lists.map(([key, label, hint]) => (
           <label className="settings-field" key={key}>
             <span className="settings-label">{label}</span>

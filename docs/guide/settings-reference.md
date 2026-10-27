@@ -1521,6 +1521,11 @@ nothing until you enable TX in the cockpit, every session.
 
 **Lists and marks**
 
+- **Reset Band activity, the call list and the RX pane at startup** — JS8Call's "Reset the Band
+  Activity, Call Activity, and RX history at startup", off by default. On, each time Nexus starts
+  the three lists start empty, as **Clear all lists…** leaves them; what is heard after fills them
+  again. Your Inbox and the station's own record of who it heard are kept. It takes effect at the
+  next start.
 - **Hide these callsigns in the RX pane** — JS8Call 3.0's RX block list, comma-separated and
   empty by default. Nothing a listed station sends prints in the RX pane (by its call as heard
   or its base call), and the call list marks it ✕; it is still heard, answered and filed as

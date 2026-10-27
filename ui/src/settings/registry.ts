@@ -408,6 +408,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
       'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
       'js8 sounds', 'notifications',
+      'reset activity', 'reset at startup', 'clear lists at startup',
       'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {

@@ -47,7 +47,9 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   that opens it. **⋯** ▸ **Clear** empties it and the compose box with it, as JS8Call's does;
   **Clear all lists…** empties the three lists and the compose box after asking. The text and the
   command go, the call in **To** stays; while a message of the compose box is going out, the box
-  keeps what is still to go and the message goes on.
+  keeps what is still to go and the message goes on. Settings ▸ Digital ▸ JS8 ▸ **Reset Band
+  activity, the call list and the RX pane at startup** (off, as in JS8Call) starts each run of
+  Nexus with the three lists empty, as **Clear all lists…** leaves them.
 - **Band activity** — one row per audio offset holding every frame heard there (the last ten),
   joined, with ♢ after each message. Columns: offset, age, SNR, and from **⋯ ▸ Show columns**
   time delta and speed too, as JS8Call's; **⋯ ▸ Show columns ▸ Minimal column labels** (off, one

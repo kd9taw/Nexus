@@ -61,6 +61,8 @@ import {
 } from '../features/js8Lists'
 import {
   clearJs8Lists,
+  js8RunStart,
+  js8StartupMarks,
   loadJs8ListMarks,
   loadJs8ViewPrefs,
   saveJs8ListMarks,
@@ -198,6 +200,9 @@ export interface Js8ListSettings {
   groups: readonly string[]
   /** "Do not participate in the @ALLCALL group": the call list leaves @ALLCALL out. */
   avoidAllcall: boolean
+  /** JS8Call's "Reset … at startup": the three lists start each run empty (features/js8View
+   *  `js8StartupMarks`). Absent until the settings are in, so nothing is decided before them. */
+  resetActivity?: boolean
   /** "Block this station": the RX block list as it should be. */
   setRxBlocklist?: (calls: string[]) => Promise<void>
   /** "Add New Station or Group…" with a @GROUP and "Remove This Group": the groups as they should be. */
@@ -1003,6 +1008,15 @@ export function Js8Cockpit({
     setMarks(next)
     saveJs8ListMarks(next)
   }
+  // JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8):
+  // decided once a run, from the first settings it has.
+  const resetActivity = lists.resetActivity
+  useEffect(() => {
+    if (resetActivity === undefined) return
+    const next = js8StartupMarks(marks, resetActivity, js8RunStart())
+    if (next !== marks) changeMarks(() => next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetActivity])
   const myCall = snap?.mycall ?? ''
   // The RX pane, Band activity and the call list, as JS8Call draws them (features/js8Lists).
   const rxLines = js8RxLines(js8?.activity ?? [], {

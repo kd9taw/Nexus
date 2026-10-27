@@ -12147,6 +12147,11 @@ export const EN = {
   'js8.calls.col.callsign.minimal': 'Call({{count}})',
   'js8.calls.col.distance.minimal': 'Dist',
 
+  // Reset the lists at startup (Settings ▸ JS8 ▸ Lists and marks): JS8Call's General-tab option.
+  'settings.js8.resetActivity.label': 'Reset Band activity, the call list and the RX pane at startup',
+  'settings.js8.resetActivity.hint':
+    'Off by default, as in JS8Call. On, each time Nexus starts, the three JS8 lists start empty, as Clear all lists leaves them. Your Inbox and the station’s own record of who it heard are kept.',
+
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
   // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —

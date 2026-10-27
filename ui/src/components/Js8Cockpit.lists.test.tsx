@@ -10,7 +10,7 @@ import { useState, type ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit, type Js8ListSettings } from './Js8Cockpit'
-import { JS8_VIEW_KEY, JS8_LISTS_KEY } from '../features/js8View'
+import { JS8_VIEW_KEY, JS8_LISTS_KEY, js8RunStart } from '../features/js8View'
 import type { AppSnapshot, Js8ActivityRow, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
 
@@ -408,6 +408,77 @@ describe('Minimal column labels, as JS8Call’s', () => {
     expect(heads('offsets').filter(Boolean), 'and off again from the call list’s ⋯').toEqual(['Offset', 'Age', 'SNR', 'Time delta', 'Message(s)'])
     expect(cell('offsets', band1503(), 'Offset')).toBe('1503 Hz')
   })
+})
+
+// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8, off):
+// JS8Call reads none of them back and clears them at its first band (mainwindow.cpp:505-508, :607-609,
+// :1281-1285). Here: Clear All Lists as of the run's start, decided once a run from the settings it
+// started with, at the station only.
+describe('the startup reset, as JS8Call’s', () => {
+  /** The fixture as heard before this run started: every time moved to end a second before it, and
+   *  its messages read (a station with an unread one stays listed through a clear, ⚑). */
+  const heardBefore = (): Js8State => {
+    const s = { ...js8Fixture(), inbox: js8Fixture().inbox.map((e) => ({ ...e, state: 'read' as const })) }
+    const newest = Math.max(...s.activity.map((r) => r.atMs), ...s.stations.map((h) => h.lastMs))
+    const by = Math.max(0, newest - (js8RunStart() - 1000))
+    return {
+      ...s,
+      activity: s.activity.map((r) => ({ ...r, atMs: r.atMs - by })),
+      stations: s.stations.map((h) => ({
+        ...h,
+        lastMs: h.lastMs - by,
+        ...(h.cqMs != null && { cqMs: h.cqMs - by }),
+        ...(h.ackMs != null && { ackMs: h.ackMs - by }),
+      })),
+    }
+  }
+  const callRows = () => document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group)').length
+  const lists3 = () => [rxLines().length, bandOffsets().length, callRows()]
+  const stored = () => JSON.parse(localStorage.getItem(JS8_LISTS_KEY) ?? 'null') as { startup?: number } | null
+  const cockpit = (l: Js8ListSettings | undefined) => <Js8Cockpit snap={snap} panels={fakePanels()} lists={l} />
+
+  it('on, the RX pane, Band activity and the call list start empty, and fill again with what is heard after', async () => {
+    state.current = heardBefore()
+    await renderCockpit({ lists: lists({ resetActivity: true }) })
+    expect(lists3()).toEqual([0, 0, 0])
+    expect(stored()?.startup, 'the run is recorded').toBe(js8RunStart())
+    const now = Date.now()
+    state.current = {
+      ...heardBefore(),
+      activity: [...heardBefore().activity, frame({ atMs: now, freqHz: 1500, from: 'N0NEW', text: 'N0NEW: @ALLCALL CQ CQ CQ EM10 ' })],
+      stations: [...heardBefore().stations, { call: 'N0NEW', grid: 'EM10', snrDb: -5, freqHz: 1500, speed: 'normal', lastMs: now, lastHb: false, lastCq: true, storedMsgs: 0 }],
+    }
+    await poll()
+    expect(lists3()).toEqual([1, 1, 1])
+    expect(stationRow('N0NEW')).toBeTruthy()
+  })
+
+  it('off, JS8Call’s default, the lists keep what was heard before', async () => {
+    state.current = heardBefore()
+    await renderCockpit({ lists: lists({ resetActivity: false }) })
+    expect(lists3()).toEqual([2, 3, 3])
+    expect(stored()?.startup, 'decided all the same').toBe(js8RunStart())
+  })
+
+  it('is decided by the first settings the run has: switched on later, or the cockpit mounted again, it waits for the next start', async () => {
+    state.current = heardBefore()
+    const r = await renderCockpit({ lists: undefined })
+    expect([lists3(), stored()], 'nothing decided before the settings come').toEqual([[2, 3, 3], null])
+    r.rerender(cockpit(lists({ resetActivity: false })))
+    await poll()
+    r.rerender(cockpit(lists({ resetActivity: true })))
+    await poll()
+    expect(lists3(), 'switched on during the run').toEqual([2, 3, 3])
+    cleanup()
+    await renderCockpit({ lists: lists({ resetActivity: true }) })
+    expect(lists3(), 'mounted again in the same run').toEqual([2, 3, 3])
+    localStorage.clear()
+    cleanup()
+    await renderCockpit({ lists: undefined }).then((again) => again.rerender(cockpit(lists({ resetActivity: true }))))
+    await poll()
+    expect(lists3(), 'control: the first settings of a run, on').toEqual([0, 0, 0])
+  })
+
 })
 
 describe('the call list is JS8Call’s', () => {

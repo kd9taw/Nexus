@@ -102,10 +102,12 @@ export interface Js8ListMarks {
   removedCalls: Record<string, number>
   /** "Add New Station or Group…" with a callsign: the call → when. */
   added: Record<string, number>
+  /** The run (its start, ms) the startup reset (`js8StartupMarks`) was last decided for; 0 for none. */
+  startup: number
 }
 
 export function emptyJs8ListMarks(): Js8ListMarks {
-  return { cleared: { rx: 0, band: 0, call: 0 }, removedOffsets: {}, removedCalls: {}, added: {} }
+  return { cleared: { rx: 0, band: 0, call: 0 }, removedOffsets: {}, removedCalls: {}, added: {}, startup: 0 }
 }
 
 /** At most this many removals or additions are kept: the oldest go first. */
@@ -135,6 +137,7 @@ export function parseJs8ListMarks(raw: string | null | undefined): Js8ListMarks 
   out.removedOffsets = times(v.removedOffsets)
   out.removedCalls = times(v.removedCalls)
   out.added = times(v.added)
+  if (typeof v.startup === 'number' && Number.isFinite(v.startup) && v.startup > 0) out.startup = v.startup
   return out
 }
 
@@ -173,5 +176,23 @@ export function clearJs8Lists(m: Js8ListMarks, which: 'rx' | 'band' | 'call' | '
     removedOffsets: band ? {} : m.removedOffsets,
     removedCalls: call ? {} : m.removedCalls,
     added: call ? {} : m.added,
+    startup: m.startup,
   }
+}
+
+/** When this run of the program started: the page's own start, as the cockpit lives in the window that
+ *  opens with the program. */
+export const js8RunStart = (): number => Math.floor(performance.timeOrigin)
+
+/** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8): JS8Call
+ *  reads none of them back and clears them at its first band (mainwindow.cpp:505-508, :607-609,
+ *  :1281-1285), which here is Clear All Lists as of the run's start, never moving a later clear back.
+ *  Decided once a run, from the first settings the run has: off, only the run is recorded, so switching
+ *  it on, or the cockpit mounting again, changes nothing until the next start. */
+export function js8StartupMarks(m: Js8ListMarks, reset: boolean, runStart: number): Js8ListMarks {
+  if (m.startup === runStart) return m
+  if (!reset) return { ...m, startup: runStart }
+  const c = clearJs8Lists(m, 'all', runStart)
+  const later = (was: number) => Math.max(was, runStart)
+  return { ...c, cleared: { rx: later(m.cleared.rx), band: later(m.cleared.band), call: later(m.cleared.call) }, startup: runStart }
 }

@@ -7766,6 +7766,9 @@ export const JA: PartialCatalog = {
   "js8.col.speed.minimal": "速度",
   "js8.calls.col.callsign.minimal": "コール({{count}})",
   "js8.calls.col.distance.minimal": "距離",
+  // JS8 screen options, the startup reset: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.resetActivity.label": "起動時にバンドアクティビティ、コールサイン一覧、RX 欄をクリア",
+  "settings.js8.resetActivity.hint": "JS8Call と同じく既定はオフ。オンにすると、Nexus を起動するたびに 3 つの JS8 リストが「すべてのリストをクリア」と同じく空で始まります。受信箱と、局自身が記録している受信局はそのまま残ります。",
   "sstv.refuse.heic": "iPhone の HEIC 写真はここでは読み込めません — Nexus に HEVC デコーダーがないためです。iPhone 側で: 設定 → カメラ → フォーマット → 互換性優先（以降の写真は JPEG になります）、または 設定 → 写真 → MacまたはPCに転送 → 自動（転送時に変換）。そのうえでこの写真をもう一度送ってください。",
   "sstv.refuse.avif": "これは AVIF ファイルです。SSTV で送れるのは JPEG・PNG・WebP・BMP・GIF です — いずれかの形式で書き出すか保存し直してください。",
   "sstv.refuse.tiff": "これは TIFF ファイルです。SSTV で送れるのは JPEG・PNG・WebP・BMP・GIF です — いずれかの形式で書き出すか保存し直してください。",

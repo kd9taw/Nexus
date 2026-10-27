@@ -2826,6 +2826,9 @@ export const FR: PartialCatalog = {
   "js8.col.speed.minimal": "Vit.",
   "js8.calls.col.callsign.minimal": "Ind.({{count}})",
   "js8.calls.col.distance.minimal": "Dist.",
+  // JS8 screen options, the startup reset: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.resetActivity.label": "Vider Activité de bande, la liste d’indicatifs et le volet RX au démarrage",
+  "settings.js8.resetActivity.hint": "Désactivé par défaut, comme dans JS8Call. Activé, à chaque démarrage de Nexus les trois listes JS8 repartent vides, comme « Vider toutes les listes » les laisse. Votre boîte et le relevé propre de la station de qui elle a entendu sont conservés.",
   "link.audioFreq.label": "f audio",
   "link.band.label": "Bande",
   "link.dial.label": "VFO",
