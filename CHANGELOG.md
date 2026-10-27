@@ -70,6 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Save the settings backup where you like.** Settings ▸ Config ▸ Backup & reset now has Save as… beside Back up: it opens your system's save dialog in Downloads with the usual dated name filled in, so you can pick a USB stick or any other folder. Back up still saves straight to Downloads.
 - **The Icom IC-7850 and IC-7851 in the radio list.** Pick "Icom IC-7850/7851" in Settings or the setup wizard and Nexus drives it through Hamlib (model 3075) over its serial CI-V port. It has not been on a bench yet. Nexus's own Icom connections (native CI-V and the network port) do not cover this radio.
 - **Add ticked memories to a group in one go.** In Memories, the bar that appears when you tick rows now has Add to group…: pick a group and every ticked memory in view joins it, keeping the groups it was already in. Rows ticked but narrowed out of view by a search or filter are left alone, as with Delete.
+- **Import a laptop's file into the club log.** The host's Contest screen has a new button in the
+  club section, **Import a laptop's file…**. Choose a laptop's contest journal (the file named
+  `fieldday_backup_` and 8 characters, `.adi`, in that laptop's Nexus settings folder) and its
+  contacts go into the club's log exactly as club sync would have sent them: the same dupe rules, and
+  the same contacts kept out (another contest, an earlier running such as a rehearsal, a contact
+  logged on another call than the club's, one taken back on that laptop). The host then says how
+  many it added, how many were duplicates or already in the club log, and how many it kept out and
+  why. Importing the same file twice adds nothing, and nothing is ever taken out of the club log.
+  This covers a host PC that dies with contacts only on its own disk, and a laptop that never
+  synced. The Field Day manual's club checklist has the steps.
 
 ### Changed
 - **Tune is in the same place on the FT8/FT4 screen as everywhere else.** The FT8/FT4 strip now opens with TX On/Off, Tune, ATU, Stop TX and Hold Tx, then Call CQ and S&P, so Tune sits right after TX On/Off exactly where every other operating screen's TX strip has it. What each button does is unchanged.

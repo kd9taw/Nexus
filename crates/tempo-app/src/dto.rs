@@ -3723,6 +3723,38 @@ pub struct FdClubOtherLocationDto {
     pub club: String,
 }
 
+/// ⭐ **What the host's "Import a laptop's file…" did** (`Engine::fd_club_import`): how many of
+/// the file's contacts it added, how many were duplicates or already in, and how many it kept out
+/// and why. Nothing is ever taken out of the club's log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubImportDto {
+    /// New contacts in the club's log.
+    pub added: usize,
+    /// Duplicates of a contact the club holds: merged as sync merges one, and the club's files
+    /// keep the earliest.
+    pub dupes: usize,
+    /// Contacts the club already held, from that position.
+    pub already_in: usize,
+    /// Kept out: of another contest, of another running of this one, logged on another call than
+    /// the club's, taken back on that laptop, and records that cannot be read.
+    pub other_contest: usize,
+    pub other_running: usize,
+    pub other_call: usize,
+    pub taken_back: usize,
+    pub unreadable: usize,
+    /// Kept out where every contact enters the club's log, each with the host screen's sentence.
+    pub refused: Vec<FdImportRefusedDto>,
+}
+
+/// One contact the club's intake kept out of an import ([`FdClubImportDto::refused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdImportRefusedDto {
+    pub call: String,
+    pub reason: String,
+}
+
 /// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many
 /// contacts the club holds, and the newest of them, newest first.
 ///

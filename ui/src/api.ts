@@ -1196,6 +1196,31 @@ export async function fdClubAllowBack(posid: string): Promise<FdRemoveAnswer> {
   return invoke<FdRemoveAnswer>('fd_club_allow_back', { posid })
 }
 
+/** What the host's "Import a laptop's file…" did (`fd_club_import`): how many of the file's
+ *  contacts it added, how many were duplicates or already in, and how many it kept out and why.
+ *  Nothing is ever taken out of the club's log. */
+export interface FdClubImport {
+  added: number
+  dupes: number
+  alreadyIn: number
+  otherContest: number
+  otherRunning: number
+  otherCall: number
+  takenBack: number
+  unreadable: number
+  /** Kept out where every contact enters the club's log, each with the host screen's sentence. */
+  refused: { call: string; reason: string }[]
+}
+
+/** ⭐ **Merge a laptop's contest file into the host's club log**, as that laptop's sync would have
+ *  merged it, recorded as from position `posid`: the host's own Contest screen, for a host that
+ *  died or a laptop that never synced. Importing the same file again adds nothing. Rejects, with
+ *  the sentence to show, when this Nexus is not hosting or the position cannot be used. Never on
+ *  Remote. */
+export async function fdClubImport(text: string, posid: string): Promise<FdClubImport> {
+  return invoke<FdClubImport>('fd_club_import', { text, posid })
+}
+
 /** The spectator scoreboard's bound state, for the Settings row: running?,
  * the URL a TV on the LAN should open, the last bind error. */
 export interface FdScoreboardStatus {
