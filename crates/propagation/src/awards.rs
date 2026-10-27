@@ -336,11 +336,11 @@ pub struct FfmaProgress {
 #[serde(rename_all = "camelCase")]
 pub struct IotaProgress {
     pub worked: usize,
-    /// Confirmed in the LOG sense (LoTW or card — `award_confirmed`).
+    /// Confirmed by LoTW or QSL card (`award_confirmed`; eQSL never counts) — what the IOTA
+    /// programme credits (cards, and LoTW-matched contacts since May 2020), so the award
+    /// checkmark gates on this count.
     pub confirmed: usize,
-    /// Confirmed by QSL CARD — the only confirmation channel here that the IOTA
-    /// program itself accepts (IOTA credits run via cards and Club Log matching,
-    /// never LoTW), so the award checkmark gates on this count.
+    /// Confirmed by QSL CARD alone, shown beside the award count.
     #[serde(default)]
     pub card_confirmed: usize,
 }
@@ -2141,10 +2141,10 @@ mod tests {
         );
     }
 
-    /// IOTA accepts QSL cards and Club Log matching — NOT LoTW. A LoTW-only confirmation
-    /// counts as "confirmed" in the log sense but must not satisfy the award gate.
+    /// IOTA credits LoTW-matched contacts as well as QSL cards: a LoTW-only confirmation and a
+    /// card both count toward the award; the card count is kept beside it.
     #[test]
-    fn iota_award_gate_needs_a_card_not_lotw() {
+    fn iota_award_counts_lotw_and_card_confirmations() {
         let mut a = Awards::new();
         // LoTW-confirmed (card_confirmed = false).
         a.add_qso(
@@ -2175,11 +2175,8 @@ mod tests {
             RecordFields::default(),
         );
         let s = a.summary();
-        assert_eq!(s.iota.confirmed, 2, "both are confirmed in the log sense");
-        assert_eq!(
-            s.iota.card_confirmed, 1,
-            "only the card counts toward the IOTA award itself"
-        );
+        assert_eq!(s.iota.confirmed, 2, "LoTW and card both count toward IOTA");
+        assert_eq!(s.iota.card_confirmed, 1, "one of them is on a card");
     }
 
     #[test]
