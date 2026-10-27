@@ -25803,7 +25803,9 @@ contact yourself."
                     let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
                     return;
                 }
-                if self.settings.auto_log {
+                // The popup opens by itself with Auto-log on OR off, as FT8/FT4's does;
+                // Auto-log alone logs it; with both off nothing is logged until Log.
+                if self.settings.auto_log || self.settings.prompt_to_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
                         // Hold for the operator's confirm-before-log popup — behind whatever
@@ -36643,6 +36645,46 @@ mod tests {
             log[0].extra
         );
         assert_eq!(log[0].comment, None, "nothing unmodelled to carry");
+    }
+
+    /// RTTY follows the same "Prompt me to log QSO" rule as FT8/FT4: with the prompt on,
+    /// the completed contact opens the popup by itself whether Auto-log is on or off;
+    /// Auto-log alone logs it by itself; with both off nothing is logged or offered.
+    #[test]
+    fn rtty_auto_contact_follows_the_prompt_with_auto_log_on_or_off() {
+        for (auto_log, prompt, held, logged) in [
+            (true, false, 0, 1),
+            (true, true, 1, 0),
+            (false, true, 1, 0),
+            (false, false, 0, 0),
+        ] {
+            let mut e = rtty_auto_engine();
+            let mut s = e.settings().clone();
+            s.auto_log = auto_log;
+            s.prompt_to_log = prompt;
+            e.apply_settings(s);
+            e.rtty_auto_cq().unwrap();
+            assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+            e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+            assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+            e.push_rtty_decode(
+                &rtty_decoded("W9XYZ DE W1AW R UR RST 599 599 NAME BOB QTH BOSTON K\n"),
+                0.0,
+                true,
+            );
+            assert_eq!(e.rtty_state().seq_state, "confirmed");
+            let case = format!("auto-log {auto_log}, prompt {prompt}");
+            assert_eq!(e.pending_logs.len(), held, "popup holds it: {case}");
+            if held == 1 {
+                assert_eq!(e.pending_logs[0].record.call, "W1AW", "{case}");
+                assert_eq!(
+                    e.snapshot().pending_log.map(|p| p.call),
+                    Some("W1AW".to_string()),
+                    "the popup opens by itself: {case}"
+                );
+            }
+            assert_eq!(e.stored_log().len(), logged, "logged by itself: {case}");
+        }
     }
 
     /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
