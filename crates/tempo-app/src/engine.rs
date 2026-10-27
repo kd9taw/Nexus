@@ -3251,6 +3251,14 @@ struct StalledQso {
     confirm_only: bool,
 }
 
+/// What a Log QSO press did ([`Engine::log_current_qso_press`]): the station it logged or held,
+/// and whether that station's offer was already waiting in the popup, so nothing new was held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogQsoPress {
+    pub call: String,
+    pub already_waiting: bool,
+}
+
 /// Is the contact with `station` COMPLETE, by the rule the auto-log has always used? The responder
 /// at Done with a report exchanged (or none possible, the i3=4 pairs), and the initiator at
 /// Confirming once its RR73 has gone on the air. `report_sent` is the report we sent
@@ -3632,6 +3640,13 @@ pub struct Engine {
     /// contact: it stays until it is logged, by Log QSO or any other path, or until the next
     /// band change sets another contact aside.
     band_change_qso: Option<StalledQso>,
+    /// Finished contacts that a click on another station, Call CQ or a mode change replaced
+    /// before they were logged, with Auto-log and the popup both off
+    /// ([`Self::rescue_replaced_contact`]). Each waits for Log QSO, oldest first; nothing opens
+    /// or logs by itself (operator decision, 2026-10-27). Unlike the run's give-up above, a log
+    /// of another contact does not end them: only the press that takes one does, so none is
+    /// lost and none is overwritten by the next.
+    set_aside_qsos: Vec<StalledQso>,
     /// The station whose RR73 or RRR the operator clicked to open the current contact
     /// ([`Self::call_station_ctx`]), which then sends only our 73 and exchanges no report. Such a
     /// contact is OFFERED for the log, never logged without the confirm
@@ -6696,6 +6711,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             band_change_qso: None,
+            set_aside_qsos: Vec::new(),
             roger_click: None,
             queued_73_click: None,
             recent_partner: None,
@@ -14092,17 +14108,22 @@ impl Engine {
     /// CQ run cannot grow it by itself.
     ///
     /// Nor does a program driving Nexus by UDP Reply unattended grow it (operator decision,
-    /// 2026-10-27): an offer-only contact is not held when a contact with the same call on the
-    /// same band is already waiting. Nothing is lost by it: that contact is the one the operator
-    /// will log or discard, and this one has no report to add.
-    pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
+    /// 2026-10-27): a report-less offer (our 73 to a roger the operator clicked) is not held when
+    /// a contact with the same call, band and mode is already waiting. Nothing is lost by it:
+    /// that contact is the one the operator will log or discard, and this one has no report to
+    /// add. The rule is for those offers only: a contact that carries a report is always held,
+    /// whatever waits (operator decisions, 2026-10-27). Returns whether it was held.
+    pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) -> bool {
         if held.confirm_only
+            && held.record.rst_sent.is_none()
+            && held.record.rst_rcvd.is_none()
             && self.pending_logs.iter().any(|w| {
                 w.record
                     .call
                     .trim()
                     .eq_ignore_ascii_case(held.record.call.trim())
                     && w.record.band.eq_ignore_ascii_case(&held.record.band)
+                    && w.record.mode.eq_ignore_ascii_case(&held.record.mode)
             })
         {
             tempo_core::applog::info(
@@ -14113,7 +14134,7 @@ impl Engine {
                     held.record.call, held.record.band
                 ),
             );
-            return;
+            return false;
         }
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
@@ -14125,7 +14146,7 @@ impl Engine {
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
-            return;
+            return true;
         }
         if self.pending_logs.len() >= PENDING_LOG_QUEUE_CAP {
             let oldest_loggable =
@@ -14158,6 +14179,7 @@ impl Engine {
         }
         self.pending_logs.push_back(held);
         self.persist_pending_qso();
+        true
     }
 
     /// Flush the in-memory Field Day contest log to `fd_log_path` as ADIF
@@ -17772,6 +17794,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             },
             (other, _) => return Err(format!("unknown mode {other:?}")),
         };
+        // The contact the new spec replaces, finished but not yet logged (Call CQ, a mode
+        // change or a contest CQ click right after our RR73), is logged, offered or set aside.
+        self.rescue_replaced_contact();
         // A valid local operating-spec gesture owns the newer station context,
         // even when its label and CAT mode are unchanged. Do not let older
         // Remote work overwrite that intent; invalid specs above change nothing.
@@ -18181,50 +18206,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 && was.dxcall.as_deref().is_some_and(|c| same_call(c, dxcall))
                 && (ft_contact_complete(was, self.qso_report_sent)
                     || self.queued_73_click.as_deref().is_some_and(|c| same_call(c, dxcall))));
-        // The contact the click replaces is not lost if it really happened and is not logged
-        // yet. Complete, with Auto-log or the confirm popup on, it is logged or offered now, as
-        // the next fold would have, and as a band change does ([`Self::on_band_change`]): a click
-        // in the period right after our RR73 comes before that fold. With both off it is set
-        // aside for Log QSO, as a contact the run gives up on is (#153), reports and all. Our 73
-        // to a roger the operator clicked goes the same way, offer-only, as at a band change.
-        //
-        // A contact already set aside is never overwritten: with both off, the older one and this
-        // one both go to the popup for the operator's confirm, offer-only, rather than one of
-        // them being dropped (operator decision, 2026-10-27).
-        if let (false, Mode::Qso { station: was, .. }) = (self.qso_logged, &self.mode) {
-            if let Some(dx) = was.dxcall.clone() {
-                let roger = roger_click_73_sent(was, self.roger_click.as_deref());
-                let complete = ft_contact_complete(was, self.qso_report_sent);
-                let (dxgrid, rx_report) = (was.dxgrid.clone(), was.rx_report);
-                if (complete || roger) && (self.settings.auto_log || self.settings.prompt_to_log) {
-                    self.qso_logged = true;
-                    if complete {
-                        self.auto_log_complete_contact(dx, dxgrid, rx_report, None);
-                    } else {
-                        self.offer_roger_click_contact(dx, dxgrid, None);
-                    }
-                } else if complete || roger {
-                    let made_on = (self.settings.band.clone(), self.log_frequencies());
-                    let mut st = self.set_aside(dx, dxgrid, rx_report, made_on);
-                    st.start_unix = st
-                        .start_unix
-                        .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
-                    st.confirm_only = !complete;
-                    if let Some(older) = self.stalled_qso.take() {
-                        for st in [older, st] {
-                            let grid_source = GridSource::of(st.dxgrid.as_deref());
-                            let record = self.set_aside_record(st);
-                            self.hold_pending_log(HeldQso {
-                                confirm_only: true,
-                                ..HeldQso::new(record, grid_source)
-                            });
-                        }
-                    } else {
-                        self.stalled_qso = Some(st);
-                    }
-                }
-            }
-        }
+        // A click on the R-report of the station our RR73 just answered, the same over answered
+        // again, is the same contact: our RR73 goes out again as before, and the contact is
+        // logged once, as WSJT-X logs it (its second RR73 is not a first 73, `m_lastMessageSent`,
+        // `widgets/mainwindow.cpp` 3.0.2 8105-8113; operator decision, 2026-10-27). The contact
+        // is logged, held or set aside just below, or was already; the new one is marked logged
+        // so the next fold does not claim it a second time.
+        let same_contact_again = station.state == QsoState::Confirming
+            && matches!(&self.mode, Mode::Qso { station: was, .. }
+                if was.dxcall.as_deref().is_some_and(|c| same_call(c, dxcall))
+                    && (self.qso_logged || ft_contact_complete(was, self.qso_report_sent)));
+        self.rescue_replaced_contact();
         // Offered for the log only when the last over we sent was not already a 73
         // ([`Self::last_over_was_73`]), read before this click's 73 goes out.
         let first_73 = !queued_73_to_them && !self.last_over_was_73();
@@ -18241,6 +18233,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             && matches!(context, Some((Msg::Rrr { .. } | Msg::Rr73 { .. }, _))))
         .then(|| dxcall.to_string());
         self.queued_73_click = queued_73_to_them.then(|| dxcall.to_string());
+        self.qso_logged = same_contact_again;
         self.follow_tx_selection(None);
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
@@ -19001,23 +18994,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
-        self.log_current_qso_call().is_some()
+        self.log_current_qso_press().is_some()
     }
 
     /// [`Self::log_current_qso`], naming the station it logged or held: with both Auto-log and
     /// the popup off, a press while a new station is shown can log the contact set aside behind
     /// it, and the toast says which.
-    pub fn log_current_qso_call(&mut self) -> Option<String> {
+    pub fn log_current_qso_press(&mut self) -> Option<LogQsoPress> {
         let held = self.take_current_qso_record()?;
         let call = held.record.call.clone();
         // Respect prompt-to-log just like auto-log; a contact that may only be offered goes to
         // the popup whatever it says ([`roger_click_73_sent`]).
-        if self.settings.prompt_to_log || held.confirm_only {
-            self.hold_pending_log(held);
+        let held_or_logged = if self.settings.prompt_to_log || held.confirm_only {
+            self.hold_pending_log(held)
         } else {
             self.log_qso(held.record);
-        }
-        Some(call)
+            true
+        };
+        Some(LogQsoPress {
+            call,
+            already_waiting: !held_or_logged,
+        })
     }
 
     /// Shared eligibility, captured fields and write-once transition for the
@@ -19026,8 +19023,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let (dxcall, dxgrid, rx_report, report_impossible, roger_click) = match &self.mode {
             Mode::Qso { station, .. } => match &station.dxcall {
                 // Write-once: if this contact was already logged (manual double-click, or
-                // it auto-logged on completion), don't log it again.
-                Some(_) if self.qso_logged => return None,
+                // it auto-logged on completion), don't log it again. The press goes to a
+                // contact set aside behind it, if any: one the act that opened this contact
+                // replaced ([`Self::rescue_replaced_contact`]) waits for exactly this press.
+                Some(_) if self.qso_logged => return self.take_set_aside_record(),
                 Some(c) => (
                     c.clone(),
                     station.dxgrid.clone(),
@@ -19054,7 +19053,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // which then neither auto-logged nor stayed for Log QSO.
                 None => return self.take_set_aside_record(),
             },
-            _ => return None,
+            // A contest or Chat has no current contact for this button; a contact set aside
+            // before entering it still waits for the press.
+            _ => return self.take_set_aside_record(),
         };
         // Don't create a report-LESS record: a QSO isn't a contact until at least one
         // signal report has been exchanged (WSJT-X only logs after the report exchange).
@@ -19090,12 +19091,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// The contact set aside for Log QSO that a press takes: the run's give-up first, then a band
-    /// change's ([`StalledQso`]). Taken, so each is logged or offered once.
+    /// change's, then the oldest one a click or a mode change replaced ([`StalledQso`]). Taken,
+    /// so each is logged or offered once.
     fn take_set_aside_record(&mut self) -> Option<HeldQso> {
         let st = self
             .stalled_qso
             .take()
-            .or_else(|| self.band_change_qso.take())?;
+            .or_else(|| self.band_change_qso.take())
+            .or_else(|| (!self.set_aside_qsos.is_empty()).then(|| self.set_aside_qsos.remove(0)))?;
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
         Some(HeldQso {
@@ -19575,6 +19578,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if tier == self.app.tier() {
             return;
         }
+        // A finished contact not yet logged is logged, offered or set aside on the mode it was
+        // made in, before the tier changes under it ([`Self::rescue_replaced_contact`]).
+        self.rescue_replaced_contact();
         // A local decoder choice supersedes a pending Remote radio operation,
         // even when both tiers use the same dial. Revoke before a decoder swap
         // can wait on the source lock while the CAT worker is outside this lock.
@@ -20239,6 +20245,53 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Not a stop: the halt above set the hold and the restore cleared it; put back what was.
         self.tx_stop_hold = stop_hold;
         self.quiet_tx_log = false;
+    }
+
+    /// The contact the sequencer is about to replace (a click on another station, Call CQ, a
+    /// mode change, a click on a CQ that a contest takes) is not lost if it really happened and
+    /// is not logged yet. Complete, with Auto-log or the confirm popup on, it is logged or
+    /// offered now, as the next fold would have, and as a band change does
+    /// ([`Self::on_band_change`]): an act in the period right after our RR73 comes before that
+    /// fold. With both off it is set aside for Log QSO ([`Self::set_aside_qsos`]), reports and
+    /// all, and nothing opens by itself. Our 73 to a roger the operator clicked goes the same
+    /// way, offer-only, as at a band change (operator decisions, 2026-10-27).
+    ///
+    /// Run while that contact is still the sequencer's, so its report sent and start time are
+    /// its own. The contact is marked logged: a station that stays (a tier change) is then not
+    /// claimed again, and Log QSO goes to the contact set aside. Logging only: nothing here
+    /// changes what or when we transmit.
+    fn rescue_replaced_contact(&mut self) {
+        if self.qso_logged {
+            return;
+        }
+        let Mode::Qso { station: was, .. } = &self.mode else {
+            return;
+        };
+        let Some(dx) = was.dxcall.clone() else {
+            return;
+        };
+        let roger = roger_click_73_sent(was, self.roger_click.as_deref());
+        let complete = ft_contact_complete(was, self.qso_report_sent);
+        if !complete && !roger {
+            return;
+        }
+        let (dxgrid, rx_report) = (was.dxgrid.clone(), was.rx_report);
+        self.qso_logged = true;
+        if self.settings.auto_log || self.settings.prompt_to_log {
+            if complete {
+                self.auto_log_complete_contact(dx, dxgrid, rx_report, None);
+            } else {
+                self.offer_roger_click_contact(dx, dxgrid, None);
+            }
+        } else {
+            let made_on = (self.settings.band.clone(), self.log_frequencies());
+            let mut st = self.set_aside(dx, dxgrid, rx_report, made_on);
+            st.start_unix = st
+                .start_unix
+                .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
+            st.confirm_only = !complete;
+            self.set_aside_qsos.push(st);
+        }
     }
 
     /// Write a contact the auto-log found complete ([`ft_contact_complete`]): to the

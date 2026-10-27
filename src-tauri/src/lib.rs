@@ -22756,6 +22756,9 @@ struct LogQsoOutcome {
     /// The station logged or held: not always the one shown, since a press while a new station
     /// is shown can log the contact set aside behind it, so the toast names it.
     call: Option<String>,
+    /// The press found that station's offer already waiting in the popup and held nothing new,
+    /// so the toast says so rather than "Logged".
+    already_waiting: bool,
     snapshot: AppSnapshot,
 }
 
@@ -22763,10 +22766,11 @@ struct LogQsoOutcome {
 #[tauri::command(async)]
 fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, String> {
     let mut eng = engine_lock(&state);
-    let call = eng.log_current_qso_call();
+    let press = eng.log_current_qso_press();
     Ok(LogQsoOutcome {
-        logged: call.is_some(),
-        call,
+        logged: press.is_some(),
+        already_waiting: press.as_ref().is_some_and(|p| p.already_waiting),
+        call: press.map(|p| p.call),
         snapshot: eng.snapshot(),
     })
 }
