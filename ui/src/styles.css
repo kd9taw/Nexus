@@ -22220,6 +22220,8 @@ button.cq-skiptx1.on {
   display: flex;
   gap: 6px;
   flex: none;
+  /* The containing block of the Log button's waiting count (.cq-log-waiting). */
+  position: relative;
 }
 .cq-free input {
   /* Capped, never a grower: the free-text payload maxes at 13 chars (maxLength),
@@ -22264,6 +22266,27 @@ button.cq-skiptx1.on {
 }
 .cq-log:disabled {
   opacity: 0.4;
+}
+/* How many contacts wait for Log QSO: a count on the Log button's top-right corner (Log is the
+   last item in .cq-free), absolutely placed so it takes no room in the strip and never moves or
+   wraps a control; it takes no clicks, so Log under its edge still gets them. */
+.cq-log-waiting {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 var(--space-1);
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--state-good, #29c281);
+  color: var(--bg);
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 /* --- Band Activity / Rx Frequency (stock WSJT-X flow: chronological, bottom-

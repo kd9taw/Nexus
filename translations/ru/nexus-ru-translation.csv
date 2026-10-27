@@ -2873,6 +2873,7 @@
 "3","operate.strip.send.title","Send on the next over","Передать в следующем периоде","",""
 "3","operate.strip.log.label","Log","Записать","","Short label on: Operate cockpit (FT8 / FT4). The same English text ""Log"" is used by 9 different keys (e.g. logEntry.log, logbook.form.log, rtty.pane.log.title) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","operate.strip.log.title","Log this QSO now","Записать это QSO сейчас","QSO",""
+"3","operate.strip.log.waiting","{{count}} waiting for Log","Ждут «Записать»: {{count}}","{{count}}","{{count}} is a number of finished contacts: with Auto-log and the log popup both off, each waits for a press of the Log button (operate.strip.log.label), which logs one. Shown on that button's corner."
 "3","operate.strip.period.title","Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period.","Цикл передачи — нажмите, чтобы переключать Auto → Tx 1-й → Tx 2-й. Режим Auto выбирает противоположный цикл станции, на которую вы отвечаете; станция, с которой вы работаете, должна быть на ПРОТИВОПОЛОЖНОМ периоде.","",""
 "3","operate.strip.period.auto.first","TX AUTO / 1st","TX АВТО / 1-й","TX",""
 "3","operate.strip.period.auto.second","TX AUTO / 2nd","TX АВТО / 2-й","TX",""

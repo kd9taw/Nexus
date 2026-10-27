@@ -2509,6 +2509,7 @@ export const RU: PartialCatalog = {
   "operate.strip.send.title": "Передать в следующем периоде",
   "operate.strip.log.label": "Записать",
   "operate.strip.log.title": "Записать это QSO сейчас",
+  "operate.strip.log.waiting": "Ждут «Записать»: {{count}}",
   "operate.strip.period.title": "Цикл передачи — нажмите, чтобы переключать Auto → Tx 1-й → Tx 2-й. Режим Auto выбирает противоположный цикл станции, на которую вы отвечаете; станция, с которой вы работаете, должна быть на ПРОТИВОПОЛОЖНОМ периоде.",
   "operate.strip.period.auto.first": "TX АВТО / 1-й",
   "operate.strip.period.auto.second": "TX АВТО / 2-й",

@@ -5968,6 +5968,9 @@ export interface AppSnapshot {
   /** How many MORE completed contacts are queued behind the one the popup shows (operator
    *  ruling 2026-09-19: queue them, never replace). 0 or absent = this is the only one. */
   pendingLogsWaiting?: number
+  /** How many finished contacts wait for Log QSO with Auto-log and the popup both off (ones a
+   *  click, Call CQ or a mode change replaced): the Log button shows the count. Absent/0 = none. */
+  logQsoWaiting?: number
   /** Last connector auto-upload outcome (QRZ/ClubLog/eQSL) from the backend
    * upload funnel; uploadTick bumps per outcome so the UI toasts it. */
   uploadNote?: string | null

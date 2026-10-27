@@ -4525,6 +4525,7 @@ export const FR: PartialCatalog = {
   "operate.strip.holdTx.title": "Hold Tx Freq : garde votre décalage TX là où vous l'avez mis quand vous double-cliquez une station pour la contacter. Désactivé, votre TX se cale sur la sienne (comportement WSJT-X). Un simple clic sur la cascade ne déplace jamais le TX, dans un sens comme dans l'autre.",
   "operate.strip.log.label": "Enregistrer",
   "operate.strip.log.title": "Enregistrer ce QSO maintenant",
+  "operate.strip.log.waiting": "En attente d’Enregistrer : {{count}}",
   "operate.strip.narrowFilter.label": "filtre {{hz}} Hz",
   "operate.strip.narrowFilter.title": "Le filtre de réception de la radio est à {{hz}} Hz — bien plus étroit qu'une fenêtre FT8/FT4. Les signaux en dehors n'atteignent pas du tout le décodeur. Élargissez le filtre sur la radio (2.4-3 kHz est normal).",
   "operate.strip.nextSlot.label": "prochain {{secs}}s",

@@ -2074,6 +2074,7 @@ export function OperateCockpit({
           onResend={onResend}
           onFreetext={onFreetext}
           onLog={onLog}
+          logWaiting={snap.logQsoWaiting ?? 0}
           onSetTxEven={onSetTxEven}
           onSetTxCycleAuto={onSetTxCycleAuto}
           skipTx1={skipTx1}

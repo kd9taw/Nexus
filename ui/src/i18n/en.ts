@@ -11153,6 +11153,7 @@ export const EN = {
   'operate.strip.send.title': 'Send on the next over',
   'operate.strip.log.label': 'Log',
   'operate.strip.log.title': 'Log this QSO now',
+  'operate.strip.log.waiting': '{{count}} waiting for Log',
 
   // The transmit-cycle button: four WHOLE labels, never a stem plus a period token.
   'operate.strip.period.title':

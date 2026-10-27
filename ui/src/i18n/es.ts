@@ -4525,6 +4525,7 @@ export const ES: PartialCatalog = {
   "operate.strip.holdTx.title": "Hold Tx Freq: mantiene tu offset de TX donde lo pusiste al hacer doble clic en una estación para trabajarla. Desactivado, tu TX se va encima del suyo (el comportamiento de WSJT-X). Un clic simple en la cascada nunca mueve el TX, en ningún caso.",
   "operate.strip.log.label": "Anotar",
   "operate.strip.log.title": "Anotar este QSO ahora",
+  "operate.strip.log.waiting": "Esperando a Anotar: {{count}}",
   "operate.strip.narrowFilter.label": "filtro {{hz}} Hz",
   "operate.strip.narrowFilter.title": "El filtro de recepción del equipo está en {{hz}} Hz — mucho más estrecho que una ventana de FT8/FT4. Las señales de fuera no llegan al decodificador. Abre el filtro en el equipo (2.4-3 kHz es lo normal).",
   "operate.strip.nextSlot.label": "próx. {{secs}}s",

@@ -50,6 +50,10 @@ interface Props {
   onFreetext: (text: string) => void
   /** Log the active QSO now (inline "Log QSO" button). */
   onLog: () => void
+  /** How many finished contacts wait for Log QSO with Auto-log and the popup both off
+   *  (`snap.logQsoWaiting`): counted on the Log button's corner, out of the layout, and Log
+   *  stays live while any wait, with or without a station on screen. */
+  logWaiting?: number
   /** TX controls consolidated beside CQ/S&P (operator request: one cluster,
    * no mousing to the top bar). Present only in the digital cockpit. */
   radio?: RadioStatus
@@ -128,6 +132,7 @@ export function OperateQsoStrip({
   onResend,
   onFreetext,
   onLog,
+  logWaiting,
   radio,
   onSetTxEnabled,
   onSetTune,
@@ -158,6 +163,7 @@ export function OperateQsoStrip({
   const contestRun = qso == null && (contestRunning ?? false)
   const autoCq = running && (!contestRun || (radio?.txEnabled ?? false))
   const dxcall = qso?.dxcall ?? null
+  const waiting = logWaiting ?? 0
   const state = qso?.state ?? 'Idle'
   const txNow = qso?.txNow ?? null
   const stalled = qso?.stalled ?? false
@@ -442,11 +448,23 @@ export function OperateQsoStrip({
           type="button"
           className="cq-log"
           onClick={onLog}
-          disabled={!dxcall}
+          disabled={!dxcall && waiting === 0}
           title={t('operate.strip.log.title')}
         >
           {t('operate.strip.log.label')}
         </button>
+        {/* On the button's corner and out of the flow, so a count never moves or wraps Log or
+            anything beside it. It takes no clicks: Log is under its edge. */}
+        {waiting > 0 && (
+          <span
+            className="cq-log-waiting"
+            role="status"
+            aria-label={t('operate.strip.log.waiting', { count: waiting })}
+            title={t('operate.strip.log.waiting', { count: waiting })}
+          >
+            {waiting}
+          </span>
+        )}
       </form>
 
       <span className="cq-spacer" />
