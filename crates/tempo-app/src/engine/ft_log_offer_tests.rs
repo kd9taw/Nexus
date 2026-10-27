@@ -325,3 +325,170 @@ fn a_band_change_at_the_rig_after_our_73_offers_the_contact_on_the_band_left() {
         shown.freq_mhz
     );
 }
+
+/// INVARIANT (A), as on origin/main: an ordinary contact, reports both ways, with Auto-log on and
+/// the confirm popup off, logs itself as it completes, and no popup opens.
+#[test]
+fn invariant_a_auto_log_on_prompt_off_logs_the_contact_by_itself() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    assert_eq!(calls_logged(&e), [DX], "logged by itself");
+    let rec = e.stored_log()[0].clone();
+    assert_eq!(
+        (rec.rst_sent.as_deref(), rec.rst_rcvd.as_deref()),
+        (Some("-09"), Some("-15")),
+        "with the reports exchanged"
+    );
+    assert!(e.snapshot().pending_log.is_none(), "no popup");
+    assert!(e.pending_logs.is_empty());
+}
+
+/// A CQ run: our CQ, W1AW answers with a grid, our report, their roger, our RR73, and one quiet
+/// period. Returns what the run queues next.
+fn run_one_contact(e: &mut Engine) -> String {
+    e.set_mode("qso-run").expect("the run starts");
+    assert!(key_once(e, 0).starts_with("CQ KR4FQG"), "premise: CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 2);
+    assert_eq!(key_once(e, 2), "W1AW KR4FQG -07", "premise: our report");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW R-10", -7)], 4);
+    assert_eq!(key_once(e, 4), "W1AW KR4FQG RR73", "premise: our RR73");
+    e.ingest_decodes_for_test(&[], 6);
+    tx_now(e)
+}
+
+/// INVARIANT (B): a CQ run calls CQ again after a contact, whether it logged itself or waits in
+/// the popup, the popup opened with Auto-log on or, now, off.
+#[test]
+fn invariant_b_a_cq_run_calls_cq_again_after_a_contact() {
+    for (auto_log, prompt, logged, held) in
+        [(true, false, 1, 0), (true, true, 0, 1), (false, true, 0, 1)]
+    {
+        let mut e = ft8();
+        e.settings.auto_log = auto_log;
+        e.settings.prompt_to_log = prompt;
+        let next = run_one_contact(&mut e);
+        let case = format!("auto-log {auto_log}, prompt {prompt}");
+        assert!(
+            next.starts_with("CQ KR4FQG"),
+            "{case}: the run calls CQ again, queued {next:?}"
+        );
+        assert_eq!(e.stored_log().len(), logged, "{case}: logged");
+        assert_eq!(e.pending_logs.len(), held, "{case}: held in the popup");
+    }
+}
+
+/// CONTROL, unchanged from origin/main: with Auto-log and the popup both off nothing claims the
+/// contact, so the run waits on Log QSO, which logs it and lets the run call CQ again.
+#[test]
+fn with_auto_log_and_the_popup_off_the_run_waits_for_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    let next = run_one_contact(&mut e);
+    assert!(!next.starts_with("CQ"), "waits: {next:?}");
+    assert!(e.pending_logs.is_empty() && e.stored_log().is_empty());
+    assert!(e.log_current_qso(), "Log QSO logs it");
+    assert_eq!(e.stored_log().len(), 1);
+    e.ingest_decodes_for_test(&[], 8);
+    assert!(tx_now(&e).starts_with("CQ KR4FQG"), "{}", tx_now(&e));
+}
+
+/// (4) "Prompt me to log QSO" with Auto-log OFF: the popup opens by itself as the contact
+/// completes, as WSJT-X's does, and the contact is offered once: Log QSO then has nothing more
+/// to offer.
+#[test]
+fn the_popup_opens_by_itself_with_auto_log_off() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    work_dx_to_73(&mut e, 11);
+    assert!(
+        e.stored_log().is_empty(),
+        "nothing logged before the confirm"
+    );
+    let shown = e
+        .snapshot()
+        .pending_log
+        .expect("the popup opened by itself");
+    assert_eq!(shown.call, DX);
+    assert!(!e.log_current_qso(), "Log QSO does not offer it again");
+    assert_eq!(e.pending_logs.len(), 1, "offered once");
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.confirm_pending_log(&key, shown.into()));
+    assert_eq!(calls_logged(&e), [DX]);
+}
+
+/// (4) …and for the contact after a click on their RR73: offered by itself, offer-only.
+#[test]
+fn the_popup_opens_by_itself_for_an_rr73_click_with_auto_log_off() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    click_their_rr73_and_send_73(&mut e, 21);
+    assert!(e.stored_log().is_empty());
+    assert_eq!(
+        e.snapshot().pending_log.map(|r| r.call).as_deref(),
+        Some(DX),
+        "the popup opened by itself"
+    );
+    assert!(e.pending_logs[0].confirm_only);
+    assert!(!e.log_current_qso(), "offered once");
+    assert_eq!(e.pending_logs.len(), 1);
+}
+
+/// (4) Unchanged: with both off nothing happens by itself; Log QSO logs the contact.
+#[test]
+fn with_both_off_nothing_logs_until_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    assert!(e.stored_log().is_empty() && e.pending_logs.is_empty());
+    assert!(e.log_current_qso(), "Log QSO logs it");
+    assert_eq!(calls_logged(&e), [DX]);
+    assert!(e.pending_logs.is_empty(), "with no popup");
+}
+
+/// (4) The start time with the popup alone is the one Auto-log takes: estimated as our closing
+/// over leaves, as WSJT-X does with either setting on (`widgets/mainwindow.cpp` 3.0.2 8113).
+#[test]
+fn the_popup_alone_takes_the_start_time_as_the_closing_over_leaves() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU R-15", -9)], 21);
+    e.call_station(DX);
+    let before = now_unix_secs();
+    key_once(&mut e, 22);
+    let after = now_unix_secs();
+    let window = wsjtx_qso_on(before, 4, 15.0)..=wsjtx_qso_on(after, 4, 15.0);
+    assert!(
+        e.qso_start_unix.is_some_and(|on| window.contains(&on)),
+        "estimated as the RR73 leaves: {:?}",
+        e.qso_start_unix
+    );
+}
+
+/// (4) Remote's Log QSO follows the same rules: the contact the popup opened for by itself is
+/// not offered a second time from Remote, before the confirm or after it.
+#[test]
+fn remotes_log_qso_does_not_offer_a_contact_the_popup_already_has() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    work_dx_to_73(&mut e, 11);
+    assert!(matches!(
+        e.log_current_qso_for_sync(),
+        remote_logging::CurrentQsoLogOutcome::PendingExists
+    ));
+    let shown = e.snapshot().pending_log.expect("premise: the popup opened");
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.confirm_pending_log(&key, shown.into()));
+    assert!(matches!(
+        e.log_current_qso_for_sync(),
+        remote_logging::CurrentQsoLogOutcome::NoEligibleContact
+    ));
+    assert_eq!(calls_logged(&e), [DX], "logged once");
+}

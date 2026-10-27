@@ -2964,7 +2964,9 @@ pub struct Settings {
     /// Prompt the operator to confirm/edit the QSO before logging (WSJT-X
     /// "Prompt me to log QSO"). When true the snapshot exposes a pending log
     /// record instead of silently writing it; the UI shows a confirm popup.
-    /// Off by default (silent auto-log). Has no effect unless `auto_log`.
+    /// Off by default (silent auto-log). With it on, the popup opens by itself when an FT8/FT4
+    /// contact completes, `auto_log` on or off, as WSJT-X's does (operator ruling, 2026-10-27);
+    /// with both off nothing is logged until the operator presses Log QSO.
     #[serde(default)]
     pub prompt_to_log: bool,
     /// Auto-save a WAV of the recent receive audio when a QSO is logged — an automatic

@@ -20098,7 +20098,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// Write a contact the auto-log found complete ([`ft_contact_complete`]): to the
-    /// confirm-before-log popup when that is on, else straight to the log. `made_on` names the
+    /// confirm-before-log popup when that is on (with Auto-log on or off), else straight to the
+    /// log. `made_on` names the
     /// band and logged frequencies it was made on when the dial has already left them (a band
     /// change, [`Self::on_band_change`]); `None` is the dial as it stands.
     fn auto_log_complete_contact(
@@ -20166,8 +20167,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// old station is not on the new band.
     ///
     /// No contact is lost by it. One already COMPLETE by the auto-log's rule
-    /// ([`ft_contact_complete`]) and not logged is logged now, with auto-log on, through the
-    /// auto-log's own path (the confirm popup when that is on) and on the band and frequency it
+    /// ([`ft_contact_complete`]) and not logged is logged now, with auto-log or the confirm popup
+    /// on, through the auto-log's own path (the confirm popup when that is on) and on the band and frequency it
     /// was made on: the next fold would have logged it, and it never comes for this station. Any
     /// other contact that really happened (reports crossed, or none possible) is set aside for
     /// Log QSO ([`Engine::band_change_qso`]), with the band, frequency, mode and end time it had,
@@ -20210,7 +20211,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if !self.qso_logged {
             if let Some(dx) = station.dxcall.clone() {
                 let (dxgrid, rx_report) = (station.dxgrid.clone(), station.rx_report);
-                if self.settings.auto_log && ft_contact_complete(station, self.qso_report_sent) {
+                if (self.settings.auto_log || self.settings.prompt_to_log)
+                    && ft_contact_complete(station, self.qso_report_sent)
+                {
                     tempo_core::applog::info(
                         "logbook",
                         "band change: the complete contact is logged on its own band",
@@ -20234,7 +20237,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
                     self.band_change_qso = Some(st);
                 } else if roger_click_73_sent(station, self.roger_click.as_deref()) {
-                    if self.settings.auto_log {
+                    if self.settings.auto_log || self.settings.prompt_to_log {
                         tempo_core::applog::info(
                             "logbook",
                             "band change: the contact after a click on their roger is offered",
@@ -29610,7 +29613,7 @@ contact yourself."
                             _ => None,
                         };
                         if let Some(n) = closing_ntx.filter(|_| {
-                            self.settings.auto_log
+                            (self.settings.auto_log || self.settings.prompt_to_log)
                                 && !self.qso_logged
                                 && self.qso_start_unix.is_none()
                         }) {
@@ -31395,12 +31398,15 @@ contact yourself."
                 let loggable = ft_contact_complete(station, self.qso_report_sent);
                 if loggable && !self.qso_logged {
                     // Only CLAIM the contact (which drives auto-log and the CQ-run
-                    // resume) when Auto-log is on. With it off, leave qso_logged
+                    // resume) when Auto-log or the confirm popup is on: with the popup on,
+                    // the contact opens it by itself, Auto-log on or off, as WSJT-X's
+                    // "Prompt me to log QSO" does (`widgets/mainwindow.cpp` 3.0.2 8113;
+                    // operator ruling, 2026-10-27). With both off, leave qso_logged
                     // false so the completed QSO stays capturable by the cockpit
                     // "Log QSO" button (log_current_qso) — otherwise it is silently
                     // discarded and the button no-ops. Logging it there sets
                     // qso_logged, so a CQ run resumes on the next slot.
-                    if self.settings.auto_log {
+                    if self.settings.auto_log || self.settings.prompt_to_log {
                         self.qso_logged = true;
                         self.closed_ft_contact = station
                             .dxcall
@@ -31412,7 +31418,7 @@ contact yourself."
                             station.rx_report,
                         ));
                     }
-                } else if self.settings.auto_log
+                } else if (self.settings.auto_log || self.settings.prompt_to_log)
                     && !self.qso_logged
                     && roger_click_73_sent(station, self.roger_click.as_deref())
                 {
@@ -31493,9 +31499,8 @@ contact yourself."
             self.qso_start_unix = None;
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
-            if self.settings.auto_log {
-                self.auto_log_complete_contact(dxcall, dxgrid, rx_report, None);
-            }
+            // Claimed above only with Auto-log or the popup on: logged, or held in the popup.
+            self.auto_log_complete_contact(dxcall, dxgrid, rx_report, None);
             // Contact closed — the next QSO (incl. a CQ-run's next caller) stamps a
             // fresh start time.
             self.qso_start_unix = None;
