@@ -1,5 +1,6 @@
 // THE JS8 LISTS' VIEW CHOICES — what JS8Call keeps in its window state rather than its Settings
-// dialog: the columns each list shows, how each sorts, whether column labels show, whether Band
+// dialog: the columns each list shows, how each sorts, whether column labels show and whether they are
+// its minimal ones (mainwindow.cpp:4657-4665, :4890-4898), whether Band
 // activity shows heartbeats and their ACKs (View ▸ "Show Band Heartbeats and ACKs"), and what was
 // cleared or removed from the lists. JS8Call 3.0.3's defaults (mainwindow.cpp:513-514, :4669-4686,
 // :4772-4800) for every one.
@@ -38,6 +39,9 @@ export interface Js8ViewPrefs {
   call: { columns: Record<Js8CallColumn, boolean>; sort: Js8CallSort }
   /** "Show Column Labels" (on). */
   labels: boolean
+  /** "Minimal Column Labels" (off): JS8Call's short headings, the cells' units dropped. One switch for
+   *  both lists, as JS8Call keys it to "all" (:4706-4712). */
+  minimal: boolean
   /** "Show Band Heartbeats and ACKs" (on). */
   showHb: boolean
 }
@@ -53,6 +57,7 @@ export function defaultJs8ViewPrefs(): Js8ViewPrefs {
     band: { columns: on(JS8_BAND_COLUMNS), sort: 'offset' },
     call: { columns: on(JS8_CALL_COLUMNS), sort: 'callsign' },
     labels: true,
+    minimal: false,
     showHb: true,
   }
 }
@@ -82,6 +87,7 @@ export function parseJs8ViewPrefs(raw: string | null | undefined): Js8ViewPrefs 
     if ((JS8_CALL_SORTS as readonly unknown[]).includes(v.call.sort)) out.call.sort = v.call.sort as Js8CallSort
   }
   if (typeof v.labels === 'boolean') out.labels = v.labels
+  if (typeof v.minimal === 'boolean') out.minimal = v.minimal
   if (typeof v.showHb === 'boolean') out.showHb = v.showHb
   return out
 }

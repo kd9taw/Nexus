@@ -49,6 +49,12 @@ describe('the view choices', () => {
     for (const raw of [null, '', '{', '[]', '"x"']) expect(parseJs8ViewPrefs(raw)).toEqual(defaultJs8ViewPrefs())
   })
 
+  it('keep JS8Call’s Minimal Column Labels, off by default, and read it back only as a boolean', () => {
+    expect(defaultJs8ViewPrefs().minimal).toBe(false)
+    expect(parseJs8ViewPrefs(JSON.stringify({ minimal: true })).minimal).toBe(true)
+    expect(parseJs8ViewPrefs(JSON.stringify({ minimal: 'yes' })).minimal, 'not a boolean').toBe(false)
+  })
+
   it('round-trip through this browser’s storage, and hold when storage refuses', () => {
     localStorage.clear()
     const p = { ...defaultJs8ViewPrefs(), showHb: false }

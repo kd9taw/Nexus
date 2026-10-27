@@ -50,7 +50,9 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   keeps what is still to go and the message goes on.
 - **Band activity** — one row per audio offset holding every frame heard there (the last ten),
   joined, with ♢ after each message. Columns: offset, age, SNR, and from **⋯ ▸ Show columns**
-  time delta and speed too, as JS8Call's; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show
+  time delta and speed too, as JS8Call's; **⋯ ▸ Show columns ▸ Minimal column labels** (off, one
+  switch for both lists, as JS8Call's) shortens the headings to JS8Call's (Off, SN, TD, Sp, Call,
+  Dist) and drops Hz and ms from the cells; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show
   band heartbeats and ACKs** (on) hides heartbeats and their acknowledgements. CQ rows are
   tinted green, traffic to you carries a bar, and the two highlight lists in Settings tint their
   words. Double-click a row to move RX there. A row's **⋯**: **Jump to … Hz** (both your RX and

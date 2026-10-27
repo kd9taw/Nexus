@@ -372,6 +372,44 @@ describe('Band activity is JS8Call’s', () => {
   })
 })
 
+// JS8Call's "Minimal Column Labels" (Show Columns, one switch for both lists, off: mainwindow.cpp:
+// 4657-4712): the short headings of its label map and the cells' units dropped (:4890-4898,
+// displayBandActivity.cpp:232-251, displayCallActivity.cpp:280-291).
+describe('Minimal column labels, as JS8Call’s', () => {
+  const heads = (pane: string) => Array.from(document.querySelectorAll(`[data-pane="${pane}"] thead th`)).map((th) => th.textContent ?? '')
+  /** A row's cell under the heading `head` (the header and the row hold their cells in one order). */
+  const cell = (pane: string, row: Element, head: string) => {
+    const i = heads(pane).indexOf(head)
+    expect(i, `no "${head}" heading in ${pane}`).toBeGreaterThanOrEqual(0)
+    return row.querySelectorAll('td')[i].textContent
+  }
+  const band1503 = () => document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[2]
+
+  it('shortens both lists’ headings and drops the cells’ units, from either list’s ⋯, and is remembered', async () => {
+    await renderCockpit()
+    await pick(paneMenu('offsets'), 'Time delta', 'Show columns')
+    await pick(paneMenu('stations'), 'Time delta', 'Show columns')
+    expect(heads('offsets').filter(Boolean), 'control: the full headings').toEqual(['Offset', 'Age', 'SNR', 'Time delta', 'Message(s)'])
+    expect(heads('stations').filter(Boolean)).toEqual(['Callsigns (3)', 'Age', 'SNR', 'Offset', 'Time delta', '✓', 'Name', 'Comment'])
+    expect([cell('offsets', band1503(), 'Offset'), cell('offsets', band1503(), 'Time delta')], 'control: with units').toEqual(['1503 Hz', '100 ms'])
+    expect([cell('stations', stationRow('W0IND'), 'Offset'), cell('stations', stationRow('W0IND'), 'Time delta')]).toEqual(['1503 Hz', '100 ms'])
+
+    await pick(paneMenu('offsets'), 'Minimal column labels', 'Show columns')
+    expect(heads('offsets').filter(Boolean)).toEqual(['Off', 'Age', 'SN', 'TD', 'Message(s)'])
+    expect(heads('stations').filter(Boolean), 'one switch for both lists').toEqual(['Call(3)', 'Age', 'SN', 'Off', 'TD', '✓', 'Name', 'Comment'])
+    expect([cell('offsets', band1503(), 'Off'), cell('offsets', band1503(), 'TD')]).toEqual(['1503', '100'])
+    expect([cell('stations', stationRow('W0IND'), 'Off'), cell('stations', stationRow('W0IND'), 'TD')]).toEqual(['1503', '100'])
+    expect(JSON.parse(localStorage.getItem(JS8_VIEW_KEY)!).minimal).toBe(true)
+
+    cleanup()
+    await renderCockpit()
+    expect(heads('offsets').filter(Boolean), 'remembered').toEqual(['Off', 'Age', 'SN', 'TD', 'Message(s)'])
+    await pick(paneMenu('stations'), 'Minimal column labels', 'Show columns')
+    expect(heads('offsets').filter(Boolean), 'and off again from the call list’s ⋯').toEqual(['Offset', 'Age', 'SNR', 'Time delta', 'Message(s)'])
+    expect(cell('offsets', band1503(), 'Offset')).toBe('1503 Hz')
+  })
+})
+
 describe('the call list is JS8Call’s', () => {
   const marks = () =>
     Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group)')).map((r) => [

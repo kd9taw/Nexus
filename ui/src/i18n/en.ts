@@ -12137,6 +12137,16 @@ export const EN = {
   'js8.inbox.col.text': 'Message',
   'js8.inbox.pick.aria': 'Pick the message from {{from}} at {{time}}',
 
+  // ── JS8 ▸ the screen options, as JS8Call 3.0.3 has them ──────────────────────────────────
+  // Minimal column labels (the lists' Show columns): JS8Call's short headings.
+  'js8.view.minimal': 'Minimal column labels',
+  'js8.col.offset.minimal': 'Off',
+  'js8.col.snr.minimal': 'SN',
+  'js8.col.tdrift.minimal': 'TD',
+  'js8.col.speed.minimal': 'Sp',
+  'js8.calls.col.callsign.minimal': 'Call({{count}})',
+  'js8.calls.col.distance.minimal': 'Dist',
+
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
   // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —

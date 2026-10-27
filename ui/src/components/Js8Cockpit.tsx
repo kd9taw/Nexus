@@ -1376,6 +1376,7 @@ export function Js8Cockpit({
         rows={bandRows}
         columns={view.band.columns}
         labels={view.labels}
+        minimal={view.minimal}
         nowMs={now}
         selectedHz={snap?.radio.rxOffsetHz ?? null}
         onDoubleClick={tuneRx}
@@ -1443,6 +1444,7 @@ export function Js8Cockpit({
         rows={sortedCallRows}
         columns={view.call.columns}
         labels={view.labels}
+        minimal={view.minimal}
         nowMs={now}
         selectedCall={selectedCall}
         pins={pins}
