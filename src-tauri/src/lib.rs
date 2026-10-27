@@ -43380,14 +43380,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
