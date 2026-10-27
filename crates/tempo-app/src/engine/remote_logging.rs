@@ -109,6 +109,12 @@ struct PendingRecord {
     /// what it was before the mark existed, and one written before reads back unmarked.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     confirm_only: bool,
+    /// A finished contact waiting for Log QSO with Auto-log and the popup both off
+    /// ([`Engine::set_aside_qsos`]), not one held in the popup: a restart puts it back there.
+    /// Written only when set, so a journal without one is what it was before, and one written
+    /// before reads back as popup contacts, as it was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    waits_for_log_qso: bool,
 }
 
 /// The journal's contacts: this build's queue, or the single record older builds wrote.
@@ -125,6 +131,7 @@ fn pending_record(held: &HeldQso) -> PendingRecord {
         record: held.record.clone().into(),
         grid_source: held.grid_source,
         confirm_only: held.confirm_only,
+        waits_for_log_qso: false,
     }
 }
 
@@ -156,13 +163,22 @@ pub(super) fn pending_qso_json(
     }))
 }
 
-/// The WHOLE confirm-before-log queue, oldest first — what the desktop journals on every hold
-/// change. A journal written by an older build holds one record and not an array;
+/// The WHOLE confirm-before-log queue, oldest first, then the contacts waiting for Log QSO,
+/// oldest first ([`PendingRecord::waits_for_log_qso`]) — what the desktop journals on every
+/// change to either. A journal written by an older build holds one record and not an array;
 /// [`Engine::load_pending_qso_json`] reads both.
 pub(super) fn pending_qso_queue_json(
     held: &std::collections::VecDeque<HeldQso>,
+    waiting: &[HeldQso],
 ) -> serde_json::Result<String> {
-    let queue: Vec<PendingRecord> = held.iter().map(pending_record).collect();
+    let queue: Vec<PendingRecord> = held
+        .iter()
+        .map(pending_record)
+        .chain(waiting.iter().map(|w| PendingRecord {
+            waits_for_log_qso: true,
+            ..pending_record(w)
+        }))
+        .collect();
     serde_json::to_string(&queue)
 }
 
@@ -432,9 +448,19 @@ impl Engine {
     /// an older build records none, and those restore as [`GridSource::LookedUp`].
     pub fn load_pending_qso_json(&mut self, text: &str) {
         if let Ok(queue) = pending_qso_journal(text) {
-            for pending in queue {
-                self.hold_pending_log(pending.into_held());
-            }
+            self.restore_journaled(queue);
+        }
+    }
+
+    /// The journal's contacts back where they were: those waiting for Log QSO first, so that
+    /// each hold's journal write below already carries them, then the popup's, in order.
+    fn restore_journaled(&mut self, queue: Vec<PendingRecord>) {
+        let (waiting, held): (Vec<_>, Vec<_>) =
+            queue.into_iter().partition(|p| p.waits_for_log_qso);
+        self.set_aside_qsos
+            .extend(waiting.into_iter().map(PendingRecord::into_held));
+        for pending in held {
+            self.hold_pending_log(pending.into_held());
         }
     }
 
@@ -450,8 +476,8 @@ impl Engine {
         let queue = tempo_core::keep_aside::read_or_keep("pendingQso", &path, now_unix, |text| {
             pending_qso_journal(text).map_err(|e| e.to_string())
         });
-        for pending in queue.into_iter().flatten() {
-            self.hold_pending_log(pending.into_held());
+        if let Some(queue) = queue {
+            self.restore_journaled(queue);
         }
     }
 
@@ -462,6 +488,7 @@ impl Engine {
         if self.pending_log().is_some() {
             return CurrentQsoLogOutcome::PendingExists;
         }
+        let waiting = self.set_aside_qsos.len();
         let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
@@ -469,11 +496,18 @@ impl Engine {
             // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
             self.stamp_hold(&mut held.record);
             self.replace_pending_log(Some(held));
+            // The journal still lists it as waiting for Log QSO until the publication rewrites
+            // it ([`Self::publish_pending_qso_journal`]), so a crash between keeps it.
             CurrentQsoLogOutcome::Pending(PendingJournalWrite {
                 pending: self.pending_log_identity().expect("hold just installed"),
             })
         } else {
-            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(held.record))
+            let outcome = self.log_qso_for_sync(held.record);
+            // One taken from those waiting for Log QSO leaves the journal once it is appended.
+            if self.set_aside_qsos.len() != waiting {
+                self.persist_pending_qso();
+            }
+            CurrentQsoLogOutcome::Append(outcome)
         }
     }
 
@@ -509,7 +543,8 @@ impl Engine {
         // whole queue when it started (`log_current_qso_for_sync` refuses while a hold exists).
         // A local completion can have joined the queue since — the rename would then leave those
         // out of the journal — so rewrite it from the live queue.
-        if self.pending_logs_waiting() > 0 {
+        // So can the contacts waiting for Log QSO, which this one contact leaves out too.
+        if self.pending_logs_waiting() > 0 || !self.set_aside_qsos.is_empty() {
             self.persist_pending_qso();
         }
         Ok(JournalSync {
@@ -582,6 +617,11 @@ impl Engine {
             }
         }
         self.replace_pending_log(None);
+        // The file held everything waiting, not only this hold: the contacts behind it in the
+        // popup and those waiting for Log QSO are journaled again.
+        if !self.pending_logs.is_empty() || !self.set_aside_qsos.is_empty() {
+            self.persist_pending_qso();
+        }
         Ok(JournalSync { parent })
     }
 }
@@ -710,6 +750,38 @@ mod tests {
         assert!(!engine.qso_logged);
         assert!(engine.stored_log().is_empty());
         assert!(engine.station.pending_uploads.is_empty());
+    }
+
+    /// A contact waiting for Log QSO (both settings off) shares the journal with Remote's hold:
+    /// publishing the hold and then discarding it both leave it journaled.
+    #[test]
+    fn remotes_hold_and_discard_keep_a_contact_waiting_for_log_qso_in_the_journal() {
+        let mut fixture = Fixture::new(Tier::Ft8, true);
+        let waiting = HeldQso::new(
+            fixture.engine.qso_record("K2ABC".into(), None, Some(-12)),
+            GridSource::LookedUp,
+        );
+        fixture.engine.set_aside_qsos.push(waiting);
+        fixture.engine.persist_pending_qso();
+        let path = fixture.dir.join("pending.json");
+        let restored = |path: &PathBuf| {
+            let mut r = Engine::new("K2DEF", "FN31", 0);
+            r.load_pending_qso_json(&std::fs::read_to_string(path).unwrap_or_default());
+            (r.set_aside_qsos.len(), r.pending_logs.len())
+        };
+        let identity = fixture.hold();
+        assert_eq!(restored(&path), (1, 1), "the hold and the waiting contact");
+        fixture
+            .engine
+            .discard_pending_log_for_sync(&identity)
+            .unwrap()
+            .sync()
+            .unwrap();
+        assert_eq!(
+            restored(&path),
+            (1, 0),
+            "the waiting contact is still journaled"
+        );
     }
 
     #[test]

@@ -1230,3 +1230,221 @@ fn contacts_replaced_one_after_another_with_both_off_each_wait_for_log_qso() {
     assert!(!e.log_current_qso(), "and nothing more");
     assert_eq!(calls_logged(&e), [DX, "W2XYZ"]);
 }
+
+/// With Auto-log and the popup both off, a CQ run waiting for Log QSO after a contact keeps
+/// waiting through a switch from FT8 to FT4, as before the switch did anything for the log: no
+/// CQ is planned or keyed, whether the switch moves the dial (Nexus driving the radio) or not
+/// (Companion mode), until the operator presses Log QSO. The press logs the contact as the FT8
+/// contact it was, on its FT8 frequency, and the run then calls CQ again.
+#[test]
+fn a_waiting_cq_run_keeps_waiting_through_an_ft8_to_ft4_switch_with_both_off() {
+    for source in [SourceKind::Native, SourceKind::Companion] {
+        let case = format!("{source:?}");
+        let mut e = ft8();
+        e.settings.auto_log = false;
+        e.settings.prompt_to_log = false;
+        e.source_kind = source;
+        run_to_our_rr73_to_w1aw(&mut e);
+        e.ingest_decodes_for_test(&[], 6);
+        assert!(
+            !tx_now(&e).starts_with("CQ"),
+            "{case}: premise: the run waits"
+        );
+        let made_on = e.log_frequencies();
+        e.set_tier(Tier::Ft4);
+        for slot in 10..22 {
+            e.ingest_decodes_for_test(&[], slot);
+            let planned = tx_now(&e);
+            assert!(
+                !planned.starts_with("CQ"),
+                "{case}: slot {slot}: CQ planned: {planned:?}"
+            );
+            if !e.poll_tx(slot).is_empty() {
+                assert!(!planned.starts_with("CQ"), "{case}: slot {slot}: CQ keyed");
+            }
+        }
+        assert!(
+            e.stored_log().is_empty() && e.pending_logs.is_empty(),
+            "{case}: nothing by itself"
+        );
+        assert!(e.log_current_qso(), "{case}: Log QSO logs it");
+        let rec = e.stored_log()[0].clone();
+        assert_eq!(
+            (rec.call.as_str(), rec.mode.as_str(), rec.band.as_str()),
+            ("W1AW", "FT8", "20m"),
+            "{case}: as the FT8 contact it was"
+        );
+        assert_eq!(
+            (rec.freq_mhz, rec.freq_rx_mhz),
+            made_on,
+            "{case}: on its FT8 frequency"
+        );
+        assert_eq!(
+            (rec.rst_sent.as_deref(), rec.rst_rcvd.as_deref()),
+            (Some("-07"), Some("-10")),
+            "{case}: with its reports"
+        );
+        assert!(!e.log_current_qso(), "{case}: once");
+        e.ingest_decodes_for_test(&[], 22);
+        assert!(
+            tx_now(&e).starts_with("CQ KR4FQG"),
+            "{case}: then the run calls CQ: {}",
+            tx_now(&e)
+        );
+    }
+}
+
+/// With Auto-log on, Log QSO pressed on a contact that is already logged never reaches an
+/// unfinished contact a band change set aside: that press is for the contact just made, and says
+/// there is nothing more to log. The set-aside contact still waits for a press with no contact
+/// shown. (A run's give-up needs no case: any log ends it, as before.)
+#[test]
+fn log_qso_on_a_logged_contact_never_reaches_an_unfinished_set_aside_contact() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.qso_report_sent = Some(-3);
+    e.band_change_qso = Some(e.set_aside(
+        "W2XYZ".into(),
+        None,
+        Some(-4),
+        (String::from("40m"), (7.075_5, None)),
+    ));
+    e.qso_report_sent = None;
+    work_dx_to_73(&mut e, 11);
+    assert_eq!(calls_logged(&e), [DX], "premise: the contact logged itself");
+    assert!(!e.log_current_qso(), "nothing more to log");
+    assert_eq!(
+        calls_logged(&e),
+        [DX],
+        "the unfinished contact is not logged"
+    );
+    e.set_mode("qso-monitor")
+        .expect("premise: no contact shown");
+    assert!(
+        e.log_current_qso(),
+        "a press with no contact shown still takes it"
+    );
+    assert_eq!(calls_logged(&e), [DX, "W2XYZ"]);
+}
+
+/// The contacts waiting for Log QSO with both off are counted in the snapshot, and the count
+/// follows each press.
+#[test]
+fn the_contacts_waiting_for_log_qso_are_counted() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    assert_eq!(e.snapshot().log_qso_waiting, 0);
+    work_dx_to_73(&mut e, 11);
+    assert_eq!(
+        e.snapshot().log_qso_waiting,
+        0,
+        "the contact shown is not counted"
+    );
+    e.set_mode("qso-run").expect("Call CQ");
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "set aside by Call CQ");
+    assert!(e.log_current_qso(), "the press takes it");
+    assert_eq!(e.snapshot().log_qso_waiting, 0);
+}
+
+/// Contacts waiting for Log QSO are kept across a restart, in the popup's journal, and come back
+/// waiting for Log QSO: the popup does not open by itself, and each press logs one.
+#[test]
+fn contacts_waiting_for_log_qso_are_kept_across_a_restart() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus-log-qso-waiting-{}-{}.json",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.set_pending_qso_path(path.clone());
+    work_dx_to_73(&mut e, 11);
+    e.set_mode("qso-run").expect("Call CQ");
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "premise: one waits");
+    assert!(path.exists(), "journaled");
+    let mut r = ft8();
+    r.settings.auto_log = false;
+    r.settings.prompt_to_log = false;
+    r.set_pending_qso_path(path.clone());
+    r.restore_pending_qso_journal(now_unix_secs() as i64);
+    let snap = r.snapshot();
+    assert_eq!(snap.log_qso_waiting, 1, "it waits again after the restart");
+    assert!(
+        snap.pending_log.is_none(),
+        "the popup does not open by itself"
+    );
+    assert!(r.log_current_qso(), "Log QSO logs it");
+    assert_eq!(
+        rows(&r),
+        [(DX.to_string(), Some("-09".into()), Some("-15".into()))]
+    );
+    assert!(!path.exists(), "and the journal is cleared");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A contact held in the popup and one waiting for Log QSO share the journal: answering the popup
+/// keeps the waiting one in it.
+#[test]
+fn answering_the_popup_keeps_a_contact_waiting_for_log_qso_in_the_journal() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus-log-qso-waiting-{}-{}.json",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.set_pending_qso_path(path.clone());
+    work_dx_to_73(&mut e, 11);
+    e.set_mode("qso-run").expect("Call CQ");
+    assert!(
+        e.hold_pending_log(held(&e, "K2ABC")),
+        "premise: the popup holds one"
+    );
+    let key = e.pending_qso_log_key().unwrap_or_default();
+    assert!(e.discard_pending_log(&key));
+    let mut r = ft8();
+    r.set_pending_qso_path(path.clone());
+    r.restore_pending_qso_journal(now_unix_secs() as i64);
+    assert_eq!(
+        r.snapshot().log_qso_waiting,
+        1,
+        "the waiting contact is still journaled"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Log QSO in Chat (or a contest) has no contact of its own: it reaches a finished contact waiting
+/// for Log QSO, never an unfinished one a band change set aside, which waits for a press outside.
+#[test]
+fn log_qso_in_chat_reaches_only_a_contact_waiting_for_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.qso_report_sent = Some(-3);
+    e.band_change_qso = Some(e.set_aside(
+        "W2XYZ".into(),
+        None,
+        Some(-4),
+        (String::from("40m"), (7.075_5, None)),
+    ));
+    e.qso_report_sent = None;
+    e.set_mode("chat").expect("premise: Chat");
+    assert!(
+        !matches!(e.mode, Mode::Qso { .. }),
+        "premise: no FT contact"
+    );
+    assert!(
+        !e.log_current_qso(),
+        "the unfinished contact is not logged here"
+    );
+    assert!(e.stored_log().is_empty());
+    e.set_mode("qso-monitor").expect("premise: back to FT");
+    assert!(e.log_current_qso(), "a press there takes it");
+    assert_eq!(calls_logged(&e), ["W2XYZ"]);
+}

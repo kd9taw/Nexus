@@ -3251,6 +3251,18 @@ struct StalledQso {
     confirm_only: bool,
 }
 
+/// Where and in what mode a finished contact was made, kept when a tier change comes before Log
+/// QSO with Auto-log and the popup both off ([`Engine::qso_made_on`]). It names its contact, by
+/// call and by the contact's identity (`Engine::qso_log_epoch`), so it can never stamp another.
+#[derive(Debug, Clone)]
+struct MadeOn {
+    call: String,
+    epoch: u64,
+    band: String,
+    freqs: (f64, Option<f64>),
+    mode: String,
+}
+
 /// What a Log QSO press did ([`Engine::log_current_qso_press`]): the station it logged or held,
 /// and whether that station's offer was already waiting in the popup, so nothing new was held.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3645,8 +3657,18 @@ pub struct Engine {
     /// ([`Self::rescue_replaced_contact`]). Each waits for Log QSO, oldest first; nothing opens
     /// or logs by itself (operator decision, 2026-10-27). Unlike the run's give-up above, a log
     /// of another contact does not end them: only the press that takes one does, so none is
-    /// lost and none is overwritten by the next.
-    set_aside_qsos: Vec<StalledQso>,
+    /// lost and none is overwritten by the next. None expires; the snapshot counts them
+    /// (`log_qso_waiting`), and the popup's journal keeps them across a restart
+    /// ([`Self::persist_pending_qso`]) (operator decisions, 2026-10-27).
+    ///
+    /// Each is the record as the contact stood when it was set aside, built then, so the journal
+    /// holds what Log QSO will log.
+    set_aside_qsos: Vec<HeldQso>,
+    /// Where and in what mode the current contact was made, captured when a tier change (FT8 to
+    /// FT4) comes after it finished, with Auto-log and the popup both off
+    /// ([`Self::set_tier_with_installer_and_reset`]). Log QSO then logs it as the contact it was.
+    /// Only the record reads it ([`Self::qso_record`]), and only for that contact.
+    qso_made_on: Option<MadeOn>,
     /// The station whose RR73 or RRR the operator clicked to open the current contact
     /// ([`Self::call_station_ctx`]), which then sends only our 73 and exchanges no report. Such a
     /// contact is OFFERED for the log, never logged without the confirm
@@ -6712,6 +6734,7 @@ impl Engine {
             stalled_qso: None,
             band_change_qso: None,
             set_aside_qsos: Vec::new(),
+            qso_made_on: None,
             roger_click: None,
             queued_73_click: None,
             recent_partner: None,
@@ -14031,13 +14054,17 @@ impl Engine {
         if tempo_core::keep_aside::refuses(path) {
             return;
         }
-        if self.pending_logs.is_empty() {
+        if self.pending_logs.is_empty() && self.set_aside_qsos.is_empty() {
             let _ = std::fs::remove_file(path);
             return;
         }
         // THE WHOLE QUEUE, not just the contact the popup is showing: everything waiting
-        // behind it is a finished contact too, and a crash must not take any of them.
-        let Ok(text) = remote_logging::pending_qso_queue_json(&self.pending_logs) else {
+        // behind it is a finished contact too, and a crash must not take any of them. So are the
+        // contacts waiting for Log QSO with both settings off ([`Self::set_aside_qsos`]), marked
+        // so a restart puts them back there and not in the popup.
+        let Ok(text) =
+            remote_logging::pending_qso_queue_json(&self.pending_logs, &self.set_aside_qsos)
+        else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -19001,6 +19028,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// the popup off, a press while a new station is shown can log the contact set aside behind
     /// it, and the toast says which.
     pub fn log_current_qso_press(&mut self) -> Option<LogQsoPress> {
+        let waiting = self.set_aside_qsos.len();
         let held = self.take_current_qso_record()?;
         let call = held.record.call.clone();
         // Respect prompt-to-log just like auto-log; a contact that may only be offered goes to
@@ -19011,6 +19039,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.log_qso(held.record);
             true
         };
+        // One taken from those waiting for Log QSO leaves the journal only now that it is in
+        // the log or the popup.
+        if self.set_aside_qsos.len() != waiting {
+            self.persist_pending_qso();
+        }
         Some(LogQsoPress {
             call,
             already_waiting: !held_or_logged,
@@ -19026,7 +19059,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // it auto-logged on completion), don't log it again. The press goes to a
                 // contact set aside behind it, if any: one the act that opened this contact
                 // replaced ([`Self::rescue_replaced_contact`]) waits for exactly this press.
-                Some(_) if self.qso_logged => return self.take_set_aside_record(),
+                // Only one waiting for Log QSO ([`Self::set_aside_qsos`]): never an unfinished
+                // contact a band change or the run's give-up set aside, which this press, meant
+                // for the contact just made, was not for (operator decision, 2026-10-27).
+                Some(_) if self.qso_logged => return self.take_waiting_record(),
                 Some(c) => (
                     c.clone(),
                     station.dxgrid.clone(),
@@ -19053,9 +19089,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // which then neither auto-logged nor stayed for Log QSO.
                 None => return self.take_set_aside_record(),
             },
-            // A contest or Chat has no current contact for this button; a contact set aside
-            // before entering it still waits for the press.
-            _ => return self.take_set_aside_record(),
+            // A contest or Chat has no current contact for this button; a finished contact set
+            // aside for Log QSO before entering it still waits for the press. An unfinished one a
+            // band change or a give-up set aside waits for a press outside it, as before.
+            _ => return self.take_waiting_record(),
         };
         // Don't create a report-LESS record: a QSO isn't a contact until at least one
         // signal report has been exchanged (WSJT-X only logs after the report exchange).
@@ -19094,17 +19131,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// change's, then the oldest one a click or a mode change replaced ([`StalledQso`]). Taken,
     /// so each is logged or offered once.
     fn take_set_aside_record(&mut self) -> Option<HeldQso> {
-        let st = self
+        let Some(st) = self
             .stalled_qso
             .take()
             .or_else(|| self.band_change_qso.take())
-            .or_else(|| (!self.set_aside_qsos.is_empty()).then(|| self.set_aside_qsos.remove(0)))?;
+        else {
+            return self.take_waiting_record();
+        };
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
         Some(HeldQso {
             confirm_only,
             ..HeldQso::new(self.set_aside_record(st), grid_source)
         })
+    }
+
+    /// The oldest finished contact waiting for Log QSO ([`Self::set_aside_qsos`]), taken. The
+    /// caller journals the queue once the press has logged or held it.
+    fn take_waiting_record(&mut self) -> Option<HeldQso> {
+        (!self.set_aside_qsos.is_empty()).then(|| self.set_aside_qsos.remove(0))
     }
 
     /// Set aside a contact that really happened, for Log QSO ([`StalledQso`]): the report we
@@ -19578,9 +19623,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if tier == self.app.tier() {
             return;
         }
-        // A finished contact not yet logged is logged, offered or set aside on the mode it was
-        // made in, before the tier changes under it ([`Self::rescue_replaced_contact`]).
-        self.rescue_replaced_contact();
+        // A finished contact not yet logged is logged or offered on the mode it was made in,
+        // before the tier changes under it ([`Self::rescue_replaced_contact`]), when Auto-log or
+        // the popup is on: the next fold would have claimed it, so a CQ run resumes as it would
+        // have. With both off it stays the current contact, unclaimed, so a CQ run keeps waiting
+        // for Log QSO through the switch, as it always has: setting it aside would mark it logged,
+        // and the run would call CQ in the new mode with nobody pressing anything (operator
+        // decision, 2026-10-27). Only where and how it was made is kept, for the press.
+        if self.settings.auto_log || self.settings.prompt_to_log {
+            self.rescue_replaced_contact();
+        } else {
+            self.keep_made_on_for_log_qso();
+        }
         // A local decoder choice supersedes a pending Remote radio operation,
         // even when both tiers use the same dial. Revoke before a decoder swap
         // can wait on the source lock while the CAT worker is outside this lock.
@@ -20247,6 +20301,46 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.quiet_tx_log = false;
     }
 
+    /// Keep where and in what mode the current contact was made ([`MadeOn`]) when it is finished
+    /// and waits for Log QSO with both settings off, before a tier change moves the mode, and
+    /// maybe the dial, under it. The first switch's is kept (FT8 to FT4 to FT2 logs FT8). Logging
+    /// only: the contact, `qso_logged` and the run are left exactly as they were.
+    fn keep_made_on_for_log_qso(&mut self) {
+        if self.qso_logged {
+            return;
+        }
+        let Mode::Qso { station, .. } = &self.mode else {
+            return;
+        };
+        let Some(call) = station.dxcall.clone() else {
+            return;
+        };
+        let finished = ft_contact_complete(station, self.qso_report_sent)
+            || roger_click_73_sent(station, self.roger_click.as_deref());
+        if !finished || self.made_on_for(&call).is_some() {
+            return;
+        }
+        let (band, freqs, mode) = (
+            self.settings.band.clone(),
+            self.log_frequencies(),
+            self.adif_mode_for_tier().to_string(),
+        );
+        self.qso_made_on = Some(MadeOn {
+            call,
+            epoch: self.qso_log_epoch,
+            band,
+            freqs,
+            mode,
+        });
+    }
+
+    /// The [`MadeOn`] kept for the contact with `call`, if it is still the current contact's.
+    fn made_on_for(&self, call: &str) -> Option<&MadeOn> {
+        self.qso_made_on
+            .as_ref()
+            .filter(|m| m.epoch == self.qso_log_epoch && same_call(&m.call, call))
+    }
+
     /// The contact the sequencer is about to replace (a click on another station, Call CQ, a
     /// mode change, a click on a CQ that a contest takes) is not lost if it really happened and
     /// is not logged yet. Complete, with Auto-log or the confirm popup on, it is logged or
@@ -20284,13 +20378,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.offer_roger_click_contact(dx, dxgrid, None);
             }
         } else {
-            let made_on = (self.settings.band.clone(), self.log_frequencies());
-            let mut st = self.set_aside(dx, dxgrid, rx_report, made_on);
-            st.start_unix = st
-                .start_unix
-                .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
-            st.confirm_only = !complete;
-            self.set_aside_qsos.push(st);
+            // The record as Log QSO would have built it now, so the journal keeps exactly that.
+            let grid_source = GridSource::of(dxgrid.as_deref());
+            let mut held = HeldQso::new(self.qso_record(dx, dxgrid, rx_report), grid_source);
+            held.confirm_only = !complete;
+            self.stamp_hold(&mut held.record);
+            self.set_aside_qsos.push(held);
+            self.persist_pending_qso();
         }
     }
 
@@ -29349,6 +29443,7 @@ contact yourself."
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
+        s.log_qso_waiting = self.set_aside_qsos.len() as u32;
         s.pending_logs_auto_logged = self.pending_logs_auto_logged;
         s
     }
@@ -32159,9 +32254,14 @@ contact yourself."
         let when_unix = self
             .qso_start_unix
             .unwrap_or_else(|| self.start_time_at_log(&dxcall));
+        // A contact finished before a tier change (FT8 to FT4) and logged after it, with both
+        // settings off, is the contact it was: its mode, band and frequencies ([`MadeOn`]).
+        let made_on = self.made_on_for(&dxcall).cloned();
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
         // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
-        let mode = self.adif_mode_for_tier().to_string();
+        let mode = made_on
+            .as_ref()
+            .map_or_else(|| self.adif_mode_for_tier().to_string(), |m| m.mode.clone());
         // Resolve the DXCC entity (country) at log time — the key field for a
         // DXer. Uses the injected resolver; None in headless tests.
         let country = self
@@ -32171,7 +32271,9 @@ contact yourself."
             .and_then(|resolve| resolve(&dxcall));
         // Logged FREQ is the actual on-air RF, and FREQ_RX the receive leg of a split
         // contact — see `log_frequencies`, which owns the rule and the satellite exclusion.
-        let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
+        let (freq_mhz, freq_rx_mhz) = made_on
+            .as_ref()
+            .map_or_else(|| self.log_frequencies(), |m| m.freqs);
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
         // Built BEFORE the struct literal moves `mode` into the record.
         let reports_note = if self.settings.log_reports_to_comments {
@@ -32195,7 +32297,7 @@ contact yourself."
             grid,
             country,
             state: None,
-            band: self.settings.band.clone(),
+            band: made_on.map_or_else(|| self.settings.band.clone(), |m| m.band),
             freq_mhz,
             freq_rx_mhz,
             mode,
@@ -48693,7 +48795,7 @@ mod tests {
             held.record.when_unix -= 4 * 3600;
             held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
         }
-        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs, &[]).unwrap();
         let mut later = Engine::new("K2DEF", "EM10", 0);
         later.settings.prompt_to_log = true;
         later.settings.rig_model_name = "Elecraft KX3".into();
@@ -48741,7 +48843,7 @@ mod tests {
             held.record.when_unix -= 4 * 3600;
             held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
         }
-        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs, &[]).unwrap();
         let mut later = Engine::new("W6R", "EM10", 0);
         later.settings.prompt_to_log = true;
         later.settings.fd_operator = "K9OP".into();

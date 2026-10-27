@@ -26,6 +26,7 @@
     "state": "rx",
     "tier": "FT4"
   },
+  "logQsoWaiting": 0,
   "logSaveTrouble": null,
   "logStoreProblem": null,
   "logTick": null,

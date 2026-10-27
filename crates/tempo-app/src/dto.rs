@@ -5161,6 +5161,12 @@ pub struct AppSnapshot {
     /// own turn in the popup. `0` when the one shown is the only one.
     #[serde(default)]
     pub pending_logs_waiting: u32,
+    /// How many finished contacts wait for Log QSO with Auto-log and the popup both off: ones a
+    /// click on another station, Call CQ or a mode change replaced before they were logged. Each
+    /// press logs one, oldest first; the cockpit shows the count beside Log. The contact on screen
+    /// is not counted.
+    #[serde(default)]
+    pub log_qso_waiting: u32,
     /// ⭐ R3 — how many contacts have been logged WITHOUT the operator's confirmation since
     /// they last answered the popup, because the confirm-before-log queue was full. The popup
     /// shows it; the Connections log carries the same event with the call, band, mode and time.
