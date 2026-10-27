@@ -30,8 +30,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 # >>> make-kit pins
 EXPECTED_ROWS = 9885
 EXPECTED_KEYS_SHA = '1895f2a04e49d6d4d4286a1fcb05b29d6f8196235d37c89ff70423caf168c40d'
-EXPECTED_ENGLISH_SHA = 'bb5356372805a2d7fe68dda13050ab6ab8990adb3f51641106e125c80eee7434'
-EXPECTED_DNT_SHA = 'c981c6abfe7e0f650a26b613c93926d73de0fa2ddca909ee7b9464e4e84ab799'
+EXPECTED_ENGLISH_SHA = 'a3170fcfc0da4ee05d87576e1db6a1d7e43190d7731481c5a0c7afe396d980fa'
+EXPECTED_DNT_SHA = '5640bd02b8d4587882e0840c34cd08afbfb4c31143110bf3c95a21fc5b3dcfe9'
 EXPECTED_TIERS = {1: 946, 2: 337, 3: 1831, 4: 535, 5: 3919, 6: 2317}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'russian', 'do_not_translate', 'notes']
