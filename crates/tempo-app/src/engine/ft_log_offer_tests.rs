@@ -492,3 +492,34 @@ fn remotes_log_qso_does_not_offer_a_contact_the_popup_already_has() {
     ));
     assert_eq!(calls_logged(&e), [DX], "logged once");
 }
+
+/// (4) …and at a band change: a contact complete when the band changes opens the popup there,
+/// on the band it was made on, with Auto-log off, as the fold would have; so does our 73 after a
+/// click on their RR73.
+#[test]
+fn with_auto_log_off_the_popup_opens_at_a_band_change() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = true;
+    e.set_mode("qso-run").expect("the run starts");
+    key_once(&mut e, 0);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 2);
+    key_once(&mut e, 2);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW R-10", -7)], 4);
+    assert_eq!(key_once(&mut e, 4), "W1AW KR4FQG RR73", "premise: our RR73");
+    e.set_frequency(7.074, "40m", "USB");
+    assert!(e.stored_log().is_empty());
+    let shown = e.snapshot().pending_log.expect("the popup opened");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), ("W1AW", "20m"));
+
+    let mut c = ft8();
+    c.settings.auto_log = false;
+    c.settings.prompt_to_log = true;
+    click_their_rr73_send_73_and_change_band(&mut c);
+    let shown = c
+        .snapshot()
+        .pending_log
+        .expect("the RR73-click contact too");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
+    assert!(c.pending_logs[0].confirm_only);
+}
