@@ -55,5 +55,8 @@ fn the_setup_wizard_once_seen_stays_seen() {
     e.apply_settings(fresh.clone());
     assert!(e.settings().setup_wizard_seen, "a stale form unmarked it");
     e.apply_restored_settings(fresh);
-    assert!(e.settings().setup_wizard_seen, "a restore or reset unmarked it");
+    assert!(
+        e.settings().setup_wizard_seen,
+        "a restore or reset unmarked it"
+    );
 }

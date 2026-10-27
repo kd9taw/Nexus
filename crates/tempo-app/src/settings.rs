@@ -8358,7 +8358,10 @@ mod tests {
         assert!(Settings::load_at(&path, KEPT_AT).setup_wizard_seen);
 
         let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
-        assert!(!full.contains("setupWizardSeen"), "fixture predates the key");
+        assert!(
+            !full.contains("setupWizardSeen"),
+            "fixture predates the key"
+        );
         std::fs::write(&path, full).unwrap();
         assert!(
             Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
