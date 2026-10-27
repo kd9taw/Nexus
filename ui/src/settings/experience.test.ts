@@ -1,7 +1,16 @@
 // What each answer to the first-run question changes, and that "not asked" changes nothing.
 import { describe, it, expect } from 'vitest'
-import { featurePreset, finishDefaults, foldsSettings, startsFolded, EXPERIENCE_LEVELS } from './experience'
+import {
+  featurePreset,
+  finishDefaults,
+  foldsSettings,
+  startsFolded,
+  targetOpens,
+  screensTurnedOff,
+  EXPERIENCE_LEVELS,
+} from './experience'
 import { applyProfiles } from '../features/state'
+import { resolveEnabled } from '../features/profiles'
 import { SETTINGS_SECTIONS } from './registry'
 
 const enabledFor = (level: Parameters<typeof featurePreset>[0]) => {
@@ -68,5 +77,49 @@ describe('the experience answer', () => {
     expect(nested).toBeTruthy()
     expect(startsFolded(nested!.id, 'newToHobby')).toBe(false)
     expect(startsFolded('no-such-section', 'newToHobby')).toBe(false)
+  })
+
+  it('never folds Accessibility or Features, for any answer', () => {
+    for (const level of ['newToHobby', 'newToDigital', 'experienced', undefined] as const) {
+      expect(startsFolded('accessibility', level), `${level}`).toBe(false)
+      expect(startsFolded('features', level), `${level}`).toBe(false)
+    }
+    // Control: their tab's other sections still fold for a new answer.
+    expect(startsFolded('theme', 'newToDigital')).toBe(true)
+  })
+
+  it('a target opens its own section and every section it sits in, and no other', () => {
+    // antenna-gain sits inside integrations-feeds (a folded top-level section for a new answer).
+    expect(targetOpens('integrations-feeds', 'antenna-gain')).toBe(true)
+    expect(targetOpens('antenna-gain', 'antenna-gain')).toBe(true)
+    expect(targetOpens('rig-control', 'rig-advanced')).toBe(true)
+    // Controls: a sibling, a child of the target and no target open nothing.
+    expect(targetOpens('theme', 'antenna-gain')).toBe(false)
+    expect(targetOpens('antenna-gain', 'integrations-feeds')).toBe(false)
+    expect(targetOpens('integrations-feeds', null)).toBe(false)
+    // Every nested section opens its whole chain of parents.
+    for (const s of SETTINGS_SECTIONS.filter((x) => x.parent)) {
+      let up: string | undefined = s.parent
+      while (up) {
+        expect(targetOpens(up, s.id), `${s.id} in ${up}`).toBe(true)
+        up = SETTINGS_SECTIONS.find((x) => x.id === up)?.parent
+      }
+    }
+  })
+
+  it('names the screens an answer would turn off, and none when it turns nothing off', () => {
+    const everything = resolveEnabled('everything')
+    const off = screensTurnedOff('newToHobby', everything).map((f) => f.id)
+    expect(off).toContain('phone')
+    expect(off).toContain('cw')
+    expect(off).not.toContain('operate')
+    // New to digital keeps Phone and CW.
+    expect(screensTurnedOff('newToDigital', everything).map((f) => f.id)).not.toContain('phone')
+    // Experienced (everything) turns nothing off from everything, nor does any answer from a set
+    // that already has only its own screens on.
+    expect(screensTurnedOff('experienced', everything)).toEqual([])
+    expect(screensTurnedOff('newToHobby', enabledFor('newToHobby'))).toEqual([])
+    // A screen that is off now is never listed.
+    expect(screensTurnedOff('newToHobby', { ...everything, phone: false }).map((f) => f.id)).not.toContain('phone')
   })
 })

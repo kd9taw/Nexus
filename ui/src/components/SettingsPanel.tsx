@@ -254,7 +254,7 @@ import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget, sectionsForTab, type SettingsTabId } from '../settings/registry'
-import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, startsFolded } from '../settings/experience'
+import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, screensTurnedOff, startsFolded, targetOpens } from '../settings/experience'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
 import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
@@ -1794,16 +1794,18 @@ export function SettingsPanel({
   // The experience answer's folding (`settings/experience.ts`): a section no first-hour operator
   // needs shows its heading only, for the two "new" answers. No answer, or Experienced: nothing
   // folds, the panel exactly as it always was. Show all unfolds the tab for this visit; a search
-  // pick or deep link opens its own section whatever the fold.
+  // pick or deep link opens its own section, and every section it sits inside, whatever the fold.
   const [unfoldedTabs, setUnfoldedTabs] = useState<Set<string>>(() => new Set())
   const fold = (sectionId: string): { 'data-folded'?: 'true' } =>
-    startsFolded(sectionId, form?.experienceLevel) && !unfoldedTabs.has(tab) && openTarget !== sectionId
+    startsFolded(sectionId, form?.experienceLevel) && !unfoldedTabs.has(tab) && !targetOpens(sectionId, openTarget)
       ? { 'data-folded': 'true' }
       : {}
   const foldingTab =
     foldsSettings(form?.experienceLevel) &&
     !unfoldedTabs.has(tab) &&
-    sectionsForTab(tab as SettingsTabId).some((x) => startsFolded(x.id, form?.experienceLevel) && x.id !== openTarget)
+    sectionsForTab(tab as SettingsTabId).some(
+      (x) => startsFolded(x.id, form?.experienceLevel) && !targetOpens(x.id, openTarget),
+    )
   // A later target (the operator clicks a second pointer while Settings is already open) must
   // move the panel, not be swallowed because the component is already mounted.
   useEffect(() => {
@@ -2852,16 +2854,18 @@ export function SettingsPanel({
     })
   }
   // The experience answer: ONE writer (`setExperienceLevel`), saved on change. It picks the
-  // starting feature set as the wizard does, so a hand-tuned set is confirmed first, the way a
-  // profile chip in Settings ▸ Appearance ▸ Features confirms it. Declined, nothing changes.
+  // starting feature set as the wizard does, so whenever that would turn any screen off (whatever
+  // the set is now, a named profile or a hand-tuned one) it asks first and names what would go.
+  // Declined, nothing changes.
   const handleSetExperience = (level: ExperienceLevel) => {
     void (async () => {
       const label = EXPERIENCE_LEVELS.find((l) => l.value === level)?.label ?? level
+      const goes = screensTurnedOff(level, features.enabled)
       if (
-        features.profile === 'custom' &&
+        goes.length > 0 &&
         !(await confirmDialog({
           title: t('settings.features.profile.confirm.title', { profile: label }),
-          body: t('settings.features.profile.confirm.body'),
+          body: t('settings.station.experience.confirm.body', { screens: goes.map((f) => f.label).join(', ') }),
           confirmLabel: t('settings.features.profile.confirm.action'),
           danger: true,
         }))

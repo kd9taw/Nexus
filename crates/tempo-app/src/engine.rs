@@ -7301,6 +7301,9 @@ impl Engine {
         // …and the experience answer (`set_experience_level`): a form loaded before the wizard
         // answered must not clear it.
         let live_experience_level = self.settings.experience_level;
+        // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
+        // to seen: no form, restore or reset brings the first-run wizard back to a station.
+        let live_setup_wizard_seen = self.settings.setup_wizard_seen;
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7435,6 +7438,7 @@ impl Engine {
         }
         self.settings.operating_mode = live_op_mode;
         self.settings.keyboard_modem = live_keyboard_modem;
+        self.settings.setup_wizard_seen |= live_setup_wizard_seen;
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -7996,6 +8000,13 @@ impl Engine {
     /// and `apply_settings` keeps the live value. Nothing in the engine reads it.
     pub fn set_experience_level(&mut self, level: crate::settings::ExperienceLevel) -> &Settings {
         self.settings.experience_level = Some(level);
+        &self.settings
+    }
+
+    /// **THE ONE WRITER of the setup wizard's "seen" record**: the first-run wizard was finished
+    /// or skipped, so it never opens by itself again. Nothing clears it (see `apply_settings_inner`).
+    pub fn mark_setup_wizard_seen(&mut self) -> &Settings {
+        self.settings.setup_wizard_seen = true;
         &self.settings
     }
 

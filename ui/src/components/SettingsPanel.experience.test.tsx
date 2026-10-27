@@ -11,6 +11,8 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FeaturesApi } from '../useFeatures'
 import { ConfirmHost } from '../confirm'
 import { EN } from '../i18n'
+import { SETTINGS_SECTIONS } from '../settings/registry'
+import { resolveEnabled } from '../features/profiles'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -37,9 +39,9 @@ vi.mock('../toast', () => ({
 }))
 
 
-function makeFeatures(profile: string) {
+function makeFeatures(profile: string, enabled: Record<string, boolean> = {}) {
   return {
-    enabled: {},
+    enabled,
     isOn: () => true,
     toggle: vi.fn(),
     applyProfile: vi.fn(),
@@ -134,8 +136,36 @@ describe('Settings ▸ Station ▸ Your experience', () => {
     expect(api.get('setSettings')).not.toHaveBeenCalled()
   })
 
+  it('asks before a named profile loses screens, names them, and changes nothing when declined', async () => {
+    // An updating station on the Everything profile (not hand-tuned) picks New to digital.
+    const features = renderPanel('operator-radio', undefined, makeFeatures('everything', resolveEnabled('everything')))
+    await waitFor(() => expect(select()).toBeTruthy())
+    fireEvent.change(select(), { target: { value: 'newToDigital' } })
+    const cancel = await screen.findByRole('button', { name: /cancel/i })
+    const body = await screen.findByText((_, el) => !!el?.textContent?.startsWith('These screens turn off:') && el.children.length === 0)
+    expect(body.textContent).toContain('RTTY')
+    // Phone and CW stay on for this answer, so they are not named.
+    expect(body.textContent).not.toMatch(/\bPhone\b/)
+    fireEvent.click(cancel)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.get('setExperienceLevel')).not.toHaveBeenCalled()
+    expect(features.applyProfiles).not.toHaveBeenCalled()
+    expect(select().value).toBe('')
+  })
+
+  it('does not ask when the answer turns no screen off', async () => {
+    // Already the starter set: New to the hobby turns nothing off.
+    const starter = resolveEnabled('starter')
+    const features = renderPanel('operator-radio', undefined, makeFeatures('starter', starter))
+    await waitFor(() => expect(select()).toBeTruthy())
+    fireEvent.change(select(), { target: { value: 'newToHobby' } })
+    await waitFor(() => expect(api.get('setExperienceLevel')).toHaveBeenCalledWith('newToHobby'))
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull()
+    expect(features.applyProfiles).toHaveBeenCalledWith(['starter'], [])
+  })
+
   it('asks before replacing a hand-tuned feature set, and changes nothing when declined', async () => {
-    const features = renderPanel('operator-radio', 'experienced', makeFeatures('custom'))
+    const features = renderPanel('operator-radio', 'experienced', makeFeatures('custom', resolveEnabled('everything')))
     await waitFor(() => expect(select()?.value).toBe('experienced'))
     fireEvent.change(select(), { target: { value: 'newToHobby' } })
     const cancel = await screen.findByRole('button', { name: /cancel/i })
@@ -150,13 +180,16 @@ describe('Settings folding for a new operator', () => {
   it('folds the Appearance sections nobody needs in hour one, and Show all opens them', async () => {
     renderPanel('station', 'newToHobby')
     await waitFor(() => expect(select()).toBeTruthy())
+    // (Station's one section is needed in hour one.)
     // Station's one section is needed in hour one: nothing folds on this tab.
     expect(section('operator-radio').hasAttribute('data-folded')).toBe(false)
     expect(screen.queryByText(SHOW_ALL)).toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: EN['settings.tabs.appearance'] }))
     await waitFor(() => expect(section('theme')).toBeTruthy())
     expect(section('theme').getAttribute('data-folded')).toBe('true')
-    expect(section('features').getAttribute('data-folded')).toBe('true')
+    // Features and Accessibility never fold, for any answer.
+    expect(section('features').hasAttribute('data-folded')).toBe(false)
+    expect(section('accessibility').hasAttribute('data-folded')).toBe(false)
     // The heading stays as the label.
     expect(section('theme').querySelector('legend')).toBeTruthy()
     fireEvent.click(screen.getByText(SHOW_ALL))
@@ -177,6 +210,39 @@ describe('Settings folding for a new operator', () => {
     await waitFor(() => expect(section('rotator')).toBeTruthy())
     expect(section('rotator').hasAttribute('data-folded')).toBe(false)
     expect(section('orbital-elements').getAttribute('data-folded')).toBe('true')
+  })
+
+  it('a deep link to a section inside a folded section opens the section around it', async () => {
+    renderPanel('antenna-gain', 'newToHobby')
+    await waitFor(() => expect(section('antenna-gain')).toBeTruthy())
+    expect(section('antenna-gain').closest('[data-folded]')).toBeNull()
+    expect(section('integrations-feeds').hasAttribute('data-folded')).toBe(false)
+  })
+
+  it('a search pick of a section inside a folded section opens the section around it', async () => {
+    renderPanel('station', 'newToHobby')
+    await waitFor(() => expect(select()).toBeTruthy())
+    fireEvent.change(document.querySelector('.settings-search input') as HTMLElement, { target: { value: 'antenna gain' } })
+    const hit = await screen.findByText('Antenna gain (advanced)', { selector: '.settings-search-hit-label' })
+    fireEvent.pointerDown(hit.closest('button') as HTMLElement)
+    await waitFor(() => expect(section('antenna-gain')).toBeTruthy())
+    expect(section('antenna-gain').closest('[data-folded]')).toBeNull()
+    // Control: a folded section beside it on that tab stays folded.
+    const folded = document.querySelectorAll('[data-folded]')
+    expect(folded.length).toBeGreaterThan(0)
+  })
+
+  it('every nested section, as a target, ends up outside every fold', async () => {
+    const nested = SETTINGS_SECTIONS.filter((x) => x.parent)
+    expect(nested.length).toBeGreaterThan(0)
+    for (const n of nested) {
+      for (const level of ['newToHobby', 'newToDigital']) {
+        renderPanel(n.id, level)
+        await waitFor(() => expect(section(n.id), n.id).toBeTruthy())
+        expect(section(n.id).closest('[data-folded]'), `${n.id} for ${level}`).toBeNull()
+        cleanup()
+      }
+    }
   })
 
   it('folds nothing for an experienced operator', async () => {

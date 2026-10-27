@@ -139,7 +139,8 @@ vi.setConfig({ testTimeout: 15_000 })
 
 beforeEach(() => {
   localStorage.clear()
-  saved = { ...(defaultSettings as Record<string, unknown>) }
+  // A new install: there was no settings file, so the backend says the wizard was never done.
+  saved = { ...(defaultSettings as Record<string, unknown>), setupWizardSeen: false }
   keyedWith = []
   order = []
   globalThis.ResizeObserver = class {

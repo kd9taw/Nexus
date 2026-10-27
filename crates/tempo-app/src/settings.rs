@@ -2134,8 +2134,24 @@ pub struct Settings {
     /// picks the UI's starting features and how much of Settings opens; nothing on the Rust side
     /// reads it, and it touches no transmit path. Written only by `Engine::set_experience_level`;
     /// a settings form save keeps the live value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Read leniently ([`lenient_experience_level`]): an answer this build does not know (one a
+    /// later build added) reads as `None` rather than failing the whole file.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_experience_level"
+    )]
     pub experience_level: Option<ExperienceLevel>,
+    /// Whether the first-run setup wizard has been done (finished or skipped). ⭐ `false` only for a
+    /// NEW install: `Settings::default()` (no settings file) says not seen, while an existing file
+    /// without the key reads as seen (the field's own serde default), and so does a file that is
+    /// present but cannot be read. Kept here, beside the station's settings, rather than in the
+    /// WebView's storage, so a WebView data reset or a reinstall that keeps the settings never
+    /// shows the wizard to an existing station again. Written only by
+    /// `Engine::mark_setup_wizard_seen`; once seen it stays seen (`apply_settings_inner`).
+    #[serde(default = "default_true")]
+    pub setup_wizard_seen: bool,
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
     /// rig-mode: CAT → CW, Soundcard → a DATA submode, PKTUSB/PKTLSB (audio tone). See [`rig_mode`].
     pub cw_keyer: CwKeyerBackend,
@@ -4320,6 +4336,14 @@ where
     })
 }
 
+/// The lenient loader of [`Settings::experience_level`]: a known answer, else `None` ("not asked").
+/// An answer from a later build must not cost the file around it (see [`lenient_list`]'s WHY).
+fn lenient_experience_level<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<ExperienceLevel>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).ok())
+}
+
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
 fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(de)? {
@@ -6040,6 +6064,8 @@ impl Default for Settings {
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
             // Not asked until the first-run wizard asks it (see the field).
             experience_level: None,
+            // No settings file: a new install, so the setup wizard is due (see the field).
+            setup_wizard_seen: false,
             cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_key_port: String::new(),
@@ -7346,6 +7372,15 @@ impl Settings {
         Self::load_at(path, now)
     }
 
+    /// The defaults for a settings file that is present but could not be used: the station is not a
+    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]).
+    fn not_a_new_install() -> Self {
+        Settings {
+            setup_wizard_seen: true,
+            ..Settings::default()
+        }
+    }
+
     /// [`Self::load`] with the clock given: `now_unix` dates a file kept aside.
     pub(crate) fn load_at(path: &Path, now_unix: i64) -> Self {
         // The RETIRED `satDoppler` opt-in, read from the raw file before serde
@@ -7374,7 +7409,7 @@ impl Settings {
             // too: then the file stays where it is, and save() refuses to write over it.
             Err(e) => {
                 tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
-                Settings::default()
+                Settings::not_a_new_install()
             }
             Ok(text) => match serde_json::from_str(&text) {
                 Ok(s) => {
@@ -7410,7 +7445,7 @@ impl Settings {
                     // Corrupt file: keep the evidence (defaults are still the right fallback,
                     // and when the rename fails save() refuses to write over the file).
                     tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
-                    Settings::default()
+                    Settings::not_a_new_install()
                 }
             },
         };
@@ -8261,6 +8296,79 @@ mod tests {
             std::fs::write(&path, file.to_string()).unwrap();
             assert_eq!(Settings::load(&path).write_all_txt, want, "{file}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **An experience answer this build does not know reads as "not asked", and costs nothing
+    /// else in the file.** A later build may add an answer; going back to this one must not set
+    /// the whole file aside and start the station unconfigured. CONTROL: a known answer in the
+    /// same file still reads as itself, and nothing is kept aside either way.
+    #[test]
+    fn an_unknown_experience_answer_reads_as_not_asked_and_keeps_the_file() {
+        let dir = scratch_dir("experience_unknown");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for (value, want) in [
+            (
+                serde_json::json!("seasonedContester"),
+                None::<ExperienceLevel>,
+            ),
+            (serde_json::json!(7), None),
+            (serde_json::json!(null), None),
+            (
+                serde_json::json!("newToDigital"),
+                Some(ExperienceLevel::NewToDigital),
+            ),
+        ] {
+            let file = serde_json::json!({ "mycall": "KD9TAW", "experienceLevel": value });
+            std::fs::write(&path, file.to_string()).unwrap();
+            let s = Settings::load_at(&path, KEPT_AT);
+            assert_eq!(
+                (s.mycall.as_str(), s.experience_level, kept_for(&dir).len()),
+                ("KD9TAW", want, 0),
+                "{value}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Only a station with NO settings file is a new install for the setup wizard.** The
+    /// wizard's "seen" record lives in the settings file, so a WebView data reset or a reinstall
+    /// that keeps the file never shows it again. A missing file reads "not seen"; a file without
+    /// the key (every station from before it) reads "seen"; a file that is present but cannot be
+    /// read is not a new install either. CONTROL: a new install's file says "not seen" until the
+    /// wizard is done, and "seen" once it is.
+    #[test]
+    fn the_setup_wizard_is_due_only_where_there_was_no_settings_file() {
+        let dir = scratch_dir("wizard_seen");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(!fresh.setup_wizard_seen, "no file: a new install");
+        fresh.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "a new install's first save keeps the wizard due"
+        );
+        let mut done = Settings::load_at(&path, KEPT_AT);
+        done.setup_wizard_seen = true;
+        done.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).setup_wizard_seen);
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(!full.contains("setupWizardSeen"), "fixture predates the key");
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "an existing station's file is not a new install"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "a file that does not read is not a new install"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

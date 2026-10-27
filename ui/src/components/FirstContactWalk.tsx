@@ -12,10 +12,21 @@ import { t } from '../i18n'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 
-/** The TX strip's button names, exactly as the FT8 screen shows them (`CockpitTxStrip.tsx`). */
+/** The TX strip's button names, exactly as the FT8 screen shows them (`OperateQsoStrip.tsx`). */
 const TX_BUTTONS = { txOff: 'TX Off', txOn: 'TX On', stop: 'Stop TX' } as const
+/** The Settings switch the answer line names when it is off, as Settings ▸ Digital labels it. */
+const DOUBLE_CLICK_SETTING = 'Double-click arms TX'
 
-export function FirstContactWalk({ onClose }: { onClose: () => void }) {
+/** `doubleClickSetsTx`: the station's "Double-click arms TX" setting (absent = on, its default).
+ *  With it on, a double-click turns TX on and Nexus may start calling in the current period
+ *  (`call_station_ctx`); with it off, TX stays off until the operator turns it on. */
+export function FirstContactWalk({
+  onClose,
+  doubleClickSetsTx = true,
+}: {
+  onClose: () => void
+  doubleClickSetsTx?: boolean
+}) {
   const returnFocus = useFocusReturn(true)
   return (
     <Dialog
@@ -30,7 +41,11 @@ export function FirstContactWalk({ onClose }: { onClose: () => void }) {
       <ol className="first-contact-steps">
         <li>{t('firstContact.step.listen')}</li>
         <li>{t('firstContact.step.cq')}</li>
-        <li>{t('firstContact.step.answer')}</li>
+        <li>
+          {doubleClickSetsTx
+            ? t('firstContact.step.answer')
+            : t('firstContact.step.answer.manual', { setting: DOUBLE_CLICK_SETTING, txOff: TX_BUTTONS.txOff })}
+        </li>
         <li>{t('firstContact.step.tx', {
             txOff: TX_BUTTONS.txOff,
             txOn: TX_BUTTONS.txOn,

@@ -50,7 +50,8 @@ ON, the two "new" answers with fewer, and a new ham is offered a short walk thro
 first FT8 contact (also under Help). Every step is skippable and everything it sets
 stays editable later: the answer in
 [Settings ▸ Station](settings-reference.md#operator--radio), any section on or off in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features). Run again from
+Settings, the wizard edits station, rig and log only and keeps the screens you have on.
 
 The supported window floor is **1024×768**. Everything is reachable there — some
 columns scroll to reach the bottom of themselves, and the pages that measure it

@@ -67,8 +67,9 @@ Your operator identity, license privileges, and default frequency.
   hobby: FT8, the log and the maps; New to digital: the same plus Phone and CW;
   Experienced: everything) and, for the two "new" answers, opens each Settings tab on
   the sections you need first, with the rest folded to their headings until
-  **Show all**, a search or a link opens them. Changing it replaces the set in
-  [Features](#features), asking first if you had tuned that set by hand. It saves
+  **Show all**, a search or a link opens them (Accessibility and Features never
+  fold). Changing it replaces the set in [Features](#features), asking first, and
+  naming them, whenever the change would turn screens off. It saves
   when you pick it. A station set up before this question existed shows **Not set**,
   and nothing changes until you pick an answer. It changes nothing about transmitting.
 - **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).

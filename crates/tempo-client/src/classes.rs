@@ -345,6 +345,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("mark_qsl_card_by_id",            RunsAtShack, "Marks one contact in the shack's logbook."),
     ("mark_qsl_sent",                  RunsAtShack, "Marks one contact in the shack's logbook."),
     ("mark_qsl_sent_by_id",            RunsAtShack, "Marks one contact in the shack's logbook."),
+    ("mark_setup_wizard_seen",         RunsAtShack, "The shack's record that its setup wizard was done; it keys nothing."),
     ("merge_log_duplicates",           RefusedHere, "Merges and deletes copies across the shack's logbook in one run, as large as a purge."),
     ("n3fjp_test_connection",          RunsAtShack, "The N3FJP Test, from the shack; takes no credential."),
     ("note_activation_exported",       RunsAtShack, "Records at the shack that one activation's file was saved; changes no contact."),

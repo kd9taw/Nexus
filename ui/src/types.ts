@@ -5716,6 +5716,10 @@ export interface Settings {
    *  existing station, or a skipped wizard), which behaves as every earlier build did. Not
    *  written by a settings save: write it with `setExperienceLevel` (api.ts), its one writer. */
   experienceLevel?: ExperienceLevel
+  /** Whether the first-run setup wizard was done (finished or skipped). `false` only on a new
+   *  install (there was no settings file); absent or `true` = an existing station, which the
+   *  wizard never opens for by itself. Write it with `markSetupWizardSeen` (api.ts), its one writer. */
+  setupWizardSeen?: boolean
 }
 
 /** Mirrors the Rust `ExperienceLevel`. */

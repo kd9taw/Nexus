@@ -99,6 +99,9 @@ interface Props {
    * first run only; the wizard re-opened from Settings does not ask again (Settings ▸ Station
    * changes the answer). */
   askExperience?: boolean
+  /** Re-opened from Settings: Finish keeps the screens the operator has on (App applies no
+   * feature preset), so its button promises no change of screens. */
+  rerun?: boolean
   /** Save the draft so far and probe CAT against it (Settings' test, wizard-reachable). */
   onTestCat: (draft: WizardDraft) => Promise<CatTestResult>
   /** Key a bounded tune carrier to prove CAT→PTT→RF (the strip's Prove TX; confirm-gated). */
@@ -203,7 +206,7 @@ const gridOk = isValidGrid
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
  * See feature-modularity.md §4.6.
  */
-export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide, onOpenWalk, askExperience = false }: Props) {
+export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide, onOpenWalk, askExperience = false, rerun = false }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
   // The About-you step sits BEFORE step 0 and only when asked, so the four steps keep their
   // numbers (and every gate written against them) whether or not it is shown.
@@ -1571,7 +1574,8 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               disabled={keyingMissing}
               onClick={() => finish(preset.profiles, 'operate', preset.extraOn)}
             >
-              {preset.profiles.includes('everything') ? t('setup.nav.finish') : t('setup.nav.finishPlain')}
+              {/* Re-run from Settings, Finish keeps the screens on now (App applies no preset). */}
+              {!rerun && preset.profiles.includes('everything') ? t('setup.nav.finish') : t('setup.nav.finishPlain')}
             </button>
           )}
         </div>

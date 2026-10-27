@@ -132,6 +132,18 @@ describe('mergeProfile — the profile-load contract', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
+  it('the experience answer and the setup wizard record are the operator\'s, never a profile\'s', () => {
+    // Who the operator is (how much they have done) and whether this station's setup wizard was
+    // done: the licence class's family. A profile from a "new to the hobby" station must not fold
+    // this one's Settings, nor bring the first-run wizard back.
+    const mine = { ...current, experienceLevel: 'experienced', setupWizardSeen: true } as unknown as Settings
+    const foreign = { experienceLevel: 'newToHobby', setupWizardSeen: false, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(mine, foreign) as unknown as Record<string, unknown>
+    expect(merged.experienceLevel).toBe('experienced')
+    expect(merged.setupWizardSeen).toBe(true)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
   it('nor does the mark that says a LoTW download of every call made the cursor', () => {
     // The mark belongs to the cursor beside it. Imported onto an older build's cursor (a download
     // of the Settings call alone made it), it would let the next sync ask from that cursor, and

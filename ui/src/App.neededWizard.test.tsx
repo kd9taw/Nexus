@@ -146,7 +146,8 @@ describe('#240 — the Needed window on first launch', () => {
   })
 
   it('pops out once the wizard is dismissed', async () => {
-    settingsAnswer = defaultSettings
+    // A new install: there was no settings file, so the backend says the wizard was never done.
+    settingsAnswer = { ...defaultSettings, setupWizardSeen: false }
     await mount()
     const dialog = await waitFor(() => {
       const d = document.querySelector('[role="dialog"]')

@@ -159,6 +159,7 @@ import {
   setHuntTarget,
   setLicenseClass,
   setExperienceLevel as apiSetExperienceLevel,
+  markSetupWizardSeen,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -367,6 +368,9 @@ function App() {
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install, and never by itself on a
   // computer driving another station: it sets up a station, and there every setting it edits is the
   // station's, while "fresh" is read from this computer's own storage. Settings still offers it.
+  // "Fresh" is decided by the settings file as well (`setupWizardSeen`, below): this computer's
+  // storage only says the wizard MAY be due; it opens only where there was no settings file and it
+  // was never done, so a WebView data reset or a reinstall never shows it to an existing station.
   const [showWizard, setShowWizard] = useState<boolean>(
     () => !drivesAnotherStation() && features.firstRun && storageWritable() && !wizardSeen(),
   )
@@ -2812,6 +2816,22 @@ function App() {
     [applyWizardDraft],
   )
 
+  // The durable half of "the wizard was done": its one writer, in the settings file. Failure is
+  // not toasted: the wizard is closed either way, and the browser copy above still holds for
+  // this computer.
+  const recordWizardSeen = useCallback(() => {
+    void markSetupWizardSeen()
+      .then(() => setSettings((prev) => (prev ? { ...prev, setupWizardSeen: true } : prev)))
+      .catch(() => {})
+  }, [])
+  // A wizard that would open by itself waits for the settings file's word: an existing station
+  // (no `setupWizardSeen: false`) is never shown it, nor asked the question.
+  useEffect(() => {
+    if (!settings || !wizardAsks || settings.setupWizardSeen === false) return
+    setShowWizard(false)
+    setWizardAsks(false)
+  }, [settings, wizardAsks])
+
   const handleWizardApply = useCallback(
     (
       ids: ProfileId[],
@@ -2844,21 +2864,25 @@ function App() {
             0,
           ),
         )
-      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top.
-      features.applyProfiles(ids, modes)
+      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top, on the
+      // first run only. Re-run from Settings, the wizard edits station, rig and log and keeps the
+      // screens the operator has on now: it never changes the feature set.
+      if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
+      recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
-    [features.applyProfiles, applyWizardDraft],
+    [features.applyProfiles, applyWizardDraft, wizardAsks, recordWizardSeen],
   )
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
+    recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [])
+  }, [recordWizardSeen])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -4381,7 +4405,7 @@ function App() {
         />
       )}
 
-      {showWizard && settings && (
+      {showWizard && settings && (!wizardAsks || settings.setupWizardSeen === false) && (
         // Gated on settings: the prefills are one-shot useState initializers,
         // and mounting against null would turn the whole real config into
         // "fields the operator cleared" at draft time (review catch).
@@ -4395,6 +4419,7 @@ function App() {
           onOpenGuide={() => setShowGuide(true)}
           onOpenWalk={() => setShowWalk(true)}
           askExperience={wizardAsks}
+          rerun={!wizardAsks}
         />
       )}
 
@@ -4405,7 +4430,12 @@ function App() {
         />
       )}
 
-      {showWalk && !showGuide && <FirstContactWalk onClose={() => setShowWalk(false)} />}
+      {showWalk && !showGuide && (
+        <FirstContactWalk
+          onClose={() => setShowWalk(false)}
+          doubleClickSetsTx={settings?.doubleClickSetsTx !== false}
+        />
+      )}
 
       {snap.pendingLog && (
         // KEYED ON THE HOLD, on every transport (operator ruling 2026-09-19: completed contacts

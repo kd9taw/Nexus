@@ -3389,6 +3389,12 @@ export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSna
   return invoke<AppSnapshot>('set_experience_level', { level })
 }
 
+/** The first-run setup wizard was finished or skipped (`Settings.setupWizardSeen`'s one writer):
+ *  recorded beside the station's settings, so it never opens by itself again. */
+export async function markSetupWizardSeen(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('mark_setup_wizard_seen')
+}
+
 /** Where a (band, mode class) WOULD route right now — the rule editor's "test" affordance.
  * Read-only: it never moves a rig. */
 export async function routePreview(

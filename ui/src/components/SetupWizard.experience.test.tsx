@@ -25,7 +25,7 @@ vi.mock('../api', () => ({
   updateRadioProfile: vi.fn(() => Promise.resolve(null)),
 }))
 
-function renderWizard(opts: { ask?: boolean; settings?: Record<string, unknown> } = {}) {
+function renderWizard(opts: { ask?: boolean; rerun?: boolean; settings?: Record<string, unknown> } = {}) {
   const onApply = vi.fn()
   const onSkip = vi.fn()
   const onOpenGuide = vi.fn()
@@ -39,6 +39,7 @@ function renderWizard(opts: { ask?: boolean; settings?: Record<string, unknown> 
       onOpenGuide={onOpenGuide}
       onOpenWalk={onOpenWalk}
       askExperience={opts.ask ?? true}
+      rerun={opts.rerun ?? false}
     />,
   )
   return { onApply, onSkip, onOpenGuide, onOpenWalk }
@@ -148,15 +149,16 @@ describe('the About-you step', () => {
 })
 
 describe('the wizard re-opened from Settings', () => {
-  it('does not ask again, and starts the features the stored answer picks', () => {
-    const { onApply } = renderWizard({ ask: false, settings: { experienceLevel: 'newToDigital' } })
+  it('does not ask again, and its Finish promises no change of screens', () => {
+    const { onApply } = renderWizard({ ask: false, rerun: true, settings: { experienceLevel: 'experienced' } })
     expect(screen.queryByText(EN['setup.about.title'])).toBeNull()
     expect(screen.getByText(EN['setup.station.title'])).toBeTruthy()
     for (let i = 0; i < 3; i++) next()
+    // App keeps the screens on a re-run (App.experience.test.tsx), so the button says plain Finish,
+    // never "everything on".
+    expect(finishButton().textContent).toBe(EN['setup.nav.finishPlain'])
     fireEvent.click(finishButton())
-    const [ids, , modes, , , level] = onApply.mock.calls[0]
-    expect(ids).toEqual(['starter'])
-    expect(modes).toEqual(['phone', 'cw'])
+    const [, , , , , level] = onApply.mock.calls[0]
     // Nothing answered in this run: the station's answer is not rewritten.
     expect(level).toBeNull()
   })
