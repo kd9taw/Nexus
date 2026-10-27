@@ -250,3 +250,52 @@ fn a_first_73_to_the_same_station_on_another_band_is_offered() {
     let shown = e.snapshot().pending_log.expect("offered on 40 m");
     assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "40m"));
 }
+
+/// Click their RR73 (decoded at 21), send our 73 at 22, and change band to 40 m before the next
+/// fold: the fold that would have offered the contact never comes for it.
+fn click_their_rr73_send_73_and_change_band(e: &mut Engine) {
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    e.call_station(DX);
+    assert_eq!(key_once(e, 22), "7P8RU KR4FQG 73", "premise: our 73");
+    e.set_frequency(7.074, "40m", "USB");
+    e.ingest_decodes_for_test(&[], 25);
+}
+
+/// (2) A band change between our 73 and the fold: the contact is offered at the band change, on
+/// the band it was made on, offer-only, and once.
+#[test]
+fn a_band_change_after_our_73_offers_the_contact_on_its_own_band() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_send_73_and_change_band(&mut e);
+    assert!(e.stored_log().is_empty(), "never logged by itself");
+    let shown = e
+        .snapshot()
+        .pending_log
+        .expect("offered at the band change");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
+    assert!(
+        (14.0..14.35).contains(&shown.freq_mhz),
+        "{}",
+        shown.freq_mhz
+    );
+    assert_eq!(e.pending_logs.len(), 1, "offered once");
+    assert!(e.pending_logs[0].confirm_only, "offer-only");
+}
+
+/// (2) With auto-log and the prompt off nothing is offered by itself; the contact waits for Log
+/// QSO, which offers it, on its own band, and does not log it.
+#[test]
+fn a_band_change_after_our_73_keeps_the_contact_for_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_send_73_and_change_band(&mut e);
+    assert!(e.pending_logs.is_empty(), "nothing offered by itself");
+    assert!(e.log_current_qso(), "Log QSO takes it");
+    assert!(e.stored_log().is_empty(), "not logged without the confirm");
+    let shown = e.snapshot().pending_log.expect("offered in the popup");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
+    assert!(e.pending_logs[0].confirm_only, "offer-only");
+}

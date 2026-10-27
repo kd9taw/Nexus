@@ -3243,6 +3243,9 @@ struct StalledQso {
     /// operator may press Log QSO after a mode switch, and minutes later.
     mode: String,
     end_unix: u64,
+    /// Our 73 to a roger the operator clicked, with no report exchanged ([`roger_click_73_sent`]):
+    /// Log QSO only offers it, in the popup ([`HeldQso::confirm_only`]).
+    confirm_only: bool,
 }
 
 /// Is the contact with `station` COMPLETE, by the rule the auto-log has always used? The responder
@@ -18934,7 +18937,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         .take()
                         .or_else(|| self.band_change_qso.take())?;
                     let grid_source = GridSource::of(st.dxgrid.as_deref());
-                    return Some(HeldQso::new(self.set_aside_record(st), grid_source));
+                    let confirm_only = st.confirm_only;
+                    return Some(HeldQso {
+                        confirm_only,
+                        ..HeldQso::new(self.set_aside_record(st), grid_source)
+                    });
                 }
             },
             _ => return None,
@@ -18988,6 +18995,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             freqs: made_on.1,
             mode: self.adif_mode_for_tier().to_string(),
             end_unix: now_unix_secs(),
+            confirm_only: false,
         }
     }
 
@@ -20118,6 +20126,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// Offer our 73 to a roger the operator clicked ([`roger_click_73_sent`]) in the confirm
+    /// popup, OFFER-ONLY, here as on the Log button: nothing logs it but the operator's confirm,
+    /// not even the queue cap. `made_on` as for [`Self::auto_log_complete_contact`].
+    fn offer_roger_click_contact(
+        &mut self,
+        dxcall: String,
+        dxgrid: Option<String>,
+        made_on: Option<(String, (f64, Option<f64>))>,
+    ) {
+        let grid_source = GridSource::of(dxgrid.as_deref());
+        let mut rec = self.qso_record(dxcall, dxgrid, None);
+        if let Some((band, (freq_mhz, freq_rx_mhz))) = made_on {
+            rec.band = band;
+            rec.freq_mhz = freq_mhz;
+            rec.freq_rx_mhz = freq_rx_mhz;
+        }
+        self.hold_pending_log(HeldQso {
+            confirm_only: true,
+            ..HeldQso::new(rec, grid_source)
+        });
+    }
+
     /// A BAND CHANGE, by any route: a band button, a typed or clicked frequency on another band,
     /// the rig's own VFO read back on another band, a JS8 band hop, a Remote band pick, or a
     /// radio handoff onto a radio on another band. The callers have already made the context
@@ -20142,6 +20172,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// other contact that really happened (reports crossed, or none possible) is set aside for
     /// Log QSO ([`Engine::band_change_qso`]), with the band, frequency, mode and end time it had,
     /// until it is logged or the next band change sets another contact aside.
+    ///
+    /// Our 73 to a roger the operator clicked ([`roger_click_73_sent`]) is not lost either
+    /// (operator ruling, 2026-10-27): the fold that would have offered it never comes, so it is
+    /// offered in the popup now, on the band it was made on, when the fold would have offered it
+    /// by itself; otherwise it is set aside for Log QSO, which offers it the same way.
     ///
     /// Only the sequencer's station changes here; the Enable Tx latch is the context halt's
     /// business, so Phone, CW, RTTY and the keyboard modes keep the mic they had, exactly as
@@ -20198,6 +20233,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         .start_unix
                         .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
                     self.band_change_qso = Some(st);
+                } else if roger_click_73_sent(station, self.roger_click.as_deref()) {
+                    if self.settings.auto_log {
+                        tempo_core::applog::info(
+                            "logbook",
+                            "band change: the contact after a click on their roger is offered",
+                        );
+                        self.qso_logged = true;
+                        self.closed_ft_contact = Some((dx.clone(), made_on.0.clone()));
+                        self.offer_roger_click_contact(dx, dxgrid, Some(made_on));
+                    } else {
+                        let mut st = self.set_aside(dx, dxgrid, None, made_on);
+                        st.start_unix = st
+                            .start_unix
+                            .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
+                        st.confirm_only = true;
+                        self.band_change_qso = Some(st);
+                    }
                 }
             }
         }
@@ -31437,13 +31489,7 @@ contact yourself."
             self.set_tx_offset(hz);
         }
         if let Some((dxcall, dxgrid)) = offered {
-            let grid_source = GridSource::of(dxgrid.as_deref());
-            let rec = self.qso_record(dxcall, dxgrid, None);
-            // Offer-only, here as on the Log button: not even the queue cap logs it.
-            self.hold_pending_log(HeldQso {
-                confirm_only: true,
-                ..HeldQso::new(rec, grid_source)
-            });
+            self.offer_roger_click_contact(dxcall, dxgrid, None);
             self.qso_start_unix = None;
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
@@ -77399,6 +77445,7 @@ mod dedup_gate_tests {
                             freqs: (14.074, None),
                             mode: "FT8".into(),
                             end_unix: 0,
+                            confirm_only: false,
                         });
                         let got =
                             matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
