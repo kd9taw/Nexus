@@ -332,7 +332,8 @@ pub enum SortKey {
     UpQrz,
     #[serde(rename = "upClublog")]
     UpClublog,
-    /// A contest contact's exchange as the column prints it.
+    /// A contest contact's exchange as the column prints it, a number in it by value (serial 9
+    /// before 10).
     #[serde(rename = "exchSent")]
     ExchSent,
     #[serde(rename = "exchRcvd")]
@@ -506,8 +507,7 @@ impl LogQuery {
 enum SortVal {
     Text(Box<str>),
     Num(f64),
-    /// Nothing in the column (`null`): after every value, in either direction. Only the columns
-    /// that were not sortable before give it; the first sixteen order exactly as they always did.
+    /// Nothing in the column (`null`): after every value, in either direction, in every column.
     Empty,
 }
 
@@ -518,6 +518,43 @@ fn text_or_empty(s: Option<&str>) -> SortVal {
         t => SortVal::Text(js_upper(t).into_boxed_str()),
     }
 }
+
+/// An exchange as its column sorts it (`naturalKey`): [`text_or_empty`], with every run of digits
+/// written so that text order is number order — a marker, the run's length without its leading
+/// zeros, then those digits. Serial 9 then sorts before 10 and 100, `05` ties `5`, and the text
+/// around the numbers orders as before. The marker is `0`, which no other character of the key
+/// can be, so a number meets a number; it sorts where a digit does, before the letters. The key
+/// is made once per contact, so the order compares plain text.
+fn natural_or_empty(s: Option<&str>) -> SortVal {
+    let SortVal::Text(t) = text_or_empty(s) else {
+        return SortVal::Empty;
+    };
+    let mut out = String::with_capacity(t.len() + 4);
+    let mut rest = &*t;
+    while let Some(at) = rest.find(|c: char| c.is_ascii_digit()) {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let digits = match rest[..end].trim_start_matches('0') {
+            "" => "0",
+            d => d,
+        };
+        out.push('0');
+        // The length as one character above the marker, held below the surrogates so that it
+        // compares the same as UTF-16.
+        out.push(char::from_u32(0x30 + digits.len().min(NATURAL_MAX_RUN) as u32).unwrap_or('0'));
+        out.push_str(digits);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    SortVal::Text(out.into_boxed_str())
+}
+
+/// The longest run of digits [`natural_or_empty`] tells apart by length (the window's
+/// `NATURAL_MAX_RUN`); longer runs compare as runs of this length do.
+const NATURAL_MAX_RUN: usize = 0xCFCF;
 
 /// A number as a column sorts it, or [`SortVal::Empty`] when there is none.
 fn num_or_empty(n: Option<f64>) -> SortVal {
@@ -601,25 +638,18 @@ fn exchange(r: &QsoRecord, sent: bool) -> Option<String> {
 
 /// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country.
 fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
-    let text = |s: &str| SortVal::Text(js_upper(s).into_boxed_str());
     match k {
-        SortKey::Call => text(&r.call),
+        SortKey::Call => text_or_empty(Some(&r.call)),
         // The country the Logbook shows (`q.entity ?? q.country`): the DXCC entity, so a QRZ
         // `Germany` and a `Fed. Rep. of Germany` sort together, and the stored text only where
         // the call resolves to none.
-        SortKey::Country => text(entity.or(r.country.as_deref()).unwrap_or("")),
+        SortKey::Country => text_or_empty(entity.or(r.country.as_deref())),
         SortKey::Band | SortKey::Freq => SortVal::Num(ui_mhz(r.freq_mhz)),
-        SortKey::Mode => text(&r.mode),
-        SortKey::Sent => text(r.rst_sent.as_deref().unwrap_or("")),
-        SortKey::Rcvd => text(r.rst_rcvd.as_deref().unwrap_or("")),
+        SortKey::Mode => text_or_empty(Some(&r.mode)),
+        SortKey::Sent => text_or_empty(r.rst_sent.as_deref()),
+        SortKey::Rcvd => text_or_empty(r.rst_rcvd.as_deref()),
         SortKey::Time => SortVal::Num(r.when_unix as f64),
-        SortKey::Park => text(
-            r.ota
-                .their_ref
-                .as_deref()
-                .or(r.ota.my_ref.as_deref())
-                .unwrap_or(""),
-        ),
+        SortKey::Park => text_or_empty(r.ota.their_ref.as_deref().or(r.ota.my_ref.as_deref())),
         SortKey::Qsl => SortVal::Num(if r.award_confirmed {
             2.0
         } else if r.confirmed {
@@ -627,15 +657,15 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
         } else {
             0.0
         }),
-        SortKey::Grid => text(r.grid.as_deref().unwrap_or("")),
-        SortKey::State => text(super::record_field(r, "STATE").unwrap_or("")),
-        SortKey::Iota => text(r.ota.iota.as_deref().unwrap_or("")),
-        SortKey::Contest => text(r.contest.as_deref().map_or("", |c| c.contest_id.as_str())),
-        SortKey::County => text(
+        SortKey::Grid => text_or_empty(r.grid.as_deref()),
+        SortKey::State => text_or_empty(super::record_field(r, "STATE")),
+        SortKey::Iota => text_or_empty(r.ota.iota.as_deref()),
+        SortKey::Contest => text_or_empty(r.contest.as_deref().map(|c| c.contest_id.as_str())),
+        SortKey::County => text_or_empty(
             r.extra
                 .iter()
                 .find(|(k, _)| k == "CNTY")
-                .map_or("", |(_, v)| v.as_str()),
+                .map(|(_, v)| v.as_str()),
         ),
         SortKey::End => num_or_empty(r.time_off_unix.map(|t| t as f64)),
         SortKey::MyGrid => text_or_empty(r.my_grid.as_deref()),
@@ -660,8 +690,8 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
         SortKey::UpEqsl => upload_rank(r.upload.eqsl.as_ref()),
         SortKey::UpQrz => upload_rank(r.upload.qrz.as_ref()),
         SortKey::UpClublog => upload_rank(r.upload.clublog.as_ref()),
-        SortKey::ExchSent => text_or_empty(exchange(r, true).as_deref()),
-        SortKey::ExchRcvd => text_or_empty(exchange(r, false).as_deref()),
+        SortKey::ExchSent => natural_or_empty(exchange(r, true).as_deref()),
+        SortKey::ExchRcvd => natural_or_empty(exchange(r, false).as_deref()),
         SortKey::Notes => {
             let comment = r.comment.as_deref().map(js_trim).filter(|c| !c.is_empty());
             notes_key(comment.or(r.notes.as_deref()))
