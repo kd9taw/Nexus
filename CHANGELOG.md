@@ -48,6 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **RTTY's tuning scope moves beside the waterfall.** The crossed-ellipse tuning display now stands to the right of the waterfall, in the same strip, with ◀ ▶ and the words beside the square, so RTTY's waterfall is as tall as every other mode's and the tuning square keeps its size. The waterfall is that much narrower on RTTY. The decoded text and the log no longer give up room for it. Hide Tuning and the waterfall takes the full width; hide the waterfall and the tuning display keeps the strip.
 
 ### Added
+- **JS8 sounds from any screen, a WAV file for each, on the output you pick.** The seven JS8 sounds (a CQ, a heartbeat, an
+  ACK for you, a message to you, a message in your Inbox, a new callsign, one you have worked) now play whichever screen is
+  showing while JS8 is the mode, as JS8Call's do, so a CQ sounds while the Logbook is open. Each plays its own tone or a
+  WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
+  plays the tone and Nexus says so once. **Play the sounds on** picks the output, the system default unless you pick one.
+  Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
+  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. All sounds
+  stay off by default.
+- **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
+  notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
+- **JS8's waterfall darkens the audio outside the decode filter**, as JS8Call's does: half-dark on each side, with a
+  yellow line at each edge, while the filter is on. Every other mode's waterfall is unchanged.
+- **JS8 screen options, as JS8Call has them.** **Minimal column labels** in Band activity's and the call list's ⋯ ▸ Show
+  columns (short headings, no units in the cells). **Reset Band activity, the call list and the RX pane at startup** in
+  Settings ▸ Digital ▸ JS8 ▸ Lists and marks (off by default; display only, so HEARING? and the other answers still know
+  stations heard before). **Colours and fonts** for the RX pane, the two lists and the compose box, each colour kept for
+  the theme you picked it in, with a warning when text would be hard to read and a Reset per pane. The RX pane's **Clear**
+  and **Clear all lists** now empty the compose box too, as JS8Call's do, except while its message is going out.
 - **Nexus in Russian.** Русский язык. Pick Русский in Settings ▸ Appearance ▸ Language, or Nexus picks it
   up from a Russian system language. Translated by loloka; completed and reviewed for this release, so every screen is in
   Russian, with Russian plural forms (1 контакт, 2 контакта, 5 контактов). Frequencies, callsigns, reports, band and mode
