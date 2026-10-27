@@ -194,11 +194,7 @@ fn work_dx_to_73(e: &mut Engine, slot: u64) {
         "premise: our roger"
     );
     e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], slot + 8);
-    assert_eq!(
-        key_once(e, slot + 9),
-        "7P8RU KR4FQG 73",
-        "premise: our 73"
-    );
+    assert_eq!(key_once(e, slot + 9), "7P8RU KR4FQG 73", "premise: our 73");
     e.ingest_decodes_for_test(&[], slot + 12);
 }
 

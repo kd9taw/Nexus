@@ -18109,6 +18109,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.reset_qso_log_identity();
         self.qso_report_sent = opening_report;
         self.qso_start_unix = None; // mainwindow.cpp:9271
+
         // Not when this station's contact on this band was already logged or offered: our 73
         // then repeats a 73 already sent ([`Self::closed_ft_contact`]).
         let first_73 = !self
