@@ -4841,6 +4841,14 @@ export interface Settings {
   /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (off by
    *  default): the cockpit starts each run with its three lists empty. Display only. */
   js8ResetActivity: boolean
+  /** JS8Call's colours and fonts for the RX pane, the two lists and the compose box (empty by
+   *  default: every pane follows the theme). Colours by theme, then by element, each `#rrggbb`;
+   *  fonts by pane. Read through features/js8PaneStyle, which checks every entry. */
+  js8PaneStyle: {
+    light: Record<string, string>
+    dark: Record<string, string>
+    fonts: Record<string, { family: string; sizePt: number }>
+  }
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean

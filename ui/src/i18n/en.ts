@@ -12152,6 +12152,41 @@ export const EN = {
   'settings.js8.resetActivity.hint':
     'Off by default, as in JS8Call. On, each time Nexus starts, the three JS8 lists start empty, as Clear all lists leaves them. Your Inbox and the station’s own record of who it heard are kept.',
 
+  // Colours and fonts (Settings ▸ JS8): JS8Call's UI tab, a colour picker for each of its colours.
+  'settings.js8.style.title': 'Colours and fonts',
+  'settings.js8.style.hint':
+    'JS8Call’s colours and fonts for the RX pane, the two lists and the compose box. Each colour starts as the theme’s; what you pick here is kept for the {{theme}} theme, the one in use now, and the other theme keeps its own. A font serves both.',
+  'settings.js8.style.pane.rx': 'RX pane',
+  'settings.js8.style.pane.lists': 'Band activity and the call list',
+  'settings.js8.style.pane.compose': 'Compose box',
+  'settings.js8.style.color.rxBg': 'Background',
+  'settings.js8.style.color.rxFg': 'Received text',
+  'settings.js8.style.color.txFg': 'Transmitted text',
+  'settings.js8.style.color.tableBg': 'Background',
+  'settings.js8.style.color.tableFg': 'Text',
+  'settings.js8.style.color.tableSelected': 'Selected row',
+  'settings.js8.style.color.directed': 'Traffic to you',
+  'settings.js8.style.color.cq': 'CQ messages',
+  'settings.js8.style.color.primary': 'Primary highlight',
+  'settings.js8.style.color.secondary': 'Secondary highlight',
+  'settings.js8.style.color.composeBg': 'Background',
+  'settings.js8.style.color.composeFg': 'Text',
+  'settings.js8.style.color.aria': '{{pane}}: {{color}}',
+  'settings.js8.style.font.rx': 'Received text font',
+  'settings.js8.style.font.tx': 'Transmitted text font',
+  'settings.js8.style.font.table': 'Font',
+  'settings.js8.style.font.compose': 'Font',
+  'settings.js8.style.family.aria': '{{pane}}, {{font}}: family',
+  'settings.js8.style.family.placeholder': 'The theme’s font',
+  'settings.js8.style.size.aria': '{{pane}}, {{font}}: size in points',
+  'settings.js8.style.size.placeholder': 'pt',
+  'settings.js8.style.reset.label': 'Reset',
+  'settings.js8.style.reset.title':
+    'Give this pane back to the theme: its colours for the {{theme}} theme, and its fonts',
+  'settings.js8.style.reset.aria': 'Reset {{pane}}',
+  'settings.js8.style.lowContrast':
+    'Hard to read: “{{text}}” on “{{background}}” is {{ratio}}:1, where 4.5:1 or more reads well.',
+
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
   // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —

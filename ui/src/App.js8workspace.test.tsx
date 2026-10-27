@@ -351,6 +351,24 @@ describe('the JS8 lists take the startup reset from Settings', () => {
   })
 })
 
+// …and JS8Call's colours and fonts (Settings ▸ JS8): the cockpit carries what was picked for the theme.
+describe('the JS8 panes take their colours and fonts from Settings', () => {
+  it('the cockpit carries a colour picked for the theme in use', async () => {
+    const api = await import('./api')
+    vi.mocked(api.getSettings).mockImplementation(
+      async () => ({ ...defaultSettings, js8PaneStyle: { light: { rxBg: '#123456' }, dark: { rxBg: '#123456' }, fonts: {} } }) as never,
+    )
+    try {
+      await mountOn('js8')
+      await waitFor(() => expect((document.querySelector('main.js8-cockpit') as HTMLElement).style.getPropertyValue('--js8-rx-bg')).toBe('#123456'), {
+        timeout: 3000,
+      })
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
+    }
+  })
+})
+
 // ── the SHAPE guard: the next cockpit, not this one ─────────────────────────────────────────
 //
 // The defect above was not a JS8 mistake, it was a MISSING PAIRING: a view can be given a

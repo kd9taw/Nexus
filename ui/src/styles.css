@@ -29016,7 +29016,9 @@ button.sat-chip:disabled {
   position: relative;
   display: flex;
   min-width: 0;
-  background: var(--bg);
+  /* The operator's compose colours and font (features/js8PaneStyle; JS8Call's Composition tab), each
+     the theme's until picked. */
+  background: var(--js8-compose-bg, var(--bg));
   border-radius: var(--radius-sm);
 }
 .js8-compose {
@@ -29039,6 +29041,9 @@ button.sat-chip:disabled {
   width: 100%;
   min-width: 0;
   background: transparent;
+  color: var(--js8-compose-fg, var(--text));
+  font-family: var(--js8-compose-font-family, var(--font-mono));
+  font-size: var(--js8-compose-font-size, calc(14px * var(--text-scale)));
 }
 .js8-compose-backdrop {
   position: absolute;
@@ -29088,6 +29093,60 @@ button.sat-chip:disabled {
   text-decoration-style: wavy;
   text-decoration-color: var(--snr-weak);
   text-decoration-skip-ink: none;
+}
+/* Settings ▸ JS8 ▸ Colours and fonts (Js8PaneStyleSettings): per pane, its sample (drawn by the pane's
+   own rules), its colour pickers in a row that wraps, its fonts, and a Reset. */
+.js8-style-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.js8-style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.js8-style-sample {
+  flex: none;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* The compose sample is a picture of the box, never a field: disabled, drawn as the box is. */
+.js8-style-sample > .js8-compose:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.js8-style-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+.js8-style-color,
+.js8-style-font {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.js8-style-color input[type='color'] {
+  inline-size: 2.4em;
+  block-size: 1.6em;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+.js8-style-family {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+.js8-style-size {
+  flex: 0 0 6em;
 }
 /* Settings ▸ JS8 ▸ Composing: the saved messages, one row each, and the row that adds one. */
 .js8-saved-list {
@@ -29362,6 +29421,35 @@ button.sat-chip:disabled {
 .js8-rx-line .js8-freq {
   white-space: nowrap;
 }
+/* THE OPERATOR'S COLOURS AND FONTS (Settings ▸ Digital ▸ JS8 ▸ Colours and fonts: JS8Call's UI
+   settings, features/js8PaneStyle). The cockpit sets a --js8-* property only for what the operator
+   picked, for the theme the page paints, and each falls back to the token the pane always had. The
+   RX pane: its background, the received text and my own; JS8Call paints a line whole in the one or
+   the other, its time and offset included (mainwindow.cpp:3247-3255). */
+.js8-rx {
+  background: var(--js8-rx-bg, transparent);
+}
+.js8-rx .js8-rx-line {
+  color: var(--js8-rx-fg, var(--text));
+  font-family: var(--js8-rx-font-family, var(--font-mono));
+  font-size: var(--js8-rx-font-size, var(--fs-label));
+}
+.js8-rx .js8-rx-line.mine {
+  color: var(--js8-tx-fg, var(--accent));
+  font-family: var(--js8-tx-font-family, var(--font-mono));
+  font-size: var(--js8-tx-font-size, var(--fs-label));
+}
+.js8-rx .js8-rx-line .js8-time,
+.js8-rx .js8-rx-line .js8-freq {
+  color: var(--js8-rx-fg, var(--text-dim));
+}
+.js8-rx .js8-rx-line.mine .js8-time,
+.js8-rx .js8-rx-line.mine .js8-freq {
+  color: var(--js8-tx-fg, var(--text-dim));
+}
+.js8-rx .cw-decode-idle {
+  color: var(--js8-rx-fg, var(--text-faint));
+}
 /* Band activity, the call list and the inbox are tables: a column is as wide as what it holds, as
    JS8Call's resize-to-contents makes it, and the message column takes the rest and wraps. The rows
    keep the class names the panes always had; a table row is a table row whatever else they say. */
@@ -29397,22 +29485,49 @@ button.sat-chip:disabled {
 .js8-table tr.directed > td:first-child {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+/* The operator's colour for traffic to me in Band activity (JS8Call's "Directed Messages Background",
+   displayBandActivity.cpp:293-301), under every other row colour, as JS8Call paints it first. */
+:is(.js8-band-table, .js8-call-table) tr.directed {
+  background: var(--js8-table-directed, transparent);
+}
 .js8-table tr.selected {
   background: var(--bg-elev-2);
 }
-/* JS8Call's row colours, from the theme: a CQ green, the two highlight lists amber and blue (the
-   primary wins: it is the later rule). */
+:is(.js8-band-table, .js8-call-table) tr.selected {
+  background: var(--js8-table-selected, var(--bg-elev-2));
+}
+/* JS8Call's row colours, from the theme until the operator picks them: a CQ green, the two highlight
+   lists amber and blue (the primary wins: it is the later rule). */
 .js8-table tr.cq {
-  background: color-mix(in srgb, var(--snr-strong) 16%, transparent);
+  background: var(--js8-table-cq, color-mix(in srgb, var(--snr-strong) 16%, transparent));
 }
 .js8-table tr.hl-secondary {
-  background: color-mix(in srgb, var(--alert-info) 22%, transparent);
+  background: var(--js8-table-secondary, color-mix(in srgb, var(--alert-info) 22%, transparent));
 }
 .js8-table tr.hl-primary {
-  background: color-mix(in srgb, var(--snr-marginal) 26%, transparent);
+  background: var(--js8-table-primary, color-mix(in srgb, var(--snr-marginal) 26%, transparent));
 }
 .js8-table tr.low {
   color: var(--text-dim);
+}
+/* The two lists' background, text and font (JS8Call's Band && Call Activity tab: one set for both,
+   displayBandActivity.cpp:340-366, displayCallActivity.cpp:447-456). The operator's text colour is
+   the whole row's, as JS8Call's, the dim cells and the calls included. */
+:is(.js8-band-table, .js8-call-table) {
+  background: var(--js8-table-bg, transparent);
+  color: var(--js8-table-fg, var(--text));
+  font-family: var(--js8-table-font-family, var(--font-mono));
+  font-size: var(--js8-table-font-size, var(--fs-label));
+}
+:is(.js8-band-table, .js8-call-table) :is(.js8-time, .js8-freq, .js8-snr, .js8-age, .js8-dt, .js8-dist, .js8-az, .js8-opcomment),
+:is(.js8-band-table, .js8-call-table) tr.low {
+  color: var(--js8-table-fg, var(--text-dim));
+}
+.js8-call-table .js8-station-call {
+  color: var(--js8-table-fg, var(--accent));
+}
+.js8-call-table .js8-group .js8-station-call {
+  color: var(--js8-table-fg, var(--text));
 }
 .js8-call-table tr.unread {
   font-weight: 700;

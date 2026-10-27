@@ -481,6 +481,29 @@ describe('the startup reset, as JS8Call’s', () => {
 
 })
 
+// JS8Call's colours and fonts (Settings ▸ JS8 ▸ Colours and fonts, features/js8PaneStyle): the cockpit
+// carries what was picked for the theme it paints, as custom properties its panes' rules read.
+describe('the panes’ colours and fonts', () => {
+  const style = {
+    light: { rxBg: '#fafafa' },
+    dark: { rxBg: '#101820', cq: '#1f6f3f' },
+    fonts: { table: { family: 'Consolas', sizePt: 11 } },
+  }
+  const root = () => document.querySelector('main.js8-cockpit') as HTMLElement
+  const props = ['--js8-rx-bg', '--js8-table-cq', '--js8-table-font-family', '--js8-table-font-size']
+
+  it('are set on the cockpit for the theme it paints, the fonts for both, and nothing when nothing is picked', async () => {
+    await renderCockpit({ paneStyle: style, theme: 'dark' })
+    expect(props.map((v) => root().style.getPropertyValue(v))).toEqual(['#101820', '#1f6f3f', '"Consolas", var(--font-mono)', 'calc(11pt * var(--text-scale, 1))'])
+    cleanup()
+    await renderCockpit({ paneStyle: style, theme: 'light' })
+    expect(props.map((v) => root().style.getPropertyValue(v)), 'a Dark pick never paints Light').toEqual(['#fafafa', '', '"Consolas", var(--font-mono)', 'calc(11pt * var(--text-scale, 1))'])
+    cleanup()
+    await renderCockpit({})
+    expect(Array.from(root().style).filter((p) => p.startsWith('--js8-')), 'nothing picked: every pane the theme’s').toEqual([])
+  })
+})
+
 describe('the call list is JS8Call’s', () => {
   const marks = () =>
     Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group)')).map((r) => [

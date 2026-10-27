@@ -1492,6 +1492,10 @@ pub struct Settings {
     /// only, as the lists' Clear All is: the station's own record of who it heard is kept.
     #[serde(default)]
     pub js8_reset_activity: bool,
+    /// JS8Call's colours and fonts for its RX pane, its two lists and its compose box (Configuration
+    /// ▸ UI, Configuration.ui:3250-4060). Empty by default: every pane then follows the theme.
+    #[serde(default)]
+    pub js8_pane_style: Js8PaneStyle,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -5773,6 +5777,38 @@ fn default_js8_mfi() -> String {
     "\u{2026}\u{2026}".to_string()
 }
 
+/// The JS8 panes' colours and fonts ([`Settings::js8_pane_style`]), as JS8Call's UI settings hold
+/// them: the RX pane's background and its received and transmitted text, the two lists' background,
+/// text, selected row and row tints, and the compose box's background and text. A colour is kept for
+/// the theme it was picked under (`light`, `dark`), so a choice made readable on one theme never
+/// paints the other; a font is one for both, as in JS8Call. An element or pane with no entry takes
+/// the theme's own. Display only, read by the UI, which checks every entry it reads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneStyle {
+    /// Colours picked under the Light theme, by element (`rxBg`, `tableFg`, `cq`, …), each `#rrggbb`.
+    #[serde(default)]
+    pub light: std::collections::BTreeMap<String, String>,
+    /// The same under the Dark theme.
+    #[serde(default)]
+    pub dark: std::collections::BTreeMap<String, String>,
+    /// Fonts by pane: `rx` and `tx` (the RX pane's received and transmitted text), `table`, `compose`.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, Js8PaneFont>,
+}
+
+/// One pane's font, as JS8Call's font buttons name it ("Font (family size)").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneFont {
+    /// One family name; empty takes the theme's.
+    #[serde(default)]
+    pub family: String,
+    /// Points, as JS8Call's; 0 takes the theme's size.
+    #[serde(default)]
+    pub size_pt: u16,
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
@@ -5907,6 +5943,7 @@ impl Default for Settings {
             js8_mfi: default_js8_mfi(),
             js8_sounds: Vec::new(),
             js8_reset_activity: false,
+            js8_pane_style: Js8PaneStyle::default(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -13173,6 +13210,61 @@ mod tests {
             !typed("js8ResetActivities"),
             "control: a near miss is not found"
         );
+    }
+
+    /// JS8Call's colours and fonts for the JS8 panes: empty by default (every pane follows the
+    /// theme), the camelCase wire shape, an upgrader's file, a partial record, a round trip of
+    /// colours picked under each theme and a font, and the TS mirror.
+    #[test]
+    fn js8_pane_style_defaults_empty_and_round_trips_per_theme() {
+        let s = Settings::default();
+        assert_eq!(s.js8_pane_style, Js8PaneStyle::default());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""js8PaneStyle":{"light":{},"dark":{},"fonts":{}}"#),
+            "the wire shape"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.js8_pane_style,
+            Js8PaneStyle::default(),
+            "an upgrader's panes follow the theme"
+        );
+        let partial: Settings =
+            serde_json::from_str(r##"{"js8PaneStyle":{"dark":{"rxBg":"#000000"}}}"##).unwrap();
+        assert!(partial.js8_pane_style.light.is_empty() && partial.js8_pane_style.fonts.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r##"{"js8PaneStyle":{"light":{"rxBg":"#ffeaa7"},"dark":{"cq":"#1f6f3f"},"fonts":{"rx":{"family":"DejaVu Sans Mono","sizePt":11}}}}"##,
+        )
+        .unwrap();
+        let p = &chosen.js8_pane_style;
+        assert_eq!(p.light.get("rxBg").map(String::as_str), Some("#ffeaa7"));
+        assert_eq!(p.dark.get("cq").map(String::as_str), Some("#1f6f3f"));
+        assert_eq!(
+            p.fonts.get("rx"),
+            Some(&Js8PaneFont {
+                family: "DejaVu Sans Mono".into(),
+                size_pt: 11
+            })
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8PaneStyle"),
+            "ui/src/types.ts Settings is missing `js8PaneStyle`"
+        );
+        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
     }
 
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the

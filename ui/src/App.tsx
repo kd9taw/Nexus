@@ -4303,6 +4303,7 @@ function App() {
                 compose={js8ComposeConfig(settings)}
                 onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
                 lists={js8Lists}
+                paneStyle={settings?.js8PaneStyle}
               />
             </div>
           )}

@@ -160,6 +160,11 @@
     "js8HoldPtt": false,
     "js8IdleWatchdogMin": 60,
     "js8Info": "",
+    "js8PaneStyle": {
+      "light": {},
+      "dark": {},
+      "fonts": {}
+    },
     "js8Relay": true,
     "js8ResetActivity": false,
     "js8RxBlocklist": [],

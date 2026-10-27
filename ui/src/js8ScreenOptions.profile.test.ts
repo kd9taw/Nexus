@@ -33,6 +33,7 @@ const settings = (over: Partial<Settings>): Settings => ({ mycall: 'KD9TAW', ...
 
 const MINE: Partial<Settings> = {
   js8ResetActivity: true,
+  js8PaneStyle: { light: { rxBg: '#ffeaa7' }, dark: { cq: '#1f6f3f' }, fonts: { rx: { family: 'Consolas', sizePt: 11 } } },
 }
 
 describe('the JS8 screen options in a config profile', () => {
@@ -41,7 +42,7 @@ describe('the JS8 screen options in a config profile', () => {
   it('save and load back by value', () => {
     saveProfile('Portable', settings(MINE))
     const loaded = loadProfiles().find((p) => p.name === 'Portable')!
-    const merged = mergeProfile(settings({ js8ResetActivity: false }), loaded.settings)
+    const merged = mergeProfile(settings({ js8ResetActivity: false, js8PaneStyle: { light: {}, dark: {}, fonts: {} } }), loaded.settings)
     expect(merged).toMatchObject(MINE)
   })
 

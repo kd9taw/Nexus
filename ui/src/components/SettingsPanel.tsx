@@ -251,6 +251,7 @@ import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
+import { Js8PaneStyleSettings } from './Js8PaneStyleSettings'
 import { resolveTarget } from '../settings/registry'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
@@ -10266,6 +10267,14 @@ export function SettingsPanel({
               setMark={setJs8Mark}
               setSounds={setJs8Sounds}
               setReset={(on) => updateBool('js8ResetActivity', on)}
+            />
+            <Js8PaneStyleSettings
+              form={form}
+              theme={paintedTheme === 'light' ? 'light' : 'dark'}
+              onChange={(js8PaneStyle) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, js8PaneStyle } : prev))
+              }}
             />
 
             {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both

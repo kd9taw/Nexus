@@ -729,6 +729,9 @@ const MIGRATED = [
   'features/voiceDelete.ts',
   // The ATU button's menu, "Switch tuner out" (#344) — migrated from birth.
   'components/AtuSwitchOutMenu.tsx',
+  // Settings ▸ Digital ▸ JS8's colours and fonts (JS8Call's UI tab) — migrated from birth. The samples'
+  // calls, offsets and reports are data.
+  'components/Js8PaneStyleSettings.tsx',
 ]
 
 /**

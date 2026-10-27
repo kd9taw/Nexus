@@ -5,9 +5,9 @@
 // in the code is the mode's own vocabulary (js8Vocab.ts): JS8, HB, CQ, @ALLCALL, the speed
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useEscStop } from '../useEscStop'
-import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed } from '../types'
+import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -71,6 +71,7 @@ import {
   type Js8ViewPrefs,
 } from '../features/js8View'
 import { Js8SoundWatch, js8SoundsToPlay, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
+import { js8PaneVars } from '../features/js8PaneStyle'
 import {
   atuBypass,
   atuTune,
@@ -184,6 +185,9 @@ interface Props {
   /** The lists' own settings (Settings ▸ JS8) and the call list's two writes. Absent: JS8Call's
    *  defaults, and the writes are not offered. */
   lists?: Js8ListSettings
+  /** JS8Call's colours and fonts for the RX pane, the lists and the compose box (Settings ▸ JS8),
+   *  painted for `theme` (features/js8PaneStyle). Absent: every pane follows the theme. */
+  paneStyle?: Settings['js8PaneStyle']
 }
 
 /** What Settings ▸ JS8 holds for the lists (JS8Call 3.0.3's, at its defaults when absent), and the
@@ -281,6 +285,7 @@ export function Js8Cockpit({
   compose = JS8_COMPOSE_DEFAULTS,
   onSavedMessages,
   lists = JS8_LIST_DEFAULTS,
+  paneStyle,
 }: Props) {
   // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
   const [statsCall, setStatsCall] = useState('')
@@ -1622,7 +1627,12 @@ export function Js8Cockpit({
     ])
 
   return (
-    <main className="layout single js8-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
+    <main
+      className="layout single js8-cockpit"
+      ref={cockpitRef}
+      data-pane-drag={dropPane ? '' : undefined}
+      style={js8PaneVars(paneStyle, theme === 'light' ? 'light' : 'dark') as CSSProperties}
+    >
       {snap && (
         <CockpitHeader
           snap={snap}

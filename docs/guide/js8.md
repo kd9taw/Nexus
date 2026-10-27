@@ -121,6 +121,16 @@ reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
 idle-watchdog readout. **CQ**, **HB**, **REPLY**, **SNR**, **INFO**, **STATUS** and **Saved** are
 greyed out while a message is waiting to go or going out, as JS8Call's are.
 
+**Colours and fonts.** Settings ▸ Digital ▸ JS8 ▸ **Colours and fonts** holds JS8Call's: for the RX
+pane its background, received text and transmitted text, each text with its font; for Band
+activity and the call list (one set for both, as in JS8Call) the background, text, selected row,
+traffic to you, CQ messages and the two highlights, with a font; and for the compose box its
+background, text and font. Each colour starts as the theme's and opens a colour picker. What you
+pick is kept for the theme in use, Light or Dark, and the other theme keeps its own, so a colour
+chosen to read well on one never paints the other; a font serves both, and a family this computer
+lacks falls back to the theme's. A sample of each pane shows the result, a line under it says when
+a text would be hard to read on its background, and **Reset** gives the pane back to the theme.
+
 ## Receiving
 
 Every speed decodes at once, exactly as JS8Call 3.0's multi-decode does: a Slow station at

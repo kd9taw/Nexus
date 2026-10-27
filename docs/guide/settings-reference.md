@@ -1546,6 +1546,18 @@ you or your group, a message filed in your Inbox, a new callsign, a callsign you
 All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
 JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
 
+**Colours and fonts**
+
+- JS8Call's colours and fonts for the **RX pane** (background, received text, transmitted text, and a
+  font for each kind of text), **Band activity and the call list** (one set for both, as in JS8Call:
+  background, text, selected row, traffic to you, CQ messages, the primary and secondary highlights,
+  and a font) and the **compose box** (background, text and a font). Each colour starts as the
+  theme's and opens a colour picker. What you pick is kept for the theme in use (Light or Dark); the
+  other theme keeps its own, so a colour chosen to read well on one never paints the other. A font
+  (a family name, and a size in points) serves both themes; a family this computer lacks falls back
+  to the theme's. A sample of each pane shows the result, a line under it says when a text would be
+  hard to read on its background (under 4.5:1), and **Reset** gives that pane back to the theme.
+
 **Sending**
 
 - **Hold PTT between frames** — off by default, as in JS8Call: PTT drops after each frame
