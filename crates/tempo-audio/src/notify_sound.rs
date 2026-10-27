@@ -422,7 +422,10 @@ mod tests {
         let played = body.find(".play()").expect("the start");
         assert!(checked < built && built < played);
         let fallback = format!(".or_else(|| host.{}())", "default_output_device");
-        assert!(!src.contains(&fallback), "no silent fallback to the default");
+        assert!(
+            !src.contains(&fallback),
+            "no silent fallback to the default"
+        );
     }
 
     #[test]
