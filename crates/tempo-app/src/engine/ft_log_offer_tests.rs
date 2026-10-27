@@ -299,3 +299,29 @@ fn a_band_change_after_our_73_keeps_the_contact_for_log_qso() {
     assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
     assert!(e.pending_logs[0].confirm_only, "offer-only");
 }
+
+/// (2) …and on the band it was made on when the dial has already left it: the rig read back on
+/// 40 m after a listen to WWV between.
+#[test]
+fn a_band_change_at_the_rig_after_our_73_offers_the_contact_on_the_band_left() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.observe_rig_freq(14_074_000);
+    let made_on = e.log_frequencies().0;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 21);
+    e.call_station(DX);
+    assert_eq!(key_once(&mut e, 22), "7P8RU KR4FQG 73", "premise: our 73");
+    e.observe_rig_freq(10_000_000);
+    e.observe_rig_freq(7_074_000);
+    let shown = e
+        .snapshot()
+        .pending_log
+        .expect("offered at the band change");
+    assert_eq!((shown.call.as_str(), shown.band.as_str()), (DX, "20m"));
+    assert!(
+        (shown.freq_mhz - made_on).abs() < 1e-9,
+        "at {made_on}, not {}",
+        shown.freq_mhz
+    );
+}
