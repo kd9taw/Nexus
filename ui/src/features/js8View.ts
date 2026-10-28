@@ -1,5 +1,6 @@
 // THE JS8 LISTS' VIEW CHOICES — what JS8Call keeps in its window state rather than its Settings
-// dialog: the columns each list shows, how each sorts, whether column labels show, whether Band
+// dialog: the columns each list shows, how each sorts, whether column labels show and whether they are
+// its minimal ones (mainwindow.cpp:4657-4665, :4890-4898), whether Band
 // activity shows heartbeats and their ACKs (View ▸ "Show Band Heartbeats and ACKs"), and what was
 // cleared or removed from the lists. JS8Call 3.0.3's defaults (mainwindow.cpp:513-514, :4669-4686,
 // :4772-4800) for every one.
@@ -38,6 +39,9 @@ export interface Js8ViewPrefs {
   call: { columns: Record<Js8CallColumn, boolean>; sort: Js8CallSort }
   /** "Show Column Labels" (on). */
   labels: boolean
+  /** "Minimal Column Labels" (off): JS8Call's short headings, the cells' units dropped. One switch for
+   *  both lists, as JS8Call keys it to "all" (:4706-4712). */
+  minimal: boolean
   /** "Show Band Heartbeats and ACKs" (on). */
   showHb: boolean
 }
@@ -53,6 +57,7 @@ export function defaultJs8ViewPrefs(): Js8ViewPrefs {
     band: { columns: on(JS8_BAND_COLUMNS), sort: 'offset' },
     call: { columns: on(JS8_CALL_COLUMNS), sort: 'callsign' },
     labels: true,
+    minimal: false,
     showHb: true,
   }
 }
@@ -82,6 +87,7 @@ export function parseJs8ViewPrefs(raw: string | null | undefined): Js8ViewPrefs 
     if ((JS8_CALL_SORTS as readonly unknown[]).includes(v.call.sort)) out.call.sort = v.call.sort as Js8CallSort
   }
   if (typeof v.labels === 'boolean') out.labels = v.labels
+  if (typeof v.minimal === 'boolean') out.minimal = v.minimal
   if (typeof v.showHb === 'boolean') out.showHb = v.showHb
   return out
 }
@@ -96,10 +102,12 @@ export interface Js8ListMarks {
   removedCalls: Record<string, number>
   /** "Add New Station or Group…" with a callsign: the call → when. */
   added: Record<string, number>
+  /** The run (its start, ms) the startup reset (`js8StartupMarks`) was last decided for; 0 for none. */
+  startup: number
 }
 
 export function emptyJs8ListMarks(): Js8ListMarks {
-  return { cleared: { rx: 0, band: 0, call: 0 }, removedOffsets: {}, removedCalls: {}, added: {} }
+  return { cleared: { rx: 0, band: 0, call: 0 }, removedOffsets: {}, removedCalls: {}, added: {}, startup: 0 }
 }
 
 /** At most this many removals or additions are kept: the oldest go first. */
@@ -129,6 +137,7 @@ export function parseJs8ListMarks(raw: string | null | undefined): Js8ListMarks 
   out.removedOffsets = times(v.removedOffsets)
   out.removedCalls = times(v.removedCalls)
   out.added = times(v.added)
+  if (typeof v.startup === 'number' && Number.isFinite(v.startup) && v.startup > 0) out.startup = v.startup
   return out
 }
 
@@ -167,5 +176,23 @@ export function clearJs8Lists(m: Js8ListMarks, which: 'rx' | 'band' | 'call' | '
     removedOffsets: band ? {} : m.removedOffsets,
     removedCalls: call ? {} : m.removedCalls,
     added: call ? {} : m.added,
+    startup: m.startup,
   }
+}
+
+/** When this run of the program started: the page's own start, as the cockpit lives in the window that
+ *  opens with the program. */
+export const js8RunStart = (): number => Math.floor(performance.timeOrigin)
+
+/** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8): JS8Call
+ *  reads none of them back and clears them at its first band (mainwindow.cpp:505-508, :607-609,
+ *  :1281-1285), which here is Clear All Lists as of the run's start, never moving a later clear back.
+ *  Decided once a run, from the first settings the run has: off, only the run is recorded, so switching
+ *  it on, or the cockpit mounting again, changes nothing until the next start. */
+export function js8StartupMarks(m: Js8ListMarks, reset: boolean, runStart: number): Js8ListMarks {
+  if (m.startup === runStart) return m
+  if (!reset) return { ...m, startup: runStart }
+  const c = clearJs8Lists(m, 'all', runStart)
+  const later = (was: number) => Math.max(was, runStart)
+  return { ...c, cleared: { rx: later(m.cleared.rx), band: later(m.cleared.band), call: later(m.cleared.call) }, startup: runStart }
 }

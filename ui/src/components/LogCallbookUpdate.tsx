@@ -7,7 +7,7 @@
 // no record, all in the call's one paced turn. The fill is the log's own callbook rule: a field the
 // contact holds is never replaced, a contest exchange's fields are never touched, the call,
 // country, upload marks and confirmations stay, and nothing is uploaded. Where the station is
-// (grid, QTH, state, county, IOTA, zones, position, UTC offset) goes only on a contact from the
+// (grid, QTH, state, county, zones, position, UTC offset) goes only on a contact from the
 // last 12 months: a callbook says where a station is now.
 //
 // Preview first: the contacts, the calls, the services asked, how many are already looked up, the

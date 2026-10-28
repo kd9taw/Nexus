@@ -1,21 +1,26 @@
 // JS8Call's notification sounds (Settings ▸ Notifications, every one off by default,
 // Configuration.cpp:1996-2002, :2464): a sound when a CQ, a heartbeat, an ACK for me, a message
 // directed to me, a message for my inbox, a new callsign or a callsign I have worked is heard. JS8Call
-// plays a sound file the operator picks for each (`tryNotify`, mainwindow.cpp:5595-5603); Nexus plays
-// a tone of its own for each, through the same WebAudio beep its other alerts use (alerts.ts), so
-// no file is needed and no two events sound alike.
+// plays a sound file the operator picks for each (`tryNotify`, mainwindow.cpp:5595-5603), and so does
+// Nexus where one is picked (Settings `js8SoundFiles`); where none is, it plays a tone of its own for
+// each, so no two events sound alike. A file that cannot be played plays that tone instead and is
+// named once: JS8Call plays nothing then (NotificationAudio.cpp:72-74). Every sound plays in Rust
+// (`src-tauri/src/js8_sounds.rs`) on the output the operator picked (Settings `js8SoundDevice`), and
+// never on a device the station transmits from: a sound there could key a rig on VOX.
 //
-// What is heard is read off the cockpit's polls of the engine (the feed's new frames, the inbox and
-// the heard list), as JS8Call's own triggers read its decodes: `tryNotify("cq")` and ("hb") on a
+// What is heard is read off polls of the engine (the feed's new frames, the inbox and the heard list;
+// Js8SoundPlayer, from whichever screen is showing), as JS8Call's own triggers read its decodes: `tryNotify("cq")` and ("hb") on a
 // heartbeat frame (processDecodeEvent.cpp:407, :429), ("directed") on a command addressed to me or a
 // group I joined (processCommandActivity.cpp:266-277), ("ack") on an ACK to me (:849), ("inbox") when a
 // message is filed for me (:587, :806, :823), ("call_new"/"call_old") when a call first enters the
 // call list, by whether the log has it (mainwindow.cpp:2313-2318). The first poll only learns what is
-// already there: nothing heard before the screen opened sounds.
-import type { Js8ActivityRow, Js8Heard } from '../types'
+// already there: nothing heard before the watch started sounds.
+import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from '../types'
 import { addresseeOf } from './js8Lists'
 import { js8BaseCall } from '../js8Vocab'
-import { beep, doubleBeep } from '../alerts'
+import { playJs8SoundHere, type Js8SoundRoute } from '../api'
+import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 export const JS8_SOUND_EVENTS = ['cq', 'hb', 'ack', 'directed', 'inbox', 'callNew', 'callOld'] as const
 export type Js8SoundEvent = (typeof JS8_SOUND_EVENTS)[number]
@@ -45,6 +50,7 @@ export class Js8SoundWatch {
   private rows: Set<string> | null = null
   private calls: Set<string> | null = null
   private waiting = new Set<string>()
+  private filed: Set<number> | null = null
 
   /** The events among `rows` not seen before; the first call only learns them. */
   frames(rows: readonly Js8ActivityRow[], myCall: string, groups: readonly string[]): Js8SoundEvent[] {
@@ -59,6 +65,15 @@ export class Js8SoundWatch {
       if (ev) out.push(ev)
     })
     return out
+  }
+
+  /** "inbox" when a message for me was filed since the last call (an unread entry not seen before);
+   *  the first call only learns what is there. */
+  inbox(entries: readonly Js8InboxEntry[]): Js8SoundEvent[] {
+    const seen = this.filed
+    this.filed = new Set(entries.map((e) => e.id))
+    if (seen === null) return []
+    return entries.some((e) => !seen.has(e.id) && e.state === 'unread') ? ['inbox'] : []
   }
 
   /** "callNew" or "callOld" for each call heard for the first time, once the log has answered for it. */
@@ -85,22 +100,83 @@ export class Js8SoundWatch {
   }
 }
 
-/** Each event's tone (Hz), apart from the other alerts' (alerts.ts BEEP_HZ, the 990 Hz alarm, the
- *  660/880 TX pair): a message for me rings twice. */
-const TONE: Record<Js8SoundEvent, number> = {
-  cq: 587,
-  hb: 466,
-  ack: 1046,
-  directed: 932,
-  inbox: 784,
-  callNew: 698,
-  callOld: 554,
+/** The event and file pairs already named as not playing, and the outputs named as refused. */
+const told = new Set<string>()
+
+/** For tests: forget the failures named. */
+export function __resetJs8SoundsForTest(): void {
+  told.clear()
 }
 
-/** Play one event's sound. */
-export function playJs8Sound(ev: Js8SoundEvent): void {
-  if (ev === 'inbox' || ev === 'directed') doubleBeep(TONE[ev])
-  else beep(TONE[ev])
+/** A path's last part, the file's name, as the Settings row and the notice show it. */
+export function js8SoundFileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
+}
+
+/** Why a file did not play, in the operator's words: Rust's refusal by name
+ *  (`src-tauri/src/js8_sounds.rs` `SoundRefusal`). */
+function whyNot(reason: unknown): string {
+  switch (reason) {
+    case 'missing':
+      return t('js8.sound.file.missing')
+    case 'notAFile':
+      return t('js8.sound.file.notAFile')
+    case 'tooLarge':
+      return t('js8.sound.file.tooLarge')
+    case 'notWav':
+      return t('js8.sound.file.notWav')
+    case 'badFormat':
+      return t('js8.sound.file.badFormat')
+    case 'notPicked':
+      return t('js8.sound.file.notPicked')
+    case 'network':
+      return t('js8.sound.file.network')
+    default:
+      return t('js8.sound.file.unreadable')
+  }
+}
+
+/** Why nothing played at all. */
+function nothingPlayed(reason: unknown): string {
+  switch (reason) {
+    case 'txDevice':
+      return t('js8.sound.txDevice')
+    case 'txDefault':
+      return t('js8.sound.txDefault')
+    case 'txUnsure':
+      return t('js8.sound.txUnsure')
+    case 'noDevice':
+      return t('js8.sound.noDevice')
+    default:
+      return t('js8.sound.failed')
+  }
+}
+
+/**
+ * Play one event's sound: its WAV file when one is set (Settings `js8SoundFiles`), else its built-in
+ * tone, on the operator's sound output. A file that cannot be played plays the tone instead and is
+ * named once per event and file; a sound that cannot play at all (its output is a TX audio device, or
+ * gone) is named once per reason. `always` names either every time, for Settings' Test, and `route`
+ * is the output and TX audio devices the Settings form holds, so Test plays where the form says.
+ */
+export async function playJs8Sound(ev: Js8SoundEvent, file?: string | null, always = false, route?: Js8SoundRoute): Promise<void> {
+  const path = file?.trim() || null
+  try {
+    const played = route ? await playJs8SoundHere(ev, path, route) : await playJs8SoundHere(ev, path)
+    if (path && played?.fileRefused) {
+      const key = `${ev}\n${path}`
+      if (always || !told.has(key)) {
+        told.add(key)
+        pushToast(t('js8.sound.file.failed', { file: js8SoundFileName(path), reason: whyNot(played.fileRefused) }), 'error', 12_000)
+      }
+    }
+  } catch (reason) {
+    const key = `\u0000${String(reason)}`
+    if (always || !told.has(key)) {
+      told.add(key)
+      pushToast(nothingPlayed(reason), 'error', 12_000)
+    }
+  }
 }
 
 /** The events of one poll to play, each once, in JS8Call's table order, the enabled ones only. */

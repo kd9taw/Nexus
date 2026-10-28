@@ -5508,6 +5508,7 @@ dependencies = [
  "tempo-app",
  "tempo-audio",
  "tempo-client",
+ "tempo-codec",
  "tempo-core",
  "tempo-net",
  "tempo-sstv",

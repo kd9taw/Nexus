@@ -494,6 +494,98 @@ fn outside_a_data_mode_the_scope_streams_as_before_with_no_pane() {
     assert!(s.sweeps() > 0);
 }
 
+/// The operator's waterfall source for the radio in use (`RadioProfile::native_scope`), as a Save
+/// of the Settings form for it hands the loop.
+fn choose_waterfall_source(s: &Scene, word: &str) {
+    let mut e = s.engine.lock().unwrap();
+    let mut settings = e.settings().clone();
+    settings.native_scope = word.into();
+    e.apply_settings(settings);
+}
+
+/// THE AUDIO WATERFALL CHOICE, BY COMMAND (#417): with the radio's waterfall source on audio the
+/// Icom scope is never switched on, even in Phone where it always streams, nothing it sweeps reaches
+/// the RF slot, and CI-V keeps serving CAT (the loop commanded the mode). Choosing the radio's scope
+/// again starts the stream by command; choosing audio again stops it by command.
+#[test]
+fn the_audio_waterfall_choice_keeps_the_scope_off_and_the_radio_scope_choice_restores_it() {
+    let mut s = Scene::new(10.0, 0.5, false);
+    choose_waterfall_source(&s, "audio");
+    s.run(1000, false);
+    assert!(
+        !mode_is_data(&s.state.last_mode) && !s.state.last_mode.is_empty(),
+        "premise: Phone commanded a voice mode over CI-V, got {:?}",
+        s.state.last_mode
+    );
+    assert!(
+        !s.wave_commands().contains(&true),
+        "the scope was switched on with the audio waterfall chosen: {:?}",
+        s.wave_commands()
+    );
+    assert_eq!(
+        s.sweeps(),
+        0,
+        "the radio streamed with the audio waterfall chosen"
+    );
+    assert!(
+        s.feed.peek_scope_row().is_none_or(|r| r.source != "civ"),
+        "a sweep reached the waterfall"
+    );
+
+    // Back to the radio's scope: the stream comes on, and the waterfall draws its sweep.
+    choose_waterfall_source(&s, "auto");
+    s.run(800, false);
+    assert_eq!(
+        s.wave_commands().last(),
+        Some(&true),
+        "choosing the radio's scope did not switch the stream on"
+    );
+    assert!(
+        s.sweeps() > 0,
+        "the radio was asked to stream and sent nothing"
+    );
+    assert_eq!(
+        s.feed.peek_scope_row().map(|r| r.source),
+        Some("civ".to_string()),
+        "the waterfall is not drawing the radio's scope"
+    );
+
+    // Audio again: the stream stops by command and the last sweep leaves the slot.
+    choose_waterfall_source(&s, "audio");
+    s.run(400, false);
+    assert_eq!(
+        s.wave_commands().last(),
+        Some(&false),
+        "choosing audio did not switch the stream off"
+    );
+    let settled = s.sweeps();
+    s.run(400, false);
+    assert_eq!(
+        s.sweeps(),
+        settled,
+        "the radio is still streaming for nobody"
+    );
+    assert!(
+        s.feed.peek_scope_row().is_none_or(|r| r.source != "civ"),
+        "the last sweep was left in the RF slot"
+    );
+}
+
+/// With the audio waterfall chosen, an RF scope pane on screen in a data mode does not turn the
+/// stream on either: the choice is the operator's for every display of this radio.
+#[test]
+fn the_audio_waterfall_choice_outranks_the_rf_pane() {
+    let mut s = Scene::new(10.0, 0.5, true);
+    choose_waterfall_source(&s, "audio");
+    s.run(1200, true);
+    assert!(
+        !s.wave_commands().contains(&true),
+        "the pane's reads switched the scope on: {:?}",
+        s.wave_commands()
+    );
+    assert_eq!(s.sweeps(), 0);
+}
+
 /// THE FT WATERFALL STILL NEVER DRAWS AN RF ROW. Its command answers from `audio_row`, and with the
 /// pane streaming the radio's sweep into the RF slot in a data mode, that read still never hands it
 /// a sweep — the row the RF pane draws is the one thing it must not see.

@@ -21,6 +21,7 @@ export function Js8BandActivity({
   rows,
   columns,
   labels,
+  minimal = false,
   nowMs,
   selectedHz,
   onDoubleClick,
@@ -30,6 +31,8 @@ export function Js8BandActivity({
   rows: readonly Js8BandRow[]
   columns: Readonly<Record<Js8BandColumn, boolean>>
   labels: boolean
+  /** JS8Call's Minimal Column Labels: its short headings, and no units in the cells. */
+  minimal?: boolean
   nowMs: number
   /** RX's offset: its row is the selected one. */
   selectedHz: number | null
@@ -38,11 +41,11 @@ export function Js8BandActivity({
 }) {
   const [menuFor, setMenuFor] = useState<number | null>(null)
   const head: Record<Js8BandColumn, string> = {
-    offset: t('js8.col.offset'),
+    offset: minimal ? t('js8.col.offset.minimal') : t('js8.col.offset'),
     timestamp: t('js8.col.age'),
-    snr: t('js8.col.snr'),
-    tdrift: t('js8.col.tdrift'),
-    submode: t('js8.col.speed'),
+    snr: minimal ? t('js8.col.snr.minimal') : t('js8.col.snr'),
+    tdrift: minimal ? t('js8.col.tdrift.minimal') : t('js8.col.tdrift'),
+    submode: minimal ? t('js8.col.speed.minimal') : t('js8.col.speed'),
   }
   const shown = (Object.keys(columns) as Js8BandColumn[]).filter((c) => columns[c])
   return (
@@ -79,9 +82,7 @@ export function Js8BandActivity({
                 title={t('js8.panel.offsets.row.title')}
               >
                 {columns.offset && (
-                  <td className="js8-cell js8-freq">
-                    {r.offsetHz} {HZ}
-                  </td>
+                  <td className="js8-cell js8-freq">{minimal ? r.offsetHz : `${r.offsetHz} ${HZ}`}</td>
                 )}
                 {columns.timestamp && (
                   <td className="js8-cell js8-age" title={utcClock(r.atMs)}>
@@ -91,7 +92,7 @@ export function Js8BandActivity({
                 {columns.snr && <td className="js8-cell js8-snr">{fmtSnr(r.snrDb)}</td>}
                 {columns.tdrift && (
                   <td className="js8-cell js8-dt" title={t('js8.panel.offsets.dt.title')}>
-                    {dtLabel(r.dtS)}
+                    {dtLabel(r.dtS, !minimal)}
                   </td>
                 )}
                 {columns.submode && (

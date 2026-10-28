@@ -128,6 +128,8 @@ mod grid_fill_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
+#[cfg(test)]
+mod iota_offer_tests;
 /// JS8's send mechanics: the TX offset moved while a message goes out.
 #[cfg(test)]
 mod js8_send_tests;
@@ -150,7 +152,12 @@ mod phone_usb_only_tests;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
 #[cfg(test)]
 mod pick_switch_tests;
+/// Test CAT for a radio that is not the one in use: a read-only look through the radio monitor.
+pub mod radio_probe;
 pub mod radio_selection;
+/// The radio setup: its preview, its read-only probe, and an untouched file staying untouched.
+#[cfg(test)]
+mod radio_setup_tests;
 pub mod receivers;
 pub mod remote_logging;
 pub mod remote_mic;
@@ -4726,6 +4733,10 @@ pub struct Engine {
     /// its stale profile `last_*`. The ACTIVE radio is NOT in this map — its live state is the flat
     /// `rig_*`/`settings.dial_mhz` block, driven by the existing `observe_rig_*`.
     radio_live: std::collections::HashMap<u32, RadioLive>,
+    /// How many CAT health reports the monitor has made per NON-active radio, ever (never reset,
+    /// not even by `forget_radio_live`). The radio setup's read-only Test CAT waits for this to
+    /// move, so it reports a reading made AFTER the press, never one from before it.
+    monitor_reads: std::collections::HashMap<u32, u64>,
     /// Last amplifier reading per radio, fed by the amplifier poll thread. Display-only.
     amp_live: std::collections::HashMap<u32, AmpLive>,
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
@@ -7088,6 +7099,7 @@ impl Engine {
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
+            monitor_reads: std::collections::HashMap::new(),
             amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
@@ -9596,6 +9608,7 @@ impl Engine {
     /// Record a non-active radio's live CAT health (`Some(true/false)`), for its switcher pill.
     pub fn observe_radio_cat(&mut self, id: u32, ok: Option<bool>) {
         self.radio_live.entry(id).or_default().cat_ok = ok;
+        *self.monitor_reads.entry(id).or_default() += 1;
     }
 
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
@@ -11461,6 +11474,20 @@ impl Engine {
             .unwrap_or(self.settings.active_radio)
     }
 
+    /// [`Self::route_preview`] for the radio setup's UNSAVED routing: the same
+    /// [`crate::settings::Settings::route_radio`], asked of a copy of the settings with the draft
+    /// laid over it ([`crate::settings::Settings::with_routing_draft`]). Read-only: nothing is
+    /// stored and no radio moves.
+    pub fn route_preview_draft(
+        &self,
+        draft: &crate::settings::RoutingDraft,
+        band: &str,
+        mode: crate::settings::RouteMode,
+    ) -> u32 {
+        let s = self.settings.with_routing_draft(draft);
+        s.route_radio(band, mode).unwrap_or(s.active_radio)
+    }
+
     /// The active Phone mode override for the cockpit picker (`None` = AUTO / band-derived).
     pub fn sideband_override(&self) -> Option<String> {
         self.sideband_override.clone()
@@ -11814,8 +11841,9 @@ impl Engine {
     }
 
     /// The answer a lookup gave this session for exactly this call, if one did. Exact call, as
-    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`.
-    fn callbook_answer(
+    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`. Also what the log-time IOTA offer
+    /// reads (`tempo_core::logbook::offer::iota_offer`).
+    pub fn callbook_answer(
         &self,
         call: &str,
     ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
@@ -17521,7 +17549,7 @@ impl Engine {
                 None => {}
             }
         }
-        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, IOTA, zones, position,
+        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, zones, position,
         // e-mail, QSL route, and the name, QTH, grid and state where the record has none — on
         // every path, the FT auto-log included. Only an answer a lookup already returned this
         // session for exactly this call (the callsign card's, the log strip's): never a lookup
@@ -17529,6 +17557,10 @@ impl Engine {
         // after the park and the state above have had their say, and before DISTANCE below, which
         // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
         // are `tempo_core::logbook::callbook`'s.
+        //
+        // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
+        // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
+        // 2026-10-27). An FT contact auto-logged with no popup logs without one.
         //
         // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
         // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
@@ -19177,6 +19209,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// fields the desktop popup extends with COMMENT (#371). `rec` arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
+        self.confirm_pending_log_with_offer(expected_key, rec, None)
+    }
+
+    /// [`Self::confirm_pending_log`], with the IOTA offer the operator took in the popup
+    /// (`tempo_core::logbook::offer::accept_iota_offer`): written into the held record's IOTA only
+    /// when it has none, and held back from uploads until the operator touches it.
+    pub fn confirm_pending_log_with_offer(
+        &mut self,
+        expected_key: &str,
+        rec: QsoRecord,
+        iota_offer: Option<&tempo_core::logbook::offer::IotaOffer>,
+    ) -> bool {
         if self.pending_qso_log_key().as_deref() != Some(expected_key) {
             return false;
         }
@@ -19217,6 +19261,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        if let Some(offer) = iota_offer {
+            tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
+        }
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held, was.gridless || dropped);
@@ -43144,6 +43191,7 @@ mod tests {
             shown: vec!["iota".into()],
             hidden: Vec::new(),
             widths: [("country".to_string(), 210)].into_iter().collect(),
+            order: vec!["notes".into(), "call".into()],
         };
         let stale = e.settings().clone();
         e.set_logbook_columns(Some(chosen.clone()));
@@ -49443,6 +49491,33 @@ mod tests {
         let plain = e.qso_record("W9XYZ".into(), None, None);
         let d = e.hrd_datagram(&plain);
         assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
+    }
+
+    /// HRD Logbook can upload a contact itself, so it never gets an IOTA reference taken from a
+    /// log-time offer the operator has not confirmed. One the operator typed, and an older
+    /// callbook-filled one, still go.
+    #[test]
+    fn the_hrd_datagram_never_carries_a_held_iota() {
+        use tempo_core::logbook::offer::{accept_iota_offer, IotaOffer, OfferSource};
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut held = e.qso_record("IA5X".into(), None, None);
+        let offer = IotaOffer {
+            reference: "EU-028".into(),
+            source: OfferSource::Spot,
+        };
+        assert!(accept_iota_offer(&mut held, &offer));
+        let d = e.hrd_datagram(&held);
+        assert!(!d.contains("<IOTA:"), "{d}");
+        assert!(!d.contains("APP_NEXUS_OFFER_HELD"), "{d}");
+        let mut typed = e.qso_record("IA5X".into(), None, None);
+        typed.ota.iota = Some("EU-028".into());
+        assert!(e.hrd_datagram(&typed).contains("<IOTA:6>EU-028"));
+        let mut older = e.qso_record("IA5X".into(), None, None);
+        older.ota.iota = Some("EU-025".into());
+        older
+            .extra
+            .push(("APP_NEXUS_CALLBOOK_FILLED".into(), "IOTA".into()));
+        assert!(e.hrd_datagram(&older).contains("<IOTA:6>EU-025"));
     }
 
     /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT

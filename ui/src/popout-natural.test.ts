@@ -147,12 +147,13 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
   })
 
   it("the Spots window drags down to 490×360, where the board's nine columns still fit at the 65% floor", () => {
-    // Measured in Chrome (`scripts/browser-probe --desktop spots`): at 100% the columns fit from 739 px, and at
-    // 740 a busy day's filter bar, the head, the column headings and three rows fit from 434 px. At its
-    // smallest the window shows a 754×554 box at the 65% floor; it opens at 960×660, at 100%.
+    // Measured in Chrome (`scripts/browser-probe --desktop spots`): at 100% the columns, the row's Spot button
+    // with them, fit from 735 px, and at 740 a busy day's filter bar (its scrollbar gutter kept), the head, the
+    // column headings and three rows fit from 455 px. At its smallest the window shows a 754×554 box at the 65%
+    // floor; it opens at 960×660, at 100%.
     expect(sizeFor(MIN_INNER, 'spots')).toEqual([490, 360])
     expect(sizeFor(DEFAULT_INNER, 'spots')).toEqual([960, 660])
-    expect(naturalFor('spots')).toEqual({ w: 740, h: 440 })
+    expect(naturalFor('spots')).toEqual({ w: 740, h: 460 })
   })
 
   it('every other pop-out opens at 100% — the behaviour the field report asked for', () => {

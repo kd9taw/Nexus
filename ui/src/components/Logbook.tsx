@@ -36,6 +36,7 @@ import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
+import { announce } from '../announce'
 import { LogFilterBar } from './LogFilterBar'
 import { clickSort, filterKey, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
 import { activationFilter } from '../features/potaActivation'
@@ -55,6 +56,8 @@ import {
   uploadMark,
   uploadOf,
   uploadWord,
+  withColumnMoved,
+  withColumnStep,
   withColumnWidth,
   type LogColumn,
   type LogColumnsSaved,
@@ -98,7 +101,7 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { IotaReferenceNote } from './Iota'
+import { IotaOfferChip, IotaReferenceNote, useIotaOffer } from './Iota'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -220,6 +223,9 @@ const IOTA_RE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 const FORM_EDITS: ReadonlySet<string> = new Set(['grid', 'iota'])
 /** One Alt+←/→ on a column header: a column's width moves this far. */
 const RESIZE_STEP_PX = 16
+/** How far a press on a header travels sideways before it is a drag that moves the column, not a
+ *  click that sorts it. */
+const MOVE_SLOP_PX = 6
 
 function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
@@ -508,6 +514,12 @@ export function Logbook({
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
 
+  // The IOTA reference the station offers a contact being ADDED here (a spot comment's, or the
+  // callbook's), taken with the chip, never stamped by itself (operator decision, 2026-10-27). None
+  // while the IOTA box holds one, and none for a contact being edited: its log entry is unchanged.
+  const [lookupTick, setLookupTick] = useState(0)
+  const iotaOffer = useIotaOffer(draft.call, draft.iota, lookupTick, !showForm || editing != null)
+
   // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
   // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
   const onQrzLookup = async () => {
@@ -517,6 +529,7 @@ export function Logbook({
     const r = await withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed'))
     setQrzBusy(false)
     if (r) {
+      setLookupTick((n) => n + 1)
       if (r.grid && !draft.grid.trim()) setField('grid', r.grid)
       const preferredName = r.nickname || r.name
       if (preferredName && !draft.name.trim()) setField('name', preferredName)
@@ -1897,9 +1910,10 @@ export function Logbook({
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
       return
     }
-    const snap = await withErrorToast(() => logQso(record), t('logbook.form.logFailed'))
+    const snap = await withErrorToast(() => logQso(record, undefined, iotaOffer.taken), t('logbook.form.logFailed'))
     if (snap) {
       load()
+      iotaOffer.reset()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', iota: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
@@ -1957,9 +1971,108 @@ export function Logbook({
     if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || c.id === 'actions') return
     e.preventDefault()
     e.stopPropagation()
+    if (e.shiftKey) return moveByKey(c, e.key === 'ArrowLeft' ? -1 : 1, e.currentTarget.parentElement)
     const step = e.key === 'ArrowLeft' ? -RESIZE_STEP_PX : RESIZE_STEP_PX
     changeColumns(withColumnWidth(colChoice, c.id, widthOf(c, e.currentTarget) + step, windowPx))
   }
+
+  // MOVING A COLUMN. A header pressed and dragged sideways past MOVE_SLOP_PX is a move: on release
+  // the column goes to the near side of the header under the pointer, and the order is saved with
+  // the rest of the choice, once. A press that never travels is the click it always was, and sorts;
+  // the click that ends a drag is swallowed, so a move never sorts. The action cluster stays last.
+  // Alt+Shift+←/→ on a focused header does the same a place at a time, and says where it went.
+  const moveStart = useRef<{ id: string; x: number; dragging: boolean } | null>(null)
+  const swallowClick = useRef(false)
+  const [moving, setMoving] = useState<{ id: string; over: string; side: 'before' | 'after' } | null>(null)
+  const saidMoved = (next: LogColumnsSaved, id: string) => {
+    const shown = renderedColumns(next, narrowWindow)
+    const c = shown.find((x) => x.id === id)
+    if (c) announce(t('logbook.columns.moved', { column: columnLabel(c), place: shown.indexOf(c) + 1, count: shown.length }))
+  }
+  // The header a keyboard move was made on keeps the focus through the re-render that moves it (a
+  // node React re-inserts loses focus), so the next Alt+Shift+arrow carries on from it.
+  const refocusHeader = useRef<{ row: Element; id: string } | null>(null)
+  useLayoutEffect(() => {
+    const r = refocusHeader.current
+    if (!r) return
+    refocusHeader.current = null
+    const el = r.row.querySelector<HTMLElement>(`:scope > [data-col="${r.id}"]`)
+    if (!el) return
+    if (document.activeElement !== el) el.focus({ preventScroll: true })
+    // A move can carry the header past the edge of a table wider than its panel: bring it back
+    // into view inside the table, moving nothing when it is already there. (jsdom has none.)
+    el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [cols])
+  const moveByKey = (c: LogColumn, dir: -1 | 1, row: Element | null) => {
+    const next = withColumnStep(colChoice, cols, c.id, dir)
+    if (next === colChoice) {
+      const column = columnLabel(c)
+      announce(dir < 0 ? t('logbook.columns.atFirst', { column }) : t('logbook.columns.atLast', { column }))
+      return
+    }
+    if (row) refocusHeader.current = { row, id: c.id }
+    changeColumns(next)
+    saidMoved(next, c.id)
+  }
+  /** The header under `x` and which half of it, among the header row's cells. */
+  const dropAt = (row: Element | null, x: number): { over: string; side: 'before' | 'after' } | null => {
+    const cells = row ? [...row.querySelectorAll<HTMLElement>(':scope > [data-col]')] : []
+    if (!cells.length) return null
+    const boxes = cells.map((el) => ({ id: el.dataset.col!, r: el.getBoundingClientRect() }))
+    const hit =
+      boxes.find((b) => x >= b.r.left && x < b.r.right) ?? (x < boxes[0].r.left ? boxes[0] : boxes[boxes.length - 1])
+    return { over: hit.id, side: x < hit.r.left + hit.r.width / 2 ? 'before' : 'after' }
+  }
+  const moveHandlers = (c: LogColumn) => ({
+    'data-col': c.id,
+    ...(c.id === 'actions'
+      ? {}
+      : {
+          onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+            swallowClick.current = false
+            if (e.button !== 0) return
+            moveStart.current = { id: c.id, x: e.clientX, dragging: false }
+            // Held from the press, so a quick flick that leaves the header in one move is still its drag.
+            e.currentTarget.setPointerCapture?.(e.pointerId)
+          },
+          onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+            const m = moveStart.current
+            if (!m || m.id !== c.id) return
+            if (!m.dragging) {
+              if (Math.abs(e.clientX - m.x) <= MOVE_SLOP_PX) return
+              m.dragging = true
+            }
+            const at = dropAt(e.currentTarget.parentElement, e.clientX)
+            setMoving(at && { id: c.id, ...at })
+          },
+          onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
+            const m = moveStart.current
+            moveStart.current = null
+            setMoving(null)
+            if (!m || m.id !== c.id || !m.dragging) return
+            swallowClick.current = true
+            const at = dropAt(e.currentTarget.parentElement, e.clientX)
+            if (!at || at.over === c.id) return
+            const next = withColumnMoved(colChoice, c.id, at.over, at.side)
+            if (next === colChoice) return
+            changeColumns(next)
+            saidMoved(next, c.id)
+          },
+          onPointerCancel: () => {
+            moveStart.current = null
+            setMoving(null)
+          },
+        }),
+  })
+  /** The header's own class for a move in progress: the one carried, and the drop mark. */
+  const moveClass = (c: LogColumn) =>
+    !moving
+      ? ''
+      : c.id === moving.id
+        ? ' moving'
+        : c.id === moving.over
+          ? ` drop-${moving.side}`
+          : ''
   const columnLabel = (c: LogColumn) => (c.id === 'qsl' ? QSL_HEADER : columnName(c))
   // The edit form's read-only line: the added columns the form has no box for, where the contact
   // holds a value.
@@ -2004,11 +2117,20 @@ export function Logbook({
       <button
         key={c.id}
         type="button"
-        className={`log-cell log-th${at ? ' sorted' : ''}`}
+        className={`log-cell log-th${at ? ' sorted' : ''}${moveClass(c)}`}
         role="columnheader"
         aria-sort={at?.place === 1 ? (at.asc ? 'ascending' : 'descending') : 'none'}
         title={t('logbook.sort.shiftHint')}
-        onClick={(e) => setSort((cur) => clickSort(cur, k, e.shiftKey, defaultAsc))}
+        {...moveHandlers(c)}
+        onClick={(e) => {
+          // Only a pointer's click (detail ≥ 1) ends a drag. Enter or Space on the header clicks with
+          // detail 0, and sorts even when a drag ended outside the header and left the flag set.
+          if (swallowClick.current && e.detail !== 0) {
+            swallowClick.current = false
+            return
+          }
+          setSort((cur) => clickSort(cur, k, e.shiftKey, defaultAsc))
+        }}
         onKeyDown={(e) => resizeByKey(e, c)}
       >
         {columnLabel(c)}
@@ -2589,6 +2711,7 @@ export function Logbook({
                 title={t('logbook.field.iota.title')}
               />
               <IotaReferenceNote reference={draft.iota} />
+              <IotaOfferChip state={iotaOffer} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
@@ -2732,7 +2855,8 @@ export function Logbook({
         {/* The grid's keys, for a screen reader: four whole sentences, never one glued. */}
         <p id={keysId} className="sr-only">
           <span>{t('logbook.keys.move')}</span> <span>{t('logbook.keys.edit')}</span>{' '}
-          <span>{t('logbook.keys.delete')}</span> <span>{t('logbook.keys.close')}</span>
+          <span>{t('logbook.keys.delete')}</span> <span>{t('logbook.keys.close')}</span>{' '}
+          <span>{t('logbook.columns.moveHint')}</span>
         </p>
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
@@ -2816,15 +2940,22 @@ export function Logbook({
             c.sort ? (
               th(c, c.sort)
             ) : c.id === 'actions' ? (
-              <span key={c.id} className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
+              <span
+                key={c.id}
+                className={`log-cell${moveClass(c)}`}
+                role="columnheader"
+                aria-label={t('logbook.column.actions')}
+                {...moveHandlers(c)}
+              ></span>
             ) : (
               <span
                 key={c.id}
-                className="log-cell"
+                className={`log-cell${moveClass(c)}`}
                 role="columnheader"
                 // An added column's header takes the keyboard's resize (Alt+←/→); a default one
                 // keeps the tab order it always had.
                 tabIndex={c.base ? undefined : 0}
+                {...moveHandlers(c)}
                 onKeyDown={(e) => resizeByKey(e, c)}
               >
                 {columnLabel(c)}

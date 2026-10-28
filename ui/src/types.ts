@@ -4866,6 +4866,23 @@ export interface Settings {
   /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
    *  directed, inbox, callNew, callOld. */
   js8Sounds: string[]
+  /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (off by
+   *  default): the cockpit starts each run with its three lists empty. Display only. */
+  js8ResetActivity: boolean
+  /** JS8Call's colours and fonts for the RX pane, the two lists and the compose box (empty by
+   *  default: every pane follows the theme). Colours by theme, then by element, each `#rrggbb`;
+   *  fonts by pane. Read through features/js8PaneStyle, which checks every entry. */
+  js8PaneStyle: {
+    light: Record<string, string>
+    dark: Record<string, string>
+    fonts: Record<string, { family: string; sizePt: number }>
+  }
+  /** The WAV file each of those plays, by event (JS8Call's notification paths). None, the default,
+   *  plays the built-in tone. Paths on this computer: the Remote page never has them. */
+  js8SoundFiles?: Record<string, string>
+  /** The output the JS8 sounds play on, by device name; empty or absent is the system default. A
+   *  device the station transmits from is refused at every play (VOX safety). */
+  js8SoundDevice?: string
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean
@@ -4962,6 +4979,10 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** This radio's waterfall source where Nexus streams an Icom's own scope: 'auto' (the default,
+   * the radio's scope) or 'audio' (the sound card's audio waterfall; the scope stream stops and
+   * CI-V keeps serving CAT). Per radio (flat mirror of `RadioProfile.nativeScope`); absent = 'auto'. */
+  nativeScope?: string
   /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
    * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
    * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
@@ -5864,7 +5885,7 @@ export interface RadioProfile {
   lastDialMhz: number
   lastBand: string
   lastSideband: string
-  /** Native panadapter: "auto" | "none" | "flex" | "civ". */
+  /** Waterfall source where Nexus streams an Icom scope: "auto" (the radio's scope, default) or "audio". */
   nativeScope: string
   /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
   flexRadioIp?: string

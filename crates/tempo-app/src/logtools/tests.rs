@@ -2306,7 +2306,9 @@ fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
         "IOTA" => r.ota.iota.clone(),
         _ => extra(r, t),
     };
-    assert_eq!(recent.ota.iota.as_deref(), Some("NA-001"));
+    // Never the IOTA reference, on any contact: a callbook's is offered at log time, not filled.
+    assert_eq!(recent.ota.iota, None);
+    assert_eq!(old.ota.iota, None);
     for tag in LOCATION_FIELDS {
         assert_eq!(
             location(old, tag),

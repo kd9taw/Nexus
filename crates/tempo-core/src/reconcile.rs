@@ -542,7 +542,7 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
     let take = |rec: &QsoRecord, tag: &str, held: Option<&str>| {
         held.is_none_or(|v| v.trim().is_empty())
             || is_callbook_filled(rec, tag)
-            || crate::logbook::offer::is_spot_filled(rec, tag)
+            || crate::logbook::offer::is_offer_held(rec, tag)
     };
     let given = |v: &Option<String>| {
         v.as_deref()
@@ -570,7 +570,7 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
         if take(rec, "IOTA", rec.ota.iota.as_deref()) {
             rec.ota.iota = Some(iota);
             unmark_callbook_filled(rec, "IOTA");
-            crate::logbook::offer::unmark_spot_filled(rec, "IOTA");
+            crate::logbook::offer::unmark_offer_held(rec, "IOTA");
         }
     }
     for tag in ["CNTY", "CQZ", "ITUZ", "PFX"] {

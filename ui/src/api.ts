@@ -457,6 +457,19 @@ export async function getIotaGroups(): Promise<IotaGroup[]> {
   return invoke<IotaGroup[]>('get_iota_groups')
 }
 
+/** An IOTA reference the station OFFERS a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
+ *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
+export interface IotaOfferData {
+  reference: string
+  source: 'spot' | 'callbook'
+}
+
+/** What IOTA reference the station offers the contact a form holds for `call`; null for none, and
+ *  none while the form holds a reference of its own (`held`). Asking writes nothing. */
+export async function getIotaOffer(call: string, held?: string | null): Promise<IotaOfferData | null> {
+  return invoke<IotaOfferData | null>('get_iota_offer', { call, held: held ?? null })
+}
+
 export interface FccStatesStatus {
   count: number
   fetchedAt: number
@@ -1356,9 +1369,12 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
  * `expectedKey` is the identity of the hold the popup was SHOWING, and it goes on every
  * transport, not only a Remote one (operator ruling 2026-09-19: completed contacts queue). The
  * engine refuses an answer whose key is not the head's, so an edited call can never be filed
- * onto a contact that was promoted while the operator was typing. */
-export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey })
+ * onto a contact that was promoted while the operator was typing.
+ *
+ * `iotaOffer` is the IOTA offer the operator took in the popup: the station writes it into an
+ * empty IOTA field, held back from uploads until the operator touches it. */
+export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** Discard a QSO held by the prompt-to-log popup without logging it. Names the hold it
@@ -1477,9 +1493,11 @@ export async function logCurrentQso(): Promise<{ logged: boolean; call?: string 
  *  callbook's, and the operator's outrank both. */
 export type StateSource = 'operator' | 'callbook' | 'park'
 
-/** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
-export async function logQso(record: LoggedQso, stateSource?: StateSource): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_qso', { record, stateSource })
+/** Append a contact to the ADIF logbook. Returns the fresh snapshot. `iotaOffer` is the IOTA offer
+ *  the operator took on the form ([`getIotaOffer`]): written into an empty IOTA field, held back
+ *  from uploads until the operator touches it. */
+export async function logQso(record: LoggedQso, stateSource?: StateSource, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('log_qso', { record, stateSource, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** One contact "Check park states" lists: a hunted park or summit in ONE state whose contact
@@ -3564,6 +3582,39 @@ export async function routePreview(
   return invoke<{ radio: number; name: string }>('route_preview', { band, mode })
 }
 
+/** The radio setup's unsaved routing: every radio's band list (empty = every band) and on/off, the
+ *  ordered rules and the default radio. Rust `RoutingDraft`. */
+export interface RoutingDraft {
+  radios: { id: number; bands: string[]; enabled: boolean }[]
+  rules: RoutingRule[]
+  defaultRadio: number | null
+}
+
+/** [`routePreview`] for the radio setup's UNSAVED routing: the backend lays the draft over a copy of
+ *  the settings and asks the same routing function the engine uses. Stores nothing, moves no rig. */
+export async function routePreviewDraft(
+  draft: RoutingDraft,
+  band: string,
+  mode: RouteMode,
+): Promise<{ radio: number; name: string }> {
+  return invoke<{ radio: number; name: string }>('route_preview_draft', { draft, band, mode })
+}
+
+/** What the read-only Test CAT of a radio not in use found (Rust `RadioCatProbe`). */
+export interface RadioCatProbe {
+  id: number
+  state: 'answered' | 'notAnswering' | 'noFreshReport' | 'inUse' | 'disabled' | 'noCat' | 'notMonitored' | 'unknown'
+  ok: boolean | null
+  dialMhz: number | null
+}
+
+/** Test CAT for a radio that is NOT the one in use: the radio monitor's next reading of it. Selects,
+ *  switches and keys nothing and sends the radio nothing. The radio in use answers `inUse`; its probe
+ *  is [`testCat`]. Waits up to ten seconds. */
+export async function testRadioCat(id: number): Promise<RadioCatProbe> {
+  return invoke<RadioCatProbe>('test_radio_cat', { id })
+}
+
 /** The editable CAT/audio/PTT/rotator/native subset of a radio profile — the per-radio Settings
  * page edits ONE radio with this, without making it active. Field names match the flat rig form. */
 export interface RadioProfilePatch {
@@ -4613,6 +4664,30 @@ export async function js8SetRxBlocklist(calls: string[]): Promise<string[]> {
  *  settings form; refused for @APRSIS and @JS8NET. Resolves with the groups as saved. */
 export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
+}
+
+/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file.
+ *  Null when cancelled. It only reads a path back; Save writes it with the rest of the form. */
+export async function pickJs8SoundFile(): Promise<string | null> {
+  return invoke<string | null>('pick_js8_sound_file')
+}
+
+/** Play one JS8 sound on this computer, in Rust (`src-tauri/src/js8_sounds.rs`): `file` (the WAV the
+ *  form holds for it) or its built-in tone, on Settings `js8SoundDevice`, or on `route`'s output from
+ *  Settings' Test. Resolves with why a file fell
+ *  back to the tone, if it did; rejects with why nothing played: 'txDevice' (the output is a device the
+ *  station transmits from, refused for VOX safety), 'txDefault' (a TX audio device is the system
+ *  default, and so is the output), 'txUnsure' (the output cannot be told apart from a TX audio
+ *  device), 'noDevice' or 'failed'. */
+export async function playJs8SoundHere(event: string, file: string | null, route?: Js8SoundRoute): Promise<{ fileRefused: string | null }> {
+  return invoke<{ fileRefused: string | null }>('play_js8_sound', { event, file, device: route?.device ?? null, txDevices: route?.txDevices ?? null })
+}
+
+/** Where Settings' Test plays a JS8 sound before Save: the form's output ('' = the system default),
+ *  refused against the form's TX audio devices as well as the saved ones. */
+export interface Js8SoundRoute {
+  device: string
+  txDevices: string[]
 }
 
 /** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's

@@ -32,7 +32,7 @@ const NOT_ON_THE_FORM = [
 
 // The station-only settings whose control is drawn at the station alone: from afar the row says
 // "Set at the station" and there is no control at all, not even a read-only one.
-const DRAWN_AT_THE_STATION_ONLY = ['tciServerTx']
+const DRAWN_AT_THE_STATION_ONLY = ['tciServerTx', 'js8SoundFiles']
 
 const SOURCES = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
   query: '?raw',

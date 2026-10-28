@@ -81,6 +81,9 @@ mod iota_list;
 /// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
 /// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
 mod js8_api;
+/// Settings ▸ Digital ▸ JS8 ▸ Sounds: the OS picker for a sound's WAV file, and the sound played here
+/// in Rust on the operator's output, never on a TX audio device. Desktop only.
+mod js8_sounds;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;
@@ -1198,6 +1201,7 @@ fn start_cluster_feed(
                     let mut s = sp.clone();
                     s.rbn = true;
                     pounce_offer(&s);
+                    note_spot_iota(&s);
                     // RANKED, never plain `push`: the buffer's corroborator cap has to
                     // choose which voices a re-spotted row keeps, and the Needed board
                     // admits the row on whether a NEAR voice is among them.
@@ -1825,6 +1829,7 @@ fn start_human_cluster_feed(
                 }
                 if let Ok(mut b) = buf.lock() {
                     pounce_offer(sp);
+                    note_spot_iota(sp);
                     // Ranked — see the RBN callback above.
                     b.push_ranked(sp.clone(), spotter_evidence_rank);
                 }
@@ -4068,6 +4073,38 @@ mod logbook_startup_tests {
         for d in [&dir, &beside, &moved] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// PSK Reporter names Nexus with the version tauri.conf.json gives the app, the one the app
+    /// shows and the installer is named for. The launch hands the radio loop the package's
+    /// version (source-scanned: what is under test is which value `finish_launch` passes, and no
+    /// type sees that), and the package's version is tauri.conf.json's.
+    #[test]
+    fn psk_reporter_is_handed_tauri_confs_version() {
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let stamp = "rest.radio_cfg.app_version = handle.package_info().version.to_string();";
+        let (at_stamp, at_start) = (
+            finish
+                .find(stamp)
+                .expect("the launch hands the radio loop the app version"),
+            finish
+                .find("start_on_the_logbook(&d, logbook_store, rest);")
+                .expect("the launch starts the radio loop"),
+        );
+        assert!(
+            at_stamp < at_start,
+            "the version is set before the radio loop starts"
+        );
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let conf_version = conf["version"]
+            .as_str()
+            .expect("a version in tauri.conf.json");
+        assert_eq!(
+            crate::context().package_info().version.to_string(),
+            conf_version
+        );
     }
 
     /// The body of the top-level function `sig` in this file.
@@ -14985,6 +15022,7 @@ fn restart_live_feeds(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
         if let Ok(mut b) = live_paths.lock() {
             *b = propagation::LiveSpots::default();
         }
@@ -18111,6 +18149,7 @@ fn set_unassisted_mode(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
     }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist unassisted-mode toggle: {e}")
@@ -20359,6 +20398,52 @@ fn route_preview(
         .map(|p| p.name.clone())
         .unwrap_or_else(|| format!("Radio {}", id + 1));
     Ok(RoutePreview { radio: id, name })
+}
+
+/// [`route_preview`] for the radio setup's UNSAVED routing (`draft`): the same routing function,
+/// asked of a copy of the settings with the draft laid over it. Read-only: it stores nothing and
+/// moves no rig.
+#[tauri::command(async)]
+fn route_preview_draft(
+    state: State<'_, SharedEngine>,
+    draft: tempo_app::settings::RoutingDraft,
+    band: String,
+    mode: tempo_app::settings::RouteMode,
+) -> Result<RoutePreview, String> {
+    let eng = engine_lock(&state);
+    let id = eng.route_preview_draft(&draft, &band, mode);
+    let name = eng
+        .settings()
+        .radios
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| format!("Radio {}", id + 1));
+    Ok(RoutePreview { radio: id, name })
+}
+
+/// Test CAT for a radio that is NOT the one in use (the radio setup): a read-only look at the
+/// radio monitor's next reading of it. Selects, switches and keys nothing, and sends the radio
+/// nothing (`tempo_app::engine::radio_probe`). The radio in use answers `inUse`: `test_cat` is its
+/// probe.
+#[tauri::command]
+async fn test_radio_cat(
+    state: State<'_, SharedEngine>,
+    id: u32,
+) -> Result<tempo_app::engine::radio_probe::RadioCatProbe, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ten seconds: a monitor that misses reads reports "not answering" after its third miss,
+        // and a slow daemon-backed read is allowed 2.5 s.
+        tempo_app::engine::radio_probe::probe_radio_read_only(
+            &engine,
+            id,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(150),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The answer to "where would 2 m FM go?" — the resolved radio, named so the operator recognizes it.
@@ -22945,11 +23030,13 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
+/// `iota_offer` is the IOTA offer the operator took in the popup, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
@@ -22959,7 +23046,7 @@ async fn confirm_pending_log(
             // is confirming cannot be allowed to log one (review R2).
             let key = expected_key.unwrap_or_default();
             let prop_mode_was = eng.settings().log_prop_mode.clone();
-            if !eng.confirm_pending_log(&key, record.into()) {
+            if !eng.confirm_pending_log_with_offer(&key, record.into(), iota_offer.as_ref()) {
                 return Err(PENDING_LOG_MOVED_ON.into());
             }
             // The popup's propagation mode is remembered for the next contact
@@ -22995,6 +23082,7 @@ fn discard_pending_log(
 /// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
 /// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
 /// carries is placed here, before the Engine lock ([`ota_park_places`]).
+/// `iota_offer` is the IOTA offer the operator took on the form, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn log_qso(
     state: State<'_, SharedEngine>,
@@ -23002,6 +23090,7 @@ async fn log_qso(
     parks: State<'_, SharedParks>,
     record: LoggedQso,
     state_source: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     let call = record.call.clone();
@@ -23018,7 +23107,13 @@ async fn log_qso(
     let (snap, wav) = durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            eng.log_form_qso(record.into(), source, park_places);
+            let mut rec: tempo_core::logbook::QsoRecord = record.into();
+            // The IOTA offer the operator took on the form ([`get_iota_offer`]): written into an
+            // empty field only, and held back from uploads until they touch it.
+            if let Some(offer) = &iota_offer {
+                tempo_core::logbook::offer::accept_iota_offer(&mut rec, offer);
+            }
+            eng.log_form_qso(rec, source, park_places);
             // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
             // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
             let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
@@ -24247,10 +24342,7 @@ fn read_spots_with(
     } else {
         spots.lock().map_err(|_| ())
     } {
-        Ok(buf) => buf.recent_within(
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(1200),
-        ),
+        Ok(buf) => buf.recent_within(std::time::Instant::now(), SPOTS_WINDOW),
         Err(_) => return Err("applicationBusy".into()),
     };
     // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
@@ -25852,6 +25944,110 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
         .rev()
         .find(|(c, _)| *c == call)
         .map(|(_, i)| i.clone())
+}
+
+/// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
+const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// Every IOTA group a cluster spot's comment named, by the call spotted and when the spot came in:
+/// the log-time offer's spot side. Kept beside the spot buffer because that buffer merges every spot
+/// of one call within a couple of kHz into one row and keeps only the newest comment, so two spots
+/// of one station on one band naming different groups would read as one. Only spots that name a
+/// group are kept, for [`SPOTS_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
+#[derive(Default)]
+struct SpotIotaLog {
+    named: std::collections::VecDeque<(std::time::Instant, String, String)>,
+}
+
+/// A memory ceiling only: far above the IOTA-naming spots one window holds.
+const SPOT_IOTA_CAP: usize = 4096;
+
+impl SpotIotaLog {
+    /// Keep the group `spot`'s comment names, if it names one, as heard at `at`.
+    fn note(&mut self, at: std::time::Instant, spot: &tempo_net::cluster::ClusterSpot) {
+        while self
+            .named
+            .front()
+            .is_some_and(|(t, _, _)| at.saturating_duration_since(*t) > SPOTS_WINDOW)
+        {
+            self.named.pop_front();
+        }
+        let Some(r) = propagation::iota::in_comment(&spot.comment) else {
+            return;
+        };
+        if self.named.len() >= SPOT_IOTA_CAP {
+            self.named.pop_front();
+        }
+        self.named
+            .push_back((at, spot.dx_call.trim().to_ascii_uppercase(), r));
+    }
+
+    /// The group every spot of exactly `call` within [`SPOTS_WINDOW`] of `now` names, or none
+    /// when none names one or any two name different groups (an old trip's re-spot, or a typo,
+    /// is not this activation; the comment parser refuses a comment naming two groups the same
+    /// way).
+    fn group_for(&self, now: std::time::Instant, call: &str) -> Option<String> {
+        let call = call.trim();
+        let mut named: Option<&String> = None;
+        for (_, _, r) in self.named.iter().filter(|(t, c, _)| {
+            now.saturating_duration_since(*t) <= SPOTS_WINDOW && c.eq_ignore_ascii_case(call)
+        }) {
+            match named {
+                Some(n) if n != r => return None,
+                Some(_) => {}
+                None => named = Some(r),
+            }
+        }
+        named.cloned()
+    }
+}
+
+static SPOT_IOTA: std::sync::LazyLock<std::sync::Mutex<SpotIotaLog>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Keep the group a cluster spot just pushed into the spot buffer names ([`SpotIotaLog`]).
+fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        log.note(std::time::Instant::now(), spot);
+    }
+}
+
+/// Forget every spot's group, with the spot buffer it sits beside.
+fn clear_spot_iota() {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        *log = SpotIotaLog::default();
+    }
+}
+
+/// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
+/// for `call` (`tempo_core::logbook::offer::iota_offer`; operator decision, 2026-10-27): the group
+/// the spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
+/// when the form already holds a reference (`held`), and with the island list held, nothing it
+/// lacks. An offer writes nothing: the operator takes it, and `log_qso` / `confirm_pending_log`
+/// then write it, held back from uploads until the operator touches it.
+#[tauri::command(async)]
+fn get_iota_offer(
+    state: State<'_, SharedEngine>,
+    call: String,
+    held: Option<String>,
+) -> Option<tempo_core::logbook::offer::IotaOffer> {
+    let spot_iota = if unassisted() {
+        None
+    } else {
+        SPOT_IOTA
+            .lock()
+            .ok()
+            .and_then(|log| log.group_for(std::time::Instant::now(), &call))
+    };
+    let answer = engine_lock(&state).callbook_answer(&call).cloned();
+    tempo_core::logbook::offer::iota_offer(
+        &call,
+        held.as_deref(),
+        spot_iota.as_deref(),
+        answer.as_ref(),
+        Some(&iota_list::known),
+    )
 }
 
 /// The US state each heard station is scored in for Worked All States. An activator live at a
@@ -31062,6 +31258,36 @@ mod upload_record_tests {
              <GRIDSQUARE:6>FN31pr<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE<EOR>",
         );
         assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
+    }
+
+    /// Nor an IOTA reference taken from a log-time offer the operator has not confirmed: DXKeeper
+    /// can upload it to LoTW and the other services. One the operator typed, and an older
+    /// callbook-filled one, are sent as before.
+    #[test]
+    fn dxkeeper_never_gets_a_held_iota() {
+        let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        let held = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<NOTES:4>mine<APP_NEXUS_OFFER_HELD:4>IOTA<EOR>",
+        );
+        assert!(tempo_core::logbook::offer::withhold_iota(&held), "premise");
+        let sent = super::dxkeeper_adif(&held);
+        assert!(!sent.contains("<IOTA:"), "{sent}");
+        assert!(!sent.contains("APP_NEXUS_OFFER_HELD"), "{sent}");
+        assert!(
+            sent.contains("<NOTES:4>mine"),
+            "still their own record: {sent}"
+        );
+        let typed = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&typed).contains("<IOTA:6>EU-028"));
+        let older = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-025<APP_NEXUS_CALLBOOK_FILLED:4>IOTA<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&older).contains("<IOTA:6>EU-025"));
     }
 }
 
@@ -38659,6 +38885,8 @@ pub fn run() {
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
         pskreporter: settings.pskreporter,
+        // The package's version, known once the app is built: `finish_launch` sets it.
+        app_version: String::new(),
         audio_in: settings.audio_in.clone(),
         audio_out: settings.audio_out.clone(),
         tx_level: settings.tx_level,
@@ -40383,6 +40611,15 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         // The last note. The relay delivers it, then ends when this sender drops.
         let _ = notes.send(SplashNote::Opening);
     }
+    // The app's version, for the radio loop to name Nexus with on PSK Reporter. The package's,
+    // which is tauri.conf.json's (stamped with a tester build's suffix) and what `app_version`
+    // shows; not this crate's CARGO_PKG_VERSION, which a stamped suffix never reaches.
+    #[cfg(feature = "radio")]
+    let rest = {
+        let mut rest = rest;
+        rest.radio_cfg.app_version = handle.package_info().version.to_string();
+        rest
+    };
     let started = start_on_the_logbook(&d, logbook_store, rest);
     if let Err(why) = started {
         stop_for_no_log(&why);
@@ -41026,6 +41263,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_experience_level,
         mark_setup_wizard_seen,
         route_preview,
+        route_preview_draft,
+        test_radio_cat,
         update_radio_profile,
         set_tune,
         atu_tune,
@@ -41115,6 +41354,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         street_map::street_map_updates,
         street_map::street_map_info,
         street_map::street_map_install_file,
+        js8_sounds::pick_js8_sound_file,
+        js8_sounds::play_js8_sound,
         set_area,
         qso_resend,
         clear_dx_call,
@@ -41280,6 +41521,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         iota_list::get_iota_list_status,
         iota_list::set_iota_list_consent,
         iota_list::get_iota_groups,
+        get_iota_offer,
         fetch_lotw_users,
         get_fcc_states_status,
         fetch_fcc_states,
@@ -46968,8 +47210,8 @@ mod tests {
         tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
         tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
         AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
-        SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
-        TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK,
+        SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -47628,6 +47870,113 @@ mod tests {
             .is_empty(),
             "a JA station only EU and AS heard must not reach the board"
         );
+    }
+
+    /// The log-time offer's spot side: the group EVERY spot of exactly this call within the
+    /// Spots board's window names, none when any two name different groups, and never another
+    /// call's. Two spots of one station on one band merge into one row of the spot buffer, which
+    /// keeps only the newest comment; the offer still sees both.
+    #[test]
+    fn the_offer_takes_the_one_group_the_calls_spots_name() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let spots = [
+            mk("IA5X", 14025.0, "IOTA EU-028 up 1"),
+            mk("IA5X", 7025.0, "loud"),
+            mk("IA5X/P", 21025.0, "IOTA EU-031"),
+            mk("IT9ABC", 14030.0, "IOTA EU-025"),
+            mk("IT9ABC", 21030.0, "op from EU-017"),
+            // Same band, half a kHz apart: one row in the buffer, two groups named.
+            mk("IA5Y", 14025.0, "IOTA EU-028"),
+            mk("IA5Y", 14025.5, "IOTA EU-031"),
+        ];
+        let mut buf = SpotBuffer::new(100);
+        let mut log = SpotIotaLog::default();
+        for sp in &spots {
+            buf.push_at(t0, sp.clone());
+            log.note(t0, sp);
+        }
+        let rows = buf.recent_within(t0, SPOTS_WINDOW);
+        assert_eq!(
+            rows.iter().filter(|r| r.dx_call == "IA5Y").count(),
+            1,
+            "premise: the buffer merged IA5Y's two spots into one row"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.dx_call == "IA5Y" && r.comment == "IOTA EU-031"),
+            "premise: that row keeps only the newest comment, which alone would offer EU-031"
+        );
+        assert_eq!(log.group_for(t0, "ia5x").as_deref(), Some("EU-028"));
+        assert_eq!(log.group_for(t0, "IA5X/P").as_deref(), Some("EU-031"));
+        assert_eq!(
+            log.group_for(t0, "IA5Y"),
+            None,
+            "two groups on one band name neither"
+        );
+        assert_eq!(log.group_for(t0, "IT9ABC"), None, "two groups name neither");
+        assert_eq!(log.group_for(t0, "K1ABC"), None);
+        // Past the Spots board's window a spot no longer counts, for or against.
+        let later = t0 + SPOTS_WINDOW + std::time::Duration::from_secs(1);
+        assert_eq!(log.group_for(later, "IA5X"), None);
+        log.note(later, &mk("IA5Y", 14025.0, "IOTA EU-031"));
+        assert_eq!(log.group_for(later, "IA5Y").as_deref(), Some("EU-031"));
+        assert_eq!(log.named.len(), 1, "older spots are let go");
+    }
+
+    /// The spot side of the offer is fed, emptied and read where no test reaches: the two
+    /// cluster feeds (network threads), the callsign restart and the unassisted toggle (the
+    /// spot buffer's two resets), and the Tauri command. So the source is read: each feed notes
+    /// every spot it keeps, after the unassisted gate and beside the buffer push; each reset of
+    /// the spot buffer empties the log with it; and the offer reads the log.
+    #[test]
+    fn the_spot_iota_log_is_fed_emptied_and_read_where_the_spots_are() {
+        let src = include_str!("lib.rs");
+        let body = |name: &str| -> &str {
+            let start = src
+                .find(&format!("\nfn {name}("))
+                .unwrap_or_else(|| panic!("no fn {name}"));
+            let len = src[start..].find("\n}\n").expect("its end");
+            &src[start..start + len]
+        };
+        for feed in ["start_cluster_feed", "start_human_cluster_feed"] {
+            let b = body(feed);
+            let gate = b
+                .find("if unassisted() {")
+                .unwrap_or_else(|| panic!("{feed} gate"));
+            let noted = b
+                .find("note_spot_iota(")
+                .unwrap_or_else(|| panic!("{feed} must note each spot's group"));
+            let pushed = b.find(".push_ranked(").expect("the buffer push");
+            assert!(gate < noted && noted < pushed, "{feed}: gate, note, push");
+            assert_eq!(b.matches("note_spot_iota(").count(), 1, "{feed}");
+        }
+        for reset in ["restart_live_feeds", "set_unassisted_mode"] {
+            let b = body(reset);
+            let cleared = b.find("SpotBuffer::default();").expect("the buffer reset");
+            let after = &b[cleared..];
+            let iota = after
+                .find("clear_spot_iota();")
+                .unwrap_or_else(|| panic!("{reset} must empty the spot IOTA log"));
+            assert!(
+                !after[..iota].contains("\n    }\n"),
+                "{reset}: emptied in the same block as the buffer"
+            );
+        }
+        let offer = body("get_iota_offer");
+        assert!(offer.contains("SPOT_IOTA"), "the offer reads the spot log");
+        assert!(offer.contains(".group_for(std::time::Instant::now(), &call)"));
+        assert!(offer.contains("spot_iota.as_deref()"));
     }
 
     /// The evidence ranking is the locality question the board asks OF THAT BAND, and

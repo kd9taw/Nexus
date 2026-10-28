@@ -63,6 +63,7 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
+import { IotaOfferChip, useIotaOffer } from './Iota'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -1855,6 +1856,13 @@ export function LogEntry({
   const newModeSlot =
     slots.workedEver && !newBandSlot && !slots.modesWorked.includes(modeKey(mode))
 
+  // The IOTA reference the station offers this call (a spot comment's, or the callbook's): shown as
+  // a chip, logged only when the operator takes it (operator decision, 2026-10-27). Asked again when
+  // a lookup here answers. Not in a contest strip, nor from a Remote browser, whose log goes by
+  // another road.
+  const [lookupTick, setLookupTick] = useState(0)
+  const iotaOffer = useIotaOffer(logCall, null, lookupTick, remoteMode || fdActive)
+
   // QRZ callbook autofill — fills ONLY blank fields, never clobbers operator input. The
   // explicit button toasts; the on-blur auto-lookup is silent on failure so an operator
   // without QRZ configured isn't nagged on every Tab.
@@ -1899,6 +1907,7 @@ export function LogEntry({
     setLogImage(r.image ?? null) // display-only; no operator value to preserve
     setCallbookState(r.state ?? '') // the recall card's, beside the callbook's town
     enrichedForRef.current = call.toUpperCase()
+    setLookupTick((n) => n + 1)
     // Feed the worked station's name/state to the engine for the {HISNAME}/{HISSTATE} CW-macro
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
     void setCwPeerInfo(call, preferredName ?? '', r.state ?? '')
@@ -2032,6 +2041,9 @@ export function LogEntry({
     setLogImage(null)
     setPark('')
     setWorkPark(null)
+    // A Use pressed on the IOTA offer was for this contact, logged or let go of (Clear, a band
+    // change setting the line aside): the next one, even the same call, starts with nothing taken.
+    iotaOffer.reset()
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
@@ -2435,7 +2447,7 @@ export function LogEntry({
     // still on screen, and kept again from the next render on.
     committing.current = true
     if (draft) writeLogDraft(draft, null)
-    const r = await withErrorToast(() => logQso(rec, stateSourceRef.current), t('logEntry.logFailed'))
+    const r = await withErrorToast(() => logQso(rec, stateSourceRef.current, iotaOffer.taken), t('logEntry.logFailed'))
     committing.current = false
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
@@ -3509,6 +3521,8 @@ export function LogEntry({
           </button>
         </div>
       )}
+
+      <IotaOfferChip state={iotaOffer} />
 
       <div className="le-row">
         <input

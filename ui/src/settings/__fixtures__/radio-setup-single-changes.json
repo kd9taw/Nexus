@@ -1,0 +1,2877 @@
+[
+ {
+  "name": "a radio turned off, with a fallback behind its rule",
+  "radios": [
+   {
+    "id": 0,
+    "bands": [
+     "2m"
+    ],
+    "enabled": true
+   },
+   {
+    "id": 1,
+    "bands": [
+     "2m"
+    ],
+    "enabled": true
+   },
+   {
+    "id": 2,
+    "bands": [
+     "2m"
+    ],
+    "enabled": false
+   }
+  ],
+  "activeRadio": 0,
+  "defaultRadio": null,
+  "rules": [
+   {
+    "bands": [
+     "2m"
+    ],
+    "mode": "digital",
+    "context": null,
+    "radio": 2
+   },
+   {
+    "bands": [
+     "2m"
+    ],
+    "mode": "digital",
+    "context": null,
+    "radio": 1
+   }
+  ],
+  "cases": [
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": null,
+    "rules": []
+   },
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 0
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "every kind of rule",
+  "radios": [
+   {
+    "id": 0,
+    "bands": [],
+    "enabled": true
+   },
+   {
+    "id": 1,
+    "bands": [
+     "6m",
+     "2m",
+     "70cm"
+    ],
+    "enabled": true
+   },
+   {
+    "id": 2,
+    "bands": [
+     "2m",
+     "70cm"
+    ],
+    "enabled": true
+   },
+   {
+    "id": 3,
+    "bands": [
+     "2m",
+     "70cm"
+    ],
+    "enabled": false
+   }
+  ],
+  "activeRadio": 0,
+  "defaultRadio": 0,
+  "rules": [
+   {
+    "bands": [
+     "2m"
+    ],
+    "mode": "fm",
+    "context": null,
+    "radio": 3
+   },
+   {
+    "bands": [
+     "2m",
+     "70cm"
+    ],
+    "mode": "fm",
+    "context": null,
+    "radio": 2
+   },
+   {
+    "bands": [
+     "70cm",
+     "6m"
+    ],
+    "mode": "digital",
+    "context": null,
+    "radio": 1
+   },
+   {
+    "bands": [
+     "2m"
+    ],
+    "mode": null,
+    "context": null,
+    "radio": 2
+   },
+   {
+    "bands": [],
+    "mode": "cw",
+    "context": null,
+    "radio": 1
+   },
+   {
+    "bands": [],
+    "mode": null,
+    "context": "satellite",
+    "radio": 1
+   }
+  ],
+  "cases": [
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "digital",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "fm",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "ssb",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "cw",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "2m",
+    "mode": "rtty",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "digital",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "digital",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "digital",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "digital",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "fm",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "fm",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "fm",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "fm",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "ssb",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "ssb",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "ssb",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "ssb",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "ssb",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "cw",
+    "radio": null,
+    "rules": [
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "cw",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "cw",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "cw",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "cw",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "rtty",
+    "radio": 0,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 0
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "rtty",
+    "radio": 1,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "rtty",
+    "radio": 2,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   },
+   {
+    "band": "70cm",
+    "mode": "rtty",
+    "radio": 3,
+    "rules": [
+     {
+      "bands": [
+       "70cm"
+      ],
+      "mode": "rtty",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 3
+     },
+     {
+      "bands": [
+       "2m",
+       "70cm"
+      ],
+      "mode": "fm",
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [
+       "70cm",
+       "6m"
+      ],
+      "mode": "digital",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [
+       "2m"
+      ],
+      "mode": null,
+      "context": null,
+      "radio": 2
+     },
+     {
+      "bands": [],
+      "mode": "cw",
+      "context": null,
+      "radio": 1
+     },
+     {
+      "bands": [],
+      "mode": null,
+      "context": "satellite",
+      "radio": 1
+     }
+    ]
+   }
+  ]
+ }
+]
