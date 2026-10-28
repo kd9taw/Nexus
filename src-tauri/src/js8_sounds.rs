@@ -490,9 +490,11 @@ mod tests {
             Err(PlayRefusal::TxDevice),
             "the station's TX device"
         );
-        settings.js8_sound_device = "plughw:CARD=CODEC_1,DEV=0".into();
+        // A card of its own: `CODEC_1` would be a renumbered twin of the station's `CODEC`, the
+        // same device, and refused with no radio at all.
+        settings.js8_sound_device = "plughw:CARD=Device,DEV=0".into();
         settings.radios.push(tempo_app::settings::RadioProfile {
-            audio_out: "plughw:CARD=CODEC_1,DEV=0".into(),
+            audio_out: "plughw:CARD=Device,DEV=0".into(),
             ..Default::default()
         });
         assert_eq!(
@@ -502,7 +504,7 @@ mod tests {
         );
         settings.radios.clear();
         assert_eq!(verdict(&settings), Ok(()), "control: that radio removed");
-        settings.audio_out = "plughw:CARD=CODEC_1,DEV=0".into();
+        settings.audio_out = "plughw:CARD=Device,DEV=0".into();
         assert_eq!(
             verdict(&settings),
             Err(PlayRefusal::TxDevice),
