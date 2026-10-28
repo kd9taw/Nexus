@@ -85,6 +85,8 @@ export interface StreetPointer {
 export interface StreetMapHandle {
   /** Zoom in (positive) or out (negative) by whole steps, animated, about the centre. */
   zoomBy: (steps: number) => void
+  /** Move the centre to (lon, lat), animated, keeping the zoom (the APRS map's Centre and Follow). */
+  centreOn: (lon: number, lat: number) => void
 }
 
 export interface StreetMapProps {
@@ -150,7 +152,14 @@ export default forwardRef<StreetMapHandle, StreetMapProps>(function StreetMap(
   const onPointerRef = useRef(onPointer)
   onPointerRef.current = onPointer
 
-  useImperativeHandle(ref, () => ({ zoomBy: (steps) => mapRef.current?.zoomTo(mapRef.current.getZoom() + steps) }), [])
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomBy: (steps) => mapRef.current?.zoomTo(mapRef.current.getZoom() + steps),
+      centreOn: (lon, lat) => mapRef.current?.easeTo({ center: [lon, lat] }),
+    }),
+    [],
+  )
 
   useEffect(() => {
     const host = hostRef.current

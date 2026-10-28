@@ -33,6 +33,8 @@ import { render, screen, fireEvent, act, cleanup, within } from '@testing-librar
 vi.mock('./MapView', () => ({ MapView: () => <div data-testid="map" /> }))
 
 vi.mock('../api', () => ({
+  // The map's Street choice reads the street map's state (features/streetMaps): not in a shell here.
+  isTauri: () => false,
   aprsArm: vi.fn(async () => []),
   aprsAutoArm: vi.fn(async () => true),
   aprsSendBeacon: vi.fn(async () => {}),

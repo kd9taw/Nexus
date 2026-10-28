@@ -179,6 +179,27 @@ export function makeProjection(
     .scale(radius / Math.PI) // antipode (π rad) → disc rim
 }
 
+/**
+ * The view that puts `focus` in the middle of the map whose projection centre is `centre` — the
+ * APRS map's "centre on me" and "follow this station". The operator's own pan rides on top, so a
+ * drag after centring still moves the picture. On the Globe a rotation the operator has set by
+ * spinning it is theirs and is left alone; otherwise the sphere turns to face the focus. The flat
+ * maps (World, Beam) are centred by a pixel offset, which their translate takes linearly.
+ */
+export function viewCentredOn(
+  kind: Exclude<Projection, 'street'>,
+  centre: LatLon,
+  focus: LatLon,
+  width: number,
+  height: number,
+  view: MapView3,
+): MapView3 {
+  if (kind === 'globe') return view.rotate ? view : { ...view, rotate: [-focus.lon, -focus.lat] }
+  const p = makeProjection(kind, centre, width, height, { ...view, panX: 0, panY: 0 })([focus.lon, focus.lat])
+  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return view
+  return { ...view, panX: view.panX + width / 2 - p[0], panY: view.panY + height / 2 - p[1] }
+}
+
 /** Project a lat/lon to screen `[x, y]`, or null if clipped/invalid. */
 export function project(proj: GeoProjection, ll: LatLon): [number, number] | null {
   const p = proj([ll.lon, ll.lat])

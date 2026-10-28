@@ -3950,6 +3950,16 @@ export interface AprsStation {
   firstHeardUnix: number
   /** Weather readings, when this station sends them. Sticky like the position. */
   wx: AprsWx | null
+  /** Where the station has been, oldest first, ending at its current position — one point per
+   * distinct position, held to the age window. Absent until the station has moved. */
+  track?: AprsTrackPoint[]
+}
+
+/** One place a station reported, and when (the latest packet that put it there). */
+export interface AprsTrackPoint {
+  lat: number
+  lon: number
+  atUnix: number
 }
 
 /** APRS weather readings — the common core of the WX format (APRS 1.0.1 ch. 12). Every field is
