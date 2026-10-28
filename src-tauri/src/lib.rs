@@ -20233,6 +20233,52 @@ fn route_preview(
     Ok(RoutePreview { radio: id, name })
 }
 
+/// [`route_preview`] for the radio setup's UNSAVED routing (`draft`): the same routing function,
+/// asked of a copy of the settings with the draft laid over it. Read-only: it stores nothing and
+/// moves no rig.
+#[tauri::command(async)]
+fn route_preview_draft(
+    state: State<'_, SharedEngine>,
+    draft: tempo_app::settings::RoutingDraft,
+    band: String,
+    mode: tempo_app::settings::RouteMode,
+) -> Result<RoutePreview, String> {
+    let eng = engine_lock(&state);
+    let id = eng.route_preview_draft(&draft, &band, mode);
+    let name = eng
+        .settings()
+        .radios
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| format!("Radio {}", id + 1));
+    Ok(RoutePreview { radio: id, name })
+}
+
+/// Test CAT for a radio that is NOT the one in use (the radio setup): a read-only look at the
+/// radio monitor's next reading of it. Selects, switches and keys nothing, and sends the radio
+/// nothing (`tempo_app::engine::radio_probe`). The radio in use answers `inUse`: `test_cat` is its
+/// probe.
+#[tauri::command]
+async fn test_radio_cat(
+    state: State<'_, SharedEngine>,
+    id: u32,
+) -> Result<tempo_app::engine::radio_probe::RadioCatProbe, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ten seconds: a monitor that misses reads reports "not answering" after its third miss,
+        // and a slow daemon-backed read is allowed 2.5 s.
+        tempo_app::engine::radio_probe::probe_radio_read_only(
+            &engine,
+            id,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(150),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// The answer to "where would 2 m FM go?" — the resolved radio, named so the operator recognizes it.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40666,6 +40712,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_experience_level,
         mark_setup_wizard_seen,
         route_preview,
+        route_preview_draft,
+        test_radio_cat,
         update_radio_profile,
         set_tune,
         atu_tune,

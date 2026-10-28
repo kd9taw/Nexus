@@ -29,7 +29,8 @@ import {
   updateRadioProfile,
   type TciServerFound,
 } from '../api'
-import { baudForRig, radioPatch } from './SettingsPanel'
+import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
+import { RadioSetupWizard } from './RadioSetupWizard'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
@@ -409,6 +410,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     seeded?: boolean
   }>(null)
   const [secondElapsed, setSecondElapsed] = useState(0)
+  const [radioSetup, setRadioSetup] = useState<Settings | null>(null)
   const [swapOffer, setSwapOffer] = useState(false)
   useEffect(() => {
     if (!second?.probing) return
@@ -1389,6 +1391,21 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               )}
               {second && !second.probing && second.portName && (
                 <span className="wizard-field-hint">{t('setup.rig.second.twoWindows')}</span>
+              )}
+              {/* Two radios now: offer the radio setup (which radio for which band and mode). It
+                  opens on the settings as saved; its own Cancel writes nothing. */}
+              {second && !second.probing && second.portName && (
+                <button
+                  type="button"
+                  className="wizard-btn setup-radio-setup-open"
+                  title={t('setup.rig.second.radioSetup.title')}
+                  onClick={() => void getSettings().then(setRadioSetup).catch(() => {})}
+                >
+                  {t('setup.rig.second.radioSetup')}
+                </button>
+              )}
+              {radioSetup && (
+                <RadioSetupWizard settings={radioSetup} bands={FREQ_BANDS} onClose={() => setRadioSetup(null)} />
               )}
             </div>
           )}

@@ -256,6 +256,7 @@ import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget, sectionsForTab, type SettingsTabId } from '../settings/registry'
 import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, screensTurnedOff, startsFolded, targetOpens } from '../settings/experience'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
+import { RadioSetupWizard } from './RadioSetupWizard'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
 import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -784,7 +785,7 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
  * 9 cm is offered for coverage/routing but carries NO US privilege segments (allocation
  * removed) — the picker shows it TX-locked for US classes, which is the honest answer.
  * Modes stay FT8/FT4 — the override table's own scope. */
-const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
+export const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
 const FREQ_MODES = ['FT8', 'FT4']
 
 // The routing mode classes and their labels live with the plain-words routing description.
@@ -2597,6 +2598,12 @@ export function SettingsPanel({
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
   // snapshot. We then re-pull the full settings and merge ONLY the radios[]/active/peg fields back
   // into the form, so the roster reflects the change without discarding unsaved flat-form edits.
+  // The radio setup ("Set up radios…"): opened on the stored settings, read fresh, so it compares
+  // against what is saved and never against this form's unsaved edits.
+  const [radioSetup, setRadioSetup] = useState<Settings | null>(null)
+  const openRadioSetup = () => {
+    void withErrorToast(() => getSettings(), t('radioSetup.load.failed')).then((s) => s && setRadioSetup(s))
+  }
   const reloadRadios = () => {
     void getSettings().then((s) => {
       setForm((prev) =>
@@ -5512,6 +5519,16 @@ export function SettingsPanel({
               <button type="button" className="settings-refresh" onClick={handleAddRadio}>
                 {t('settings.radios.add.action')}
               </button>
+              {(form.radios?.length ?? 1) > 1 && (
+                <button
+                  type="button"
+                  className="settings-refresh radios-setup-open"
+                  title={t('settings.radios.setup.title')}
+                  onClick={openRadioSetup}
+                >
+                  {t('settings.radios.setup.action')}
+                </button>
+              )}
               <span className="settings-hint">
                 {(form.radios?.length ?? 1) > 1
                   ? t('settings.radios.hint.multi', {
@@ -5759,6 +5776,23 @@ export function SettingsPanel({
               </label>
             )}
           </fieldset>
+          {radioSetup && (
+            <RadioSetupWizard
+              settings={radioSetup}
+              bands={FREQ_BANDS}
+              onClose={() => setRadioSetup(null)}
+              onFinished={(plan) => {
+                // The switch choice is form state with its own writer (as handleSetSwitchPolicy keeps
+                // it); the roster and the routing come back through reloadRadios.
+                const policy = plan.policy
+                if (policy) {
+                  setForm((prev) => (prev ? { ...prev, radioSwitchPolicy: policy } : prev))
+                  if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: policy }
+                }
+                reloadRadios()
+              }}
+            />
+          )}
           <fieldset className="settings-section" id="settings-profiles" {...fold('profiles')}>
             <legend>{t('settings.profiles.legend')}</legend>
             <div className="settings-grid">
