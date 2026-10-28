@@ -1,0 +1,4 @@
+[{"refno":"EU-901","name":"Example  Isles group ","dxcc_num":"0","whitelist":"0","comment":""},
+{"refno":"OC-902","name":"Sample Reef -aka Test Atoll-","dxcc_num":"0","whitelist":"1","comment":"Hand-made test data, not IOTA's list"},
+{"refno":"NA-903","name":"Fixture Key","dxcc_num":"0","whitelist":"0","comment":""},
+{"refno":"XX-904","name":"Not a continent","dxcc_num":"0","whitelist":"0","comment":""}]

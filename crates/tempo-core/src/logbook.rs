@@ -528,6 +528,7 @@ pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)])
         }
     }
     callbook::unmark_edited(&before, r);
+    offer::unmark_edited(&before, r);
 }
 
 /// The contest provenance of one general-log row (§3).
@@ -1173,6 +1174,7 @@ pub mod io_fence;
 pub mod logfile;
 pub mod migrate;
 pub mod mirror;
+pub mod offer;
 #[cfg(test)]
 mod one_row_tests;
 mod op;
@@ -3130,8 +3132,10 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if state_of(&rec) != state_of(old) {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
-    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]).
+    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
+    // and for an IOTA reference a spot's comment filled ([`offer::SPOT_FILLED_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
+    offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that
@@ -3692,13 +3696,16 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it).
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One a spot's comment filled that
+    // the operator has not touched since stays in their own log and is sent nowhere
+    // ([`offer::SPOT_FILLED_FIELD`]).
     if let Some(iota) = r
         .ota
         .iota
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|_| audience == Audience::OwnLog || !offer::withhold_iota(r))
     {
         out.push_str(&field("IOTA", iota));
     }
@@ -3728,7 +3735,9 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
         // ([`callbook::CALLBOOK_FILLED_FIELD`]).
         if audience == Audience::Outbound
-            && (k == SELF_FILLED_FIELD || k == callbook::CALLBOOK_FILLED_FIELD)
+            && (k == SELF_FILLED_FIELD
+                || k == callbook::CALLBOOK_FILLED_FIELD
+                || k == offer::SPOT_FILLED_FIELD)
         {
             continue;
         }

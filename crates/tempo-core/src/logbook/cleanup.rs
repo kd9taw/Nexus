@@ -110,6 +110,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::callbook::{self, CALLBOOK_FILLED_FIELD};
+use super::offer;
 use super::{
     canonical, extra_value, self_filled, set_extra, set_self_filled, QslRcvd, QsoRecord, RecordId,
     UploadState, SELF_FILLED_FIELD,
@@ -589,7 +590,7 @@ fn exchange(slots: &[(String, String)]) -> String {
 /// The passthrough fields that are marks about OTHER fields: they follow the values they mark,
 /// never merged as values of their own.
 fn is_mark(name: &str) -> bool {
-    name == SELF_FILLED_FIELD || name == CALLBOOK_FILLED_FIELD
+    name == SELF_FILLED_FIELD || name == CALLBOOK_FILLED_FIELD || name == offer::SPOT_FILLED_FIELD
 }
 
 /// How much a copy holds: the default copy to keep is the fullest.
@@ -824,7 +825,13 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     // holds the value the merged contact now holds.
     let mut own: Vec<String> = Vec::new();
     let mut looked: Vec<String> = Vec::new();
+    let mut spotted: Vec<String> = Vec::new();
     for r in &order {
+        for tag in offer::spot_filled(r) {
+            if mark_value(r, tag) == mark_value(&out, tag) && mark_value(r, tag).is_some() {
+                spotted.push(tag.to_string());
+            }
+        }
         for tag in self_filled(r) {
             if mark_value(r, tag) == mark_value(&out, tag) && mark_value(r, tag).is_some() {
                 own.push(tag.to_string());
@@ -844,6 +851,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         CALLBOOK_FILLED_FIELD,
         (!looked.is_empty()).then(|| looked.join(",")),
     );
+    offer::set_spot_filled(&mut out, spotted);
 
     // ★ Every field of the record, named — no `..`: a field added to `QsoRecord` does not compile
     // here until it has a rule. The rules, field by field:
@@ -1342,6 +1350,7 @@ pub fn changed(
         set_self_filled(&mut rec, tags);
     }
     callbook::unmark_edited(row, &mut rec);
+    offer::unmark_edited(row, &mut rec);
     // A changed station call: the stamps go, as a corrected call's do (the module header).
     if resends(row, &rec) {
         rec.upload = UploadState::default();

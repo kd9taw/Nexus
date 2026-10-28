@@ -495,3 +495,33 @@ describe('Download confirmations (#348)', () => {
     expect(api.downloadLotwReport).not.toHaveBeenCalled()
   })
 })
+
+describe('an IOTA reference a spot filled (operator ruling, 2026-10-27)', () => {
+  it('says it is held back from every service, and Confirm takes the mark off and nothing else', async () => {
+    const spotted: LoggedQso = {
+      ...DL,
+      ota: { ...DL.ota!, iota: 'EU-028' },
+      extra: [...(DL.extra ?? []), ['APP_NEXUS_SPOT_FILLED', 'IOTA']],
+    }
+    engine.log = [OTHER, spotted, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).getByText(t('iota.card.spotHeld'))).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: t('iota.card.confirm') }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    const [ref, edit, fields] = vi.mocked(api.editQsoById).mock.calls[0]
+    expect(ref.id).toBe('id-dl')
+    expect(fields).toEqual([{ tag: 'APP_NEXUS_SPOT_FILLED', old: 'IOTA', new: null }])
+    expect(edit.ota.iota, 'the reference itself is as stored').toBe('EU-028')
+    expect(edit.name, 'and every box is as stored').toBeNull()
+  })
+
+  it('a reference the operator typed shows no such note', async () => {
+    const typed: LoggedQso = { ...DL, ota: { ...DL.ota!, iota: 'EU-028' } }
+    engine.log = [OTHER, typed, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).queryByText(t('iota.card.spotHeld'))).toBeNull()
+    expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
+  })
+})

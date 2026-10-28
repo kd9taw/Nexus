@@ -40,6 +40,7 @@ import { modeKey } from './callHistory'
 export const NEED_TIER: Record<NeedTag, number> = {
   Wanted: 120,
   NewEntity: 100,
+  NewIota: 80,
   NewZone: 70,
   NewState: 60,
   NewGrid: 55,

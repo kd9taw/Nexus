@@ -718,6 +718,7 @@ mod tests {
             state_from: None,
             wpx_need: None,
             wae_need: None,
+            iota: None,
         }
     }
 

@@ -441,6 +441,7 @@ fn the_reports_board() -> (LogNeeds, Vec<NeedAlert>) {
             evidence: Some("decoded by YOUR radio on this band".into()),
             grid: None,
             us_state: None,
+            iota: None,
         });
     }
     let board = rank(&heard, &needs, &needs.slots());

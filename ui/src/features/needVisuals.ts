@@ -20,6 +20,7 @@ import {
   TreePine,
   Mountain,
   Star,
+  TreePalm,
   type LucideIcon,
 } from 'lucide-react'
 import { t, type MessageKey } from '../i18n'
@@ -37,6 +38,8 @@ export type NeedCat =
   | 'mode'
   | 'grid'
   | 'state'
+  /** An IOTA island group never worked. */
+  | 'iota'
   | 'dxped'
   | 'confirm'
   /** A park/summit not yet worked in the activation running now — a real need, unlike the
@@ -88,6 +91,7 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
   mode: badge({ cls: 'need-mode', Icon: Radio, labelKey: 'need.badge.mode.label', titleKey: 'need.badge.mode.title' }),
   grid: badge({ cls: 'need-grid', Icon: Grid3x3, labelKey: 'need.badge.grid.label', titleKey: 'need.badge.grid.title' }),
   state: badge({ cls: 'need-state', Icon: MapPin, labelKey: 'need.badge.state.label', titleKey: 'need.badge.state.title' }),
+  iota: badge({ cls: 'need-iota', Icon: TreePalm, labelKey: 'need.badge.iota.label', titleKey: 'need.badge.iota.title' }),
   dxped: badge({ cls: 'need-dxped', Icon: Tent, labelKey: 'need.badge.dxped.label', titleKey: 'need.badge.dxped.title', iconOnly: true }),
   confirm: badge({ cls: 'need-confirm', Icon: MailQuestion, labelKey: 'need.badge.confirm.label', titleKey: 'need.badge.confirm.title' }),
   // Reuses the POTA palette (`--need-pota`) on purpose: a park need IS a POTA/SOTA thing, and
@@ -124,11 +128,12 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
 export const NEED_PRECEDENCE: NeedCat[] = [
   // MUST mirror the backend NeedTag::tier() descending (needalert.rs) so the decode feed's
   // lead pill + row colour match the Needed board for every multi-need station: the board
-  // sorts by tier and colours from tags[0]. tier(): entity 100 > zone 70 > state 60 > grid
-  // 55 > band 50 > mode 30 > confirm 10 (wanted pinned top; dxped/pota/sota are icon-only).
+  // sorts by tier and colours from tags[0]. tier(): entity 100 > iota 80 > zone 70 > state 60 >
+  // grid 55 > band 50 > mode 30 > confirm 10 (wanted pinned top; dxped/pota/sota are icon-only).
   // A rare grid still floats above via the backend rarity_boost; a *plain* grid < state.
   'wanted',
   'entity',
+  'iota',
   'zone',
   'state',
   'grid',
@@ -180,6 +185,12 @@ export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
     labelKey: 'need.chip.newEntity.label',
     shortKey: 'need.chip.newEntity.short',
     titleKey: 'need.chip.newEntity.title',
+  }),
+  NewIota: chip({
+    cls: 'iota',
+    labelKey: 'need.chip.newIota.label',
+    shortKey: 'need.chip.newIota.short',
+    titleKey: 'need.chip.newIota.title',
   }),
   NewZone: chip({
     cls: 'zone',

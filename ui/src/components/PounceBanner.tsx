@@ -25,6 +25,7 @@ const TAG_TO_CAT: Record<string, NeedCat> = {
   NewEntity: 'entity',
   NewZone: 'zone',
   NewState: 'state',
+  NewIota: 'iota',
   NewGrid: 'grid',
   NewBand: 'band',
   NewMode: 'mode',

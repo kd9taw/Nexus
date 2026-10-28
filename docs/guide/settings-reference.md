@@ -1946,6 +1946,18 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
   the next launch** — the status line shows the active release date and notes
   when a newer download is waiting.
 
+### IOTA island list
+
+- **Download the IOTA island-group list** — off until you turn it on (or say
+  **Download** on the one-line offer beside an IOTA reference). The list is © RSGB and
+  © Islands On The Air (IOTA) Ltd, published at iota-world.org for personal,
+  non-commercial use, so Nexus never ships a copy: it downloads the list (about
+  300 KB) onto this computer when you say yes, and refreshes it at most monthly.
+  With it, the Logbook and the contact card show each group's name beside a
+  reference, with IOTA Ltd's credit and a link, and flag a reference that is not an
+  island group. Without it, a reference is checked by its shape (`EU-131`) only.
+  Turning it off deletes the copy.
+
 ---
 
 ## Logging & Connectors

@@ -26,6 +26,7 @@ import { qrzLookup } from '../api'
 import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
 import { QsoHistory } from './QsoHistory'
+import { IotaReferenceNote } from './Iota'
 import { CallbookPhoto, qrzPageOf } from './CallCard'
 import { confirmDialog } from '../confirm'
 import { useFocusReturn } from '../focusReturn'
@@ -55,6 +56,9 @@ import {
   type CardField,
   type Unclearable,
 } from '../features/contactCard'
+
+/** The mark on a contact whose IOTA reference a spot's comment filled (`offer::SPOT_FILLED_FIELD`). */
+const SPOT_FILLED_FIELD = 'APP_NEXUS_SPOT_FILLED'
 
 /** Service names and the QRZ button: proper nouns, not words. */
 const QRZ_PAGE = 'QRZ ↗'
@@ -245,6 +249,24 @@ function CardBody({
     }
   }
 
+  // An IOTA reference a spot's comment filled is kept in the log and sent to no service until the
+  // operator confirms it (`tempo_core::logbook::offer`). Confirm takes the mark off: the one
+  // Nexus-kept field a card may change, and only by removing it.
+  const spotMark = q.extra?.find(([k]) => k === SPOT_FILLED_FIELD)?.[1] ?? null
+  const spotHeld = !!spotMark?.split(',').some((tag) => tag.trim() === 'IOTA')
+  const confirmIota = async () => {
+    if (!contact.ref || busy || !spotMark) return
+    const made = cardSave(q, start, start, fieldsOf(q))
+    if (!made.ok) return
+    setBusy(true)
+    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: SPOT_FILLED_FIELD, old: spotMark, new: null }], q.call)
+    setBusy(false)
+    if (answer?.kind === 'applied' || answer?.kind === 'changed') {
+      onChanged()
+      if (q.id) onSwitch(q.id)
+    }
+  }
+
   const lookUp = () => {
     setLooking(true)
     void withErrorToast(() => qrzLookup(q.call), t('callbook.lookupFailed')).finally(() => setLooking(false))
@@ -408,6 +430,19 @@ function CardBody({
             {program('theirProgram', t('contactCard.program.theirs'))}
             {box('theirRef', t('logbook.field.parkTheirs.label'))}
             {box('iota', t('logbook.field.iota.label'), { maxLength: 6 })}
+            {(draft.iota.trim() !== '' || spotHeld) && (
+              <div className="logbook-field logbook-field-wide iota-card-note">
+                <IotaReferenceNote reference={draft.iota.trim().toUpperCase()} />
+                {spotHeld && (
+                  <span className="iota-card-held">
+                    <span className="settings-hint">{t('iota.card.spotHeld')}</span>
+                    <button type="button" className="settings-test-btn" onClick={() => void confirmIota()} disabled={!canSave || busy || dirty}>
+                      {t('iota.card.confirm')}
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
             {program('myProgram', t('contactCard.program.mine'))}
             {box('myRef', t('logbook.field.parkMine.label'))}
             {box('myGrid', t('logbook.field.myGrid.label'))}
