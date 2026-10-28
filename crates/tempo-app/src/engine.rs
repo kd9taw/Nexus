@@ -49389,6 +49389,33 @@ mod tests {
         assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
     }
 
+    /// HRD Logbook can upload a contact itself, so it never gets an IOTA reference taken from a
+    /// log-time offer the operator has not confirmed. One the operator typed, and an older
+    /// callbook-filled one, still go.
+    #[test]
+    fn the_hrd_datagram_never_carries_a_held_iota() {
+        use tempo_core::logbook::offer::{accept_iota_offer, IotaOffer, OfferSource};
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut held = e.qso_record("IA5X".into(), None, None);
+        let offer = IotaOffer {
+            reference: "EU-028".into(),
+            source: OfferSource::Spot,
+        };
+        assert!(accept_iota_offer(&mut held, &offer));
+        let d = e.hrd_datagram(&held);
+        assert!(!d.contains("<IOTA:"), "{d}");
+        assert!(!d.contains("APP_NEXUS_OFFER_HELD"), "{d}");
+        let mut typed = e.qso_record("IA5X".into(), None, None);
+        typed.ota.iota = Some("EU-028".into());
+        assert!(e.hrd_datagram(&typed).contains("<IOTA:6>EU-028"));
+        let mut older = e.qso_record("IA5X".into(), None, None);
+        older.ota.iota = Some("EU-025".into());
+        older
+            .extra
+            .push(("APP_NEXUS_CALLBOOK_FILLED".into(), "IOTA".into()));
+        assert!(e.hrd_datagram(&older).contains("<IOTA:6>EU-025"));
+    }
+
     /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT
     /// sequencer's record builder hard-coded `name: None`, so every auto-logged FT8/FT4 contact
     /// reached the Logbook, ADIF and the uploads nameless even when the callsign card had

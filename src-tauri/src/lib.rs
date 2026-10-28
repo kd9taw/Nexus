@@ -1198,6 +1198,7 @@ fn start_cluster_feed(
                     let mut s = sp.clone();
                     s.rbn = true;
                     pounce_offer(&s);
+                    note_spot_iota(&s);
                     // RANKED, never plain `push`: the buffer's corroborator cap has to
                     // choose which voices a re-spotted row keeps, and the Needed board
                     // admits the row on whether a NEAR voice is among them.
@@ -1825,6 +1826,7 @@ fn start_human_cluster_feed(
                 }
                 if let Ok(mut b) = buf.lock() {
                     pounce_offer(sp);
+                    note_spot_iota(sp);
                     // Ranked — see the RBN callback above.
                     b.push_ranked(sp.clone(), spotter_evidence_rank);
                 }
@@ -14967,6 +14969,7 @@ fn restart_live_feeds(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
         if let Ok(mut b) = live_paths.lock() {
             *b = propagation::LiveSpots::default();
         }
@@ -18093,6 +18096,7 @@ fn set_unassisted_mode(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
     }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist unassisted-mode toggle: {e}")
@@ -24136,10 +24140,7 @@ fn read_spots_with(
     } else {
         spots.lock().map_err(|_| ())
     } {
-        Ok(buf) => buf.recent_within(
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(1200),
-        ),
+        Ok(buf) => buf.recent_within(std::time::Instant::now(), SPOTS_WINDOW),
         Err(_) => return Err("applicationBusy".into()),
     };
     // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
@@ -25743,27 +25744,77 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
         .map(|(_, i)| i.clone())
 }
 
-/// The IOTA reference the DX cluster's recent spots of exactly `call` name in their comments, for
-/// the log-time offer: the one group they name, or none when none names one or two name different
-/// groups (an old trip's re-spot, or a typo, is not this activation; the comment parser refuses a
-/// comment naming two groups the same way).
-fn spot_iota_for(recent: &[tempo_net::cluster::ClusterSpot], call: &str) -> Option<String> {
-    let call = call.trim();
-    let mut named: Option<String> = None;
-    for cs in recent
-        .iter()
-        .filter(|cs| cs.dx_call.trim().eq_ignore_ascii_case(call))
-    {
-        let Some(r) = propagation::iota::in_comment(&cs.comment) else {
-            continue;
-        };
-        match &named {
-            Some(n) if *n != r => return None,
-            Some(_) => {}
-            None => named = Some(r),
+/// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
+const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// Every IOTA group a cluster spot's comment named, by the call spotted and when the spot came in:
+/// the log-time offer's spot side. Kept beside the spot buffer because that buffer merges every spot
+/// of one call within a couple of kHz into one row and keeps only the newest comment, so two spots
+/// of one station on one band naming different groups would read as one. Only spots that name a
+/// group are kept, for [`SPOTS_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
+#[derive(Default)]
+struct SpotIotaLog {
+    named: std::collections::VecDeque<(std::time::Instant, String, String)>,
+}
+
+/// A memory ceiling only: far above the IOTA-naming spots one window holds.
+const SPOT_IOTA_CAP: usize = 4096;
+
+impl SpotIotaLog {
+    /// Keep the group `spot`'s comment names, if it names one, as heard at `at`.
+    fn note(&mut self, at: std::time::Instant, spot: &tempo_net::cluster::ClusterSpot) {
+        while self
+            .named
+            .front()
+            .is_some_and(|(t, _, _)| at.saturating_duration_since(*t) > SPOTS_WINDOW)
+        {
+            self.named.pop_front();
         }
+        let Some(r) = propagation::iota::in_comment(&spot.comment) else {
+            return;
+        };
+        if self.named.len() >= SPOT_IOTA_CAP {
+            self.named.pop_front();
+        }
+        self.named
+            .push_back((at, spot.dx_call.trim().to_ascii_uppercase(), r));
     }
-    named
+
+    /// The group every spot of exactly `call` within [`SPOTS_WINDOW`] of `now` names, or none
+    /// when none names one or any two name different groups (an old trip's re-spot, or a typo,
+    /// is not this activation; the comment parser refuses a comment naming two groups the same
+    /// way).
+    fn group_for(&self, now: std::time::Instant, call: &str) -> Option<String> {
+        let call = call.trim();
+        let mut named: Option<&String> = None;
+        for (_, _, r) in self.named.iter().filter(|(t, c, _)| {
+            now.saturating_duration_since(*t) <= SPOTS_WINDOW && c.eq_ignore_ascii_case(call)
+        }) {
+            match named {
+                Some(n) if n != r => return None,
+                Some(_) => {}
+                None => named = Some(r),
+            }
+        }
+        named.cloned()
+    }
+}
+
+static SPOT_IOTA: std::sync::LazyLock<std::sync::Mutex<SpotIotaLog>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Keep the group a cluster spot just pushed into the spot buffer names ([`SpotIotaLog`]).
+fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        log.note(std::time::Instant::now(), spot);
+    }
+}
+
+/// Forget every spot's group, with the spot buffer it sits beside.
+fn clear_spot_iota() {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        *log = SpotIotaLog::default();
+    }
 }
 
 /// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
@@ -25776,22 +25827,16 @@ fn spot_iota_for(recent: &[tempo_net::cluster::ClusterSpot], call: &str) -> Opti
 #[tauri::command(async)]
 fn get_iota_offer(
     state: State<'_, SharedEngine>,
-    spots: State<'_, SharedSpots>,
     call: String,
     held: Option<String>,
 ) -> Option<tempo_core::logbook::offer::IotaOffer> {
     let spot_iota = if unassisted() {
         None
     } else {
-        spots.lock().ok().and_then(|buf| {
-            spot_iota_for(
-                &buf.recent_within(
-                    std::time::Instant::now(),
-                    std::time::Duration::from_secs(1200),
-                ),
-                &call,
-            )
-        })
+        SPOT_IOTA
+            .lock()
+            .ok()
+            .and_then(|log| log.group_for(std::time::Instant::now(), &call))
     };
     let answer = engine_lock(&state).callbook_answer(&call).cloned();
     tempo_core::logbook::offer::iota_offer(
@@ -31011,6 +31056,36 @@ mod upload_record_tests {
              <GRIDSQUARE:6>FN31pr<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE<EOR>",
         );
         assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
+    }
+
+    /// Nor an IOTA reference taken from a log-time offer the operator has not confirmed: DXKeeper
+    /// can upload it to LoTW and the other services. One the operator typed, and an older
+    /// callbook-filled one, are sent as before.
+    #[test]
+    fn dxkeeper_never_gets_a_held_iota() {
+        let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        let held = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<NOTES:4>mine<APP_NEXUS_OFFER_HELD:4>IOTA<EOR>",
+        );
+        assert!(tempo_core::logbook::offer::withhold_iota(&held), "premise");
+        let sent = super::dxkeeper_adif(&held);
+        assert!(!sent.contains("<IOTA:"), "{sent}");
+        assert!(!sent.contains("APP_NEXUS_OFFER_HELD"), "{sent}");
+        assert!(
+            sent.contains("<NOTES:4>mine"),
+            "still their own record: {sent}"
+        );
+        let typed = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&typed).contains("<IOTA:6>EU-028"));
+        let older = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-025<APP_NEXUS_CALLBOOK_FILLED:4>IOTA<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&older).contains("<IOTA:6>EU-025"));
     }
 }
 
@@ -46833,13 +46908,13 @@ mod tests {
         load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
         profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
         redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
-        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spot_iota_for,
-        spotter_evidence_rank, spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate,
-        tle_extend_aliases, tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed,
-        tle_seed_floor, tle_seed_path, tle_set_currency, view_passes, write_json_atomic,
-        write_qso_wav_in, AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto,
-        SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot,
-        SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
+        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
+        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
+        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
+        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
+        SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK,
+        SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -47500,12 +47575,13 @@ mod tests {
         );
     }
 
-    /// The log-time offer's spot side: the group the spots of exactly this call name, none when
-    /// two name different groups, and never another call's.
+    /// The log-time offer's spot side: the group EVERY spot of exactly this call within the
+    /// Spots board's window names, none when any two name different groups, and never another
+    /// call's. Two spots of one station on one band merge into one row of the spot buffer, which
+    /// keeps only the newest comment; the offer still sees both.
     #[test]
     fn the_offer_takes_the_one_group_the_calls_spots_name() {
         use tempo_net::cluster::{ClusterSpot, SpotBuffer};
-        // Spots of one call within a few kHz merge into one row; these are on separate bands.
         let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
             spotter: "W3LPL".into(),
             dx_call: call.into(),
@@ -47516,24 +47592,49 @@ mod tests {
             corroborators: Vec::new(),
             rbn: false,
         };
+        let t0 = std::time::Instant::now();
+        let spots = [
+            mk("IA5X", 14025.0, "IOTA EU-028 up 1"),
+            mk("IA5X", 7025.0, "loud"),
+            mk("IA5X/P", 21025.0, "IOTA EU-031"),
+            mk("IT9ABC", 14030.0, "IOTA EU-025"),
+            mk("IT9ABC", 21030.0, "op from EU-017"),
+            // Same band, half a kHz apart: one row in the buffer, two groups named.
+            mk("IA5Y", 14025.0, "IOTA EU-028"),
+            mk("IA5Y", 14025.5, "IOTA EU-031"),
+        ];
         let mut buf = SpotBuffer::new(100);
-        buf.push(mk("IA5X", 14025.0, "IOTA EU-028 up 1"));
-        buf.push(mk("IA5X", 7025.0, "loud"));
-        buf.push(mk("IA5X/P", 21025.0, "IOTA EU-031"));
-        buf.push(mk("IT9ABC", 14030.0, "IOTA EU-025"));
-        buf.push(mk("IT9ABC", 21030.0, "op from EU-017"));
-        let recent = buf.recent_within(
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(900),
-        );
-        assert_eq!(spot_iota_for(&recent, "ia5x").as_deref(), Some("EU-028"));
-        assert_eq!(spot_iota_for(&recent, "IA5X/P").as_deref(), Some("EU-031"));
+        let mut log = SpotIotaLog::default();
+        for sp in &spots {
+            buf.push_at(t0, sp.clone());
+            log.note(t0, sp);
+        }
+        let rows = buf.recent_within(t0, SPOTS_WINDOW);
         assert_eq!(
-            spot_iota_for(&recent, "IT9ABC"),
-            None,
-            "two groups name neither"
+            rows.iter().filter(|r| r.dx_call == "IA5Y").count(),
+            1,
+            "premise: the buffer merged IA5Y's two spots into one row"
         );
-        assert_eq!(spot_iota_for(&recent, "K1ABC"), None);
+        assert!(
+            rows.iter()
+                .any(|r| r.dx_call == "IA5Y" && r.comment == "IOTA EU-031"),
+            "premise: that row keeps only the newest comment, which alone would offer EU-031"
+        );
+        assert_eq!(log.group_for(t0, "ia5x").as_deref(), Some("EU-028"));
+        assert_eq!(log.group_for(t0, "IA5X/P").as_deref(), Some("EU-031"));
+        assert_eq!(
+            log.group_for(t0, "IA5Y"),
+            None,
+            "two groups on one band name neither"
+        );
+        assert_eq!(log.group_for(t0, "IT9ABC"), None, "two groups name neither");
+        assert_eq!(log.group_for(t0, "K1ABC"), None);
+        // Past the Spots board's window a spot no longer counts, for or against.
+        let later = t0 + SPOTS_WINDOW + std::time::Duration::from_secs(1);
+        assert_eq!(log.group_for(later, "IA5X"), None);
+        log.note(later, &mk("IA5Y", 14025.0, "IOTA EU-031"));
+        assert_eq!(log.group_for(later, "IA5Y").as_deref(), Some("EU-031"));
+        assert_eq!(log.named.len(), 1, "older spots are let go");
     }
 
     /// The evidence ranking is the locality question the board asks OF THAT BAND, and

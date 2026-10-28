@@ -80,9 +80,13 @@ carries:
   an island group, or your callbook lookup does, the log strip, the Logbook's Add form and the
   log popup show it as a chip ("IOTA EU-131 · from the spot"). Press **Use** to log it, or ×
   to leave it out; nothing is filled in by itself, and a reference you typed is never replaced.
-  An FT contact logged by itself with no popup logs without one. A reference taken this way stays
-  in your log and its exports but goes to no service until you confirm it on the contact card or
-  edit it.
+  Use is for that one contact: the next starts with nothing taken, even with the same station.
+  When two spot comments for the call in the last 20 minutes name different groups, none is
+  offered. An FT contact logged by itself with no popup logs without one. A reference taken this
+  way stays in your log and its exports but goes to no service, and not to DXKeeper or HRD
+  Logbook (both can upload it themselves), until you confirm it on the contact card or edit it.
+  Confirming it later does not send it on to DXKeeper or HRD Logbook, which keep the contact as
+  they first got it; once confirmed, a LoTW confirmation no longer replaces it.
 - **Space weather**, if you turn on **Log space weather on each contact** in
   [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,

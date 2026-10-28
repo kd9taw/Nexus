@@ -15,7 +15,8 @@
 //! the operator's own log and its exports, but nothing Nexus sends off the machine
 //! ([`super::Audience::Outbound`]) carries it while the mark names it. Editing the field, or
 //! confirming it on the contact card (which takes the mark off, [`super::FieldEdit`] allows
-//! exactly that removal), makes it the operator's. Modelled on the callbook's mark
+//! exactly that removal), makes it the operator's: a callbook-sourced one is then no longer
+//! marked as the callbook's, so a later LoTW download does not replace it. Modelled on the callbook's mark
 //! ([`super::callbook::CALLBOOK_FILLED_FIELD`]): an app-private list in `extra`, never sent
 //! itself. A callbook-sourced offer is also marked as a callbook fill, as the rest of the
 //! callbook's answer is; that mark alone, on a contact logged before offers existed, holds
@@ -169,14 +170,21 @@ pub(crate) fn set_offer_held(r: &mut QsoRecord, tags: Vec<String>) {
 
 /// An edit that changed a field taken from an offer makes it the operator's: it comes off the mark, as
 /// a callbook-filled one does ([`super::callbook::unmark_edited`]). `old` before the edit, `rec` after.
+/// Once it is off the mark, by that edit or by a confirm on the contact card, the reference is no
+/// longer the callbook's either, so a LoTW download no longer replaces it.
 pub(crate) fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
     let norm = |v: Option<&str>| {
         v.map(|v| v.trim().to_ascii_uppercase())
             .filter(|v| !v.is_empty())
     };
-    if is_offer_held(old, "IOTA") && norm(rec.ota.iota.as_deref()) != norm(old.ota.iota.as_deref())
-    {
+    if !is_offer_held(old, "IOTA") {
+        return;
+    }
+    if norm(rec.ota.iota.as_deref()) != norm(old.ota.iota.as_deref()) {
         unmark_offer_held(rec, "IOTA");
+    }
+    if !is_offer_held(rec, "IOTA") {
+        super::callbook::unmark_callbook_filled(rec, "IOTA");
     }
 }
 
@@ -190,7 +198,9 @@ pub fn withhold_iota(r: &QsoRecord) -> bool {
 mod tests {
     use super::*;
     use crate::logbook::FieldEdit;
-    use crate::logbook::{adif_record, adif_record_own_log, edited, fields_set, parse_adif};
+    use crate::logbook::{
+        adif_record, adif_record_own_log, adif_record_own_logger, edited, fields_set, parse_adif,
+    };
 
     fn rec(call: &str) -> QsoRecord {
         parse_adif(&format!(
@@ -324,9 +334,11 @@ mod tests {
         let out = adif_record(&r);
         assert!(!out.contains("IOTA:"), "{out}");
         assert!(!out.contains(OFFER_HELD_FIELD), "{out}");
-        // Confirmed on the card, it goes out.
+        // Confirmed on the card, it goes out, and it is the operator's now: no longer the
+        // callbook's either, so a later LoTW download does not replace what they confirmed.
         fields_set(&mut r, &[(OFFER_HELD_FIELD.to_string(), None)]);
         assert!(adif_record(&r).contains("<IOTA:6>EU-025"));
+        assert!(!crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
     }
 
     /// A contact logged before offers existed, whose IOTA a callbook lookup filled at log time,
@@ -338,6 +350,32 @@ mod tests {
         set_extra(&mut r, CALLBOOK_FILLED_FIELD, Some("IOTA,NAME".into()));
         assert!(!withhold_iota(&r));
         assert!(adif_record(&r).contains("<IOTA:6>EU-025"));
+    }
+
+    /// A logging program on the operator's own machine (DXKeeper, HRD Logbook) can upload the
+    /// contact itself, so a held reference never reaches it either. One the operator typed, and
+    /// an older callbook-filled one, still do, as before.
+    #[test]
+    fn a_held_reference_never_reaches_a_local_logger() {
+        let mut r = rec("IA5X");
+        let from_cb = IotaOffer {
+            reference: "EU-025".into(),
+            source: OfferSource::Callbook,
+        };
+        assert!(accept_iota_offer(&mut r, &from_cb));
+        let sent = adif_record_own_logger(&r);
+        assert!(!sent.contains("<IOTA:"), "{sent}");
+        assert!(!sent.contains(OFFER_HELD_FIELD), "{sent}");
+        assert!(!sent.contains("IOTA"), "no mark names it: {sent}");
+        assert!(sent.contains("<CALL:4>IA5X"), "{sent}");
+
+        let mut typed = rec("IA5X");
+        typed.ota.iota = Some("EU-028".into());
+        assert!(adif_record_own_logger(&typed).contains("<IOTA:6>EU-028"));
+        let mut older = rec("IA5X");
+        older.ota.iota = Some("EU-025".into());
+        set_extra(&mut older, CALLBOOK_FILLED_FIELD, Some("IOTA,NAME".into()));
+        assert!(adif_record_own_logger(&older).contains("<IOTA:6>EU-025"));
     }
 
     /// Confirming on the contact card takes the mark off (the one APP_NEXUS_ field a card may

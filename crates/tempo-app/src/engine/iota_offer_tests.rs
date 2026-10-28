@@ -150,3 +150,39 @@ fn an_offer_never_replaces_a_reference_the_contact_holds() {
     assert_eq!(r.ota.iota.as_deref(), Some("EU-001"));
     assert!(!is_offer_held(&r, "IOTA"));
 }
+
+/// The log form: an offer the operator took there (`log_qso` writes it with `accept_iota_offer`
+/// before `log_form_qso`) keeps its hold mark through to the stored contact and the upload queue.
+#[test]
+fn a_form_offer_taken_keeps_its_hold_through_to_the_upload_queue() {
+    use tempo_core::logbook::offer::accept_iota_offer;
+    let mut e = station();
+    let _ = e.take_pending_uploads();
+    let mut form = bare(&e, "IA5F");
+    let offer = IotaOffer {
+        reference: "EU-028".into(),
+        source: OfferSource::Spot,
+    };
+    assert!(accept_iota_offer(&mut form, &offer));
+    e.log_form_qso(form, StateSource::Operator, Vec::new());
+    let r = logged(&e, "IA5F");
+    assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
+    assert!(is_offer_held(&r, "IOTA"), "held back until touched");
+    let queued: Vec<PendingUpload> = e
+        .take_pending_uploads()
+        .into_iter()
+        .filter(|u| u.rec.call == "IA5F")
+        .collect();
+    assert!(
+        !queued.is_empty(),
+        "premise: the contact is queued for upload"
+    );
+    for u in &queued {
+        assert!(
+            is_offer_held(&u.rec, "IOTA"),
+            "the queued copy keeps the mark"
+        );
+        let sent = tempo_core::logbook::adif_record(&u.rec);
+        assert!(!sent.contains("<IOTA:"), "{sent}");
+    }
+}

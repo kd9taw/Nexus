@@ -3483,13 +3483,25 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
 /// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
 /// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
 /// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+/// For the same reason, **never an IOTA reference held back from uploads**
+/// ([`offer::withhold_iota`]), nor the marks naming it. Confirming it later in Nexus does not
+/// send it again: the program keeps the contact as it first got it.
 pub fn adif_record_own_logger(r: &QsoRecord) -> String {
-    if !callbook::is_map_only_grid(r) {
+    let map_only = callbook::is_map_only_grid(r);
+    let held_iota = offer::withhold_iota(r);
+    if !map_only && !held_iota {
         return adif_record_own_log(r);
     }
     let mut kept = r.clone();
-    kept.grid = None;
-    callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    if map_only {
+        kept.grid = None;
+        callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    }
+    if held_iota {
+        kept.ota.iota = None;
+        offer::unmark_offer_held(&mut kept, "IOTA");
+        callbook::unmark_callbook_filled(&mut kept, "IOTA");
+    }
     adif_record_own_log(&kept)
 }
 
