@@ -123,11 +123,15 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
                 value={String(value)}
                 placeholder={f.placeholderKey ? t(f.placeholderKey) : undefined}
                 onChange={(e) => onUpdate(f.key, e.target.value)}
+                disabled={locked?.(f.key)}
                 aria-invalid={invalid && !!error}
                 autoComplete="off"
                 spellCheck={false}
               />
               <span className="settings-hint">{t(f.hintKey)}</span>
+              {/* From afar, a field the station keeps as it has it: the call, while the station has
+                  "My station" profiles (`stationOnlySettings`). */}
+              {setAtStation?.(f.key)}
             </label>
           )
         })}

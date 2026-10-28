@@ -58,6 +58,21 @@ describe('the My station picker', () => {
     expect(onSwitch).toHaveBeenCalledWith('p1')
   })
 
+  it('waits, saying why, while a run, a contact or an over is under way', () => {
+    const onSwitch = vi.fn()
+    renderBar({
+      stationProfiles: both, activeStationProfile: 'home', stationProfileLocked: true, onSwitchStationProfile: onSwitch,
+    })
+    const picker = screen.getByLabelText('Station profile') as HTMLSelectElement
+    expect(picker.disabled).toBe(true)
+    expect(picker.title).toBe('Waits for the run or contact to end: stop transmitting and press S&P, then switch.')
+    cleanup()
+    renderBar({
+      stationProfiles: both, activeStationProfile: 'home', stationProfileLocked: false, onSwitchStationProfile: onSwitch,
+    })
+    expect((screen.getByLabelText('Station profile') as HTMLSelectElement).disabled, 'CONTROL: idle').toBe(false)
+  })
+
   it('is switched at the station only', () => {
     setRemoteStation(true)
     renderBar({ stationProfiles: both, activeStationProfile: 'home', onSwitchStationProfile: vi.fn() })

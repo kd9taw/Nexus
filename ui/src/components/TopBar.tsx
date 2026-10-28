@@ -100,6 +100,8 @@ interface Props {
    *  sees the bar it always had. */
   stationProfiles?: StationProfileChoice[]
   activeStationProfile?: string
+  /** A run, a contact or an over is under way: the profile waits (snapshot `stationProfileLocked`). */
+  stationProfileLocked?: boolean
   onSwitchStationProfile?: (id: string) => void
   onSetPegLock?: (on: boolean) => void
   link: LinkState
@@ -371,6 +373,7 @@ export function TopBar({
   onSetActiveRadio,
   stationProfiles,
   activeStationProfile,
+  stationProfileLocked,
   onSwitchStationProfile,
   onSetPegLock,
   link,
@@ -534,8 +537,12 @@ export function TopBar({
           <select
             className="station-profile-picker"
             aria-label={t('topbar.stationProfile.label')}
-            title={drivesAnotherStation() ? t('topbar.stationProfile.atStation') : t('topbar.stationProfile.title')}
-            disabled={drivesAnotherStation() || !onSwitchStationProfile}
+            title={drivesAnotherStation()
+              ? t('topbar.stationProfile.atStation')
+              : stationProfileLocked
+                ? t('topbar.stationProfile.busy')
+                : t('topbar.stationProfile.title')}
+            disabled={drivesAnotherStation() || stationProfileLocked || !onSwitchStationProfile}
             value={activeStationProfile ?? ''}
             onChange={(e) => onSwitchStationProfile?.(e.target.value)}
           >

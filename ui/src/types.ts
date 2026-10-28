@@ -5953,6 +5953,8 @@ export interface AppSnapshot {
   stationProfiles?: StationProfileChoice[]
   /** The id of the profile the station is on. */
   activeStationProfile?: string
+  /** A run, a contact or an over is under way, so the profile cannot change now. */
+  stationProfileLocked?: boolean
   /** The last radio switch Nexus made by itself this session (absent until one happens). */
   autoRadioSwitch?: AutoRadioSwitch
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */

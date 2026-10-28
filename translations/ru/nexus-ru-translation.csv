@@ -919,6 +919,7 @@
 "1","topbar.stationProfile.label","Station profile","Профиль станции","",""
 "1","topbar.stationProfile.title","My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.","Профиль моей станции: его позывной, локатор и место попадают в новые связи. Настройка: Настройки ▸ Станция.","",""
 "1","topbar.stationProfile.atStation","Switched at the station only.","Переключается только на станции.","",""
+"1","topbar.stationProfile.busy","Waits for the run or contact to end: stop transmitting and press S&P, then switch.","Ждёт окончания серии или связи: остановите передачу и нажмите S&P, затем переключите.","",""
 "1","topbar.field.on.title","Field mode is on: larger type, maximum contrast. Click to turn off.","Полевой режим включён: крупный шрифт, максимальная контрастность. Щёлкните, чтобы выключить.","",""
 "1","topbar.field.off.title","Field mode for operating outdoors: larger type, maximum contrast","Полевой режим для работы на улице: крупный шрифт, максимальная контрастность","",""
 "1","topbar.operator.title","Operating as {{call}} — click to change who is at the key","Работает {{call}} — щёлкните, чтобы сменить оператора на ключе","{{call}}",""

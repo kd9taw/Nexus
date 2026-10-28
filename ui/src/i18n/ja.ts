@@ -9121,6 +9121,7 @@ export const JA: PartialCatalog = {
   "topbar.stationProfile.label": "ステーション・プロファイル",
   "topbar.stationProfile.title": "マイステーション・プロファイル: コールサイン、グリッド、所在地が新しい交信に入ります。設定 ▸ 局情報で設定します。",
   "topbar.stationProfile.atStation": "ステーション側でのみ切り替えます。",
+  "topbar.stationProfile.busy": "ランや交信が終わるまで待ちます。送信を止めて S&P を押してから切り替えます。",
   "topbar.field.on.title": "フィールドモードはオンです:大きい文字と最大コントラスト。クリックでオフ。",
   "topbar.field.off.title": "屋外運用向けのフィールドモード:大きい文字と最大コントラスト",
   "topbar.operator.title": "{{call}}として運用中 — クリックでオペレーターを変更",

@@ -4000,6 +4000,7 @@ function App() {
         onSetActiveRadio={handleSetActiveRadio}
         stationProfiles={snap.stationProfiles}
         activeStationProfile={snap.activeStationProfile}
+        stationProfileLocked={snap.stationProfileLocked}
         onSwitchStationProfile={handleSwitchStationProfile}
         onSetPegLock={handleSetPegLock}
         link={snap.link}

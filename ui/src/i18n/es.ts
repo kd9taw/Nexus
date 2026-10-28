@@ -9129,6 +9129,7 @@ export const ES: PartialCatalog = {
   "topbar.stationProfile.label": "Perfil de estación",
   "topbar.stationProfile.title": "Mi perfil de estación: su indicativo, locator y ubicación van en los contactos nuevos. Se configuran en Ajustes ▸ Estación.",
   "topbar.stationProfile.atStation": "Solo se cambia en la estación.",
+  "topbar.stationProfile.busy": "Espera a que termine la serie o el contacto: deja de transmitir y pulsa S&P, luego cambia.",
   "topbar.field.off.title": "Modo campo para operar al aire libre: letra más grande, contraste máximo",
   "topbar.field.on.title": "El modo campo está activado: letra más grande, contraste máximo. Pulsa para desactivarlo.",
   "topbar.help.label": "Ayuda",
