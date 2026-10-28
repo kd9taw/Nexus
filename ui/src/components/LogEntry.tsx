@@ -2041,6 +2041,9 @@ export function LogEntry({
     setLogImage(null)
     setPark('')
     setWorkPark(null)
+    // A Use pressed on the IOTA offer was for this contact, logged or let go of (Clear, a band
+    // change setting the line aside): the next one, even the same call, starts with nothing taken.
+    iotaOffer.reset()
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
@@ -2449,7 +2452,6 @@ export function LogEntry({
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
-      iotaOffer.reset()
       loggedFromStrip(call, effBand)
       return true
     }

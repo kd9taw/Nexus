@@ -4,9 +4,10 @@
 // front of them; once that contact is logged, the next one starts with nothing taken, even when it
 // is the same station again (an island DXpedition worked on a second band). Pinned on both forms
 // that keep their offer across contacts: the log strip and the Logbook's Add form. The
-// confirm-before-log popup is a new form per contact, so it starts over by itself.
+// confirm-before-log popup is a new form per contact, so it starts over by itself. A contact the
+// strip lets go of without logging (Clear, or set aside by a band change) gives its Use back too.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import { Logbook } from './Logbook'
 import { getIotaOffer, logQso } from '../api'
@@ -110,5 +111,50 @@ describe('a Use press is for one contact', () => {
     await waitFor(() => expect(vi.mocked(getIotaOffer).mock.calls.length).toBeGreaterThan(1))
     await waitFor(() => expect(chip()).toBeTruthy())
     expect(use().getAttribute('aria-pressed'), 'taken for the last contact, not this one').toBe('false')
+  })
+})
+
+describe('a contact let go of without logging gives its Use back', () => {
+  const at = (tick: number, band: string, dialMhz: number) =>
+    ({ mycall: 'KD9TAW', mygrid: 'EN52', radio: { band, dialMhz }, hunt: null, bandChangeTick: tick }) as unknown as AppSnapshot
+  const strip = (tick: number, band = '20m', dialMhz = 14.025) => (
+    <LogEntry snap={at(tick, band, dialMhz)} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} clearCallOnBandChange />
+  )
+  const call = () => document.querySelector<HTMLInputElement>('input.le-call')!
+  /** IA5X typed, the offer shown, Use pressed. */
+  const take = async () => {
+    fireEvent.change(call(), { target: { value: 'IA5X' } })
+    await waitFor(() => expect(chip()).toBeTruthy())
+    fireEvent.click(use())
+    expect(use().getAttribute('aria-pressed')).toBe('true')
+  }
+  /** IA5X typed again: the offer comes back, not taken. */
+  const retype = async () => {
+    const asked = vi.mocked(getIotaOffer).mock.calls.length
+    fireEvent.change(call(), { target: { value: 'IA5X' } })
+    await waitFor(() => expect(vi.mocked(getIotaOffer).mock.calls.length).toBeGreaterThan(asked))
+    await waitFor(() => expect(chip()).toBeTruthy())
+    expect(use().getAttribute('aria-pressed'), 'taken for the contact let go of, not this one').toBe('false')
+  }
+
+  it('Clear', async () => {
+    render(strip(1))
+    await take()
+    fireEvent.click(screen.getByRole('button', { name: t('logEntry.clear.label') }))
+    await waitFor(() => expect(call().value).toBe(''))
+    await retype()
+    expect(logQso).not.toHaveBeenCalled()
+  })
+
+  it('a band change that sets the line aside', async () => {
+    const view = render(strip(1))
+    await take()
+    view.rerender(strip(2, '40m', 7.025))
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+    })
+    expect(call().value, 'premise: the line was set aside').toBe('')
+    await retype()
+    expect(logQso).not.toHaveBeenCalled()
   })
 })
