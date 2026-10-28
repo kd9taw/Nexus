@@ -14822,6 +14822,134 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A bundle exported from afar whose saved profiles are `profiles`, and a station whose saved
+    /// profiles are `station`, after [`keep_the_stations_paths`]: the bundle's profiles by name.
+    fn profiles_kept(
+        profiles: serde_json::Value,
+        station: serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let mut bundle = serde_json::json!({
+            (STATION_PATHS_LEFT_OUT): true,
+            "settings": {},
+            "uiState": { (crate::command_dispatch::PROFILES): profiles.to_string() },
+        });
+        let station_ui: std::collections::BTreeMap<String, String> = [(
+            crate::command_dispatch::PROFILES.to_string(),
+            station.to_string(),
+        )]
+        .into_iter()
+        .collect();
+        keep_the_stations_paths(&mut bundle, &serde_json::json!({}), || station_ui);
+        let kept: Vec<serde_json::Value> = serde_json::from_str(
+            bundle["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        kept.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS EVERY PROFILE'S VOICE SLOTS: a profile this station
+    /// has no profile of the same name for (a fresh install, a profile deleted), and one whose
+    /// station profile has no voice slots, keep the backup's slots, labels and all, with the
+    /// recording blank. CONTROL: a station profile with the slot gives it its recording.
+    #[test]
+    fn restoring_from_afar_keeps_the_voice_slots_the_station_has_no_recording_for() {
+        let slots = |label: &str| {
+            serde_json::json!([
+                { "slot": 1, "label": label, "file": "", "repeat": true },
+                { "slot": 2, "label": format!("{label} 2"), "file": "" },
+            ])
+        };
+        let kept = profiles_kept(
+            serde_json::json!([
+                { "name": "Portable", "settings": { "voiceMessages": slots("CQ POTA") } },
+                { "name": "Home", "settings": { "voiceMessages": slots("CQ DX") } },
+                { "name": "Field", "settings": { "voiceMessages": slots("CQ FD") } },
+            ]),
+            serde_json::json!([
+                { "name": "Home", "settings": { "mycall": "W9SHK" } },
+                { "name": "Field", "settings": { "voiceMessages": [
+                    { "slot": 2, "label": "x", "file": "C:\\Shack\\fd2.wav" }
+                ] } },
+            ]),
+        );
+        assert_eq!(
+            kept["Portable"]["voiceMessages"],
+            slots("CQ POTA"),
+            "no such profile here"
+        );
+        assert_eq!(
+            kept["Home"]["voiceMessages"],
+            slots("CQ DX"),
+            "no voice slots here"
+        );
+        assert_eq!(
+            kept["Field"]["voiceMessages"],
+            serde_json::json!([
+                { "slot": 1, "label": "CQ FD", "file": "", "repeat": true },
+                { "slot": 2, "label": "CQ FD 2", "file": "C:\\Shack\\fd2.wav" },
+            ]),
+            "CONTROL: the station's recording for its slot"
+        );
+    }
+
+    /// ★ TWO PROFILES, TWO STATIONS' WORTH OF PATHS: each profile in a backup made from afar gets
+    /// the paths of this station's profile of ITS name, never the other's, whatever the order.
+    #[test]
+    fn restoring_from_afar_gives_each_profile_its_own_paths() {
+        let stripped = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": "W9SHK",
+                "voiceMessages": [{ "slot": 1, "label": name, "file": "" }],
+            } })
+        };
+        let station = |name: &str, root: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "tqslPath": format!("{root}\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "?", "file": format!("{root}\\v1.wav") }],
+            } })
+        };
+        let kept = profiles_kept(
+            serde_json::json!([stripped("Alpha"), stripped("Bravo")]),
+            serde_json::json!([station("Bravo", "D:\\B"), station("Alpha", "C:\\A")]),
+        );
+        let paths = |s: &serde_json::Value| {
+            (
+                s["tqslPath"].clone(),
+                s["js8SoundFiles"]["cq"].clone(),
+                s["voiceMessages"][0]["file"].clone(),
+                s["voiceMessages"][0]["label"].clone(),
+            )
+        };
+        assert_eq!(
+            paths(&kept["Alpha"]),
+            (
+                serde_json::json!("C:\\A\\tqsl.exe"),
+                serde_json::json!("C:\\A\\cq.wav"),
+                serde_json::json!("C:\\A\\v1.wav"),
+                serde_json::json!("Alpha"),
+            )
+        );
+        assert_eq!(
+            paths(&kept["Bravo"]),
+            (
+                serde_json::json!("D:\\B\\tqsl.exe"),
+                serde_json::json!("D:\\B\\cq.wav"),
+                serde_json::json!("D:\\B\\v1.wav"),
+                serde_json::json!("Bravo"),
+            )
+        );
+    }
+
     /// The station's paths, set on `engine`: the TQSL program, a JS8 sound file and F1's
     /// recording, each under `root`. With the UI state holding a saved profile "Home" that carries
     /// the same three.
@@ -15427,8 +15555,10 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
 /// One settings object from a bundle exported from afar with the station's paths put back as
 /// `station` holds them (this station's settings, or its saved profile of the same name): each of
 /// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
-/// hold is left out, the voice slots whole where it holds none, so loading that profile keeps
-/// this station's own.
+/// hold is left out, so loading that profile keeps this station's own. The backup's voice slots are
+/// always kept, labels and all: a slot the station holds no recording for (no profile of that
+/// name here, or one with no voice slots) keeps its recording blank, as a slot is before one is
+/// recorded.
 fn with_station_paths(
     settings: &mut serde_json::Map<String, serde_json::Value>,
     station: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -15439,13 +15569,9 @@ fn with_station_paths(
             None => settings.remove(key),
         };
     }
-    let Some(held) = station
+    let held = station
         .and_then(|s| s.get("voiceMessages"))
-        .and_then(serde_json::Value::as_array)
-    else {
-        settings.remove("voiceMessages");
-        return;
-    };
+        .and_then(serde_json::Value::as_array);
     if let Some(slots) = settings
         .get_mut("voiceMessages")
         .and_then(serde_json::Value::as_array_mut)
@@ -15455,7 +15581,8 @@ fn with_station_paths(
             .filter_map(serde_json::Value::as_object_mut)
         {
             let file = held
-                .iter()
+                .into_iter()
+                .flatten()
                 .find(|h| h.get("slot").is_some() && h.get("slot") == slot.get("slot"))
                 .and_then(|h| h.get("file"))
                 .cloned()
