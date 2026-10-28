@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import { announce } from '../announce'
 import type { LogQuestion } from '../features/logAnswers'
 import type { LogColumnsSaved } from '../features/logColumns'
 
@@ -43,6 +44,7 @@ vi.mock('../api', () => {
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
 })
+vi.mock('../announce', () => ({ announce: vi.fn() }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn((run: () => Promise<unknown>) => run()),
@@ -222,6 +224,101 @@ describe('resize', () => {
     expect(saved).toHaveBeenCalledTimes(1)
     expect(saved).toHaveBeenLastCalledWith({ shown: [], hidden: [], widths: { country: 180 } })
     expect(header.getAttribute('aria-sort'), 'the click that ends a drag must not sort').toBe('none')
+  })
+})
+
+describe('move', () => {
+  /** jsdom lays nothing out: give each header cell a 100 px slot by its place in the header row. */
+  function layHeaders() {
+    return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const i = this.dataset.col ? [...this.parentElement!.children].indexOf(this) : -1
+      const left = i < 0 ? 0 : i * 100
+      const width = i < 0 ? 0 : 100
+      return { left, right: left + width, width, x: left, top: 0, bottom: width ? 20 : 0, height: width ? 20 : 0, y: 0, toJSON() {} } as DOMRect
+    })
+  }
+  const DEFAULT_HEADERS = ['Call', 'Country', 'Band', 'Freq', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'Notes', 'Edit / delete']
+
+  it('dragging a header onto another moves the column, saves the order once, and does not sort', async () => {
+    const rects = layHeaders()
+    try {
+      const saved = vi.fn()
+      await renderLog({ onColumnsChange: saved })
+      expect(headers()).toEqual(DEFAULT_HEADERS)
+      const notes = screen.getByRole('columnheader', { name: 'Notes' })
+      // Notes (slot 11) dragged onto Country's left half (slot 1: 100–200).
+      fireEvent.pointerDown(notes, { button: 0, clientX: 1150, clientY: 10, pointerId: 1 })
+      fireEvent.pointerMove(notes, { clientX: 700, clientY: 10, pointerId: 1 })
+      fireEvent.pointerMove(notes, { clientX: 120, clientY: 10, pointerId: 1 })
+      expect(saved).not.toHaveBeenCalled()
+      fireEvent.pointerUp(notes, { clientX: 120, clientY: 10, pointerId: 1 })
+      fireEvent.click(notes)
+      expect(headers()).toEqual(['Call', 'Notes', 'Country', 'Band', 'Freq', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'Edit / delete'])
+      expect(saved).toHaveBeenCalledTimes(1)
+      const order = saved.mock.calls[0][0].order as string[]
+      expect(order.slice(0, 3)).toEqual(['call', 'notes', 'country'])
+      expect(screen.getByRole('columnheader', { name: 'Notes' }).getAttribute('aria-sort'), 'the click that ends a drag must not sort').toBe('none')
+      // The rows follow the header: the second cell of a row is now the notes cell.
+      expect(announce).toHaveBeenCalledWith('Notes moved to place 2 of 13')
+    } finally {
+      rects.mockRestore()
+    }
+  })
+
+  it('a click with no travel still sorts', async () => {
+    const rects = layHeaders()
+    try {
+      const saved = vi.fn()
+      await renderLog({ onColumnsChange: saved })
+      const country = screen.getByRole('columnheader', { name: 'Country' })
+      fireEvent.pointerDown(country, { button: 0, clientX: 150, clientY: 10, pointerId: 1 })
+      fireEvent.pointerMove(country, { clientX: 152, clientY: 11, pointerId: 1 })
+      fireEvent.pointerUp(country, { clientX: 152, clientY: 11, pointerId: 1 })
+      fireEvent.click(country)
+      expect(saved).not.toHaveBeenCalled()
+      expect(headers()).toEqual(DEFAULT_HEADERS)
+      expect(screen.getByRole('columnheader', { name: /^Country/ }).getAttribute('aria-sort')).toBe('ascending')
+    } finally {
+      rects.mockRestore()
+    }
+  })
+
+  it('Alt+Shift+← and → on a focused header move its column a place, save, and say where it went', async () => {
+    const saved = vi.fn()
+    await renderLog({ onColumnsChange: saved })
+    screen.getByRole('columnheader', { name: 'Country' }).focus()
+    fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight', altKey: true, shiftKey: true })
+    expect(headers().slice(0, 3)).toEqual(['Call', 'Band', 'Country'])
+    expect(saved).toHaveBeenCalledTimes(1)
+    // A move is not a resize: no width was saved.
+    expect(saved.mock.calls[0][0].widths).toEqual({})
+    expect(announce).toHaveBeenLastCalledWith('Country moved to place 3 of 13')
+    // The header keeps the focus it had, so the next press carries on.
+    expect(document.activeElement).toBe(screen.getByRole('columnheader', { name: 'Country' }))
+    fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowLeft', altKey: true, shiftKey: true })
+    expect(headers()).toEqual(DEFAULT_HEADERS)
+    // Back where it began: nothing but the default table is saved.
+    expect(saved).toHaveBeenLastCalledWith({ shown: [], hidden: [], widths: {} })
+    // At the first place it goes no further, and says so.
+    saved.mockClear()
+    fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Call' }), { key: 'ArrowLeft', altKey: true, shiftKey: true })
+    expect(saved).not.toHaveBeenCalled()
+    expect(announce).toHaveBeenLastCalledWith('Call is already the first column')
+  })
+
+  it('a saved order loads in that order, and Reset puts the default order back', async () => {
+    const saved = vi.fn()
+    await renderLog({ columns: { shown: [], hidden: [], widths: {}, order: ['notes', 'call'] }, onColumnsChange: saved })
+    expect(headers().slice(0, 3)).toEqual(['Notes', 'Call', 'Country'])
+    const menu = await openChooser()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reset to the default columns' }))
+    expect(saved).toHaveBeenLastCalledWith(null)
+    expect(headers()).toEqual(DEFAULT_HEADERS)
+  })
+
+  it('an old saved choice with no order shows the table it always did', async () => {
+    await renderLog({ columns: { shown: ['iota'], hidden: ['freq'], widths: {} } })
+    expect(headers()).toEqual(['Call', 'Country', 'Band', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'IOTA', 'Notes', 'Edit / delete'])
   })
 })
 

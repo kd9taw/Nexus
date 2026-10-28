@@ -48,10 +48,13 @@ log stores about the station you worked — their grid, IOTA, county, CQ and ITU
 zones, continent and distance, the dates a card was sent and a QSL received,
 each service's upload state, and a contest contact's exchange. Untick one to
 hide it. Drag the right edge of a column's header to change its width (or press
-Alt+← / Alt+→ on the header); double-click the edge to put it back. A table with
-added columns scrolls sideways. Nexus keeps the choice in your settings, and
-**Reset to the default columns** in the same menu, or Settings ▸ Logbook ▸
-Logbook display, puts the default table back.
+Alt+← / Alt+→ on the header); double-click the edge to put it back. Drag a
+column's header left or right to move the column (or press Alt+Shift+← /
+Alt+Shift+→ on the header); a click on a header still sorts by it. The table
+uses the whole width of the window; one with more columns than fit scrolls
+sideways inside the table, its header with it. Nexus keeps the choice, the order
+included, in your settings, and **Reset to the default columns** in the same
+menu, or Settings ▸ Logbook ▸ Logbook display, puts the default table back.
 
 **What each contact records.** Besides the call, band, mode and reports, a contact you log
 carries:
