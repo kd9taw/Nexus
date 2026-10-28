@@ -4063,6 +4063,38 @@ mod logbook_startup_tests {
         }
     }
 
+    /// PSK Reporter names Nexus with the version tauri.conf.json gives the app, the one the app
+    /// shows and the installer is named for. The launch hands the radio loop the package's
+    /// version (source-scanned: what is under test is which value `finish_launch` passes, and no
+    /// type sees that), and the package's version is tauri.conf.json's.
+    #[test]
+    fn psk_reporter_is_handed_tauri_confs_version() {
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let stamp = "rest.radio_cfg.app_version = handle.package_info().version.to_string();";
+        let (at_stamp, at_start) = (
+            finish
+                .find(stamp)
+                .expect("the launch hands the radio loop the app version"),
+            finish
+                .find("start_on_the_logbook(&d, logbook_store, rest);")
+                .expect("the launch starts the radio loop"),
+        );
+        assert!(
+            at_stamp < at_start,
+            "the version is set before the radio loop starts"
+        );
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let conf_version = conf["version"]
+            .as_str()
+            .expect("a version in tauri.conf.json");
+        assert_eq!(
+            crate::context().package_info().version.to_string(),
+            conf_version
+        );
+    }
+
     /// The body of the top-level function `sig` in this file.
     fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
         let start = src
@@ -38301,6 +38333,8 @@ pub fn run() {
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
         pskreporter: settings.pskreporter,
+        // The package's version, known once the app is built: `finish_launch` sets it.
+        app_version: String::new(),
         audio_in: settings.audio_in.clone(),
         audio_out: settings.audio_out.clone(),
         tx_level: settings.tx_level,
@@ -40027,6 +40061,15 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         // The last note. The relay delivers it, then ends when this sender drops.
         let _ = notes.send(SplashNote::Opening);
     }
+    // The app's version, for the radio loop to name Nexus with on PSK Reporter. The package's,
+    // which is tauri.conf.json's (stamped with a tester build's suffix) and what `app_version`
+    // shows; not this crate's CARGO_PKG_VERSION, which a stamped suffix never reaches.
+    #[cfg(feature = "radio")]
+    let rest = {
+        let mut rest = rest;
+        rest.radio_cfg.app_version = handle.package_info().version.to_string();
+        rest
+    };
     let started = start_on_the_logbook(&d, logbook_store, rest);
     if let Err(why) = started {
         stop_for_no_log(&why);
