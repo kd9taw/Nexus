@@ -2608,3 +2608,117 @@ fn the_dropped_late_reply_notice_is_said_only_in_digital() {
         (Some(LATE_REPLY_DROPPED), None)
     );
 }
+
+// --- With no profiles, a call edit never relabels a contact or keys an old-call message --------
+
+/// The calls logged, each with its STATION_CALLSIGN.
+fn logged_calls(e: &Engine) -> Vec<(String, Option<String>)> {
+    e.stored_log()
+        .iter()
+        .map(|r| (r.call.clone(), r.station_callsign.clone()))
+        .collect()
+}
+
+/// No profiles, S&P: the operator double-clicks W1AW, our call and our roger key under the call
+/// the station has then; `before` is saved as the call before the click when given, `after` once
+/// our roger is on the air. Then W1AW's RR73 arrives, the contact is complete, and it logs itself.
+fn sp_closed(before: Option<&str>, after: Option<&str>) -> Engine {
+    let mut e = plain_ft8();
+    if let Some(call) = before {
+        settings_call_edit(&mut e, call);
+    }
+    let me = e.settings.mycall.clone();
+    e.call_station("W1AW");
+    assert_eq!(
+        keyed(&mut e, 0..2),
+        vec![format!("W1AW {me} EN52")],
+        "premise: our call"
+    );
+    e.ingest_decodes_for_test(&[dec_snr(&format!("{me} W1AW -10"), -7)], 2);
+    assert_eq!(
+        keyed(&mut e, 2..4),
+        vec![format!("W1AW {me} R-07")],
+        "premise: our roger"
+    );
+    if let Some(call) = after {
+        settings_call_edit(&mut e, call);
+    }
+    e.ingest_decodes_for_test(&[dec_snr(&format!("{me} W1AW RR73"), -7)], 4);
+    e
+}
+
+/// ⛔ No profiles: every over of an S&P contact went out as KD9TAW; the call is saved as KD9TAW/P
+/// (or another call, W9XYZ) after our roger and before W1AW's RR73 completes it. The contact is
+/// logged under KD9TAW, the call its overs carried, not the call in force when it is logged.
+/// CONTROLS: unchanged, it logs KD9TAW; with the call saved as KD9TAW/P before the click, every
+/// over carries KD9TAW/P and it logs KD9TAW/P.
+#[test]
+fn without_profiles_a_contact_finished_after_a_call_edit_logs_the_call_its_overs_carried() {
+    let w1aw = |call: &str| vec![("W1AW".to_string(), Some(call.to_string()))];
+    assert_eq!(logged_calls(&sp_closed(None, None)), w1aw(ME), "CONTROL");
+    assert_eq!(
+        logged_calls(&sp_closed(Some("KD9TAW/P"), None)),
+        w1aw("KD9TAW/P"),
+        "CONTROL: the call saved before the contact"
+    );
+    assert_eq!(
+        logged_calls(&sp_closed(None, Some("KD9TAW/P"))),
+        w1aw(ME),
+        "a portable form saved mid-contact"
+    );
+    assert_eq!(
+        logged_calls(&sp_closed(None, Some("W9XYZ"))),
+        w1aw(ME),
+        "another call saved mid-contact"
+    );
+}
+
+/// ⛔ The runner's side: our RR73 keyed under KD9TAW, the call is saved as KD9TAW/P, and the next
+/// fold logs the contact. It carries KD9TAW. CONTROL: unchanged, KD9TAW as well.
+#[test]
+fn without_profiles_a_run_contact_logged_after_a_call_edit_logs_the_call_its_overs_carried() {
+    for edit in [false, true] {
+        let mut e = run_at_their_roger(false);
+        assert_eq!(key_over(&mut e, 104).as_deref(), Some("W1AW KD9TAW RR73"));
+        if edit {
+            settings_call_edit(&mut e, "KD9TAW/P");
+        }
+        e.hear_for_test("CQ K1ABC FN42", -5, 106);
+        assert_eq!(
+            logged_calls(&e),
+            vec![("W1AW".to_string(), Some(ME.to_string()))],
+            "edit={edit}"
+        );
+    }
+}
+
+/// ⛔ No profiles: a run sets aside a contact whose caller went quiet after the reports crossed.
+/// The call is saved as W9XYZ and Log QSO pressed: the contact logs under KD9TAW, the call its
+/// overs carried. CONTROL: unchanged, KD9TAW too.
+#[test]
+fn without_profiles_a_contact_set_aside_logs_the_call_its_overs_carried() {
+    for edit in [false, true] {
+        let mut e = plain_ft8();
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0);
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -8)], 1);
+        e.poll_tx(2);
+        e.ingest_decodes_for_test(&[], 3);
+        for slot in [4u64, 6, 8] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        assert!(e.stalled_qso.is_some(), "premise: set aside");
+        e.halt_tx();
+        e.set_mode("qso-monitor").unwrap();
+        if edit {
+            settings_call_edit(&mut e, "W9XYZ");
+        }
+        assert!(e.log_current_qso(), "Log QSO");
+        assert_eq!(
+            logged_calls(&e),
+            vec![("W1AW".to_string(), Some(ME.to_string()))],
+            "edit={edit}"
+        );
+    }
+}

@@ -3302,6 +3302,9 @@ struct StalledQso {
     /// under, not the one on when the button is pressed. `None` with no profiles: the contact is
     /// stamped when it is logged, as before profiles.
     station: Option<QsoRecord>,
+    /// The call its overs carried ([`Engine::contact_station_callsign`], taken when it was set
+    /// aside): with no profiles, a call saved before Log QSO does not relabel it.
+    station_callsign: Option<String>,
 }
 
 /// Where and in what mode a finished contact was made, kept when a tier change comes before Log
@@ -17014,6 +17017,29 @@ impl Engine {
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
     }
 
+    /// The station callsign to stamp on the FT contact with `dxcall`: while the sequencer holds
+    /// that contact, the call its overs were made under (`QsoStation::mycall`), which is the call
+    /// they went out under, since an over made under another call than the station's is never
+    /// keyed; otherwise [`Self::station_callsign_now`]. A call saved mid-contact on a station with
+    /// no profiles does not relabel a contact the air carried under the call before it.
+    fn contact_station_callsign(&self, dxcall: &str) -> Option<String> {
+        let built = match &self.mode {
+            Mode::Qso { station, .. }
+                if station
+                    .dxcall
+                    .as_deref()
+                    .is_some_and(|c| same_call(c, dxcall)) =>
+            {
+                tempo_core::message::unhash_call(&station.mycall).trim()
+            }
+            _ => "",
+        };
+        if built.is_empty() {
+            return self.station_callsign_now();
+        }
+        Some(built.to_ascii_uppercase())
+    }
+
     /// The rig to stamp on a contact (ADIF `MY_RIG`): the active radio's model, or nothing when
     /// none is configured — "No rig" is spelled "None / VOX" by `Settings::default` (and "None"
     /// elsewhere), so the test is the prefix, and a station with no rig stamps nothing rather
@@ -17643,12 +17669,11 @@ impl Engine {
         // them has a start-of-QSO identity snapshot to read (`Station::mycall`,
         // crates/tempo-core/src/qso.rs). Reading that here would leave every other path
         // unstamped, which is most contacts. The two can only disagree when the operator
-        // changes callsign mid-contact, and in that window the WIRE is already wrong — the
-        // sequencer keeps transmitting from its start-of-QSO snapshot while the identity gate
-        // validates the new call — which is a separate transmit-path defect this change
-        // deliberately does not reach into. The mode builders that CAN be delayed (a
+        // changes callsign mid-contact. The mode builders that CAN be delayed (a
         // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
-        // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
+        // confirm) stamp it at contact time instead, and this fill leaves theirs alone; the FT
+        // builder stamps the call the sequencer's overs carried
+        // ([`Self::contact_station_callsign`]), since an over under any other call never keys.
         //
         // A record arriving with its own station call — an imported club log, or a row the
         // operator repaired by hand — is left alone. Same rule as `operator` below.
@@ -19717,6 +19742,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         rx_report: Option<i32>,
         made_on: (String, (f64, Option<f64>)),
     ) -> StalledQso {
+        let station_callsign = self.contact_station_callsign(&dxcall);
         StalledQso {
             dxcall,
             dxgrid,
@@ -19729,6 +19755,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             end_unix: now_unix_secs(),
             confirm_only: false,
             station: None,
+            station_callsign,
         }
         .with_station(self)
     }
@@ -19750,6 +19777,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         (rec.freq_mhz, rec.freq_rx_mhz) = st.freqs;
         rec.mode = st.mode;
         rec.time_off_unix = Some(st.end_unix);
+        rec.station_callsign = st.station_callsign;
         // The station it was made under ([`StalledQso::station`]): everything the stamps put on
         // a record, taken as they were when it was set aside.
         if let Some(station) = st.station {
@@ -33229,6 +33257,7 @@ contact yourself."
         // settings off, is the contact it was: its mode, band and frequencies ([`MadeOn`]).
         let made_on = self.made_on_for(&dxcall).cloned();
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
+        let station_callsign = self.contact_station_callsign(&dxcall);
         // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
         let mode = made_on
             .as_ref()
@@ -33310,10 +33339,11 @@ contact yourself."
             sat_name: None,
             operator: None,
             // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
-            // as the operator takes to confirm, so the call is captured now.
+            // as the operator takes to confirm, so the call is captured now: the call the
+            // contact's overs carried ([`Self::contact_station_callsign`]).
             my_grid: None,
             my_rig: None,
-            station_callsign: self.station_callsign_now(),
+            station_callsign,
             extra: Vec::new(),
             contest: None,
         }
@@ -79276,6 +79306,7 @@ mod dedup_gate_tests {
                             end_unix: 0,
                             confirm_only: false,
                             station: None,
+                            station_callsign: None,
                         });
                         let got =
                             matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
