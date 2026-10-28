@@ -220,6 +220,40 @@ describe('the radio setup', () => {
       expect(onClose).not.toHaveBeenCalled()
     })
 
+    it('after a refused Finish the setup still answers: the keying is fixed and Finish saves it', async () => {
+      const onClose = openAudio(withRadio2(0))
+      fireEvent.change(keying(2), { target: { value: 'cat' } })
+      finish()
+      await screen.findByRole('alert')
+      expect((screen.getByRole('button', { name: 'Finish' }) as HTMLButtonElement).disabled).toBe(false)
+      while (!screen.queryByRole('heading', { name: 'Audio and keying' })) fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+      fireEvent.change(keying(2), { target: { value: 'rts' } })
+      fireEvent.change(screen.getByRole('textbox', { name: 'PTT Serial Port' }), { target: { value: 'COM9' } })
+      finish()
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(api.spies.updateRadioProfile.mock.calls.map(([id, p]) => [id, (p as Record<string, unknown>).pttMethod])).toEqual([[2, 'rts']])
+    })
+
+    it('after a refused Finish, Back, Cancel and Esc still work', async () => {
+      const refuse = async () => {
+        fireEvent.change(keying(2), { target: { value: 'cat' } })
+        finish()
+        await screen.findByRole('alert')
+      }
+      const onClose = openAudio(withRadio2(0))
+      await refuse()
+      fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+      expect(screen.queryByRole('button', { name: 'Finish' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(onClose).toHaveBeenCalledTimes(1)
+      cleanup()
+      const onClose2 = openAudio(withRadio2(0))
+      await refuse()
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+      expect(onClose2).toHaveBeenCalledTimes(1)
+      expect(writes()).toEqual([])
+    })
+
     it('positive control: CAT keying on a radio with a rig model is written', async () => {
       const onClose = openAudio(withRadio2(1))
       fireEvent.change(keying(2), { target: { value: 'cat' } })

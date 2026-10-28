@@ -232,6 +232,16 @@ export function RadioSetupWizard({
       onClose()
       return
     }
+    // The checks Settings makes at Save, on each radio whose keying or sound cards changed here
+    // (`kitProblems`): one that cannot work (CAT keying with no rig model) is refused, saving nothing.
+    // Before `busy`: they read nothing, and a return after it would leave the setup busy for good
+    // (Cancel, Back and Finish disabled, the dialog unclosable). Every return after `busy` is in the
+    // `try`, whose `finally` clears it.
+    const refused = radios.flatMap((r) => kitProblems(r, a.kit[r.id])).find((c) => c.level === 'error')
+    if (refused) {
+      setError(refused.message)
+      return
+    }
     setBusy(true)
     setError(null)
     let landed = false
@@ -239,13 +249,6 @@ export function RadioSetupWizard({
     const write = async (verb: Promise<unknown>) => {
       await verb
       landed = true
-    }
-    // The checks Settings makes at Save, on each radio whose keying or sound cards changed here
-    // (`kitProblems`): one that cannot work (CAT keying with no rig model) is refused, saving nothing.
-    const refused = radios.flatMap((r) => kitProblems(r, a.kit[r.id])).find((c) => c.level === 'error')
-    if (refused) {
-      setError(refused.message)
-      return
     }
     try {
       if (!sameSetup(settings, await getSettings())) {
