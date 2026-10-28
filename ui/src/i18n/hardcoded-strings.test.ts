@@ -82,6 +82,7 @@ const MIGRATED = [
   // Settings' one Connect to my station… entry — born migrated: its label, button, hint and failure line.
   'lan/ConnectEntry.tsx',
   'components/SettingsStation.tsx',
+  'components/StationProfiles.tsx',
   // Settings ▸ Appearance ▸ Colours (2026-09-26) — born migrated: the section's rows, and the role
   // table whose `labelKey`/`hintKey` entries name every role and preset word.
   'components/SettingsColours.tsx',

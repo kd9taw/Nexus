@@ -38,6 +38,10 @@ export interface Profile {
  * current value. */
 const NEVER_IMPORT: readonly string[] = [
   'mycall',
+  // The "My station" profiles and the one the station is on: the station's own calls, each
+  // written by its own verb, never by a borrowed profile.
+  'stationProfiles',
+  'activeStationProfile',
   'licenseClass',
   'radios',
   'activeRadio',

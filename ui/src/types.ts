@@ -5724,6 +5724,12 @@ export interface Settings {
   activeRadio?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** "My station" profiles (Home, a portable kit, a club call). Absent until the operator makes
+   *  one. Written only by their own verbs (`saveStationProfile`, `switchStationProfile`,
+   *  `removeStationProfile`); a settings save keeps the live list and active id. */
+  stationProfiles?: StationProfile[]
+  /** The id of the profile the station is on; the flat call, grid, state and power are its. */
+  activeStationProfile?: string
   /** Opt-in: run two radios at once (one per window). When on with ≥2 radios, launch shows a
    *  "which radio?" picker. Off by default so single-radio stations are never bothered. */
   simultaneousRadios?: boolean
@@ -5902,6 +5908,36 @@ export interface RadioSummary {
   bands: string[]
 }
 
+/** The id of the implicit Home profile: today's Settings ▸ Station. */
+export const HOME_STATION_PROFILE = 'home'
+
+/** One "My station" profile (`crates/tempo-app/src/settings/station_profiles.rs`). Blank fields
+ *  stamp nothing on a contact. */
+export interface StationProfile {
+  /** `home` for Home, `p1`… for the others; empty when adding one. */
+  id: string
+  /** Blank for Home, which the screen names in its language. */
+  name: string
+  call: string
+  grid: string
+  state: string
+  county: string
+  cqZone: number | null
+  ituZone: number | null
+  iota: string
+  park: string
+  powerW: number | null
+  rig: string
+  antenna: string
+}
+
+/** One profile as the top bar offers it. */
+export interface StationProfileChoice {
+  id: string
+  name: string
+  call: string
+}
+
 export interface AppSnapshot {
   mycall: string
   mygrid: string
@@ -5913,6 +5949,10 @@ export interface AppSnapshot {
   activeRadioId?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** The "My station" profiles the top bar picks from; absent for a station with none. */
+  stationProfiles?: StationProfileChoice[]
+  /** The id of the profile the station is on. */
+  activeStationProfile?: string
   /** The last radio switch Nexus made by itself this session (absent until one happens). */
   autoRadioSwitch?: AutoRadioSwitch
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */

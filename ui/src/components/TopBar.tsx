@@ -10,13 +10,14 @@
 // and stay in the code.
 import { useEffect, useId, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
-import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
+import type { BandChannel, LinkState, RadioStatus, RadioSummary, StationProfileChoice, Tier } from '../types'
 import { isOnAir, isRxOnly } from '../types'
 import { Menu } from './ui/Menu'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
 import { LiveLevelMeter } from './LiveMeters'
 import { RadioSwitcher } from './RadioSwitcher'
+import { stationProfileName } from './StationProfiles'
 import { appVersion, repairClock } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
@@ -95,6 +96,11 @@ interface Props {
   /** Peg-lock state for the switcher. */
   radioPegged?: boolean
   onSetActiveRadio?: (id: number) => void
+  /** "My station" profiles (snapshot). Fewer than two ⇒ no picker: a station that never made one
+   *  sees the bar it always had. */
+  stationProfiles?: StationProfileChoice[]
+  activeStationProfile?: string
+  onSwitchStationProfile?: (id: string) => void
   onSetPegLock?: (on: boolean) => void
   link: LinkState
   bandPlan: BandChannel[]
@@ -363,6 +369,9 @@ export function TopBar({
   radios,
   radioPegged,
   onSetActiveRadio,
+  stationProfiles,
+  activeStationProfile,
+  onSwitchStationProfile,
   onSetPegLock,
   link,
   bandPlan,
@@ -521,6 +530,22 @@ export function TopBar({
           {mycall}
           <span className="mygrid">{mygrid}</span>
         </span>
+        {stationProfiles && stationProfiles.length > 1 && (
+          <select
+            className="station-profile-picker"
+            aria-label={t('topbar.stationProfile.label')}
+            title={drivesAnotherStation() ? t('topbar.stationProfile.atStation') : t('topbar.stationProfile.title')}
+            disabled={drivesAnotherStation() || !onSwitchStationProfile}
+            value={activeStationProfile ?? ''}
+            onChange={(e) => onSwitchStationProfile?.(e.target.value)}
+          >
+            {stationProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {stationProfileName(p)} · {p.call}
+              </option>
+            ))}
+          </select>
+        )}
         {radios && radios.length > 1 && (
           <RadioSwitcher
             radios={radios}

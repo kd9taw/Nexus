@@ -17,6 +17,8 @@ import type { MessageKey } from '../i18n'
 import type { BandChannel, ExperienceLevel, Settings } from '../types'
 import { EXPERIENCE_LEVELS } from '../settings/experience'
 import { FrequencyControl } from './FrequencyControl'
+import { StationProfiles } from './StationProfiles'
+import { drivesAnotherStation } from '../features/durableStore'
 
 type FieldKey = keyof Settings
 
@@ -93,9 +95,12 @@ interface Props {
   /** Saves a new experience answer through its one writer (and re-picks the starting features).
    *  Absent: the select is not shown. */
   onSetExperience?: (level: ExperienceLevel) => void
+  /** After a "My station" profile was saved or removed through its own writer: the panel re-reads
+   *  the station's fields. Absent: the profiles are not shown. */
+  onStationProfilesChanged?: () => void
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation, onSetExperience }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation, onSetExperience, onStationProfilesChanged }: Props) {
   return (
     // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
     // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
@@ -170,6 +175,12 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
         )}
       </div>
       </fieldset>
+      {/* "My station" profiles: saved as they are saved, by their own writer, so they sit outside
+          the form's disabled group and take `readOnly` themselves; from a computer driving the
+          station they are shown, and set at the station only. */}
+      {onStationProfilesChanged && (
+        <StationProfiles form={form} readOnly={readOnly || drivesAnotherStation()} onChanged={onStationProfilesChanged} />
+      )}
       {/* #248: km or miles, °C or °F, for the whole app. It sat under Digital ▸ Station
           Housekeeping, where nobody looking for miles would look. The option VALUES are
           persisted tokens; only the labels are prose. A separate <label htmlFor> keeps the

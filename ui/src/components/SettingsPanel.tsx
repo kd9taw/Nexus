@@ -2858,6 +2858,27 @@ export function SettingsPanel({
   // starting feature set as the wizard does, so whenever that would turn any screen off (whatever
   // the set is now, a named profile or a hand-tuned one) it asks first and names what would go.
   // Declined, nothing changes.
+  // A "My station" profile was saved or removed (its own writer, not Save): the station's call,
+  // grid, state and power may be the profile's now, so the form and its saved copy take them, with
+  // the list, from the backend; the rest of the form is left as the operator has it.
+  const handleStationProfilesChanged = () => {
+    void (async () => {
+      const fresh = await getSettings().catch(() => null)
+      if (!fresh) return
+      const station: Partial<Settings> = {
+        mycall: fresh.mycall,
+        mygrid: fresh.mygrid,
+        opState: fresh.opState,
+        stationPowerW: fresh.stationPowerW,
+        stationProfiles: fresh.stationProfiles,
+        activeStationProfile: fresh.activeStationProfile,
+      }
+      setForm((prev) => (prev ? { ...prev, ...station } : prev))
+      if (savedRef.current) savedRef.current = { ...savedRef.current, ...station }
+      onSaved?.()
+    })()
+  }
+
   const handleSetExperience = (level: ExperienceLevel) => {
     void (async () => {
       const label = EXPERIENCE_LEVELS.find((l) => l.value === level)?.label ?? level
@@ -5199,6 +5220,7 @@ export function SettingsPanel({
             onUpdate={update}
             onSetFreq={setFreq}
             onSetExperience={handleSetExperience}
+            onStationProfilesChanged={handleStationProfilesChanged}
           />
           )}
 

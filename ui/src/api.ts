@@ -69,6 +69,7 @@ import type {
   QrzPushResult,
   RouteMode,
   RadioSwitchPolicy,
+  StationProfile,
   ExperienceLevel,
   RoutingRule,
   Settings,
@@ -3524,6 +3525,22 @@ export async function setDefaultRadio(id: number | null): Promise<AppSnapshot> {
  * `radioSwitchPolicy` (a settings save keeps the live value, as for `setBetaUpdates`). */
 export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
+}
+
+/** Put the station on a "My station" profile — the ONE writer of `activeStationProfile`. Its call,
+ * grid, state and power become the station's, as a Settings save of them would. */
+export async function switchStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('switch_station_profile', { id })
+}
+
+/** Save one "My station" profile (an empty id adds one) — the ONE writer of `stationProfiles`. */
+export async function saveStationProfile(profile: StationProfile): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('save_station_profile', { profile })
+}
+
+/** Remove one "My station" profile; Home and the one the station is on stay. */
+export async function removeStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('remove_station_profile', { id })
 }
 
 /** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of

@@ -6722,6 +6722,21 @@ body.resizing {
   color: var(--text-faint);
 }
 
+/* "My station" profile picker (rendered only once a profile exists): a compact select beside the
+   callsign, capped so a long profile name never widens the bar. */
+.station-profile-picker {
+  margin-left: var(--space-2);
+  max-width: 9.5em;
+  min-width: 0;
+  font-size: calc(11px * var(--text-scale));
+  padding: 2px var(--space-1);
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  text-overflow: ellipsis;
+}
+
 .radio-readout {
   margin-left: auto;
   /* Let the pinned-right frequency pill wrap instead of running off the header edge when the

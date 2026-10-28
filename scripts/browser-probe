@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|profiles
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -138,6 +138,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         is drawn whole and covers none, Log stays topmost and live and a click
                         reaches it, with a control (the count in the flow) that must be caught
                         (ui/probe/logwaiting-probe.mjs; it builds nothing)
+  --desktop profiles    the "My station" picker in the real top bar, on Operate and on the Logbook
+                        at 1024×768 and 1920×1080, measured without and with three profiles (one
+                        with a long name), asserting the picker is topmost with its three profiles
+                        and a pick reaches the switch, the bar keeps its height, nothing runs
+                        sideways or past the window, and Stop TX and Tune do not move, with a
+                        planted overflow that must be caught (ui/probe/profiles-probe.mjs)
   --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
                         and 125/150 % on a 1080p screen, without and with a status-lane message,
                         asserting the message changes neither the bar's height nor the line any
@@ -189,7 +195,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, logwaiting, topbar, header, rttyfit, firstrun, clublog or aprsmap" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|profiles) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, logwaiting, topbar, header, rttyfit, firstrun, clublog, aprsmap or profiles" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -224,6 +230,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
+  [ "$DESKTOP" = profiles ] && exec node "$ROOT/ui/probe/profiles-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

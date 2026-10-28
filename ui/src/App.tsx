@@ -41,6 +41,7 @@ import {
   setTxEnabled as apiSetTxEnabled,
   setTxLevel as apiSetTxLevel,
   setActiveRadio as apiSetActiveRadio,
+  switchStationProfile as apiSwitchStationProfile,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
   atuBypass as apiAtuBypass,
@@ -1448,6 +1449,13 @@ function App() {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
 
+  // The station profile changed (the picker, Settings, or an activation picking its park's): the
+  // settings copy every screen reads takes the profile's call, grid, state and power.
+  const activeStationProfile = snap?.activeStationProfile
+  useEffect(() => {
+    if (activeStationProfile !== undefined) reloadSettings()
+  }, [activeStationProfile, reloadSettings])
+
   // initial load + live subscription
   useEffect(() => {
     let mounted = true
@@ -1982,6 +1990,14 @@ function App() {
   // peg-lock. The returned snapshot echoes the new active radio + tune instantly.
   const handleSetActiveRadio = useCallback((id: number) => {
     void withErrorToast(() => apiSetActiveRadio(id), t('shell.radio.switch.failed')).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  // The top bar's "My station" picker. The snapshot answers with the new call; the settings copy
+  // follows below, from the active id the snapshot carries.
+  const handleSwitchStationProfile = useCallback((id: string) => {
+    void withErrorToast(() => apiSwitchStationProfile(id), t('shell.stationProfile.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -3982,6 +3998,9 @@ function App() {
         radios={snap.radios}
         radioPegged={snap.radioPegged}
         onSetActiveRadio={handleSetActiveRadio}
+        stationProfiles={snap.stationProfiles}
+        activeStationProfile={snap.activeStationProfile}
+        onSwitchStationProfile={handleSwitchStationProfile}
         onSetPegLock={handleSetPegLock}
         link={snap.link}
         bandPlan={bandPlan}
