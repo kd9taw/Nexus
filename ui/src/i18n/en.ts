@@ -2205,6 +2205,7 @@ export const EN = {
   'logbook.tools.callbook.applyUpTo': { one: 'Update up to {{count}} contact', other: 'Update up to {{count}} contacts' },
   'logbook.tools.callbook.stroked': { one: 'A call with a stroke is asked again for its base call: up to {{count}} lookup in all.', other: 'A call with a stroke is asked again for its base call: up to {{count}} lookups in all.' },
   'logbook.tools.callbook.qrzCount': { one: 'QRZ counted {{count}} lookup on your account in the last day.', other: 'QRZ counted {{count}} lookups on your account in the last day.' },
+  'logbook.tools.callbook.qrzCountNote': 'That counts every program that uses your QRZ login; only Nexus’s own lookups count toward the limit above.',
   'logbook.tools.callbook.waitingForTx': 'Waiting for the transmission to end before the contacts are changed…',
   'logbook.tools.callbook.end.refused': 'Stopped: QRZ answered 3 calls in a row with no record, which is how it refuses lookups (a daily limit, a lapsed subscription or a suspended account). What was found is filled in. Check your QRZ account before running it again.',
   'logbook.tools.callbook.resume': { one: '{{count}} call not looked up yet: run the update again to continue.', other: '{{count}} calls not looked up yet: run the update again to continue.' },

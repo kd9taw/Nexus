@@ -3310,6 +3310,7 @@ export const ES: PartialCatalog = {
   "logbook.tools.callbook.applyUpTo": { "one": "Actualizar hasta {{count}} contacto", "other": "Actualizar hasta {{count}} contactos" },
   "logbook.tools.callbook.stroked": { "one": "Un indicativo con barra se consulta otra vez por su indicativo base: hasta {{count}} consulta en total.", "other": "Un indicativo con barra se consulta otra vez por su indicativo base: hasta {{count}} consultas en total." },
   "logbook.tools.callbook.qrzCount": { "one": "QRZ contó {{count}} consulta en tu cuenta en el último día.", "other": "QRZ contó {{count}} consultas en tu cuenta en el último día." },
+  "logbook.tools.callbook.qrzCountNote": "Eso cuenta todos los programas que usan tu acceso a QRZ; para el límite de arriba solo cuentan las consultas de Nexus.",
   "logbook.tools.callbook.waitingForTx": "Esperando a que termine la transmisión antes de cambiar los contactos…",
   "logbook.tools.callbook.end.refused": "Detenido: QRZ respondió 3 indicativos seguidos sin registro, que es como rechaza consultas (un límite diario, una suscripción caducada o una cuenta suspendida). Lo encontrado está rellenado. Revisa tu cuenta de QRZ antes de ejecutarlo otra vez.",
   "logbook.tools.callbook.resume": { "one": "{{count}} indicativo aún sin consultar: vuelve a ejecutar la actualización para continuar.", "other": "{{count}} indicativos aún sin consultar: vuelve a ejecutar la actualización para continuar." },

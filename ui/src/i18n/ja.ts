@@ -1488,6 +1488,7 @@ export const JA: PartialCatalog = {
   "logbook.tools.callbook.applyUpTo": "最大{{count}}件を更新",
   "logbook.tools.callbook.stroked": "斜線付きのコールは基本コールでもう一度検索されます：合計で最大{{count}}回の検索。",
   "logbook.tools.callbook.qrzCount": "QRZはこの1日にあなたのアカウントで{{count}}回の検索を数えています。",
+  "logbook.tools.callbook.qrzCountNote": "これはQRZのログインを使うすべてのプログラムの合計です。上の上限に数えるのはNexus自身の検索だけです。",
   "logbook.tools.callbook.waitingForTx": "送信が終わるのを待ってからQSOを変更します…",
   "logbook.tools.callbook.end.refused": "停止：QRZが3件続けて記録なしで応答しました。これはQRZが検索を拒否するときの応答です（1日の上限、購読の期限切れ、アカウントの停止）。見つかった分は入力済みです。もう一度実行する前にQRZのアカウントを確認してください。",
   "logbook.tools.callbook.resume": "未検索のコールが{{count}}件あります。続けるには更新をもう一度実行してください。",
