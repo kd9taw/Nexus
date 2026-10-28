@@ -47637,6 +47637,51 @@ mod tests {
         assert_eq!(log.named.len(), 1, "older spots are let go");
     }
 
+    /// The spot side of the offer is fed, emptied and read where no test reaches: the two
+    /// cluster feeds (network threads), the callsign restart and the unassisted toggle (the
+    /// spot buffer's two resets), and the Tauri command. So the source is read: each feed notes
+    /// every spot it keeps, after the unassisted gate and beside the buffer push; each reset of
+    /// the spot buffer empties the log with it; and the offer reads the log.
+    #[test]
+    fn the_spot_iota_log_is_fed_emptied_and_read_where_the_spots_are() {
+        let src = include_str!("lib.rs");
+        let body = |name: &str| -> &str {
+            let start = src
+                .find(&format!("\nfn {name}("))
+                .unwrap_or_else(|| panic!("no fn {name}"));
+            let len = src[start..].find("\n}\n").expect("its end");
+            &src[start..start + len]
+        };
+        for feed in ["start_cluster_feed", "start_human_cluster_feed"] {
+            let b = body(feed);
+            let gate = b
+                .find("if unassisted() {")
+                .unwrap_or_else(|| panic!("{feed} gate"));
+            let noted = b
+                .find("note_spot_iota(")
+                .unwrap_or_else(|| panic!("{feed} must note each spot's group"));
+            let pushed = b.find(".push_ranked(").expect("the buffer push");
+            assert!(gate < noted && noted < pushed, "{feed}: gate, note, push");
+            assert_eq!(b.matches("note_spot_iota(").count(), 1, "{feed}");
+        }
+        for reset in ["restart_live_feeds", "set_unassisted_mode"] {
+            let b = body(reset);
+            let cleared = b.find("SpotBuffer::default();").expect("the buffer reset");
+            let after = &b[cleared..];
+            let iota = after
+                .find("clear_spot_iota();")
+                .unwrap_or_else(|| panic!("{reset} must empty the spot IOTA log"));
+            assert!(
+                !after[..iota].contains("\n    }\n"),
+                "{reset}: emptied in the same block as the buffer"
+            );
+        }
+        let offer = body("get_iota_offer");
+        assert!(offer.contains("SPOT_IOTA"), "the offer reads the spot log");
+        assert!(offer.contains(".group_for(std::time::Instant::now(), &call)"));
+        assert!(offer.contains("spot_iota.as_deref()"));
+    }
+
     /// The evidence ranking is the locality question the board asks OF THAT BAND, and
     /// nothing else — a rank that disagreed with the gate would evict the wrong voice.
     ///
