@@ -54,7 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
   plays the tone and Nexus says so once. **Play the sounds on** picks the output, the system default unless you pick one.
   Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
-  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. Two
+  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. The
+  device the radio actually opened for TX audio is refused too, while the radio holds it: with TX audio set to the
+  system default, a sound is not played on that device after the system default moves to another one. Two
   identically named sound cards count as one device. On Linux, the sound server's default output (default, PulseAudio,
   PipeWire) may be the radio's card, so the sounds play only on a sound card picked by name, and only while the radio's
   TX audio is set to its own, different card by name. A device whose route is set in a sound configuration file (one of

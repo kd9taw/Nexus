@@ -8,6 +8,9 @@
 //! - the TX audio device of the station (`audio_out`) or of ANY radio profile, the one in use or
 //!   not, since a second rig can be keyed by its own VOX while the first is the one shown;
 //! - SmartSDR's DAX transmit device, whatever is configured ([`crate::monitor`]'s rule);
+//! - the TX output the radio's audio path holds open now, by the name it resolved to when the
+//!   radio opened ([`open_tx_outputs`]): a TX device of "system default" stays on the device it
+//!   opened when the default later moves, and the settings no longer name it;
 //! - the same ALSA card as one of those, reached by another name (`hw:` against `plughw:`, or by
 //!   its number, `hw:1,0`, resolved to the card's id);
 //! - the system default output, when a TX device is configured as "system default" (empty);
@@ -61,6 +64,58 @@ pub fn tx_audio_devices(settings: &Settings) -> Vec<String> {
     std::iter::once(settings.audio_out.clone())
         .chain(settings.radios.iter().map(|r| r.audio_out.clone()))
         .collect()
+}
+
+/// The TX outputs the radio's audio path holds now, each by the name of the device it ACTUALLY
+/// resolved when it opened ([`hold_tx_output`]). The settings name a TX device as the operator
+/// chose it, and "" (the system default) is resolved once, when the radio opens: if the system
+/// default moves afterwards (a headset plugged in), the radio keeps transmitting on the device it
+/// holds, which the settings no longer name. Every sound is refused against these as well.
+static OPEN_TX_OUTPUTS: std::sync::Mutex<Vec<(u64, String)>> = std::sync::Mutex::new(Vec::new());
+static NEXT_TX_HOLD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// One TX output held open by the radio's audio path, named in [`OPEN_TX_OUTPUTS`] until it is
+/// dropped (when the audio backend that resolved it goes).
+#[derive(Debug)]
+pub struct TxOutputHold(u64);
+
+impl Drop for TxOutputHold {
+    fn drop(&mut self) {
+        OPEN_TX_OUTPUTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(id, _)| *id != self.0);
+    }
+}
+
+/// Name `device` (the name the device that opened reports) as a TX output held open, until the
+/// returned hold is dropped.
+pub fn hold_tx_output(device: String) -> TxOutputHold {
+    let id = NEXT_TX_HOLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    OPEN_TX_OUTPUTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((id, device));
+    TxOutputHold(id)
+}
+
+/// The TX outputs held open now, by the names they opened as. Read-only.
+pub fn open_tx_outputs() -> Vec<String> {
+    OPEN_TX_OUTPUTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// The TX devices a sound is refused against: the settings' (`tx_devices`) and every TX output
+/// the radio holds open now ([`open_tx_outputs`]).
+#[cfg_attr(not(feature = "device"), allow(dead_code))]
+fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
+    let mut all = tx_devices.to_vec();
+    all.extend(open_tx_outputs());
+    all
 }
 
 /// The ALSA PCM names that reach the sound server's (or ALSA's) default sink rather than a card
@@ -426,7 +481,7 @@ pub use device_play::play;
 
 #[cfg(feature = "device")]
 mod device_play {
-    use super::{begin_play, clip_for_output, refuse_tx, PlayRefusal};
+    use super::{begin_play, clip_for_output, guarded_tx_devices, refuse_tx, PlayRefusal};
     use crate::device::{cpal_device_name, dispatch_format, resolve_configured, AUDIO_HOST_LOCK};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::SampleFormat;
@@ -507,7 +562,13 @@ mod device_play {
         )
         .map_err(|_| PlayRefusal::NoDevice)?;
         let opened = cpal_device_name(&dev).ok_or(PlayRefusal::NoDevice)?;
-        refuse_tx(&opened, device, tx_devices, default_output.as_deref())?;
+        // The settings' TX devices and the TX outputs the radio holds open, as they are now.
+        refuse_tx(
+            &opened,
+            device,
+            &guarded_tx_devices(tx_devices),
+            default_output.as_deref(),
+        )?;
         let supported = dev
             .default_output_config()
             .map_err(|e| PlayRefusal::Failed(e.to_string()))?;
@@ -942,6 +1003,42 @@ mod tests {
         assert!(ep("  ", &s(&["Rig"]), Some("Speakers")));
     }
 
+    /// The radio opened its TX output while it was "the system default", and the default moved
+    /// later: the radio still transmits on the device it opened, which the settings no longer name.
+    /// A sound on that device is refused for as long as the radio holds it.
+    #[test]
+    fn the_tx_output_the_radio_holds_open_is_refused_whatever_settings_say() {
+        let tx = s(&[""]);
+        let codec = "Nexus Test Held CODEC";
+        assert_eq!(
+            ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
+            Ok(()),
+            "premise: by the settings alone it plays"
+        );
+        let held = hold_tx_output(codec.to_string());
+        assert_eq!(
+            ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
+            Err(PlayRefusal::TxDevice)
+        );
+        assert_eq!(
+            ep_refuse(
+                "Headphones",
+                "",
+                &guarded_tx_devices(&s(&["Rig CODEC"])),
+                Some("Headphones")
+            ),
+            Ok(()),
+            "control: another output plays"
+        );
+        drop(held);
+        assert!(!open_tx_outputs().iter().any(|n| n == codec));
+        assert_eq!(
+            ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
+            Ok(()),
+            "released when the radio lets it go"
+        );
+    }
+
     /// The setting moves AFTER the sound's device was picked: the next play is refused, because
     /// the guard reads the settings at each play.
     #[test]
@@ -1002,10 +1099,13 @@ mod tests {
     #[test]
     fn every_play_is_checked_before_its_stream_is_built() {
         let src = include_str!("notify_sound.rs");
-        let body = &src[src.find("fn open_and_start(").expect("the play path")..];
+        let body: String = src[src.find("fn open_and_start(").expect("the play path")..]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         let checked = body
-            .find("refuse_tx(&opened, device, tx_devices")
-            .expect("the check");
+            .find("refuse_tx(&opened,device,&guarded_tx_devices(tx_devices),")
+            .expect("the check, against the settings and the outputs the radio holds");
         let built = body.find("dispatch_format!(").expect("the stream");
         let played = body.find(".play()").expect("the start");
         assert!(checked < built && built < played);
@@ -1014,6 +1114,32 @@ mod tests {
             !src.contains(&fallback),
             "no silent fallback to the default"
         );
+    }
+
+    /// The radio's audio open names the TX output it resolved for as long as the backend lives
+    /// (the cpal half cannot run headless, so this is held by the source): the hold is taken from
+    /// the device that resolved, before it moves into the deferred output, and kept in the backend.
+    #[test]
+    fn the_radios_open_holds_the_tx_output_it_resolved() {
+        let src: String = include_str!("device.rs")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let open = &src[src
+            .find("letout_dev=matchsame_card")
+            .expect("the output resolves")..];
+        let held = open
+            .find(
+                "lettx_output_held=out_dev.device_name().map(crate::notify_sound::hold_tx_output);",
+            )
+            .expect("the resolved output is held");
+        let moved = open
+            .find("dev:out_dev,")
+            .expect("it moves to the deferred output");
+        let kept = open
+            .find("_tx_output_held:tx_output_held,")
+            .expect("the backend keeps the hold");
+        assert!(held < moved && moved < kept);
     }
 
     /// A sound's stream is torn down under the host lock, as every other cpal teardown is
