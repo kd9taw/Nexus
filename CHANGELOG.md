@@ -54,8 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
   plays the tone and Nexus says so once. **Play the sounds on** picks the output, the system default unless you pick one.
   Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
-  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. All sounds
-  stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
+  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. Two
+  identically named sound cards count as one device. On Linux, the sound server's default output (default, PulseAudio,
+  PipeWire) may be the radio's card, so with the radio's TX audio set to a card or to that default, pick the sound
+  card for the sounds by name. With a radio's TX audio set to the system default (or a radio profile with none), pick a
+  specific output for the sounds. A sound plays at most ten seconds, one at a time, and Test plays on the output chosen
+  in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
   Remote they show the station's choice and say "Set at the station".
 - **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
   notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
