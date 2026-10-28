@@ -1089,14 +1089,14 @@ impl LogQueries {
                 };
                 rows.each_with(
                     VUCC,
-                    &[tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD],
+                    &[tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD],
                     Scope::All,
                     Order::Log,
                     &mut |r| {
                         let band = r.band.trim().to_ascii_lowercase();
                         if !crate::qso_is_sat(r.prop_mode.as_deref()) && vucc_bands.contains(&band)
                         {
-                            // Never a grid a callbook filled (`counted_grid`).
+                            // Never a grid for the map only (`counted_grid`).
                             if let Some(sq) =
                                 tempo_core::logbook::counted_grid(r).and_then(vucc_square)
                             {

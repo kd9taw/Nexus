@@ -2074,7 +2074,9 @@ mod tests {
     /// and a LoTW value carries no mark.
     #[test]
     fn lotw_detail_fills_empty_fields_and_replaces_only_a_callbook_value() {
-        use crate::logbook::callbook::{callbook_filled, fill_from_callbook, CallbookAnswer};
+        use crate::logbook::callbook::{
+            callbook_filled, fill_gridless_from_callbook, is_map_only_grid, CallbookAnswer,
+        };
         let d = 20_000;
         let detail = |r: QsoRecord| {
             let mut r = under(confirms(r, "DXCC"), "K2DEF");
@@ -2130,10 +2132,11 @@ mod tests {
         reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
         assert_eq!(got(&log[0]), got(&mine), "the operator's values stay");
 
-        // The same values, filled by a callbook lookup: LoTW's replace them, and the mark goes.
+        // The same values, filled by a callbook lookup into a contact logged with no grid (the grid
+        // for the map only): LoTW's replace them, and the marks go, the map-only one with them.
         let mut looked_up = under(w1aw_at(d, 12, 0), "K2DEF");
         looked_up.country = Some("United States".into());
-        fill_from_callbook(
+        fill_gridless_from_callbook(
             &mut looked_up,
             &CallbookAnswer {
                 call: "W1AW".into(),
@@ -2147,9 +2150,12 @@ mod tests {
             },
         );
         assert!(!callbook_filled(&looked_up).is_empty(), "premise: marked");
+        assert!(is_map_only_grid(&looked_up), "premise: map only");
         let mut log = vec![looked_up];
         reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
         assert_eq!(got(&log[0]), lotw, "LoTW's values replace the callbook's");
+        assert!(!is_map_only_grid(&log[0]), "LoTW's grid counts");
+        assert_eq!(crate::logbook::counted_grid(&log[0]), Some("FN31pr"));
         assert_eq!(
             log[0].state.as_deref(),
             Some("MA"),

@@ -117,15 +117,12 @@ const AWARDS_EXTRAS: &[&str] = &[
     "WWFF_REF",
     "QSL_VIA",
     "STATE",
-    tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD,
+    tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD,
 ];
 
 /// The passthrough fields [`journey_qso`] reads beside [`JOURNEY`]: the state a merged contest
-/// contact's exchange carries, and the callbook's mark (`counted_grid`).
-const JOURNEY_EXTRAS: &[&str] = &[
-    "STATE",
-    tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD,
-];
+/// contact's exchange carries, and the map-only mark (`counted_grid`).
+const JOURNEY_EXTRAS: &[&str] = &["STATE", tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD];
 
 /// [`journey_qso`]'s inputs.
 const JOURNEY: Narrow = Narrow {
@@ -279,7 +276,7 @@ fn needs_add(needs: &mut propagation::LogNeeds, q: &QsoRecord) {
         &q.call,
         &q.band,
         &q.mode,
-        // Never a grid a callbook filled: it fills no GRID need (`counted_grid`).
+        // Never a grid for the distance and the map only: it fills no GRID need (`counted_grid`).
         tempo_core::logbook::counted_grid(q),
         // The state its upload carries: a merged contest contact's exchange, unless the
         // operator has edited it (`record_field`).
@@ -497,7 +494,7 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         q.qsl_rcvd.card,
         // The state its upload carries (`record_field`), as the WAS needs and custom awards read.
         tempo_core::logbook::record_field(q, "STATE"),
-        // Never a grid a callbook filled: it counts toward no grid award (`counted_grid`).
+        // Never a grid for the distance and the map only: no grid award counts it (`counted_grid`).
         tempo_core::logbook::counted_grid(q),
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
@@ -584,9 +581,9 @@ pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRe
         call: &q.call,
         band: &q.band,
         mode: &q.mode,
-        // Never a grid a callbook filled (`counted_grid`).
+        // Never a grid for the distance and the map only (`counted_grid`).
         grid: tempo_core::logbook::record_field(q, "GRIDSQUARE")
-            .filter(|_| !tempo_core::logbook::callbook::is_callbook_filled(q, "GRIDSQUARE")),
+            .filter(|_| !tempo_core::logbook::callbook::is_map_only_grid(q)),
         refs: &refs,
         field: &field,
         lotw_card: q.award_confirmed,
@@ -723,7 +720,7 @@ pub(crate) fn journey_qso(r: &QsoRecord) -> propagation::JourneyQso {
     };
     propagation::JourneyQso {
         call: r.call.clone(),
-        // Never a grid a callbook filled (`counted_grid`).
+        // Never a grid for the distance and the map only (`counted_grid`).
         grid: tempo_core::logbook::counted_grid(r).map(str::to_string),
         // The state its upload carries: a merged contest contact's exchange (`record_field`).
         state: tempo_core::logbook::record_field(r, "STATE").map(str::to_string),
@@ -2216,12 +2213,63 @@ mod tests {
         }
     }
 
-    /// ★ A grid a callbook filled (the contact's grid marked as the callbook's) counts toward no
-    /// grid award and fills no GRID need, read from the store as the awards and the needed board
-    /// read it (the narrow reads carry the mark); the same grid sent on the air, unmarked, counts
-    /// toward both (operator decision, 2026-10-27).
+    /// ★ An old log whose grids carry today's callbook mark (callsign-card lookups at log time,
+    /// Update from callbook) folds to exactly the totals it had before the map-only mark existed:
+    /// the same log with the marks taken out, which is how every earlier build counted it. Nobody's
+    /// VUCC or grid totals drop, and no GRID need comes back (operator decision, 2026-10-27).
     #[test]
-    fn a_grid_a_callbook_filled_counts_toward_no_award_and_no_need() {
+    fn an_old_log_with_todays_callbook_marks_keeps_its_award_totals() {
+        let row = |call: &str, grid: &str, band: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20250310<TIME_ON:6>123400<BAND:{}>{band}<MODE:3>FT8\
+                 <GRIDSQUARE:{}>{grid}<LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len(),
+                band.len(),
+                grid.len()
+            )
+        };
+        let marked = "<APP_NEXUS_CALLBOOK_FILLED:15>GRIDSQUARE,NAME<NAME:3>Bob";
+        let log = |mark: &str| {
+            format!(
+                "{}{}{}{}",
+                tempo_core::logbook::adif_header(),
+                row("W1AW", "FN31", "2m", mark),
+                row("N0XYZ", "DM79", "6m", mark),
+                row("K2ABC", "EM12", "2m", ""),
+            )
+        };
+        let folds = |name: &str, text: String| {
+            let d = Dir::new(name);
+            std::fs::write(d.log(), text).unwrap();
+            let e = launch(&d);
+            let tallies = LogTallies::default();
+            let awards = awards_kept(&e, &tallies).unwrap();
+            assert_eq!(*awards, awards_for_records(&records(&e), MY_CALL), "{name}");
+            let needs = needs_kept(&e, &tallies).unwrap();
+            let mut worked: Vec<_> = needs.worked_grids().iter().cloned().collect();
+            worked.sort();
+            (awards, worked)
+        };
+        let (with_marks, worked_marked) = folds("old-marks", log(marked));
+        let (without, worked_plain) = folds("old-plain", log("<NAME:3>Bob"));
+        assert_eq!(
+            (with_marks.vucc.worked, with_marks.vucc.confirmed),
+            (3, 3),
+            "every grid counts: {:?}",
+            with_marks.vucc
+        );
+        assert_eq!(*with_marks, *without, "the totals the log had");
+        assert_eq!(worked_marked, worked_plain, "no GRID need comes back");
+        assert_eq!(worked_marked.len(), 3);
+    }
+
+    /// ★ A grid for the distance and the map only (a callbook's, filled into a contact logged with
+    /// none) counts toward no grid award and fills no GRID need, read from the store as the awards
+    /// and the needed board read it (the narrow reads carry the mark); a grid sent on the air,
+    /// unmarked, and one with today's callbook mark alone count toward both (operator decision,
+    /// 2026-10-27).
+    #[test]
+    fn a_map_only_grid_counts_toward_no_award_and_no_need() {
         let d = Dir::new("callbook-grid");
         let row = |call: &str, grid: &str, fields: &str| {
             format!(
@@ -2234,20 +2282,25 @@ mod tests {
         std::fs::write(
             d.log(),
             format!(
-                "{}{}{}",
+                "{}{}{}{}",
                 tempo_core::logbook::adif_header(),
-                row("W1AW", "FN31", "<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE"),
+                row(
+                    "W1AW",
+                    "FN31",
+                    "<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE<APP_NEXUS_MAP_ONLY_GRID:1>Y"
+                ),
                 row("K2ABC", "EM12", ""),
+                row("N0OLD", "DM79", "<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE"),
             ),
         )
         .unwrap();
         let e = launch(&d);
         let tallies = LogTallies::default();
         let held = records(&e);
-        assert_eq!(held.len(), 2, "premise: both contacts converted");
+        assert_eq!(held.len(), 3, "premise: every contact converted");
         assert!(
-            tempo_core::logbook::callbook::is_callbook_filled(&held[0], "GRIDSQUARE"),
-            "premise: W1AW's grid is the callbook's"
+            tempo_core::logbook::callbook::is_map_only_grid(&held[0]),
+            "premise: W1AW's grid is for the map only"
         );
         let awards = awards_kept(&e, &tallies).unwrap();
         assert_eq!(
@@ -2257,15 +2310,19 @@ mod tests {
         );
         assert_eq!(
             (awards.vucc.worked, awards.vucc.confirmed),
-            (1, 1),
-            "EM12 only: {:?}",
+            (2, 2),
+            "EM12 and DM79: {:?}",
             awards.vucc
         );
         let needs = needs_kept(&e, &tallies).unwrap();
-        let worked: Vec<_> = needs.worked_grids().iter().cloned().collect();
+        let mut worked: Vec<_> = needs.worked_grids().iter().cloned().collect();
+        worked.sort();
         assert_eq!(
             worked,
-            [("EM12".to_string(), propagation::model::Band::B2)],
+            [
+                ("DM79".to_string(), propagation::model::Band::B2),
+                ("EM12".to_string(), propagation::model::Band::B2)
+            ],
             "FN31 stays a GRID need on 2 m"
         );
     }

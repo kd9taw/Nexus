@@ -12,8 +12,9 @@
 //!    already made answered for exactly this call (the lookup cache; nothing is looked up here),
 //!    only for a call with no stroke and no park, and only on a contact from the last 12 months —
 //!    the log's own callbook rule ([`callbook::fill_from_callbook`], [`super::LOCATION_FIELDS`]).
-//!    It is filled through that rule, so it carries the callbook's mark: for the distance and the
-//!    map only, counted toward no grid award, filling no GRID need, sent to no service
+//!    It is filled through that rule with the map-only mark
+//!    ([`callbook::fill_gridless_from_callbook`]): for the distance and the map only, counted
+//!    toward no grid award, filling no GRID need, sent to no service
 //!    (`tempo_core::logbook::counted_grid`).
 //!
 //! **What it changes:** the grid of a contact that still has none, and nothing else. Never a call,
@@ -218,7 +219,9 @@ pub fn fill_grids(
                         refused.push((*id, "changed"));
                         continue;
                     }
-                    callbook::fill_from_callbook(
+                    // For the distance and the map only, as an FT8/FT4 contact logged with no
+                    // grid takes it (`fill_gridless_from_callbook`).
+                    callbook::fill_gridless_from_callbook(
                         &mut after,
                         &CallbookAnswer {
                             call: row.call.clone(),

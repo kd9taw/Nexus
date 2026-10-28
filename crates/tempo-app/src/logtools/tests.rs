@@ -2493,6 +2493,11 @@ fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
         callbook::is_callbook_filled(&k1, "GRIDSQUARE"),
         "the callbook's mark"
     );
+    assert!(callbook::is_map_only_grid(&k1), "for the map only");
+    assert!(
+        !callbook::is_map_only_grid(&after_w1),
+        "a heard grid is not map only"
+    );
     assert_eq!(
         tempo_core::logbook::counted_grid(&k1),
         None,

@@ -1296,3 +1296,29 @@ fn a_merge_carries_no_stamp_of_the_same_spelling_another_call_or_another_worked_
     let merged = merge(&[kept, other], 0, &HashMap::new()).record;
     assert_eq!(merged.upload.lotw, None, "another worked call");
 }
+
+/// ★ A merge keeps a grid for the map only only when every copy holding that grid held it so: one
+/// copy that counted it (today's callbook mark alone, or none) keeps it counted, so a merge never
+/// takes a grid out of anyone's totals. The mark is never merged as a value of its own.
+#[test]
+fn a_merge_keeps_a_grid_for_the_map_only_only_when_every_copy_held_it_so() {
+    use crate::logbook::callbook::{is_map_only_grid, CALLBOOK_FILLED_FIELD, MAP_ONLY_GRID_FIELD};
+    let marks = |r: &mut QsoRecord, map_only: bool| {
+        r.grid = Some("FN31".into());
+        set_extra(r, CALLBOOK_FILLED_FIELD, Some("GRIDSQUARE".into()));
+        if map_only {
+            set_extra(r, MAP_ONLY_GRID_FIELD, Some("Y".into()));
+        }
+    };
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    marks(&mut a, true);
+    marks(&mut b, true);
+    let merged = merge(&[a.clone(), b.clone()], 0, &HashMap::new());
+    assert!(is_map_only_grid(&merged.record), "both map only");
+    assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    marks(&mut b, false);
+    set_extra(&mut b, MAP_ONLY_GRID_FIELD, None);
+    let merged = merge(&[a, b], 0, &HashMap::new());
+    assert!(!is_map_only_grid(&merged.record), "one copy counted it");
+    assert_eq!(crate::logbook::counted_grid(&merged.record), Some("FN31"));
+}

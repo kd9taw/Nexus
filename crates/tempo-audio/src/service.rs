@@ -15595,7 +15595,7 @@ fn wsjtx_qso_of<'a>(
     WsjtxQso {
         time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
         dx_call: &q.call,
-        // Never a grid a callbook filled: a logger would upload it
+        // Never a grid for the distance and the map only: a logger would upload it
         // (`tempo_core::logbook::counted_grid`).
         dx_grid: tempo_core::logbook::counted_grid(q).unwrap_or(""),
         // The contact's own frequency, not the rig's current dial — by the time this drains the
@@ -18670,10 +18670,11 @@ mod tests {
         )
     }
 
-    /// A grid a callbook filled never reaches a logger's `QSOLogged` datagram (a logger would
-    /// upload it: `counted_grid`); the same grid with no mark does.
+    /// A grid for the distance and the map only never reaches a logger's `QSOLogged` datagram (a
+    /// logger would upload it: `counted_grid`); the same grid with no mark, or with today's
+    /// callbook mark alone, does, as it always did.
     #[test]
-    fn a_grid_a_callbook_filled_is_not_in_the_logged_datagram() {
+    fn a_map_only_grid_is_not_in_the_logged_datagram() {
         let mut r = tempo_core::logbook::parse_adif(
             "<CALL:4>W1AW<BAND:3>20m<FREQ:9>14.075500<MODE:3>FT8<GRIDSQUARE:4>FN31<EOR>",
         )
@@ -18687,6 +18688,11 @@ mod tests {
         r.extra.push((
             tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD.into(),
             "GRIDSQUARE".into(),
+        ));
+        assert_eq!(grid(&r), "FN31", "today's mark: sent as before");
+        r.extra.push((
+            tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD.into(),
+            "Y".into(),
         ));
         assert_eq!(grid(&r), "");
     }

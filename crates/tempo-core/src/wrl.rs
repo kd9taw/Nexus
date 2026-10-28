@@ -78,8 +78,7 @@ pub fn build_contact_json(
     if let Some(v) = r.rst_rcvd.as_deref().filter(|s| !s.is_empty()) {
         put("rstRcvd", v.to_string().into());
     }
-    // Never a grid a callbook filled: it is for the operator's own distance and map
-    // ([`crate::logbook::counted_grid`]).
+    // Never a grid for the distance and the map only ([`crate::logbook::counted_grid`]).
     if let Some(v) = crate::logbook::counted_grid(r).filter(|s| !s.is_empty()) {
         put("gridsquare", v.to_string().into());
     }
@@ -303,9 +302,10 @@ mod tests {
         }
     }
 
-    /// A grid a callbook filled is never sent (`counted_grid`); the same grid with no mark is.
+    /// A grid for the distance and the map only is never sent (`counted_grid`); the same grid
+    /// with today's callbook mark alone is, as it always was.
     #[test]
-    fn a_grid_a_callbook_filled_is_never_sent() {
+    fn a_map_only_grid_is_never_sent() {
         let mut r = rec();
         r.grid = Some("FN31".into());
         let sent = |r: &QsoRecord| build_contact_json(r, "KD9TAW", None).contains("\"gridsquare\"");
@@ -314,6 +314,12 @@ mod tests {
             &mut r,
             crate::logbook::callbook::CALLBOOK_FILLED_FIELD,
             Some("GRIDSQUARE".into()),
+        );
+        assert!(sent(&r), "today's mark: sent as before");
+        crate::logbook::set_extra(
+            &mut r,
+            crate::logbook::callbook::MAP_ONLY_GRID_FIELD,
+            Some("Y".into()),
         );
         assert!(!sent(&r));
     }

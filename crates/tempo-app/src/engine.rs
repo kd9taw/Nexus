@@ -1705,6 +1705,14 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// the measurement and fails if this moves.
 const ZERO_RF_POWER: f32 = 0.005;
 
+/// On a contact the FT8/FT4 engine built ([`Engine::qso_record`]) with no grid: the station gave
+/// none in the exchange, sent none this session, and was never logged with one. A callbook's grid
+/// filled at log time is then for the distance and the map only
+/// ([`tempo_core::logbook::callbook::fill_gridless_from_callbook`]; operator decision,
+/// 2026-10-27). It rides the record while the contact waits (the popup, Log QSO, the journal) and
+/// [`Engine::log_qso_inner`] takes it off before anything is written: it never reaches the log.
+pub(crate) const GRIDLESS_CONTACT_FIELD: &str = "APP_NEXUS_GRIDLESS_CONTACT";
+
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
 ///
 /// The heavy poll refreshes well inside this, and while a key Nexus applies (its own or another
@@ -3088,7 +3096,7 @@ pub fn n1mm_contact_for(
         mode: rec.mode.to_uppercase(),
         timestamp: tempo_net::n1mm::utc_timestamp(rec.when_unix),
         section: String::new(),
-        // Never a grid a callbook filled (`tempo_core::logbook::counted_grid`).
+        // Never a grid for the distance and the map only (`tempo_core::logbook::counted_grid`).
         gridsquare: tempo_core::logbook::counted_grid(rec)
             .unwrap_or_default()
             .to_string(),
@@ -17032,6 +17040,10 @@ impl Engine {
         // contact handed in again as "USB" must still read as that contact. An FT contact is
         // already in that form (its band is the band plan's, its mode the tier's) and is untouched.
         tempo_core::logbook::canonical::contact(&mut rec);
+        // An FT8/FT4 contact logged with no grid ([`GRIDLESS_CONTACT_FIELD`]): the note is read
+        // and taken off here, first, so it never reaches the log.
+        let gridless = rec.extra.iter().any(|(k, _)| k == GRIDLESS_CONTACT_FIELD);
+        rec.extra.retain(|(k, _)| k != GRIDLESS_CONTACT_FIELD);
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -17233,8 +17245,16 @@ impl Engine {
         // after the park and the state above have had their say, and before DISTANCE below, which
         // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
         // are `tempo_core::logbook::callbook`'s.
+        //
+        // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
+        // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
+        // and is sent nowhere. Every other contact takes it as it always has, counted.
         if let Some(answer) = self.callbook_answer(&rec.call) {
-            tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
+            if gridless {
+                tempo_core::logbook::callbook::fill_gridless_from_callbook(&mut rec, answer);
+            } else {
+                tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
+            }
         }
         // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
         // file's answer for the call — the same reading a contest row records — and the distance
@@ -32076,10 +32096,10 @@ contact yourself."
                     .map(str::to_string)
             })
             .or_else(|| {
-                // Last: a grid we LOGGED for this station before — never one a callbook filled,
-                // which counts toward nothing (`tempo_core::logbook::counted_grid`). A station
-                // with none logs blank here, and the callbook's answer, if a lookup gave one this
-                // session, fills it for the distance and the map only (`log_qso_inner`).
+                // Last: a grid we LOGGED for this station before — never one for the distance and
+                // the map only, which counts toward nothing (`tempo_core::logbook::counted_grid`).
+                // A station with none logs blank here, and the callbook's answer, if a lookup gave
+                // one this session, fills it for the distance and the map only (`log_qso_inner`).
                 //
                 // The session roster only remembers stations heard since launch, so a station
                 // worked on a previous
@@ -32350,6 +32370,12 @@ contact yourself."
             .as_ref()
             .map_or_else(|| self.log_frequencies(), |m| m.freqs);
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
+        // No grid from the station at all: a callbook's, at log time, is for the map only.
+        let extra = if grid.is_none() {
+            vec![(GRIDLESS_CONTACT_FIELD.to_string(), "Y".to_string())]
+        } else {
+            Vec::new()
+        };
         // Built BEFORE the struct literal moves `mode` into the record.
         let reports_note = if self.settings.log_reports_to_comments {
             reports_comment(
@@ -32418,7 +32444,7 @@ contact yourself."
             my_grid: None,
             my_rig: None,
             station_callsign: self.station_callsign_now(),
-            extra: Vec::new(),
+            extra,
             contest: None,
         }
     }
