@@ -14801,7 +14801,7 @@ mod contest_session_tests {
         })
         .to_string();
         let mut ui_saved = None;
-        let restored = restore_settings_bundle(&engine, text, |ui| {
+        let restored = restore_settings_bundle(&engine, text, Default::default, |ui| {
             ui_saved = Some(ui);
             true
         });
@@ -14819,6 +14819,198 @@ mod contest_session_tests {
         drop(eng);
         assert_eq!(ui_saved, None, "nor the UI state the backup carries");
         drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The station's paths, set on `engine`: the TQSL program, a JS8 sound file and F1's
+    /// recording, each under `root`. With the UI state holding a saved profile "Home" that carries
+    /// the same three.
+    fn with_station_paths_set(
+        engine: &SharedEngine,
+        root: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.tqsl_path = format!("{root}\\TrustedQSL\\tqsl.exe");
+        s.js8_sound_files
+            .insert("cq".into(), format!("{root}\\Sounds\\cq.wav"));
+        s.voice_messages[0].file = format!("{root}\\voice\\slot1.wav");
+        engine_lock(engine).apply_restored_settings(s);
+        let profiles = serde_json::json!([{
+            "name": "Home",
+            "settings": {
+                "mycall": "W9SHK",
+                "tqslPath": format!("{root}\\TrustedQSL\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\Sounds\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "CQ", "file": format!("{root}\\voice\\slot1.wav") }],
+            },
+        }]);
+        [(
+            crate::command_dispatch::PROFILES.to_string(),
+            profiles.to_string(),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    const FROM_AFAR: crate::command_dispatch::Afar = crate::command_dispatch::Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+
+    /// ★ A BACKUP MADE FROM A COMPUTER DRIVING THE STATION CARRIES NO PATH ON THE STATION'S DISK:
+    /// not the TQSL program, not a JS8 sound file, not a voice-keyer recording, in its settings or
+    /// in a saved profile, and it says it left them out. Each voice slot keeps its label. CONTROL: a
+    /// backup made at the station carries each, by value, and says nothing.
+    #[test]
+    fn a_backup_made_from_afar_leaves_out_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Shack");
+        let text = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        assert!(!text.contains("Shack"), "no station path from afar: {text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v[STATION_PATHS_LEFT_OUT], serde_json::json!(true));
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                s["mycall"],
+                serde_json::json!("W9SHK"),
+                "{whose}: the rest goes"
+            );
+            assert_eq!(s.get("tqslPath"), None, "{whose}");
+            assert_eq!(s.get("js8SoundFiles"), None, "{whose}");
+            assert_eq!(
+                s["voiceMessages"][0]["file"],
+                serde_json::json!(""),
+                "{whose}"
+            );
+            assert_eq!(
+                s["voiceMessages"][0]["label"],
+                serde_json::json!("CQ"),
+                "{whose}"
+            );
+        }
+
+        let text = settings_bundle(&engine, ui, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v.get(STATION_PATHS_LEFT_OUT),
+            None,
+            "CONTROL: at the station"
+        );
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                (
+                    &s["tqslPath"],
+                    &s["js8SoundFiles"],
+                    &s["voiceMessages"][0]["file"]
+                ),
+                (
+                    &serde_json::json!("C:\\Shack\\TrustedQSL\\tqsl.exe"),
+                    &serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+                    &serde_json::json!("C:\\Shack\\voice\\slot1.wav"),
+                ),
+                "CONTROL: at the station, {whose}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS THE STATION'S PATHS, as the station has them at
+    /// the restore (moved since the backup), in its settings and in its saved profile of the same
+    /// name, while the rest of the backup lands. CONTROL: a backup made at the station restores the
+    /// paths it carries.
+    #[test]
+    fn restoring_a_backup_made_from_afar_keeps_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Old");
+        let restore = |text: String, station_ui: std::collections::BTreeMap<String, String>| {
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles: serde_json::Value =
+                serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+            let p = profiles[0]["settings"].clone();
+            (
+                s.mycall,
+                (
+                    s.tqsl_path,
+                    s.js8_sound_files.get("cq").cloned(),
+                    s.voice_messages[0].file.clone(),
+                ),
+                (
+                    p["tqslPath"].clone(),
+                    p["js8SoundFiles"]["cq"].clone(),
+                    p["voiceMessages"][0]["file"].clone(),
+                ),
+            )
+        };
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let now = with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(afar, now.clone()),
+            (
+                "W9NEW".to_string(),
+                (
+                    "D:\\Now\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("D:\\Now\\Sounds\\cq.wav".to_string()),
+                    "D:\\Now\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("D:\\Now\\Sounds\\cq.wav"),
+                    serde_json::json!("D:\\Now\\voice\\slot1.wav")
+                ),
+            ),
+            "the station's own, as it has them now"
+        );
+        with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(local, now),
+            (
+                "W9NEW".to_string(),
+                (
+                    "C:\\Old\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("C:\\Old\\Sounds\\cq.wav".to_string()),
+                    "C:\\Old\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("C:\\Old\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("C:\\Old\\Sounds\\cq.wav"),
+                    serde_json::json!("C:\\Old\\voice\\slot1.wav")
+                ),
+            ),
+            "CONTROL: a backup made at the station restores its own"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -15188,10 +15380,123 @@ fn strip_unknown_for_backup(
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
 /// without realising it held every contact they had made.
+///
+/// From afar (a computer driving the station over Remote), the bundle leaves out the paths on the
+/// station's own disk ([`without_station_paths`]), in its settings and in each saved profile, and
+/// says so ([`STATION_PATHS_LEFT_OUT`]): a restore of it at the station keeps the station's own.
+/// Made at the station, it carries them as they are.
 #[tauri::command(async)]
-fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, String> {
+fn export_settings_bundle(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<String, String> {
+    let ui_state = ui_state_read(&ui_state_path(), false).unwrap_or_default();
+    settings_bundle(&state, ui_state, afar.as_ref())
+}
+
+/// The settings that hold a path on the station's own disk: the TQSL program and JS8's sound
+/// files. Each voice-keyer slot's recording (`voiceMessages[].file`) is one too, and goes with
+/// them ([`without_station_paths`]).
+const STATION_PATHS: [&str; 2] = ["tqslPath", "js8SoundFiles"];
+
+/// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
+/// were left out of it ([`without_station_paths`]), so a restore keeps the station's own
+/// ([`keep_the_stations_paths`]).
+const STATION_PATHS_LEFT_OUT: &str = "stationPathsLeftOut";
+
+/// One settings object (the bundle's own, or a saved profile's) without the station's paths: each
+/// of [`STATION_PATHS`] left out, which a restore and a profile load read as "keep this station's",
+/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded.
+fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in STATION_PATHS {
+        settings.remove(key);
+    }
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            slot.insert("file".into(), serde_json::Value::String(String::new()));
+        }
+    }
+}
+
+/// One settings object from a bundle exported from afar with the station's paths put back as
+/// `station` holds them (this station's settings, or its saved profile of the same name): each of
+/// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
+/// hold is left out, the voice slots whole where it holds none, so loading that profile keeps
+/// this station's own.
+fn with_station_paths(
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+    station: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    for key in STATION_PATHS {
+        match station.and_then(|s| s.get(key)) {
+            Some(held) => settings.insert(key.into(), held.clone()),
+            None => settings.remove(key),
+        };
+    }
+    let Some(held) = station
+        .and_then(|s| s.get("voiceMessages"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        settings.remove("voiceMessages");
+        return;
+    };
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            let file = held
+                .iter()
+                .find(|h| h.get("slot").is_some() && h.get("slot") == slot.get("slot"))
+                .and_then(|h| h.get("file"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::String(String::new()));
+            slot.insert("file".into(), file);
+        }
+    }
+}
+
+/// The saved profiles `text` with `each(profile name, its settings)` done to every profile. `None`
+/// when `text` does not read as a list.
+fn each_profile(
+    text: &str,
+    mut each: impl FnMut(&str, &mut serde_json::Map<String, serde_json::Value>),
+) -> Option<String> {
+    let mut profiles: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let name = profile
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Some(settings) = profile
+            .get_mut("settings")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            each(&name, settings);
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// [`export_settings_bundle`] of `engine`'s settings and the UI state `ui_state`, as asked from
+/// afar or at the station (`afar`).
+fn settings_bundle(
+    engine: &SharedEngine,
+    mut ui_state: std::collections::BTreeMap<String, String>,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<String, String> {
     let (settings, unknown) = {
-        let eng = engine_lock(&state);
+        let eng = engine_lock(engine);
         (
             // As the settings file stores it, so an older build restores Novice and Advanced as
             // a class it knows rather than refusing the backup (`LicenseClass`).
@@ -15199,10 +15504,20 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
             eng.settings().unknown.clone(),
         )
     };
-    let settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
-    let ui_state = serde_json::to_value(ui_state_read(&ui_state_path(), false).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
-    let bundle = serde_json::json!({
+    let mut settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
+    if afar.is_some() {
+        if let Some(fields) = settings.as_object_mut() {
+            without_station_paths(fields);
+        }
+        // A list that does not read here cannot have its paths left out, so it does not go.
+        if let Some(text) = ui_state.remove(command_dispatch::PROFILES) {
+            if let Some(stripped) = each_profile(&text, |_, s| without_station_paths(s)) {
+                ui_state.insert(command_dispatch::PROFILES.into(), stripped);
+            }
+        }
+    }
+    let ui_state = serde_json::to_value(ui_state).map_err(|e| e.to_string())?;
+    let mut bundle = serde_json::json!({
         "kind": "nexus-settings-backup",
         // Versioned from the start: a restore that cannot tell which shape it is holding is a
         // restore that will one day quietly write the wrong thing.
@@ -15211,6 +15526,9 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
         "settings": settings,
         "uiState": ui_state,
     });
+    if afar.is_some() {
+        bundle[STATION_PATHS_LEFT_OUT] = serde_json::Value::Bool(true);
+    }
     serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
 }
 
@@ -15265,17 +15583,61 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
-    restore_settings_bundle(&state, text, ui_state_save)
+    restore_settings_bundle(
+        &state,
+        text,
+        || ui_state_read(&ui_state_path(), false).unwrap_or_default(),
+        ui_state_save,
+    )
+}
+
+/// A bundle exported from afar ([`STATION_PATHS_LEFT_OUT`]) with the station's own paths put back
+/// ([`with_station_paths`]): in its settings as `station` (this station's settings) holds them, and
+/// in each saved profile as this station's profile of the same name in `station_ui` holds them. A
+/// bundle made at the station is left as it is.
+fn keep_the_stations_paths(
+    bundle: &mut serde_json::Value,
+    station: &serde_json::Value,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
+) {
+    if bundle.get(STATION_PATHS_LEFT_OUT) != Some(&serde_json::Value::Bool(true)) {
+        return;
+    }
+    if let Some(fields) = bundle
+        .get_mut("settings")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        with_station_paths(fields, station.as_object());
+    }
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = station_ui().get(command_dispatch::PROFILES) {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    if let Some(kept) = each_profile(&text, |name, s| with_station_paths(s, held.get(name))) {
+        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    }
 }
 
 /// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
-/// ([`ui_state_save`]) once the restore goes through.
+/// ([`ui_state_save`]) once the restore goes through. `station_ui` reads this station's own UI
+/// state, for a bundle exported from afar ([`keep_the_stations_paths`]).
 fn restore_settings_bundle(
     engine: &SharedEngine,
     text: String,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
     save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
 ) -> Result<AppSnapshot, String> {
-    let v: serde_json::Value =
+    let mut v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
         return Err("That file is not a Nexus settings backup.".to_string());
@@ -15290,6 +15652,9 @@ fn restore_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
+    let station = serde_json::to_value(engine_lock(engine).settings().for_storage())
+        .map_err(|e| e.to_string())?;
+    keep_the_stations_paths(&mut v, &station, station_ui);
     let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,

@@ -530,8 +530,9 @@ pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static 
 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press and the Lock, which never run as commands, each section entry ([`ENTRIES`]), the work
-/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]) and the
-/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]). A test holds this to the handlers that take it.
+/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]), the
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]) and the settings backup, which leaves out the
+/// station's paths from afar. A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -550,6 +551,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || PRESENCE_BOUND.contains(&cmd)
         || SETTINGS_FROM_AFAR.contains(&cmd)
         || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
+        || cmd == "export_settings_bundle"
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -780,7 +782,7 @@ impl Stores for ShackStores {
 /// ([`station_answer`]). A save from afar keeps the shack's own of both, as the settings themselves
 /// do, leaves the shack's list as it is when it carries none, and is refused where a list does not
 /// read here ([`merged_save`]).
-const PROFILES: &str = "nexus.profiles";
+pub(crate) const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
 /// `None` when `text` does not read here as a list. The shack's screen reads more than this does,

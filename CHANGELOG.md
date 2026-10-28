@@ -97,7 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specific output for the sounds. A sound plays at most ten seconds, one at a time, and Test plays on the output chosen
   in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station.
   On a computer driving the station over Remote, the sounds play their built-in tones on that computer, where you hear
-  the station, and Settings says so; the station's sound files never leave the station, and none is chosen there.
+  the station, and Settings says so. None is chosen there, and the station's sound files are not sent to that computer:
+  not in Settings, not in a saved profile, not in a settings backup made from it. Such a backup also leaves out where the
+  TQSL program and the voice keyer's recordings are, and restoring it at the station keeps the station's own.
 - **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
   notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
 - **JS8's waterfall darkens the audio outside the decode filter**, as JS8Call's does: half-dark on each side, with a
