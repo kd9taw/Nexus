@@ -13,18 +13,44 @@ install. Audio is **CoreAudio** via `cpal`, no extra libraries. CAT and PTT go t
 `rigctld`, which the bundle carries — see [Hamlib](#hamlib-is-not-in-the-repo-either) below,
 because on macOS nothing makes you stage it.
 
-## Apple Silicon
+## Apple Silicon and Intel
 
-The published `.dmg` is **arm64 only, deliberately**, and there is no universal binary. A
-universal build means building `libtempo` — Fortran, FFTW and Boost through CMake — twice and
-`lipo`-ing the results, and Homebrew's `gfortran` is single-arch: there is no x86_64 Fortran and
-FFTW toolchain on an Apple Silicon machine to build the other half with. Apple Silicon covers
-every Mac sold since 2020.
+The release publishes **two `.dmg`s**, `_aarch64.dmg` for Apple Silicon and `_x64.dmg` for Intel
+(the Intel one from the release after 1.21.0), and no universal binary. A universal build means
+building `libtempo` — Fortran, FFTW and Boost through CMake — twice and `lipo`-ing the results,
+and Homebrew's `gfortran` is single-arch: there is no x86_64 Fortran and FFTW toolchain on an
+Apple Silicon machine to build the other half with. So each is built natively, on a Mac of its
+own kind (`release.yml`'s `macos` job has one leg per architecture), and a universal binary
+would have doubled every Apple Silicon download besides. Nothing below is arm-specific:
+`tempo-fast-sys/build.rs` asks the toolchain where its own libraries are rather than
+hardcoding a prefix, so it is correct on both `/opt/homebrew` and `/usr/local`. An Intel-built
+`.dmg` will not run on Apple Silicon, nor the other way round.
 
-Intel is a **source build**, and it works: nothing below is arm-specific, and
-`tempo-fast-sys/build.rs` asks the toolchain where its own libraries are rather than hardcoding a
-prefix, so it is correct on both `/opt/homebrew` and `/usr/local`. It is simply not a platform
-anyone ships binaries for. An Intel-built `.dmg` will not run on Apple Silicon.
+## The minimum macOS is 12, and the build has to be told
+
+Both `.dmg`s run on **macOS 12 (Monterey) and later**. The number is written once, as
+`bundle.macOS.minimumSystemVersion` in `src-tauri/tauri.conf.json`; Tauri puts it in the app's
+`Info.plist` and passes it to the build as `MACOSX_DEPLOYMENT_TARGET`. That variable matters
+more than it looks: every Mach-O records the oldest macOS it will run on, and without it a build
+records **the build machine's own**. 1.21.0's bundled Hamlib tools were built that way for macOS
+14, so on a Mac running 12 or 13 dyld refused them and CAT fell back to whatever Homebrew had.
+Homebrew's bottles have the same property, which is why the release builds FFTW
+(`scripts/fetch-fftw-macos.sh`) and libusb (inside `scripts/fetch-hamlib-unix.sh`) from source
+rather than using Homebrew's.
+
+`scripts/check-macho-bundle.mjs` reads every Mach-O in a build — the load commands, the minimum
+macOS of each, the architecture — and fails on one built for a newer macOS than the app promises
+or one that loads anything from `/opt/homebrew`, `/usr/local` or `/opt/local`. The release runs
+it before signing and again on the finished app; to check a build of your own:
+
+```sh
+node scripts/check-macho-bundle.mjs --floor 12.0 --arch "$(uname -m)" \
+  --plist src-tauri/target/release/bundle/macos/Nexus.app/Contents/Info.plist \
+  src-tauri/target/release/bundle/macos/Nexus.app
+```
+
+A build for your own Mac does not need any of this: Homebrew's `fftw` is fine for that, and the
+check will simply tell you that what you built needs your macOS.
 
 ## What you need
 
@@ -33,7 +59,6 @@ Xcode's Command Line Tools for `clang` and `ld`, then Homebrew:
 ```sh
 xcode-select --install
 brew install cmake ninja gcc fftw boost node
-brew install libusb          # only if you will stage Hamlib for a bundle (see below)
 ```
 
 Plus [rustup](https://rustup.rs) with the pinned toolchain — CI uses **1.93.1**, and matching it
@@ -48,9 +73,9 @@ Some of that is worth a word:
   links it statically — its `libfftw3f.a` as well. **`boost`** is for the header-only CRC-14 in
   `crc14.cpp`.
 - **No WebView package**, unlike Windows' WebView2: WKWebView is part of macOS.
-- **No Hamlib package.** Unlike an older macOS build that expected `brew install hamlib`, the
-  bundle now carries its own `rigctld`, built from source by `scripts/fetch-hamlib-unix.sh` —
-  which is also why `libusb` appears above.
+- **No Hamlib package, and no libusb.** Unlike an older macOS build that expected
+  `brew install hamlib`, the bundle now carries its own `rigctld`, built from source by
+  `scripts/fetch-hamlib-unix.sh`, which builds the libusb it bundles from source too.
 
 There is no `--target` to add: the default rustup host toolchain
 (`aarch64-apple-darwin`, or `x86_64-apple-darwin` on Intel) links against the same `clang` and
@@ -158,6 +183,8 @@ does not strand you on a stale versioned path.
 `src-tauri/resources/hamlib/` holds only Hamlib's five tracked licence texts; the binaries are
 gitignored and staged by `scripts/fetch-hamlib-unix.sh`, which builds Hamlib 4.7.1 from source
 and sets the loader path so the staged programs find their own `libhamlib` inside the bundle.
+On macOS it builds libusb from source as well, builds both for the minimum macOS above, and ends
+with `scripts/check-macho-bundle.mjs` over what it staged (so it needs `node` and `pkg-config`).
 
 **On macOS nothing makes you run it.** `src-tauri/build.rs` has a bundled-Hamlib presence gate,
 but it is Windows-targets-only by design, and the Tauri bundle glob `resources/hamlib/*` still

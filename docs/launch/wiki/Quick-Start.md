@@ -19,7 +19,7 @@ full of live decodes, and one FT8 QSO in your log.
 ## 1. Install and get past SmartScreen (~3 min)
 
 Download the file for your platform — `Nexus_<version>_x64-setup.exe` on Windows,
-`Nexus_<version>_aarch64.dmg` on a Mac with Apple Silicon,
+`Nexus_<version>_aarch64.dmg` on a Mac with Apple Silicon, `Nexus_<version>_x64.dmg` on an Intel Mac,
 `Nexus_<version>_amd64.AppImage` or `Nexus_<version>_pc_amd64.deb` on Linux,
 `Nexus_<version>_pi_arm64_bookworm.deb` / `..._trixie.deb` on a 64-bit Raspberry Pi —
 from the

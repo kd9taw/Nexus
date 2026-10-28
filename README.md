@@ -274,12 +274,13 @@ logs, and never shown back to the UI beyond "configured."
 ## Quick start
 
 1. **[Download](https://github.com/kd9taw/Nexus/releases/latest)** the file for your platform.
-   Every release carries all six, built from the same tree:
+   Every release carries all seven, built from the same tree:
 
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
-   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed; Intel Macs build from source |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed |
+   | `Nexus_<version>_x64.dmg` | **macOS on an Intel Mac** (macOS 12+) — the same app built for Intel, signed, notarized and self-updating like the Apple Silicon one |
    | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place, bundles Hamlib so CAT works with nothing installed |
    | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed; bundles Hamlib, and still pulls `libhamlib-utils` as a fallback |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
