@@ -15142,6 +15142,268 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
+    /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
+    /// With the UI state holding a station key (the watch list) and this computer's own (the UI
+    /// scale's cap).
+    fn with_station_keys_set(
+        engine: &SharedEngine,
+        tag: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.clublog_api_key = format!("{tag}-TOP-CLUBLOG");
+        s.cloudlog_key = format!("{tag}-TOP-CLOUDLOG");
+        engine_lock(engine).apply_restored_settings(s);
+        let profile = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": format!("W9{name}"),
+                "clublogApiKey": format!("{tag}-{name}-CLUBLOG"),
+                "cloudlogKey": format!("{tag}-{name}-CLOUDLOG"),
+            } })
+        };
+        [
+            (
+                crate::command_dispatch::PROFILES.to_string(),
+                serde_json::json!([profile("ALPHA"), profile("BRAVO")]).to_string(),
+            ),
+            ("nexus.watchlist".to_string(), "[\"K1ABC\"]".to_string()),
+            ("nexus-ui-scale-cap".to_string(), "1.5".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// The saved profiles a bundle (or a saved UI state) carries, by name, as their settings.
+    fn bundle_profiles(
+        ui: &serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let list: Vec<serde_json::Value> =
+            serde_json::from_str(ui[crate::command_dispatch::PROFILES].as_str().unwrap()).unwrap();
+        list.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ NO SETTINGS BACKUP CARRIES A STORED KEY, made at the station or from afar: not the
+    /// station's own Club Log or Cloudlog key, and not one a saved profile holds, anywhere in the
+    /// file. CONTROL: the planted keys are in what the backup is made from, and the rest of each
+    /// profile goes.
+    #[test]
+    fn no_settings_backup_carries_a_stored_key() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-keys", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let source = format!(
+            "{} {}",
+            serde_json::to_string(engine_lock(&engine).settings()).unwrap(),
+            ui[crate::command_dispatch::PROFILES]
+        );
+        assert_eq!(
+            source.matches("PLANTED").count(),
+            6,
+            "CONTROL: planted: {source}"
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(
+                !text.contains("PLANTED"),
+                "a stored key in a backup (afar {}): {text}",
+                afar.is_some()
+            );
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let profiles = bundle_profiles(&v["uiState"]);
+            assert_eq!(
+                (
+                    &profiles["ALPHA"]["mycall"],
+                    &profiles["BRAVO"]["mycall"],
+                    &v["settings"]["mycall"]
+                ),
+                (
+                    &serde_json::json!("W9ALPHA"),
+                    &serde_json::json!("W9BRAVO"),
+                    &serde_json::json!("W9SHK")
+                ),
+                "CONTROL: the rest goes (afar {})",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVED PROFILE LIST THAT DOES NOT READ IS IN NO BACKUP: its keys cannot be taken out of
+    /// it, so it does not go, made at the station or from afar. CONTROL: the watch list goes.
+    #[test]
+    fn a_profile_list_that_does_not_read_is_in_no_backup() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-unread", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(
+            crate::command_dispatch::PROFILES.into(),
+            "{ \"clublogApiKey\": \"PLANTED-UNREAD\", ".into(),
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(!text.contains("PLANTED"), "afar {}: {text}", afar.is_some());
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                (
+                    v["uiState"].get(crate::command_dispatch::PROFILES),
+                    &v["uiState"]["nexus.watchlist"]
+                ),
+                (None, &serde_json::json!("[\"K1ABC\"]")),
+                "afar {}: {text}",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A BACKUP MADE FROM AFAR CARRIES ONLY THE STATION'S HALF OF THE UI STATE: this computer's
+    /// own (the UI scale's cap) is not the station's to back up. CONTROL: made at the station, it
+    /// carries both.
+    #[test]
+    fn a_backup_made_from_afar_carries_only_the_stations_ui_state() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-half", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (
+                v["uiState"].get("nexus.watchlist").cloned(),
+                v["uiState"].get("nexus-ui-scale-cap").cloned(),
+            )
+        };
+        assert_eq!(
+            carried(Some(&FROM_AFAR)),
+            (Some(serde_json::json!("[\"K1ABC\"]")), None)
+        );
+        assert_eq!(
+            carried(None),
+            (
+                Some(serde_json::json!("[\"K1ABC\"]")),
+                Some(serde_json::json!("1.5"))
+            ),
+            "CONTROL: at the station"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP KEEPS THE STATION'S OWN STORED KEYS: its Club Log and Cloudlog keys,
+    /// and each saved profile's of the same name, whether the backup's profile has them blank or
+    /// leaves them out, made at the station or from afar, while the rest of the backup lands. A
+    /// backup made from afar keeps this computer's own half of the UI state too. CONTROL: a key a
+    /// backup does carry (an older one, written before keys were left out) restores as it is, and a
+    /// profile the station has no namesake for keeps its blank.
+    #[test]
+    fn restoring_a_backup_keeps_the_stations_stored_keys() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keys", 0);
+        let ui = with_station_keys_set(&engine, "OLD");
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let restore = |text: &str, edit: &dyn Fn(&mut serde_json::Value)| {
+            let station_ui = with_station_keys_set(&engine, "STATION");
+            let mut v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            edit(&mut v);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let ui = serde_json::to_value(saved.unwrap()).unwrap();
+            (s, ui)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("clublogApiKey").cloned(),
+                p.get("cloudlogKey").cloned(),
+            )
+        };
+        let station = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+            )
+        };
+        for (whose, text) in [("afar", &afar), ("local", &local)] {
+            // As exported: the profile keys left out. And blanked, as an older build's read
+            // from afar wrote them.
+            let blank = |v: &mut serde_json::Value| {
+                let mut list: Vec<serde_json::Value> = serde_json::from_str(
+                    v["uiState"][crate::command_dispatch::PROFILES]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                list[1]["settings"]["clublogApiKey"] = serde_json::json!("");
+                list[1]["settings"]["cloudlogKey"] = serde_json::json!(" ");
+                v["uiState"][crate::command_dispatch::PROFILES] =
+                    serde_json::json!(serde_json::to_string(&list).unwrap());
+                v["settings"]["clublogApiKey"] = serde_json::json!("");
+            };
+            let as_exported = |_: &mut serde_json::Value| {};
+            let edits: [&dyn Fn(&mut serde_json::Value); 2] = [&as_exported, &blank];
+            for edit in edits {
+                let (s, ui) = restore(text, edit);
+                let profiles = bundle_profiles(&ui);
+                assert_eq!(
+                    (
+                        s.mycall.as_str(),
+                        s.clublog_api_key.as_str(),
+                        s.cloudlog_key.as_str()
+                    ),
+                    ("W9NEW", "STATION-TOP-CLUBLOG", "STATION-TOP-CLOUDLOG"),
+                    "{whose}: the station's own keys"
+                );
+                assert_eq!(keys(&profiles["ALPHA"]), station("ALPHA"), "{whose}");
+                assert_eq!(keys(&profiles["BRAVO"]), station("BRAVO"), "{whose}");
+                assert_eq!(
+                    ui["nexus-ui-scale-cap"],
+                    serde_json::json!("1.5"),
+                    "{whose}: this computer's own half"
+                );
+            }
+        }
+
+        // CONTROL: a backup that carries keys restores them; a profile with no namesake here
+        // keeps its blank.
+        let (s, ui) = restore(&local, &|v| {
+            let list = serde_json::json!([
+                { "name": "ALPHA", "settings": { "clublogApiKey": "FILE-ALPHA-CLUBLOG" } },
+                { "name": "CHARLIE", "settings": { "clublogApiKey": "", "cloudlogKey": "" } },
+            ]);
+            v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(list.to_string());
+            v["settings"]["clublogApiKey"] = serde_json::json!("FILE-TOP-CLUBLOG");
+        });
+        let profiles = bundle_profiles(&ui);
+        assert_eq!(s.clublog_api_key, "FILE-TOP-CLUBLOG", "CONTROL: carried");
+        assert_eq!(
+            keys(&profiles["ALPHA"]),
+            (
+                Some(serde_json::json!("FILE-ALPHA-CLUBLOG")),
+                station("ALPHA").1
+            ),
+            "CONTROL: carried, the one left out kept"
+        );
+        assert_eq!(
+            keys(&profiles["CHARLIE"]),
+            (Some(serde_json::json!("")), Some(serde_json::json!(""))),
+            "CONTROL: no namesake"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ A SETTINGS SAVE THAT WOULD PUT A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS
     /// REFUSED, BY NAME, AND CHANGES NOTHING. The station operates an FTDX10 (its rigctld on 4535)
     /// beside an IC-9700 on wfview's rigctld at `127.0.0.1:4533`, and the form types the FTDX10's
@@ -15448,8 +15710,11 @@ async fn export_selected_log(
 /// a key that becomes public. A backup that silently carried it would revoke the operator's ClubLog
 /// access the first time they shared the file for help.
 ///
-/// A restore therefore does not put it back, and the operator re-enters it. That is the correct
-/// trade: re-typing one key beats a key that stops working for reasons nobody can see.
+/// A restore therefore does not put it back: the station keeps the key it has saved, and a new
+/// computer has the operator re-enter it. That is the correct trade: re-typing one key beats a key
+/// that stops working for reasons nobody can see. Each saved profile's stored keys are left out the
+/// same way ([`redact_profile_for_backup`]), and kept the same way on a restore
+/// ([`keep_the_stations_profile_keys`]).
 ///
 /// The fields are `command_dispatch::SECRET_SETTINGS`, the one list a read from afar blanks and a
 /// save from afar keeps too, so the three cannot drift apart.
@@ -15460,6 +15725,16 @@ fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
         }
     }
     settings
+}
+
+/// One saved profile's settings without its stored keys (`command_dispatch::SECRET_SETTINGS`), as
+/// [`redact_for_backup`] leaves them out of the station's own. Left out rather than blanked: a
+/// profile loaded with a key left out keeps the key the station has (`mergeProfile`), where a blank
+/// one would clear it.
+fn redact_profile_for_backup(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, _) in command_dispatch::SECRET_SETTINGS {
+        settings.remove(key);
+    }
 }
 
 /// Drop every key carried by `Settings::unknown` from a serialised Settings object — the keys a
@@ -15512,7 +15787,10 @@ fn strip_unknown_for_backup(
 /// From afar (a computer driving the station over Remote), the bundle leaves out the paths on the
 /// station's own disk ([`without_station_paths`]), in its settings and in each saved profile, and
 /// says so ([`STATION_PATHS_LEFT_OUT`]): a restore of it at the station keeps the station's own.
-/// Made at the station, it carries them as they are.
+/// It also carries only the station's half of the UI state (`split_ui_state`), and a restore of it
+/// keeps the station's other half. Made at the station, it carries the paths and the whole UI
+/// state as they are. Either way a saved profile list that does not read here is left out: its
+/// stored keys could not be taken out of it.
 #[tauri::command(async)]
 fn export_settings_bundle(
     state: State<'_, SharedEngine>,
@@ -15636,11 +15914,20 @@ fn settings_bundle(
         if let Some(fields) = settings.as_object_mut() {
             without_station_paths(fields);
         }
-        // A list that does not read here cannot have its paths left out, so it does not go.
-        if let Some(text) = ui_state.remove(command_dispatch::PROFILES) {
-            if let Some(stripped) = each_profile(&text, |_, s| without_station_paths(s)) {
-                ui_state.insert(command_dispatch::PROFILES.into(), stripped);
+        // This computer's own half (its UI scale, rail order, pane layout) is not the station's.
+        ui_state = command_dispatch::split_ui_state(ui_state).0;
+    }
+    // Each saved profile goes without its stored keys, and from afar without the station's paths.
+    // A list that does not read here cannot have either left out, so it does not go.
+    if let Some(text) = ui_state.remove(command_dispatch::PROFILES) {
+        let stripped = each_profile(&text, |_, s| {
+            redact_profile_for_backup(s);
+            if afar.is_some() {
+                without_station_paths(s);
             }
+        });
+        if let Some(stripped) = stripped {
+            ui_state.insert(command_dispatch::PROFILES.into(), stripped);
         }
     }
     let ui_state = serde_json::to_value(ui_state).map_err(|e| e.to_string())?;
@@ -15755,6 +16042,46 @@ fn keep_the_stations_paths(
     }
 }
 
+/// A bundle's saved profiles with each stored key (`command_dispatch::SECRET_SETTINGS`) a profile
+/// has blank or leaves out put back as this station's saved profile of the same name in
+/// `station_ui` holds it: a backup carries none ([`redact_profile_for_backup`]), and restoring one
+/// never clears a key saved here. A key the bundle does carry (one written before keys were left
+/// out) restores as it is. A list that does not read is left as it is.
+fn keep_the_stations_profile_keys(
+    bundle: &mut serde_json::Value,
+    station_ui: &std::collections::BTreeMap<String, String>,
+) {
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = station_ui.get(command_dispatch::PROFILES) {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    let kept = each_profile(&text, |name, s| {
+        for (key, _) in command_dispatch::SECRET_SETTINGS {
+            let blank = s
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|k| k.trim().is_empty());
+            let own = held.get(name).and_then(|h| h.get(key));
+            if let (true, Some(own)) = (blank, own) {
+                s.insert(key.into(), own.clone());
+            }
+        }
+    });
+    if let Some(kept) = kept {
+        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    }
+}
+
 /// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
 /// ([`ui_state_save`]) once the restore goes through. `station_ui` reads this station's own UI
 /// state, for a bundle exported from afar ([`keep_the_stations_paths`]).
@@ -15779,10 +16106,20 @@ fn restore_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
-    let station = serde_json::to_value(engine_lock(engine).settings().for_storage())
-        .map_err(|e| e.to_string())?;
-    keep_the_stations_paths(&mut v, &station, station_ui);
-    let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    let mut own = engine_lock(engine).settings().clone();
+    let station = serde_json::to_value(own.for_storage()).map_err(|e| e.to_string())?;
+    let station_ui = station_ui();
+    let from_afar = v.get(STATION_PATHS_LEFT_OUT) == Some(&serde_json::Value::Bool(true));
+    keep_the_stations_paths(&mut v, &station, || station_ui.clone());
+    keep_the_stations_profile_keys(&mut v, &station_ui);
+    let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    // A backup carries no stored key (`redact_for_backup`): one it has blank or leaves out stays
+    // as this station has it.
+    for (_, field) in command_dispatch::SECRET_SETTINGS {
+        if field(&mut settings).trim().is_empty() {
+            field(&mut settings).clone_from(field(&mut own));
+        }
+    }
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
@@ -15792,9 +16129,14 @@ fn restore_settings_bundle(
         // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
         // should still restore the radios. The half that failed is named rather than swallowed.
         if let Some(ui) = v.get("uiState").cloned() {
-            if let Ok(map) =
+            if let Ok(mut map) =
                 serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
             {
+                // A backup made from afar carries the station's half alone: this station keeps
+                // its own other half.
+                if from_afar {
+                    map = command_dispatch::join_ui_state(map, station_ui);
+                }
                 save_ui(map);
             }
         }
