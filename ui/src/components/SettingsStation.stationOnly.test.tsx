@@ -17,12 +17,12 @@ const form = {
   units: 'auto', dialMhz: 14.074, band: '20m', sideband: 'USB',
 } as unknown as Settings
 
-function mount(stationOnly: string[]) {
+function mount(stationOnly: string[], callWaits = false) {
   const locked = (key: string) => stationOnly.includes(key)
   const setAtStation = (key: string) =>
     locked(key) ? <span data-set-at-station={key}>{t('settings.stationOnly.hint')}</span> : null
   render(<SettingsStation form={form} error={null} bandPlan={[]} onUpdate={vi.fn()} onSetFreq={vi.fn()}
-    locked={locked as never} setAtStation={setAtStation as never} />)
+    locked={locked as never} setAtStation={setAtStation as never} callWaits={callWaits} />)
   return {
     callsign: screen.getByDisplayValue('KD9TAW') as HTMLInputElement,
     grid: screen.getByDisplayValue('EN52') as HTMLInputElement,
@@ -43,4 +43,22 @@ it('with no profiles the call is editable, as before', () => {
   const { callsign } = mount([])
   expect(callsign.matches(':disabled')).toBe(false)
   expect(said(callsign)).toBeNull()
+})
+
+// At the station, while a run, a contact or a JS8 message is under way on a station with profiles
+// (`stationProfileLocked`), the call stays as the station has it: the field is read-only and says why.
+const waits = (el: Element) => el.closest('label')?.querySelector('[data-call-waits]')?.textContent ?? null
+
+it('the call waits while a run or contact is under way, and says why', () => {
+  const { callsign, grid } = mount([], true)
+  expect(callsign.matches(':disabled')).toBe(true)
+  expect(waits(callsign)).toBe(t('settings.station.callWaits'))
+  expect(grid.matches(':disabled'), 'CONTROL: the grid is the form\'s').toBe(false)
+  expect(waits(grid)).toBeNull()
+})
+
+it('idle, the call is editable and says nothing more', () => {
+  const { callsign } = mount([], false)
+  expect(callsign.matches(':disabled')).toBe(false)
+  expect(waits(callsign)).toBeNull()
 })

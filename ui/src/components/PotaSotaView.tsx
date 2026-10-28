@@ -43,6 +43,7 @@ import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
 import { activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '../features/potaActivation'
 import { ActivationOverDialog } from './ActivationOverDialog'
+import { stationProfileName } from './StationProfiles'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
@@ -504,6 +505,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       setAct(a)
       setActRef('')
       pushToast(t('ota.activation.ended'), 'info', 2000)
+      // Stop could not take the station back to its profile (a run or contact under way): say
+      // once which one to pick in the top bar.
+      const back = a.stationProfileBack
+      if (back) pushToast(t('ota.activation.profileStays', { profile: stationProfileName(back), call: back.call }), 'info')
     }
   }
   // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park, dial and comment

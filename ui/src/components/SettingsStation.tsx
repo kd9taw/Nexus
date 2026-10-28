@@ -98,9 +98,13 @@ interface Props {
   /** After a "My station" profile was saved or removed through its own writer: the panel re-reads
    *  the station's fields. Absent: the profiles are not shown. */
   onStationProfilesChanged?: () => void
+  /** A run, a contact or a JS8 message is under way on a station with profiles (snapshot
+   *  `stationProfileLocked`): the call stays as the station has it, so the field shows read-only
+   *  and says why. */
+  callWaits?: boolean
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation, onSetExperience, onStationProfilesChanged }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation, onSetExperience, onStationProfilesChanged, callWaits }: Props) {
   return (
     // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
     // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
@@ -114,6 +118,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
         {STATION_FIELDS.map((f) => {
           const value = form[f.key]
           const invalid = f.key === 'mycall' && !String(value).trim()
+          const waits = f.key === 'mycall' && !!callWaits
           return (
             <label className="settings-field" key={f.key}>
               <span className="settings-label">{t(f.labelKey)}</span>
@@ -123,7 +128,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
                 value={String(value)}
                 placeholder={f.placeholderKey ? t(f.placeholderKey) : undefined}
                 onChange={(e) => onUpdate(f.key, e.target.value)}
-                disabled={locked?.(f.key)}
+                disabled={locked?.(f.key) || waits}
                 aria-invalid={invalid && !!error}
                 autoComplete="off"
                 spellCheck={false}
@@ -132,6 +137,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
               {/* From afar, a field the station keeps as it has it: the call, while the station has
                   "My station" profiles (`stationOnlySettings`). */}
               {setAtStation?.(f.key)}
+              {waits && <span className="settings-hint" data-call-waits>{t('settings.station.callWaits')}</span>}
             </label>
           )
         })}

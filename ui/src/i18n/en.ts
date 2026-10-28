@@ -810,6 +810,7 @@ export const EN = {
 
   'settings.station.callsign.label': 'Callsign',
   'settings.station.callsign.hint': 'Your station callsign (required).',
+  'settings.station.callWaits': 'Your call stays as it is while a run, a contact or a JS8 message is under way. End it first to change the call.',
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
@@ -4754,6 +4755,7 @@ export const EN = {
   'ota.activation.stop.label': 'Stop',
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
+  'ota.activation.profileStays': 'The station stays on this profile while a run, a contact or a queued message is under way. When it ends, pick {{profile}} ({{call}}) in the top bar to go back.',
   'ota.activation.stopFailed': 'Could not stop activation',
   'ota.activation.state.ask': 'On a state line. Which state are you in?',
   'ota.activation.state.mine': 'Your state: {{state}}',

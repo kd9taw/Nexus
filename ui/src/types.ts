@@ -1056,6 +1056,10 @@ export interface Activation {
    *  operator answers "Still activating" (`resumeActivation`): nothing is tagged with the park,
    *  keyed or spotted meanwhile. */
   restored?: boolean
+  /** Only on the answer to a Stop pressed here that could not take the station back to the
+   *  "My station" profile it was on before the park's (a run, a contact or a queued message under
+   *  way): that profile, to pick in the top bar once it has ended. */
+  stationProfileBack?: StationProfileChoice
 }
 
 /** One park of the running activation and what it holds today. */

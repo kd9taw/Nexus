@@ -320,6 +320,9 @@ interface Props {
   /** Parsec presence mode as the station reports it (`snap.parsecPresence`), for the readout
    *  under its switch. Absent from tests, the setup wizard and a station older than the mode. */
   parsecPresence?: ParsecPresence | null
+  /** A run, a contact or a JS8 message is under way on a station with "My station" profiles
+   *  (`snap.stationProfileLocked`): the call field waits. Absent from tests and the wizard. */
+  stationProfileLocked?: boolean
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -1097,6 +1100,7 @@ export function SettingsPanel({
   targetSeq,
   radio,
   parsecPresence,
+  stationProfileLocked,
   activeRadioId,
   onProveTx,
   scale,
@@ -5221,6 +5225,7 @@ export function SettingsPanel({
             onSetFreq={setFreq}
             onSetExperience={handleSetExperience}
             onStationProfilesChanged={handleStationProfilesChanged}
+            callWaits={stationProfileLocked}
           />
           )}
 
