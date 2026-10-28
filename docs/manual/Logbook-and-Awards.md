@@ -232,7 +232,7 @@ Every QSO record carries a per-source `UploadOutcome` stamped at upload time and
 
 The connection event log (accessible from Settings → Logging & Connectors ▸ Connections) holds the last 200 events in a rolling buffer, covering every credential save, sync download, upload dispatch, and service rejection for all five connectors. Each event carries a timestamp, connector name, severity, and a sanitized message (absolute paths redacted to basenames, truncated to 200 characters).
 
-Per-row push buttons in the Logbook table re-push one QSO on demand without re-syncing the entire log: ↥ for QRZ, CL for ClubLog, HL for HRDLog.net and WRL for World Radio League. eQSL has none in the Logbook; Awards ▸ Confirmations offers **Push to eQSL** on a contact that was never uploaded to eQSL or whose upload bounced. There is no whole-log eQSL upload: saving the eQSL password queues the contacts not yet sent, as many as the upload queue has room for, one at a time.
+Per-row push buttons in the Logbook table re-push one QSO on demand without re-syncing the entire log: QRZ for QRZ, CL for ClubLog, HL for HRDLog.net, WRL for World Radio League and LoTW for LoTW. LoTW's signs the one contact with TQSL through the same path as **Upload to LoTW** (your Station Location, the same upload marks and messages); a contact already uploaded, already confirmed or with no time of day is not sent, and the button says why. eQSL has none in the Logbook; Awards ▸ Confirmations offers **Push to eQSL** on a contact that was never uploaded to eQSL or whose upload bounced. There is no whole-log eQSL upload: saving the eQSL password queues the contacts not yet sent, as many as the upload queue has room for, one at a time.
 
 ---
 

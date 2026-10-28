@@ -1991,6 +1991,9 @@ export const EN = {
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
   'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
+  // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
+  'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
+  'logbook.row.pushLotw.aria': 'Upload the QSO with {{call}} to LoTW',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -2080,6 +2083,13 @@ export const EN = {
     'HRDLog.net unavailable — {{call}} not confirmed uploaded; try again later',
   'logbook.push.hrdlog.rejected': '✗ HRDLog.net rejected {{call}}: {{reason}}',
   'logbook.push.hrdlog.failed': '✗ HRDLog.net push failed: {{detail}}',
+  // LoTW per-row upload results. Failures reuse the bulk upload's logbook.lotw.upload.* words.
+  'logbook.push.lotw.ok': '✓ {{call}} signed and uploaded to LoTW — it confirms when the other station uploads',
+  'logbook.push.lotw.duplicate': '✓ {{call}} was already on LoTW',
+  'logbook.push.lotw.already': '{{call}} is already uploaded to LoTW',
+  'logbook.push.lotw.confirmed': '{{call}} is already confirmed, so it is not uploaded to LoTW',
+  'logbook.push.lotw.timeless': '{{call}} has no time of day, so LoTW can never match it — not sent',
+  'logbook.push.lotw.none': '{{call}} was not sent to LoTW',
 
   // Deleting one contact. `{{band}}` is a band name — never translated.
   'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
