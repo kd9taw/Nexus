@@ -243,8 +243,10 @@ describe('SSTV text overlays', () => {
 
     fireEvent.click(send)
     await waitFor(() => expect(sstvSend).toHaveBeenCalled())
-    // sstvSend(b64, w, h, mode, idInImage) — the last argument is the affirmation.
+    // sstvSend(b64, w, h, mode, idInImage, overlayCalls) — the fifth is the affirmation.
     expect(sstvSend.mock.calls[0][4]).toBe(false)
+    // The operator's own text names no station call for the keying-time call check.
+    expect(sstvSend.mock.calls[0][5]).toEqual([])
   })
 
   it('text carrying the call retires the plate, and the Send says so', async () => {
@@ -263,6 +265,9 @@ describe('SSTV text overlays', () => {
     // The Rust side redraws the plate unless idInImage is set, so the computed
     // affirmation has to reach it or the preview and the wire disagree.
     expect(sstvSend.mock.calls[0][4]).toBe(true)
+    // …and the call the preset wrote travels with the picture, for the keying-time call check
+    // (a picture made before a profile switch is not sent under the new call).
+    expect(sstvSend.mock.calls[0][5]).toEqual(['KD9TAW'])
   })
 
   it('deleting the call-bearing text revives the plate', async () => {

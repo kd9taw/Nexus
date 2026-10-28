@@ -3690,6 +3690,7 @@ function App() {
             radio={snap.radio}
             parsecPresence={snap.parsecPresence}
             stationProfileLocked={snap.stationProfileLocked}
+            activeStationProfile={snap.activeStationProfile}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
             scale={scale}

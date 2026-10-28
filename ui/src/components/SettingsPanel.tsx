@@ -325,6 +325,10 @@ interface Props {
   /** A run, a contact or a JS8 message is under way on a station with "My station" profiles
    *  (`snap.stationProfileLocked`): the call field waits. Absent from tests and the wizard. */
   stationProfileLocked?: boolean
+  /** The "My station" profile the station is on (`snap.activeStationProfile`). The Station tab's
+   *  call, grid, state and power reload when it changes, so a form left open across a switch shows
+   *  the profile the station is on. Absent from tests, the wizard and a station with no profiles. */
+  activeStationProfile?: string
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -1118,6 +1122,7 @@ export function SettingsPanel({
   radio,
   parsecPresence,
   stationProfileLocked,
+  activeStationProfile,
   activeRadioId,
   onProveTx,
   scale,
@@ -1906,6 +1911,22 @@ export function SettingsPanel({
   // TopBar switcher pills while Settings is open), the flat Rig/CAT form now describes the WRONG
   // radio. Reload the form from the live settings so a Save can't fold edits into — or command —
   // the wrong rig. Skip the first observation (the mount effect already loads the form).
+  // "My station" profiles: the same for a profile switched underneath the form (the top bar's
+  // picker, a POTA Start or Stop). The Station tab's call, grid, state and power now describe the
+  // profile the station LEFT, and a Save from it would edit nothing (a form on another profile
+  // saves none of the four). They are read again from the station, with the list and the active
+  // id, so the tab shows the profile the station is on; the rest of the form stays as it is.
+  const lastStationProfileRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (activeStationProfile == null) return
+    if (lastStationProfileRef.current === undefined) {
+      lastStationProfileRef.current = activeStationProfile
+      return
+    }
+    if (lastStationProfileRef.current === activeStationProfile) return
+    lastStationProfileRef.current = activeStationProfile
+    void refreshStationFields()
+  }, [activeStationProfile])
   const lastActiveRef = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (activeRadioId == null) return
@@ -2930,21 +2951,26 @@ export function SettingsPanel({
   // grid, state and power may be the profile's now, so the form and its saved copy take them, with
   // the list, from the backend; the rest of the form is left as the operator has it.
   const handleStationProfilesChanged = () => {
-    void (async () => {
-      const fresh = await getSettings().catch(() => null)
-      if (!fresh) return
-      const station: Partial<Settings> = {
-        mycall: fresh.mycall,
-        mygrid: fresh.mygrid,
-        opState: fresh.opState,
-        stationPowerW: fresh.stationPowerW,
-        stationProfiles: fresh.stationProfiles,
-        activeStationProfile: fresh.activeStationProfile,
-      }
-      setForm((prev) => (prev ? { ...prev, ...station } : prev))
-      if (savedRef.current) savedRef.current = { ...savedRef.current, ...station }
-      onSaved?.()
-    })()
+    void refreshStationFields().then((fresh) => {
+      if (fresh) onSaved?.()
+    })
+  }
+  // The station's call, grid, state and power, its profiles and the one it is on, read again from
+  // the backend into the form and its saved copy. Resolves whether it read them.
+  async function refreshStationFields(): Promise<boolean> {
+    const fresh = await getSettings().catch(() => null)
+    if (!fresh) return false
+    const station: Partial<Settings> = {
+      mycall: fresh.mycall,
+      mygrid: fresh.mygrid,
+      opState: fresh.opState,
+      stationPowerW: fresh.stationPowerW,
+      stationProfiles: fresh.stationProfiles,
+      activeStationProfile: fresh.activeStationProfile,
+    }
+    setForm((prev) => (prev ? { ...prev, ...station } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...station }
+    return true
   }
 
   const handleSetExperience = (level: ExperienceLevel) => {

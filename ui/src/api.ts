@@ -4752,6 +4752,9 @@ export async function sstvSend(
   /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
    *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
   idInImage?: boolean,
+  /** The station calls the picture's preset text carries (`OverlayItem.call`): the backend
+   *  refuses the picture when one is not the station's call now. */
+  overlayCalls?: string[],
 ): Promise<SstvState> {
   return invoke<SstvState>('sstv_send', {
     mode,
@@ -4759,6 +4762,7 @@ export async function sstvSend(
     height,
     rgbBase64: rgbB64,
     idInImage: idInImage ?? false,
+    overlayCalls: overlayCalls ?? [],
   })
 }
 
