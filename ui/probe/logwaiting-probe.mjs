@@ -9,10 +9,13 @@
 //     moves or wraps Log or anything beside it;
 //   · the count is drawn whole inside the strip (the strip clips), shows the number, and covers the centre of no
 //     control; Log is the topmost thing at its centre;
-//   · with no station on screen, Log is live while contacts wait, and a real click on it reaches Log once.
+//   · with no station on screen, Log is live while contacts wait, and a real click on it reaches Log once;
+//   · the count reads at WCAG AA (4.5:1) against its own ground, Log's spoken name carries the count, and the polite
+//     status that announces it is mounted, empty, before any contact waits.
 //
-// THE CONTROL, run every time: the same page with the count put back in the flow, wide. The probe must see the
-// controls move; if it does not, the check cannot fail and the probe says so instead.
+// THE CONTROLS, run every time: the same page with the count put back in the flow, wide. The probe must see the
+// controls move; if it does not, the check cannot fail and the probe says so instead. And in the light theme the
+// old pair (the ground's colour on Log's green, 4.1:1) is measured the same way and must read below 4.5:1.
 //
 // exit: 0 every size clear · 1 a red, or a control that could not fail · 2 a page never drew the strip
 import { createServer } from 'vite'
@@ -46,8 +49,23 @@ const MEASURE = `(() => {
     badgeInside = b.width > 0 && b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.bottom
     covers = controls.filter((el) => { const [x, y] = centre(el); return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom }).map((el) => el.textContent.trim() || el.getAttribute('aria-label'))
   }
+  const rgb = (c) => (c.match(/[0-9.]+/g) || []).slice(0, 3).map(Number)
+  const lum = ([r, g, b]) => [r, g, b].map((v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }).reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0)
+  const ratio = (fg, bg) => { const [a, b] = [lum(rgb(fg)), lum(rgb(bg))].sort((x, y) => y - x); return Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100 }
+  const contrastOf = (el) => { const cs = getComputedStyle(el); return ratio(cs.color, cs.backgroundColor) }
+  const old = document.createElement('span')
+  old.style.cssText = 'background: var(--state-good); color: var(--bg)'
+  strip.appendChild(old)
+  const oldContrast = contrastOf(old)
+  old.remove()
+  const status = strip.querySelector('.cq-free [role="status"]')
   return {
     page: document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth,
+    contrast: badge ? contrastOf(badge) : null,
+    colours: badge ? [getComputedStyle(badge).color, getComputedStyle(badge).backgroundColor] : null,
+    oldContrast,
+    logName: log.getAttribute('aria-label') || log.textContent.trim(),
+    status: status ? { text: status.textContent, live: status.getAttribute('aria-live') } : null,
     controls: controls.map((el) => (el.textContent.trim() || el.getAttribute('aria-label') || el.tagName) + '@' + JSON.stringify(box(el))),
     log: box(log),
     logOn: topmostAt(log, ...centre(log)),
@@ -119,6 +137,12 @@ try {
         const red = []
         if (base.m.badge) red.push('a count shows with none waiting')
         if (dx === '0' && !base.m.logDisabled) red.push('Log is live with no station and none waiting')
+        if (!base.m.status || base.m.status.text !== '' || base.m.status.live !== 'polite')
+          red.push(`the polite status is not mounted empty before any contact waits: ${JSON.stringify(base.m.status)}`)
+        if (theme === 'light' && !(typeof base.m.oldContrast === 'number' && base.m.oldContrast > 1 && base.m.oldContrast < 4.5)) {
+          console.error(`logwaiting-probe: CONTROL FAILED at ${at} — the old pair measured ${base.m.oldContrast}:1, not below 4.5; the contrast check cannot fail`)
+          code = code || 1
+        }
         for (const n of [1, 12]) {
           const p = await page(w, h, `waiting=${n}&dx=${dx}&theme=${theme}`)
           const m = p.m
@@ -134,7 +158,10 @@ try {
             if (m.badge.text !== String(n)) red.push(`${n} waiting: the count reads ${m.badge.text}`)
             if (!m.badge.inside) red.push(`${n} waiting: the count is clipped by the strip ${JSON.stringify(m.badge.box)}`)
             if (m.badge.covers.length) red.push(`${n} waiting: the count covers ${m.badge.covers.join(', ')}`)
+            if (!(m.contrast >= 4.5)) red.push(`${n} waiting: the count reads at ${m.contrast}:1, under 4.5:1`)
           }
+          if (!m.logName.includes(String(n))) red.push(`${n} waiting: Log's spoken name "${m.logName}" has no count`)
+          if (!m.status || !m.status.text.includes(String(n))) red.push(`${n} waiting: the status says ${JSON.stringify(m.status)}`)
           if (!m.logOn) red.push(`${n} waiting: Log is covered`)
           if (m.logDisabled) red.push(`${n} waiting: Log is off`)
           if (!m.logDisabled) {
@@ -142,7 +169,7 @@ try {
             const calls = await p.evaluate('window.__calls()')
             if (JSON.stringify(calls) !== '["log"]') red.push(`${n} waiting: a click on Log asked ${JSON.stringify(calls)}`)
           }
-          console.log(`logwaiting-probe: window ${at}, ${n} waiting: Log ${JSON.stringify(m.log)} count ${JSON.stringify(m.badge)}`)
+          console.log(`logwaiting-probe: window ${at}, ${n} waiting: Log ${JSON.stringify(m.log)} count ${JSON.stringify(m.badge)} contrast ${m.contrast}:1 ${JSON.stringify(m.colours)} (old pair ${m.oldContrast}:1)`)
           await browser.call('Target.closeTarget', { targetId: p.targetId })
         }
         if (red.length) {
@@ -160,7 +187,7 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`logwaiting-probe: PASS — the count of contacts waiting for Log QSO moves no control, is drawn whole and covers none, Log stays topmost and live and a click reaches it, at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')} in ${THEMES.join(' and ')}, with and without a station on screen; each control caught`)
+  if (code === 0) console.log(`logwaiting-probe: PASS — the count of contacts waiting for Log QSO moves no control, is drawn whole and covers none, Log stays topmost and live and a click reaches it, the count reads at 4.5:1 or better and is spoken, at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')} in ${THEMES.join(' and ')}, with and without a station on screen; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

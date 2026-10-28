@@ -19127,16 +19127,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Some(held)
     }
 
-    /// The contact set aside for Log QSO that a press takes: the run's give-up first, then a band
-    /// change's, then the oldest one a click or a mode change replaced ([`StalledQso`]). Taken,
-    /// so each is logged or offered once.
+    /// The contact set aside for Log QSO that a press takes: the run's give-up first, then the
+    /// oldest finished one waiting for it ([`Self::set_aside_qsos`], the ones the count beside Log
+    /// names), then an unfinished one a band change set aside ([`StalledQso`]). Taken, so each is
+    /// logged or offered once.
+    ///
+    /// The give-up comes before the counted ones because ANY log ends it ([`Self::log_qso_inner`]):
+    /// logged after another, it would be lost. The counted ones come before the band change's, so
+    /// the press the count invites takes a counted contact whenever no give-up waits; neither of
+    /// the other two is ended by a log of another contact.
     fn take_set_aside_record(&mut self) -> Option<HeldQso> {
-        let Some(st) = self
-            .stalled_qso
-            .take()
-            .or_else(|| self.band_change_qso.take())
-        else {
-            return self.take_waiting_record();
+        let st = match self.stalled_qso.take() {
+            Some(st) => st,
+            None => {
+                if let Some(held) = self.take_waiting_record() {
+                    return Some(held);
+                }
+                self.band_change_qso.take()?
+            }
         };
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
@@ -19630,7 +19638,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // for Log QSO through the switch, as it always has: setting it aside would mark it logged,
         // and the run would call CQ in the new mode with nobody pressing anything (operator
         // decision, 2026-10-27). Only where and how it was made is kept, for the press.
-        if self.settings.auto_log || self.settings.prompt_to_log {
+        //
+        // …unless the switch ends the contact (into a receive-only tier, or away from a tier
+        // whose overs run long with TX on, below): the station is replaced and TX halted there,
+        // so with both off the finished contact is set aside for Log QSO first, not lost. That
+        // is logging only: the run ends there whatever is set.
+        let leaving_a_long_over_now = self.tx_enabled
+            && !matches!(
+                self.app.tier(),
+                Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep
+            );
+        let station_replaced = self.tier_is_rx_only(tier) || leaving_a_long_over_now;
+        if self.settings.auto_log || self.settings.prompt_to_log || station_replaced {
             self.rescue_replaced_contact();
         } else {
             self.keep_made_on_for_log_qso();
@@ -20378,14 +20397,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.offer_roger_click_contact(dx, dxgrid, None);
             }
         } else {
-            // The record as Log QSO would have built it now, so the journal keeps exactly that.
-            let grid_source = GridSource::of(dxgrid.as_deref());
-            let mut held = HeldQso::new(self.qso_record(dx, dxgrid, rx_report), grid_source);
-            held.confirm_only = !complete;
-            self.stamp_hold(&mut held.record);
-            self.set_aside_qsos.push(held);
-            self.persist_pending_qso();
+            self.wait_for_log_qso(dx, dxgrid, rx_report, !complete, None);
         }
+    }
+
+    /// Set a finished contact aside for Log QSO with Auto-log and the popup both off
+    /// ([`Self::set_aside_qsos`]): counted, journaled, kept until a press takes it. The record is
+    /// built now, while the contact is still the sequencer's, as Log QSO would have built it, so
+    /// the journal keeps exactly that. `made_on` names the band and logged frequencies it was made
+    /// on when the dial has already left them (a band change), unless a tier change kept them
+    /// first ([`MadeOn`]). Logging only.
+    fn wait_for_log_qso(
+        &mut self,
+        dx: String,
+        dxgrid: Option<String>,
+        rx_report: Option<i32>,
+        confirm_only: bool,
+        made_on: Option<(String, (f64, Option<f64>))>,
+    ) {
+        let grid_source = GridSource::of(dxgrid.as_deref());
+        let kept_by_tier_change = self.made_on_for(&dx).is_some();
+        let mut rec = self.qso_record(dx, dxgrid, rx_report);
+        if let Some((band, freqs)) = made_on.filter(|_| !kept_by_tier_change) {
+            rec.band = band;
+            (rec.freq_mhz, rec.freq_rx_mhz) = freqs;
+        }
+        let mut held = HeldQso::new(rec, grid_source);
+        held.confirm_only = confirm_only;
+        self.stamp_hold(&mut held.record);
+        self.set_aside_qsos.push(held);
+        self.persist_pending_qso();
     }
 
     /// Write a contact the auto-log found complete ([`ft_contact_complete`]): to the
@@ -20511,6 +20552,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     );
                     self.qso_logged = true;
                     self.auto_log_complete_contact(dx, dxgrid, rx_report, Some(made_on));
+                } else if ft_contact_complete(station, self.qso_report_sent) {
+                    // Complete, with Auto-log and the popup both off: it waits for Log QSO with
+                    // the others a click or Call CQ set aside, counted and kept across a restart,
+                    // on the band it was made on (operator decision, 2026-10-27).
+                    self.qso_logged = true;
+                    self.wait_for_log_qso(dx, dxgrid, rx_report, false, Some(made_on));
                 } else if rx_report.is_some()
                     || self.qso_report_sent.is_some()
                     || station.report_impossible_exchange()
@@ -20535,12 +20582,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         self.qso_logged = true;
                         self.offer_roger_click_contact(dx, dxgrid, Some(made_on));
                     } else {
-                        let mut st = self.set_aside(dx, dxgrid, None, made_on);
-                        st.start_unix = st
-                            .start_unix
-                            .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
-                        st.confirm_only = true;
-                        self.band_change_qso = Some(st);
+                        // Offer-only, with the others waiting for Log QSO, as a click sets one
+                        // aside (operator decision, 2026-10-27).
+                        self.qso_logged = true;
+                        self.wait_for_log_qso(dx, dxgrid, None, true, Some(made_on));
                     }
                 }
             }

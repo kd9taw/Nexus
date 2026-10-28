@@ -11154,6 +11154,8 @@ export const EN = {
   'operate.strip.log.label': 'Log',
   'operate.strip.log.title': 'Log this QSO now',
   'operate.strip.log.waiting': '{{count}} waiting for Log',
+  'operate.strip.log.titleWaiting': 'Log this QSO now. Waiting for Log: {{count}}',
+  'operate.strip.log.ariaWaiting': 'Log, {{count}} waiting',
 
   // The transmit-cycle button: four WHOLE labels, never a stem plus a period token.
   'operate.strip.period.title':

@@ -4526,6 +4526,8 @@ export const FR: PartialCatalog = {
   "operate.strip.log.label": "Enregistrer",
   "operate.strip.log.title": "Enregistrer ce QSO maintenant",
   "operate.strip.log.waiting": "En attente d’Enregistrer : {{count}}",
+  "operate.strip.log.titleWaiting": "Enregistrer ce QSO maintenant. En attente d’Enregistrer : {{count}}",
+  "operate.strip.log.ariaWaiting": "Enregistrer, {{count}} en attente",
   "operate.strip.narrowFilter.label": "filtre {{hz}} Hz",
   "operate.strip.narrowFilter.title": "Le filtre de réception de la radio est à {{hz}} Hz — bien plus étroit qu'une fenêtre FT8/FT4. Les signaux en dehors n'atteignent pas du tout le décodeur. Élargissez le filtre sur la radio (2.4-3 kHz est normal).",
   "operate.strip.nextSlot.label": "prochain {{secs}}s",

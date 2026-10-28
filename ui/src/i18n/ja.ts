@@ -7004,6 +7004,8 @@ export const JA: PartialCatalog = {
   "operate.strip.log.label": "記録",
   "operate.strip.log.title": "この交信を今すぐ記録します",
   "operate.strip.log.waiting": "記録待ち: {{count}}",
+  "operate.strip.log.titleWaiting": "この交信を今すぐ記録します。記録待ち: {{count}}",
+  "operate.strip.log.ariaWaiting": "記録、待ち {{count}}",
   "operate.strip.period.title": "送信サイクル — クリックで Auto → Tx 1st → Tx 2nd の順に切り替わります。Auto は応答する相手局と逆のサイクルを選びます。交信相手とは必ず逆の周期にいる必要があります。",
   "operate.strip.period.auto.first": "TX AUTO / 1st",
   "operate.strip.period.auto.second": "TX AUTO / 2nd",

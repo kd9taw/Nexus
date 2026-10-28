@@ -6592,6 +6592,8 @@ export const DE: PartialCatalog = {
   "operate.strip.log.label": "Loggen",
   "operate.strip.log.title": "Dieses QSO jetzt loggen",
   "operate.strip.log.waiting": "Warten auf Loggen: {{count}}",
+  "operate.strip.log.titleWaiting": "Dieses QSO jetzt loggen. Warten auf Loggen: {{count}}",
+  "operate.strip.log.ariaWaiting": "Loggen, wartend: {{count}}",
   "operate.strip.period.title": "Sendezyklus — klicken, um zwischen Auto → TX 1. → TX 2. zu wechseln. Auto wählt den entgegengesetzten Zyklus der Station, die Sie beantworten; die gearbeitete Station muss in der ENTGEGENGESETZTEN Periode senden.",
   "operate.strip.period.auto.first": "TX AUTO / 1.",
   "operate.strip.period.auto.second": "TX AUTO / 2.",
