@@ -72,10 +72,14 @@ export function ruleRadio(
   return hit ? hit.radio : null
 }
 
+/** Whether a band list holds `band`, read without case as the engine reads it (a stored "2M" is 2m). */
+export const listsBand = (list: readonly string[] | undefined, band: string) =>
+  (list ?? []).some((b) => b.toLowerCase() === band.toLowerCase())
+
 /** Bands at least two radios that are on list by name, in `order`. A catch-all radio (no list) is not
  *  counted: a radio that lists the band already outranks it there. */
 export function sharedBands(a: RadioSetupAnswers, order: readonly string[]): string[] {
-  return order.filter((band) => a.ids.filter((id) => a.enabled[id] && a.bands[id]?.includes(band)).length >= 2)
+  return order.filter((band) => a.ids.filter((id) => a.enabled[id] && listsBand(a.bands[id], band)).length >= 2)
 }
 
 export const kitOf = (r: RadioProfile): RadioKit => ({

@@ -312,6 +312,23 @@ describe('the radio setup', () => {
     expect(api.spies.testCat).toHaveBeenCalledTimes(1)
   })
 
+  it('a band stored in other capitals shows ticked, and unticking it takes it off', async () => {
+    // The engine reads band lists without case: a stored "2M" is 2 m.
+    const s = station()
+    s.radios = s.radios!.map((r) => (r.id === 2 ? { ...r, bands: ['2M', '70cm'] } : r))
+    api.get('getSettings').mockResolvedValue(s)
+    const onClose = vi.fn()
+    render(<RadioSetupWizard settings={s} bands={BANDS} onClose={onClose} />)
+    next()
+    const box = screen.getByRole('checkbox', { name: 'FT-991A on 2m' }) as HTMLInputElement
+    expect(box.checked).toBe(true)
+    fireEvent.click(box)
+    while (screen.queryByRole('button', { name: 'Next' })) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(api.spies.setRadioBands).toHaveBeenCalledWith(2, ['70cm'])
+  })
+
   it('ticking a band keeps a band the table does not show', async () => {
     const s = station()
     s.radios = s.radios!.map((r) => (r.id === 2 ? { ...r, bands: ['2m', '1.25m'] } : r))

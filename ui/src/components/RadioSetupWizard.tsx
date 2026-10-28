@@ -62,6 +62,7 @@ import {
   type FinishPlan,
   type RadioSetupAnswers,
   kitOf,
+  listsBand,
   type RadioKit,
 } from '../settings/radioSetup'
 import { checkRigForm, NO_CAT_PTT_TRANSCEIVERS, type RigCheck, type RigFormFacts } from '../rigFormChecks'
@@ -166,7 +167,7 @@ export function RadioSetupWizard({
     setA((prev) => {
       const now = prev.bands[id] ?? []
       // Added at the end, so a band the list holds that this table does not show is kept.
-      const next = now.includes(band) ? now.filter((b) => b !== band) : [...now, band]
+      const next = listsBand(now, band) ? now.filter((b) => !listsBand([b], band)) : [...now, band]
       return { ...prev, bands: { ...prev.bands, [id]: next } }
     })
   const setCell = (band: string, mode: RouteMode, radio: number | null) =>
@@ -425,7 +426,7 @@ export function RadioSetupWizard({
                       <input
                         type="checkbox"
                         aria-label={t('radioSetup.bands.cell.aria', { radio: name(id), band: b })}
-                        checked={(a.bands[id] ?? []).includes(b)}
+                        checked={listsBand(a.bands[id], b)}
                         disabled={a.enabled[id] === false}
                         onChange={() => toggleBand(id, b)}
                       />
