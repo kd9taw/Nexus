@@ -20850,6 +20850,27 @@ button.cq-skiptx1.on {
   flex: 1;
   min-height: 0;
 }
+/* THE SPOTS BOARD IN A SHORT WINDOW. Its filter bar has a chip per spotted-from country, so on a
+   busy day it can be taller than a small window: measured in Chrome at the Spots window's 490×360
+   minimum with 80 countries, the list was squeezed to 2 px and the last chips were clipped below the
+   window. So the list keeps a floor of a few rows (the header and three, 119 px at 100%; the floor
+   is a little under that so it never asks for more height than the window's declared natural), and
+   once the list is at its floor the FILTER BAR gives way, scrolling inside itself. Not the whole
+   board: a scrollbar on the board takes its width from the columns, and in Chrome it then stayed up
+   (the chips rewrapped taller under it) and pushed the columns 6 px sideways. The filter bar's own
+   scrollbar takes width only from the chips, and its gutter is kept whether it scrolls or not, so the
+   chips wrap the same way either side of the threshold (without it the scrollbar stayed up after the
+   window grew back, for the same reason). While everything fits, nothing scrolls but the list.
+   (DetachedPanel.scroll.test.tsx computes the winners; `browser-probe --desktop spots` lays it out.) */
+.spots-panel > .np-filters {
+  flex: 0 1 auto;
+  min-height: 3em;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.spots-panel > .sp-grid {
+  min-height: 8em;
+}
 /* A `.panel`-rooted view torn off on its own: the panel IS the window, so it takes the height
    and owns its own deficit — the SAME fate `.layout.single > .panel` gives it docked, in the
    host that has no `.layout.single` to give it. Without this the only overflow declaration
@@ -21189,9 +21210,13 @@ button.cq-skiptx1.on {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 /* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
-   mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
+   mode · spotter · comment, then the row's Spot button). Reuses the Needed board's row chrome,
+   own column template. The column floors are what the Spots window promises to fit at its
+   smallest (useScale's PANEL_NATURAL.spots, 740 px wide): the Spot button's column and its gap
+   (42 px) are paid for out of the spotter and comment floors, the two columns that ellipsize,
+   so a window dragged to its minimum neither scrolls sideways nor cuts the last column off. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr) 32px;
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(48px, 1fr) minmax(86px, 1.6fr) 32px;
 }
 /* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as

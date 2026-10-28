@@ -387,6 +387,37 @@ describe('the torn-off POTA/SOTA board can be scrolled', () => {
   })
 })
 
+// ── 1b. the Spots window: a filter bar taller than a small window ──────────────────────
+//
+// The Spots window can be dragged down to its 490×360 minimum, and its filter bar has one
+// chip per spotted-from country, as many as a busy day brings. Measured in Chrome at that
+// minimum with 80 countries: the board's root clipped (`overflow: hidden`), the list
+// collapsed to 2 px — no row at all — and the last chips sat below the window with no way
+// to reach them. The list's own scroller does not help: it holds the rows, not the head or
+// the filter bar above it. So the list keeps a floor of a few rows and the filter bar, once the
+// list is at that floor, gives way and scrolls inside itself (a scrollbar on the whole board
+// would take its width from the columns; measured in Chrome, it pushed them sideways).
+
+describe('the torn-off Spots board with a tall filter bar', () => {
+  it('scrolls to the last filter chip instead of clipping it, and keeps a few rows of list', async () => {
+    const { app } = await mountPopout('spots')
+    const board = app.querySelector('main.spots-panel')!
+    await act(async () => {
+      ;(board.querySelector('.np-filter-toggle') as HTMLElement).click()
+    })
+    const chips = board.querySelectorAll('.np-filters button')
+    expect(chips.length, 'the Filter button opens the filter bar').toBeGreaterThan(0)
+    const { fate, at } = deficitFate(chips[chips.length - 1], app)
+    expect(
+      fate,
+      `The Spots window's filter bar makes its deficit inside a box that ${fate === 'clip' ? `CLIPS it (${at})` : 'nothing owns'}: ` +
+        'in a small window the last filter chips are below the window and cannot be reached.',
+    ).toBe('scroll')
+    const floor = declOf(board.querySelector('.sp-grid')!, 'min-height')
+    expect(floor, 'the list keeps a floor of a few rows, or a tall filter bar squeezes it to nothing').toMatch(/^[1-9][\d.]*em$/)
+  })
+})
+
 // ── 2. the same question of every other pop-out ─────────────────────────────────────────
 
 describe('every pop-out the shell can host', () => {
