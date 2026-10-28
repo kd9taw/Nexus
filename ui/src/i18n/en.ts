@@ -10926,6 +10926,8 @@ export const EN = {
   'aprs.head.packets': '{{count}} pkts',
   'aprs.channel.title':
     'APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)',
+  'aprs.channel.iss': 'ISS (space station)',
+  'aprs.channel.title.iss': 'The ISS APRS digipeater (2 m FM, AFSK-1200), heard only while the station passes overhead. A pass shifts the frequency a few kHz (Doppler), and Nexus does not correct it — selecting it tunes the rig',
   'aprs.retune.label': 'Re-tune',
   'aprs.retune.title.loading': 'Reading your APRS channel…',
   'aprs.retune.title':
@@ -11084,6 +11086,11 @@ export const EN = {
   'aprs.beacon.symbol.label': 'Symbol',
   'aprs.beacon.comment.label': 'Comment',
   'aprs.beacon.path.label': 'Path',
+  'aprs.beacon.path.pick.label': 'Pick a digipeater path (fills the Path box)',
+  'aprs.beacon.path.pick.own': 'Your own',
+  'aprs.beacon.path.pick.direct': 'Direct (no path)',
+  'aprs.iss.hint': 'The ISS digipeater answers to the path {{path}}. A pass shifts the frequency a few kHz (Doppler), and Nexus does not correct it.',
+  'aprs.iss.useAriss': 'Use {{path}}',
   'aprs.beacon.send': 'Send beacon',
   'aprs.msg.title': 'Message',
   'aprs.msg.to.label': 'To',
