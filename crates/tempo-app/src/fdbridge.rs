@@ -19,8 +19,8 @@
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
 use tempo_net::fdsync::{
-    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionKey, PositionSync,
-    Unreachable, WireQso,
+    ClockSample, ClubBackend, ClubListView, ClubRows, ClubState, JoinAccept, PosReport,
+    PositionKey, PositionSync, Unreachable, WireQso,
 };
 
 fn now_unix() -> u64 {
@@ -92,6 +92,10 @@ impl ClubBackend for EngineClubBackend {
 
     fn retracted(&self, pos: &str) -> Vec<u64> {
         engine_lock(&self.0).fd_club_retracted(pos)
+    }
+
+    fn club_list(&self) -> Arc<ClubListView> {
+        engine_lock(&self.0).fd_club_list()
     }
 }
 
@@ -212,6 +216,14 @@ impl PositionSync for EnginePositionSync {
         let now = now_unix();
         self.mirror(|m| {
             m.apply(st);
+            m.heard(now);
+        });
+    }
+
+    fn on_rows(&self, rows: &ClubRows) {
+        let now = now_unix();
+        self.mirror(|m| {
+            m.on_rows(rows);
             m.heard(now);
         });
     }

@@ -12,6 +12,8 @@ import { StreamInputDispatcher } from '../remote-native/stream-input'
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
+  // A joined laptop's club block lists the club log the host sent: none here.
+  fdClubLogNewest: vi.fn(async () => null),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
   exportLog: vi.fn(async () => ''),

@@ -1833,7 +1833,7 @@ export interface ClubLogColumns {
 const CLUB_LOG_READ_MS = 2000
 
 /**
- * ⭐ THE CLUB LOG, ON THE HOST'S OWN SCREEN: every position's contacts as this host merged them,
+ * ⭐ THE CLUB LOG, ON THE HOST'S SCREEN AND EVERY LAPTOP'S: every position's contacts as this host merged them,
  * newest first, with the position that logged each, so the host can watch them arrive (the operator,
  * benching two laptops: "I can see the number on the board on the host computer here but it doesnt
  * show in the host master log").
@@ -1844,8 +1844,10 @@ const CLUB_LOG_READ_MS = 2000
  * files' own, drawn by the row this station's own log is drawn by, so it is marked as a dupe is there.
  * Each position is named as its line on the board above names it. Read-only: nothing here is pressed.
  *
- * The host's alone (`FdClubSection`'s `clubLog`): a joined laptop holds no rows, and Remote's page is
- * sent none of them.
+ * ⭐ On every joined laptop too, as every station of a networked club sees the combined log: the host
+ * sends each laptop this same list over club sync, and the laptop's engine answers it from what the host
+ * sent (`ClubMirror::list`), so a laptop lists exactly what the host's own screen lists. View only: a
+ * laptop still takes back only its own contacts, from its own log. Remote's page is sent none of it.
  */
 function ClubLogList({
   club,
@@ -1882,7 +1884,10 @@ function ClubLogList({
   const slotColumns = fieldDay ? [] : columns.receives
   return (
     <div className={big ? 'fd-log fd-club-log-big' : 'fd-log'} role="region" aria-label={t('fieldDay.club.log.head')}>
-      <div style={{ ...CLUB_HEADER, gap: 8, fontSize: textPx(big ? 15 : 12) }} title={t('fieldDay.club.log.title')}>
+      <div
+        style={{ ...CLUB_HEADER, gap: 8, fontSize: textPx(big ? 15 : 12) }}
+        title={club.hosting ? t('fieldDay.club.log.title') : t('fieldDay.club.log.title.joined')}
+      >
         <span style={{ fontWeight: 700, color: 'var(--text)' }}>{t('fieldDay.club.log.head')}</span>
         <span style={{ color: 'var(--text-dim)' }}>
           {log.total > log.rows.length
@@ -1965,10 +1970,10 @@ export function FdClubSection({
   /** This laptop's own position id (`Settings.fdPositionId`), whose name the grid marks as this
    *  laptop on a position's board. Not on Remote, which is no laptop of the club's. */
   ownPosid?: string
-  /** ⭐ The host's club log under the board (`ClubLogList`), and the log table's columns of the
-   *  contest the club runs: the host's contest screen and its club board's own window pass it. Not
-   *  Remote's contest view, whose page is sent none of the club's rows, and shown only while this
-   *  laptop hosts: a joined laptop holds the club's counts and keys, never its rows. */
+  /** ⭐ The club log under the board (`ClubLogList`), and the log table's columns of the contest the
+   *  club runs: the contest screen and its club board's own window pass it, on the host and on every
+   *  joined laptop (the host sends each the same list). Not Remote's contest view, whose page is sent
+   *  none of the club's rows. */
   clubLog?: ClubLogColumns
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
@@ -2568,7 +2573,7 @@ export function FdClubSection({
           })}
         </div>
       )}
-      {clubLog && club.hosting && !readOnly && (
+      {clubLog && !readOnly && (
         <ClubLogList club={club} fieldDay={fieldDay} columns={clubLog} big={big} />
       )}
     </div>

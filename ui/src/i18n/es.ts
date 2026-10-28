@@ -2234,6 +2234,7 @@ export const ES: PartialCatalog = {
   "fieldDay.club.board.heard.never": "(sin oírse desde que arrancó este Nexus)",
   "fieldDay.club.log.head": "Log del club",
   "fieldDay.club.log.title": "Los contactos de todas las posiciones tal como este host los combinó, los más recientes primero, con la posición que registró cada uno: el log del club, del que se escriben el ADIF del club y el Cabrillo del club. Un duplicado se marca como en su propio log. En un concurso largo solo se listan los contactos más recientes, para que esta pantalla nunca se ralentice; todos los contactos están en los archivos del club.",
+  "fieldDay.club.log.title.joined": "Los contactos de todas las posiciones tal como el host del club los combinó, los más recientes primero, con la posición que registró cada uno: el log del club, del que el host escribe el ADIF del club y el Cabrillo del club. El host envía esta lista a cada portátil, así que aquí cambia en cuanto los contactos llegan al host. Un duplicado se marca como en su propio log. Solo para ver: usted retira solo sus propios contactos, desde su propio log. En un concurso largo solo se listan los contactos más recientes; todos los contactos están en los archivos del club en el host.",
   "fieldDay.club.log.count": { "one": "{{count}} contacto", "other": "{{count}} contactos" },
   "fieldDay.club.log.newest": "los {{shown}} más recientes de {{total}} contactos",
   "fieldDay.club.log.empty": "Aún no hay contactos en el log del club.",
