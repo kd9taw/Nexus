@@ -1452,6 +1452,20 @@ impl Engine {
         if self.js8_planned_slot == Some(slot) {
             return None;
         }
+        // ⛔ The keying-time call check (`Engine::sent_call_refusal`): the next message's frames
+        // carry the call it was queued under. Made under another call than the station's now,
+        // it is dropped before a frame of it is released, and the cockpit says why, as the
+        // locator refusal above does.
+        if let Some(why) = self
+            .js8_station
+            .next_message_call()
+            .and_then(|call| self.sent_call_refusal(call))
+        {
+            self.js8_station.drop_outbox();
+            self.js8_last_error = Some(why.to_string());
+            self.set_transmitting(false);
+            return None;
+        }
         let period_ms = u64::from(speed.period_s()) * 1000;
         let period_start_ms = slot.saturating_mul(period_ms);
         // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566-5590): the

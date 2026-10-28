@@ -96,6 +96,9 @@ impl Engine {
     /// - an FT contact is finished and not logged yet (Auto-log and the log prompt both off): its
     ///   overs went out under this call, and the Log QSO button logs it under the call the
     ///   station has when it is pressed ([`STATION_PROFILE_UNLOGGED_REFUSED`]).
+    /// - JTTY is asking whether to log the contact its TU just ended (at most two minutes): the
+    ///   screen logs it under the call the station has when it is answered
+    ///   ([`crate::settings::STATION_PROFILE_JTTY_PROMPT_REFUSED`]).
     ///
     /// It reads the transmit state and changes none of it. S&P (monitoring) or Clear DX with TX
     /// off leaves nothing to send, and the profile can change.
@@ -114,6 +117,11 @@ impl Engine {
             Some(STATION_PROFILE_JS8_QUEUED_REFUSED)
         } else if finished_not_logged {
             Some(STATION_PROFILE_UNLOGGED_REFUSED)
+        } else if self
+            .jtty_open_log_prompt(super::now_unix_millis() as i64)
+            .is_some()
+        {
+            Some(crate::settings::STATION_PROFILE_JTTY_PROMPT_REFUSED)
         } else {
             None
         }
@@ -214,9 +222,10 @@ impl Engine {
     }
 
     /// A whole-settings save keeps the live profiles and active id (`live`, `live_active`, taken
-    /// before the save landed); the save's flat station fields go to the profile its form was on
-    /// ([`Settings::keep_station_form`]), and if that put the flat fields back to another
-    /// profile's, the identity follows them.
+    /// before the save landed); the save's flat station fields edit the profile the station is on
+    /// when the form was on it, and are left out when it names another
+    /// ([`Settings::keep_station_form`]); when the flat fields come back to the active profile's,
+    /// the identity follows them.
     ///
     /// ⛔ `call_waits`: the station's call before the save, given while
     /// [`Self::station_profile_switch_refusal`] stood then. The save changes no profile's call:
@@ -232,14 +241,7 @@ impl Engine {
         self.settings.station_profiles = live;
         let bound = (self.settings.mycall.clone(), self.settings.mygrid.clone());
         if let Some(call) = call_waits {
-            // The call of the profile the form describes, as it is: the live one for the profile
-            // the station is on, the stored one for a profile a stale form was on.
-            self.settings.mycall = self
-                .settings
-                .station_profiles
-                .iter()
-                .find(|p| p.id == form && p.id != self.settings.active_station_profile)
-                .map_or(call, |p| p.call.clone());
+            self.settings.mycall = call;
         }
         self.settings.keep_station_form(&form);
         if (self.settings.mycall.clone(), self.settings.mygrid.clone()) != bound {
@@ -398,9 +400,10 @@ impl Engine {
                 }
             }
         }
-        // WHAT IT WAS MADE WITH: the rig as the operator described it here (over the radio's
-        // model, which `stamp_station_now` fills when this leaves it empty), and the antenna.
-        if rec.my_rig.is_none() && !profile.rig.is_empty() {
+        // WHAT IT WAS MADE WITH: a configured radio's model names the rig, as it always has
+        // (`stamp_station_now` fills it); the profile's rig only when no radio is configured
+        // (the operator's decision, 2026-10-28). And the antenna.
+        if rec.my_rig.is_none() && !profile.rig.is_empty() && self.log_rig_now().is_none() {
             rec.my_rig = Some(profile.rig.clone());
         }
         if !profile.antenna.is_empty() {

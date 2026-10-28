@@ -19776,6 +19776,7 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
 /// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
 /// dimension mismatch, or any TX gate being down. `afar`: as [`set_tx_enabled`]'s, checked in the
 /// hold the picture is handed over in.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn sstv_send(
     state: State<'_, SharedEngine>,
@@ -19788,6 +19789,9 @@ fn sstv_send(
     // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
     // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
     id_in_image: Option<bool>,
+    // The station calls the picture's text carries, as the screen put them there (a CQ or 73
+    // preset's "DE <call>"): judged by the keying-time call check before anything is encoded.
+    overlay_calls: Option<Vec<String>>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
@@ -19816,6 +19820,11 @@ fn sstv_send(
     let (mycall, send_fsk_id) = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
+        // ⛔ The keying-time call check: a picture whose text names another station call than
+        // the station's now (a preset added before a profile switch) is not sent.
+        if let Some(why) = eng.sstv_overlay_call_refusal(&overlay_calls.unwrap_or_default()) {
+            return Err(why.to_string());
+        }
         (eng.settings().mycall.clone(), eng.settings().sstv_tx_fsk_id)
     };
 
@@ -19876,7 +19885,8 @@ fn sstv_send(
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.sstv_send(samples, spec.name.to_string())?;
+    // The picture carries the call read above; the poll judges it by that call.
+    eng.sstv_send_as(samples, spec.name.to_string(), &mycall)?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(sstv_state_dto(&eng))
 }

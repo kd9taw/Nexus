@@ -28,8 +28,8 @@
 //! The list and the active id are written by their own verbs (`Engine::switch_station_profile`,
 //! `Engine::save_station_profile`, `Engine::remove_station_profile`), never by a whole-settings
 //! save: a form is a snapshot from whenever it loaded, and a stale one must not switch the
-//! station back to the call it had then. A save's flat station fields describe the profile its
-//! form was on ([`Settings::keep_station_form`]).
+//! station back to the call it had then. A save's flat station fields edit the profile the station
+//! is on, and only when the form was on it ([`Settings::keep_station_form`]).
 
 use super::Settings;
 use serde::{Deserialize, Serialize};
@@ -57,9 +57,19 @@ pub const STATION_PROFILE_JS8_QUEUED_REFUSED: &str = "The station profile waits 
 /// overs went out under this call, and the log takes the call the station has when it is logged.
 pub const STATION_PROFILE_UNLOGGED_REFUSED: &str = "The station profile waits until the contact you just finished is logged. Press Log QSO, or Clear DX to leave it out, then switch.";
 
+/// ⛔ Why the station profile does not change now: JTTY is asking whether to log the contact its
+/// TU just ended, and the screen logs it under the call the station has when it is answered.
+pub const STATION_PROFILE_JTTY_PROMPT_REFUSED: &str = "The station profile waits while JTTY asks to log the contact you just finished. Answer it (Log QSO or Not now), then switch.";
+
 /// ⛔ Why a settings restore or reset is refused now: it would change the call the station
 /// transmits under while a run, a contact, an over or a JS8 message is under way.
 pub const STATION_PROFILE_RESTORE_REFUSED: &str = "Settings are not restored or reset while a run, a contact, an over or a JS8 message is under way: that would change the call the station transmits under. Stop transmitting and end the run or contact (S&P) first, then try again.";
+
+/// ⛔ Why a message is not sent: it was made under another callsign than the one the station
+/// transmits under now (the keying-time call check, `Engine::sent_call_refusal`). A CQ, a reply,
+/// a queued text or a picture keeps the call it was built with; once the station's call has
+/// changed it would go out under the old one, so it is dropped instead.
+pub const STATION_CALL_CHANGED_TX_REFUSED: &str = "Not sent: this message was made under another callsign than the one your station uses now. Send it again, or end the run and start it again, to go out under your current call.";
 
 /// One named station setup. Every field but the id and name is optional: blank means "not
 /// stated", and a blank field stamps nothing on a contact.
@@ -181,9 +191,31 @@ impl Settings {
         if self.station_profiles.is_empty() {
             self.station_profiles.push(self.home_from_flat());
             self.active_station_profile = HOME_STATION_PROFILE.into();
-        } else if self.active_station_profile().is_none() {
-            self.active_station_profile = HOME_STATION_PROFILE.into();
+        } else {
+            self.repair_active_station_profile();
         }
+    }
+
+    /// ⛔ An active id that names no profile (a hand-edited file, a bundle from another install)
+    /// is put on Home, or on the first profile when there is no Home, and the station takes that
+    /// profile's call, grid, state and power. Never the other way round: the flat call may be a
+    /// club's, and folded into Home it would lift the licence refusal for good. Run at load and on
+    /// a restore. With no profiles, or a valid id, nothing changes.
+    pub fn repair_active_station_profile(&mut self) {
+        if self.station_profiles.is_empty() || self.active_station_profile().is_some() {
+            return;
+        }
+        let id = if self
+            .station_profiles
+            .iter()
+            .any(|p| p.id == HOME_STATION_PROFILE)
+        {
+            HOME_STATION_PROFILE.to_string()
+        } else {
+            self.station_profiles[0].id.clone()
+        };
+        self.active_station_profile = id;
+        self.sync_flat_from_active_station();
     }
 
     /// The active profile takes the flat call, grid, state and power: what Settings ▸ Station,
@@ -220,22 +252,24 @@ impl Settings {
     }
 
     /// After a whole-settings save adopted the LIVE list and active id: the save's flat station
-    /// fields describe the profile its form was on (`form_profile`, the save's own active id), so
-    /// they go into that one, and if the station has switched since the form loaded, the flat
-    /// fields come back to the profile it is on now. A save naming no profile (a payload from
-    /// before profiles, or one that does not carry them) describes the active one.
+    /// fields describe the profile its form was on (`form_profile`, the save's own active id).
+    /// ⛔ A whole save edits the profile the station is on, and no other: when the form names
+    /// another profile (a form loaded before a switch, or one that names it on purpose), its flat
+    /// call, grid, state and power are left out, and the station keeps the active profile's. So a
+    /// save never writes a call into a profile the station is not on: that would change the call
+    /// another profile transmits under, or lift the licence refusal by giving Home the club's
+    /// call. Those are changed in the profile editor, at the station. A save naming no profile, or
+    /// one the list does not have (a payload from before profiles), describes the active one.
     pub fn keep_station_form(&mut self, form_profile: &str) {
         if self.station_profiles.is_empty() {
             return;
         }
-        let form = if self.station_profiles.iter().any(|p| p.id == form_profile) {
-            form_profile.to_string()
-        } else {
-            self.active_station_profile.clone()
-        };
-        self.fold_flat_into_station_profile(&form);
-        if form != self.active_station_profile {
+        let another = form_profile != self.active_station_profile
+            && self.station_profiles.iter().any(|p| p.id == form_profile);
+        if another {
             self.sync_flat_from_active_station();
+        } else {
+            self.sync_active_station_from_flat();
         }
     }
 
@@ -244,10 +278,13 @@ impl Settings {
     /// licence) and a licence class is set. `Open` applies no privilege gate to any call, so there
     /// is nothing to decide. Home itself never refuses.
     pub fn station_profile_tx_refusal(&self) -> Option<&'static str> {
-        if self.license_class == super::LicenseClass::Open {
+        if self.license_class == super::LicenseClass::Open || self.station_profiles.is_empty() {
             return None;
         }
-        let active = self.active_station_profile()?;
+        // An active id that names no profile refuses until it is repaired: it never lifts this.
+        let Some(active) = self.active_station_profile() else {
+            return Some(STATION_PROFILE_CALL_TX_REFUSED);
+        };
         if active.id == HOME_STATION_PROFILE {
             return None;
         }
@@ -325,10 +362,10 @@ mod tests {
         assert_eq!(back.active_station_profile, HOME_STATION_PROFILE);
     }
 
-    /// A form loaded on Home and saved after the station switched to Portable: its call goes to
-    /// Home, and the flat fields stay Portable's.
+    /// A form loaded on Home and saved after the station switched to Portable: its call goes
+    /// nowhere (Home keeps its own), and the flat fields stay Portable's.
     #[test]
-    fn a_stale_form_folds_into_the_profile_it_was_on() {
+    fn a_stale_form_writes_no_call_into_the_profile_it_was_on() {
         let mut s = station();
         s.ensure_station_profiles();
         s.station_profiles.push(portable());
@@ -338,9 +375,106 @@ mod tests {
         s.mycall = "KD9TAX".into();
         s.mygrid = "EN52".into();
         s.keep_station_form(HOME_STATION_PROFILE);
-        assert_eq!(s.station_profiles[0].call, "KD9TAX", "Home took the edit");
+        assert_eq!(s.station_profiles[0].call, "KD9TAW", "Home keeps its call");
         assert_eq!(s.mycall, "KD9TAW/P", "the station stays on Portable");
         assert_eq!(s.mygrid, "EN53");
+    }
+
+    /// A club profile (W9ABC) beside Home, under a General licence, with an active id that names
+    /// no profile (a hand-edited file, a bundle from another install) and the club's call in the
+    /// flat field.
+    fn dangling(home: bool) -> Settings {
+        let mut s = station();
+        s.license_class = crate::settings::LicenseClass::General;
+        s.ensure_station_profiles();
+        s.station_profiles.push(StationProfile {
+            call: "W9ABC".into(),
+            ..portable()
+        });
+        if !home {
+            s.station_profiles.remove(0);
+        }
+        s.active_station_profile = "p9".into();
+        s.mycall = "W9ABC".into();
+        s
+    }
+
+    /// ⛔ An active id that names no profile never lifts the licence refusal: it refuses until it
+    /// is repaired, and loading the file puts the station on Home, with Home's own call, or on the
+    /// first profile when there is no Home.
+    #[test]
+    fn a_dangling_active_id_is_repaired_at_load_and_never_lifts_the_refusal() {
+        assert_eq!(
+            dangling(true).station_profile_tx_refusal(),
+            Some(STATION_PROFILE_CALL_TX_REFUSED),
+            "refused before the repair"
+        );
+        let path = std::env::temp_dir().join(format!(
+            "tempo_station_profiles_dangling_{}.json",
+            std::process::id()
+        ));
+        for (home, active, call, refused) in [
+            (true, HOME_STATION_PROFILE, "KD9TAW", false),
+            (false, "p1", "W9ABC", true),
+        ] {
+            dangling(home).save(&path).unwrap();
+            let back = Settings::load(&path);
+            assert_eq!(
+                (
+                    back.active_station_profile.as_str(),
+                    back.mycall.as_str(),
+                    back.station_profile_tx_refusal().is_some(),
+                ),
+                (active, call, refused),
+                "with Home: {home}"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A station with no profiles: a full stored settings file (every field the UI's fixture
+    /// carries, and one written from the defaults) loads and is written back with exactly the keys
+    /// it had, none of them a profile key, and a second load writes it byte for byte. (The first
+    /// load's own migrations, as on a station before profiles, may reword a value: the macros'
+    /// defaults, an empty uplink list.)
+    #[test]
+    fn a_full_stored_file_with_no_profiles_round_trips_with_no_new_keys() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo_station_profiles_roundtrip_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture: Settings = serde_json::from_str(include_str!(
+            "../../../../ui/src/components/__fixtures__/defaultSettings.json"
+        ))
+        .unwrap();
+        let keys = |text: &str| {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        for (name, start) in [("default", Settings::default()), ("fixture", fixture)] {
+            assert!(start.station_profiles.is_empty(), "premise: {name}");
+            let file = |n: &str| dir.join(format!("{name}-{n}.json"));
+            start.save(&file("a")).unwrap();
+            Settings::load(&file("a")).save(&file("b")).unwrap();
+            Settings::load(&file("b")).save(&file("c")).unwrap();
+            let read = |n: &str| std::fs::read_to_string(file(n)).unwrap();
+            let (a, b, c) = (read("a"), read("b"), read("c"));
+            assert_eq!(keys(&a), keys(&b), "{name}: the same keys written back");
+            assert_eq!(b, c, "{name}: written back byte for byte");
+            for key in [
+                "stationProfiles",
+                "activeStationProfile",
+                "stationProfileBack",
+            ] {
+                assert!(!a.contains(key) && !b.contains(key), "{name}: no {key}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -12,8 +12,9 @@ pub mod station_profiles;
 pub mod writer;
 
 pub use station_profiles::{
-    StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_CALL_TX_REFUSED,
-    STATION_PROFILE_JS8_QUEUED_REFUSED, STATION_PROFILE_RESTORE_REFUSED,
+    StationProfile, HOME_STATION_PROFILE, STATION_CALL_CHANGED_TX_REFUSED,
+    STATION_PROFILE_CALL_TX_REFUSED, STATION_PROFILE_JS8_QUEUED_REFUSED,
+    STATION_PROFILE_JTTY_PROMPT_REFUSED, STATION_PROFILE_RESTORE_REFUSED,
     STATION_PROFILE_SWITCH_REFUSED, STATION_PROFILE_UNLOGGED_REFUSED,
 };
 
@@ -7807,6 +7808,9 @@ impl Settings {
             p.flex_native_audio |= flat_audio;
         }
         s.sync_flat_from_active();
+        // ⛔ A station profile id that names no profile is put back on one, with that profile's
+        // call (`Settings::repair_active_station_profile`).
+        s.repair_active_station_profile();
         s
     }
 

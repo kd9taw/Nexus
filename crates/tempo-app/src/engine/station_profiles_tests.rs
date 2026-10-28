@@ -133,7 +133,7 @@ fn a_profile_stamps_its_fields_on_new_contacts() {
             s("7"),
             None,
             None,
-            s("IC-705"),
+            s("Icom IC-7300"),
             s("EFHW"),
             s("10")
         ]
@@ -257,8 +257,8 @@ fn another_parks_activation_takes_none_of_the_profiles_location() {
     );
     assert_eq!(
         r.my_rig.as_deref(),
-        Some("IC-705"),
-        "what it was made with still is"
+        Some("Icom IC-7300"),
+        "what it was made with still is: the configured radio"
     );
 }
 
@@ -897,4 +897,572 @@ fn a_stop_that_cannot_go_back_says_so_and_keeps_the_way_back() {
     assert_eq!(e.clear_activation_from(false), None);
     assert_eq!(e.settings.active_station_profile, HOME_STATION_PROFILE);
     assert_eq!(e.settings.mycall, ME);
+}
+
+// --- A whole save writes no call into a profile the station is not on ---------------------------
+
+/// Home (KD9TAW) and a club profile (W9ABC) under a General licence, the station idle.
+fn home_and_club() -> (Engine, String) {
+    let mut e = station();
+    e.set_frequency(14.074, "20m", "USB");
+    assert!(e.set_license_class("general"));
+    let mut club = portable();
+    club.name = "Club".into();
+    club.call = "W9ABC".into();
+    let club = e.save_station_profile(club).unwrap();
+    (e, club)
+}
+
+/// ⛔ The reviewer's sequence. A computer driving the station opens Settings while the shack is on
+/// Home; at the shack the operator picks the club profile; the far computer saves an unrelated
+/// change. Its form still names Home, and the save from afar carries the shack's call (W9ABC).
+/// Home's call stays KD9TAW, so the club call's licence refusal stands, and the rest of the form is
+/// saved. The reverse (a stale form naming the club while the shack is on Home) leaves the club's
+/// call alone, and so does a form that names a profile the station is not on on purpose.
+#[test]
+fn a_save_naming_a_profile_the_station_is_not_on_writes_no_call_into_it() {
+    let (mut e, club) = home_and_club();
+    let mut far_form = e.settings.clone();
+    e.switch_station_profile(&club).unwrap();
+    far_form.mycall = "W9ABC".into(); // what a save from afar takes from the shack
+    far_form.op_name = "Far op".into();
+    e.apply_settings(far_form);
+    assert_eq!(
+        (
+            profile_call(&e, HOME_STATION_PROFILE),
+            e.settings.mycall.clone(),
+            e.settings.active_station_profile.clone(),
+            e.connection_tx_refusal(),
+            e.settings.op_name.clone(),
+        ),
+        (
+            ME.to_string(),
+            "W9ABC".to_string(),
+            club.clone(),
+            Some(crate::settings::STATION_PROFILE_CALL_TX_REFUSED),
+            "Far op".to_string(),
+        )
+    );
+    // The reverse: the station on Home, a form still on the club profile with Home's call.
+    e.switch_station_profile(HOME_STATION_PROFILE).unwrap();
+    let mut stale = e.settings.clone();
+    stale.active_station_profile = club.clone();
+    stale.mycall = ME.into();
+    stale.mygrid = "FN31".into();
+    e.apply_settings(stale);
+    assert_eq!(
+        (
+            profile_call(&e, &club),
+            e.settings.mycall.clone(),
+            e.settings.mygrid.clone()
+        ),
+        ("W9ABC".to_string(), ME.to_string(), "EN52".to_string()),
+        "the club profile keeps its call; the station keeps Home's call and grid"
+    );
+    // CONTROL: a form on the profile the station is on edits it.
+    let mut form = e.settings.clone();
+    form.mygrid = "EN44".into();
+    e.apply_settings(form);
+    let home_grid = e
+        .settings
+        .station_profiles
+        .iter()
+        .find(|p| p.id == HOME_STATION_PROFILE)
+        .map(|p| p.grid.clone());
+    assert_eq!(
+        (e.settings.mygrid.as_str(), home_grid.as_deref()),
+        ("EN44", Some("EN44"))
+    );
+}
+
+/// ⛔ At the station: Settings opened on Home, the top bar switched to the club profile, and the
+/// operator types the club's call into the Station tab's call field (it still shows Home's) and
+/// saves. Home's call stays KD9TAW, and the club call stays refused.
+#[test]
+fn a_form_left_open_across_a_switch_does_not_rewrite_homes_call() {
+    let (mut e, club) = home_and_club();
+    let mut open_form = e.settings.clone();
+    e.switch_station_profile(&club).unwrap();
+    open_form.mycall = "W9ABC".into();
+    e.apply_settings(open_form);
+    assert_eq!(
+        (profile_call(&e, HOME_STATION_PROFILE), e.tx_allowed()),
+        (ME.to_string(), false)
+    );
+}
+
+/// ⛔ A restored settings bundle whose active id names no profile, with the club's call in the
+/// flat field: the station is put on Home with Home's call, never left transmitting the club call
+/// unrefused.
+#[test]
+fn a_restore_with_a_dangling_active_id_lands_on_home() {
+    let (mut e, _club) = home_and_club();
+    let mut bundle = e.settings.clone();
+    bundle.active_station_profile = "p9".into();
+    bundle.mycall = "W9ABC".into();
+    e.apply_restored_settings(bundle);
+    assert_eq!(
+        (
+            e.settings.active_station_profile.as_str(),
+            e.settings.mycall.as_str(),
+            e.snapshot().mycall.as_str(),
+        ),
+        (HOME_STATION_PROFILE, ME, ME)
+    );
+}
+
+// --- The keying-time call check --------------------------------------------------------------------
+//
+// Every message that carries the call it was built with is checked when it is about to go out: the
+// call in it must be the station's call now, or it is not sent and the operator is told why. The
+// switch refusals above keep the call from changing while a message waits; these tests change the
+// call directly, as any path that slipped past them would, and show that the message still does
+// not go out under the old call. Each has a control where the calls match and it keys.
+
+const CALL_CHANGED: &str = crate::settings::STATION_CALL_CHANGED_TX_REFUSED;
+
+/// The station's call becomes the profile `id`'s, with nothing refusing it: the switch's own
+/// effect, without its lock.
+fn call_becomes(e: &mut Engine, id: &str) {
+    e.settings.active_station_profile = id.to_string();
+    e.settings.sync_flat_from_active_station();
+}
+
+/// A station on FT8 with Home and KD9TAW/P, its CQ run started under KD9TAW.
+fn ft8_run() -> (Engine, String) {
+    let (mut e, id) = ft8_station();
+    e.start_cq(None).unwrap();
+    assert_eq!(tx_now(&e), "CQ KD9TAW EN52", "premise");
+    (e, id)
+}
+
+/// ⛔ FT8: a CQ run built under KD9TAW does not key once the station's call is KD9TAW/P, and the
+/// cockpit's transmit refusal says why. CONTROL: with the call unchanged the run keys its CQ.
+#[test]
+fn an_ft_run_built_under_another_call_does_not_key() {
+    let (mut control, _) = ft8_run();
+    assert_eq!(
+        keyed(&mut control, 0..4),
+        vec!["CQ KD9TAW EN52".to_string(); 2],
+        "CONTROL: the calls match and the run keys"
+    );
+    assert_eq!(control.snapshot().radio.tx_refusal, None);
+    let (mut e, id) = ft8_run();
+    call_becomes(&mut e, &id);
+    assert_eq!(keyed(&mut e, 0..4), Vec::<String>::new(), "nothing keyed");
+    assert_eq!(e.snapshot().radio.tx_refusal.as_deref(), Some(CALL_CHANGED));
+}
+
+/// A Field Day run on FT8 with Home and KD9TAW/P, started under KD9TAW.
+fn field_day_run() -> (Engine, String) {
+    let (mut e, id) = ft8_station();
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_class = "3A".into();
+    s.fd_section = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-run").unwrap();
+    assert!(matches!(e.mode, Mode::FieldDay { .. }), "premise");
+    (e, id)
+}
+
+/// Overs keyed in `slots`, counted.
+fn overs(e: &mut Engine, slots: std::ops::Range<u64>) -> usize {
+    slots.filter(|&slot| !e.poll_tx(slot).is_empty()).count()
+}
+
+/// ⛔ Field Day: the run's CQ, built under KD9TAW, does not key once the call is KD9TAW/P.
+/// CONTROL: unchanged, it keys.
+#[test]
+fn a_field_day_run_built_under_another_call_does_not_key() {
+    let (mut control, _) = field_day_run();
+    assert_eq!(overs(&mut control, 0..4), 2, "CONTROL: the run keys");
+    let (mut e, id) = field_day_run();
+    call_becomes(&mut e, &id);
+    assert_eq!(overs(&mut e, 0..4), 0, "nothing keyed");
+    assert_eq!(e.snapshot().radio.tx_refusal.as_deref(), Some(CALL_CHANGED));
+}
+
+/// A JS8 station with Home and KD9TAW/P, TX on, one message queued under KD9TAW, and the slot of
+/// the next period.
+fn js8_queued() -> (Engine, String, u64) {
+    let mut e = station();
+    let id = e.save_station_profile(portable()).unwrap();
+    e.js8_enter();
+    e.set_frequency(14.078, "20m", "USB");
+    e.set_tx_offset(1500.0);
+    e.set_tx_enabled(true);
+    e.js8_send(None, "HELLO FROM HOME".into()).unwrap();
+    let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+    let slot = tempo_core::timing::now_unix_ms() as u64 / period_ms + 1;
+    (e, id, slot)
+}
+
+/// ⛔ JS8: a message queued under KD9TAW (its frames carry the call) is not keyed once the station's
+/// call is KD9TAW/P; it is dropped, and the JS8 cockpit says why. CONTROL: unchanged, it keys.
+#[test]
+fn a_js8_message_queued_under_another_call_does_not_key() {
+    let (mut control, _, slot) = js8_queued();
+    assert!(control.plan_tx(slot).is_some(), "CONTROL: it keys");
+    let (mut e, id, slot) = js8_queued();
+    call_becomes(&mut e, &id);
+    assert!(e.plan_tx(slot).is_none(), "nothing keyed");
+    let js8 = e.js8_state();
+    assert_eq!(
+        (js8.queue.len(), js8.last_error.as_deref()),
+        (0, Some(CALL_CHANGED)),
+        "the message is dropped, and the reason shown"
+    );
+}
+
+/// RTTY text as the demodulator hands it over.
+fn rtty_heard(e: &mut Engine, text: &str) {
+    let chars: Vec<_> = text
+        .chars()
+        .map(|ch| tempo_core::rtty::DecodedChar {
+            ch,
+            confidence: 0.9,
+        })
+        .collect();
+    e.push_rtty_decode(&chars, 0.0, true);
+}
+
+/// RTTY Auto on Home (KD9TAW) with KD9TAW/P beside it: Auto CQ goes out, W1AW answers, our
+/// reply goes out, and the sequencer is between overs waiting for W1AW's exchange.
+fn rtty_auto_between_overs() -> (Engine, String) {
+    let mut e = station();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    let id = e.save_station_profile(portable()).unwrap();
+    e.set_operating_mode("rtty", false);
+    e.set_frequency(14.080, "20m", "LSB");
+    e.set_rtty_auto(true).unwrap();
+    e.rtty_auto_cq().unwrap();
+    let cq = e.poll_rtty_one().expect("premise: the CQ keys");
+    assert!(cq.contains("KD9TAW"), "premise: {cq}");
+    e.rtty_auto_service(); // the CQ has gone out
+    rtty_heard(&mut e, "KD9TAW DE W1AW W1AW K\n");
+    e.rtty_auto_service();
+    let reply = e.poll_rtty_one().expect("premise: our reply keys");
+    assert!(
+        reply.contains("W1AW") && reply.contains("KD9TAW"),
+        "premise: {reply}"
+    );
+    e.rtty_auto_service(); // …and has gone out: between overs, nothing queued
+    assert!(e.rtty_queue.is_empty(), "premise: between overs");
+    (e, id)
+}
+
+/// W1AW's exchange arrives, and the sequencer answers it.
+fn w1aw_sends_the_exchange(e: &mut Engine) -> Option<String> {
+    rtty_heard(e, "KD9TAW DE W1AW 599 BOB CT 599 BOB CT KD9TAW DE W1AW K\n");
+    e.rtty_auto_service();
+    e.poll_rtty_one()
+}
+
+/// ⛔ The reviewer's RTTY sequence. RTTY Auto is between overs, its contact with W1AW under way
+/// under KD9TAW; the operator picks KD9TAW/P in the top bar (the switch is allowed between
+/// overs). Nothing more goes out under KD9TAW: the contact ends, the cockpit says why, and
+/// nothing is logged under KD9TAW/P for a contact the air carried as KD9TAW. CONTROL: without the
+/// switch, the next over keys under KD9TAW.
+#[test]
+fn rtty_auto_between_overs_does_not_send_the_old_call_after_a_switch() {
+    let (mut control, _) = rtty_auto_between_overs();
+    let next = w1aw_sends_the_exchange(&mut control).unwrap_or_default();
+    assert!(
+        next.contains("KD9TAW"),
+        "CONTROL: the next over keys: {next:?}"
+    );
+    let (mut e, id) = rtty_auto_between_overs();
+    e.switch_station_profile(&id).unwrap();
+    assert_eq!(e.settings.mycall, "KD9TAW/P", "premise: switched");
+    let sent = w1aw_sends_the_exchange(&mut e);
+    let st = e.rtty_state();
+    assert_eq!(
+        (
+            sent,
+            st.seq_state.as_str(),
+            st.keyer_error.as_deref(),
+            e.stored_log().len(),
+        ),
+        (None, "idle", Some(CALL_CHANGED), 0)
+    );
+}
+
+/// ⛔ An RTTY over typed or sent from a macro under KD9TAW and still queued is not keyed once the
+/// call is KD9TAW/P. CONTROL: unchanged, it keys.
+#[test]
+fn an_rtty_over_queued_under_another_call_does_not_key() {
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_operating_mode("rtty", false);
+        e.set_frequency(14.080, "20m", "LSB");
+        e.rtty_send_text("CQ CQ DE KD9TAW KD9TAW K").unwrap();
+        (e, id)
+    };
+    let (mut control, _) = make();
+    assert!(control.poll_rtty_one().is_some(), "CONTROL: it keys");
+    let (mut e, id) = make();
+    call_becomes(&mut e, &id);
+    assert_eq!(e.poll_rtty_one(), None, "nothing keyed");
+    assert_eq!(
+        (e.rtty_queue.len(), e.rtty_state().keyer_error),
+        (0, Some(CALL_CHANGED.to_string()))
+    );
+}
+
+/// ⛔ CW: a macro's `{MYCALL}` is expanded when it is queued, so a message queued under KD9TAW is
+/// not keyed once the call is KD9TAW/P; the rest of it is dropped and the CW cockpit says why.
+/// CONTROL: unchanged, its first word keys.
+#[test]
+fn a_cw_macro_queued_under_another_call_does_not_key() {
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "CW");
+        e.send_cw("CQ DE {MYCALL} K");
+        assert!(e.cw_queue.contains(&"KD9TAW".to_string()), "premise");
+        (e, id)
+    };
+    let (mut control, _) = make();
+    assert_eq!(
+        control.poll_cw_word().map(|w| w.0).as_deref(),
+        Some("CQ"),
+        "CONTROL: it keys"
+    );
+    let (mut e, id) = make();
+    call_becomes(&mut e, &id);
+    assert_eq!(e.poll_cw_word(), None, "nothing keyed");
+    assert_eq!(
+        (e.cw_queue.len(), e.cw_keyer_error().as_deref()),
+        (0, Some(CALL_CHANGED))
+    );
+}
+
+/// ⛔ PSK: a line queued under KD9TAW is not keyed once the call is KD9TAW/P. CONTROL: unchanged,
+/// it keys.
+#[test]
+fn a_psk_line_queued_under_another_call_does_not_key() {
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_operating_mode("keyboard", false);
+        e.set_frequency(14.070, "20m", "USB");
+        e.psk_send_text("cq cq de kd9taw kd9taw k").unwrap();
+        (e, id)
+    };
+    let (mut control, _) = make();
+    assert!(control.poll_psk_one().is_some(), "CONTROL: it keys");
+    let (mut e, id) = make();
+    call_becomes(&mut e, &id);
+    assert_eq!(e.poll_psk_one(), None, "nothing keyed");
+    assert_eq!(
+        (e.psk_queue.len(), e.psk_state().keyer_error),
+        (0, Some(CALL_CHANGED.to_string()))
+    );
+}
+
+/// ⛔ SSTV: a picture whose ID was drawn under KD9TAW is not sent once the call is KD9TAW/P; it is
+/// dropped and the SSTV cockpit says why. CONTROL: unchanged, it keys.
+#[test]
+fn an_sstv_picture_made_under_another_call_does_not_key() {
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_frequency(14.230, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        e.sstv_send_as(vec![0.0; 24_000], "PD-120".into(), ME)
+            .unwrap();
+        (e, id)
+    };
+    let (mut control, _) = make();
+    assert!(control.poll_sstv_tx().is_some(), "CONTROL: it keys");
+    let (mut e, id) = make();
+    call_becomes(&mut e, &id);
+    assert!(e.poll_sstv_tx().is_none(), "nothing keyed");
+    assert_eq!(
+        (e.sstv_sending(), e.sstv_tx_notice()),
+        (false, Some(CALL_CHANGED))
+    );
+}
+
+/// ⛔ APRS: a beacon rendered under KD9TAW (its AX.25 source) is not keyed once the call is
+/// KD9TAW/P; it is dropped and the APRS status line says why. CONTROL: unchanged, it keys.
+#[test]
+fn an_aprs_beacon_made_under_another_call_does_not_key() {
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_operating_mode("phone", false);
+        e.aprs_tune(144.390).unwrap();
+        e.aprs_beacon(43.0, -89.4, '/', '>', "test", &[]).unwrap();
+        (e, id)
+    };
+    let (mut control, _) = make();
+    assert!(control.poll_aprs_tx().is_some(), "CONTROL: it keys");
+    let (mut e, id) = make();
+    call_becomes(&mut e, &id);
+    assert!(e.poll_aprs_tx().is_none(), "nothing keyed");
+    assert_eq!(e.aprs_tx_notice(), Some(CALL_CHANGED));
+}
+
+/// ⛔ JTTY: an over planned under KD9TAW is not keyed once the call is KD9TAW/P; it is dropped and
+/// the JTTY cockpit says why. CONTROL: unchanged, it keys.
+#[test]
+fn a_jtty_over_planned_under_another_call_does_not_key() {
+    use crate::engine::jtty_tx::{send_text, JttyTick};
+    let make = || {
+        let mut e = station();
+        let id = e.save_station_profile(portable()).unwrap();
+        e.set_operating_mode("jtty", false);
+        e.set_frequency(14.090, "20m", "USB");
+        e.set_tx_enabled(true);
+        let m = std::sync::Mutex::new(e);
+        send_text(&m, "CQ CQ DE KD9TAW K", "").unwrap();
+        (m, id)
+    };
+    let (control, _) = make();
+    assert!(
+        matches!(
+            engine_lock(&control).poll_jtty(true, 0.0),
+            JttyTick::Frame(_)
+        ),
+        "CONTROL: it keys"
+    );
+    let (m, id) = make();
+    let mut e = engine_lock(&m);
+    call_becomes(&mut e, &id);
+    assert!(
+        matches!(e.poll_jtty(true, 0.0), JttyTick::Idle),
+        "nothing keyed"
+    );
+    assert_eq!(e.jtty_state().tx.notice.as_deref(), Some(CALL_CHANGED));
+}
+
+// --- A contact set aside for Log QSO keeps the station it was made under -------------------------
+
+/// ⛔ The reviewer's sequence. During a run under KD9TAW a caller goes quiet after the reports
+/// crossed, and the run sets the contact aside for Log QSO. The operator presses S&P, picks
+/// KD9TAW/P, then presses Log QSO: the contact is logged under KD9TAW and Home's grid and place,
+/// the station its overs went out under, not the profile on when the button is pressed.
+#[test]
+fn a_contact_set_aside_logs_the_station_it_was_made_under() {
+    let (mut e, id) = ft8_station();
+    e.set_mode("qso-run").unwrap();
+    e.poll_tx(0); // our CQ
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -8)], 1);
+    e.poll_tx(2); // our R-08
+    e.ingest_decodes_for_test(&[], 3);
+    for slot in [4u64, 6, 8] {
+        e.poll_tx(slot);
+        e.ingest_decodes_for_test(&[], slot + 1);
+    }
+    assert!(e.stalled_qso.is_some(), "premise: set aside");
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    e.switch_station_profile(&id).unwrap();
+    assert_eq!(e.settings.mycall, "KD9TAW/P", "premise: switched");
+    assert!(e.log_current_qso(), "Log QSO");
+    let r = e.stored_log().last().map(|r| QsoRecord::clone(r)).unwrap();
+    assert_eq!(r.call, "W1AW");
+    assert_eq!(
+        (
+            r.station_callsign.as_deref(),
+            r.my_grid.as_deref(),
+            extra_field(&r, "MY_CNTY"),
+            r.tx_power,
+        ),
+        (Some(ME), Some("EN52"), None, Some(100.0))
+    );
+}
+
+/// ⛔ JTTY: while the Log QSO prompt for the contact a TU just ended is asked, the profile waits
+/// (the screen logs it under the call the station has when it is answered). Answered, it goes.
+#[test]
+fn a_jtty_log_prompt_keeps_the_profile_until_it_is_answered() {
+    use crate::engine::jtty_tx::{send_text, JttyTick};
+    let mut e = station();
+    let id = e.save_station_profile(portable()).unwrap();
+    e.set_operating_mode("jtty", false);
+    e.set_frequency(14.090, "20m", "USB");
+    e.set_tx_enabled(true);
+    let m = std::sync::Mutex::new(e);
+    send_text(&m, "TU 73", "W1AW").unwrap();
+    for _ in 0..1000 {
+        if matches!(engine_lock(&m).poll_jtty(true, 0.0), JttyTick::Idle) {
+            break;
+        }
+    }
+    let mut e = engine_lock(&m);
+    e.set_tx_enabled(false);
+    let prompt = e
+        .jtty_state()
+        .tx
+        .log_prompt
+        .clone()
+        .expect("premise: asked");
+    assert_eq!(prompt.call, "W1AW", "premise");
+    assert_eq!(
+        e.switch_station_profile(&id),
+        Err(crate::settings::STATION_PROFILE_JTTY_PROMPT_REFUSED.to_string())
+    );
+    let _ = e.jtty_log_prompt_answer(prompt.id); // Not now
+    e.switch_station_profile(&id).unwrap();
+    assert_eq!(e.settings.mycall, "KD9TAW/P");
+}
+
+// --- MY_RIG: the radio's model wins ---------------------------------------------------------------
+
+/// MY_RIG on a profile contact: a configured radio's model name, as Nexus has always logged it;
+/// the profile's rig only when no radio is configured.
+#[test]
+fn a_configured_radio_names_the_rig_and_the_profile_only_without_one() {
+    let mut e = station();
+    let id = e.save_station_profile(portable()).unwrap();
+    e.switch_station_profile(&id).unwrap();
+    let with_radio = log(&mut e, "W1AW");
+    e.settings.rig_model_name = "None / VOX".into();
+    let without = log(&mut e, "K1ABC");
+    assert_eq!(
+        (with_radio.my_rig.as_deref(), without.my_rig.as_deref()),
+        (Some("Icom IC-7300"), Some("IC-705"))
+    );
+}
+
+/// ⛔ SSTV: a picture whose preset text says "DE KD9TAW" is refused once the call is KD9TAW/P.
+/// CONTROL: unchanged, or with no preset text, it is not.
+#[test]
+fn an_sstv_picture_whose_text_names_another_call_is_refused() {
+    let mut e = station();
+    let id = e.save_station_profile(portable()).unwrap();
+    let text = vec![ME.to_string()];
+    assert_eq!(e.sstv_overlay_call_refusal(&text), None, "CONTROL");
+    call_becomes(&mut e, &id);
+    assert_eq!(
+        (
+            e.sstv_overlay_call_refusal(&text),
+            e.sstv_overlay_call_refusal(&[])
+        ),
+        (Some(CALL_CHANGED), None)
+    );
+}
+
+/// ⛔ Review 1's and review 2's sequence, held by the keying-time call check alone: the club run
+/// (W9ABC, refused under a General licence) is armed with every slot skipped, and the station's call
+/// becomes Home's by a path that slipped past every lock (here, directly). The licence refusal
+/// lifts, and the run's "CQ W9ABC" still never keys. CONTROL: a run built under Home keys.
+#[test]
+fn a_club_run_never_keys_once_the_call_is_home_whatever_moved_it() {
+    let (mut e, _club) = club_run();
+    call_becomes(&mut e, HOME_STATION_PROFILE);
+    assert!(e.tx_allowed(), "premise: the licence refusal has lifted");
+    let sent = keyed(&mut e, 2..10);
+    assert_eq!(sent, Vec::<String>::new(), "nothing keyed: {sent:?}");
+    // CONTROL: S&P, then Call CQ again under Home: it keys.
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    e.start_cq(None).unwrap();
+    assert_eq!(keyed(&mut e, 10..14), vec!["CQ KD9TAW EN52".to_string(); 2]);
 }

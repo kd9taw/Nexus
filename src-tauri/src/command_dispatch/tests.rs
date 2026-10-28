@@ -4163,6 +4163,56 @@ fn with_station_profiles_the_call_is_set_at_the_station() {
     );
 }
 
+/// ⛔ The reviewer's sequence from afar. The far computer opens Settings with the shack on Home;
+/// at the shack the operator picks the club profile (W9ABC, refused under a General licence); the
+/// far computer saves an unrelated change. Its form still names Home, and the save from afar takes
+/// the shack's call (W9ABC). Home's call stays KD9TAW, so the club call's licence refusal stands;
+/// the far computer's change is saved.
+#[test]
+fn a_save_from_afar_on_a_stale_profile_never_gives_home_the_club_call() {
+    let mut shack = tempo_app::settings::Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        ..Default::default()
+    };
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.set_frequency(14.074, "20m", "USB");
+    assert!(e.set_license_class("general"));
+    let club = e
+        .save_station_profile(tempo_app::settings::StationProfile {
+            name: "Club".into(),
+            call: "W9ABC".into(),
+            grid: "EN43".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut far_form = e.settings().clone();
+    e.switch_station_profile(&club).unwrap();
+    shack.clone_from(e.settings());
+    far_form.op_name = "Far op".into();
+    let afar = Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+    keep_the_shacks_settings(&shack, &mut far_form, Some(&afar));
+    e.apply_settings(far_form);
+    let home = e
+        .settings()
+        .station_profiles
+        .iter()
+        .find(|p| p.id == tempo_app::settings::HOME_STATION_PROFILE)
+        .map(|p| p.call.clone());
+    assert_eq!(
+        (
+            home.as_deref(),
+            e.settings().mycall.as_str(),
+            e.connection_tx_refusal().is_some(),
+            e.settings().op_name.as_str(),
+        ),
+        (Some("KD9TAW"), "W9ABC", true, "Far op")
+    );
+}
+
 /// The list the UI's tests render the form with is the one the read from afar sends.
 #[test]
 fn the_ui_fixture_carries_the_station_only_list() {

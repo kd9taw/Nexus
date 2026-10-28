@@ -651,6 +651,9 @@ struct OutMsg {
     display: String,
     /// The compose box's message, which its typeahead changes while it goes out (at most one).
     typeahead: bool,
+    /// The call its frames were made with (`StationConfig::mycall` when it was queued): the
+    /// station's keying-time call check reads it ([`Station::next_message_call`]).
+    mycall: String,
 }
 
 /// An automatic reply waiting for the operator's Yes (JS8Call's AutoreplyConfirmation box):
@@ -2371,6 +2374,7 @@ impl Station {
     ) -> Result<OutMsg, ComposeError> {
         let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, None, text, self.cfg.speed)?;
         Ok(OutMsg {
+            mycall: self.cfg.mycall.clone(),
             typeahead: false,
             origin,
             display: format!("{}: {text}", self.base()),
@@ -2393,6 +2397,7 @@ impl Station {
         let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, &text, self.cfg.speed)?;
         let n = seq.len();
         let out = OutMsg {
+            mycall: self.cfg.mycall.clone(),
             typeahead: false,
             origin: Origin::Operator,
             display: format!("{}: {text}", self.base()),
@@ -2427,6 +2432,7 @@ impl Station {
         )?;
         let n = seq.len();
         let out = OutMsg {
+            mycall: self.cfg.mycall.clone(),
             typeahead: false,
             origin: Origin::Operator,
             display: format!("{}: {line}", self.base()),
@@ -2469,6 +2475,7 @@ impl Station {
             self.cfg.speed,
         )?;
         Ok(OutMsg {
+            mycall: self.cfg.mycall.clone(),
             typeahead: false,
             origin,
             display: format!("{}: @ALLCALL {line}", self.base()),
@@ -2510,6 +2517,7 @@ impl Station {
             self.cfg.speed,
         )?;
         let out = OutMsg {
+            mycall: self.cfg.mycall.clone(),
             typeahead: false,
             origin: Origin::Heartbeat,
             display: format!("{}: @HB {line}", self.base()),
@@ -2706,6 +2714,12 @@ impl Station {
             },
         );
         true
+    }
+
+    /// The call the next message to go out was made with, or `None` with nothing queued: the
+    /// keying-time call check compares it with the station's call before a frame of it keys.
+    pub fn next_message_call(&self) -> Option<&str> {
+        self.outbox.front().map(|o| o.mycall.as_str())
     }
 
     /// The outbox alone: what waits to be keyed, the rest of a message already going out
