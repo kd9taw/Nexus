@@ -1882,6 +1882,13 @@ export type CleanupField =
   | 'MY_GRIDSQUARE' | 'MY_RIG' | 'OPERATOR' | 'STATION_CALLSIGN' | 'PROP_MODE' | 'SAT_NAME'
   | 'TX_PWR' | 'MY_POTA_REF' | 'MY_SOTA_REF'
   | 'GRIDSQUARE' | 'BAND' | 'DXCC' | 'IOTA' | 'POTA_REF' | 'SOTA_REF' | 'TIME_OFF'
+  | AwardStatusField
+
+/** An award's status on a contact, by the award's ADIF Credit code: set to 'SUBMITTED' or
+ *  'GRANTED' (one clears the other, in CREDIT_SUBMITTED / CREDIT_GRANTED), cleared for neither.
+ *  Only that code moves. */
+export type AwardStatusField =
+  | 'CREDIT_DXCC' | 'CREDIT_WAS' | 'CREDIT_CQWAZ_MIXED' | 'CREDIT_IOTA' | 'CREDIT_USACA'
 
 /** One field set (`value`) or cleared (`null`). */
 export interface FieldChange { field: CleanupField; value: string | null }
@@ -2105,6 +2112,40 @@ export async function getAwards(): Promise<AwardSummary> {
 /** The whole-log DXCC chart: every current entity × every DXCC band, by mode class. */
 export async function getDxccChart(): Promise<import('./types').DxccChart> {
   return invoke('get_dxcc_chart')
+}
+
+/** An award whose status the log keeps. */
+export type AwardKind = 'dxcc' | 'was' | 'waz' | 'iota' | 'usaca'
+
+/** A contact to submit for an entity of an award. `entity`: a DXCC entity's name, a state's code,
+ *  a zone's number, an island group's reference, a county as `STATE,Name`. */
+export interface ReadyRow {
+  entity: string
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  /** The channels that confirm it for this award: 'card', 'lotw', 'eqsl'. */
+  confirmedBy: string[]
+}
+
+/** One award's status over the log, in entities: worked, confirmed, submitted (not yet granted),
+ *  granted, and one contact per entity confirmed and neither submitted nor granted. */
+export interface AwardStatus {
+  award: AwardKind
+  creditCode: string
+  worked: number
+  confirmed: number
+  submitted: number
+  granted: number
+  ready: ReadyRow[]
+}
+
+/** One award's status: each ready entity's newest confirmed contact where `newest`, else its
+ *  oldest. Read-only. */
+export async function getAwardStatus(award: AwardKind, newest: boolean): Promise<AwardStatus> {
+  return invoke<AwardStatus>('get_award_status', { award, newest })
 }
 
 /** What to QSL: unconfirmed contacts whose confirmation fills a slot an award still needs,

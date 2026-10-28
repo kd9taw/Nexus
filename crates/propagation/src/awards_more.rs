@@ -1099,6 +1099,7 @@ mod tests {
             let extras = ContactExtras {
                 wwff: (i % 50 == 0).then_some("KFF-0001"),
                 qsl_via: (i % 7 == 0).then_some("BUREAU"),
+                cnty: None,
             };
             contact(
                 &mut a,

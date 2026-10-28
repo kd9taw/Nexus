@@ -23500,6 +23500,19 @@ async fn get_call_stats(
     .await
 }
 
+/// One award's status ([`log_folds::award_status`]): entities worked, confirmed, submitted and
+/// granted, and one contact per entity ready to submit — the newest confirmed one where `newest`,
+/// else the oldest. Read-only: marking the list Submitted is a Bulk edit the operator confirms.
+#[tauri::command]
+async fn get_award_status(
+    state: State<'_, SharedEngine>,
+    award: propagation::award_status::AwardKind,
+    newest: bool,
+) -> Result<propagation::award_status::AwardStatus, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || log_folds::award_status(&engine, award, newest)).await
+}
+
 /// The whole-log DXCC chart: every current entity × every DXCC band, by mode class, from the
 /// award fold ([`log_folds::dxcc_chart_kept`]).
 #[tauri::command]
@@ -40744,6 +40757,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_queries::ask_log,
         purge_log,
         get_awards,
+        get_award_status,
         get_call_stats,
         get_dxcc_chart,
         get_what_to_qsl,

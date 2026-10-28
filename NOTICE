@@ -782,6 +782,20 @@ derives from **US Census Bureau** cartographic boundary files (a work of the
 US government, **public domain**). Regenerate with
 `node scripts/gen-grid-state.mjs`.
 
+### US Counties award county list (us_counties.txt)
+`crates/propagation/data/us_counties.txt` (3,077 lines, embedded via `include_str!`) is the
+county list of the US Counties award. It is generated (`scripts/gen-us-counties.py`) from the
+**US Census Bureau**'s "2010 FIPS Codes for Counties and County Equivalent Entities"
+(`national_county.txt`,
+<https://www2.census.gov/geo/docs/reference/codes/files/national_county.txt>; the download is
+checked against a recorded SHA-256), a work of the US government and so **public domain**
+(17 U.S.C. § 105). Only the state codes and county names are used, with the award's own
+choices applied (the 50 states; Virginia's independent cities, Carson City and the District of
+Columbia left out; Alaska as its four Judicial Districts). Which Judicial District each Alaskan
+borough or census area lies in (`crates/propagation/src/us_counties.rs`) is a fact, written from
+the ADIF specification's Alaska subdivision table. Regenerate with
+`python3 scripts/gen-us-counties.py`.
+
 ### Map / globe textures
 `ui/src/assets/earth-relief.webp` (the shaded relief under the flat map) derives from
 Natural Earth's **Shaded Relief** raster at 1:10m (`SR_HR`, version

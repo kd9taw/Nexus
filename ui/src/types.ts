@@ -3642,6 +3642,19 @@ export interface IotaProgress {
   cardConfirmed: number
 }
 
+/** The US Counties award (CQ's USA-CA): the 3,077 counties, by the contact's CNTY. Confirmed by
+ * the award's rule: a card, or an eQSL from an Authenticity-Guaranteed member. */
+export interface UsacaProgress {
+  worked: number
+  confirmed: number
+  total: number
+  /** The highest level reached (500, 1000 … 3077) and the next one. */
+  level: number | null
+  nextLevel: number | null
+  /** Contacts whose CNTY names no county of the award: left uncounted. */
+  unplaced: number
+}
+
 /** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
  * currentTotal − 9 = Honor Roll; all current entities = #1 Honor Roll.) */
 export interface HonorRollProgress {
@@ -3771,6 +3784,8 @@ export interface AwardSummary {
   ffma?: FfmaProgress
   /** IOTA — island groups worked / confirmed. */
   iota: IotaProgress
+  /** The US Counties award. Absent from an older station. */
+  usaca?: UsacaProgress
   /** Worked All Provinces (Canada). Absent from an older station. */
   wap?: WapProgress
   /** CQ WPX, DARC WAE and WWFF. Absent from a station older than them. */

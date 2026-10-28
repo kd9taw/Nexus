@@ -195,6 +195,7 @@ const MIGRATED = [
   // lookup happens when the string is read rather than when the module loads.
   'components/AwardsView.tsx',
   'components/AwardsMore.tsx',
+  'components/AwardStatus.tsx',
   'components/CallStatsPane.tsx',
   'components/RecentQsosPane.tsx',
   'components/AwardsJourney.tsx',
