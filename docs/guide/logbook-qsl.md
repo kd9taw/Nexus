@@ -73,12 +73,23 @@ carries:
 - **The worked station's continent** (CONT) and **the distance to it** in km (DISTANCE) when
   both grids are known.
 - **What your callbook lookup said**, when you looked the station up before logging (the
-  callsign card or the log strip): name, QTH, grid, state, county (CNTY), IOTA, CQ and ITU
+  callsign card or the log strip): name, QTH, grid, state, county (CNTY), CQ and ITU
   zones, position (LAT/LON), e-mail, web page and QSL manager (QSL_VIA), plus whether they use
   LoTW, eQSL or paper cards and their UTC offset. Every way of logging takes it, the FT
   auto-log too; nothing waits for a lookup. Where the station is comes only from its own
   callbook entry, never a home call's entry for a /P or a station at a park, and a LoTW
-  confirmation's grid, county, zones or IOTA replaces a callbook one.
+  confirmation's grid, county or zones replace a callbook one.
+- **An IOTA reference only when you take it.** When a DX-cluster spot comment for the call names
+  an island group, or your callbook lookup does, the log strip, the Logbook's Add form and the
+  log popup show it as a chip ("IOTA EU-131 · from the spot"). Press **Use** to log it, or ×
+  to leave it out; nothing is filled in by itself, and a reference you typed is never replaced.
+  Use is for that one contact: the next starts with nothing taken, even with the same station.
+  When two spot comments for the call in the last 20 minutes name different groups, none is
+  offered. An FT contact logged by itself with no popup logs without one. A reference taken this
+  way stays in your log and its exports but goes to no service, and not to DXKeeper or HRD
+  Logbook (both can upload it themselves), until you confirm it on the contact card or edit it.
+  Confirming it later does not send it on to DXKeeper or HRD Logbook, which keep the contact as
+  they first got it; once confirmed, a LoTW confirmation no longer replaces it.
 - **Space weather**, if you turn on **Log space weather on each contact** in
   [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,

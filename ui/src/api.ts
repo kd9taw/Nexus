@@ -456,6 +456,19 @@ export async function getIotaGroups(): Promise<IotaGroup[]> {
   return invoke<IotaGroup[]>('get_iota_groups')
 }
 
+/** An IOTA reference the station OFFERS a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
+ *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
+export interface IotaOfferData {
+  reference: string
+  source: 'spot' | 'callbook'
+}
+
+/** What IOTA reference the station offers the contact a form holds for `call`; null for none, and
+ *  none while the form holds a reference of its own (`held`). Asking writes nothing. */
+export async function getIotaOffer(call: string, held?: string | null): Promise<IotaOfferData | null> {
+  return invoke<IotaOfferData | null>('get_iota_offer', { call, held: held ?? null })
+}
+
 export interface FccStatesStatus {
   count: number
   fetchedAt: number
@@ -1355,9 +1368,12 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
  * `expectedKey` is the identity of the hold the popup was SHOWING, and it goes on every
  * transport, not only a Remote one (operator ruling 2026-09-19: completed contacts queue). The
  * engine refuses an answer whose key is not the head's, so an edited call can never be filed
- * onto a contact that was promoted while the operator was typing. */
-export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey })
+ * onto a contact that was promoted while the operator was typing.
+ *
+ * `iotaOffer` is the IOTA offer the operator took in the popup: the station writes it into an
+ * empty IOTA field, held back from uploads until the operator touches it. */
+export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** Discard a QSO held by the prompt-to-log popup without logging it. Names the hold it
@@ -1476,9 +1492,11 @@ export async function logCurrentQso(): Promise<{ logged: boolean; call?: string 
  *  callbook's, and the operator's outrank both. */
 export type StateSource = 'operator' | 'callbook' | 'park'
 
-/** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
-export async function logQso(record: LoggedQso, stateSource?: StateSource): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_qso', { record, stateSource })
+/** Append a contact to the ADIF logbook. Returns the fresh snapshot. `iotaOffer` is the IOTA offer
+ *  the operator took on the form ([`getIotaOffer`]): written into an empty IOTA field, held back
+ *  from uploads until the operator touches it. */
+export async function logQso(record: LoggedQso, stateSource?: StateSource, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('log_qso', { record, stateSource, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** One contact "Check park states" lists: a hunted park or summit in ONE state whose contact

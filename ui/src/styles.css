@@ -34054,3 +34054,9 @@ td.aw-cc {
 .iota-offer-from {
   color: var(--text-faint);
 }
+/* Use, pressed: the reference goes into the log with the contact. */
+.iota-offer .settings-test-btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}

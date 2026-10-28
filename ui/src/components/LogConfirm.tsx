@@ -7,6 +7,7 @@ import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
 import { upperTyped } from '../typedInput'
+import { IotaOfferChip, useIotaOffer, type IotaOfferData } from './Iota'
 
 /** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
  *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
@@ -65,8 +66,8 @@ function propModeName(code: string): string {
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
   record: LoggedQso
-  /** Log the (possibly edited) record. */
-  onConfirm: (record: LoggedQso) => void
+  /** Log the (possibly edited) record, with the IOTA offer the operator took, if any. */
+  onConfirm: (record: LoggedQso, iotaOffer?: IotaOfferData | null) => void
   /** Discard the contact without logging. */
   onDiscard: () => void
   /** How many MORE completed contacts are held behind this one (operator ruling 2026-09-19:
@@ -98,6 +99,9 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   const [operator, setOperator] = useState(record.operator ?? '')
   const [myGrid, setMyGrid] = useState(record.myGrid ?? '')
   const [propMode, setPropMode] = useState(record.propMode ?? '')
+  // The IOTA reference the station offers this call, for the operator to take or leave (operator
+  // decision, 2026-10-27): nothing is stamped by itself. None over a reference the contact holds.
+  const iotaOffer = useIotaOffer(call, record.ota?.iota)
 
   // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
   const parseRst = (v: string): string | null => {
@@ -118,7 +122,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
       operator: operator.trim().toUpperCase() || null,
       myGrid: myGrid.trim().toUpperCase() || null,
       propMode: propMode || null,
-    })
+    }, iotaOffer.taken)
   }
 
   // Watts, as the log writes TX_PWR; anything that is not a positive number sends nothing.
@@ -245,6 +249,8 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
             />
           </label>
         </div>
+
+        <IotaOfferChip state={iotaOffer} />
 
         <div className="logconfirm-actions">
           {onStop && <FtStopControl onHaltTx={onStop} />}

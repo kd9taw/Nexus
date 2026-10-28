@@ -146,9 +146,9 @@ impl FieldEdit {
                 "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
             ));
         }
-        // The one mark the operator takes off by hand: confirming a reference a spot filled
-        // (`offer::SPOT_FILLED_FIELD`) — removal only, never a value.
-        if tag == super::offer::SPOT_FILLED_FIELD && self.value().is_none() {
+        // The one mark the operator takes off by hand: confirming a reference taken from an offer
+        // (`offer::OFFER_HELD_FIELD`) — removal only, never a value.
+        if tag == super::offer::OFFER_HELD_FIELD && self.value().is_none() {
             return Ok(());
         }
         if tag.starts_with("APP_NEXUS_")

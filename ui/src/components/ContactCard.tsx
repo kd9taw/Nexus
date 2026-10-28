@@ -58,8 +58,12 @@ import {
   type Unclearable,
 } from '../features/contactCard'
 
-/** The mark on a contact whose IOTA reference a spot's comment filled (`offer::SPOT_FILLED_FIELD`). */
-const SPOT_FILLED_FIELD = 'APP_NEXUS_SPOT_FILLED'
+/** The mark on a contact whose IOTA reference was taken from a log-time offer, a spot comment's or a
+ *  callbook's (`offer::OFFER_HELD_FIELD`). */
+const OFFER_HELD_FIELD = 'APP_NEXUS_OFFER_HELD'
+/** The callbook's mark (`callbook::CALLBOOK_FILLED_FIELD`): naming IOTA beside the held mark, the
+ *  offer taken was the callbook's. */
+const CALLBOOK_FILLED_FIELD = 'APP_NEXUS_CALLBOOK_FILLED'
 
 /** Service names and the QRZ button: proper nouns, not words. */
 const QRZ_PAGE = 'QRZ ↗'
@@ -250,17 +254,20 @@ function CardBody({
     }
   }
 
-  // An IOTA reference a spot's comment filled is kept in the log and sent to no service until the
-  // operator confirms it (`tempo_core::logbook::offer`). Confirm takes the mark off: the one
-  // Nexus-kept field a card may change, and only by removing it.
-  const spotMark = q.extra?.find(([k]) => k === SPOT_FILLED_FIELD)?.[1] ?? null
-  const spotHeld = !!spotMark?.split(',').some((tag) => tag.trim() === 'IOTA')
+  // An IOTA reference taken from a log-time offer (a spot comment's or the callbook's) is kept in the
+  // log and sent to no service until the operator confirms it (`tempo_core::logbook::offer`).
+  // Confirm takes the mark off: the one Nexus-kept field a card may change, and only by removing it.
+  const names = (field: string, tag: string) =>
+    !!q.extra?.find(([k]) => k === field)?.[1]?.split(',').some((t) => t.trim() === tag)
+  const spotMark = q.extra?.find(([k]) => k === OFFER_HELD_FIELD)?.[1] ?? null
+  const spotHeld = names(OFFER_HELD_FIELD, 'IOTA')
+  const heldFromCallbook = spotHeld && names(CALLBOOK_FILLED_FIELD, 'IOTA')
   const confirmIota = async () => {
     if (!contact.ref || busy || !spotMark) return
     const made = cardSave(q, start, start, fieldsOf(q))
     if (!made.ok) return
     setBusy(true)
-    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: SPOT_FILLED_FIELD, old: spotMark, new: null }], q.call)
+    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: OFFER_HELD_FIELD, old: spotMark, new: null }], q.call)
     setBusy(false)
     if (answer?.kind === 'applied' || answer?.kind === 'changed') {
       onChanged()
@@ -436,7 +443,7 @@ function CardBody({
                 <IotaReferenceNote reference={draft.iota.trim().toUpperCase()} />
                 {spotHeld && (
                   <span className="iota-card-held">
-                    <span className="settings-hint">{t('iota.card.spotHeld')}</span>
+                    <span className="settings-hint">{heldFromCallbook ? t('iota.card.callbookHeld') : t('iota.card.spotHeld')}</span>
                     <button type="button" className="settings-test-btn" onClick={() => void confirmIota()} disabled={!canSave || busy || dirty}>
                       {t('iota.card.confirm')}
                     </button>

@@ -3162,7 +3162,7 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
     // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
-    // and for an IOTA reference a spot's comment filled ([`offer::SPOT_FILLED_FIELD`]).
+    // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
     offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
@@ -3483,13 +3483,25 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
 /// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
 /// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
 /// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+/// For the same reason, **never an IOTA reference held back from uploads**
+/// ([`offer::withhold_iota`]), nor the marks naming it. Confirming it later in Nexus does not
+/// send it again: the program keeps the contact as it first got it.
 pub fn adif_record_own_logger(r: &QsoRecord) -> String {
-    if !callbook::is_map_only_grid(r) {
+    let map_only = callbook::is_map_only_grid(r);
+    let held_iota = offer::withhold_iota(r);
+    if !map_only && !held_iota {
         return adif_record_own_log(r);
     }
     let mut kept = r.clone();
-    kept.grid = None;
-    callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    if map_only {
+        kept.grid = None;
+        callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    }
+    if held_iota {
+        kept.ota.iota = None;
+        offer::unmark_offer_held(&mut kept, "IOTA");
+        callbook::unmark_callbook_filled(&mut kept, "IOTA");
+    }
     adif_record_own_log(&kept)
 }
 
@@ -3752,9 +3764,9 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One a spot's comment filled that
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One taken from a log-time offer that
     // the operator has not touched since stays in their own log and is sent nowhere
-    // ([`offer::SPOT_FILLED_FIELD`]).
+    // ([`offer::OFFER_HELD_FIELD`]).
     if let Some(iota) = r
         .ota
         .iota
@@ -3793,7 +3805,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
-                || k == offer::SPOT_FILLED_FIELD
+                || k == offer::OFFER_HELD_FIELD
                 || k == callbook::MAP_ONLY_GRID_FIELD)
         {
             continue;

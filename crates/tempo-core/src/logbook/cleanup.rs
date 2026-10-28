@@ -593,7 +593,7 @@ fn exchange(slots: &[(String, String)]) -> String {
 fn is_mark(name: &str) -> bool {
     name == SELF_FILLED_FIELD
         || name == CALLBOOK_FILLED_FIELD
-        || name == offer::SPOT_FILLED_FIELD
+        || name == offer::OFFER_HELD_FIELD
         || name == MAP_ONLY_GRID_FIELD
 }
 
@@ -831,7 +831,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     let mut looked: Vec<String> = Vec::new();
     let mut spotted: Vec<String> = Vec::new();
     for r in &order {
-        for tag in offer::spot_filled(r) {
+        for tag in offer::offer_held(r) {
             if mark_value(r, tag) == mark_value(&out, tag) && mark_value(r, tag).is_some() {
                 spotted.push(tag.to_string());
             }
@@ -865,7 +865,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         CALLBOOK_FILLED_FIELD,
         (!looked.is_empty()).then(|| looked.join(",")),
     );
-    offer::set_spot_filled(&mut out, spotted);
+    offer::set_offer_held(&mut out, spotted);
     set_extra(&mut out, MAP_ONLY_GRID_FIELD, map_only.then(|| "Y".into()));
 
     // ★ Every field of the record, named — no `..`: a field added to `QsoRecord` does not compile

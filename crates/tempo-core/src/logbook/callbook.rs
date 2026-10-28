@@ -7,10 +7,14 @@
 //! is never touched. It is pure: the answer is one a lookup already returned, held by the engine;
 //! nothing here asks the network.
 //!
+//! **Never the IOTA reference.** A callbook's island group describes the licensee's record, not
+//! necessarily this activation, so it is OFFERED at log time and written only when the operator
+//! takes it (`super::offer`; operator decision, 2026-10-27).
+//!
 //! **Where the station is, only when the answer is that station's.** A lookup of a stroked call
 //! (`W1ABC/P`, `KH6/W1ABC`) falls back to the base call's record, which says where the licensee
 //! lives, not where the contact was made; and a contact with a hunted park or summit is placed
-//! by the park. So the location fields — grid, QTH, state, county, position, IOTA, zones, UTC
+//! by the park. So the location fields — grid, QTH, state, county, position, zones, UTC
 //! offset — are filled only when the record the callbook answered with IS the logged call and
 //! the contact carries no park. The name, e-mail, web page, QSL route and the confirmation
 //! flags say who the operator is and go on either.
@@ -26,7 +30,7 @@
 //! callbook zone, filled first, would block LoTW's authoritative one for good, and WAZ would
 //! count the callbook's.
 
-use super::{extra_value, record_field, set_extra, valid_iota, QsoRecord};
+use super::{extra_value, record_field, set_extra, QsoRecord};
 
 /// The fields the callbook filled on this contact, as a comma-separated list of their ADIF names
 /// (see the module header). App-private, never sent.
@@ -215,8 +219,7 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
             "NAME" => &mut rec.name,
             "QTH" => &mut rec.qth,
             "STATE" => &mut rec.state,
-            "GRIDSQUARE" => &mut rec.grid,
-            _ => &mut rec.ota.iota,
+            _ => &mut rec.grid,
         };
         if blank(slot) {
             *slot = Some(v);
@@ -236,7 +239,6 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
             "GRIDSQUARE",
             clean(&a.grid).filter(|g| crate::message::is_valid_grid(g)),
         );
-        column(rec, "IOTA", a.iota.as_deref().and_then(valid_iota));
     }
 
     // The rest, in `extra`.
@@ -384,7 +386,6 @@ mod tests {
             ("CQZ", "5"),
             ("EMAIL", "w1abc@example.org"),
             ("GRIDSQUARE", "FN31pr"),
-            ("IOTA", "NA-001"),
             ("ITUZ", "8"),
             ("LAT", "S041 42.882"),
             ("LON", "W072 43.632"),
@@ -412,6 +413,20 @@ mod tests {
         // Never the DXCC number, and the country stays the country file's.
         assert_eq!(r.dxcc, None);
         assert_eq!(r.country.as_deref(), Some("United States"));
+    }
+
+    /// ★ A callbook's IOTA reference is never stamped into a contact (operator decision,
+    /// 2026-10-27): it describes the licensee's record, not necessarily this activation, so it is
+    /// OFFERED at log time (`offer::iota_offer`) and written only when the operator takes it.
+    #[test]
+    fn a_callbook_iota_is_offered_never_stamped() {
+        let mut r = rec("W1ABC");
+        fill_from_callbook(&mut r, &answer("W1ABC"));
+        assert_eq!(r.ota.iota, None);
+        assert!(!is_callbook_filled(&r, "IOTA"));
+        let mut g = rec("W1ABC");
+        fill_gridless_from_callbook(&mut g, &answer("W1ABC"));
+        assert_eq!(g.ota.iota, None);
     }
 
     /// ★ Operator data is never overwritten: each field the record already holds keeps its value

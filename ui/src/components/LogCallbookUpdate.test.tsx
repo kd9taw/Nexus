@@ -126,7 +126,7 @@ describe('update from callbook', () => {
     screen.getByText(
       'Asks QRZ, then HamQTH, then callook.info (US calls), the next only when the one before has no record. The pace and the daily limit cover them all. HamQTH data provided by HamQTH.com.',
     )
-    screen.getByText(/^Location \(grid, QTH, state, county, IOTA, CQ and ITU zones, latitude\/longitude, UTC offset\) is filled only on contacts from the last 12 months/)
+    screen.getByText(/^Location \(grid, QTH, state, county, CQ and ITU zones, latitude\/longitude, UTC offset\) is filled only on contacts from the last 12 months/)
     expect(screen.queryByText(/older than 12 months/)).toBeNull()
   })
 
