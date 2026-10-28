@@ -344,6 +344,9 @@ const MIGRATED = [
   // The contest setup (2026-10-26): born migrated — every string is a catalog key; contest names,
   // Cabrillo tokens and UTC times are invariant tokens.
   'components/ContestSetupWizard.tsx',
+  // The radio setup (2026-10-27): born migrated — every string is a catalog key; radio names,
+  // band tokens, model names, ports and the routing mode names are data or invariant tokens.
+  'components/RadioSetupWizard.tsx',
   // What keeps a contest from starting, moved out of ContestView beside it: catalog keys only.
   'features/contestStart.ts',
   'components/ContestScoreChip.tsx',

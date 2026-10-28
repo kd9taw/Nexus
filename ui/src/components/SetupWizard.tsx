@@ -29,7 +29,9 @@ import {
   updateRadioProfile,
   type TciServerFound,
 } from '../api'
-import { baudForRig, radioPatch } from './SettingsPanel'
+import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
+import { RadioSetupWizard } from './RadioSetupWizard'
+import { KIT_FIELDS, type FinishPlan, type RadioKit } from '../settings/radioSetup'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
@@ -409,6 +411,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     seeded?: boolean
   }>(null)
   const [secondElapsed, setSecondElapsed] = useState(0)
+  const [radioSetup, setRadioSetup] = useState<Settings | null>(null)
   const [swapOffer, setSwapOffer] = useState(false)
   useEffect(() => {
     if (!second?.probing) return
@@ -503,6 +506,44 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setAudioIn(b.audioIn)
     setAudioOut(b.audioOut)
     setSwapOffer(false)
+  }
+
+  // "Set up radios" from here: radio 1, the radio this page sets up, is the radio in use, and this
+  // page's Finish writes its own choices for it whole, AFTER anything the radio setup wrote. So the
+  // setup opens showing this page's unsaved sound cards and keying for radio 1 (not what was stored
+  // before them), and a change it makes to them comes back into this page, as the audio swap's does,
+  // or this page's Finish would put its older choice back over it.
+  const kitSetters: Record<keyof RadioKit, (value: string) => void> = {
+    audioIn: setAudioIn,
+    audioOut: setAudioOut,
+    pttMethod: pickKeying,
+    pttSerialPort: setPttSerialPort,
+  }
+  const radio1 = (s: Settings) => s.activeRadio ?? s.radios?.[0]?.id ?? 0
+  // Every unsaved per-radio choice on this page (model, port, connection, baud as well as the sound
+  // cards and keying), so the setup's checks and hints for radio 1 judge the radio this page will
+  // save, not the one stored before it. Only the sound cards and keying are ever written from there
+  // (`finishPlan` compares those alone, over a fresh read), so the rest only informs.
+  const openRadioSetup = () => {
+    const d = draft()
+    const perRadio = Object.keys(radioPatch({}))
+    const unsaved = Object.fromEntries(Object.entries(d).filter(([k, v]) => perRadio.includes(k) && v !== undefined))
+    void getSettings()
+      .then((s) => setRadioSetup({ ...s, radios: (s.radios ?? []).map((r) => (r.id === radio1(s) ? { ...r, ...unsaved } : r)) }))
+      .catch(() => {})
+  }
+  // A Finish refused partway may have stopped before radio 1's write: then only what the station
+  // holds now comes back, so this page does not take up a change that was never saved.
+  const adoptRadioSetup = async (plan: FinishPlan, complete: boolean) => {
+    if (!radioSetup) return
+    const id = radio1(radioSetup)
+    const changes = plan.radios.find((r) => r.id === id)?.changes ?? {}
+    const stored = complete ? null : (await getSettings().catch(() => null))?.radios?.find((r) => r.id === id)
+    if (!complete && !stored) return
+    for (const f of KIT_FIELDS) {
+      const value = changes[f]
+      if (value !== undefined && (complete || stored?.[f] === value)) kitSetters[f](value)
+    }
   }
 
   const scannedOnEntry = useRef(false)
@@ -1389,6 +1430,26 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               )}
               {second && !second.probing && second.portName && (
                 <span className="wizard-field-hint">{t('setup.rig.second.twoWindows')}</span>
+              )}
+              {/* Two radios now: offer the radio setup (which radio for which band and mode). It
+                  opens on the settings as saved; its own Cancel writes nothing. */}
+              {second && !second.probing && second.portName && (
+                <button
+                  type="button"
+                  className="wizard-btn setup-radio-setup-open"
+                  title={t('setup.rig.second.radioSetup.title')}
+                  onClick={openRadioSetup}
+                >
+                  {t('setup.rig.second.radioSetup')}
+                </button>
+              )}
+              {radioSetup && (
+                <RadioSetupWizard
+                  settings={radioSetup}
+                  bands={FREQ_BANDS}
+                  onFinished={(plan, complete) => void adoptRadioSetup(plan, complete)}
+                  onClose={() => setRadioSetup(null)}
+                />
               )}
             </div>
           )}

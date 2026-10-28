@@ -3547,6 +3547,39 @@ export async function routePreview(
   return invoke<{ radio: number; name: string }>('route_preview', { band, mode })
 }
 
+/** The radio setup's unsaved routing: every radio's band list (empty = every band) and on/off, the
+ *  ordered rules and the default radio. Rust `RoutingDraft`. */
+export interface RoutingDraft {
+  radios: { id: number; bands: string[]; enabled: boolean }[]
+  rules: RoutingRule[]
+  defaultRadio: number | null
+}
+
+/** [`routePreview`] for the radio setup's UNSAVED routing: the backend lays the draft over a copy of
+ *  the settings and asks the same routing function the engine uses. Stores nothing, moves no rig. */
+export async function routePreviewDraft(
+  draft: RoutingDraft,
+  band: string,
+  mode: RouteMode,
+): Promise<{ radio: number; name: string }> {
+  return invoke<{ radio: number; name: string }>('route_preview_draft', { draft, band, mode })
+}
+
+/** What the read-only Test CAT of a radio not in use found (Rust `RadioCatProbe`). */
+export interface RadioCatProbe {
+  id: number
+  state: 'answered' | 'notAnswering' | 'noFreshReport' | 'inUse' | 'disabled' | 'noCat' | 'notMonitored' | 'unknown'
+  ok: boolean | null
+  dialMhz: number | null
+}
+
+/** Test CAT for a radio that is NOT the one in use: the radio monitor's next reading of it. Selects,
+ *  switches and keys nothing and sends the radio nothing. The radio in use answers `inUse`; its probe
+ *  is [`testCat`]. Waits up to ten seconds. */
+export async function testRadioCat(id: number): Promise<RadioCatProbe> {
+  return invoke<RadioCatProbe>('test_radio_cat', { id })
+}
+
 /** The editable CAT/audio/PTT/rotator/native subset of a radio profile — the per-radio Settings
  * page edits ONE radio with this, without making it active. Field names match the flat rig form. */
 export interface RadioProfilePatch {

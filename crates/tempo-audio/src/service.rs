@@ -2714,7 +2714,7 @@ fn monitor_want(s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport
     let want = s
         .radios
         .iter()
-        .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
+        .filter(|p| p.monitored_while(active))
         .map(|p| {
             let mut t = Transport::from_profile(p);
             t.control_lines = lines;

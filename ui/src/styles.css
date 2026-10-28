@@ -32832,6 +32832,123 @@ tr.sel .aprs-sym {
 .contest-setup-warn p {
   margin: 0 0 var(--space-1);
 }
+/* ── The radio setup (RadioSetupWizard.tsx). The dialog box is its one scroll owner (.ui-dialog);
+   the band grid scrolls sideways inside its own wrapper only when a station has many radios, and
+   the step buttons stay at the bottom edge of the box, opaque, so Finish is always reachable. ── */
+.ui-dialog.radio-setup {
+  width: min(760px, calc(100vw - 2 * var(--space-4)));
+}
+.radio-setup .wizard-dots {
+  flex-wrap: wrap;
+}
+.radio-setup .wizard-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  padding-top: var(--space-2);
+}
+.radio-setup-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(16em, 100%), 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.radio-setup-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.radio-setup-card .wizard-field {
+  min-width: 0;
+}
+.radio-setup-tick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.radio-setup-meta,
+.radio-setup-card .settings-hint {
+  margin: 0;
+}
+.radio-setup-warn {
+  color: var(--alert-warning);
+}
+.radio-setup-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.radio-setup-test .settings-hint.ok {
+  color: var(--state-good);
+}
+.radio-setup-test .settings-hint.bad {
+  color: var(--state-weak);
+}
+.radio-setup-grid {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin-bottom: var(--space-2);
+  font-size: var(--fs-body);
+}
+.radio-setup-grid th,
+.radio-setup-grid td {
+  padding: 2px var(--space-2);
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+.radio-setup-grid th[scope='row'] {
+  text-align: left;
+  font-family: var(--font-mono);
+}
+.radio-setup-grid tr.shared th[scope='row'] {
+  color: var(--accent);
+  font-weight: 700;
+}
+.radio-setup-shared {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.radio-setup-shared > legend {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.radio-setup-mode {
+  min-width: min(11em, 100%);
+}
+.radio-setup-facts,
+.radio-setup-lines,
+.radio-setup-rules {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.4em;
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;
+}
+.radio-setup-policy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.radio-setup-probe {
+  margin-bottom: var(--space-3);
+}
+.radio-setup-answer {
+  font-weight: 700;
+}
 .contest-setup-bad {
   margin: 0 0 var(--space-2);
   color: var(--state-weak);

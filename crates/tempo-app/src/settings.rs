@@ -4602,6 +4602,28 @@ impl RoutingRule {
     }
 }
 
+/// One radio as the radio setup has it before Finish: which bands it lists (empty = covers every
+/// band) and whether it is on. Part of a [`RoutingDraft`].
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RadioRoutingDraft {
+    pub id: u32,
+    pub bands: Vec<String>,
+    pub enabled: bool,
+}
+
+/// The routing the radio setup is showing and has NOT saved: every radio's band list and on/off,
+/// the ordered rules and the default radio. [`Settings::with_routing_draft`] lays it over a copy
+/// of the settings so "Where would this go?" is answered by [`Settings::route_radio`] itself, the
+/// function the engine routes by, and never by a second copy of the rules. Nothing stores it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RoutingDraft {
+    pub radios: Vec<RadioRoutingDraft>,
+    pub rules: Vec<RoutingRule>,
+    pub default_radio: Option<u32>,
+}
+
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
 /// exactly one (migrated from the flat `Settings` rig/audio fields); adding a 2nd radio in Settings
 /// appends another. Serde-defaulted throughout so partial/older records load.
@@ -5012,6 +5034,17 @@ impl Settings {
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == id) {
             p.yaesu_fix_starts.insert(band.to_string(), mhz);
         }
+    }
+}
+
+impl RadioProfile {
+    /// Whether the radio monitor holds a read-only CAT connection to this radio while radio
+    /// `active` is the one in use: it is on, not the one in use, and has a CAT model. THE monitor's
+    /// predicate (`tempo-audio`'s `monitor_want`), kept here so the radio setup's read-only Test CAT
+    /// asks the same question. An OmniRig radio has no model number of Nexus's (OmniRig holds it), so
+    /// the monitor does not watch it, although the radio has CAT when it is the one in use.
+    pub fn monitored_while(&self, active: u32) -> bool {
+        self.enabled && self.id != active && self.rig_model != 0
     }
 }
 
@@ -6818,6 +6851,26 @@ impl Settings {
         let rule = designated(Some(RouteContext::Satellite)).or_else(|| designated(None))?;
         // Authoritative exactly as in the band tiers, stay-put included.
         (rule.radio != self.active_radio).then_some(rule.radio)
+    }
+
+    /// A COPY of these settings with the radio setup's unsaved routing laid over it, exactly as
+    /// the verbs Finish calls would leave them (`set_radio_bands`, `set_radio_enabled`,
+    /// `set_routing_rules`, `set_default_radio`). A radio the draft does not name keeps what it
+    /// has. The active radio stays as it is, so a preview answers "from the radio in use now".
+    /// Read-only: `self` is untouched.
+    pub fn with_routing_draft(&self, draft: &RoutingDraft) -> Settings {
+        let mut s = self.clone();
+        for d in &draft.radios {
+            if let Some(p) = s.radios.iter_mut().find(|p| p.id == d.id) {
+                p.bands = d.bands.clone();
+                // The radio in use cannot be switched off (`set_radio_enabled` refuses it).
+                p.enabled = d.enabled || p.id == s.active_radio;
+            }
+        }
+        s.routing_rules = draft.rules.clone();
+        s.default_radio = draft.default_radio;
+        s.ensure_routing_targets();
+        s
     }
 
     /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can

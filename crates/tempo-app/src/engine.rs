@@ -150,7 +150,12 @@ mod phone_usb_only_tests;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
 #[cfg(test)]
 mod pick_switch_tests;
+/// Test CAT for a radio that is not the one in use: a read-only look through the radio monitor.
+pub mod radio_probe;
 pub mod radio_selection;
+/// The radio setup: its preview, its read-only probe, and an untouched file staying untouched.
+#[cfg(test)]
+mod radio_setup_tests;
 pub mod receivers;
 pub mod remote_logging;
 pub mod remote_mic;
@@ -4717,6 +4722,10 @@ pub struct Engine {
     /// its stale profile `last_*`. The ACTIVE radio is NOT in this map — its live state is the flat
     /// `rig_*`/`settings.dial_mhz` block, driven by the existing `observe_rig_*`.
     radio_live: std::collections::HashMap<u32, RadioLive>,
+    /// How many CAT health reports the monitor has made per NON-active radio, ever (never reset,
+    /// not even by `forget_radio_live`). The radio setup's read-only Test CAT waits for this to
+    /// move, so it reports a reading made AFTER the press, never one from before it.
+    monitor_reads: std::collections::HashMap<u32, u64>,
     /// Last amplifier reading per radio, fed by the amplifier poll thread. Display-only.
     amp_live: std::collections::HashMap<u32, AmpLive>,
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
@@ -7078,6 +7087,7 @@ impl Engine {
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
+            monitor_reads: std::collections::HashMap::new(),
             amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
@@ -9571,6 +9581,7 @@ impl Engine {
     /// Record a non-active radio's live CAT health (`Some(true/false)`), for its switcher pill.
     pub fn observe_radio_cat(&mut self, id: u32, ok: Option<bool>) {
         self.radio_live.entry(id).or_default().cat_ok = ok;
+        *self.monitor_reads.entry(id).or_default() += 1;
     }
 
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
@@ -11434,6 +11445,20 @@ impl Engine {
         self.settings
             .route_radio(band, mode)
             .unwrap_or(self.settings.active_radio)
+    }
+
+    /// [`Self::route_preview`] for the radio setup's UNSAVED routing: the same
+    /// [`crate::settings::Settings::route_radio`], asked of a copy of the settings with the draft
+    /// laid over it ([`crate::settings::Settings::with_routing_draft`]). Read-only: nothing is
+    /// stored and no radio moves.
+    pub fn route_preview_draft(
+        &self,
+        draft: &crate::settings::RoutingDraft,
+        band: &str,
+        mode: crate::settings::RouteMode,
+    ) -> u32 {
+        let s = self.settings.with_routing_draft(draft);
+        s.route_radio(band, mode).unwrap_or(s.active_radio)
     }
 
     /// The active Phone mode override for the cockpit picker (`None` = AUTO / band-derived).
