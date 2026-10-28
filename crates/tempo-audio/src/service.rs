@@ -2513,6 +2513,8 @@ impl Transport {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
             icom_data_mode: p.icom_data_mode,
+            // A monitor never streams its scope; an ADOPTED one carries its own radio's choice.
+            scope_to_audio: tempo_app::settings::native_scope_is_audio(&p.native_scope),
             // A monitor never keys, but an ADOPTED one does (`set_ptt_mode(ptt_mode_for(…))`),
             // and `rig_differs` compares this, so a Rear/Data radio's pooled connection must
             // carry it or it could never be adopted.
@@ -8581,8 +8583,13 @@ impl RadioLoop {
                 // Phone/CW keep the scope — their PhoneScope is source-aware and renders the civ
                 // row correctly, and CW keeps it even on the soundcard keyer, whose mode word is
                 // now a DATA submode too (see `RadioLoop::scope_yields_to_audio_waterfall`).
-                let stand_down =
-                    self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted();
+                //
+                // AND NEVER while the operator chose the audio waterfall for this radio
+                // (`RadioProfile::native_scope`, #417): the stream stays off whatever the mode or
+                // the RF pane asks, and the rows stand down exactly as in a data mode, so every
+                // waterfall draws the sound card's audio, as on the Hamlib path.
+                let stand_down = self.applied.scope_to_audio
+                    || (self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted());
                 d.set_scope_enabled(
                     link_carries_the_scope(&self.applied) && !keyed_now && !stand_down,
                 );
@@ -8684,9 +8691,9 @@ impl RadioLoop {
                         crate::civ::scope::publish_sweep(&self.spectrum_feed, sweep);
                     }
                 } else {
-                    // DATA mode (FT8/FT4) with no RF scope pane: drop any stale native row so the
-                    // audio FFT takes over immediately (no ~1 s window where the last civ row still
-                    // wins).
+                    // DATA mode (FT8/FT4) with no RF scope pane, or the operator's audio waterfall:
+                    // drop any stale native row so the audio FFT takes over immediately (no ~1 s
+                    // window where the last civ row still wins).
                     self.spectrum_feed.clear_rf();
                 }
             }
@@ -16860,6 +16867,11 @@ struct Transport {
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
     icom_data_mode: u8,
+    /// The operator's waterfall source for this radio is the sound card's audio
+    /// (`RadioProfile::native_scope`): the Icom scope stream stays off and its rows stay out of the
+    /// waterfall. NOT part of transport identity (`rig_differs` does not compare it): choosing it
+    /// stops the stream on the next tick, with CI-V left connected for CAT.
+    scope_to_audio: bool,
     /// "Transmit audio source (CAT PTT)" (#381), the stored word — see [`cat_ptt_mode`], which
     /// decides whether it keys the DATA input on this radio at all.
     tx_audio_source: String,
@@ -16892,6 +16904,8 @@ impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
             icom_data_mode: c.icom_data_mode,
+            // Not in the startup seed: the first settings tick reads it, before any scope enable.
+            scope_to_audio: false,
             tx_audio_source: c.tx_audio_source.clone(),
             radio_label: LogLabel(if c.radio_label.is_empty() {
                 radio_label("", c.rig_model)
@@ -16967,6 +16981,7 @@ impl Transport {
     fn from_station(s: &Settings, serving: Option<u16>) -> Self {
         let mut t = Self {
             icom_data_mode: s.icom_data_mode,
+            scope_to_audio: tempo_app::settings::native_scope_is_audio(&s.native_scope),
             tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
                 s.radios
@@ -37060,6 +37075,7 @@ mod tests {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
             icom_data_mode: 1,
+            scope_to_audio: false,
             tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             ptt_method: "cat".to_string(),
             rig_model: 1035,

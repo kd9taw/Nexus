@@ -792,6 +792,17 @@ impl SdrconnectFollow {
 /// SDRconnect's WebSocket API port as SDRplay ships it.
 pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
 
+/// Does this radio's waterfall source ([`RadioProfile::native_scope`]) say the sound card's audio
+/// waterfall rather than the radio's own scope? Only the word `audio` does: `auto` (the default)
+/// and any other word, including one from a later build, leave the radio's scope where it is.
+pub fn native_scope_is_audio(word: &str) -> bool {
+    word.trim().eq_ignore_ascii_case("audio")
+}
+
+fn default_native_scope() -> String {
+    "auto".to_string()
+}
+
 fn default_scope_source() -> String {
     ScopeSource::Radio.as_setting().to_string()
 }
@@ -2094,6 +2105,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The active radio's waterfall source (flat mirror — see [`RadioProfile::native_scope`]).
+    /// `"auto"` is today's behaviour.
+    #[serde(default = "default_native_scope")]
+    pub native_scope: String,
     /// The active radio's transmit audio source for CAT PTT (flat mirror — see
     /// [`RadioProfile::tx_audio_source`]). "front" is today's behaviour.
     #[serde(default = "default_tx_audio_source")]
@@ -4759,7 +4774,16 @@ pub struct RadioProfile {
     pub last_dial_mhz: f64,
     pub last_band: String,
     pub last_sideband: String,
-    // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
+    /// THIS radio's waterfall source, where Nexus streams the radio's own scope over its Icom
+    /// CI-V engine (the native CI-V switch, or the Icom network connection): `"auto"` (the
+    /// default) draws the radio's scope there as every release has, and `"audio"` draws the sound
+    /// card's audio waterfall instead, as on the Hamlib path, and stops the radio's scope stream
+    /// while CI-V keeps serving CAT ([`native_scope_is_audio`]; any other word is `"auto"`).
+    ///
+    /// Per radio, because the reason to choose it is the radio: an IC-7300's scope is ~105 Hz a
+    /// point at ±25 kHz, coarser than the audio waterfall for close-in work (#417). The FlexRadio
+    /// panadapter, the FT-710's and a TCI program's are not read here: each is already its own
+    /// per-radio switch, off by default (`flex_native_pan`, `yaesu_rf_scope`, `tci_pan`).
     pub native_scope: String,
     // --- FlexRadio native lane (PER-RADIO since 2026-08-18) ---
     /// THIS radio's FlexRadio LAN IP for the SmartSDR Ethernet API (port 4992) — the address the
@@ -6056,6 +6080,7 @@ impl Default for Settings {
             split_detect_enabled: false,
             yaesu_rf_scope: false,
             icom_data_mode: 1,
+            native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
@@ -6530,7 +6555,7 @@ impl Settings {
             last_dial_mhz: self.dial_mhz,
             last_band: self.band.clone(),
             last_sideband: self.sideband.clone(),
-            native_scope: "auto".to_string(),
+            native_scope: self.native_scope.clone(),
             // The Flex three come from the flat mirror like every other rig field — this IS the
             // migration for a pre-multi-radio settings file (see `load`'s sibling for the file
             // that already HAS profiles).
@@ -6985,6 +7010,7 @@ impl Settings {
         // mode selects which audio input the rig transmits from, so the wrong one is wrong
         // TX audio routing on the radio you just switched to.
         self.icom_data_mode = p.icom_data_mode;
+        self.native_scope = p.native_scope;
         self.tx_audio_source = p.tx_audio_source;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
@@ -7042,6 +7068,7 @@ impl Settings {
             rigctld_port,
             icom_native_cat,
             icom_data_mode,
+            native_scope,
             tx_audio_source,
             yaesu_rf_scope,
             data_modes_plain_ssb,
@@ -7087,6 +7114,7 @@ impl Settings {
             self.rigctld_port,
             self.icom_native_cat,
             self.icom_data_mode,
+            self.native_scope.clone(),
             self.tx_audio_source.clone(),
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
@@ -7133,6 +7161,7 @@ impl Settings {
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.icom_data_mode = icom_data_mode;
+            p.native_scope = native_scope;
             p.tx_audio_source = tx_audio_source;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
@@ -10205,6 +10234,100 @@ mod tests {
             }
         }
         assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The per-radio waterfall source (`native_scope`) by its wire key: the radio's own scope
+    /// in a fresh and an older file, carried to the flat form and back for the radio in use, and
+    /// a second radio keeps its own choice across a switch. By JSON, so it reads the stored file
+    /// exactly as a later build would.
+    #[test]
+    fn the_waterfall_source_defaults_to_the_radio_scope_and_is_per_radio() {
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            assert_eq!(v["nativeScope"], "auto", "{what} file, flat");
+        }
+        // A whole stored file from before the flat key (the UI's fixture of every key; its radios
+        // already carry theirs).
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        let raw: serde_json::Value = serde_json::from_str(full).expect("the fixture is JSON");
+        assert!(
+            raw.get("nativeScope").is_none(),
+            "fixture predates the flat key"
+        );
+        let stored: Settings = serde_json::from_str(full).expect("the stored file loads");
+        assert_eq!(
+            stored.native_scope, "auto",
+            "a stored file from before the key"
+        );
+        let profile: RadioProfile = serde_json::from_str(r#"{"id": 3, "rigModel": 3073}"#)
+            .expect("a profile from before the choice loads");
+        assert_eq!(profile.native_scope, "auto", "an older profile");
+        assert!(!native_scope_is_audio(&profile.native_scope));
+
+        // Two radios: the IC-7300 on its audio waterfall, the other left alone.
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    rig_model: 3073,
+                    native_scope: "audio".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    rig_model: 3081,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "audio",
+            "the radio in use brings its choice"
+        );
+        s.active_radio = 1;
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "auto",
+            "the second radio is unaffected"
+        );
+
+        // An edit to the radio in use goes through the flat form and reaches its profile only.
+        let mut flat = serde_json::to_value(&s).expect("serializes");
+        flat["nativeScope"] = "audio".into();
+        let mut s: Settings = serde_json::from_value(flat).expect("loads");
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].native_scope, "audio",
+            "a flat save reaches the profile"
+        );
+        assert_eq!(
+            s.radios[0].native_scope, "audio",
+            "the other radio kept its own"
+        );
+        s.radios[0].native_scope = "auto".into();
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[0].native_scope, "auto",
+            "saving radio 1 never writes radio 0"
+        );
+    }
+
+    /// Only the word "audio" moves the waterfall off the radio's scope; anything else, including
+    /// a word from a later build, leaves it where it has always been.
+    #[test]
+    fn only_audio_moves_the_waterfall_off_the_radio_scope() {
+        assert!(native_scope_is_audio("audio"));
+        assert!(native_scope_is_audio(" Audio "));
+        for word in ["auto", "", "none", "civ", "flex", "radio"] {
+            assert!(!native_scope_is_audio(word), "{word:?}");
+        }
     }
 
     /// The stored words are read leniently, and a word this build does not know leaves the
