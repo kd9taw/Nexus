@@ -144,13 +144,6 @@ fn value_of<'a>(r: &'a QsoRecord, tag: &str) -> Option<&'a str> {
 /// An edit that changed a field the callbook filled makes it the operator's: it comes off the
 /// mark. `old` is the record before the edit, `rec` after it.
 pub(crate) fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
-    let grid_kept = match (value_of(rec, "GRIDSQUARE"), value_of(old, "GRIDSQUARE")) {
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        (a, b) => a == b,
-    };
-    if !grid_kept {
-        set_extra(rec, MAP_ONLY_GRID_FIELD, None);
-    }
     for tag in callbook_filled(old) {
         let same = match (value_of(rec, tag), value_of(old, tag)) {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
