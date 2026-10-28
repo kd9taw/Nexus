@@ -285,6 +285,17 @@ impl UploadStart {
         }
     }
 
+    /// The start point of the one service on `leg`.
+    pub fn of_leg(&self, leg: u8) -> Option<u64> {
+        use crate::engine::upload_legs as l;
+        match leg {
+            l::QRZ => self.qrz,
+            l::CLUBLOG => self.clublog,
+            l::EQSL => self.eqsl,
+            _ => None,
+        }
+    }
+
     /// Which of `legs` a contact made at `when_unix` may still be sent on automatically: all of
     /// them, less each service whose start point is after it.
     pub fn open_legs(&self, legs: u8, when_unix: u64) -> u8 {

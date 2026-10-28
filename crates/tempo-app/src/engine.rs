@@ -7616,6 +7616,16 @@ impl Engine {
         self.settings.operating_mode = live_op_mode;
         self.settings.keyboard_modem = live_keyboard_modem;
         self.settings.setup_wizard_seen |= live_setup_wizard_seen;
+        // Where uploads start: a form keeps the live values (below), and a restore or a factory
+        // reset never clears one either. Only the operator's "Send them" does (`set_upload_start`),
+        // so a reset or an older backup cannot hand the old log back to the next login save. A
+        // backup brings in a start point only for a service that has none here.
+        if !keep_live_roster {
+            let (qrz, clublog, eqsl) = live_upload_start;
+            self.settings.qrz_logbook_upload_from = qrz.or(self.settings.qrz_logbook_upload_from);
+            self.settings.clublog_upload_from = clublog.or(self.settings.clublog_upload_from);
+            self.settings.eqsl_upload_from = eqsl.or(self.settings.eqsl_upload_from);
+        }
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -8110,12 +8120,28 @@ impl Engine {
         self.settings.clone()
     }
 
+    /// Whether saving the first login for the service on `leg` (QRZ Logbook, ClubLog or eQSL) asks
+    /// what becomes of the contacts never sent there: only while that service's upload switch is
+    /// off. With the switch already on, the operator opted in before the login existed, and the
+    /// contacts that failed for want of it are sent as before, unasked.
+    pub fn login_question_applies(&self, leg: u8) -> bool {
+        let s = &self.settings;
+        !match leg {
+            upload_legs::QRZ => s.qrz_logbook_upload,
+            upload_legs::CLUBLOG => s.clublog_upload,
+            upload_legs::EQSL => s.eqsl_upload,
+            _ => true,
+        }
+    }
+
     /// A login for the service on `leg` (QRZ Logbook, ClubLog or eQSL) was just saved, BEFORE its
     /// upload is turned on and its catch-up runs. `first`: no login for it was stored before this
-    /// save. Only a first login moves the start point: `send_old` (the operator's "Send them")
-    /// clears it, anything else — the default "Only contacts made from now on", or no answer at
-    /// all — puts it at `now_unix`. A login saved over one already stored changes nothing (`None`),
-    /// so a station that had its logins before this question existed sees no difference.
+    /// save. Only a first login whose question applies ([`Self::login_question_applies`]) moves
+    /// the start point: `send_old` (the operator's "Send them") clears it, anything else (the
+    /// default "Only contacts made from now on", a first login with nothing waiting, or no answer
+    /// at all) puts it at `now_unix`, or keeps an earlier one already there. A login saved over
+    /// one already stored, or with the upload switch already on, changes nothing (`None`), so a
+    /// station that had its logins before this question existed sees no difference.
     /// Returns the settings to persist when it changed them.
     pub fn first_login_saved(
         &mut self,
@@ -8124,10 +8150,18 @@ impl Engine {
         send_old: bool,
         now_unix: u64,
     ) -> Option<Settings> {
-        if !first {
+        if !first || !self.login_question_applies(leg) {
             return None;
         }
-        Some(self.set_upload_start(leg, (!send_old).then_some(now_unix)))
+        if send_old {
+            return Some(self.set_upload_start(leg, None));
+        }
+        let held = crate::station::UploadStart::of(&self.settings).of_leg(leg);
+        let from = held.map_or(now_unix, |held| held.min(now_unix));
+        if held == Some(from) {
+            return None;
+        }
+        Some(self.set_upload_start(leg, Some(from)))
     }
 
     /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a

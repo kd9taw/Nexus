@@ -14327,12 +14327,7 @@ fn reset_settings(
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
 ) -> Result<AppSnapshot, String> {
-    // A default Settings has an empty roster, which is not a state `load` can ever produce and
-    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
-    let mut fresh = Settings::default();
-    fresh.ensure_radio_profiles();
-    fresh.ensure_distinct_radio_ports();
-    fresh.ensure_routing_targets();
+    let fresh = factory_settings();
     // The ordinary save path in full — its persistence, its feed handling and the process-global
     // state it resets — but with the ROSTER CONTRACT of a restore. Routing a reset through a form
     // save keeps the engine's live roster, so every radio the dialog promised to erase survives it.
@@ -14347,6 +14342,17 @@ fn reset_settings(
         true,
     )
 }
+/// The settings a factory reset puts in place ([`reset_settings`]).
+fn factory_settings() -> Settings {
+    // A default Settings has an empty roster, which is not a state `load` can ever produce and
+    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    fresh
+}
+
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -28229,12 +28235,7 @@ fn clear_lotw_password() -> Result<(), String> {
 ///
 /// Only the legs that leave a per-QSO upload stamp can be swept (`StationCore::unsent_legs`
 /// holds that list and why), so HRDLog, N3FJP, Cloudlog and WRL have no saver calling this.
-fn catch_up_failed_uploads(
-    state: &State<'_, SharedEngine>,
-    leg: u8,
-    service: &'static str,
-    lead_in: &str,
-) {
+fn catch_up_failed_uploads(state: &SharedEngine, leg: u8, service: &'static str, lead_in: &str) {
     // The pick reads the logbook store, so it runs with the engine lock released: the queue's
     // room and the log's rows are taken under it, and the contacts picked are queued under it
     // again (a record the queue has filled up past meanwhile stays unsent for the next sweep).
@@ -28283,7 +28284,7 @@ fn catch_up_failed_uploads(
 /// the operator's answer to "Send N contacts not yet sent to <service>?": only `Some(true)`, "Send
 /// them", sends the old log; the default and no answer both start from now.
 fn start_uploads_for_login(
-    state: &State<'_, SharedEngine>,
+    state: &SharedEngine,
     leg: u8,
     service: &'static str,
     first: bool,
@@ -28292,23 +28293,82 @@ fn start_uploads_for_login(
     let send_old = send_old == Some(true);
     let changed = {
         let mut eng = engine_lock(state);
-        eng.first_login_saved(leg, first, send_old, now_unix().max(0) as u64)
+        let changed = eng.first_login_saved(leg, first, send_old, now_unix().max(0) as u64);
+        // Queued under the same hold of the lock that made the change (`persist_settings`).
+        changed.map(|updated| {
+            persist_settings(updated, |e| {
+                eprintln!("tempo: couldn't persist settings: {e}")
+            })
+        })
     };
-    if let Some(updated) = changed {
-        persist_settings(updated, |e| {
-            eprintln!("tempo: couldn't persist settings: {e}")
-        });
-        if !send_old {
+    if changed.is_some() && !send_old {
+        conn_log(
+            service,
+            "info",
+            format!(
+                "only contacts made from now on are sent to {service} automatically; send an \
+                 older one from the Logbook"
+            ),
+        );
+    }
+}
+
+/// Whether a login is stored in the keychain `entry`, for the first login's question. Only a
+/// genuine "no entry" is a no: a keychain that cannot be read is an error, never a first login. A
+/// stored value that is not readable text is still a stored login (and its bytes are never shown).
+/// The secret itself is read and dropped here, as [`keychain_has`] does.
+fn login_stored(entry: &keyring::Entry) -> Result<bool, keyring::Error> {
+    match entry.get_password() {
+        Ok(_) | Err(keyring::Error::BadEncoding(_)) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// QRZ Logbook, ClubLog or eQSL, as a login save names it.
+#[derive(Clone, Copy)]
+struct UploadLogin {
+    leg: u8,
+    service: &'static str,
+    toggle: UploadToggle,
+    /// The Connections log's line once the login is in the keychain.
+    saved: &'static str,
+    /// What the catch-up's log line starts with.
+    lead_in: &'static str,
+}
+
+/// ⛔ A login save for QRZ Logbook, ClubLog or eQSL, in the one order that keeps the first login's
+/// answer: whether a login was `stored` is read BEFORE `store` writes the new one (read after, every
+/// login looks stored and the answer is ignored), and the start point is set BEFORE the upload is
+/// turned on and its catch-up runs (after, the old log is already on its way). A keychain that
+/// cannot be read is no first login: the error is logged, and the save goes on as it always did.
+fn save_upload_login(
+    engine: &SharedEngine,
+    login: UploadLogin,
+    stored: impl FnOnce() -> Result<bool, keyring::Error>,
+    store: impl FnOnce() -> Result<(), String>,
+    send_old: Option<bool>,
+) -> Result<(), String> {
+    let first = match stored() {
+        Ok(stored) => !stored,
+        Err(e) => {
             conn_log(
-                service,
-                "info",
+                login.service,
+                "error",
                 format!(
-                    "only contacts made from now on are sent to {service} automatically; send an \
-                     older one from the Logbook"
+                    "couldn't read the system keychain: {e}; the login is saved as one already \
+                     stored, and uploads go on as before"
                 ),
             );
+            false
         }
-    }
+    };
+    store()?;
+    conn_log(login.service, "ok", login.saved);
+    start_uploads_for_login(engine, login.leg, login.service, first, send_old);
+    set_upload_toggle(engine, login.toggle, true);
+    catch_up_failed_uploads(engine, login.leg, login.service, login.lead_in);
+    Ok(())
 }
 
 /// The service a login question is about, by its name on the wire: its upload leg and the keychain
@@ -28323,10 +28383,10 @@ fn backlog_service(service: &str) -> Result<(u8, &'static str), String> {
     }
 }
 
-/// What saving a login for `service` ("qrz", "clublog" or "eqsl") would ask first: `None` when a
-/// login for it is already stored (a save then asks nothing and changes nothing), else how many
-/// logged contacts have not been sent there. Asked by Settings before it saves the login; it says
-/// only whether a login is stored, never anything of it.
+/// What saving a login for `service` ("qrz", "clublog" or "eqsl") would ask first: `None` when the
+/// save asks nothing (see [`backlog_question`]), else how many logged contacts have not been sent
+/// there. Asked by Settings before it saves the login; it says only whether a login is stored,
+/// never anything of it.
 #[tauri::command]
 async fn upload_backlog(
     service: String,
@@ -28335,13 +28395,32 @@ async fn upload_backlog(
     let (leg, user) = backlog_service(&service)?;
     let engine = state.inner().clone();
     log_folds::off_the_runtime(move || {
-        if keychain_has(user) {
-            return Ok(None);
-        }
-        let rows = engine_lock(&engine).log_rows();
-        tempo_app::station::backlog_count(&rows, leg).map(Some)
+        let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+            .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+        backlog_question(&engine, leg, login_stored(&entry))
     })
     .await
+}
+
+/// [`upload_backlog`] once the keychain is read: no question (`None`) when a login is `stored` or
+/// the service's upload switch is already on; an error, so no question either, when the keychain
+/// cannot be read (the save then goes on as before, see [`save_upload_login`]); else the count.
+fn backlog_question(
+    engine: &SharedEngine,
+    leg: u8,
+    stored: Result<bool, keyring::Error>,
+) -> Result<Option<usize>, String> {
+    if stored.map_err(|e| format!("couldn't read the system keychain: {e}"))? {
+        return Ok(None);
+    }
+    let rows = {
+        let eng = engine_lock(engine);
+        if !eng.login_question_applies(leg) {
+            return Ok(None);
+        }
+        eng.log_rows()
+    };
+    tempo_app::station::backlog_count(&rows, leg).map(Some)
 }
 
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
@@ -28361,26 +28440,23 @@ fn set_eqsl_password(
         set_upload_toggle(&state, UploadToggle::Eqsl, false);
         return Ok(());
     }
-    let first = !keychain_has(EQSL_KEYCHAIN_USER);
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("eQSL", "ok", "password saved to the OS keychain");
-    start_uploads_for_login(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::EQSL,
-        "eQSL",
-        first,
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::EQSL,
+            service: "eQSL",
+            toggle: UploadToggle::Eqsl,
+            saved: "password saved to the OS keychain",
+            lead_in: "password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
         send_old,
-    );
-    set_upload_toggle(&state, UploadToggle::Eqsl, true);
-    catch_up_failed_uploads(
-        &state,
-        tempo_app::engine::upload_legs::EQSL,
-        "eQSL",
-        "password saved",
-    );
-    Ok(())
+    )
 }
 
 /// Remove the stored eQSL password from the OS keychain (idempotent).
@@ -28509,26 +28585,23 @@ fn set_qrz_logbook_key(
         set_upload_toggle(&state, UploadToggle::Qrz, false);
         return Ok(());
     }
-    let first = !keychain_has(QRZ_LOGBOOK_KEYCHAIN_USER);
-    entry
-        .set_password(key)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
-    start_uploads_for_login(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::QRZ,
-        "QRZ Logbook",
-        first,
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::QRZ,
+            service: "QRZ Logbook",
+            toggle: UploadToggle::Qrz,
+            saved: "API key saved to the OS keychain",
+            lead_in: "API key saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(key)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
         send_old,
-    );
-    set_upload_toggle(&state, UploadToggle::Qrz, true);
-    catch_up_failed_uploads(
-        &state,
-        tempo_app::engine::upload_legs::QRZ,
-        "QRZ Logbook",
-        "API key saved",
-    );
-    Ok(())
+    )
 }
 
 /// Which connector's auto-upload toggle to flip alongside its credential.
@@ -28549,7 +28622,7 @@ enum UploadToggle {
 /// NEVER `apply_settings` — that resets the operating mode and drops queued TX,
 /// and a credential save mid-QSO must not kill the QSO. No-op when already in
 /// the requested state.
-fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
+fn set_upload_toggle(state: &SharedEngine, which: UploadToggle, on: bool) {
     {
         let mut eng = engine_lock(state);
         let (connector, already) = {
@@ -31583,30 +31656,27 @@ fn set_clublog_password(
     // no-credentials announce latch, so the next dry spell is announced again.
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-    let first = !keychain_has(CLUBLOG_KEYCHAIN_USER);
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
-    start_uploads_for_login(
-        &state,
-        tempo_app::engine::upload_legs::CLUBLOG,
-        "ClubLog",
-        first,
-        send_old,
-    );
-    set_upload_toggle(&state, UploadToggle::Clublog, true);
     // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
     // re-send them. Without this, every QSO logged before the password was stored stayed
-    // un-uploaded with nothing to flag it. Now AFTER the toggle, not before — see
+    // un-uploaded with nothing to flag it. The catch-up runs AFTER the toggle, not before — see
     // `catch_up_failed_uploads`: a record drained in the gap would lose the leg silently.
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::CLUBLOG,
-        "ClubLog",
-        "app-password saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::CLUBLOG,
+            service: "ClubLog",
+            toggle: UploadToggle::Clublog,
+            saved: "app-password saved to the OS keychain",
+            lead_in: "app-password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Remove the stored ClubLog app-password from the OS keychain (idempotent);
@@ -59647,5 +59717,264 @@ mod upload_backlog_tests {
             Ok((upload_legs::EQSL, super::EQSL_KEYCHAIN_USER))
         );
         assert!(super::backlog_service("hrdlog").is_err());
+    }
+
+    /// Three contacts from 2019, as an import from another program brings them: sent nowhere.
+    const OLD_LOG: &str = "<EOH>\n\
+        <CALL:5>W1OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20190601<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W2OLD<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20190602<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W3OLD<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20190603<TIME_ON:6>120000<EOR>\n";
+
+    const QRZ: super::UploadLogin = super::UploadLogin {
+        leg: upload_legs::QRZ,
+        service: "QRZ Logbook",
+        toggle: super::UploadToggle::Qrz,
+        saved: "API key saved to the OS keychain",
+        lead_in: "API key saved",
+    };
+
+    fn station(log: &str) -> super::SharedEngine {
+        let mut e = super::Engine::new("K2DEF", "FN31", 0);
+        e.import_adif(log);
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// A keychain as the OS keeps one: a read sees a login only once the write has stored it.
+    struct Keychain(std::cell::Cell<bool>);
+
+    impl Keychain {
+        fn stored(&self) -> Result<bool, keyring::Error> {
+            Ok(self.0.get())
+        }
+        fn store(&self) -> Result<(), String> {
+            self.0.set(true);
+            Ok(())
+        }
+    }
+
+    /// Save a QRZ key through the setters' own sequence; what it queued to send, by call and leg.
+    fn save(
+        engine: &super::SharedEngine,
+        keychain: &Keychain,
+        send_old: Option<bool>,
+    ) -> Vec<(String, u8)> {
+        super::save_upload_login(
+            engine,
+            QRZ,
+            || keychain.stored(),
+            || keychain.store(),
+            send_old,
+        )
+        .expect("the login is saved");
+        super::engine_lock(engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect()
+    }
+
+    fn qrz_from(engine: &super::SharedEngine) -> Option<u64> {
+        super::engine_lock(engine)
+            .settings()
+            .qrz_logbook_upload_from
+    }
+
+    fn old_log() -> Vec<(String, u8)> {
+        ["W1OLD", "W2OLD", "W3OLD"]
+            .iter()
+            .map(|c| (c.to_string(), upload_legs::QRZ))
+            .collect()
+    }
+
+    /// ⛔ THE SETTER'S ORDER. A first key saved with the default answer: whether a login was stored
+    /// is read before the key is written (read after, the save looks like one over a stored key and
+    /// the old log goes), and the start point is set before the upload is turned on and the
+    /// catch-up runs (after, the switch is already on, or the old log is already queued). "Send
+    /// them" is the positive control: the same save, the catch-up sends the whole old log.
+    #[test]
+    fn a_first_key_saved_sets_its_start_point_before_anything_is_sent() {
+        let before = super::now_unix().max(0) as u64;
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+        let from = qrz_from(&engine).expect("a start point");
+        assert!(from >= before && from <= super::now_unix().max(0) as u64);
+        assert!(
+            super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "QRZ is on"
+        );
+
+        let control = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&control, &keychain, Some(true)), old_log());
+        assert_eq!(qrz_from(&control), None);
+    }
+
+    /// ⛔ M4. A keychain that cannot be read is no first login: no start point, and the save goes
+    /// on exactly as before, its catch-up sending every contact not yet sent.
+    #[test]
+    fn a_keychain_that_cannot_be_read_is_no_first_login() {
+        let engine = station(OLD_LOG);
+        let stored = || -> Result<bool, keyring::Error> {
+            Err(keyring::Error::NoStorageAccess(
+                "the keychain is locked".into(),
+            ))
+        };
+        let wrote = std::cell::Cell::new(false);
+        super::save_upload_login(
+            &engine,
+            QRZ,
+            stored,
+            || {
+                wrote.set(true);
+                Ok(())
+            },
+            None,
+        )
+        .expect("the login is saved");
+        assert!(wrote.get(), "the key is still written");
+        assert_eq!(qrz_from(&engine), None, "no start point");
+        let sent: Vec<(String, u8)> = super::engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect();
+        assert_eq!(sent, old_log(), "the catch-up sends as before");
+
+        assert_eq!(
+            super::backlog_question(
+                &engine,
+                upload_legs::QRZ,
+                Err(keyring::Error::PlatformFailure("denied".into()))
+            )
+            .map_err(|e| e.starts_with("couldn't read the system keychain")),
+            Err(true),
+            "and nothing is asked"
+        );
+    }
+
+    /// ⛔ M4. Only the keychain's genuine "no entry" is no login. Any other error is an error, and a
+    /// stored value that is not readable text is still a stored login. A mock credential, never the
+    /// OS keychain.
+    #[test]
+    fn only_a_genuine_no_entry_is_no_login() {
+        use keyring::mock::MockCredential;
+        let entry = keyring::Entry::new_with_credential(Box::new(MockCredential::default()));
+        let mock = || -> &MockCredential { entry.get_credential().downcast_ref().expect("a mock") };
+        assert!(matches!(super::login_stored(&entry), Ok(false)));
+        mock().set_error(keyring::Error::NoStorageAccess("locked".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::NoStorageAccess(_))
+        ));
+        mock().set_error(keyring::Error::PlatformFailure("denied".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::PlatformFailure(_))
+        ));
+        entry
+            .set_password("FAKE-LOGIN")
+            .expect("the mock stores it");
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+        mock().set_error(keyring::Error::BadEncoding(vec![0xff]));
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+    }
+
+    /// What Settings asks before a save: nothing over a stored login, nothing with the upload
+    /// switch already on (operator ruling "Skip the question", where the save then sends as
+    /// before), else the count.
+    #[test]
+    fn the_question_is_asked_only_of_a_first_login_with_the_upload_off() {
+        let engine = station(OLD_LOG);
+        let ask = |stored| super::backlog_question(&engine, upload_legs::QRZ, Ok(stored));
+        assert_eq!(ask(true), Ok(None));
+        assert_eq!(ask(false), Ok(Some(3)));
+        super::engine_lock(&engine).set_upload_toggles(Some(true), None, None);
+        assert_eq!(ask(false), Ok(None));
+
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), old_log(), "sent as before");
+        assert_eq!(qrz_from(&engine), None);
+    }
+
+    /// Operator ruling "Set it silently": a first key saved with nothing waiting starts QRZ's
+    /// uploads from then, so a log imported afterwards and the key saved again send nothing old.
+    #[test]
+    fn a_log_imported_after_the_first_key_is_not_sent_by_a_later_save() {
+        let engine = station("<EOH>\n");
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            super::backlog_question(&engine, upload_legs::QRZ, keychain.stored()),
+            Ok(Some(0)),
+            "premise: nothing waiting, so Settings asks nothing and answers from now on"
+        );
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        assert!(qrz_from(&engine).is_some());
+        // Imported as Import ADIF does, outside the Engine lock.
+        let mut e = std::sync::Arc::into_inner(engine)
+            .expect("one owner")
+            .into_inner()
+            .expect("not poisoned");
+        let (added, ..) = e.import_adif(OLD_LOG);
+        assert_eq!(added, 3);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1: a factory reset keeps the answer. It turns the uploads off and keeps the logins, and
+    /// saving the stored key again (how QRZ comes back on) sends nothing old.
+    #[test]
+    fn a_factory_reset_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        super::engine_lock(&engine).apply_restored_settings(super::factory_settings());
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the reset turned QRZ off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1, through the backup's own restore: an answer given after the backup was made survives
+    /// restoring it, and the stored key saved again sends nothing old.
+    #[test]
+    fn restoring_an_older_backup_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let older = super::engine_lock(&engine).settings().clone();
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": older,
+        })
+        .to_string();
+        super::restore_settings_bundle(&engine, text, |_| true).expect("restored");
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the backup's switch is off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
     }
 }

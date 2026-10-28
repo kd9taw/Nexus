@@ -294,3 +294,142 @@ fn a_settings_save_keeps_the_live_start_points() {
         }
     );
 }
+
+/// What a factory reset hands the engine (`reset_settings`): a fresh install's settings, its
+/// logins kept in the keychain.
+fn factory_settings() -> Settings {
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    fresh
+}
+
+/// ⛔ A FACTORY RESET KEEPS THE ANSWER. A reset turns the uploads off and keeps the logins, and
+/// saving a stored login again is how they come back on: that save is no first login, so it asks
+/// nothing, and its catch-up must still find nothing old.
+#[test]
+fn a_factory_reset_keeps_the_start_points() {
+    let mut e = station_with_an_imported_log();
+    for leg in [upload_legs::QRZ, upload_legs::CLUBLOG, upload_legs::EQSL] {
+        e.first_login_saved(leg, true, false, ANSWERED_AT);
+    }
+    e.apply_restored_settings(factory_settings());
+    assert!(!e.settings().qrz_logbook_upload, "premise: a reset");
+    assert_eq!(
+        UploadStart::of(e.settings()),
+        UploadStart {
+            qrz: Some(ANSWERED_AT),
+            clublog: Some(ANSWERED_AT),
+            eqsl: Some(ANSWERED_AT),
+        }
+    );
+    for leg in [upload_legs::QRZ, upload_legs::CLUBLOG, upload_legs::EQSL] {
+        assert_eq!(
+            e.first_login_saved(leg, false, false, ANSWERED_AT + 60),
+            None
+        );
+        assert_eq!(swept(&mut e, leg), owed(&[], 0), "leg {leg:#b}");
+    }
+}
+
+/// ⛔ RESTORING A BACKUP MADE BEFORE THE ANSWER KEEPS IT. The backup has no start point; the
+/// station's stays. A backup that carries one brings it to a station that has none.
+#[test]
+fn a_backup_restore_keeps_the_start_points() {
+    let mut e = station_with_an_imported_log();
+    let older = e.settings().clone();
+    assert_eq!(UploadStart::of(&older), UploadStart::default(), "premise");
+    e.first_login_saved(upload_legs::QRZ, true, false, ANSWERED_AT);
+    e.apply_restored_settings(older);
+    assert_eq!(e.settings().qrz_logbook_upload_from, Some(ANSWERED_AT));
+    assert_eq!(
+        e.first_login_saved(upload_legs::QRZ, false, false, ANSWERED_AT + 60),
+        None
+    );
+    assert_eq!(swept(&mut e, upload_legs::QRZ), owed(&[], 0));
+
+    let mut carried = e.settings().clone();
+    carried.qrz_logbook_upload_from = Some(1);
+    carried.eqsl_upload_from = Some(ANSWERED_AT - 3_600);
+    e.apply_restored_settings(carried);
+    assert_eq!(
+        UploadStart::of(e.settings()),
+        UploadStart {
+            qrz: Some(ANSWERED_AT),
+            clublog: None,
+            eqsl: Some(ANSWERED_AT - 3_600),
+        },
+        "the station's own start point wins; the backup's fills only where there is none"
+    );
+}
+
+/// Operator ruling "Keep the earlier point": a login cleared and saved again asks again, and a
+/// second "from now on" keeps the first answer's start point, so a contact made between the two
+/// answers that never reached the service is still owed. Only "Send them" clears it.
+#[test]
+fn a_second_from_now_on_keeps_the_earlier_start_point() {
+    let mut e = station_with_an_imported_log();
+    e.first_login_saved(upload_legs::QRZ, true, false, ANSWERED_AT);
+    let mut between = e.qso_record("K4MID".into(), None, None);
+    between.when_unix = ANSWERED_AT + 600;
+    e.log_qso(between);
+    let _ = e.take_pending_uploads();
+
+    assert_eq!(
+        e.first_login_saved(upload_legs::QRZ, true, false, ANSWERED_AT + 3_600),
+        None,
+        "nothing changes"
+    );
+    assert_eq!(e.settings().qrz_logbook_upload_from, Some(ANSWERED_AT));
+    assert_eq!(
+        swept(&mut e, upload_legs::QRZ),
+        owed(&["K4MID"], upload_legs::QRZ),
+        "the contact made between the answers is still owed"
+    );
+}
+
+/// Operator ruling "Skip the question": with the service's upload switch already on before its
+/// first login was saved, the operator opted in before; nothing is asked, no start point is set,
+/// and the catch-up sends what failed for want of the login, as before.
+#[test]
+fn a_first_login_with_the_upload_already_on_sends_as_before() {
+    let mut e = station_with_an_imported_log();
+    e.set_upload_toggles(None, Some(true), None);
+    assert!(!e.login_question_applies(upload_legs::CLUBLOG));
+    assert!(
+        e.login_question_applies(upload_legs::QRZ),
+        "only ClubLog's switch is on"
+    );
+    assert_eq!(
+        e.first_login_saved(upload_legs::CLUBLOG, true, false, ANSWERED_AT),
+        None
+    );
+    assert_eq!(UploadStart::of(e.settings()), UploadStart::default());
+    assert_eq!(waiting(&mut e), owed(&["K9WAIT"], upload_legs::ALL));
+    assert_eq!(
+        swept(&mut e, upload_legs::CLUBLOG),
+        owed(&["W1OLD", "W2OLD", "W3OLD", "K9WAIT"], upload_legs::CLUBLOG)
+    );
+}
+
+/// Operator ruling "Set it silently": a first login saved with nothing waiting still starts the
+/// uploads from that moment (the settings page asks nothing, and answers "from now on"), so a log
+/// imported later and the login saved again send nothing old.
+#[test]
+fn a_first_login_with_nothing_waiting_starts_from_then() {
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    assert!(
+        swept(&mut e, upload_legs::EQSL).is_empty(),
+        "premise: nothing waiting"
+    );
+    e.first_login_saved(upload_legs::EQSL, true, false, ANSWERED_AT);
+    assert_eq!(e.settings().eqsl_upload_from, Some(ANSWERED_AT));
+    let (added, ..) = e.import_adif(OLD_LOG);
+    assert_eq!(added, 3);
+    assert_eq!(
+        e.first_login_saved(upload_legs::EQSL, false, false, ANSWERED_AT + 60),
+        None
+    );
+    assert_eq!(swept(&mut e, upload_legs::EQSL), owed(&[], 0));
+}

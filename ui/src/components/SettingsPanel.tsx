@@ -3519,9 +3519,11 @@ export function SettingsPanel({
   // would send every contact never sent there — an imported log included, since an import marks
   // nothing as sent. So it asks first, and the default (the button that has the focus, and what
   // Escape, a click outside or a dialog that cannot open all answer) is "Only contacts made from
-  // now on". `true` sends them, as a save did before. A login saved over a stored one asks nothing
-  // (`undefined`: the backend changes nothing either), and with nothing waiting there is nothing
-  // to ask. A count that cannot be read is no answer, which the backend takes as the default.
+  // now on". `true` sends them, as a save did before. A login saved over a stored one, or one whose
+  // upload switch is already on, asks nothing (`undefined`: the backend changes nothing either).
+  // With nothing waiting there is nothing to ask, and the answer is "from now on", so a log
+  // imported later is not sent by the next save. A count that cannot be read is no answer: the
+  // backend then saves as it always did if the keychain could not be read, else as the default.
   const askSendOld = async (
     service: 'qrz' | 'clublog' | 'eqsl',
     name: string,
@@ -3533,7 +3535,7 @@ export function SettingsPanel({
       return undefined
     }
     if (owed == null) return undefined
-    if (owed === 0) return true
+    if (owed === 0) return false
     return confirmDialog({
       title: t('settings.connections.backlog.title', { count: owed, service: name }),
       body: t('settings.connections.backlog.body', { service: name }),

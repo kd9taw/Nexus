@@ -159,12 +159,14 @@ describe('the first login saved for an upload service asks about the contacts ne
     },
   )
 
-  it('with nothing waiting there is nothing to ask, and the save is as it always was', async () => {
+  // Operator ruling "Set it silently": with nothing waiting nothing is asked, and the answer is
+  // "from now on", so a log imported afterwards is not sent by a later save of the login.
+  it('with nothing waiting nothing is asked, and uploads start from now', async () => {
     api.get('uploadBacklog').mockImplementation(() => Promise.resolve(0))
     renderPanel()
     await save('settings.confirmations.clublog.password.placeholder')
     await waitFor(() => expect(api.get('setClublogPassword')).toHaveBeenCalledTimes(1))
-    expect(api.get('setClublogPassword').mock.calls[0]).toEqual(['FAKE-LOGIN', true])
+    expect(api.get('setClublogPassword').mock.calls[0]).toEqual(['FAKE-LOGIN', false])
     expect(document.querySelector('.confirm-actions')).toBeNull()
   })
 
