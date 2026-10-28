@@ -959,12 +959,25 @@ jobs:
           # notarytool wants the .p8 on disk; Tauri picks it up via APPLE_API_KEY_PATH.
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
           export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          # The bundler staples the notarization ticket onto the .app and then builds the DMG
+          # and the updater tarball from it, but it ignores the stapler's result, and a ticket
+          # Apple has accepted can take a while to be stapleable. scripts/xcrun-staple-retry.sh
+          # stands in for xcrun so that one call is retried (bounded) and logged; every other
+          # xcrun call passes straight through.
+          shim="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$shim"
+          ln -sf "$PWD/scripts/xcrun-staple-retry.sh" "$shim/xcrun"
+          export PATH="$shim:$PATH" NEXUS_STAPLE_LOG="$RUNNER_TEMP/staple.log"
+          : > "$NEXUS_STAPLE_LOG"
           ( cd src-tauri && cargo tauri bundle --target ${{ matrix.target }} \
               --features radio,custom-protocol --bundles app,dmg )
           rm -f "$RUNNER_TEMP/AuthKey.p8"
           # The Developer ID identity goes too: the Verify step below runs the bundled rigctld,
           # and nothing after this line signs anything.
           security delete-keychain "$RUNNER_TEMP/nexus-signing.keychain-db"
+          cat "$NEXUS_STAPLE_LOG"
+          grep -q '^stapled ' "$NEXUS_STAPLE_LOG" \
+            || { echo "the .app was not stapled before the DMG and updater bundle were made from it"; exit 1; }
 
       - name: Verify the artifacts
         env:

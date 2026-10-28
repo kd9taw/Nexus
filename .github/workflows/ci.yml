@@ -704,6 +704,12 @@ jobs:
       - name: The macOS bundle check refuses build-machine paths and a too-new minimum macOS
         run: node --test scripts/check-macho-bundle.test.mjs
 
+      # The xcrun the macOS release bundler runs (scripts/xcrun-staple-retry.sh): stapling the
+      # notarization ticket is retried a bounded number of times and logged, every other call
+      # passes through. It only runs for real inside a release; its tests use a fake xcrun.
+      - name: The macOS release retries stapling the notarization ticket, and gives up loudly
+        run: node --test scripts/xcrun-staple-retry.test.mjs
+
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
       # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
       # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`
