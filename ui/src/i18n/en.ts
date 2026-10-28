@@ -9389,6 +9389,8 @@ export const EN = {
   'js8.sound.file.badFormat': 'its format is not one Nexus can play, or it is cut short',
   'js8.sound.file.notPicked': 'it was not chosen for this sound in Settings',
   'js8.sound.txDevice': 'A JS8 sound did not play: its output is a device your radio transmits from, and a sound there could key the radio on VOX. Choose another output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+  'js8.sound.txDefault': 'A JS8 sound did not play: a TX audio device (the station’s, or a radio profile’s that has none) is set to the system default output, so a sound there could key a radio on VOX. Choose a specific output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+  'js8.sound.txUnsure': 'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from (the sound server’s default output may be the radio’s sound card). Choose the sound card to play on by name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own card by name.',
   'js8.sound.noDevice': 'A JS8 sound did not play: its output is not on this computer now. Choose another in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
   'js8.sound.failed': 'A JS8 sound did not play: its output would not open.',
   'settings.js8.sound.device.label': 'Play the sounds on',

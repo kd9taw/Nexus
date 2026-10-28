@@ -139,6 +139,10 @@ function nothingPlayed(reason: unknown): string {
   switch (reason) {
     case 'txDevice':
       return t('js8.sound.txDevice')
+    case 'txDefault':
+      return t('js8.sound.txDefault')
+    case 'txUnsure':
+      return t('js8.sound.txUnsure')
     case 'noDevice':
       return t('js8.sound.noDevice')
     default:

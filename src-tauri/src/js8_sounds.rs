@@ -88,6 +88,12 @@ pub enum SoundRefusal {
     // Nothing played.
     /// The output is a device the station transmits from (VOX safety).
     TxDevice,
+    /// The output is the system default, and a TX audio device (the station's or a radio
+    /// profile's) is set to the system default too (VOX safety).
+    TxDefault,
+    /// The output cannot be told apart from a TX audio device by name (Linux: the sound server's
+    /// default against a sound card), so it is refused (VOX safety).
+    TxUnsure,
     /// No such output here.
     NoDevice,
     /// The output would not open or play.
@@ -241,6 +247,8 @@ fn play_on(settings: &Settings, clip: SoundClip) -> Result<(), SoundRefusal> {
     let (device, tx_devices) = sound_route(settings);
     play(device, tx_devices, clip.rate, clip.samples).map_err(|e| match e {
         PlayRefusal::TxDevice => SoundRefusal::TxDevice,
+        PlayRefusal::TxDefault => SoundRefusal::TxDefault,
+        PlayRefusal::TxUnsure => SoundRefusal::TxUnsure,
         PlayRefusal::NoDevice => SoundRefusal::NoDevice,
         PlayRefusal::Failed(why) => {
             eprintln!("nexus: a JS8 sound did not play: {why}");
@@ -360,6 +368,8 @@ mod tests {
             SoundRefusal::BadFormat,
             SoundRefusal::NotPicked,
             SoundRefusal::TxDevice,
+            SoundRefusal::TxDefault,
+            SoundRefusal::TxUnsure,
             SoundRefusal::NoDevice,
             SoundRefusal::Failed,
         ]
@@ -377,6 +387,8 @@ mod tests {
                 "\"badFormat\"",
                 "\"notPicked\"",
                 "\"txDevice\"",
+                "\"txDefault\"",
+                "\"txUnsure\"",
                 "\"noDevice\"",
                 "\"failed\""
             ]

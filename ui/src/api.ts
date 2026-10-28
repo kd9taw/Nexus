@@ -4441,7 +4441,9 @@ export async function pickJs8SoundFile(): Promise<string | null> {
 /** Play one JS8 sound on this computer, in Rust (`src-tauri/src/js8_sounds.rs`): `file` (the WAV the
  *  form holds for it) or its built-in tone, on Settings `js8SoundDevice`. Resolves with why a file fell
  *  back to the tone, if it did; rejects with why nothing played: 'txDevice' (the output is a device the
- *  station transmits from, refused for VOX safety), 'noDevice' or 'failed'. */
+ *  station transmits from, refused for VOX safety), 'txDefault' (a TX audio device is the system
+ *  default, and so is the output), 'txUnsure' (the output cannot be told apart from a TX audio
+ *  device), 'noDevice' or 'failed'. */
 export async function playJs8SoundHere(event: string, file: string | null): Promise<{ fileRefused: string | null }> {
   return invoke<{ fileRefused: string | null }>('play_js8_sound', { event, file })
 }

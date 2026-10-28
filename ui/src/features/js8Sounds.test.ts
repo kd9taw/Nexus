@@ -177,6 +177,20 @@ describe('the sound a sound plays: the operator’s WAV file, else the built-in 
     expect(said()[2]).toContain('its output is not on this computer now')
   })
 
+  it('says the actual reason when the output is refused as the system default, or as one that cannot be told apart', async () => {
+    play.mockRejectedValue('txDefault')
+    await playJs8Sound('cq', null, true)
+    expect(said()[0]).toBe(
+      'A JS8 sound did not play: a TX audio device (the station’s, or a radio profile’s that has none) is set to the system default output, so a sound there could key a radio on VOX. Choose a specific output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+    )
+    play.mockRejectedValue('txUnsure')
+    await playJs8Sound('cq', null, true)
+    expect(said()[1]).toBe(
+      'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from (the sound server’s default output may be the radio’s sound card). Choose the sound card to play on by name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own card by name.',
+    )
+    expect(said().some((m) => m.includes('its output is a device your radio transmits from')), 'not called a TX device').toBe(false)
+  })
+
   it('names a file by its last part, from either kind of path', () => {
     expect(js8SoundFileName('/home/op/sounds/cq.wav')).toBe('cq.wav')
     expect(js8SoundFileName('C:\\Sounds\\mail.wav')).toBe('mail.wav')
