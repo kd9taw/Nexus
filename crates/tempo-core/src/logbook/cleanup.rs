@@ -74,7 +74,8 @@
 //! # A bulk edit ([`changed`])
 //!
 //! Sets or clears the fields in [`BULK_FIELDS`] — the operator's own station details, the
-//! propagation mode, and the operator's park or summit. **Never the worked call**: by the edit
+//! propagation mode, the operator's park or summit, and an award's status (Submitted or Granted,
+//! by the award's ADIF Credit code — [`credit_code`]). **Never the worked call**: by the edit
 //! rule ([`super::edited`]) it keeps every confirmation but a changed station call's (below), and
 //! queues nothing to any service.
 //!
@@ -982,10 +983,60 @@ pub enum Field {
     PotaRef,
     SotaRef,
     TimeOff,
+    // An award's status on the contact, by the award's ADIF Credit code: `SUBMITTED` (in
+    // `CREDIT_SUBMITTED`) or `GRANTED` (in `CREDIT_GRANTED`); a clear takes the code off both.
+    // Only that one code moves: another award's, and the award's band or mode credit
+    // (`DXCC_BAND`), stay as they are ([`set_credit`]).
+    CreditDxcc,
+    CreditWas,
+    CreditCqwazMixed,
+    CreditIota,
+    CreditUsaca,
+}
+
+/// The ADIF Credit code an award-status field sets ([`Field::CreditDxcc`] …), else `None`.
+pub fn credit_code(field: Field) -> Option<&'static str> {
+    match field {
+        Field::CreditDxcc => Some("DXCC"),
+        Field::CreditWas => Some("WAS"),
+        Field::CreditCqwazMixed => Some("CQWAZ_MIXED"),
+        Field::CreditIota => Some("IOTA"),
+        Field::CreditUsaca => Some("USACA"),
+        _ => None,
+    }
+}
+
+/// An award's status on `r` by its Credit `code`: `GRANTED`, `SUBMITTED`, or `None`.
+fn credit_status(r: &QsoRecord, code: &str) -> Option<String> {
+    let holds = |codes: &[String]| codes.iter().any(|c| c.eq_ignore_ascii_case(code));
+    if holds(&r.credit_granted) {
+        Some("GRANTED".into())
+    } else if holds(&r.credit_submitted) {
+        Some("SUBMITTED".into())
+    } else {
+        None
+    }
+}
+
+/// Set an award's status on `rec` by its Credit `code`: `GRANTED` or `SUBMITTED` (one clears the
+/// other), or `None` for neither. The code alone moves; each list stays upper case, sorted and
+/// once each, as the log reads it.
+fn set_credit(rec: &mut QsoRecord, code: &str, status: Option<&str>) {
+    rec.credit_granted.retain(|c| !c.eq_ignore_ascii_case(code));
+    rec.credit_submitted
+        .retain(|c| !c.eq_ignore_ascii_case(code));
+    let list = match status {
+        Some("GRANTED") => &mut rec.credit_granted,
+        Some("SUBMITTED") => &mut rec.credit_submitted,
+        _ => return,
+    };
+    list.push(code.to_string());
+    list.sort();
+    list.dedup();
 }
 
 /// The fields a bulk edit offers. Never the call: see the module header.
-pub const BULK_FIELDS: [Field; 9] = [
+pub const BULK_FIELDS: [Field; 14] = [
     Field::MyGridsquare,
     Field::MyRig,
     Field::Operator,
@@ -995,6 +1046,11 @@ pub const BULK_FIELDS: [Field; 9] = [
     Field::TxPwr,
     Field::MyPotaRef,
     Field::MySotaRef,
+    Field::CreditDxcc,
+    Field::CreditWas,
+    Field::CreditCqwazMixed,
+    Field::CreditIota,
+    Field::CreditUsaca,
 ];
 
 /// One field set (`Some`) or cleared (`None`).
@@ -1030,6 +1086,11 @@ pub fn value_of(r: &QsoRecord, field: Field) -> Option<String> {
         Field::PotaRef => of_side(&r.ota.their_program, &r.ota.their_ref, "POTA"),
         Field::SotaRef => of_side(&r.ota.their_program, &r.ota.their_ref, "SOTA"),
         Field::TimeOff => r.time_off_unix.map(|t| t.to_string()),
+        Field::CreditDxcc
+        | Field::CreditWas
+        | Field::CreditCqwazMixed
+        | Field::CreditIota
+        | Field::CreditUsaca => credit_code(field).and_then(|code| credit_status(r, code)),
     };
     v.filter(|v| !v.is_empty())
 }
@@ -1147,6 +1208,14 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         }
         Field::Iota if !valid_iota(&v.to_ascii_uppercase()) => bad("an IOTA reference"),
         Field::Band if v.is_empty() => bad("a band"),
+        _ if credit_code(field).is_some() => {
+            let up = v.to_ascii_uppercase();
+            if up == "SUBMITTED" || up == "GRANTED" {
+                Ok(up)
+            } else {
+                bad("an award status (SUBMITTED or GRANTED)")
+            }
+        }
         _ if v.is_empty() => Err("A value to set cannot be blank; clear the field instead.".into()),
         Field::Operator | Field::StationCallsign | Field::PropMode => Ok(v.to_ascii_uppercase()),
         // A two-fer as the activation stamps one: the parks upper case, comma-separated with no
@@ -1337,6 +1406,15 @@ pub fn changed(
             }
             Field::Iota => rec.ota.iota = v,
             Field::TimeOff => rec.time_off_unix = v.and_then(|t| t.parse().ok()),
+            Field::CreditDxcc
+            | Field::CreditWas
+            | Field::CreditCqwazMixed
+            | Field::CreditIota
+            | Field::CreditUsaca => {
+                if let Some(code) = credit_code(c.field) {
+                    set_credit(&mut rec, code, v.as_deref());
+                }
+            }
         }
     }
     // What an edit does beside its fields (`super::edited`), for the fields these change.

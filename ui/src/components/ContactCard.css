@@ -49,6 +49,21 @@
 .contact-card-facts {
   margin-top: var(--space-3);
 }
+/* Each award's status: five choices, as many to a row as fit, never wider than the card. */
+.contact-card-awards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.contact-card-awards > legend {
+  color: var(--text-dim);
+  font-weight: 700;
+  padding: 0 4px;
+}
 .contact-card-recent {
   width: 100%;
   border-collapse: collapse;

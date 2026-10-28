@@ -109,8 +109,9 @@ const AWARDS: Narrow = Narrow {
 };
 
 /// The passthrough fields the award fold reads: [`AWARD_EXTRAS`], and the WWFF reference and QSL
-/// route its WWFF count and What-to-QSL list read ([`award_extras`]). `STATE` brings a merged
-/// contest contact's exchange state, as there.
+/// route its WWFF count and What-to-QSL list read, and the county the US Counties award counts
+/// ([`award_extras`]). `STATE` and `CNTY` bring a merged contest contact's exchange state and
+/// county, as there.
 const AWARDS_EXTRAS: &[&str] = &[
     "CQZ",
     tempo_core::logbook::LOTW_DXCC_FIELD,
@@ -118,6 +119,7 @@ const AWARDS_EXTRAS: &[&str] = &[
     "WWFF_REF",
     "QSL_VIA",
     "STATE",
+    "CNTY",
 ];
 
 /// [`journey_qso`]'s inputs.
@@ -471,6 +473,8 @@ pub(crate) fn award_extras(q: &QsoRecord) -> propagation::ContactExtras<'_> {
     propagation::ContactExtras {
         wwff: extra("WWFF_REF").or_else(|| q.ota.their_ref.as_deref().filter(|_| sig_wwff)),
         qsl_via: extra("QSL_VIA"),
+        // Where the record keeps it, a merged contest contact's exchange included.
+        cnty: tempo_core::logbook::record_field(q, "CNTY"),
     }
 }
 
@@ -497,6 +501,56 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         award_fields(q),
         award_extras(q),
     );
+}
+
+// ── award status ────────────────────────────────────────────────────────────
+
+/// One award's status over the log ([`propagation::award_status`]): entities submitted and
+/// granted, and one contact per entity ready to submit — its newest confirmed one where `newest`,
+/// else its oldest. A pass over WHOLE records (the credit codes and the county ride beside the
+/// fields a fold reads), off the Engine lock, refused when the store has not taken every change
+/// made before it was asked. Kept nowhere: it is asked when the operator opens the list.
+pub(crate) fn award_status(
+    engine: &Mutex<Engine>,
+    kind: propagation::award_status::AwardKind,
+    newest: bool,
+) -> Result<propagation::award_status::AwardStatus, String> {
+    let rows = engine_lock(engine).log_rows();
+    tempo_core::logbook::io_fence::whole_log_off_engine_lock("the award status");
+    let mut fold = propagation::award_status::StatusFold::new(kind, newest);
+    rows.each_record(tempo_app::logstore::READ_WAIT, &mut |q| {
+        if let Some(id) = q.id {
+            let id = id.to_string();
+            fold.add(&status_contact(q, &id));
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(unreadable)?
+    .or_refuse()?;
+    Ok(fold.finish())
+}
+
+/// A whole record as the award status reads it, by the readings the award fold takes
+/// ([`award_fields`], [`award_add`]).
+pub(crate) fn status_contact<'a>(
+    q: &'a QsoRecord,
+    id: &'a str,
+) -> propagation::award_status::StatusContact<'a> {
+    propagation::award_status::StatusContact {
+        id,
+        call: &q.call,
+        when_unix: q.when_unix,
+        band: &q.band,
+        mode: &q.mode,
+        award_confirmed: q.award_confirmed,
+        sat: qso_is_sat(q.prop_mode.as_deref()),
+        state: tempo_core::logbook::record_field(q, "STATE"),
+        cnty: tempo_core::logbook::record_field(q, "CNTY"),
+        iota: q.ota.iota.as_deref(),
+        rec: award_fields(q),
+        granted: &q.credit_granted,
+        submitted: &q.credit_submitted,
+    }
 }
 
 // ── the custom awards ───────────────────────────────────────────────────────
@@ -2452,6 +2506,37 @@ mod tests {
             ..Default::default()
         }));
         r
+    }
+
+    /// ★ The US Counties award counts the county a merged contest contact's exchange carries, read
+    /// the way the award fold reads the log (the store's narrow read) and as a whole record, and
+    /// the award status reads it the same: one county worked, not confirmed (LoTW alone).
+    #[test]
+    fn the_counties_award_counts_a_merged_contest_contacts_county() {
+        let rec = merged_contest_contact();
+        let mut db = tempo_core::logbook::sqlite::LogDb::open_in_memory().unwrap();
+        db.insert(&rec, tempo_core::logbook::sqlite::Resolved::default())
+            .unwrap();
+        let mut narrow = propagation::Awards::new();
+        db.each_narrow_with(AWARDS, AWARDS_EXTRAS, Scope::All, Order::Log, &mut |q| {
+            award_add(&mut narrow, q);
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        let whole = awards_for_records(&db.load_all().unwrap(), "KD9TAW").usaca;
+        let narrow = narrow.summary().usaca;
+        assert_eq!(
+            (narrow.worked, narrow.confirmed, narrow.unplaced),
+            (1, 0, 0)
+        );
+        assert_eq!(narrow, whole);
+        let id = "x";
+        let c = status_contact(&rec, id);
+        assert_eq!(
+            propagation::award_status::entity_of(propagation::award_status::AwardKind::Usaca, &c)
+                .as_deref(),
+            Some("CA,Santa Clara")
+        );
     }
 
     /// ★ WAZ counts the zone the other station SENT in a merged CQ WW contact, read the way the

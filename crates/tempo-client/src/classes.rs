@@ -191,6 +191,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_assistance_journal",         RunsAtShack, "The shack's assistance journal."),
     ("get_audio_devices",              RunsAtShack, "The shack's sound cards, for its rig audio."),
     ("get_aurora",                     RunsAtShack, "The shack's propagation feeds."),
+    ("get_award_status",               RunsAtShack, "From the shack's logbook."),
     ("get_awards",                     RunsAtShack, "From the shack's logbook."),
     ("get_band_outlook",               RunsAtShack, "The shack's propagation model."),
     ("get_band_plan",                  RunsAtShack, "The shack's band plan."),

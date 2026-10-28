@@ -27,6 +27,7 @@ import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
 import { QsoHistory } from './QsoHistory'
 import { IotaReferenceNote } from './Iota'
+import { CardAwardStatus } from './AwardStatus'
 import { CallbookPhoto, qrzPageOf } from './CallCard'
 import { confirmDialog } from '../confirm'
 import { useFocusReturn } from '../focusReturn'
@@ -567,6 +568,17 @@ function CardBody({
             </dl>
           )}
         </details>
+
+        {/* Each award's status, set at once (it asks first) and undone from the History below. Not
+            while the card holds unsaved typing: reading the contact again would drop it. */}
+        <CardAwardStatus
+          q={q}
+          canSave={canSave && !dirty}
+          onChanged={() => {
+            onChanged()
+            if (q.id) onReload(q.id)
+          }}
+        />
 
         <section className="qso-detail-section">
           <h3 className="qso-detail-heading">{t('contactCard.recent')}</h3>

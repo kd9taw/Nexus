@@ -42,6 +42,16 @@ required to *see* where you stand:
   so leave them out of an application. A needed 6 m square on the Needed board
   says FFMA in its row,
 - **IOTA** (Islands On The Air),
+- **USA-CA** (CQ's United States of America Counties Award): the 3,077 counties,
+  from the county logged on each contact (`CNTY`), with the award's levels of 500,
+  1,000, 1,500, 2,000, 2,500, 3,000 and all 3,077. The county is read as ADIF
+  writes it (`IN,Marion`) and as other logs write it (`Marion, IN`,
+  `IN, Marion County`, a county alone beside the contact's state). Alaska counts by
+  its four Judicial Districts. A Virginia independent city, or Carson City, counts
+  for a bordering county of your choosing, so Nexus leaves it uncounted, as it
+  does any county it cannot place; the card says how many. A county is confirmed by
+  a QSL card or an eQSL from an Authenticity-Guaranteed member, as CQ's rules say;
+  CQ names no LoTW credit for this award. The list is the US Census Bureau's,
 - **WAP** (Worked All Provinces): the 13 Canadian provinces and territories, from
   the province logged on a Canadian contact, with the ones still to confirm listed,
 - **WPX** (CQ): distinct prefixes worked and confirmed, by the prefix rule CQ
@@ -71,6 +81,26 @@ required to *see* where you stand:
 
 A WPX prefix or a WAE country never worked does not raise a row on the Needed
 board on its own; the Needed board stays DXCC, zone, grid, state and park.
+
+### Award status: Submitted, Granted and Ready to submit
+
+Each contact carries an award status for **DXCC, WAS, WAZ, IOTA and USA-CA**:
+not submitted, **Submitted** or **Granted**, in the ADIF fields made for it
+(`CREDIT_SUBMITTED`, `CREDIT_GRANTED`) under the award's credit code (`DXCC`,
+`WAS`, `CQWAZ_MIXED`, `IOTA`, `USACA`). Set it on the contact card under **Award
+status**, or for many contacts at once in **Bulk edit**. Setting one clears the
+other; nothing else on the contact changes and nothing is sent; Undo takes it
+back. The granted DXCC credit LoTW sends is kept as before.
+
+The **Award status** panel in Awards shows, for the award you pick, the
+entities worked, confirmed, submitted and granted, and the contacts **ready to
+submit**: one per entity confirmed by that award's own rule (DXCC and WAS: LoTW
+or a card; WAZ: those or an Authenticity-Guaranteed eQSL; IOTA: a card or LoTW;
+USA-CA: a card or an Authenticity-Guaranteed eQSL) and neither submitted nor
+granted, either its oldest confirmed contact or its newest. **Export CSV** and
+**Save a page to print** write the list to your Downloads folder. **Mark …
+submitted** marks the whole list Submitted: Nexus says how many contacts it will
+change and changes them only when you confirm.
 
 ### Custom awards
 

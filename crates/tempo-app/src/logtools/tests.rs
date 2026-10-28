@@ -813,6 +813,78 @@ fn a_bulk_edit_acts_only_on_the_count_confirmed() {
     assert_eq!(rows(&engine), before);
 }
 
+/// ★ AN AWARD'S STATUS, SET IN BULK (the Awards view's "Mark submitted", the contact card's
+/// choice). Refused, changing nothing, on any count but the one the operator confirmed; made, it
+/// moves that award's one Credit code — every other field, the other awards' codes and the band
+/// credit stay — the store writes it to the ADIF mirror, and the run's undo puts every contact back.
+#[test]
+fn an_award_status_is_set_only_on_the_count_confirmed_and_undoes_whole() {
+    let d = Dir::new("tools-bulk-credit");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "JA1ABC",
+                "120000",
+                "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:9>DXCC_BAND<CREDIT_SUBMITTED:4>IOTA",
+            ),
+            adif("DL1ABC", "120100", "<QSL_RCVD:1>Y"),
+        ],
+    );
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let submit = [Change {
+        field: Field::CreditDxcc,
+        value: Some("SUBMITTED".into()),
+    }];
+    let preview = bulk_preview(&engine, &ids, &submit).unwrap();
+    assert_eq!((preview.change, preview.moves, preview.recall), (2, 0, 0));
+    for expect in [1, 3] {
+        let (made, _) = bulk_edit(&engine, &ids, expect, &MovesAck::default(), &submit);
+        assert_eq!(made, Err(NOT_AS_PREVIEWED.to_string()));
+    }
+    assert_eq!(
+        rows(&engine),
+        before,
+        "an unconfirmed count changes nothing"
+    );
+
+    let (made, dur) = bulk_edit(
+        &engine,
+        &ids,
+        preview.selected,
+        &MovesAck::default(),
+        &submit,
+    );
+    let made = made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, 2);
+    let after = rows(&engine);
+    for (was, now) in before.iter().zip(&after) {
+        let mut want = was.clone();
+        want.credit_submitted.push("DXCC".into());
+        want.credit_submitted.sort();
+        assert_eq!(*now, want, "only DXCC's code moves");
+    }
+    assert_eq!(after[0].credit_granted, ["DXCC_BAND"]);
+    settle(&engine);
+    assert_eq!(mirror(&d).matches("<CREDIT_SUBMITTED:4>DXCC").count(), 1);
+    assert_eq!(
+        mirror(&d).matches("<CREDIT_SUBMITTED:9>DXCC,IOTA").count(),
+        1
+    );
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "nothing is sent"
+    );
+
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before, "every contact back, whole");
+}
+
 /// ★ A STATION CALL CHANGED IN BULK. The preview counts the contacts uploaded under another call;
 /// the edit clears their upload stamps — the next upload sends them under the new call — and
 /// queues nothing itself. A contact already under the new call is left as it is, stamps and all.

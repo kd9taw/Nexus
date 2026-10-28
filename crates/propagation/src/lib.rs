@@ -17,6 +17,7 @@
 
 pub mod achievements;
 pub mod advisor;
+pub mod award_status;
 pub mod awards;
 pub mod awards_more;
 pub mod beacons;
@@ -61,6 +62,7 @@ pub mod space_wx;
 pub mod spot;
 pub mod stats;
 pub mod swpc_scales;
+pub mod us_counties;
 pub mod wae;
 pub mod wmm;
 pub mod wpx;
@@ -74,7 +76,7 @@ pub use achievements::Achievement;
 pub use advisor::{BandReport, PropAdvisor, PropAdvisory, RegionReport};
 pub use awards::{
     AwardBandNeeds, AwardSummary, Awards, BandAward, BandNeed, ContactExtras, DxccDisagreement,
-    EntityNeed, QslChannels, RecordFields,
+    EntityNeed, QslChannels, RecordFields, UsacaProgress,
 };
 pub use awards_more::{
     mark_award_needs, DxccChart, DxccChartRow, QslFor, QslSlot, QslWant, WaeCountry, WaeProgress,
