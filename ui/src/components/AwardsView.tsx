@@ -27,6 +27,7 @@ import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
 import { CustomAwardsPanel, DxccChartPanel, PotaActivatorPanel, WhatToQslPanel } from './AwardsMore'
+import { AwardStatusPanel } from './AwardStatus'
 
 /** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
  * language, and a translated one names no award anybody can apply for. */
@@ -41,6 +42,7 @@ const AWARD_NAMES = {
   ffma: 'FFMA',
   satVucc: 'Sat VUCC',
   iota: 'IOTA',
+  usaca: 'USA-CA',
   wap: 'WAP',
   wpx: 'WPX',
   wae: 'WAE',
@@ -1040,6 +1042,37 @@ export function AwardsView({
           </span>
         </div>
 
+        {/* CQ's US Counties award: the 3,077 counties, counted from each contact's CNTY. The
+            award confirms by card or an eQSL from an AG member; CQ names no LoTW credit for it.
+            Absent from an older station. */}
+        {aw.usaca && (
+          <div className={`aw-card${aw.usaca.level === aw.usaca.total ? ' aw-card-elite' : ''}`}>
+            <span className="aw-k">
+              <Flag size={13} aria-hidden="true" /> {AWARD_NAMES.usaca}
+            </span>
+            <span className="aw-v">
+              {aw.usaca.confirmed}
+              <span className="aw-of"> / {aw.usaca.nextLevel ?? aw.usaca.total}</span>
+            </span>
+            <div className="aw-bar">
+              <div
+                className="aw-fill good"
+                style={{
+                  width: `${Math.min(100, (aw.usaca.confirmed / Math.max(1, aw.usaca.nextLevel ?? aw.usaca.total)) * 100)}%`,
+                }}
+              />
+            </div>
+            <span className="aw-note">
+              {aw.usaca.level != null
+                ? t('awards.usaca.note.level', { level: aw.usaca.level, worked: aw.usaca.worked, total: aw.usaca.total })
+                : t('awards.usaca.note.toGo', { worked: aw.usaca.worked, total: aw.usaca.total })}
+            </span>
+            {aw.usaca.unplaced > 0 && (
+              <span className="aw-note">{t('awards.usaca.note.unplaced', { count: aw.usaca.unplaced })}</span>
+            )}
+          </div>
+        )}
+
         {/* Worked All Provinces: the 13 Canadian provinces and territories, by the logged ADIF
             STATE on a Canadian contact. Absent from an older station. */}
         {aw.wap && (
@@ -1307,6 +1340,7 @@ export function AwardsView({
           )}
           {aw.wae && <WaeNeeded wae={aw.wae} />}
           {/* The station's own reads: an observed summary carries none of them. */}
+          {!observation && <AwardStatusPanel />}
           {!observation && <WhatToQslPanel />}
           {!observation && <CustomAwardsPanel />}
           {!observation && <PotaActivatorPanel />}

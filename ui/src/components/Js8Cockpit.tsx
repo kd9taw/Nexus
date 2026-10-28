@@ -5,9 +5,9 @@
 // in the code is the mode's own vocabulary (js8Vocab.ts): JS8, HB, CQ, @ALLCALL, the speed
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useEscStop } from '../useEscStop'
-import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed } from '../types'
+import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -28,7 +28,7 @@ import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
 import { RecentQsosFrame } from './RecentQsosPane'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
-import { Js8WaterfallControls, js8CentreFilterItem } from './Js8WaterfallControls'
+import { Js8WaterfallControls, js8CentreFilterItem, js8FilterShade } from './Js8WaterfallControls'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
@@ -61,6 +61,8 @@ import {
 } from '../features/js8Lists'
 import {
   clearJs8Lists,
+  js8RunStart,
+  js8StartupMarks,
   loadJs8ListMarks,
   loadJs8ViewPrefs,
   saveJs8ListMarks,
@@ -68,7 +70,7 @@ import {
   type Js8ListMarks,
   type Js8ViewPrefs,
 } from '../features/js8View'
-import { Js8SoundWatch, js8SoundsToPlay, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
+import { js8PaneVars } from '../features/js8PaneStyle'
 import {
   atuBypass,
   atuTune,
@@ -125,7 +127,6 @@ import {
   estimateFrames,
   fmtSnr,
   js8ListedStations,
-  utcClock,
 } from '../js8Vocab'
 import { Js8ComposeBox } from './Js8ComposeBox'
 import { Js8ComposeActions } from './Js8ComposeActions'
@@ -182,6 +183,11 @@ interface Props {
   /** The lists' own settings (Settings ▸ JS8) and the call list's two writes. Absent: JS8Call's
    *  defaults, and the writes are not offered. */
   lists?: Js8ListSettings
+  /** JS8Call's colours and fonts for the RX pane, the lists and the compose box (Settings ▸ JS8),
+   *  painted for `theme` (features/js8PaneStyle). Absent: every pane follows the theme. */
+  paneStyle?: Settings['js8PaneStyle']
+  /** A station whose Inbox to show, asked by the new-message notice's "Show" (a new `seq` each ask). */
+  inboxRequest?: { call: string; seq: number } | null
 }
 
 /** What Settings ▸ JS8 holds for the lists (JS8Call 3.0.3's, at its defaults when absent), and the
@@ -192,12 +198,13 @@ export interface Js8ListSettings {
   highlightSecondary: readonly string[]
   eot: string
   mfi: string
-  /** The events that play a sound (features/js8Sounds). */
-  sounds: readonly string[]
   /** The joined @GROUPs. */
   groups: readonly string[]
   /** "Do not participate in the @ALLCALL group": the call list leaves @ALLCALL out. */
   avoidAllcall: boolean
+  /** JS8Call's "Reset … at startup": the three lists start each run empty (features/js8View
+   *  `js8StartupMarks`). Absent until the settings are in, so nothing is decided before them. */
+  resetActivity?: boolean
   /** "Block this station": the RX block list as it should be. */
   setRxBlocklist?: (calls: string[]) => Promise<void>
   /** "Add New Station or Group…" with a @GROUP and "Remove This Group": the groups as they should be. */
@@ -206,10 +213,6 @@ export interface Js8ListSettings {
   setAvoidAllcall?: (avoid: boolean) => Promise<void>
 }
 
-/** How long the new-message notice stays up: JS8Call's "New Message Received" box closes itself
- *  after 300 seconds (`SelfDestructMessageBox(300, …)`, processCommandActivity.cpp:809-818). */
-const JS8_NEW_MESSAGE_MS = 300_000
-
 /** JS8Call's defaults for the lists, where no settings are handed down. */
 const JS8_LIST_DEFAULTS: Js8ListSettings = {
   rxBlocklist: [],
@@ -217,7 +220,6 @@ const JS8_LIST_DEFAULTS: Js8ListSettings = {
   highlightSecondary: [],
   eot: '\u2662',
   mfi: '\u2026\u2026',
-  sounds: [],
   groups: [],
   avoidAllcall: false,
 }
@@ -276,6 +278,8 @@ export function Js8Cockpit({
   compose = JS8_COMPOSE_DEFAULTS,
   onSavedMessages,
   lists = JS8_LIST_DEFAULTS,
+  paneStyle,
+  inboxRequest,
 }: Props) {
   // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
   const [statsCall, setStatsCall] = useState('')
@@ -344,50 +348,12 @@ export function Js8Cockpit({
     if (host && !host.shown('inbox')) panels?.setPanelState('inbox', 'docked')
   }
 
-  // JS8Call's notification sounds (features/js8Sounds), the enabled events only, each once a poll.
-  // What a poll brings is read against the one before; coming back to this view starts afresh, so
-  // what was heard meanwhile does not sound all at once. The Remote page plays none.
-  const soundWatch = useRef(new Js8SoundWatch())
-  const playSounds = (events: readonly Js8SoundEvent[]) => {
-    for (const ev of js8SoundsToPlay(events, lists.sounds)) playJs8Sound(ev)
-  }
+  // The "New Message Received" notice is App's (Js8SoundPlayer), from whichever screen shows; its
+  // "Show" opens this screen and asks for that station's Inbox here.
   useEffect(() => {
-    if (!active) soundWatch.current = new Js8SoundWatch()
-  }, [active])
-  useEffect(() => {
-    if (!js8) return
-    playSounds(soundWatch.current.frames(js8.activity, snapRef.current?.mycall ?? '', lists.groups))
+    if (inboxRequest) showInbox(inboxRequest.call)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.activity])
-
-  // A MSG to me announces itself, as JS8Call's "New Message Received" box does
-  // (processCommandActivity.cpp:806-820): ONCE per message, and it stays up as long as that box
-  // (300 s) unless dismissed, with a way to the message. What the first poll finds is taken as seen,
-  // so mail filed before this view opened (or restored from the journal) does not announce itself.
-  const seenInboxRef = useRef<Set<number> | null>(null)
-  useEffect(() => {
-    const inbox = js8?.inbox
-    if (!inbox) return
-    const seen = seenInboxRef.current
-    if (seen === null) {
-      seenInboxRef.current = new Set(inbox.map((e) => e.id))
-      return
-    }
-    let filed = false
-    for (const e of inbox) {
-      if (seen.has(e.id)) continue
-      seen.add(e.id)
-      if (e.state === 'unread') {
-        filed = true
-        pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', JS8_NEW_MESSAGE_MS, {
-          action: () => showInbox(e.from),
-          actionLabel: t('js8.inbox.new.open'),
-        })
-      }
-    }
-    if (filed) playSounds(['inbox'])
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.inbox])
+  }, [inboxRequest?.seq])
 
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call
@@ -1003,6 +969,15 @@ export function Js8Cockpit({
     setMarks(next)
     saveJs8ListMarks(next)
   }
+  // JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8):
+  // decided once a run, from the first settings it has.
+  const resetActivity = lists.resetActivity
+  useEffect(() => {
+    if (resetActivity === undefined) return
+    const next = js8StartupMarks(marks, resetActivity, js8RunStart())
+    if (next !== marks) changeMarks(() => next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetActivity])
   const myCall = snap?.mycall ?? ''
   // The RX pane, Band activity and the call list, as JS8Call draws them (features/js8Lists).
   const rxLines = js8RxLines(js8?.activity ?? [], {
@@ -1070,12 +1045,6 @@ export function Js8Cockpit({
     reading && !answeredCalls.has(call)
       ? unansweredTitle
       : null
-  // A call heard for the first time sounds once the log has said whether it is worked.
-  useEffect(() => {
-    if (!js8) return
-    playSounds(soundWatch.current.newCalls(js8.stations, (call) => (answeredCalls.has(call) ? logDetail.has(call) : null)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [js8?.stations, answeredCalls, logDetail])
   // Each listed call's grid: its own, else the log's (JS8Call's fallback), for the distance and
   // azimuth orders.
   const callGrids = new Map(
@@ -1212,7 +1181,19 @@ export function Js8Cockpit({
 
   // ---- THE LISTS' MENUS (js8ListMenus): JS8Call's View and header menus, each pane's ⋯, and its
   // right-click menus, each row's ⋯ or a right-click on the row. Nothing in them keys. ----
-  const clearList = (which: 'rx' | 'band' | 'call') => changeMarks((m) => clearJs8Lists(m, which, Date.now()))
+  /** JS8Call's RX Clear empties its compose box too (`clearRXActivity`, mainwindow.cpp:3001-3014),
+   *  and Clear All Lists runs it (:2970-2990): the text and the command go, the To box (JS8Call's
+   *  selected call) stays. Not while the box's own message goes out: the box then holds what is still
+   *  to go (typeahead), and that goes on, as JS8Call's empty box changes no frame (:3598-3600). */
+  const clearCompose = () => {
+    if (typeahead.active) return
+    setText('')
+    setCmdId(null)
+  }
+  const clearList = (which: 'rx' | 'band' | 'call') => {
+    changeMarks((m) => clearJs8Lists(m, which, Date.now()))
+    if (which === 'rx') clearCompose()
+  }
   /** "Clear All Lists", after JS8Call's question (UI_Constructor.cpp:783-795). */
   const clearAll = () => {
     void confirmDialog({
@@ -1221,7 +1202,9 @@ export function Js8Cockpit({
       confirmLabel: t('js8.lists.clearAll.confirm.label'),
       danger: true,
     }).then((yes) => {
-      if (yes) changeMarks((m) => clearJs8Lists(m, 'all', Date.now()))
+      if (!yes) return
+      changeMarks((m) => clearJs8Lists(m, 'all', Date.now()))
+      clearCompose()
     })
   }
   const clears = (which: 'rx' | 'band' | 'call') => js8ClearEntries(() => clearList(which), clearAll)
@@ -1362,6 +1345,7 @@ export function Js8Cockpit({
         rows={bandRows}
         columns={view.band.columns}
         labels={view.labels}
+        minimal={view.minimal}
         nowMs={now}
         selectedHz={snap?.radio.rxOffsetHz ?? null}
         onDoubleClick={tuneRx}
@@ -1429,6 +1413,7 @@ export function Js8Cockpit({
         rows={sortedCallRows}
         columns={view.call.columns}
         labels={view.labels}
+        minimal={view.minimal}
         nowMs={now}
         selectedCall={selectedCall}
         pins={pins}
@@ -1592,7 +1577,12 @@ export function Js8Cockpit({
     ])
 
   return (
-    <main className="layout single js8-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
+    <main
+      className="layout single js8-cockpit"
+      ref={cockpitRef}
+      data-pane-drag={dropPane ? '' : undefined}
+      style={js8PaneVars(paneStyle, theme === 'light' ? 'light' : 'dark') as CSSProperties}
+    >
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -1733,6 +1723,8 @@ export function Js8Cockpit({
           keyed={sending || (snap?.radio.tuning ?? false)}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+          // The audio the decode filter leaves out, darkened as JS8Call's waterfall darkens it.
+          shade={js8FilterShade(js8?.controls?.filter)}
           // JS8Call's waterfall controls (the decode filter, QSY to centre), on its waterfall, as
           // JS8Call keeps them: a plate naming the filter opens them (its own file).
           headerExtra={

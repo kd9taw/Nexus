@@ -311,7 +311,9 @@ describe('the Settings panel uses the window it has', () => {
       document.documentElement.setAttribute('data-viewport', t)
       const expected: Record<string, string> = {
         'panel pota-view pota-hunter': '1100px', // prose-shaped, and still is
-        'panel log-view logbook': t === 'xl' ? '1600px' : '1100px',
+        // The Logbook uses the whole width of its pane from md, as Settings does (the operator, 2026-10-27:
+        // "a large portion of the screen on either side is unused"); at xs/sm the cap is inert by arithmetic.
+        'panel log-view logbook': t === 'xs' || t === 'sm' ? '1100px' : 'none',
         // Repeaters uses the whole width of its pane from md, as Settings does (the operator, 2026-10-03: "the
         // screen is narrow and in the middle"); at xs/sm the shipped cap is inert by arithmetic and stays.
         'radioprog panel': t === 'xs' || t === 'sm' ? '1100px' : 'none',

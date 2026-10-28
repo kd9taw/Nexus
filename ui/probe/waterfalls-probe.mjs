@@ -25,13 +25,17 @@
 //      keeps its size (at least what it was in its old place left of the decoded text, measured before the move:
 //      TUNING_BEFORE), its nudges and words are on screen with nothing scrolled, RTTY's cockpit does not scroll,
 //      and with the scope hidden the waterfall takes the strip's full width.
+//   7. THE CW SCOPE'S HiDef/Fast SWITCH (2026-10-27): on the CW scope at every size, reading HiDef (the default),
+//      on screen, the topmost thing where it stands, inside the scope, and its header row not overflowing; a
+//      click turns it to Fast and it is still on screen. Phone shows no such switch.
 //   5. PHONE'S LEFT SIDE: with Band Activity on the side, the scope is exactly as wide as without it, and the side
 //      starts under the TX strip. TEMPO, STACKED (1024×768 at a pinned 100 %): its strip is 25 % of the window and
 //      stands clear of the cell under it.
 // THE CONTROLS, run every time: JS8 with its divider moved one step (the default no longer 25 %) must fail check
 // 1, and Phone with a planted 360 px margin beside its scope must fail check 2. If either passes, the checks
 // cannot fail and the probe says so instead of passing. RTTY's two (6): a planted ceiling on its strip must fail the
-// common height, and a planted 60 px square must fail the scope's size.
+// common height, and a planted 60 px square must fail the scope's size. The CW switch's (7): a planted cover over
+// it must fail its reach.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 a page never drew its waterfall
 import { createServer } from 'vite'
@@ -116,6 +120,17 @@ const MEASURE = `(() => {
     txBottom: txstrip ? Math.round(txstrip.getBoundingClientRect().bottom) : null,
     next: (() => { const n = [...shell.children].find((e) => e.matches('.grid-stations')); return n ? Math.round(n.getBoundingClientRect().top) : null })(),
     vhEff: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')) || null,
+    // The CW scope's HiDef/Fast switch, where one is shown.
+    hidef: (() => {
+      const b = [...strip.querySelectorAll('button')].find((x) => vis(x) && /^(HiDef|Fast)$/.test(x.textContent.trim()))
+      if (!b) return null
+      const q = b.getBoundingClientRect(), row = b.parentElement
+      return {
+        label: b.textContent.trim(), pressed: b.getAttribute('aria-pressed'), reach: reach(b),
+        inStrip: q.left >= r.left - 1 && q.right <= r.right + 1 && q.top >= r.top - 1,
+        rowOverflows: row.scrollWidth > row.clientWidth + 1,
+      }
+    })(),
     // RTTY's tuning display: its square, where it stands against the waterfall, and whether its nudges and words
     // are on screen without its column scrolling.
     tuning: (() => {
@@ -217,6 +232,19 @@ async function measure(hash, [W, H], extra = {}, before = null) {
   }
 }
 
+/** Check 7 for one page: the CW scope's HiDef/Fast switch reads `label`, on screen and uncovered, inside the scope. */
+function hidefRed(name, m, label) {
+  const h = m.hidef
+  if (!h) return [`${name}: no HiDef/Fast switch on the scope`]
+  const reds = []
+  if (h.label !== label) reds.push(`${name}: the switch reads ${h.label}, not ${label}`)
+  if (h.pressed !== String(label === 'HiDef')) reds.push(`${name}: the switch's pressed state is ${h.pressed} for ${h.label}`)
+  if (!h.reach) reds.push(`${name}: the HiDef/Fast switch is not on screen or something covers it`)
+  if (!h.inStrip) reds.push(`${name}: the HiDef/Fast switch stands outside the scope`)
+  if (h.rowOverflows) reds.push(`${name}: the scope's header row overflows with the switch in it`)
+  return reds
+}
+
 /** Check 1 for one page: the announced height is 25 % of the shell, clamped by the announced range. */
 function defaultRed(name, m) {
   const want = Math.min(m.max, Math.max(m.min, 0.25 * m.shellCs))
@@ -309,7 +337,9 @@ try {
       if (name === 'CW') {
         if (!m.region || m.region.h < m.region.floor - 1) red(`CW at ${tag}: its pane region is ${m.region?.h.toFixed(0)} CSS px, under its ${m.region?.floor} px floor`)
         if (m.shellScrolls) red(`CW at ${tag}: the cockpit scrolls`)
+        for (const r of hidefRed(`CW at ${tag}`, m, 'HiDef')) red(r)
       }
+      if (name === 'Phone' && m.hidef) red(`Phone at ${tag}: shows the CW scope's HiDef/Fast switch`)
     }
     bySize.set(tag, rows)
     for (const r of sameRed(tag, rows)) red(r)
@@ -330,6 +360,18 @@ try {
       if (Math.abs(m.px.h - plain.px.h) > 2) red(`Phone at ${tag}: the scope is ${m.px.h} px tall beside the side, ${plain.px.h} without it`)
       for (const [label, ok] of m.stops) if (!ok) red(`Phone (side) at ${tag}: ${label} is not on screen or something covers it`)
       if (m.ptt === false) red(`Phone (side) at ${tag}: PTT is not on screen or something covers it`)
+    }
+  }
+  // 7. The CW switch clicked to Fast stays where it was.
+  for (const size of [[1024, 768], [1920, 1080]]) {
+    const tag = `${size[0]}×${size[1]}`
+    const m = await measure('cw', size, {}, async (evaluate) => {
+      await evaluate(`(() => { const b = [...document.querySelectorAll('.ph-scope-panel button')].find((x) => x.textContent.trim() === 'HiDef'); b?.click(); return 1 })()`)
+    })
+    if (!m) red(`CW at ${tag} after the switch: no scope`)
+    else {
+      console.log(`waterfalls-probe: CW at ${tag}: the switch reads ${m.hidef?.label} after a click`)
+      for (const r of hidefRed(`CW at ${tag} after a click`, m, 'Fast')) red(r)
     }
   }
   // Tempo stacked: 1024×768 at a pinned 100 % is the narrow collapse.
@@ -372,7 +414,17 @@ try {
     else console.log(`waterfalls-probe: CONTROL — RTTY with ${what}: ${caught[0]} (caught)`)
   }
 
-  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, and every control was caught')
+  // The CW switch's control (7): a cover planted over the scope's header must fail its reach.
+  {
+    const m = await measure('cw', [1366, 768], {}, async (evaluate) => {
+      await evaluate(`(() => { const b = [...document.querySelectorAll('.ph-scope-panel button')].find((x) => x.textContent.trim() === 'HiDef'); const q = b.getBoundingClientRect(); const d = document.createElement('div'); d.style.cssText = 'position:fixed;z-index:99999;left:' + q.left + 'px;top:' + q.top + 'px;width:' + q.width + 'px;height:' + q.height + 'px'; document.body.appendChild(d); return 1 })()`)
+    })
+    const caught = m ? hidefRed('CW at 1366×768 (planted cover)', m, 'HiDef') : []
+    if (caught.length === 0) red('CONTROL FAILED — a cover planted over the CW scope\'s HiDef switch passed check 7; the check cannot fail')
+    else console.log(`waterfalls-probe: CONTROL — ${caught[0]} (caught)`)
+  }
+
+  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, the CW scope\'s HiDef switch on screen, and every control was caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

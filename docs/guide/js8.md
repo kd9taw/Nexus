@@ -44,11 +44,17 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   arrive ("time · offset · text"), closed by **♢** after its last frame. **……** stands where a
   frame did not come within one and a half periods. Your own transmissions print here too,
   tinted, and lines addressed to you carry a bar. Double-click a line to write to the station
-  that opens it. **⋯** ▸ **Clear** empties it; **Clear all lists…** empties the three lists after
-  asking.
+  that opens it. **⋯** ▸ **Clear** empties it and the compose box with it, as JS8Call's does;
+  **Clear all lists…** empties the three lists and the compose box after asking. The text and the
+  command go, the call in **To** stays; while a message of the compose box is going out, the box
+  keeps what is still to go and the message goes on. Settings ▸ Digital ▸ JS8 ▸ **Reset Band
+  activity, the call list and the RX pane at startup** (off, as in JS8Call) starts each run of
+  Nexus with the three lists empty, as **Clear all lists…** leaves them.
 - **Band activity** — one row per audio offset holding every frame heard there (the last ten),
   joined, with ♢ after each message. Columns: offset, age, SNR, and from **⋯ ▸ Show columns**
-  time delta and speed too, as JS8Call's; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show
+  time delta and speed too, as JS8Call's; **⋯ ▸ Show columns ▸ Minimal column labels** (off, one
+  switch for both lists, as JS8Call's) shortens the headings to JS8Call's (Off, SN, TD, Sp, Call,
+  Dist) and drops Hz and ms from the cells; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show
   band heartbeats and ACKs** (on) hides heartbeats and their acknowledgements. CQ rows are
   tinted green, traffic to you carries a bar, and the two highlight lists in Settings tint their
   words. Double-click a row to move RX there. A row's **⋯**: **Jump to … Hz** (both your RX and
@@ -82,7 +88,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   `<path> MSG [MESSAGE]` in the compose box, the path the message came by, with `[MESSAGE]`
   picked for you to type over; nothing is sent until you send it, and while a message of yours
   is going out it puts nothing in, as JS8Call adds no text then. A new message to you puts a
-  notice up for five minutes, as JS8Call's box stays, with **Show** to open it. A message held
+  notice up for five minutes, as JS8Call's box stays, whichever screen is showing while JS8 is
+  the mode, with **Show** to open it here. A message held
   for one station stays until you delete it, as in JS8Call. One left for a group
   (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
   QUERY MSGS to the group, once to each, and handed over whenever a station asks for it with
@@ -115,6 +122,16 @@ reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
 idle-watchdog readout. **CQ**, **HB**, **REPLY**, **SNR**, **INFO**, **STATUS** and **Saved** are
 greyed out while a message is waiting to go or going out, as JS8Call's are.
 
+**Colours and fonts.** Settings ▸ Digital ▸ JS8 ▸ **Colours and fonts** holds JS8Call's: for the RX
+pane its background, received text and transmitted text, each text with its font; for Band
+activity and the call list (one set for both, as in JS8Call) the background, text, selected row,
+traffic to you, CQ messages and the two highlights, with a font; and for the compose box its
+background, text and font. Each colour starts as the theme's and opens a colour picker. What you
+pick is kept for the theme in use, Light or Dark, and the other theme keeps its own, so a colour
+chosen to read well on one never paints the other; a font serves both, and a family this computer
+lacks falls back to the theme's. A sample of each pane shows the result, a line under it says when
+a text would be hard to read on its background, and **Reset** gives the pane back to the theme.
+
 ## Receiving
 
 Every speed decodes at once, exactly as JS8Call 3.0's multi-decode does: a Slow station at
@@ -126,7 +143,14 @@ arrive in Band activity (and in RX when they are on your offset or for you), and
 message in Inbox if it was for you. Settings ▸ Digital ▸ JS8 holds JS8Call's lists and marks:
 the callsigns to hide in the RX pane, two highlight lists, the ♢ and …… marks, and a sound for
 each of a CQ, a heartbeat, an ACK for you, a message to you, a message in your Inbox, a new
-callsign and one you have worked (all off, as in JS8Call).
+callsign and one you have worked (all off, as in JS8Call). Each plays a tone of its own or a WAV
+file you choose, as JS8Call plays the file you pick, and it plays whichever screen is showing
+while JS8 is the mode: you hear a CQ from the Logbook or the Map too. A file that cannot be
+played plays the tone instead, and Nexus says so once. **Play the sounds on** picks the output
+(the system default unless you pick one), as JS8Call lets you pick its notification device. It is
+never a device your radio transmits from: a sound there could key a rig on VOX, so Nexus checks at
+every sound and plays nothing there, even if the radio's TX audio device is changed to it later,
+and says so.
 
 **JS8 60** is JS8Call 3.0's newest speed, and JS8Call calls it experimental: 4-second
 periods, a signal 250 Hz wide, each frame about 2.6 s on the air, so the band carries a
@@ -189,7 +213,8 @@ the frequency you last used in JS8 instead.
 controls. Switch the filter off to decode the whole passband, or set its centre and width;
 **Centre on my RX offset** puts it on the station you are listening to. While it is on, a row's
 **⋯** in Band activity or the call list has **Centre filter at … Hz**, which centres it on that
-row, as JS8Call's row menus do.
+row, as JS8Call's row menus do. While the filter is on, the waterfall darkens the audio outside it
+to half, as JS8Call's does, with a yellow line at each edge, so you can see what is left out.
 
 **QSY to centre**, in the same controls, moves the rig's dial so your TX offset sits on the
 passband centre (1500 Hz unless you change it): for narrow filters, and rigs whose passband

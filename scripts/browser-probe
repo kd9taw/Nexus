@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|logbook
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -132,6 +132,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Why? opens Settings at the Radios cards, whose routing lines and switch
                         choice are on screen with nothing sideways, with a planted overflow in
                         the notice and in a card that must be caught (ui/probe/radioswitch-probe.mjs)
+  --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at 1024×768 and
+                        1920×1080: reached from the Radios cards, every step inside the window
+                        with Next/Finish, Back and Cancel reachable and nothing sideways (the band
+                        grid included), Test CAT on a radio not in use and "Where would this go?"
+                        answered on screen, an untouched Finish writing nothing, with a planted
+                        overflow that must be caught (ui/probe/radiosetup-probe.mjs)
   --desktop logwaiting  the Operate strip's Log button with a count of contacts waiting for
                         Log QSO, at 1024×768 and 1920×1080 in both themes, with and without a
                         station on screen, asserting no control moves for the count, the count
@@ -162,6 +168,24 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         walk on screen, and Settings folded for a new operator with Show all
                         opening it, with a planted overflow in an answer and in the walk that
                         must be caught (ui/probe/firstrun-probe.mjs)
+  --desktop clublog     the club log on a joined laptop (five positions with long names, the
+                        newest 100 of 4,321 contacts) on the Contest screen and in the club
+                        board pop-out at 1024×768 and 1920×1080, asserting it is under the club
+                        board with its head, nothing scrolls sideways, and the newest and the
+                        hundredth contact's cells are on screen, with a planted wide row that
+                        must be caught (ui/probe/clublog-probe.mjs; it builds nothing)
+  --desktop aprsmap     the APRS screen's map in the real app, at 1024×768 and 1920×1080: nothing
+                        scrolls sideways, Stop TX and the TX latch on screen, every control of the
+                        map's toolbar inside the map, the Layers panel on it, the map drawn, and a
+                        station's card opening inside the map with Follow on screen, with a toolbar
+                        forced onto one row that must be caught (ui/probe/aprsmap-probe.mjs)
+  --desktop logbook     the Logbook in the app's own wrapper at 1024×768, 1920×1080 and
+                        2560×1440, asserting the panel spans the window and the table the
+                        panel, nothing scrolls sideways at the page, the default table fits,
+                        every column scrolls sideways inside the table with its header, and a
+                        real drag of a header moves the column without sorting while a click
+                        still sorts, with the old centred measure as a control that must be
+                        caught (ui/probe/logbook-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -178,7 +202,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, logwaiting, topbar, header, rttyfit or firstrun" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|logbook) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, logwaiting, topbar, header, rttyfit, firstrun, clublog, aprsmap or logbook" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -207,10 +231,14 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
   [ "$DESKTOP" = logwaiting ] && exec node "$ROOT/ui/probe/logwaiting-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
+  [ "$DESKTOP" = radiosetup ] && exec node "$ROOT/ui/probe/radiosetup-probe.mjs"
   [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
+  [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
+  [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
+  [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

@@ -31,6 +31,7 @@ import {
   resolveSymbol,
   symbolCategory,
 } from '../aprsSymbols'
+import { trackSummary } from '../features/aprsMap'
 
 /** The two services' own names — a name is a token, not prose. */
 const QRZ = 'QRZ'
@@ -152,12 +153,18 @@ export function AprsStationCard({
   nowSec,
   me,
   onClose,
+  following = false,
+  onFollow,
 }: {
   station: AprsStation
   nowSec: number
   /** The operator's own position, for distance and bearing. Null when no grid is set. */
   me: LatLon | null
   onClose: () => void
+  /** The map is following this station (keeping it in the middle as it moves). */
+  following?: boolean
+  /** Follow this station on the map, or stop. Omitted = no Follow button. */
+  onFollow?: (on: boolean) => void
 }) {
   const units = useUnits()
   const [rawOpen, setRawOpen] = useState(false)
@@ -166,6 +173,7 @@ export function AprsStationCard({
   const colour = `var(${CATEGORY_VAR[symbolCategory(sym.glyph)]})`
   const there = st.lat != null && st.lon != null ? { lat: st.lat, lon: st.lon } : null
   const alt = altitudeFt(st.text)
+  const trail = trackSummary(st.track)
 
   // Escape closes, and focus moves to the card on open so a keyboard operator is not left behind on
   // the map canvas. Matches the app's dialog handling. The take is SILENT (preventScroll — no
@@ -278,6 +286,18 @@ export function AprsStationCard({
           </div>
         )}
 
+        {trail && (
+          <div className="aprs-card-row">
+            <dt>{t('aprs.card.track.label')}</dt>
+            <dd>
+              {t('aprs.card.track.value', {
+                dist: fmtDistanceKm(trail.km, units),
+                age: ageText(nowSec - trail.secs, nowSec),
+              })}
+            </dd>
+          </div>
+        )}
+
         {st.text && (
           <div className="aprs-card-row">
             <dt>{t('aprs.card.comment.label')}</dt>
@@ -330,6 +350,17 @@ export function AprsStationCard({
       )}
 
       <div className="aprs-card-actions">
+        {onFollow && there && (
+          <button
+            type="button"
+            className={following ? 'active' : undefined}
+            aria-pressed={following}
+            onClick={() => onFollow(!following)}
+            title={t('aprs.card.follow.title')}
+          >
+            {following ? t('aprs.card.unfollow') : t('aprs.card.follow')}
+          </button>
+        )}
         <button
           type="button"
           onClick={() =>

@@ -3063,6 +3063,9 @@ export type NeedTag =
   | 'NewMode'
   | 'NewGrid'
   | 'NewState'
+  /** An IOTA island group never worked, on any band. Set only when the station's group is known:
+   * a spot comment that names it, or a callbook answer for exactly that call (needalert.rs). */
+  | 'NewIota'
   /** A POTA/SOTA reference not yet worked in the activation running right now — a genuine
    * need, unlike the Pota/Sota labels below. See HuntedActivations (needalert.rs). */
   | 'NewPark'
@@ -3124,6 +3127,9 @@ export interface NeedAlert {
   /** The WAE country this station would be new in on this band in this mode class. Sent only
    *  while "Show WAE country needs" is on (off as it ships); the board shows a WAE chip for it. */
   waeNeed?: string | null
+  /** The IOTA island group the station is on, when its spot's comment or a callbook answer named
+   * one — present on a NewIota row, and on a Confirm row the group raised. */
+  iota?: string | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the firehose).
@@ -3155,6 +3161,8 @@ export interface SpotRow {
   /** Seconds since received; -1 if unknown. */
   ageSecs: number
   comment: string
+  /** The IOTA island group the comment names, when it names exactly one (`iota::in_comment`). */
+  iota?: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
   /** At least one voice for this spot — the spotter or a corroborator — is on the operator's
@@ -3645,6 +3653,19 @@ export interface IotaProgress {
   cardConfirmed: number
 }
 
+/** The US Counties award (CQ's USA-CA): the 3,077 counties, by the contact's CNTY. Confirmed by
+ * the award's rule: a card, or an eQSL from an Authenticity-Guaranteed member. */
+export interface UsacaProgress {
+  worked: number
+  confirmed: number
+  total: number
+  /** The highest level reached (500, 1000 … 3077) and the next one. */
+  level: number | null
+  nextLevel: number | null
+  /** Contacts whose CNTY names no county of the award: left uncounted. */
+  unplaced: number
+}
+
 /** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
  * currentTotal − 9 = Honor Roll; all current entities = #1 Honor Roll.) */
 export interface HonorRollProgress {
@@ -3774,6 +3795,8 @@ export interface AwardSummary {
   ffma?: FfmaProgress
   /** IOTA — island groups worked / confirmed. */
   iota: IotaProgress
+  /** The US Counties award. Absent from an older station. */
+  usaca?: UsacaProgress
   /** Worked All Provinces (Canada). Absent from an older station. */
   wap?: WapProgress
   /** CQ WPX, DARC WAE and WWFF. Absent from a station older than them. */
@@ -4484,9 +4507,10 @@ export interface FdClubStatus {
   clubCode?: string
 }
 
-/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
- *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
- *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+/** The club log, as the host's own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. A joined laptop answers the
+ *  same list, as the host sent it over club sync. Nothing of it rides the snapshot, so Remote is sent
+ *  none of it. */
 export interface FdClubLog {
   /** Every contact in the club's log, duplicates included: the count the club line says. */
   total: number
@@ -4841,6 +4865,23 @@ export interface Settings {
   /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
    *  directed, inbox, callNew, callOld. */
   js8Sounds: string[]
+  /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (off by
+   *  default): the cockpit starts each run with its three lists empty. Display only. */
+  js8ResetActivity: boolean
+  /** JS8Call's colours and fonts for the RX pane, the two lists and the compose box (empty by
+   *  default: every pane follows the theme). Colours by theme, then by element, each `#rrggbb`;
+   *  fonts by pane. Read through features/js8PaneStyle, which checks every entry. */
+  js8PaneStyle: {
+    light: Record<string, string>
+    dark: Record<string, string>
+    fonts: Record<string, { family: string; sizePt: number }>
+  }
+  /** The WAV file each of those plays, by event (JS8Call's notification paths). None, the default,
+   *  plays the built-in tone. Paths on this computer: the Remote page never has them. */
+  js8SoundFiles?: Record<string, string>
+  /** The output the JS8 sounds play on, by device name; empty or absent is the system default. A
+   *  device the station transmits from is refused at every play (VOX safety). */
+  js8SoundDevice?: string
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean
@@ -4937,6 +4978,10 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** This radio's waterfall source where Nexus streams an Icom's own scope: 'auto' (the default,
+   * the radio's scope) or 'audio' (the sound card's audio waterfall; the scope stream stops and
+   * CI-V keeps serving CAT). Per radio (flat mirror of `RadioProfile.nativeScope`); absent = 'auto'. */
+  nativeScope?: string
   /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
    * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
    * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
@@ -5846,7 +5891,7 @@ export interface RadioProfile {
   lastDialMhz: number
   lastBand: string
   lastSideband: string
-  /** Native panadapter: "auto" | "none" | "flex" | "civ". */
+  /** Waterfall source where Nexus streams an Icom scope: "auto" (the radio's scope, default) or "audio". */
   nativeScope: string
   /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
   flexRadioIp?: string

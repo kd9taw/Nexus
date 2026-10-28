@@ -1169,9 +1169,13 @@ mod tests {
     fn each_published_read_is_one_numbered_frame() {
         let feed = tempo_app::engine::SpectrumFeed::default();
         let newest = |last| {
-            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
-                unreachable!("a frame was published, so the fallback is never asked")
-            })
+            feed.scope_frame_after(
+                0.0,
+                0.0,
+                tempo_core::spectrum::ScopeAnalysis::default(),
+                last,
+                || unreachable!("a frame was published, so the fallback is never asked"),
+            )
         };
         let meta = SweepMeta {
             dial_hz: 14_100_000.0,

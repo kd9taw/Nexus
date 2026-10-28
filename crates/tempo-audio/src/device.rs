@@ -1082,6 +1082,10 @@ where
 /// Real sound-card backend. Keep it alive for the duration of operation — the
 /// cpal streams stop when this is dropped.
 pub struct CpalBackend {
+    /// The TX output this backend resolved, named to the notification sounds' guard
+    /// ([`crate::notify_sound::open_tx_outputs`]) until the backend is dropped, so a sound is never
+    /// played on it, whatever the settings name (VOX safety).
+    _tx_output_held: Option<crate::notify_sound::TxOutputHold>,
     /// `Option` so [`AudioBackend::release_device`] can drop it IN PLACE. Dropping a
     /// cpal `Stream` is what actually frees the ALSA handle; pausing does not.
     _in_stream: Option<Stream>,
@@ -1828,6 +1832,13 @@ impl CpalBackend {
             err_capture,
         )?;
 
+        // VOX SAFETY for the notification sounds: the device this radio transmits from, by the name
+        // it resolved to now. A TX device set to "the system default" names no device in the
+        // settings, and the default may move while this backend still holds this one.
+        let tx_output_held = out_dev
+            .device_name()
+            .map(crate::notify_sound::hold_tx_output);
+
         // ---- output: NOT OPENED YET (#139) ----
         // The device and its config are resolved and probed here, so an unusable output device is
         // still an error the operator sees when he saves the setting. The PCM itself is opened by
@@ -1865,6 +1876,7 @@ impl CpalBackend {
             tx_tee: None,
             health_seen: audio_health(),
             tx_pending: VecDeque::new(),
+            _tx_output_held: tx_output_held,
         })
     }
 

@@ -71,6 +71,9 @@ pub struct SpotHint {
     /// Who reported it: the spotter, then any corroborators the spot already carries. Read only
     /// by the "Spotted from" filter ([`SpotterFilter`]).
     pub voices: Vec<String>,
+    /// The IOTA island group the spot's comment names, when it names exactly one
+    /// ([`propagation::iota::in_comment`]) — the New IOTA need's heard side.
+    pub iota: Option<String>,
 }
 
 /// THE SPOTS BOARD'S "SPOTTED FROM" CHIPS, WHICH POUNCE FOLLOWS (#174). The operator who has
@@ -233,6 +236,7 @@ pub fn run(
         else {
             continue; // off-band frequency — not workable, not news
         };
+        heard.iota = hint.iota.clone();
         // A spot names no state, so the row is placed as the Needed board places the same
         // station: a live activator in its park's state, any other station by the radio's own
         // decodes' resolver. Unplaced, "…or a new US state" never fired on a state. The hunter
@@ -246,6 +250,11 @@ pub fn run(
             &live,
             n,
             crate::fcc_state_for_call,
+        );
+        crate::place_iotas(
+            std::slice::from_mut(&mut heard),
+            crate::callbook_iota_for_call,
+            crate::iota_list::known,
         );
         let alerts = propagation::rank_needs(std::slice::from_ref(&heard), &**n, &n.slots());
         let Some(alert) = alerts.into_iter().next() else {
@@ -333,6 +342,7 @@ mod tests {
                 mode: "CW".into(),
                 spotted_unix: 0,
                 voices: Vec::new(),
+                iota: None,
             });
         }
         // Reaching here at all is the assertion: `offer` never blocked despite the queue being
@@ -401,6 +411,7 @@ mod tests {
                 mode: "CW".into(),
                 spotted_unix: crate::now_unix(),
                 voices: vec![(*spotter).into()],
+                iota: None,
             });
         }
         drop(tx);

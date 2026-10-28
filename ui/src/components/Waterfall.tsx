@@ -276,6 +276,12 @@ interface Props {
    *  dropped, so a row lands on the first frame at or past `rowMs` after the last: 120 ms is
    *  8 frames at 60 Hz, ~133 ms, the cadence the FT surfaces' history depth is judged at. */
   keepRowRemainder?: boolean
+  /** JS8's decode filter, lo–hi Hz: the audio outside it is darkened as JS8Call's waterfall darkens
+   *  it, black at its 50 % (127 of 255) over the whole height with a yellow line at each edge,
+   *  painted last, over the markers (`CPlotter::drawFilter`, CPlotter.cpp:468-503 and :150-154;
+   *  WideGraph.cpp:239-240, :616-618). PAINT ONLY: no click, gesture or hit-test reads it. Unset or
+   *  null = nothing, so every other mode's waterfall draws exactly as before. */
+  shade?: { loHz: number; hiHz: number } | null
 }
 
 /** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
@@ -300,6 +306,11 @@ const tagWidthPx = (label: string) => label.length * 6.6 + 12
 const TAG_GAP_PX = 4
 /** Room kept at the right for the count of tags left out, CSS px at text scale 1. */
 const TAG_COUNT_PX = 36
+
+/** JS8Call's "Filter Opacity" default, 50 %, as it hands it to the plotter: `int(0.5 * 255)`. */
+const SHADE_ALPHA = 127 / 255
+/** The filter edge's line: Qt's yellow, as JS8Call draws it. */
+const SHADE_EDGE = '#ffff00'
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
 // spectrum row so stations calling above ~2.9 kHz are visible + clickable. drawRow maps the view
@@ -357,6 +368,7 @@ export function Waterfall({
   tagLanes,
   keepRowRemainder = false,
   onRowDoubleClick,
+  shade,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -468,6 +480,7 @@ export function Waterfall({
   const toneBandRef = useRef(toneBand)
   const keyedRef = useRef(keyed)
   const markerWidthRef = useRef(markerWidthHz)
+  const shadeRef = useRef(shade)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
   const keepRemainderRef = useRef(keepRowRemainder)
@@ -523,6 +536,7 @@ export function Waterfall({
   toneBandRef.current = toneBand
   keyedRef.current = keyed
   markerWidthRef.current = markerWidthHz
+  shadeRef.current = shade
   activeRef.current = active
   rowMsRef.current = rowMs
   keepRemainderRef.current = keepRowRemainder
@@ -1069,6 +1083,24 @@ export function Waterfall({
           octx.fillText('RX', Math.min(W - 18 * textScale, rxx + 3), wfH - 6 * textScale)
         }
       }
+
+      // JS8's decode filter, last and over everything, as JS8Call paints it: each side outside it
+      // darkened top to bottom, and a yellow line at an edge that is in view. A side outside the
+      // view has nothing to darken; a filter wholly to one side of it darkens the whole view
+      // (freqToX clamps to the window's edges).
+      const filter = shadeRef.current
+      if (filter) {
+        const lx = freqToX(filter.loHz, W, vlo, vhi)
+        const hx = freqToX(filter.hiHz, W, vlo, vhi)
+        octx.globalAlpha = SHADE_ALPHA
+        octx.fillStyle = '#000000'
+        if (filter.loHz > vlo) octx.fillRect(0, 0, lx, H)
+        if (filter.hiHz < vhi) octx.fillRect(hx, 0, W - hx, H)
+        octx.globalAlpha = 1
+        octx.fillStyle = SHADE_EDGE
+        if (filter.loHz > vlo && filter.loHz < vhi) octx.fillRect(lx, 0, 1, H)
+        if (filter.hiHz > vlo && filter.hiHz < vhi) octx.fillRect(hx, 0, 1, H)
+      }
     }
 
     /** Everything the overlay draws from, as one string: it is drawn again only when this moves
@@ -1078,7 +1110,8 @@ export function Waterfall({
       const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
       const band = toneBandRef.current
       const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
-      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}`
+      const filter = shadeRef.current
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}`
     }
 
     const loop = (now: number) => {

@@ -41,6 +41,12 @@ describe('contacts waiting for Log QSO', () => {
       const { container, log } = strip(n)
       expect(container.querySelector('.cq-log-waiting')).toBeNull()
       expect(log.disabled).toBe(true)
+      // The status is there before any contact waits, empty, so the first count is announced.
+      const status = container.querySelector('.cq-free [role="status"]')
+      expect(status, 'the polite status is mounted').not.toBeNull()
+      expect(status!.textContent).toBe('')
+      expect(log.getAttribute('aria-label')).toBeNull()
+      expect(log.getAttribute('title')).toBe(t('operate.strip.log.title'))
       cleanup()
     }
   })
@@ -50,9 +56,17 @@ describe('contacts waiting for Log QSO', () => {
     const count = container.querySelector('.cq-log-waiting')
     expect(count, 'no count').not.toBeNull()
     expect(count!.textContent).toBe('2')
-    expect(count!.getAttribute('aria-label')).toBe(t('operate.strip.log.waiting', { count: 2 }))
-    expect(count!.getAttribute('title')).toBe(t('operate.strip.log.waiting', { count: 2 }))
+    // The badge takes no pointer, so it carries no tooltip and is hidden from a screen reader:
+    // Log's own tooltip and spoken name say the count, and a polite status announces it.
+    expect(count!.getAttribute('aria-hidden')).toBe('true')
+    expect(count!.getAttribute('title')).toBeNull()
+    expect(log.getAttribute('title')).toBe(t('operate.strip.log.titleWaiting', { count: 2 }))
+    expect(log.getAttribute('aria-label')).toBe(t('operate.strip.log.ariaWaiting', { count: 2 }))
+    expect(t('operate.strip.log.ariaWaiting', { count: 2 })).toBe('Log, 2 waiting')
     expect(t('operate.strip.log.waiting', { count: 2 })).toBe('2 waiting for Log')
+    const status = container.querySelector('.cq-free [role="status"]')
+    expect(status?.textContent).toBe(t('operate.strip.log.waiting', { count: 2 }))
+    expect(status?.getAttribute('aria-live')).toBe('polite')
     // Out of the button: its label, and so its name and width, are what they were.
     expect(log.textContent).toBe(t('operate.strip.log.label'))
     expect(log.disabled).toBe(false)

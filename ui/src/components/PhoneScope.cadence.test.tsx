@@ -198,11 +198,23 @@ describe('the frame number round trip', () => {
   })
 
   it('asks with the analysis window the cockpit’s record holds', async () => {
-    localStorage.setItem('nexus.scope.cw', JSON.stringify({ window: 'fast' }))
+    localStorage.setItem('nexus.scope.cw', JSON.stringify({ window: 'fast', hiDef: false }))
     render(<PhoneScope transmitting={false} theme="dark" cockpit="cw" />)
     await run(300)
     expect(src.asked.length, 'control: nothing was polled').toBeGreaterThan(0)
     expect(src.asked.every((a) => a.window === 'fast')).toBe(true)
+  })
+
+  it('asks for HiDef from the CW scope with nothing stored, and for the window once switched to Fast', async () => {
+    render(<PhoneScope transmitting={false} theme="dark" cockpit="cw" />)
+    await run(300)
+    expect(src.asked.length, 'control: nothing was polled').toBeGreaterThan(0)
+    expect(src.asked.every((a) => a.window === 'hidef')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'HiDef' }))
+    src.asked.length = 0
+    await run(300)
+    expect(src.asked.length, 'control: nothing was polled after the switch').toBeGreaterThan(0)
+    expect(src.asked.every((a) => a.window === 'balanced')).toBe(true)
   })
 })
 

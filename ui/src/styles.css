@@ -6299,11 +6299,20 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* xl (effective width ≥ 2400): let the DATA surface — Logbook's 11-column table — use
-   the room. POTA is prose-shaped and keeps the 1100px measure above; Settings and
-   Repeaters USED to, and the rules below are why they no longer do. */
+/* THE LOGBOOK USES THE WHOLE WINDOW from md, as Settings, Repeaters and the Field Day board do.
+   (The operator, 2026-10-27: "a large portion of the screen on either side is unused, and must
+   one scroll horizontally.") It was capped at the 1100px measure above, and at 1600px on xl only,
+   so the table sat in a centred column: 935px of a 1024×768 window (md at its 85 % zoom), 1100px
+   of 1920 (lg), 1600px of 2560 (xl), while a table with added columns scrolled sideways inside
+   that column. The table is the content here, and width buys it columns, not longer lines. Where
+   the columns still do not fit, `.log-scroll` scrolls them sideways (`.logbook-table.wide`), never
+   the page. md AND UP for Settings' reason: at xs/sm the cap is inert by arithmetic, so the floor
+   is untouched. Computed per tier in settings-width.test.tsx; measured in real Chrome by
+   `scripts/browser-probe --desktop logbook`. POTA is prose-shaped and keeps the measure. */
+[data-viewport='md'] .layout.single > .panel.log-view,
+[data-viewport='lg'] .layout.single > .panel.log-view,
 [data-viewport='xl'] .layout.single > .panel.log-view {
-  max-width: 1600px;
+  max-width: none;
 }
 /* Repeaters uses the whole width of its pane from md, as Settings does (the operator,
    2026-10-03: "the screen is narrow and in the middle and you have a lot of room on the screen
@@ -7978,6 +7987,7 @@ select optgroup {
   --need-mode: #22d3ee; /* cyan — new mode */
   --need-grid: #34d399; /* green — new grid */
   --need-state: #2dd4bf; /* teal — new US state (WAS) */
+  --need-iota: #fb7185; /* coral — new IOTA island group */
   --need-confirm: #9ca3af; /* grey — worked, needs a confirmation */
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
@@ -8018,6 +8028,7 @@ select optgroup {
   --need-mode: #0d6f8a;
   --need-grid: #047857;
   --need-state: #0f766e; /* teal — new US state (WAS) */
+  --need-iota: #be123c; /* coral — new IOTA island group */
   --need-confirm: #64748b;
   --need-dxped: #0369a1;
   /* Two steps darker than the #15803d it was. The first (operator, 2026-10-05: "Add a brightness difference
@@ -8095,6 +8106,9 @@ select optgroup {
 }
 .need-state {
   --need-color: var(--need-state);
+}
+.need-iota {
+  --need-color: var(--need-iota);
 }
 .need-watch {
   --need-color: var(--need-watch);
@@ -8907,6 +8921,28 @@ select optgroup {
   font-size: calc(11px * var(--text-scale));
   color: var(--state-good);
   border: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
+}
+/* "Cards to send" (QslCardsToSend) renders on the park-states box, rows and notes above; its label
+   stock, start label and combine choice sit in one wrapping row above the list. */
+.qsl-cards-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+  font-size: calc(13px * var(--text-scale));
+}
+.qsl-cards-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.qsl-cards-options .park-review-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+.qsl-cards-start {
+  width: 6ch;
 }
 /* "Check confirmations" (ConfirmationReview) renders on the park-states box, rows and notes above.
    Each row adds a second line, under the call: why it is listed, and what the change keeps or
@@ -17578,6 +17614,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-state);
   background: color-mix(in srgb, var(--need-state) 16%, transparent);
 }
+.decode-row.need-iota {
+  border-left: 3px solid var(--need-iota);
+  background: color-mix(in srgb, var(--need-iota) 18%, transparent);
+}
 .decode-row.need-confirm {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
@@ -17601,6 +17641,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.need-mode .need-chip.need-mode,
 .decode-row.need-grid .need-chip.need-grid,
 .decode-row.need-state .need-chip.need-state,
+.decode-row.need-iota .need-chip.need-iota,
 .decode-row.need-confirm .need-chip.need-confirm,
 .decode-row.need-pota .need-chip.need-pota {
   background: transparent;
@@ -18295,6 +18336,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-col-resize:hover {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A header being dragged to another place (Logbook.tsx, MOVING A COLUMN): the one carried dims, and
+   the header it would land beside shows an accent bar on that side. Drawn inside the cell (an inset
+   shadow), so a move in progress takes no width and shifts nothing. */
+.logbook-row.head > .log-cell.moving {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+.logbook-row.head > .log-cell.drop-before {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.logbook-row.head > .log-cell.drop-after {
+  box-shadow: inset -3px 0 0 var(--accent);
 }
 /* An upload column's mark: the state in a glyph, its words in the tooltip. */
 .log-upload.done {
@@ -20850,6 +20904,27 @@ button.cq-skiptx1.on {
   flex: 1;
   min-height: 0;
 }
+/* THE SPOTS BOARD IN A SHORT WINDOW. Its filter bar has a chip per spotted-from country, so on a
+   busy day it can be taller than a small window: measured in Chrome at the Spots window's 490×360
+   minimum with 80 countries, the list was squeezed to 2 px and the last chips were clipped below the
+   window. So the list keeps a floor of a few rows (the header and three, 119 px at 100%; the floor
+   is a little under that so it never asks for more height than the window's declared natural), and
+   once the list is at its floor the FILTER BAR gives way, scrolling inside itself. Not the whole
+   board: a scrollbar on the board takes its width from the columns, and in Chrome it then stayed up
+   (the chips rewrapped taller under it) and pushed the columns 6 px sideways. The filter bar's own
+   scrollbar takes width only from the chips, and its gutter is kept whether it scrolls or not, so the
+   chips wrap the same way either side of the threshold (without it the scrollbar stayed up after the
+   window grew back, for the same reason). While everything fits, nothing scrolls but the list.
+   (DetachedPanel.scroll.test.tsx computes the winners; `browser-probe --desktop spots` lays it out.) */
+.spots-panel > .np-filters {
+  flex: 0 1 auto;
+  min-height: 3em;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.spots-panel > .sp-grid {
+  min-height: 8em;
+}
 /* A `.panel`-rooted view torn off on its own: the panel IS the window, so it takes the height
    and owns its own deficit — the SAME fate `.layout.single > .panel` gives it docked, in the
    host that has no `.layout.single` to give it. Without this the only overflow declaration
@@ -21189,9 +21264,13 @@ button.cq-skiptx1.on {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 /* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
-   mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
+   mode · spotter · comment, then the row's Spot button). Reuses the Needed board's row chrome,
+   own column template. The column floors are what the Spots window promises to fit at its
+   smallest (useScale's PANEL_NATURAL.spots, 740 px wide): the Spot button's column and its gap
+   (42 px) are paid for out of the spotter and comment floors, the two columns that ellipsize,
+   so a window dragged to its minimum neither scrolls sideways nor cuts the last column off. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr) 32px;
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(48px, 1fr) minmax(86px, 1.6fr) 32px;
 }
 /* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
@@ -21457,6 +21536,24 @@ button.cq-skiptx1.on {
 .sp-row.contest-dupe .qrz-link-call {
   text-decoration: line-through;
 }
+/* The IOTA island group a spot's comment names: plain while it is no need, the need's chip while it is
+   one (`need-chip need-iota`, whose ink and tint NeedChip.contrast.test.tsx holds). */
+.sp-iota {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: calc(9px * var(--text-scale));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.sp-iota.need-chip {
+  font-size: calc(9px * var(--text-scale));
+  padding: 1px 6px;
+  border: 1px solid var(--need-color);
+}
 .sp-worked {
   margin-right: 6px;
   padding: 1px 6px;
@@ -21550,6 +21647,9 @@ button.cq-skiptx1.on {
 }
 .np-row.need-zone {
   box-shadow: inset 3px 0 0 var(--need-zone);
+}
+.np-row.need-iota {
+  box-shadow: inset 3px 0 0 var(--need-iota);
 }
 .np-row.need-band {
   box-shadow: inset 3px 0 0 var(--need-band);
@@ -22323,7 +22423,10 @@ button.cq-skiptx1.on {
 }
 /* How many contacts wait for Log QSO: a count on the Log button's top-right corner (Log is the
    last item in .cq-free), absolutely placed so it takes no room in the strip and never moves or
-   wraps a control; it takes no clicks, so Log under its edge still gets them. */
+   wraps a control; it takes no clicks, so Log under its edge still gets them. The number is the
+   theme's own text on its own ground, the pair every theme and skin keeps readable (WCAG AA,
+   4.5:1, checked by the logwaiting browser probe), ringed in Log's green; the light theme's
+   ground on that green was 4.1:1. */
 .cq-log-waiting {
   position: absolute;
   top: -6px;
@@ -22333,11 +22436,12 @@ button.cq-skiptx1.on {
   padding: 0 var(--space-1);
   box-sizing: border-box;
   border-radius: 8px;
-  background: var(--state-good, #29c281);
-  color: var(--bg);
+  border: 1px solid var(--state-good, #29c281);
+  background: var(--bg);
+  color: var(--text);
   font-size: 0.62rem;
   font-weight: 800;
-  line-height: 15px;
+  line-height: 13px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -24101,6 +24205,15 @@ button.cq-skiptx1.on {
 .aw-needfilter:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* The award status panel's two choosers and its three actions: a row that wraps. */
+.aw-status-controls,
+.aw-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin: var(--space-1) 0;
 }
 .aw-needsort {
   flex: none;
@@ -29066,7 +29179,9 @@ button.sat-chip:disabled {
   position: relative;
   display: flex;
   min-width: 0;
-  background: var(--bg);
+  /* The operator's compose colours and font (features/js8PaneStyle; JS8Call's Composition tab), each
+     the theme's until picked. */
+  background: var(--js8-compose-bg, var(--bg));
   border-radius: var(--radius-sm);
 }
 .js8-compose {
@@ -29089,6 +29204,9 @@ button.sat-chip:disabled {
   width: 100%;
   min-width: 0;
   background: transparent;
+  color: var(--js8-compose-fg, var(--text));
+  font-family: var(--js8-compose-font-family, var(--font-mono));
+  font-size: var(--js8-compose-font-size, calc(14px * var(--text-scale)));
 }
 .js8-compose-backdrop {
   position: absolute;
@@ -29138,6 +29256,60 @@ button.sat-chip:disabled {
   text-decoration-style: wavy;
   text-decoration-color: var(--snr-weak);
   text-decoration-skip-ink: none;
+}
+/* Settings ▸ JS8 ▸ Colours and fonts (Js8PaneStyleSettings): per pane, its sample (drawn by the pane's
+   own rules), its colour pickers in a row that wraps, its fonts, and a Reset. */
+.js8-style-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.js8-style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.js8-style-sample {
+  flex: none;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* The compose sample is a picture of the box, never a field: disabled, drawn as the box is. */
+.js8-style-sample > .js8-compose:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.js8-style-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+.js8-style-color,
+.js8-style-font {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.js8-style-color input[type='color'] {
+  inline-size: 2.4em;
+  block-size: 1.6em;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+.js8-style-family {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+.js8-style-size {
+  flex: 0 0 6em;
 }
 /* Settings ▸ JS8 ▸ Composing: the saved messages, one row each, and the row that adds one. */
 .js8-saved-list {
@@ -29412,6 +29584,35 @@ button.sat-chip:disabled {
 .js8-rx-line .js8-freq {
   white-space: nowrap;
 }
+/* THE OPERATOR'S COLOURS AND FONTS (Settings ▸ Digital ▸ JS8 ▸ Colours and fonts: JS8Call's UI
+   settings, features/js8PaneStyle). The cockpit sets a --js8-* property only for what the operator
+   picked, for the theme the page paints, and each falls back to the token the pane always had. The
+   RX pane: its background, the received text and my own; JS8Call paints a line whole in the one or
+   the other, its time and offset included (mainwindow.cpp:3247-3255). */
+.js8-rx {
+  background: var(--js8-rx-bg, transparent);
+}
+.js8-rx .js8-rx-line {
+  color: var(--js8-rx-fg, var(--text));
+  font-family: var(--js8-rx-font-family, var(--font-mono));
+  font-size: var(--js8-rx-font-size, var(--fs-label));
+}
+.js8-rx .js8-rx-line.mine {
+  color: var(--js8-tx-fg, var(--accent));
+  font-family: var(--js8-tx-font-family, var(--font-mono));
+  font-size: var(--js8-tx-font-size, var(--fs-label));
+}
+.js8-rx .js8-rx-line .js8-time,
+.js8-rx .js8-rx-line .js8-freq {
+  color: var(--js8-rx-fg, var(--text-dim));
+}
+.js8-rx .js8-rx-line.mine .js8-time,
+.js8-rx .js8-rx-line.mine .js8-freq {
+  color: var(--js8-tx-fg, var(--text-dim));
+}
+.js8-rx .cw-decode-idle {
+  color: var(--js8-rx-fg, var(--text-faint));
+}
 /* Band activity, the call list and the inbox are tables: a column is as wide as what it holds, as
    JS8Call's resize-to-contents makes it, and the message column takes the rest and wraps. The rows
    keep the class names the panes always had; a table row is a table row whatever else they say. */
@@ -29447,22 +29648,49 @@ button.sat-chip:disabled {
 .js8-table tr.directed > td:first-child {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+/* The operator's colour for traffic to me in Band activity (JS8Call's "Directed Messages Background",
+   displayBandActivity.cpp:293-301), under every other row colour, as JS8Call paints it first. */
+:is(.js8-band-table, .js8-call-table) tr.directed {
+  background: var(--js8-table-directed, transparent);
+}
 .js8-table tr.selected {
   background: var(--bg-elev-2);
 }
-/* JS8Call's row colours, from the theme: a CQ green, the two highlight lists amber and blue (the
-   primary wins: it is the later rule). */
+:is(.js8-band-table, .js8-call-table) tr.selected {
+  background: var(--js8-table-selected, var(--bg-elev-2));
+}
+/* JS8Call's row colours, from the theme until the operator picks them: a CQ green, the two highlight
+   lists amber and blue (the primary wins: it is the later rule). */
 .js8-table tr.cq {
-  background: color-mix(in srgb, var(--snr-strong) 16%, transparent);
+  background: var(--js8-table-cq, color-mix(in srgb, var(--snr-strong) 16%, transparent));
 }
 .js8-table tr.hl-secondary {
-  background: color-mix(in srgb, var(--alert-info) 22%, transparent);
+  background: var(--js8-table-secondary, color-mix(in srgb, var(--alert-info) 22%, transparent));
 }
 .js8-table tr.hl-primary {
-  background: color-mix(in srgb, var(--snr-marginal) 26%, transparent);
+  background: var(--js8-table-primary, color-mix(in srgb, var(--snr-marginal) 26%, transparent));
 }
 .js8-table tr.low {
   color: var(--text-dim);
+}
+/* The two lists' background, text and font (JS8Call's Band && Call Activity tab: one set for both,
+   displayBandActivity.cpp:340-366, displayCallActivity.cpp:447-456). The operator's text colour is
+   the whole row's, as JS8Call's, the dim cells and the calls included. */
+:is(.js8-band-table, .js8-call-table) {
+  background: var(--js8-table-bg, transparent);
+  color: var(--js8-table-fg, var(--text));
+  font-family: var(--js8-table-font-family, var(--font-mono));
+  font-size: var(--js8-table-font-size, var(--fs-label));
+}
+:is(.js8-band-table, .js8-call-table) :is(.js8-time, .js8-freq, .js8-snr, .js8-age, .js8-dt, .js8-dist, .js8-az, .js8-opcomment),
+:is(.js8-band-table, .js8-call-table) tr.low {
+  color: var(--js8-table-fg, var(--text-dim));
+}
+.js8-call-table .js8-station-call {
+  color: var(--js8-table-fg, var(--accent));
+}
+.js8-call-table .js8-group .js8-station-call {
+  color: var(--js8-table-fg, var(--text));
 }
 .js8-call-table tr.unread {
   font-weight: 700;
@@ -29541,8 +29769,25 @@ button.sat-chip:disabled {
 }
 .js8-sound {
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+/* A sound's WAV file, on its own line under the switch and Test: the file's name (the whole path on
+   hover) or "Built-in tone", Choose… and Reset to built-in. The row is a row (a settings field is a
+   column), and it wraps rather than widen the panel. */
+.js8-sound-file {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.js8-sound-file-name {
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 .js8-mark-input {
   max-width: 6em;
@@ -30211,7 +30456,8 @@ button.sat-chip:disabled {
 .aprs-card {
   position: absolute;
   top: var(--space-2);
-  left: var(--space-2);
+  /* Top RIGHT of the map: the Layers panel holds the top left (`.map-layers`). */
+  right: var(--space-2);
   z-index: 30;
   width: 19rem;
   max-height: calc(100% - var(--space-4));
@@ -31368,14 +31614,9 @@ tr.sel .aprs-sym {
   border-radius: 8px;
   overflow: hidden;
 }
-/* The map-side switch (layout L7): a chip in the map's top-right corner, over the map rather than
-   in the header, where one more chip wraps the row at some widths and takes a line from the body.
-   Below the station card (z 30), which may cover it while a station is open. */
+/* The map-side switch (layout L7): a chip in the map's own toolbar (MapView `aprsToolbar`), which
+   wraps, rather than in the header, where one more chip wraps the row and takes a line from the body. */
 .aprs-map-side {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  z-index: 20;
   background: var(--panel);
 }
 /* On, it is the header chips' `.active`, laid on the panel so the map never shows through. */
@@ -32591,6 +32832,123 @@ tr.sel .aprs-sym {
 .contest-setup-warn p {
   margin: 0 0 var(--space-1);
 }
+/* ── The radio setup (RadioSetupWizard.tsx). The dialog box is its one scroll owner (.ui-dialog);
+   the band grid scrolls sideways inside its own wrapper only when a station has many radios, and
+   the step buttons stay at the bottom edge of the box, opaque, so Finish is always reachable. ── */
+.ui-dialog.radio-setup {
+  width: min(760px, calc(100vw - 2 * var(--space-4)));
+}
+.radio-setup .wizard-dots {
+  flex-wrap: wrap;
+}
+.radio-setup .wizard-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  padding-top: var(--space-2);
+}
+.radio-setup-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(16em, 100%), 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.radio-setup-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.radio-setup-card .wizard-field {
+  min-width: 0;
+}
+.radio-setup-tick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.radio-setup-meta,
+.radio-setup-card .settings-hint {
+  margin: 0;
+}
+.radio-setup-warn {
+  color: var(--alert-warning);
+}
+.radio-setup-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.radio-setup-test .settings-hint.ok {
+  color: var(--state-good);
+}
+.radio-setup-test .settings-hint.bad {
+  color: var(--state-weak);
+}
+.radio-setup-grid {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin-bottom: var(--space-2);
+  font-size: var(--fs-body);
+}
+.radio-setup-grid th,
+.radio-setup-grid td {
+  padding: 2px var(--space-2);
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+.radio-setup-grid th[scope='row'] {
+  text-align: left;
+  font-family: var(--font-mono);
+}
+.radio-setup-grid tr.shared th[scope='row'] {
+  color: var(--accent);
+  font-weight: 700;
+}
+.radio-setup-shared {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.radio-setup-shared > legend {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.radio-setup-mode {
+  min-width: min(11em, 100%);
+}
+.radio-setup-facts,
+.radio-setup-lines,
+.radio-setup-rules {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.4em;
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;
+}
+.radio-setup-policy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.radio-setup-probe {
+  margin-bottom: var(--space-3);
+}
+.radio-setup-answer {
+  font-weight: 700;
+}
 .contest-setup-bad {
   margin: 0 0 var(--space-2);
   color: var(--state-weak);
@@ -33660,4 +34018,45 @@ td.aw-cc {
   flex-direction: column;
   gap: 2px;
   color: var(--text-dim);
+}
+
+/* IOTA beside a reference (components/Iota.tsx): the group's name with IOTA Ltd's credit, the
+   consent line, the "not on the list" warning, and the offer chip. Plain text styles only; no
+   sizing (the hosts own their boxes). */
+.iota-name,
+.iota-unknown {
+  display: block;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.iota-unknown {
+  color: var(--state-warn);
+}
+.iota-credit {
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+}
+.iota-consent,
+.iota-offer,
+.iota-card-held {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.iota-consent-line {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+.iota-offer-from {
+  color: var(--text-faint);
+}
+/* Use, pressed: the reference goes into the log with the contact. */
+.iota-offer .settings-test-btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
 }

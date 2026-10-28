@@ -91,7 +91,7 @@ import { useSkinActive } from '../useSkin'
 import { createSpectrumRenderer, type DisplayRange, type SpectrumFrame, type SpectrumRenderer } from '../spectrum'
 import { axisOf, rendererFrame } from '../spectrum/scale'
 import { LogRecursiveAverager } from '../spectrum/scaleAverage'
-import { useScaleSettings } from '../spectrum/scaleSettings'
+import { scopeAnalysis, useScaleSettings } from '../spectrum/scaleSettings'
 import { ScaleStrip } from '../spectrum/ScaleStrip'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
@@ -401,6 +401,11 @@ export function PhoneScope({
   const [scale, setScale] = useScaleSettings(cockpit)
   const scaleRef = useRef(scale)
   scaleRef.current = scale
+  /** What the row is asked to be computed with: the window, or the CW scope's HiDef. */
+  const analysisRef = useRef(scopeAnalysis(cockpit, scale))
+  analysisRef.current = scopeAnalysis(cockpit, scale)
+  /** The CW scope's HiDef/Fast switch: the CW cockpit's audio scope only. */
+  const hiDefSwitch = cockpit === 'cw' && !rfOnly
   /** The ⚙ strip (window, averaging, detector, slow-scope look): shown on demand. */
   const [gear, setGear] = useState(false)
   const gearId = useId()
@@ -1225,7 +1230,7 @@ export function PhoneScope({
         // frame's own loHz/hiHz below is what everything downstream reads anyway.
         wire = rfOnly
           ? await getRfFrame(lastSeq)
-          : await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
+          : await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq)
       } catch {
         if (rfOnly && latch.owns(myGen)) setScopeAvailable(false)
         return
@@ -1890,6 +1895,19 @@ export function PhoneScope({
             aria-label={t('scope.zero.aria')}
           />
         </label>
+        {/* The CW scope's HiDef/Fast switch, in the row rather than behind ⚙: it is the one
+            choice between a narrow carrier and an immediate picture, and it is made on the air. */}
+        {hiDefSwitch && (
+          <button
+            type="button"
+            className={`ph-scope-btn${scale.hiDef ? ' on' : ''}`}
+            aria-pressed={scale.hiDef}
+            title={scale.hiDef ? t('scope.hidef.on.title') : t('scope.hidef.off.title')}
+            onClick={() => setScale({ hiDef: !scale.hiDef })}
+          >
+            {scale.hiDef ? t('scope.hidef.label') : t('scope.fast.label')}
+          </button>
+        )}
         {/* The ⚙ strip's toggle: the analysis window, averaging, detector and slow-scope look are
             set once and left, so they sit one click away instead of crowding this row. */}
         <button
@@ -1952,7 +1970,8 @@ export function PhoneScope({
       {gear && (
         <div className="ph-scope-gear" id={gearId}>
           {/* No analysis window on the RF pane: its rows are the radio's own sweep, not an FFT here. */}
-          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} />
+          {/* Nor while HiDef is on: the window is Fast's, and HiDef does not use it. */}
+          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly && !(hiDefSwitch && scale.hiDef)} />
           <button
             type="button"
             className={`ph-scope-btn${rowCadence === 'sweep' ? ' on' : ''}`}

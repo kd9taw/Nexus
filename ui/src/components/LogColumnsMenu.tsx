@@ -29,7 +29,8 @@ interface Props {
 
 export function LogColumnsMenu({ choice, onChange, onReset }: Props) {
   const shown = new Set(visibleColumns(choice).map((c) => c.id))
-  const custom = choice.shown.length > 0 || choice.hidden.length > 0 || Object.keys(choice.widths).length > 0
+  const custom =
+    choice.shown.length > 0 || choice.hidden.length > 0 || Object.keys(choice.widths).length > 0 || !!choice.order
   return (
     <RM.Root modal={false}>
       <RM.Trigger asChild>
@@ -46,6 +47,7 @@ export function LogColumnsMenu({ choice, onChange, onReset }: Props) {
           {/* The portal escapes `.app`'s zoom, so the content re-applies it (as ui/Menu does). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
             <p className="log-columns-hint">{t('logbook.columns.hint')}</p>
+            <p className="log-columns-hint">{t('logbook.columns.moveHint')}</p>
             {GROUPS.map((g) => (
               <RM.Group key={g}>
                 <RM.Label className="log-columns-group">{groupName(g)}</RM.Label>

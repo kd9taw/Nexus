@@ -29,6 +29,10 @@ export const PER_SURFACE = [
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
+  // The APRS map's own choices: its map, view and filters (features/aprsMap), and its Layers
+  // panel (MapView) — per window, like Connect's map and Layers panel.
+  'nexus.aprs.map',
+  'nexus.aprs.map.layers',
   'nexus.aprs.mapSide',
   'nexus.aprs.railWidth',
   'nexus.awardsTab',

@@ -131,11 +131,12 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // The Spots board: its nine columns (age, call, entity, state, band, frequency, mode, spotter,
   // comment) floor at a fixed width, so width is the hard axis; the list under the head and the
   // filter bar scrolls, so height is elastic past the first rows. Measured in Chrome at 100%
-  // (`browser-probe --desktop spots`): the columns fit from 739 px, and at 740 a busy day's filter
-  // bar (81 chips, forty of them spotted-from countries), the head, the column headings and three
-  // rows fit from 434 px. `panel_min_inner` gained a `spots` arm to keep it under the 65%-floor
-  // ceiling.
-  ['spots', { w: 740, h: 440 }],
+  // (`browser-probe --desktop spots`): the columns, the row's Spot button with them, fit from 735 px,
+  // and at 740 a busy day's filter bar (81 chips, forty of them spotted-from countries, with the
+  // scrollbar gutter it keeps), the head, the column headings and three rows fit from 455 px. A
+  // filter bar taller than that scrolls inside itself rather than squeezing the list.
+  // `panel_min_inner` gained a `spots` arm to keep it under the 65%-floor ceiling.
+  ['spots', { w: 740, h: 460 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

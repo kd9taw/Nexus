@@ -11,9 +11,20 @@ import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { AprsCockpit } from './AprsCockpit'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
-vi.mock('./MapView', () => ({ MapView: () => <div data-testid="map" /> }))
+// The stand-in draws what the cockpit hands the map's toolbar and overlay (the map-side switch is in
+// the toolbar), as MapView does.
+vi.mock('./MapView', () => ({
+  MapView: (p: { aprsToolbar?: React.ReactNode; aprsOverlay?: React.ReactNode }) => (
+    <div data-testid="map">
+      {p.aprsToolbar}
+      {p.aprsOverlay}
+    </div>
+  ),
+}))
 
 vi.mock('../api', () => ({
+  // The map's Street choice reads the street map's state (features/streetMaps): not in a shell here.
+  isTauri: () => false,
   aprsArm: vi.fn(async () => []),
   getAprsHeard: vi.fn(async () => []),
   getAprsHealth: vi.fn(async () => ({

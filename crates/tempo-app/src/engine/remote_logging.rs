@@ -70,6 +70,13 @@ pub(crate) struct HeldQso {
     /// ([`Engine::hold_pending_log`]), and the journal keeps the mark, so a restart does not
     /// lose it (operator ruling, 2026-10-27).
     pub(crate) confirm_only: bool,
+    /// An FT8/FT4 contact the station gave no grid in: none in the exchange, none sent this
+    /// session, none logged before ([`Engine::qso_record`] resolved none). A callbook's grid filled
+    /// at log time is then for the distance and the map only
+    /// ([`tempo_core::logbook::callbook::fill_gridless_from_callbook`]; operator decision,
+    /// 2026-10-27). Kept here and in the journal, never on the record, so no build that logs the
+    /// record can carry the note into the log or an upload.
+    pub(crate) gridless: bool,
 }
 
 impl HeldQso {
@@ -78,6 +85,16 @@ impl HeldQso {
             record,
             grid_source,
             confirm_only: false,
+            gridless: false,
+        }
+    }
+
+    /// A contact the FT8/FT4 engine built ([`Engine::qso_record`]): with no grid it is
+    /// [`Self::gridless`], since the engine resolved none from any source.
+    pub(crate) fn built(record: QsoRecord, grid_source: GridSource) -> Self {
+        Self {
+            gridless: record.grid.is_none(),
+            ..Self::new(record, grid_source)
         }
     }
 }
@@ -115,6 +132,10 @@ struct PendingRecord {
     /// before reads back as popup contacts, as it was.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     waits_for_log_qso: bool,
+    /// [`HeldQso::gridless`]. Written only when set, as the two above; a build that does not know
+    /// it reads past it, and logs the contact as one with a grid source of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    gridless: bool,
 }
 
 /// The journal's contacts: this build's queue, or the single record older builds wrote.
@@ -132,6 +153,7 @@ fn pending_record(held: &HeldQso) -> PendingRecord {
         grid_source: held.grid_source,
         confirm_only: held.confirm_only,
         waits_for_log_qso: false,
+        gridless: held.gridless,
     }
 }
 
@@ -147,6 +169,7 @@ impl PendingRecord {
         record.freq_rx_mhz = freq_rx_mhz;
         HeldQso {
             confirm_only: self.confirm_only,
+            gridless: self.gridless,
             ..HeldQso::new(record, grid_source)
         }
     }
@@ -190,6 +213,7 @@ pub struct PendingLogIdentity {
     record: Arc<QsoRecord>,
     grid_source: GridSource,
     confirm_only: bool,
+    gridless: bool,
     path: Option<PathBuf>,
     epoch: u64,
 }
@@ -432,6 +456,7 @@ impl Engine {
             record: Arc::new(held.record.clone()),
             grid_source: held.grid_source,
             confirm_only: held.confirm_only,
+            gridless: held.gridless,
             path: self.station.pending_qso_path.clone(),
             epoch: self.pending_log_epoch,
         })
@@ -502,7 +527,14 @@ impl Engine {
                 pending: self.pending_log_identity().expect("hold just installed"),
             })
         } else {
-            let outcome = self.log_qso_for_sync(held.record);
+            let outcome = self.log_qso_inner(
+                held.record,
+                true,
+                crate::engine::StateSource::Operator,
+                Vec::new(),
+                false,
+                held.gridless,
+            );
             // One taken from those waiting for Log QSO leaves the journal once it is appended.
             if self.set_aside_qsos.len() != waiting {
                 self.persist_pending_qso();
@@ -573,7 +605,7 @@ impl Engine {
         // The same R2 re-derivation the desktop confirm runs: a corrected call must not carry
         // the busted call's COUNTRY, NAME or looked-up GRID into the log, whichever client the
         // operator confirmed from.
-        self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
+        let dropped = self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
         // Its park was decided when it was held.
         let outcome = self.log_qso_inner(
             record,
@@ -581,6 +613,7 @@ impl Engine {
             crate::engine::StateSource::Operator,
             Vec::new(),
             true,
+            pending.gridless || dropped,
         );
         Ok(PendingLogConfirmation { pending, outcome })
     }
@@ -639,6 +672,10 @@ mod tests {
     }
     impl Fixture {
         fn new(tier: Tier, prompt: bool) -> Self {
+            Self::with_grid(tier, prompt, Some("EN37"))
+        }
+        /// [`Self::new`], the station giving `grid` in the exchange (or none).
+        fn with_grid(tier: Tier, prompt: bool, grid: Option<&str>) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "nexus-remote-qso-log-{}-{}",
@@ -651,7 +688,7 @@ mod tests {
             engine.settings.prompt_to_log = prompt;
             engine.set_log_path(dir.join("log.adi"));
             engine.set_pending_qso_path(dir.join("pending.json"));
-            engine.call_station_with_grid("W9XYZ", Some("EN37"));
+            engine.call_station_with_grid("W9XYZ", grid);
             engine.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
             engine.qso_start_unix = Some(1_700_000_000);
             Self { dir, engine }
@@ -682,6 +719,44 @@ mod tests {
             rst_sent: pending.record().rst_sent.clone(),
             rst_rcvd: pending.record().rst_rcvd.clone(),
         }
+    }
+
+    /// A contact the station gave no grid in is the same from a computer driving the station: logged
+    /// at once, or held and confirmed there, a callbook grid fills it for the distance and the map
+    /// only (operator decision, 2026-10-27).
+    #[test]
+    fn a_gridless_contact_logged_from_afar_takes_a_callbook_grid_for_the_map_only() {
+        use tempo_core::logbook::callbook::{is_map_only_grid, CallbookAnswer};
+        let answer = CallbookAnswer {
+            call: "W9XYZ".into(),
+            grid: Some("EN52ab".into()),
+            ..CallbookAnswer::default()
+        };
+        let mut at_once = Fixture::with_grid(Tier::Ft8, false, None);
+        at_once.engine.note_callbook_answer("W9XYZ", answer.clone());
+        let CurrentQsoLogOutcome::Append(LogWriteOutcome::PendingSync(receipts)) =
+            at_once.engine.log_current_qso_for_sync()
+        else {
+            panic!("expected append receipts")
+        };
+        for receipt in receipts {
+            receipt.sync().unwrap();
+        }
+        let logged = at_once.engine.stored_log()[0].clone();
+        assert_eq!(logged.grid.as_deref(), Some("EN52ab"), "premise: filled");
+        assert!(is_map_only_grid(&logged), "logged at once: map only");
+
+        let mut held = Fixture::with_grid(Tier::Ft8, true, None);
+        held.engine.note_callbook_answer("W9XYZ", answer);
+        let identity = held.hold();
+        assert!(identity.record().grid.is_none(), "premise: no grid");
+        held.engine
+            .confirm_pending_log_for_sync(identity.clone(), edits(&identity))
+            .unwrap()
+            .sync()
+            .unwrap();
+        let logged = held.engine.stored_log()[0].clone();
+        assert!(is_map_only_grid(&logged), "confirmed from afar: map only");
     }
 
     #[test]

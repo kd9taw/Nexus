@@ -603,9 +603,13 @@ mod tests {
     fn each_completed_sweep_is_one_numbered_frame() {
         let feed = tempo_app::engine::SpectrumFeed::default();
         let newest = |last| {
-            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
-                unreachable!("a sweep was published, so the fallback is never asked")
-            })
+            feed.scope_frame_after(
+                0.0,
+                0.0,
+                tempo_core::spectrum::ScopeAnalysis::default(),
+                last,
+                || unreachable!("a sweep was published, so the fallback is never asked"),
+            )
         };
         let mut asm = ScopeAssembler::new(Some(IcomModel::Ic9700));
         assert!(asm.push(&wf_frame(1, 2, &center_header())).is_none());

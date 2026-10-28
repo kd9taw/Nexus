@@ -345,6 +345,24 @@ pub struct IotaProgress {
     pub card_confirmed: usize,
 }
 
+/// The US Counties award's standing: the 3,077 counties of [`crate::us_counties`], by the
+/// contact's `CNTY`. Confirmed is the award's own rule: a QSL card, or an eQSL from an
+/// Authenticity-Guaranteed member (CQ's rules name no LoTW credit for this award).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsacaProgress {
+    pub worked: usize,
+    pub confirmed: usize,
+    /// Every county of the award (3,077).
+    pub total: usize,
+    /// The highest level confirmed counties reach (500, 1000 … 3,077), and the next one.
+    pub level: Option<usize>,
+    pub next_level: Option<usize>,
+    /// Contacts whose `CNTY` names no county of the award (a Virginia independent city, a
+    /// misspelling, another country's subdivision): left uncounted, never guessed.
+    pub unplaced: usize,
+}
+
 /// Worked All States progress (50 US states; LoTW/paper confirmed, eQSL excluded).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -547,6 +565,9 @@ pub struct AwardSummary {
     pub ffma: FfmaProgress,
     /// IOTA — island-group references worked / confirmed.
     pub iota: IotaProgress,
+    /// The US Counties award (CQ's USA-CA) — counties worked / confirmed ([`crate::us_counties`]).
+    #[serde(default)]
+    pub usaca: UsacaProgress,
     /// CQ WPX — prefixes worked / confirmed ([`crate::wpx`]).
     #[serde(default)]
     pub wpx: WpxProgress,
@@ -625,6 +646,11 @@ pub struct Awards {
     call_stats: Option<CallStatsIndex>,
     /// WPX, WAE, WWFF, the DXCC chart and What-to-QSL, fed what this fold credits each contact.
     more: MoreAwards,
+    /// The US Counties award: counties (indices into [`crate::us_counties::counties`]) worked /
+    /// confirmed, and the contacts whose county names none of the award's.
+    worked_county: HashSet<usize>,
+    confirmed_county: HashSet<usize>,
+    unplaced_county: usize,
 }
 
 /// What a contact's record carries for the awards counted beside DXCC ([`Awards::add_contact`]):
@@ -635,6 +661,8 @@ pub struct ContactExtras<'a> {
     pub wwff: Option<&'a str>,
     /// ADIF `QSL_VIA`.
     pub qsl_via: Option<&'a str>,
+    /// ADIF `CNTY` — the US Counties award's county ([`crate::us_counties::county_for`]).
+    pub cnty: Option<&'a str>,
 }
 
 /// The DXCC entity a contact counts toward ([`counted_entity`]).
@@ -856,6 +884,7 @@ impl Awards {
             rec,
             &mut cr,
         );
+        self.add_county(state, rec.qsl, extras.cnty);
         self.more.add(
             &Contact {
                 call,
@@ -870,6 +899,24 @@ impl Awards {
             },
             &cr,
         );
+    }
+
+    /// The US Counties award's share of a contact: its county ([`crate::us_counties::county_for`]
+    /// over its `CNTY`, beside its `STATE`), confirmed as the award confirms
+    /// ([`AwardKind::Usaca`](crate::award_status::AwardKind::Usaca)): a card, or an eQSL from an
+    /// Authenticity-Guaranteed member.
+    fn add_county(&mut self, state: Option<&str>, qsl: QslChannels, cnty: Option<&str>) {
+        let Some(cnty) = cnty.map(str::trim).filter(|c| !c.is_empty()) else {
+            return;
+        };
+        let Some(i) = crate::us_counties::county_for(cnty, state) else {
+            self.unplaced_county += 1;
+            return;
+        };
+        self.worked_county.insert(i);
+        if crate::award_status::AwardKind::Usaca.confirms(false, qsl) {
+            self.confirmed_county.insert(i);
+        }
     }
 
     /// The fold itself; `cr` collects each slot it credits, confirmed or not.
@@ -1093,6 +1140,19 @@ impl Awards {
                 self.confirmed_slot.insert((entity, b));
                 pb.1.insert(entity);
             }
+        }
+    }
+
+    fn usaca(&self) -> UsacaProgress {
+        let confirmed = self.confirmed_county.len();
+        let (level, next_level) = crate::us_counties::level(confirmed);
+        UsacaProgress {
+            worked: self.worked_county.len(),
+            confirmed,
+            total: crate::us_counties::TOTAL,
+            level,
+            next_level,
+            unplaced: self.unplaced_county,
         }
     }
 
@@ -1449,6 +1509,7 @@ impl Awards {
             vucc,
             ffma,
             iota,
+            usaca: self.usaca(),
             wpx: self.more.wpx(),
             wae: self.more.wae(),
             wwff: self.more.wwff(),

@@ -35,6 +35,11 @@ pub enum NeedTag {
     /// A US state never worked (Worked All States) — independent of the entity (like a
     /// grid). Only set when the heard station's US state is known (a callsign lookup).
     NewState,
+    /// An IOTA island group never worked, on any band — the IOTA award counts each group once.
+    /// Only set when the heard station's group is known: a spot comment that names it
+    /// ([`crate::iota::in_comment`]) or a callbook answer for exactly that call. Independent of
+    /// the entity, so a station on a new island in a long-worked country still lights it.
+    NewIota,
     /// A POTA/SOTA reference the operator has not worked in the activation running right
     /// now — a park or summit still worth a contact. Unlike [`NeedTag::Pota`]/[`NeedTag::Sota`],
     /// which only LABEL what a station is doing, this is a genuine need: there is something
@@ -66,6 +71,7 @@ impl NeedTag {
             NeedTag::NewMode => "New mode",
             NeedTag::NewGrid => "New grid",
             NeedTag::NewState => "New state",
+            NeedTag::NewIota => "New IOTA",
             NeedTag::NewPark => "New park",
             NeedTag::Confirm => "Confirm",
             NeedTag::Dxped => "DXpedition",
@@ -82,6 +88,10 @@ impl NeedTag {
             // The operator asked for this call by name — it outranks even an ATNO.
             NeedTag::Wanted => 120,
             NeedTag::NewEntity => 100,
+            // A new island group: below a new one (the entity is the bigger catch and the rarer
+            // event), above a new zone, because a group is one slot for all time while a zone
+            // comes round again on every band. An ultra-rare needed grid (55+30) still edges it.
+            NeedTag::NewIota => 80,
             NeedTag::NewZone => 70,
             // A new US state (Worked All States) — a real domestic chase — outranks a
             // bare new grid: the operator ranks WAS above VUCC/grid chasing. A grid that
@@ -145,6 +155,10 @@ pub struct Heard {
     /// The heard station's US state (ADIF STATE code) and where it came from, when something
     /// placed it. Drives the NewState (WAS) need.
     pub us_state: Option<(String, StateSource)>,
+    /// The IOTA island group the station is on, when something named it: the spot's comment
+    /// ([`crate::iota::in_comment`]) or a callbook answer for exactly this call. Drives the
+    /// NewIota need; any spelling, [`crate::iota::canonical`] reads it.
+    pub iota: Option<String>,
 }
 
 /// Where a station's US state came from, so the Needed board's STATE chip can say which.
@@ -233,6 +247,10 @@ pub struct NeedAlert {
     /// operator has turned on "Show WAE country needs"; `None` otherwise, and then not sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wae_need: Option<String>,
+    /// The IOTA island group the station is on, as the evidence named it ([`Heard::iota`]), so a
+    /// row can name the group; `None` otherwise, and then not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iota: Option<String>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -249,6 +267,7 @@ pub fn heard_from_freq(call: &str, freq_mhz: f64, mode: &str) -> Option<Heard> {
         evidence: None,
         grid: None,     // cluster/RBN spots carry no grid
         us_state: None, // …nor a US state (needs a callsign lookup)
+        iota: None,     // the caller reads the spot's comment for one
     })
 }
 
@@ -271,7 +290,14 @@ pub struct AwardSlots<'a> {
     pub confirmed_grids: &'a HashSet<(String, Band)>,
     pub worked_states: &'a HashSet<(String, Band)>,
     pub confirmed_states: &'a HashSet<(String, Band)>,
+    /// IOTA groups worked / confirmed, any band (the award counts a group once), canonical
+    /// ([`crate::iota::canonical`]).
+    pub worked_iota: &'a HashSet<String>,
+    pub confirmed_iota: &'a HashSet<String>,
 }
+
+/// No IOTA group at all — what a caller with no log behind it hands the scorer.
+static NO_IOTA: LazyLock<HashSet<String>> = LazyLock::new(HashSet::new);
 
 impl AwardSlots<'_> {
     /// True once ALL 40 CQ zones have been worked on SOME band (classic any-band WAZ is
@@ -312,6 +338,8 @@ pub fn score(
             confirmed_grids: worked_grids,
             worked_states,
             confirmed_states: worked_states,
+            worked_iota: &NO_IOTA,
+            confirmed_iota: &NO_IOTA,
         },
     )
 }
@@ -325,6 +353,22 @@ pub fn score_slots(
     mode: &str,
     grid: Option<&str>,
     us_state: Option<&str>,
+    needs: &dyn OperatorNeeds,
+    slots: &AwardSlots,
+) -> Option<NeedAlert> {
+    score_heard(call, band, mode, grid, us_state, None, needs, slots)
+}
+
+/// [`score_slots`] with the IOTA group the station is on, when something named it — what
+/// [`rank`] scores every heard station by.
+#[allow(clippy::too_many_arguments)]
+pub fn score_heard(
+    call: &str,
+    band: &str,
+    mode: &str,
+    grid: Option<&str>,
+    us_state: Option<&str>,
+    iota: Option<&str>,
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
 ) -> Option<NeedAlert> {
@@ -448,6 +492,22 @@ pub fn score_slots(
         }
     }
 
+    // IOTA need — an island group never worked on ANY band (the award counts each group once,
+    // so the band is not asked and an off-band dial changes nothing). Resolved by the same
+    // `canonical` the log's side folds by ([`crate::dxped::LogNeeds::add_iota`]) — the heard /
+    // worked symmetry rule. Worked but not confirmed (by card or LoTW, which IOTA credits) is a
+    // confirmation opportunity like the other axes.
+    let iota = iota.and_then(crate::iota::canonical);
+    if let Some(r) = &iota {
+        if slots.worked_iota.contains(r) {
+            if !slots.confirmed_iota.contains(r) {
+                wants_confirm = true;
+            }
+        } else {
+            tags.push(NeedTag::NewIota);
+        }
+    }
+
     // Fold the worked-but-unconfirmed axes into ONE Confirm row (the DXCC path may have
     // already added Confirm — don't duplicate the pill).
     if wants_confirm && !tags.contains(&NeedTag::Confirm) {
@@ -521,6 +581,11 @@ pub fn score_slots(
             band,
             info.entity
         ),
+        NeedTag::NewIota => format!(
+            "New IOTA — {} ({})",
+            iota.as_deref().unwrap_or("?"),
+            info.entity
+        ),
         NeedTag::Confirm => format!("Confirm — {}", info.entity),
         // NewPark is appended by [`activation_alert`], which owns the headline naming the
         // park or summit; this arm exists only for match exhaustiveness.
@@ -569,6 +634,7 @@ pub fn score_slots(
         state_from: None, // set by rank and activation_alert, which know where the state came from
         wpx_need: None,
         wae_need: None,
+        iota,
     })
 }
 
@@ -591,12 +657,13 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
         .filter_map(|s| {
             // score() owns the award logic + mode class; attach the exact frequency
             // (when this Heard carried one) so click-to-work can QSY to the spot.
-            score_slots(
+            score_heard(
                 &s.call,
                 &s.band,
                 &s.mode,
                 s.grid.as_deref(),
                 s.us_state.as_ref().map(|(state, _)| state.as_str()),
+                s.iota.as_deref(),
                 needs,
                 slots,
             )
@@ -879,6 +946,7 @@ pub fn activation_alert(
         state_from: None,
         wpx_need: None,
         wae_need: None,
+        iota: None,
     });
     // The award's row names the scored mode itself where it names FT8, FT4 or RTTY; this row is
     // the class, as it always was.
@@ -997,6 +1065,7 @@ pub fn watched_alert(
         state_from: None,
         wpx_need: None,
         wae_need: None,
+        iota: None,
     });
     mark_watched(&mut alert);
     alert
@@ -1241,6 +1310,7 @@ pub fn heard_near_me(reports: &[PathSpot], me: (f64, f64)) -> Vec<Heard> {
                 evidence: Some(ev),
                 grid: e.tx_grid,
                 us_state: None, // reception geometry carries no US state
+                iota: None,
             });
         }
     }
@@ -1309,6 +1379,7 @@ pub fn workable_by_getting_out(reports: &[PathSpot], my_call: &str) -> Vec<Heard
                     )),
                     grid: p.tx_grid.clone(),
                     us_state: None, // reception geometry carries no US state
+                    iota: None,
                 });
             }
         }
@@ -1350,6 +1421,79 @@ pub fn skimmer_grid(call: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A heard station on `band` with the IOTA group a spot comment named — the shape the
+    /// cluster arm builds.
+    fn heard_on_island(call: &str, iota: Option<&str>) -> Heard {
+        Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            freq_mhz: Some(14.025),
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: None,
+            iota: iota.map(str::to_string),
+        }
+    }
+
+    /// A log that has Italy on 20 m CW, confirmed, and its zone: an Italian island station
+    /// heard there carries no DXCC, band, mode or zone need, so only the island can light it.
+    fn italy_worked() -> LogNeeds {
+        let mut n = LogNeeds::new();
+        n.add("I2ABC", "20m", "CW", None, None, true);
+        n
+    }
+
+    #[test]
+    fn a_group_never_worked_is_a_new_iota_on_a_worked_entity() {
+        let n = italy_worked();
+        let board = rank(&[heard_on_island("IA5X", Some("EU-028"))], &n, &n.slots());
+        let a = board
+            .first()
+            .expect("a never-worked island group is a need");
+        assert_eq!(a.tags[0], NeedTag::NewIota, "{:?}", a.tags);
+        assert_eq!(a.iota.as_deref(), Some("EU-028"));
+        assert!(a.headline.contains("EU-028"), "{}", a.headline);
+        // Without a group, the same station is no need at all.
+        assert!(rank(&[heard_on_island("IA5X", None)], &n, &n.slots()).is_empty());
+        // Junk is no group.
+        assert!(rank(&[heard_on_island("IA5X", Some("EU-28"))], &n, &n.slots()).is_empty());
+    }
+
+    /// THE SYMMETRY RULE for IOTA (the New State lesson above): the group a contact is logged
+    /// with must clear the need that group raised, through the same resolver on both sides —
+    /// logged in another spelling, worked on another band, and through `slots()` exactly as
+    /// the board reads it.
+    #[test]
+    fn logging_the_group_clears_the_new_iota_need() {
+        let mut n = italy_worked();
+        n.add_iota(Some(" eu-028"), false);
+        let board = rank(&[heard_on_island("IA5X", Some("EU-028"))], &n, &n.slots());
+        let a = board
+            .first()
+            .expect("worked but unconfirmed: a confirmation chance");
+        assert!(!a.tags.contains(&NeedTag::NewIota), "{:?}", a.tags);
+        assert_eq!(a.tags, vec![NeedTag::Confirm]);
+        // Confirmed (card or LoTW): nothing left to ask for.
+        n.add_iota(Some("EU-028"), true);
+        assert!(rank(&[heard_on_island("IA5X", Some("EU-028"))], &n, &n.slots()).is_empty());
+        // Another group is still new.
+        let other = rank(&[heard_on_island("IA5X", Some("EU-031"))], &n, &n.slots());
+        assert_eq!(other[0].tags[0], NeedTag::NewIota);
+    }
+
+    #[test]
+    fn a_new_iota_ranks_below_a_new_one_and_above_a_new_zone() {
+        assert!(NeedTag::NewIota.tier() < NeedTag::NewEntity.tier());
+        assert!(NeedTag::NewIota.tier() > NeedTag::NewZone.tier());
+        // An empty log: the island rides behind the new one on the same row.
+        let n = LogNeeds::new();
+        let board = rank(&[heard_on_island("IA5X", Some("EU-028"))], &n, &n.slots());
+        assert_eq!(board[0].tags[0], NeedTag::NewEntity);
+        assert_eq!(board[0].tags[1], NeedTag::NewIota, "{:?}", board[0].tags);
+    }
 
     /// REGRESSION (operator, on-air 2026-07-26): "things I have already worked are not being
     /// removed from the Needed section, and the pills that designate why I needed them do not
@@ -1427,6 +1571,8 @@ mod tests {
             confirmed_grids: g,
             worked_states: s,
             confirmed_states: s,
+            worked_iota: &NO_IOTA,
+            confirmed_iota: &NO_IOTA,
         }
     }
     use crate::dxped::LogNeeds;
@@ -1441,6 +1587,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: None,
+            iota: None,
         }
     }
 
@@ -2228,6 +2375,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: None,
+            iota: None,
         }];
         let ranked = rank(
             &spots,
@@ -2269,6 +2417,7 @@ mod tests {
                 evidence: None,
                 grid: None,
                 us_state: None,
+                iota: None,
             },
             Heard {
                 call: "3Y0J".into(),
@@ -2279,6 +2428,7 @@ mod tests {
                 evidence: None,
                 grid: None,
                 us_state: None,
+                iota: None,
             },
         ];
         let ranked = rank(
@@ -2357,6 +2507,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: None,
+            iota: None,
         };
         let ranked = rank(
             &[heard("JTTY", 14.0915), heard("FT8", 14.074)],
@@ -2383,6 +2534,7 @@ mod tests {
                 evidence: None,
                 grid: None,
                 us_state: None,
+                iota: None,
             },
             Heard {
                 call: "3Y0J".into(),
@@ -2393,6 +2545,7 @@ mod tests {
                 evidence: None,
                 grid: None,
                 us_state: None,
+                iota: None,
             },
         ];
         let ranked = rank(
@@ -2777,6 +2930,8 @@ mod tests {
                 confirmed_grids: &eg,
                 worked_states: &es,
                 confirmed_states: &es,
+                worked_iota: &NO_IOTA,
+                confirmed_iota: &NO_IOTA,
             },
         )
         .expect("a worked-but-unconfirmed zone is a confirmation opportunity");
@@ -2803,6 +2958,8 @@ mod tests {
                     confirmed_grids: &eg,
                     worked_states: &es,
                     confirmed_states: &es,
+                    worked_iota: &NO_IOTA,
+                    confirmed_iota: &NO_IOTA,
                 },
             )
             .is_none(),
@@ -2832,6 +2989,8 @@ mod tests {
                 confirmed_grids: &eg,
                 worked_states: &es,
                 confirmed_states: &es,
+                worked_iota: &NO_IOTA,
+                confirmed_iota: &NO_IOTA,
             },
         )
         .unwrap();
@@ -3866,6 +4025,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: Some(("VT".into(), StateSource::License)),
+            iota: None,
         }];
         let ranked = rank(
             &spots,
@@ -3919,6 +4079,7 @@ mod tests {
                 state_from: None,
                 wpx_need: None,
                 wae_need: None,
+                iota: None,
             }
         }
         let mut alerts = vec![

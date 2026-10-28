@@ -13,9 +13,11 @@
 // chooser.
 //
 // What is saved (`settings.json` → `logbookColumns`, through its one writer `set_logbook_columns`):
-// the default columns turned OFF, the other columns turned ON, and the width of each column the
-// operator dragged. Deltas, not a list: a column added to the defaults later still shows for an
-// operator who customised before it existed.
+// the default columns turned OFF, the other columns turned ON, the width of each column the
+// operator dragged, and — once a header has been dragged to another place — the order. Deltas, not
+// a list: a column added to the defaults later still shows for an operator who customised before
+// it existed, and a column the saved order does not name takes its place beside its default
+// neighbour. A choice saved before the order existed has no `order` and loads exactly as it did.
 //
 // ⚠️ A SAVED WIDTH IS CLAMPED ON LOAD (the layout contract: anything persisted that encodes a size
 // is clamped against the current window, not only at drag time). A width dragged out on a 4K
@@ -144,6 +146,9 @@ export interface LogColumnsSaved {
   hidden: string[]
   /** Dragged widths, px, by column id. */
   widths: Record<string, number>
+  /** The operator's column order, every column id (shown or not), the action cluster aside — it is
+   *  always last. Absent while the table is in its default order. */
+  order?: string[]
 }
 
 export const DEFAULT_LOG_COLUMNS: LogColumnsSaved = { shown: [], hidden: [], widths: {} }
@@ -211,18 +216,74 @@ export function clampLogColumns(raw: unknown, windowPx: number | null): LogColum
       widths[id] = clampWidth(c, px, windowPx)
     }
   }
-  return {
-    shown: ids(r.shown, (c) => !c.base),
-    hidden: ids(r.hidden, (c) => !!c.base && !c.fixed),
-    widths,
-  }
+  return withOrder(
+    {
+      shown: ids(r.shown, (c) => !c.base),
+      hidden: ids(r.hidden, (c) => !!c.base && !c.fixed),
+      widths,
+    },
+    Array.isArray(r.order) ? columnOrder({ order: r.order }) : DEFAULT_ORDER,
+  )
 }
 
-/** The columns a saved choice shows, in table order. */
+/** Every column the operator can move, in the default order: all but the action cluster. */
+const DEFAULT_ORDER: readonly string[] = LOG_COLUMNS.filter((c) => c.id !== 'actions').map((c) => c.id)
+
+/** The full column order a choice holds: its saved order (known ids, once each, never the
+ *  actions), with every column it does not name placed after its nearest default predecessor. */
+function columnOrder(saved: { order?: unknown }): string[] {
+  const raw = Array.isArray(saved.order) ? saved.order : []
+  const out = [...new Set(raw.filter((id): id is string => typeof id === 'string' && id !== 'actions' && BY_ID.has(id)))]
+  if (!out.length) return [...DEFAULT_ORDER]
+  DEFAULT_ORDER.forEach((id, i) => {
+    if (out.includes(id)) return
+    let at = 0
+    for (let j = i - 1; j >= 0; j--) {
+      const k = out.indexOf(DEFAULT_ORDER[j])
+      if (k >= 0) {
+        at = k + 1
+        break
+      }
+    }
+    out.splice(at, 0, id)
+  })
+  return out
+}
+
+/** `saved` with `order`, kept only when it is not the default one (so a table moved back to where
+ *  it began saves exactly what it did before it was ever moved). */
+function withOrder(saved: LogColumnsSaved, order: readonly string[]): LogColumnsSaved {
+  const { order: _drop, ...rest } = saved
+  const isDefault = order.length === DEFAULT_ORDER.length && order.every((id, i) => id === DEFAULT_ORDER[i])
+  return isDefault ? rest : { ...rest, order: [...order] }
+}
+
+/** The columns a saved choice shows, in table order: the operator's, then the action cluster. */
 export function visibleColumns(saved: LogColumnsSaved): LogColumn[] {
   const shown = new Set(saved.shown)
   const hidden = new Set(saved.hidden)
-  return LOG_COLUMNS.filter((c) => c.fixed || (c.base ? !hidden.has(c.id) : shown.has(c.id)))
+  const on = (c: LogColumn) => c.fixed || (c.base ? !hidden.has(c.id) : shown.has(c.id))
+  return [...columnOrder(saved).map((id) => BY_ID.get(id)!), BY_ID.get('actions')!].filter(on)
+}
+
+/** The choice with column `id` moved to just `side` of column `anchor`. Dropped on the action
+ *  cluster, it goes last before it; the cluster itself does not move. */
+export function withColumnMoved(saved: LogColumnsSaved, id: string, anchor: string, side: 'before' | 'after'): LogColumnsSaved {
+  if (id === 'actions' || id === anchor || !BY_ID.has(id) || !BY_ID.has(anchor)) return saved
+  const order = columnOrder(saved).filter((x) => x !== id)
+  const at = anchor === 'actions' ? order.length : order.indexOf(anchor) + (side === 'after' ? 1 : 0)
+  order.splice(at, 0, id)
+  return withOrder(saved, order)
+}
+
+/** The choice with column `id` moved one place left (-1) or right (1) among the columns `cols`
+ *  renders — past its neighbour on screen, never past the action cluster. Unchanged at an end. */
+export function withColumnStep(saved: LogColumnsSaved, cols: readonly LogColumn[], id: string, dir: -1 | 1): LogColumnsSaved {
+  const movable = cols.filter((c) => c.id !== 'actions')
+  const i = movable.findIndex((c) => c.id === id)
+  const next = movable[i + dir]
+  if (i < 0 || !next) return saved
+  return withColumnMoved(saved, id, next.id, dir === 1 ? 'after' : 'before')
 }
 
 /** Whether the choice shows any column the default table does not. Such a table keeps every

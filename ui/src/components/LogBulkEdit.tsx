@@ -20,8 +20,11 @@
 // which keep the park they were sent with, and the activation files already exported that the
 // change puts out of date: nothing changes a stamp, and nothing is sent.
 //
+// An award's status (Submitted / Granted, by the award's ADIF Credit code) is set here too, on as
+// many contacts as the edit names: the same preview, confirm and one-run Undo.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names are ADIF
-// tokens, shown as they are.
+// tokens, shown as they are; an award status is named by its award.
 import { useEffect, useRef, useState } from 'react'
 import {
   bulkEditApply,
@@ -35,6 +38,7 @@ import { t } from '../i18n'
 import { withErrorToast } from '../toast'
 import type { LogQuery } from '../features/logQuery'
 import { changesRefusedHere, sayRun } from '../features/logCleanup'
+import { STATUS_AWARDS, statusAwardOf } from '../features/awardStatus'
 
 /** The fields a bulk edit offers, in the order the menu lists them. */
 export const BULK_FIELDS: readonly CleanupField[] = [
@@ -47,7 +51,19 @@ export const BULK_FIELDS: readonly CleanupField[] = [
   'SAT_NAME',
   'MY_POTA_REF',
   'MY_SOTA_REF',
+  // Each award's status: Submitted or Granted (one clears the other), or cleared for neither —
+  // that award's one ADIF Credit code, and nothing else, moves (features/awardStatus.ts).
+  ...STATUS_AWARDS.map((a) => a.field),
 ]
+
+/** A row's starting value for `field`: an award status starts at Submitted, the others blank. */
+const startValue = (field: CleanupField): string => (statusAwardOf(field) ? 'SUBMITTED' : '')
+
+/** A field as the menu names it: its ADIF token, or the award whose status it sets. */
+function fieldLabel(field: CleanupField): string {
+  const award = statusAwardOf(field)
+  return award ? t('logbook.tools.bulk.awardStatus', { award: award.name }) : field
+}
 
 interface Row {
   field: CleanupField
@@ -145,10 +161,13 @@ export function LogBulkEdit({
           <select
             aria-label={t('logbook.tools.bulk.field')}
             value={r.field}
-            onChange={(e) => edit(rows.map((x, k) => (k === i ? { ...x, field: e.target.value as CleanupField } : x)))}
+            onChange={(e) => {
+              const field = e.target.value as CleanupField
+              edit(rows.map((x, k) => (k === i ? { ...x, field, value: startValue(field) } : x)))
+            }}
           >
             {BULK_FIELDS.filter((f) => f === r.field || !used.has(f)).map((f) => (
-              <option key={f} value={f}>{f}</option>
+              <option key={f} value={f}>{fieldLabel(f)}</option>
             ))}
           </select>
           <select
@@ -159,7 +178,17 @@ export function LogBulkEdit({
             <option value="set">{t('logbook.tools.bulk.set')}</option>
             <option value="clear">{t('logbook.tools.bulk.clear')}</option>
           </select>
-          {!r.clear && (
+          {!r.clear && statusAwardOf(r.field) && (
+            <select
+              aria-label={t('logbook.tools.bulk.value')}
+              value={r.value}
+              onChange={(e) => edit(rows.map((x, k) => (k === i ? { ...x, value: e.target.value } : x)))}
+            >
+              <option value="SUBMITTED">{t('contactCard.award.submitted')}</option>
+              <option value="GRANTED">{t('contactCard.award.granted')}</option>
+            </select>
+          )}
+          {!r.clear && !statusAwardOf(r.field) && (
             <input
               type="text"
               aria-label={t('logbook.tools.bulk.value')}
@@ -181,7 +210,7 @@ export function LogBulkEdit({
           disabled={used.size >= BULK_FIELDS.length}
           onClick={() => {
             const next = BULK_FIELDS.find((f) => !used.has(f))
-            if (next) edit([...rows, { field: next, clear: false, value: '' }])
+            if (next) edit([...rows, { field: next, clear: false, value: startValue(next) }])
           }}
         >
           {t('logbook.tools.bulk.add')}

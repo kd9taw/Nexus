@@ -47,6 +47,20 @@ import { T } from '../i18n/T'
 import { pollSingleFlight } from '../singleFlight'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { aprsRailValue, parseAprsRail } from '../features/aprsRail'
+import {
+  APRS_AGE_CHOICES,
+  APRS_TYPE_CHOICES,
+  aprsMapPrefsValue,
+  filterAprsStations,
+  parseAprsMapPrefs,
+  type AprsAgeMin,
+  type AprsMapPick,
+  type AprsMapPrefs,
+  type AprsTypeFilter,
+} from '../features/aprsMap'
+import { packFor, useStreetMaps } from '../features/streetMaps'
+import { MapPicker, FLAT_MAP_CHOICES } from './MapPicker'
+import { StreetDownloadSheet } from './StreetDownloadSheet'
 
 /** The mode's own name — four letters, the same in every language. */
 const APRS_MODE = 'APRS'
@@ -55,6 +69,34 @@ const APRS_MODE = 'APRS'
 const APRS_RAIL_KEY = 'nexus.aprs.railWidth'
 /** Where the map-side choice is stored (per surface): 'left', or anything else for the stock right. */
 const APRS_MAP_SIDE_KEY = 'nexus.aprs.mapSide'
+/** Where the map's own choices are stored (per surface): features/aprsMap `AprsMapPrefs`. */
+const APRS_MAP_KEY = 'nexus.aprs.map'
+
+/** The kind-of-station filter's names, resolved when the select renders (the locale can change). */
+function typeLabel(k: AprsTypeFilter): string {
+  switch (k) {
+    case 'all':
+      return t('aprs.map.type.all')
+    case 'mobile':
+      return t('aprs.map.type.mobile')
+    case 'fixed':
+      return t('aprs.map.type.fixed')
+    case 'wx':
+      return t('aprs.map.type.wx')
+    case 'infra':
+      return t('aprs.map.type.infra')
+    case 'object':
+      return t('aprs.map.type.object')
+    case 'air':
+      return t('aprs.map.type.air')
+    case 'marine':
+      return t('aprs.map.type.marine')
+    case 'other':
+      return t('aprs.map.type.other')
+  }
+}
+const ageChoiceLabel = (m: AprsAgeMin): string =>
+  m === 0 ? t('aprs.map.age.all') : m < 60 ? t('aprs.map.age.mins', { mins: m }) : t('aprs.map.age.hours', { hours: m / 60 })
 
 /** The North American APRS channel, named in the failed-checksum advice. A frequency is a
  * token: it is interpolated into that sentence, never written inside it. */
@@ -287,7 +329,9 @@ function sameRoster(a: AprsStationsView, b: AprsStationsView): boolean {
       x.lon !== y.lon ||
       x.sourceKind !== y.sourceKind ||
       x.symbolCode !== y.symbolCode ||
-      x.symbolTable !== y.symbolTable
+      x.symbolTable !== y.symbolTable ||
+      // The trail: the store trims its old points as they age out, with no new packet to say so.
+      (x.track?.length ?? 0) !== (y.track?.length ?? 0)
     ) {
       return false
     }
@@ -670,6 +714,25 @@ export function AprsCockpit({
     // '' reads back as "never set" (parseAprsRail): the stock width.
     surfaceSet(APRS_RAIL_KEY, px == null ? '' : String(Math.round(px)))
   }
+  // THE MAP'S OWN CHOICES (features/aprsMap): which map, the age and kind filters, trails and
+  // labels — per window, each change stored as it is made.
+  const [mapPrefs, setMapPrefs] = useState<AprsMapPrefs>(() => parseAprsMapPrefs(surfaceGet(APRS_MAP_KEY)))
+  const setMapPref = (patch: Partial<AprsMapPrefs>) =>
+    setMapPrefs((p) => {
+      const next = { ...p, ...patch }
+      surfaceSet(APRS_MAP_KEY, aprsMapPrefsValue(next))
+      return next
+    })
+  // The station the map keeps in its middle (the card's Follow), for this visit only.
+  const [follow, setFollow] = useState<string | null>(null)
+  // THE STREET MAP, exactly as Connect offers it (ConnectView): the installed pack that holds the
+  // station, else the newest; without a pack a Street press opens the download sheet, and nothing
+  // is fetched until the operator downloads there. A stored Street pick that cannot draw here shows
+  // Flat and says why, without discarding the pick.
+  const streetMaps = useStreetMaps()
+  const streetOffered = streetMaps.offered === true
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const mapCentreRef = useRef<LatLon | null>(null)
   const [mapLeft, setMapLeft] = useState(() => surfaceGet(APRS_MAP_SIDE_KEY) === 'left')
   const toggleMapSide = () => {
     const next = !mapLeft
@@ -1017,10 +1080,39 @@ export function AprsCockpit({
   // No per-station source accumulation any more: the backend store derives each station's source
   // from when each channel last carried it, which is one source of truth instead of two that could
   // drift.
+  // The map's age and kind filters join it here for the same reason (features/aprsMap). The clock
+  // is a dependency only while an age filter is on, so an unfiltered roster keeps its identity
+  // between polls.
+  const ageClock = mapPrefs.ageMin > 0 ? now : 0
   const visibleStations = useMemo(
-    () => (showInet ? roster.stations : roster.stations.filter((st) => st.sourceKind !== 'inet')),
-    [roster, showInet],
+    () => filterAprsStations(roster.stations, { showInet, ageMin: mapPrefs.ageMin, type: mapPrefs.type }, ageClock),
+    [roster, showInet, mapPrefs.ageMin, mapPrefs.type, ageClock],
   )
+  // The map's pick, and whether Street can draw it (ConnectView's rule; see `streetMaps` above).
+  const streetPack = streetOffered ? packFor(streetMaps.packs, gridToLatLon(derivedGrid)) : null
+  const streetCanDraw = streetOffered && streetMaps.webgl2 && streetPack != null
+  const streetKnown = streetMaps.offered === false || (streetOffered && streetMaps.packs !== null)
+  const streetWhy =
+    mapPrefs.pick !== 'street' || streetCanDraw || !streetKnown
+      ? null
+      : !streetOffered
+        ? t('map.street.standIn.hidden')
+        : !streetMaps.webgl2
+          ? t('map.street.standIn.noWebgl2')
+          : t('map.street.standIn.noPack')
+  const shownPick: AprsMapPick = mapPrefs.pick === 'street' && !streetCanDraw ? 'world' : mapPrefs.pick
+  const chooseMap = (choice: AprsMapPick | '3d') => {
+    if (choice === '3d') return
+    if (choice === 'street') {
+      if (!streetOffered || !streetMaps.webgl2) return
+      if (!streetPack) {
+        setSheetOpen(true)
+        return
+      }
+    }
+    setMapPref({ pick: choice })
+  }
+  const followed = follow != null && visibleStations.some((st) => st.call === follow) ? follow : null
 
   // How many VISIBLE stations actually carry a position — a station heard only via a message or
   // status packet has none, so "nothing on the map" is a normal state worth naming.
@@ -1508,6 +1600,14 @@ export function AprsCockpit({
             aprsTtlMin={roster.ttlMin}
             selectedAprs={selected}
             onSelectAprs={setSelected}
+            aprsTracks={mapPrefs.tracks}
+            aprsTrailMin={mapPrefs.ageMin}
+            aprsLabels={mapPrefs.labels}
+            aprsFollow={followed}
+            onAprsCentre={() => setFollow(null)}
+            projection={shownPick}
+            streetPack={shownPick === 'street' ? (streetPack ?? undefined) : undefined}
+            centreRef={mapCentreRef}
             myGrid={derivedGrid}
             theme={theme}
             stations={noStations}
@@ -1515,31 +1615,129 @@ export function AprsCockpit({
             selectedCall={null}
             onSelectCall={noSelectCall}
             needByCall={noNeeds}
+            aprsToolbar={
+              <>
+                {/* The same picker as Connect's, without 3D (the WebGL globe has no APRS layer). */}
+                <MapPicker
+                  choices={streetOffered ? [...FLAT_MAP_CHOICES, 'street'] : FLAT_MAP_CHOICES}
+                  value={shownPick}
+                  onPick={chooseMap}
+                  street={
+                    streetOffered
+                      ? {
+                          installed: streetPack != null,
+                          percent: streetMaps.download.state === 'running' ? streetMaps.download.percent : null,
+                          unavailable: streetMaps.webgl2 ? null : t('map.street.noWebgl2'),
+                        }
+                      : undefined
+                  }
+                />
+                {streetWhy && (
+                  <span className="connect-map-note" role="status">
+                    {streetWhy}
+                  </span>
+                )}
+                <select
+                  className="np-chip aprs-map-age"
+                  value={mapPrefs.ageMin}
+                  onChange={(e) => setMapPref({ ageMin: Number(e.target.value) as AprsAgeMin })}
+                  title={t('aprs.map.age.title')}
+                  aria-label={t('aprs.map.age.title')}
+                >
+                  {APRS_AGE_CHOICES.map((m) => (
+                    <option key={m} value={m}>
+                      {ageChoiceLabel(m)}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="np-chip aprs-map-type"
+                  value={mapPrefs.type}
+                  onChange={(e) => setMapPref({ type: e.target.value as AprsTypeFilter })}
+                  title={t('aprs.map.type.title')}
+                  aria-label={t('aprs.map.type.title')}
+                >
+                  {APRS_TYPE_CHOICES.map((k) => (
+                    <option key={k} value={k}>
+                      {typeLabel(k)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`np-chip${mapPrefs.tracks ? ' active' : ''}`}
+                  aria-pressed={mapPrefs.tracks}
+                  onClick={() => setMapPref({ tracks: !mapPrefs.tracks })}
+                  title={t('aprs.map.tracks.title')}
+                >
+                  {t('aprs.map.tracks.label')}
+                </button>
+                <button
+                  type="button"
+                  className={`np-chip${mapPrefs.labels ? ' active' : ''}`}
+                  aria-pressed={mapPrefs.labels}
+                  onClick={() => setMapPref({ labels: !mapPrefs.labels })}
+                  title={t('aprs.map.labels.title')}
+                >
+                  {t('aprs.map.labels.label')}
+                </button>
+                {followed && (
+                  <button
+                    type="button"
+                    className="np-chip active aprs-map-follow"
+                    aria-pressed={true}
+                    onClick={() => setFollow(null)}
+                    title={t('aprs.map.follow.title')}
+                  >
+                    {t('aprs.map.follow.label', { call: followed })}
+                  </button>
+                )}
+                {/* Which side the map stands on (layout L7): in the map's own toolbar, which wraps,
+                    rather than the header, where one more chip takes a line from the body. */}
+                <button
+                  type="button"
+                  className={`np-chip aprs-map-side${mapLeft ? ' active' : ''}`}
+                  aria-pressed={mapLeft}
+                  onClick={toggleMapSide}
+                  title={t('aprs.mapLeft.title')}
+                >
+                  {t('aprs.mapLeft.label')}
+                </button>
+              </>
+            }
+            aprsOverlay={
+              <>
+                {positioned === 0 && (
+                  <div className="aprs-map-empty">
+                    {decode.state === 'decoding' ? t('aprs.map.noPositions') : decode.detail}
+                  </div>
+                )}
+                {/* Selecting a station — from the map OR the list — opens its detail card over the map.
+                    Both routes set the same `selected`, so the card serves both without a second path. */}
+                {selectedStation && (
+                  <AprsStationCard
+                    station={selectedStation}
+                    nowSec={now}
+                    me={me}
+                    onClose={() => setSelected(null)}
+                    following={follow === selectedStation.call}
+                    onFollow={(on) => setFollow(on ? selectedStation.call : null)}
+                  />
+                )}
+              </>
+            }
           />
-          {/* Which side the map stands on (layout L7). Over the map, not in the header: one more
-              chip there wraps the row at some widths and takes a line from the body. */}
-          <button
-            type="button"
-            className={`np-chip aprs-map-side${mapLeft ? ' active' : ''}`}
-            aria-pressed={mapLeft}
-            onClick={toggleMapSide}
-            title={t('aprs.mapLeft.title')}
-          >
-            {t('aprs.mapLeft.label')}
-          </button>
-          {positioned === 0 && (
-            <div className="aprs-map-empty">
-              {decode.state === 'decoding' ? t('aprs.map.noPositions') : decode.detail}
-            </div>
-          )}
-          {/* Selecting a station — from the map OR the list — opens its detail card over the map.
-              Both routes set the same `selected`, so the card serves both without a second path. */}
-          {selectedStation && (
-            <AprsStationCard
-              station={selectedStation}
-              nowSec={now}
-              me={me}
-              onClose={() => setSelected(null)}
+          {streetOffered && (
+            <StreetDownloadSheet
+              open={sheetOpen}
+              onClose={() => setSheetOpen(false)}
+              myGrid={derivedGrid}
+              mapCentre={sheetOpen ? mapCentreRef.current : null}
+              onInstalled={() => {
+                // A download asked for from the picker shows the map it brought, as Connect's does.
+                setSheetOpen(false)
+                setMapPref({ pick: 'street' })
+              }}
             />
           )}
         </div>
