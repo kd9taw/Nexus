@@ -996,7 +996,14 @@ jobs:
           # Gatekeeper's own verdict on what shipped — signing AND notarization AND
           # staple, the exact test a user's first double-click runs.
           spctl -a -t exec -vv "$app"
-          xcrun stapler validate "$app"
+          # `stapler validate` asks Apple's ticket service online, so a dropped connection
+          # (NSURLError -1005, exit 68) fails it with the ticket stapled; try a few times.
+          for i in 1 2 3 4 5; do
+            xcrun stapler validate "$app" && break
+            [ "$i" -lt 5 ] || { echo "stapler validate failed 5 times"; exit 1; }
+            echo "stapler validate attempt $i failed; trying again in 20s"
+            sleep 20
+          done
           # The model must be IN the bundle — the 2026-07-20 .deb shipped without it
           # and nothing but looking inside the artifact can catch that class.
           m="$app/Contents/Resources/resources/deepcw/model.onnx"
