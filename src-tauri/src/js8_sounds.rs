@@ -224,17 +224,22 @@ pub async fn play_js8_sound(
     .map_err(|_| SoundRefusal::Failed)?
 }
 
+/// Where a sound goes and what it must never reach, from the settings as they are at this play: the
+/// operator's output (`js8SoundDevice`), and every TX audio device the station has configured.
+#[cfg(feature = "radio")]
+fn sound_route(settings: &Settings) -> (&str, Vec<String>) {
+    (
+        &settings.js8_sound_device,
+        tempo_audio::notify_sound::tx_audio_devices(settings),
+    )
+}
+
 /// Play `clip` on the operator's output, refused on a TX device (`tempo_audio::notify_sound`).
 #[cfg(feature = "radio")]
 fn play_on(settings: &Settings, clip: SoundClip) -> Result<(), SoundRefusal> {
-    use tempo_audio::notify_sound::{play, tx_audio_devices, PlayRefusal};
-    play(
-        &settings.js8_sound_device,
-        tx_audio_devices(settings),
-        clip.rate,
-        clip.samples,
-    )
-    .map_err(|e| match e {
+    use tempo_audio::notify_sound::{play, PlayRefusal};
+    let (device, tx_devices) = sound_route(settings);
+    play(device, tx_devices, clip.rate, clip.samples).map_err(|e| match e {
         PlayRefusal::TxDevice => SoundRefusal::TxDevice,
         PlayRefusal::NoDevice => SoundRefusal::NoDevice,
         PlayRefusal::Failed(why) => {
@@ -379,6 +384,49 @@ mod tests {
         let ev: Js8SoundEvent = serde_json::from_str("\"callNew\"").unwrap();
         assert_eq!(ev, Js8SoundEvent::CallNew);
         assert!(serde_json::from_str::<Js8SoundEvent>("\"../etc\"").is_err());
+    }
+
+    /// VOX SAFETY, end to end on this side: the route a play takes from Settings hands the guard
+    /// every TX audio device, so the operator's output set to one of them (by any spelling, the
+    /// station's or a radio profile's, chosen before or after the TX device) refuses the sound.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_sound_routed_to_a_tx_audio_device_is_refused() {
+        use tempo_audio::notify_sound::{refuse_tx, PlayRefusal};
+        let mut settings = Settings {
+            audio_out: "USB Audio CODEC".into(),
+            js8_sound_device: "Speakers".into(),
+            ..Default::default()
+        };
+        let verdict = |s: &Settings| {
+            let (device, tx) = sound_route(s);
+            refuse_tx(device, device, &tx, None)
+        };
+        assert_eq!(verdict(&settings), Ok(()), "control: another output plays");
+        settings.js8_sound_device = "usb audio codec".into();
+        assert_eq!(
+            verdict(&settings),
+            Err(PlayRefusal::TxDevice),
+            "the station's TX device"
+        );
+        settings.js8_sound_device = "Rig 2 CODEC".into();
+        settings.radios.push(tempo_app::settings::RadioProfile {
+            audio_out: "Rig 2 CODEC".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            verdict(&settings),
+            Err(PlayRefusal::TxDevice),
+            "a radio profile's TX device"
+        );
+        settings.radios.clear();
+        assert_eq!(verdict(&settings), Ok(()), "control: that radio removed");
+        settings.audio_out = "Rig 2 CODEC".into();
+        assert_eq!(
+            verdict(&settings),
+            Err(PlayRefusal::TxDevice),
+            "the TX device changed to it after the output was picked"
+        );
     }
 
     /// Both commands are registered, once each, and the old byte-handing command is gone: a
