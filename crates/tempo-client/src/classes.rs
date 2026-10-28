@@ -163,6 +163,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("fd_club_allow_back",             RefusedHere, "Lets a removed position back into the club event; a club change is made at the shack only."),
     ("fd_club_export",                 RunsAtShack, "The club log as text; this computer saves it."),
     ("fd_club_give_position",          RefusedHere, "Gives a held club position to a laptop the host turned away; a club change is made at the shack only."),
+    ("fd_club_import",                 RefusedHere, "Merges a laptop's contest file into the club log; a club change is made at the shack only."),
     ("fd_club_log_newest",             RunsAtShack, "The newest contacts in the club log the shack hosts; changes nothing."),
     ("fd_club_remove_position",        RefusedHere, "Removes a position from the club event; a club change is made at the shack only."),
     ("fd_discover_events",             RunsAtShack, "Listens for club events on the shack's network."),

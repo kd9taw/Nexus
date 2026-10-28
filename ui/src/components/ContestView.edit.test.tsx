@@ -27,6 +27,7 @@ vi.mock('../api', () => ({
   fdClubGivePosition: vi.fn(),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
   fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubImport: vi.fn(async () => ({})),
   fdClubExport: vi.fn(),
 }))
 const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>

@@ -496,6 +496,7 @@ During the party:
 
 - [ ] One transmitted signal per position. Every club chip reads **Synced**; a chip reading Offline or Behind catches up by itself when the network is back.
 - [ ] Whoever takes a seat sets **Operator at the key** first.
+- [ ] **If the host PC dies:** turn on **Host a club event** on another laptop, and the others join it again; each sends its contacts again by itself. The dead host's own contacts were on its disk only. If its disk can still be read, copy its contest journal, `fieldday_backup_` and 8 characters `.adi` from its Nexus settings folder (`%APPDATA%\tempo\` on Windows, `~/.config/tempo/` on macOS and Linux), to the new host, and press **Import a laptop's file…** in the club section of the new host's Contest screen. Do the same for a laptop that never synced. The new host says how many contacts it added and how many it kept out, and why; importing a file twice adds nothing.
 
 After the party:
 

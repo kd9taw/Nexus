@@ -15485,6 +15485,88 @@ impl Engine {
         Ok(club.merge(row, now))
     }
 
+    /// ⭐ **A laptop's contest journal, merged into the host's club log as that laptop's sync
+    /// would have merged it** — the host's "Import a laptop's file…", for a host that died and a
+    /// laptop that never synced. `text` is the laptop's journal (`fieldday_backup_<position>.adi`
+    /// in its settings folder) or the ADIF its Contest screen exported, and `posid` the position
+    /// its contacts are recorded as from.
+    ///
+    /// Read the way a restart restores that laptop's own log, under the club's session: a contact of
+    /// another contest or another running of this one is kept out ([`FieldDayLog::restore_journal`]),
+    /// and a record with no call or cut short is counted unreadable. Each live contact then goes
+    /// the way the outbox sends it: one logged on another call than the club's is kept out
+    /// ([`Self::fd_on_another_call`]; one that carries no call, which only the journal records, is
+    /// taken as the club's), and every other is built as the outbox builds it ([`fd_wire_row`])
+    /// and merged through the club's own intake ([`crate::fdevent::ClubLog::import`]): the same
+    /// keeping out, the same duplicates, and by `(position, seq)`, so a file imported again, or
+    /// after its laptop synced, adds nothing. A contact taken back on that laptop is not added, and
+    /// nothing the club holds is taken away.
+    ///
+    /// `Err` with the sentence the screen shows: not hosting, a position id no Nexus makes, a
+    /// position the host removed, or a club whose session Settings cannot build.
+    ///
+    /// [`FieldDayLog::restore_journal`]: tempo_core::fieldday::FieldDayLog::restore_journal
+    pub fn fd_club_import(
+        &mut self,
+        text: &str,
+        posid: &str,
+    ) -> Result<crate::dto::FdClubImportDto, String> {
+        let now = now_unix_secs();
+        let club = self
+            .fd_club
+            .as_ref()
+            .ok_or_else(|| "this station is not hosting a club event".to_string())?;
+        let posid = posid.trim().to_ascii_lowercase();
+        if !crate::fdevent::club_position_id(&posid) {
+            return Err(format!(
+                "{posid:?} is not a club position id: 8 characters, 0 to 9 and a to f"
+            ));
+        }
+        if club.is_removed(&posid) {
+            return Err("you removed that position from the club event: Allow back first".into());
+        }
+        let session = self.fd_club_session(club)?;
+        let club_call = self.fd_club_call();
+        let mut log = tempo_core::fieldday::FieldDayLog::new(&club_call, session, "");
+        let read = log.restore_journal(text, 0, now);
+        let (other_contest, other_running) = log.held();
+        let mut dto = crate::dto::FdClubImportDto {
+            other_contest,
+            other_running,
+            unreadable: read.unreadable,
+            taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
+            ..Default::default()
+        };
+        let mut rows = Vec::new();
+        {
+            let other = self.fd_on_another_call_than("");
+            for q in log.qsos() {
+                if other(q) {
+                    dto.other_call += 1;
+                } else {
+                    rows.push(fd_wire_row(&posid, &club_call, q));
+                }
+            }
+        }
+        let Some(club) = self.fd_club.as_mut() else {
+            return Err("this station is not hosting a club event".into());
+        };
+        for row in &rows {
+            match club.import(row, now) {
+                crate::fdevent::Imported::Added => dto.added += 1,
+                crate::fdevent::Imported::Dupe => dto.dupes += 1,
+                crate::fdevent::Imported::AlreadyIn => dto.already_in += 1,
+                crate::fdevent::Imported::KeptOut(reason) => {
+                    dto.refused.push(crate::dto::FdImportRefusedDto {
+                        call: crate::fdevent::shown_call(&row.call),
+                        reason,
+                    })
+                }
+            }
+        }
+        Ok(dto)
+    }
+
     /// ⭐ **A position takes back its own row `seq`** — `pos` is the position the connection
     /// JOINed as (the socket loop refuses any other), so no laptop can take back another's
     /// contact; the host's own laptop takes back its own the same way, over its loopback. A
@@ -15926,12 +16008,21 @@ impl Engine {
     /// flowing, as the JOIN gate serves it. ARRL Field Day takes every call: its GOTA station is on
     /// another call by rule, and the club's file writes its contacts under it.
     fn fd_on_another_call(&self) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + '_ {
+        self.fd_on_another_call_than(self.fd_mirror.link_call.as_str())
+    }
+
+    /// [`Self::fd_on_another_call`], with `link` the call a contact that carries none follows: this
+    /// laptop's link's for its own contacts, nothing for a laptop's file the host imports
+    /// ([`Self::fd_club_import`]), whose contact carrying no call is taken as the club's.
+    fn fd_on_another_call_than<'a>(
+        &'a self,
+        link: &'a str,
+    ) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + 'a {
         let gota = self.fd_club_contest() == tempo_core::fieldday::FdEvent::ArrlFd.code();
         let club = crate::fdevent::club_call(&match &self.fd_club {
             Some(_) => self.fd_club_call(),
             None => self.fd_mirror.host_call.clone(),
         });
-        let link = self.fd_mirror.link_call.as_str();
         move |q| {
             let call = match q.on_air_call.as_str() {
                 "" => link,
@@ -15980,34 +16071,7 @@ impl Engine {
             .qsos()
             .iter()
             .filter(|q| keep(q))
-            .map(|q| tempo_net::fdsync::WireQso {
-                pos: posid.clone(),
-                seq: q.seq,
-                call: q.call.clone(),
-                // The legacy pair still travels: it is what a v1 HOST reads, and
-                // it costs two short strings. The exchange as data travels beside
-                // it — both sides, from the ROW, because a mobile's county moves
-                // and the row that sent the old one must keep it.
-                class: q.class().to_string(),
-                sect: q.section().to_string(),
-                ex: crate::fdevent::to_wire_fields(&q.rx),
-                mex: crate::fdevent::to_wire_fields(&q.tx),
-                band: q.band.clone(),
-                mode: q.mode.clone(),
-                sub: q.submode.clone(),
-                when: q.when_unix,
-                op: if q.operator.trim().is_empty() {
-                    fallback.clone()
-                } else {
-                    q.operator.trim().to_uppercase()
-                },
-                // ⭐ THE BIRD, because the HOST builds this row's dupe key from what
-                // this position sends. ARRL lists a satellite as a separate band, so a
-                // key built without it would have the club board judging every
-                // position's pass contacts as terrestrial ones on the downlink band.
-                sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
-                sat_fm: q.sat.as_ref().is_some_and(|s| s.single_channel_fm),
-            })
+            .map(|q| fd_wire_row(posid, &fallback, q))
             .collect();
         rows.sort_by_key(|r| r.seq);
         rows
@@ -34220,6 +34284,45 @@ pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
+/// ⭐ **One contest row as club sync sends it**, as position `posid`: the outbox's rows
+/// ([`Engine::fd_sync_outbox`]) and the rows of a laptop's file the host imports
+/// ([`Engine::fd_club_import`]) are built here, so an imported contact is the row that laptop's
+/// sync would have sent. `fallback` is the operator of a row that names nobody.
+fn fd_wire_row(
+    posid: &str,
+    fallback: &str,
+    q: &tempo_core::fieldday::LoggedQso,
+) -> tempo_net::fdsync::WireQso {
+    tempo_net::fdsync::WireQso {
+        pos: posid.to_string(),
+        seq: q.seq,
+        call: q.call.clone(),
+        // The legacy pair still travels: it is what a v1 HOST reads, and
+        // it costs two short strings. The exchange as data travels beside
+        // it — both sides, from the ROW, because a mobile's county moves
+        // and the row that sent the old one must keep it.
+        class: q.class().to_string(),
+        sect: q.section().to_string(),
+        ex: crate::fdevent::to_wire_fields(&q.rx),
+        mex: crate::fdevent::to_wire_fields(&q.tx),
+        band: q.band.clone(),
+        mode: q.mode.clone(),
+        sub: q.submode.clone(),
+        when: q.when_unix,
+        op: if q.operator.trim().is_empty() {
+            fallback.to_string()
+        } else {
+            q.operator.trim().to_uppercase()
+        },
+        // ⭐ THE BIRD, because the HOST builds this row's dupe key from what
+        // this position sends. ARRL lists a satellite as a separate band, so a
+        // key built without it would have the club board judging every
+        // position's pass contacts as terrestrial ones on the downlink band.
+        sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
+        sat_fm: q.sat.as_ref().is_some_and(|s| s.single_channel_fm),
+    }
+}
+
 pub(crate) fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -54084,6 +54187,220 @@ mod tests {
         );
         let cab = e.fd_club_export(true).unwrap();
         assert!(!cab.contains("K9BBB"), "{cab}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A party laptop at position `posid` that has logged `calls`, and its contest journal as
+    /// the file the host imports: what its settings folder holds.
+    fn party_laptop(dir: &std::path::Path, posid: &str, calls: &[&str]) -> (Engine, String) {
+        let mut e = party_position(&dir.join(format!("fieldday_backup_{posid}.adi")));
+        let mut s = e.settings().clone();
+        s.fd_position_id = posid.into();
+        e.apply_settings(s);
+        for call in calls {
+            party_contact(&mut e, call);
+        }
+        let file = e.field_day_log_adif().expect("the laptop logged");
+        (e, file)
+    }
+
+    fn import_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-import-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// ⭐ **A laptop's file merges its contacts into the host's club log once**: imported again it
+    /// adds nothing, and says every contact is already in.
+    #[test]
+    fn a_laptops_file_merges_its_contacts_into_the_club_log_once() {
+        let dir = import_dir("once");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let mut host = party_host(&dir);
+        let first = host.fd_club_import(&file, "bbbb0002").unwrap();
+        assert_eq!(
+            (first.added, first.dupes, first.already_in),
+            (2, 0, 0),
+            "{first:?}"
+        );
+        assert_eq!(host.fd_club_log().map(|c| c.qsos_raw()), Some(2));
+        let again = host.fd_club_import(&file, "bbbb0002").unwrap();
+        assert_eq!(
+            again,
+            crate::dto::FdClubImportDto {
+                already_in: 2,
+                ..Default::default()
+            },
+            "a second import adds nothing"
+        );
+        assert_eq!(host.fd_club_log().map(|c| c.qsos_raw()), Some(2));
+        let cab = host.fd_club_export(true).unwrap();
+        assert_eq!(
+            cab.lines().filter(|l| l.starts_with("QSO:")).count(),
+            2,
+            "{cab}"
+        );
+        assert!(
+            host.fd_club_import(&file, "nope").is_err(),
+            "a position id no Nexus makes is refused"
+        );
+        host.fd_club_remove_position("bbbb0002").unwrap();
+        assert_eq!(
+            host.fd_club_import(&file, "bbbb0002"),
+            Err("you removed that position from the club event: Allow back first".to_string()),
+            "and a position the host removed, until it is let back"
+        );
+        host.fd_club_allow_back("bbbb0002").unwrap();
+        assert_eq!(
+            host.fd_club_import(&file, "bbbb0002").map(|r| r.already_in),
+            Ok(2),
+            "CONTROL: let back, it is read again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A duplicate and the contacts the club keeps out are counted, not added**: a station
+    /// another position already worked, a contact logged on another call than the club's, one taken
+    /// back on its laptop, one whose call is not a call sign, and a Field Day contact in the same
+    /// journal.
+    #[test]
+    fn an_import_counts_a_dupe_and_what_it_keeps_out() {
+        let dir = import_dir("kept");
+        let (_a, file_a) = party_laptop(&dir, "bbbb0002", &["K9AAA"]);
+        let (mut b, _) = party_laptop(&dir, "cccc0003", &["K9AAA", "K9DDD", "K9EEE"]);
+        // K9EEE taken back on that laptop.
+        let now = now_unix_secs();
+        if let Mode::FieldDay { station, .. } = &mut b.mode {
+            let seq = station.log.qsos().last().unwrap().seq;
+            assert!(station.log.remove_row(seq, now).is_some());
+        }
+        // Then a contact logged on the operator's own call.
+        let mut s = b.settings().clone();
+        s.mycall = "K9OWN".into();
+        b.apply_settings(s);
+        party_contact(&mut b, "K9CCC");
+        let mut file_b = b.field_day_log_adif().unwrap();
+        assert!(file_b.contains("<CALL:5>K9DDD"));
+        file_b = file_b.replace("<CALL:5>K9DDD", "<CALL:5>KKDDD");
+        // …and an ARRL Field Day contact from an hour ago in the same journal.
+        let mut fd = tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(tempo_core::fieldday::FdEvent::ArrlFd, "3A", "IL"),
+            "40m",
+        );
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert!(fd.log_fields_at(
+            "K1ABC",
+            &[pair("CLASS", "2A"), pair("SECTION", "EMA")],
+            "CW",
+            "",
+            0,
+            now - 3600
+        ));
+        let fd_adif = fd.adif();
+        file_b.push_str(fd_adif[fd_adif.find("<CALL").unwrap()..].trim_end());
+        file_b.push('\n');
+
+        let mut host = party_host(&dir);
+        host.fd_club_import(&file_a, "bbbb0002").unwrap();
+        let score = |cab: &str| {
+            cab.lines()
+                .find(|l| l.starts_with("CLAIMED-SCORE:"))
+                .map(str::to_string)
+        };
+        let before = score(&host.fd_club_export(true).unwrap());
+        assert!(before.is_some(), "CONTROL: the file claims a score");
+        let got = host.fd_club_import(&file_b, "cccc0003").unwrap();
+        assert_eq!(
+            (
+                got.added,
+                got.dupes,
+                got.already_in,
+                got.other_contest,
+                got.other_running,
+                got.other_call,
+                got.taken_back,
+                got.unreadable,
+                got.refused
+                    .iter()
+                    .map(|r| r.call.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (0, 1, 0, 1, 0, 1, 1, 0, vec!["KKDDD"]),
+            "{got:?}"
+        );
+        // The dupe merges as sync merges it: the party logs its duplicates, so the club's file
+        // keeps it as a line that scores nothing.
+        assert_eq!(host.fd_club_log().map(|c| c.qsos_raw()), Some(2));
+        let cab = host.fd_club_export(true).unwrap();
+        let qsos: Vec<&str> = cab.lines().filter(|l| l.starts_with("QSO:")).collect();
+        assert_eq!(qsos.len(), 2, "{cab}");
+        assert!(qsos.iter().all(|l| l.contains("K9AAA")), "{cab}");
+        assert_eq!(score(&cab), before, "the duplicate scores nothing");
+        for kept in ["K9CCC", "KKDDD", "K9EEE", "K1ABC"] {
+            assert!(!cab.contains(kept), "{kept} kept out:\n{cab}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The Club Cabrillo after an import is the one sync would have built from the same
+    /// rows**: one host takes a laptop's contacts over its link, another imports that laptop's
+    /// file, and the two files are the same bytes.
+    #[test]
+    fn the_club_cabrillo_after_an_import_is_the_one_sync_builds() {
+        let dir = import_dir("same");
+        let (mut laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB", "N9CCC"]);
+        {
+            let m = laptop.fd_mirror_mut();
+            m.on_link(true, now_unix_secs());
+            m.on_welcome(0, "ILQP", "W9XYZ", 0);
+            m.link_call = "W9XYZ".into();
+        }
+        let synced_dir = dir.join("synced");
+        std::fs::create_dir_all(&synced_dir).unwrap();
+        let mut synced = party_host(&synced_dir);
+        let role = synced.fd_position_role();
+        let hold = synced
+            .fd_club_join(
+                tempo_net::fdsync::PROTO_VERSION,
+                "bbbb0002",
+                "CW tent",
+                "W9XYZ",
+                "ilqp",
+                &role,
+                &club_key_hash("bbbb0002"),
+            )
+            .expect("the laptop joins")
+            .hold;
+        let out = laptop.fd_sync_outbox(0);
+        assert_eq!(out.len(), 3, "CONTROL: the laptop sends all three");
+        for row in &out {
+            synced.fd_club_merge(hold, row).unwrap();
+        }
+        let imported_dir = dir.join("imported");
+        std::fs::create_dir_all(&imported_dir).unwrap();
+        let mut imported = party_host(&imported_dir);
+        let got = imported.fd_club_import(&file, "bbbb0002").unwrap();
+        assert_eq!(got.added, 3, "{got:?}");
+        let (a, b) = (
+            synced.fd_club_export(true).unwrap(),
+            imported.fd_club_export(true).unwrap(),
+        );
+        assert!(
+            a.contains("N9CCC"),
+            "CONTROL: the synced file holds them:\n{a}"
+        );
+        assert_eq!(b, a);
+        assert_eq!(
+            imported.fd_club_export(false).unwrap(),
+            synced.fd_club_export(false).unwrap(),
+            "and the Club ADIF"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

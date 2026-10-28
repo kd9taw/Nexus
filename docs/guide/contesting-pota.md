@@ -410,7 +410,12 @@ a club sync worked.*
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
   reconnect, Contest mode on or off. If the host PC dies, enable hosting on
-  any other position; everyone re-joins and nothing is lost.
+  any other position; everyone re-joins and sends their contacts again. The
+  dead host's own contacts, and a laptop's that never synced, go in with
+  **Import a laptop's file…** on the new host: choose that laptop's contest
+  journal (`fieldday_backup_` and 8 characters, `.adi`, in its Nexus settings
+  folder). It merges them as sync would, says what it added and what it kept
+  out, and adds nothing the second time.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring
