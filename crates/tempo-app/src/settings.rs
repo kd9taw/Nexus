@@ -746,6 +746,13 @@ pub struct TxAudioRoute<'a> {
 /// Every other radio, and any of these with its network audio off, takes its audio from the card.
 /// The headphone monitor and the JS8 sounds use it to leave out a TX device of "system default" on
 /// a radio that does not transmit from a card ([`Settings`]'s TX devices, in `tempo_audio`).
+///
+/// This is decided from the settings, and the live path can still fall back to the card: while the
+/// Flex client's DAX audio has failed, or before the TCI tee is ready, the radio loop plays the
+/// transmit audio to the TX device, and a TX device of "system default" is the default output.
+/// That is safe only because the operating radio's backend holds its resolved TX output open
+/// (`tempo_audio::notify_sound::hold_tx_output`), which those guards also refuse; an idle radio
+/// does not transmit. Dropping that hold for network radios would turn this rule into a hole.
 pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
     let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
     let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
