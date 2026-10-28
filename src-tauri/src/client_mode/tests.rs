@@ -260,6 +260,7 @@ fn expected(cmd: &str, args: &Value) -> Way {
             "start_voice_recording" => Way::Local(Local::RecordStart),
             "stop_voice_recording" => Way::Local(Local::RecordStop),
             "cancel_voice_recording" => Way::Local(Local::RecordCancel),
+            "play_js8_sound" => Way::Local(Local::Js8Tone),
             _ => Way::Here,
         },
         Class::StopsTx => Way::Shack { stop: true },
@@ -865,6 +866,10 @@ const MAY_REACH: &[&str] = &[
     // WebView2's browser keys off in each window as Tauri makes it: one setting of the webview's
     // own, and nothing else.
     "crate::browser_keys::init",
+    // A JS8 sound's event and its built-in tone, made as samples for this computer's headset: it
+    // reads no file and opens nothing.
+    "crate::js8_sounds::Js8SoundEvent",
+    "crate::js8_sounds::tone_at",
     "crate::remote_service::vault::PairedStation",
     "crate::remote_service::vault::SystemVault",
     "crate::ui_state_read",
@@ -1645,6 +1650,91 @@ fn this_computers_audio_is_kept_here_and_never_sent() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(written, ["client-audio.json"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ A JS8 sound on this computer, while it drives the station: the event's built-in tone, into
+/// this computer's headset, where the station is heard. Never a file: not one the screen names (the
+/// station's paths never come here, and none is chosen here), a real WAV included, and nothing goes
+/// to the shack. CONTROL: another event plays its own tone; an event that is not one is refused.
+#[test]
+fn a_js8_sound_here_is_its_built_in_tone_in_this_computers_headset() {
+    use crate::js8_sounds::{tone_at, Js8SoundEvent};
+    let shack = FakeShack::new();
+    let dir = scratch("js8-tone");
+    // A real WAV: a quarter-scale square wave, nothing like a tone.
+    let wav = dir.join("directed.wav");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36u32 + 4_800).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&48_000u32.to_le_bytes());
+    bytes.extend_from_slice(&96_000u32.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&4_800u32.to_le_bytes());
+    for i in 0..2_400 {
+        let s: i16 = if i % 20 < 10 { 8_192 } else { -8_192 };
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(&wav, bytes).unwrap();
+    let client = client_in(&dir, &shack);
+    let headset = tempo_client::audio_road::StandIn::new();
+    client.hear_in_a_test(Arc::clone(&headset) as Arc<dyn Headset>);
+    let screens = screens(&client);
+    // What this computer's output plays next, as its callback takes it.
+    let heard = |n: usize| -> Vec<f32> {
+        let mut out = tempo_codec::headset::Cushion::new(48_000);
+        (0..n).map(|_| out.next(&headset.rings)).collect()
+    };
+    let wav = wav.to_string_lossy().into_owned();
+    for (name, event) in [
+        ("directed", Js8SoundEvent::Directed),
+        ("cq", Js8SoundEvent::Cq),
+    ] {
+        let tone = tone_at(event, 48_000);
+        assert!(!tone.is_empty(), "premise: {name} has a tone");
+        assert_eq!(
+            ask(
+                &screens.main,
+                "play_js8_sound",
+                json!({ "event": name, "file": wav, "device": "Speakers", "txDevices": ["Speakers"] }),
+            ),
+            Ok(json!({ "fileRefused": null })),
+            "{name}"
+        );
+        assert_eq!(
+            heard(tone.len() + 10)[..tone.len()],
+            tone[..],
+            "{name}: its tone"
+        );
+        assert!(
+            heard(10).iter().all(|s| *s == 0.0),
+            "{name}: nothing after it"
+        );
+    }
+    assert!(
+        ask(
+            &screens.main,
+            "play_js8_sound",
+            json!({ "event": "../etc" })
+        )
+        .is_err(),
+        "not an event"
+    );
+    assert!(
+        heard(100).iter().all(|s| *s == 0.0),
+        "nothing played for it"
+    );
+    assert!(shack.sent().is_empty(), "nothing went to the shack");
+    assert!(
+        lock(&screens.here).is_empty(),
+        "the station's own handler never ran"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

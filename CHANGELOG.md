@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **RTTY's tuning scope moves beside the waterfall.** The crossed-ellipse tuning display now stands to the right of the waterfall, in the same strip, with ◀ ▶ and the words beside the square, so RTTY's waterfall is as tall as every other mode's and the tuning square keeps its size. The waterfall is that much narrower on RTTY. The decoded text and the log no longer give up room for it. Hide Tuning and the waterfall takes the full width; hide the waterfall and the tuning display keeps the strip.
 - **The Logbook uses the whole window.** The log sat in a centred column with empty space on both sides (1100 px of a 1920 screen, 1600 px of a 2560 one), and a table with added columns scrolled sideways inside that column. It now spans the window at every size from 1024×768 up; where the columns you chose still do not fit, the table scrolls sideways inside itself, header and rows together, and the page never does.
 - **PSK Reporter shows your Nexus version.** Spots you upload to PSK Reporter now name the reporting software as "Nexus v" and the version you run (for example "Nexus v1.21.0"), as WSJT-X and other programs send theirs, instead of "Nexus" alone. The WSJT-X UDP Heartbeat that loggers read now gives the same version (it said 0.2.0).
+- **Play receive audio here stays off on an output that might be your radio's TX audio.** It already refused the radio's TX audio device by name. It now also refuses one it cannot tell apart from it, as the JS8 sounds do: a second identically named sound card, whatever number Windows or Linux gives it ("USB Audio CODEC #2", "Speakers (2- USB Audio CODEC)", CODEC_1), and, on Linux, the system default, PulseAudio or PipeWire output against a radio on a sound card (or the other way round), since either may be the radio's card. On Linux, pick **Headphones or speakers** by its card name; Settings ▸ Radio ▸ Receive audio on this computer says so. Two different sound cards monitor as before.
 
 ### Added
 - **Choose the audio waterfall on an Icom** (#417). Settings ▸ Radio ▸ Rig & CAT ▸ Advanced has a Waterfall source for an Icom whose own scope Nexus shows (native CI-V, or the Icom network connection): Radio's scope, as before, or Audio, the sound card's waterfall, which is finer close to the dial than an IC-7300's scope at ±25 kHz. With Audio the radio stops sending its scope, CI-V stays connected for CAT, and every screen draws the audio waterfall, CW's HiDef included. Each radio keeps its own choice; Radio's scope stays the default.
@@ -94,8 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your own from ~/.asoundrc, or plug:, oss, a bare dmix) may reach any card, so a sound is refused against it either way
   round. With a radio's TX audio set to the system default (or a radio profile with none), pick a
   specific output for the sounds. A sound plays at most ten seconds, one at a time, and Test plays on the output chosen
-  in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
-  Remote they show the station's choice and say "Set at the station".
+  in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station.
+  On a computer driving the station over Remote, the sounds play their built-in tones on that computer, where you hear
+  the station, and Settings says so; the station's sound files never leave the station, and none is chosen there.
 - **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
   notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
 - **JS8's waterfall darkens the audio outside the decode filter**, as JS8Call's does: half-dark on each side, with a

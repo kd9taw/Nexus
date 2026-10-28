@@ -8338,6 +8338,8 @@ export const EN = {
   'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
+  'settings.headphoneMonitor.device.linuxHint':
+    'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
@@ -9550,6 +9552,8 @@ export const EN = {
   'settings.js8.sounds.title': 'Sounds',
   'settings.js8.sounds.hint':
     'A sound when one of these is heard, whichever screen is showing: its own tone, or a WAV file you choose. All off by default, as JS8Call’s notifications are. Test plays it once.',
+  'settings.js8.sounds.thisComputer':
+    'On this computer the sounds play their built-in tones, where you hear the station; a file chosen at the station is not used here.',
   'settings.js8.sound.cq': 'A CQ',
   'settings.js8.sound.hb': 'A heartbeat',
   'settings.js8.sound.ack': 'An ACK for you',

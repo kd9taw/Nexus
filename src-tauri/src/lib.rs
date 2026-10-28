@@ -14262,6 +14262,11 @@ fn settings_read(
     // From afar the stored keys stay at the shack: blanked, with whether each is saved.
     let saved_at_the_station =
         command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar, watched);
+    // From afar no path on the shack's disk goes: the computer driving it plays JS8's built-in
+    // tones (`client_mode`), and the save from afar keeps the shack's own files.
+    if afar.is_some() {
+        s.js8_sound_files.clear();
+    }
     // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
     // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
     // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
@@ -59233,6 +59238,36 @@ mod secrets_toward_remote_tests {
         assert!(
             own.get(command_dispatch::SET_AT_THE_STATION).is_none(),
             "at the shack, no list and nothing planted"
+        );
+    }
+
+    /// ⛔ No path on the station's disk crosses to a computer driving it: a read from afar carries
+    /// none of the station's JS8 sound files (that computer plays the built-in tones), and the save
+    /// from afar keeps them as the shack has them. CONTROL: the shack's own read carries them.
+    #[test]
+    fn a_settings_read_from_afar_carries_no_station_sound_file() {
+        let afar = command_dispatch::Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        };
+        let mut shack = station();
+        shack
+            .js8_sound_files
+            .insert("cq".into(), "C:\\Shack\\Sounds\\cq.wav".into());
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
+        assert_eq!(read["js8SoundFiles"], serde_json::json!({}), "from afar");
+        assert!(!read.to_string().contains("cq.wav"), "from afar: {read}");
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
+        assert_eq!(
+            own["js8SoundFiles"],
+            serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+            "CONTROL: at the shack"
+        );
+        let mut save = settings_read(&shack, Some(&afar), false).settings;
+        command_dispatch::keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            save.js8_sound_files, shack.js8_sound_files,
+            "a save from afar keeps the station's"
         );
     }
 

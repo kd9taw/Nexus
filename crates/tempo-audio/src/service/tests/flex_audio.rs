@@ -1130,11 +1130,18 @@ fn programs_on_the_tci_server_hear_the_flexs_dax_audio() {
 
 // ── The headphone monitor ────────────────────────────────────────────────────────────────
 
-/// "Play receive audio here" on, to `device`, with the rig's TX audio on its own device.
+/// A headphone output: another sound card than the rig's TX audio.
+const HEADSET: &str = "hw:CARD=Headset,DEV=0";
+/// The rig's TX audio card, by another spelling.
+const SAME_AS_TX: &str = "PLUGHW:CARD=codec,DEV=0";
+
+/// "Play receive audio here" on, to `device`, with the rig's TX audio on its own device. The names
+/// are ALSA cards' (`HEADSET`, `SAME_AS_TX`), so two different cards on every platform: on Linux the
+/// guard proves only two cards different (`monitor::monitor_would_transmit`).
 fn monitor_on(s: &FlexScene, device: &str) {
     let mut e = s.engine.lock().unwrap();
     let mut settings = e.settings().clone();
-    settings.audio_out = "USB Audio CODEC".into();
+    settings.audio_out = "plughw:CARD=CODEC,DEV=0".into();
     settings.monitor_enabled = true;
     settings.monitor_device = device.into();
     e.apply_settings(settings);
@@ -1167,7 +1174,7 @@ fn native_audio_with_the_monitor_on(device: &str) -> FlexScene {
 /// plays the sound card again.
 #[test]
 fn play_receive_audio_here_plays_the_flexs_native_audio() {
-    let mut s = native_audio_with_the_monitor_on("Headphones");
+    let mut s = native_audio_with_the_monitor_on(HEADSET);
     {
         let mut e = s.engine.lock().unwrap();
         let mut settings = e.settings().clone();
@@ -1220,7 +1227,7 @@ fn play_receive_audio_here_plays_the_flexs_native_audio() {
 /// queued either.
 #[test]
 fn native_flex_audio_never_reaches_a_monitor_on_the_tx_device_or_while_keyed() {
-    let mut s = native_audio_with_the_monitor_on("usb audio codec");
+    let mut s = native_audio_with_the_monitor_on(SAME_AS_TX);
     s.run(1_000);
     assert!(
         !s.backend
@@ -1238,7 +1245,7 @@ fn native_flex_audio_never_reaches_a_monitor_on_the_tx_device_or_while_keyed() {
         "Flex audio queued for the TX device"
     );
     // A monitor on its own device, and the operator's PTT down: the loop mutes it.
-    monitor_on(&s, "Headphones");
+    monitor_on(&s, HEADSET);
     run_until(&mut s, "the monitor never played the Flex", |s| {
         s.backend.monitor.queued() > 0
     });
@@ -1299,7 +1306,7 @@ fn native_flex_audio_never_reaches_a_monitor_on_the_dax_transmit_device() {
         "Flex audio queued for DAX TX"
     );
     // Control: the same scene on headphones plays.
-    monitor_on(&s, "Headphones");
+    monitor_on(&s, HEADSET);
     run_until(&mut s, "the monitor never played the Flex", |s| {
         s.backend.monitor.queued() > 0
     });
@@ -1310,7 +1317,7 @@ fn native_flex_audio_never_reaches_a_monitor_on_the_dax_transmit_device() {
 /// same feed nothing of the Flex's reaches it, though the pooled client lives on.
 #[test]
 fn a_flex_radio_switched_away_stops_feeding_the_headphones() {
-    let mut s = native_audio_with_the_monitor_on("Headphones");
+    let mut s = native_audio_with_the_monitor_on(HEADSET);
     run_until(&mut s, "the monitor never played the Flex", |s| {
         s.backend.monitor.queued() > 0
     });
@@ -1341,7 +1348,7 @@ fn a_flex_radio_switched_away_stops_feeding_the_headphones() {
 /// monitor back to the idle sound card a tick after the TCI radio took it.
 #[test]
 fn a_flex_replaced_by_a_tci_radio_without_the_handoff_leaves_the_headphones_on() {
-    let mut s = native_audio_with_the_monitor_on("Headphones");
+    let mut s = native_audio_with_the_monitor_on(HEADSET);
     run_until(&mut s, "the monitor never played the Flex", |s| {
         s.backend.monitor.queued() > 0
     });

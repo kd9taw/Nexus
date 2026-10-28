@@ -180,6 +180,13 @@ export function Js8ListsSettings({
       <div className="settings-featgroup">
         <span className="settings-featgroup-title">{t('settings.js8.sounds.title')}</span>
         <span className="settings-hint">{t('settings.js8.sounds.hint')}</span>
+        {/* From a computer driving the station a sound plays its built-in tone there (client_mode's
+            JS8 tone): the station's files stay at the station, and none is chosen here. */}
+        {!filesHere && (
+          <span className="settings-hint" data-js8-sounds-here="">
+            {t('settings.js8.sounds.thisComputer')}
+          </span>
+        )}
         {setAtStation?.('js8SoundFiles')}
         {setSoundDevice && (
           <label className="settings-field">

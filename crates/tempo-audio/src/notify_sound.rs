@@ -163,7 +163,7 @@ const CARD_PLUGINS: [&str; 13] = [
 
 /// How this computer's audio host names an output device, and so how two names are compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Naming {
+pub(crate) enum Naming {
     /// Linux: ALSA PCM names, whose routing may live in a config file.
     Alsa,
     /// Windows / macOS: one name per endpoint.
@@ -171,7 +171,7 @@ enum Naming {
 }
 
 /// This computer's naming (cpal's ALSA host on Linux, WASAPI / CoreAudio elsewhere).
-const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
+pub(crate) const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
     Naming::Alsa
 } else {
     Naming::Endpoint
@@ -310,7 +310,7 @@ fn collide(a: &Route, b: &Route) -> Option<Collision> {
 }
 
 /// An ALSA card's id from its number, as the kernel lists it (`/proc/asound/card<N>/id`).
-fn system_card_id(n: u32) -> Option<String> {
+pub(crate) fn system_card_id(n: u32) -> Option<String> {
     if cfg!(target_os = "linux") {
         std::fs::read_to_string(format!("/proc/asound/card{n}/id"))
             .ok()
@@ -324,7 +324,7 @@ fn system_card_id(n: u32) -> Option<String> {
 /// THE GUARD for one name: why playing on `device` might play into one of `tx_devices`, where an
 /// empty TX name is the system default output, `default_output` (`None` when the host cannot name
 /// one). The strongest reason wins: a named TX device over an unprovable one over a default one.
-fn device_verdict(
+pub(crate) fn device_verdict(
     device: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
@@ -439,9 +439,14 @@ pub fn refuse_tx(
 
 /// A built-in tone: a short sine at `hz` with the alerts' envelope (10 ms up to 0.18, down to
 /// silence at 220 ms), twice for `double`, the second a fifth higher 130 ms later — what the
-/// window's own alert beeps sound like.
+/// window's own alert beeps sound like. At [`TONE_RATE`].
 pub fn tone(hz: f32, double: bool) -> Vec<f32> {
-    let rate = TONE_RATE as f32;
+    tone_at(hz, double, TONE_RATE)
+}
+
+/// [`tone`], made at `rate` samples a second (an output that plays at its own rate).
+pub fn tone_at(hz: f32, double: bool, rate: u32) -> Vec<f32> {
+    let rate = rate.max(1) as f32;
     let beep = |f: f32| -> Vec<f32> {
         let n = (0.24 * rate) as usize;
         (0..n)

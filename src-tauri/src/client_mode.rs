@@ -496,6 +496,8 @@ pub(crate) enum Local {
     RecordStop,
     /// The voice keyer's recording thrown away: nothing is sent.
     RecordCancel,
+    /// A JS8 sound: its built-in tone, in this computer's headset. Never a file.
+    Js8Tone,
 }
 
 /// The way for `cmd` invoked with `args`. `command_dispatch::route` first, deny by default: a
@@ -517,6 +519,9 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
             "start_voice_recording" => Way::Local(Local::RecordStart),
             "stop_voice_recording" => Way::Local(Local::RecordStop),
             "cancel_voice_recording" => Way::Local(Local::RecordCancel),
+            // The app's own handler plays the station's sound files on an Engine's settings; here
+            // a JS8 sound is its built-in tone, in this computer's headset.
+            "play_js8_sound" => Way::Local(Local::Js8Tone),
             _ => Way::Here,
         },
         Route::Shack => {
@@ -1452,6 +1457,13 @@ impl Client {
                 invoke.resolver.resolve(());
                 true
             }
+            Way::Local(Local::Js8Tone) => {
+                let me = Arc::clone(self);
+                invoke.resolver.respond_async(async move {
+                    me.js8_tone(&args).await.map_err(InvokeError::from)
+                });
+                true
+            }
             Way::Local(Local::RecordStop) => {
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
@@ -1588,7 +1600,34 @@ impl Client {
             }
             // Answered by [`Client::record_stop`].
             Local::RecordStop => Err(word(Refusal::BadArguments.code())),
+            // Answered by [`Client::js8_tone`].
+            Local::Js8Tone => Err(word(Refusal::BadArguments.code())),
         }
+    }
+
+    /// A JS8 sound while this computer drives the station: the event's built-in tone, played into
+    /// this computer's headset, on the output where the station is heard, as This computer ▸
+    /// Audio's Test plays. Never a file, whatever the screen names: the station's files stay at the
+    /// station, and none is chosen here. Nothing goes to the shack. Answers as the station's own
+    /// `play_js8_sound` does: no file refused, or `failed` when the output will not open.
+    async fn js8_tone(&self, args: &Value) -> Result<Value, String> {
+        let event: crate::js8_sounds::Js8SoundEvent = serde_json::from_value(args["event"].clone())
+            .map_err(|_| word(Refusal::BadArguments.code()))?;
+        let headset = self.link_headset().ok_or("failed")?;
+        headset.want_output();
+        // The output opens on the headset's own thread within a moment, unless it cannot.
+        for _ in 0..50 {
+            if let Some(rate) = headset.rings().out_rate() {
+                let tone = crate::js8_sounds::tone_at(event, rate);
+                if tone.is_empty() {
+                    break;
+                }
+                headset.rings().sound(&tone);
+                return Ok(json!({ "fileRefused": null }));
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Err("failed".to_string())
     }
 
     /// The voice keyer's Stop & save: the recording made here, finished, written as the keyer's

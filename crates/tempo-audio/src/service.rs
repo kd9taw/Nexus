@@ -8460,7 +8460,8 @@ impl RadioLoop {
             // monitor-setting change — or re-apply it to a freshly rebuilt backend,
             // whose monitor starts off. This never rebuilds the capture/TX streams, so
             // the decode path never restarts. Guard: refuse to open the monitor on the
-            // rig's TX output device, which would transmit the received band back out.
+            // rig's TX output device, or one it cannot be told apart from by name, which would
+            // transmit the received band back out.
             if audio_rebuilt
                 || want.monitor_differs(&self.applied)
                 || std::mem::take(&mut self.monitor_reapply)
@@ -8502,8 +8503,9 @@ impl RadioLoop {
                                 eng.set_audio_error(Some((
                                     AudioErrorKind::Monitor,
                                     "Headphone monitor is off: the chosen output is the rig's TX \
-                                     device — monitoring it would transmit the received band. Pick a \
-                                     separate headphone or speaker device."
+                                     device, or cannot be told apart from it — monitoring it would \
+                                     transmit the received band. Pick a separate headphone or \
+                                     speaker device (on Linux, by its card name)."
                                         .to_string(),
                                 )));
                                 self.err_owner = ErrOwner::Monitor;

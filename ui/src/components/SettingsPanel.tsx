@@ -7399,6 +7399,9 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   {t('settings.headphoneMonitor.device.hint')}
                 </span>
+                <span className="settings-hint">
+                  {t('settings.headphoneMonitor.device.linuxHint')}
+                </span>
               </label>
 
               <label className="settings-field">

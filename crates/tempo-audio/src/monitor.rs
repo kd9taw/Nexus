@@ -22,21 +22,11 @@ pub use tempo_codec::ring::SpscRing;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// The TX-device guard, as a pure predicate: `true` when opening the monitor on
-/// `monitor_device` would feed the received band into the rig's TX audio device
-/// (`audio_out`) and thus transmit it back out. When it returns `true` the monitor
-/// must NOT open.
-///
-/// Two devices collide when their names match case-insensitively, or when BOTH are
-/// empty (each meaning "system default output", i.e. the same device). An empty
-/// against a named device is treated as distinct — we cannot prove by name that a
-/// named device *is* the current system default, so the guard doesn't block it.
-/// SmartSDR's DAX transmit device is refused whatever `audio_out` is
-/// ([`is_flex_dax_tx_device`]).
 /// Resolve an empty device name ("system default output") to the ACTUAL default
 /// output device's name, so the TX guard can compare real devices instead of
 /// treating "" as unknowable. Returns the input unchanged when it's non-empty or
-/// the host can't name a default (guard then falls back to the pure rule).
+/// the host can't name a default (the guard then refuses: an unnamed default cannot be told
+/// apart from anything).
 #[cfg(feature = "device")]
 pub fn resolve_output_name(name: &str) -> String {
     use cpal::traits::HostTrait;
@@ -54,19 +44,51 @@ pub fn resolve_output_name(name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The TX-device guard, as a pure predicate: `true` when opening the monitor on
+/// `monitor_device` might feed the received band into the rig's TX audio device (`audio_out`)
+/// and thus transmit it back out. When it returns `true` the monitor must NOT open.
+///
+/// It is the JS8 sounds' guard ([`crate::notify_sound`]), with the rig's TX device as the one TX
+/// device, so the two cannot drift apart. Fail-safe: the monitor is refused when the two are the
+/// same device, or cannot be PROVEN different by name.
+/// - Windows / macOS: two names are one device case-blind and without the " #N" a device list adds
+///   to a second identically named codec, or the "N- " Windows numbers it by ("Speakers (2- USB
+///   Audio CODEC)"), since those numbers move when one is unplugged.
+/// - Linux: only two different sound cards are proven different (`hw:CARD=PCH` against
+///   `plughw:CARD=CODEC`). The sound server's default (`default`, `pulse`, `pipewire`…) may be
+///   the rig's card, and an `~/.asoundrc` PCM routes by a file, so either against a card is
+///   refused; so is a renumbered twin card (`CODEC_1` against `CODEC`). The operator picks the
+///   monitor output by card name.
+/// - An empty name (a system default the host could not name) is refused against anything.
+///
+/// SmartSDR's DAX transmit device is refused whatever `audio_out` is ([`is_flex_dax_tx_device`]).
 pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
-    let m = monitor_device.trim();
-    let o = audio_out.trim();
-    if is_flex_dax_tx_device(m) {
-        return true;
-    }
-    if m.is_empty() && o.is_empty() {
-        return true; // both "system default output" → the same device
-    }
-    if m.is_empty() || o.is_empty() {
-        return false;
-    }
-    m.eq_ignore_ascii_case(o)
+    monitor_would_transmit_as(
+        monitor_device,
+        audio_out,
+        crate::notify_sound::HOST_NAMING,
+        &crate::notify_sound::system_card_id,
+    )
+}
+
+/// [`monitor_would_transmit`] under `naming`, a card number resolved through `card_id` (tests name
+/// their own platform and cards).
+fn monitor_would_transmit_as(
+    monitor_device: &str,
+    audio_out: &str,
+    naming: crate::notify_sound::Naming,
+    card_id: &dyn Fn(u32) -> Option<String>,
+) -> bool {
+    // The names come resolved (`resolve_output_name`): an empty one is a default nobody could
+    // name, so no default is handed in and it is refused against anything.
+    crate::notify_sound::device_verdict(
+        monitor_device,
+        &[audio_out.to_string()],
+        None,
+        naming,
+        card_id,
+    )
+    .is_some()
 }
 
 /// Whether `name` is SmartSDR's DAX transmit device on Windows: "DAX Audio TX (FlexRadio Systems
@@ -1011,18 +1033,111 @@ mod tests {
     }
     use super::*;
 
+    use crate::notify_sound::Naming::{Alsa, Endpoint};
+
+    /// No card numbers resolve: a test names its own cards.
+    fn no_cards(_: u32) -> Option<String> {
+        None
+    }
+
+    /// The guard as Windows / macOS name their devices.
+    fn endpoint(monitor: &str, tx: &str) -> bool {
+        monitor_would_transmit_as(monitor, tx, Endpoint, &no_cards)
+    }
+
+    /// The guard as Linux (ALSA) names its devices, card 1 being `CODEC`.
+    fn alsa(monitor: &str, tx: &str) -> bool {
+        let cards = |n: u32| (n == 1).then(|| "CODEC".to_string());
+        monitor_would_transmit_as(monitor, tx, Alsa, &cards)
+    }
+
     #[test]
     fn guard_blocks_same_device_and_both_default() {
         // Both empty = both "system default output" → the same device → blocked.
-        assert!(monitor_would_transmit("", ""));
+        assert!(endpoint("", ""));
         // Same name (case-insensitive) → blocked.
-        assert!(monitor_would_transmit("USB Audio CODEC", "usb audio codec"));
-        assert!(monitor_would_transmit(" Speakers ", "Speakers"));
+        assert!(endpoint("USB Audio CODEC", "usb audio codec"));
+        assert!(endpoint(" Speakers ", "Speakers"));
         // Distinct devices → allowed.
-        assert!(!monitor_would_transmit("Headphones", "USB Audio CODEC"));
-        // One default, one named → cannot prove collision by name → allowed.
-        assert!(!monitor_would_transmit("Headphones", ""));
-        assert!(!monitor_would_transmit("", "USB Audio CODEC"));
+        assert!(!endpoint("Headphones", "USB Audio CODEC"));
+        // One default the host could not name, one named → cannot be told apart → blocked.
+        assert!(endpoint("Headphones", ""));
+        assert!(endpoint("", "USB Audio CODEC"));
+    }
+
+    /// Windows / macOS: a second identically named codec is listed with a " #N", and Windows
+    /// numbers it inside its name ("2- "); the numbers move when one is unplugged, so the twins are
+    /// one device. Case and spaces never tell two devices apart.
+    #[test]
+    fn guard_blocks_a_renumbered_twin_codec_by_any_spelling() {
+        for (monitor, tx) in [
+            ("USB Audio CODEC #2", "USB Audio CODEC"),
+            ("USB Audio CODEC", "USB Audio CODEC #3"),
+            (
+                "Speakers (2- USB Audio CODEC)",
+                "Speakers (USB Audio CODEC)",
+            ),
+            (
+                "Speakers (3- USB Audio CODEC)",
+                "Speakers (2- USB Audio CODEC)",
+            ),
+            (
+                "  speakers (usb audio codec) ",
+                "Speakers (USB Audio CODEC)",
+            ),
+        ] {
+            assert!(
+                endpoint(monitor, tx),
+                "{monitor:?} against {tx:?} let through"
+            );
+        }
+        // Positive controls: different devices still monitor.
+        for (monitor, tx) in [
+            ("Headphones (Realtek Audio)", "Speakers (USB Audio CODEC)"),
+            (
+                "Headphones (USB Audio CODEC)",
+                "Speakers (2- USB Audio CODEC)",
+            ),
+            ("Speakers (Line 2- Out)", "Speakers (Line Out)"),
+        ] {
+            assert!(!endpoint(monitor, tx), "{monitor:?} against {tx:?} refused");
+        }
+    }
+
+    /// Linux: the sound server's default (`default`, `pulse`, `pipewire`…) may be the rig's card,
+    /// so against a card it is refused, either way round; a renumbered twin card (`CODEC_1`), the
+    /// card by its number and by another plugin are the rig's card. Two different cards monitor.
+    #[test]
+    fn guard_blocks_linux_aliases_of_the_tx_card() {
+        let tx = "plughw:CARD=CODEC,DEV=0";
+        for monitor in [
+            "default",
+            "pulse",
+            "pipewire",
+            "sysdefault",
+            " DEFAULT ",
+            "rigtx",
+            "hw:CARD=CODEC,DEV=0",
+            "hw:CARD=codec,DEV=0",
+            "front:CARD=CODEC,DEV=0",
+            "plughw:CARD=CODEC_1,DEV=0",
+            "hw:1,0",
+            "hw:2,0",
+            "",
+        ] {
+            assert!(alsa(monitor, tx), "{monitor:?} let through");
+        }
+        // The TX device on the sound server's default: no card can be shown to differ from it.
+        for tx in ["default", "pulse", "pipewire", ""] {
+            assert!(alsa("hw:CARD=PCH,DEV=0", tx), "against {tx:?} let through");
+        }
+        // Both on the sound server's default: the same target.
+        assert!(alsa("pulse", "default"));
+        // Positive controls: another card, by name or by a number that resolves elsewhere.
+        assert!(!alsa("hw:CARD=PCH,DEV=0", tx));
+        assert!(!alsa("plughw:CARD=Headset,DEV=0", tx));
+        assert!(!alsa("hw:CARD=PCH,DEV=0", "hw:1,0"));
+        assert!(!alsa("front:CARD=PCH,DEV=0", "hw:CARD=CODEC,DEV=0"));
     }
 
     /// SmartSDR's DAX transmit device carries what is played on it to a Flex's transmitter, whatever
@@ -1037,11 +1152,12 @@ mod tests {
             "DAX TX (FlexRadio DAX)",
             " dax tx ",
         ] {
+            assert!(endpoint(dax_tx, "Speakers"), "{dax_tx:?} let through");
+            assert!(endpoint(dax_tx, ""), "{dax_tx:?} let through");
             assert!(
                 monitor_would_transmit(dax_tx, "Speakers"),
-                "{dax_tx:?} let through"
+                "{dax_tx:?} let through on this computer"
             );
-            assert!(monitor_would_transmit(dax_tx, ""), "{dax_tx:?} let through");
         }
         // The receive devices, and devices that only mention DAX, are headphones like any other.
         for other in [
@@ -1051,9 +1167,25 @@ mod tests {
             "Headphones (DAX TX helper)",
             "DAX TXT",
         ] {
-            assert!(
-                !monitor_would_transmit(other, "USB Audio CODEC"),
-                "{other:?} refused"
+            assert!(!endpoint(other, "USB Audio CODEC"), "{other:?} refused");
+        }
+    }
+
+    /// This computer's guard is the JS8 sounds' guard under this computer's naming: the same
+    /// answer for every pair, so the two cannot drift apart.
+    #[test]
+    fn the_guard_on_this_computer_is_the_js8_sounds_guard() {
+        for (monitor, tx) in [
+            ("default", "hw:CARD=CODEC,DEV=0"),
+            ("hw:CARD=PCH,DEV=0", "hw:CARD=CODEC,DEV=0"),
+            ("USB Audio CODEC #2", "USB Audio CODEC"),
+            ("Headphones", "USB Audio CODEC"),
+            ("Headphones", ""),
+        ] {
+            assert_eq!(
+                monitor_would_transmit(monitor, tx),
+                crate::notify_sound::would_transmit(monitor, &[tx.to_string()], None),
+                "{monitor:?} against {tx:?}"
             );
         }
     }

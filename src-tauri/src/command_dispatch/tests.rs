@@ -3777,6 +3777,29 @@ fn a_profile_saved_from_afar_keeps_every_station_only_setting() {
     );
 }
 
+/// ⛔ No path on the station's disk crosses to a computer driving it: a saved profile read from
+/// afar carries none of the station's JS8 sound files. CONTROL: the rest of the profile goes as it
+/// was.
+#[test]
+fn a_saved_profile_carries_no_station_sound_file_toward_afar() {
+    let shack_profiles = json!([
+        { "name": "Home", "settings": { "js8SoundFiles": { "cq": "/home/op/sounds/cq.wav" }, "mygrid": "EN52" } },
+    ])
+    .to_string();
+    let shack = map(&[("nexus.profiles", shack_profiles.as_str())]);
+    let read = station_answer(serde_json::to_value(&shack).unwrap());
+    let text = read["nexus.profiles"]
+        .as_str()
+        .expect("the profiles are read");
+    assert!(!text.contains("cq.wav"), "from afar: {text}");
+    let profiles: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(profiles[0]["settings"].get("js8SoundFiles"), None);
+    assert_eq!(
+        profiles[0]["settings"]["mygrid"], "EN52",
+        "CONTROL: the rest"
+    );
+}
+
 /// A profile saved at the shack is read from afar and saved back as it was read: it comes back
 /// whole, every field of a whole Settings, its stored key and its station-only settings included.
 /// What the shack's own screen saves never passes here (`ui_state_save`, at the shack, writes the
@@ -3787,6 +3810,7 @@ fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
         tx_watchdog_min: 3,
         clublog_api_key: "FAKE-HOME-KEY-0003".into(),
         tqsl_path: "C:\\TrustedQSL\\tqsl.exe".into(),
+        js8_sound_files: [("cq".to_string(), "C:\\Sounds\\cq.wav".to_string())].into(),
         ..Default::default()
     })
     .unwrap();
@@ -3797,6 +3821,11 @@ fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
     assert_eq!(
         read[0]["settings"]["clublogApiKey"], "",
         "premise: read blank"
+    );
+    assert_eq!(
+        read[0]["settings"].get("js8SoundFiles"),
+        None,
+        "premise: no sound file read"
     );
     let saved = profiles_saved_from_afar(&shack_profiles, &read);
     assert_eq!(saved, shack_profiles);

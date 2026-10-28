@@ -720,10 +720,17 @@ fn the_sdr_programs_receive_audio_takes_the_sound_cards_place() {
     );
 }
 
-/// "Play receive audio here" on, to `device`, with the rig's TX audio on its own device.
+/// A headphone output: another sound card than the rig's TX audio.
+const HEADSET: &str = "hw:CARD=Headset,DEV=0";
+/// The rig's TX audio card, by another spelling.
+const SAME_AS_TX: &str = "PLUGHW:CARD=codec,DEV=0";
+
+/// "Play receive audio here" on, to `device`, with the rig's TX audio on its own device. The names
+/// are ALSA cards' (`HEADSET`, `SAME_AS_TX`), so two different cards on every platform: on Linux the
+/// guard proves only two cards different (`monitor::monitor_would_transmit`).
 fn monitor_on(e: &mut Engine, device: &str) {
     let mut settings = e.settings().clone();
-    settings.audio_out = "USB Audio CODEC".into();
+    settings.audio_out = "plughw:CARD=CODEC,DEV=0".into();
     settings.monitor_enabled = true;
     settings.monitor_device = device.into();
     e.apply_settings(settings);
@@ -748,7 +755,7 @@ fn play_receive_audio_here_plays_the_sdr_programs_audio() {
     s.run_until("TCI audio never became the receive source", |s| {
         s.state.tci_rx.is_some()
     });
-    monitor_on(&mut s.engine(), "Headphones");
+    monitor_on(&mut s.engine(), HEADSET);
     s.run_until("the monitor never turned on", |s| {
         s.card.mon_enabled.load(std::sync::atomic::Ordering::SeqCst)
     });
@@ -800,7 +807,7 @@ fn tci_audio_never_reaches_a_monitor_on_the_tx_device() {
     s.run_until("TCI audio never became the receive source", |s| {
         s.state.tci_rx.is_some()
     });
-    monitor_on(&mut s.engine(), "usb audio codec");
+    monitor_on(&mut s.engine(), SAME_AS_TX);
     s.run(1_500);
     assert!(
         !s.card.mon_enabled.load(std::sync::atomic::Ordering::SeqCst),
@@ -826,7 +833,7 @@ fn the_monitor_is_muted_on_tci_audio_while_the_ptt_is_down() {
     s.run_until("TCI audio never became the receive source", |s| {
         s.state.tci_rx.is_some()
     });
-    monitor_on(&mut s.engine(), "Headphones");
+    monitor_on(&mut s.engine(), HEADSET);
     s.run_until("the monitor never played the program", |s| {
         s.card.monitor.queued() > 0
     });
@@ -858,7 +865,7 @@ fn tci_audio_on_the_monitor() -> TciScene {
     s.run_until("TCI audio never became the receive source", |s| {
         s.state.tci_rx.is_some()
     });
-    monitor_on(&mut s.engine(), "Headphones");
+    monitor_on(&mut s.engine(), HEADSET);
     s.run_until("the monitor never played the program", |s| {
         s.card.monitor.queued() > 0
     });

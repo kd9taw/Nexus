@@ -107,7 +107,7 @@ async function openApp() {
 
 const PTT = "The rig didn't accept PTT — check your PTT method and CAT/port."
 const MONITOR =
-  "Headphone monitor is off: the chosen output is the rig's TX device — monitoring it would transmit the received band. Pick a separate headphone or speaker device."
+  "Headphone monitor is off: the chosen output is the rig's TX device, or cannot be told apart from it — monitoring it would transmit the received band. Pick a separate headphone or speaker device (on Linux, by its card name)."
 
 const withLine = (audioError: string | null, audioErrorKind?: AudioErrorKind) =>
   ({ ...base, radio: { ...base.radio, audioError, audioErrorKind } }) as AppSnapshot
