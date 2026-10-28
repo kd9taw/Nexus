@@ -14354,6 +14354,7 @@ export const EN = {
   'radioSetup.cat.stale.none': 'No reading from this radio yet',
   'radioSetup.cat.disabled': 'Turned off',
   'radioSetup.cat.noCat': 'No CAT model set',
+  'radioSetup.cat.notMonitored': 'Nexus does not watch this radio while another is in use (its model is set in OmniRig), so it cannot test it from here. Test it while it is the radio in use.',
   'radioSetup.cat.unknown': 'This radio is not in the station',
   'radioSetup.cat.notConnected': 'Not connected',
   'radioSetup.cat.live': 'Answering: {{mhz}} MHz',
@@ -14371,6 +14372,7 @@ export const EN = {
   'radioSetup.finish': 'Finish',
   'radioSetup.finish.busy': 'Saving…',
   'radioSetup.finish.failed': 'Could not save the radio setup: {{error}}',
+  'radioSetup.finish.changed': 'Your radios or their routing changed while this was open (in another window, from a computer driving the station, or by a radio switch). Nothing was saved. Close this and open Set up radios… again to start from what is saved now.',
   'radioSetup.load.failed': 'Could not read the radio settings',
 
   // ── The link pill ───────────────────────────────────────────────────────────────────

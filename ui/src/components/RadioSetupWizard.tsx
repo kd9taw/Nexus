@@ -30,12 +30,13 @@
 // brings it back). This page only says so. It sets which sound card and keying method a radio uses,
 // the same stored choice Settings sets; how a radio keys or plays audio is not changed here.
 // ---------------------------------------------------------------------------
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
 import type { AppSnapshot, AudioDevices, RouteMode, Settings } from '../types'
 import {
   getAudioDevices,
+  getSettings,
   getSnapshot,
   renameRadio,
   routePreviewDraft,
@@ -53,6 +54,7 @@ import {
   finishPlan,
   planIsEmpty,
   routingDraft,
+  sameSetup,
   sharedBands,
   withCells,
   type FinishPlan,
@@ -97,8 +99,9 @@ export function RadioSetupWizard({
   /** The bands offered, in order (Settings' band list). */
   bands: readonly string[]
   onClose: () => void
-  /** After a Finish that wrote something: what it wrote. */
-  onFinished?: (plan: FinishPlan) => void
+  /** After a Finish that wrote something: the plan, and whether all of it was written (false: a
+   *  verb was refused partway, and only what came before it landed). */
+  onFinished?: (plan: FinishPlan, complete: boolean) => void
 }) {
   const stored = settings.routingRules ?? []
   const [a, setA] = useState<RadioSetupAnswers>(() => answersFrom(settings, bands))
@@ -141,12 +144,15 @@ export function RadioSetupWizard({
 
   const draft = useMemo(() => routingDraft(a, stored, bands), [a, stored, bands])
   const rules = draft.rules
+  // Only the answer to the latest question is shown: an earlier one arriving late is dropped.
+  const probeSeq = useRef(0)
   const runProbe = (band: string, mode: RouteMode) => {
+    const seq = ++probeSeq.current
     setProbe({ band, mode })
     setProbeAnswer(null)
     void routePreviewDraft(draft, band, mode)
-      .then((r) => setProbeAnswer(r.name))
-      .catch(() => setProbeAnswer(null))
+      .then((r) => seq === probeSeq.current && setProbeAnswer(r.name))
+      .catch(() => seq === probeSeq.current && setProbeAnswer(null))
   }
   useEffect(() => {
     if (step === 'check') runProbe(probe.band, probe.mode)
@@ -155,25 +161,24 @@ export function RadioSetupWizard({
   const toggleBand = (id: number, band: string) =>
     setA((prev) => {
       const now = prev.bands[id] ?? []
-      const next = now.includes(band) ? now.filter((b) => b !== band) : bands.filter((b) => b === band || now.includes(b))
+      // Added at the end, so a band the list holds that this table does not show is kept.
+      const next = now.includes(band) ? now.filter((b) => b !== band) : [...now, band]
       return { ...prev, bands: { ...prev.bands, [id]: next } }
     })
   const setCell = (band: string, mode: RouteMode, radio: number | null) =>
     setA((prev) => ({
       ...prev,
-      cellsEdited: true,
       cells: { ...prev.cells, [band]: { ...(prev.cells[band] ?? {}), [mode]: radio } },
     }))
 
   const testOne = (id: number) => {
     setCat((c) => ({ ...c, [id]: 'busy' }))
     const done = (line: CatLine) => setCat((c) => ({ ...c, [id]: line }))
-    if (id === active) {
+    const inUse = () =>
       void testCat()
         .then((r) => done({ ok: r.ok, text: r.detail }))
         .catch((e) => done({ ok: false, text: String(e) }))
-      return
-    }
+    if (id === active) return inUse()
     void testRadioCat(id)
       .then((r) => {
         const mhz = r.dialMhz != null ? r.dialMhz.toFixed(3) : null
@@ -196,6 +201,12 @@ export function RadioSetupWizard({
             return done({ ok: null, text: t('radioSetup.cat.disabled') })
           case 'noCat':
             return done({ ok: null, text: t('radioSetup.cat.noCat') })
+          case 'notMonitored':
+            return done({ ok: null, text: t('radioSetup.cat.notMonitored') })
+          // It became the radio in use since the setup opened (a radio switch): its Test CAT is
+          // the radio in use's.
+          case 'inUse':
+            return inUse()
           default:
             return done({ ok: null, text: t('radioSetup.cat.unknown') })
         }
@@ -203,6 +214,13 @@ export function RadioSetupWizard({
       .catch((e) => done({ ok: false, text: String(e) }))
   }
 
+  // ⭐ FINISH WRITES OVER WHAT IT OPENED ON, OR NOT AT ALL. The plan is the difference from the
+  // settings the setup opened on. If the radios or their routing changed since (another window, a
+  // computer driving the station, a radio switch), that difference would write the old values over
+  // the new ones, so Finish reads the station first and refuses, saving nothing. A sound card or
+  // keying method changed elsewhere is no reason to: those go one field at a time (`patchRadio`).
+  // If a verb is refused partway, what had landed is reported (`onFinished`, `complete: false`) so
+  // Settings re-reads it, and the setup stays open saying why.
   const finish = async () => {
     const plan = finishPlan(settings, a, bands)
     if (planIsEmpty(plan)) {
@@ -211,23 +229,34 @@ export function RadioSetupWizard({
     }
     setBusy(true)
     setError(null)
+    let landed = false
+    let complete = false
+    const write = async (verb: Promise<unknown>) => {
+      await verb
+      landed = true
+    }
     try {
-      for (const r of plan.renames) await renameRadio(r.id, r.name)
-      for (const r of plan.radios) await patchRadio(r.id, (stored) => radioPatch({ ...stored, ...r.changes }))
+      if (!sameSetup(settings, await getSettings())) {
+        setError(t('radioSetup.finish.changed'))
+        return
+      }
+      for (const r of plan.renames) await write(renameRadio(r.id, r.name))
+      for (const r of plan.radios) await write(patchRadio(r.id, (stored) => radioPatch({ ...stored, ...r.changes })))
       // On first, so a rule or default can name a radio switched back on; off after.
-      for (const e of plan.enabled.filter((x) => x.enabled)) await setRadioEnabled(e.id, true)
-      for (const b of plan.bands) await setRadioBands(b.id, b.bands)
-      if (plan.rules) await setRoutingRules(plan.rules)
-      if (plan.defaultRadio !== undefined) await setDefaultRadio(plan.defaultRadio)
-      for (const e of plan.enabled.filter((x) => !x.enabled)) await setRadioEnabled(e.id, false)
-      if (plan.policy) await setRadioSwitchPolicy(plan.policy)
-      onFinished?.(plan)
-      onClose()
+      for (const e of plan.enabled.filter((x) => x.enabled)) await write(setRadioEnabled(e.id, true))
+      for (const b of plan.bands) await write(setRadioBands(b.id, b.bands))
+      if (plan.rules) await write(setRoutingRules(plan.rules))
+      if (plan.defaultRadio !== undefined) await write(setDefaultRadio(plan.defaultRadio))
+      for (const e of plan.enabled.filter((x) => !x.enabled)) await write(setRadioEnabled(e.id, false))
+      if (plan.policy) await write(setRadioSwitchPolicy(plan.policy))
+      complete = true
     } catch (e) {
       setError(t('radioSetup.finish.failed', { error: e instanceof Error ? e.message : String(e) }))
     } finally {
       setBusy(false)
+      if (landed) onFinished?.(plan, complete)
     }
+    if (complete) onClose()
   }
 
   const routeLine = (l: RouteLine): string => {

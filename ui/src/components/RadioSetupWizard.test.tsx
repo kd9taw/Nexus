@@ -69,6 +69,8 @@ beforeEach(() => {
   api.get('testRadioCat').mockResolvedValue({ id: 1, state: 'answered', ok: true, dialMhz: 144.174 })
   api.get('testCat').mockResolvedValue({ ok: true, detail: 'Connected — 14.074 MHz' })
   for (const n of WRITERS) api.get(n).mockResolvedValue({})
+  // What the station holds when Finish reads it: as the setup opened, unless a test changes it.
+  api.get('getSettings').mockImplementation(() => Promise.resolve(station()))
 })
 afterEach(cleanup)
 
@@ -131,13 +133,14 @@ describe('the radio setup', () => {
     expect(written.map((r) => `${r.bands.join(', ')} · ${r.mode ? ROUTE_MODE_LABEL[r.mode] : ''} → ${name(r.radio)}`)).toEqual(shown)
     expect(written).toEqual(previewed)
     expect(written).toEqual([
+      // The two cells changed, then the stored rule, as it was.
       { bands: ['2m'], mode: 'digital', context: null, radio: 1 },
-      { bands: ['2m'], mode: 'fm', context: null, radio: 2 },
       { bands: ['70cm'], mode: 'cw', context: null, radio: 2 },
+      FM,
     ])
     // Nothing else changed, so nothing else was written.
     expect(writes()).toEqual(['setRoutingRules'])
-    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ rules: written }))
+    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ rules: written }), true)
   })
 
   it('Test CAT on a radio not in use is the read-only probe; on the radio in use it is Test CAT', async () => {
@@ -190,4 +193,61 @@ describe('the radio setup', () => {
     while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()
     for (const box of screen.getAllByRole('combobox', { name: /PTT Method/ })) expect((box as HTMLSelectElement).disabled).toBe(true)
   })
+
+  it('Finish refuses, saving nothing, when the radios or rules changed since the setup opened', async () => {
+    const later = station()
+    later.routingRules = [{ bands: ['2m'], mode: 'fm', context: null, radio: 1 }]
+    api.get('getSettings').mockResolvedValue(later)
+    const onClose = vi.fn()
+    const onFinished = vi.fn()
+    render(<RadioSetupWizard settings={station()} bands={BANDS} onClose={onClose} onFinished={onFinished} />)
+    fireEvent.change(screen.getAllByRole('textbox')[1], { target: { value: 'IC-9700 shack' } })
+    while (screen.queryByRole('button', { name: 'Next' })) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await screen.findByText(/changed while this was open/)
+    expect(writes()).toEqual([])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onFinished).not.toHaveBeenCalled()
+  })
+
+  it('a Finish refused partway says so, stays open, and reports what landed so Settings re-reads it', async () => {
+    api.get('setRoutingRules').mockRejectedValue('the station refused it')
+    const onClose = vi.fn()
+    const onFinished = vi.fn()
+    render(<RadioSetupWizard settings={station()} bands={BANDS} onClose={onClose} onFinished={onFinished} />)
+    fireEvent.change(screen.getAllByRole('textbox')[1], { target: { value: 'IC-9700 shack' } })
+    next() // bands
+    next() // shared bands
+    fireEvent.change(screen.getByRole('combobox', { name: '2m Weak-signal digital' }), { target: { value: '1' } })
+    while (screen.queryByRole('button', { name: 'Next' })) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await screen.findByText(/the station refused it/)
+    expect(api.spies.renameRadio).toHaveBeenCalledWith(1, 'IC-9700 shack')
+    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ renames: [{ id: 1, name: 'IC-9700 shack' }] }), false)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('Test CAT on a radio that has become the one in use since the setup opened is Test CAT', async () => {
+    api.get('testRadioCat').mockResolvedValue({ id: 1, state: 'inUse', ok: null, dialMhz: null })
+    render(<RadioSetupWizard settings={station()} bands={BANDS} onClose={() => {}} />)
+    while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Test CAT' })[1])
+    await screen.findByText('Connected — 14.074 MHz')
+    expect(api.spies.testCat).toHaveBeenCalledTimes(1)
+  })
+
+  it('ticking a band keeps a band the table does not show', async () => {
+    const s = station()
+    s.radios = s.radios!.map((r) => (r.id === 2 ? { ...r, bands: ['2m', '1.25m'] } : r))
+    api.get('getSettings').mockResolvedValue(s)
+    const onClose = vi.fn()
+    render(<RadioSetupWizard settings={s} bands={BANDS} onClose={onClose} />)
+    next()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'FT-991A on 70cm' }))
+    while (screen.queryByRole('button', { name: 'Next' })) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(api.spies.setRadioBands).toHaveBeenCalledWith(2, ['2m', '1.25m', '70cm'])
+  })
 })
+

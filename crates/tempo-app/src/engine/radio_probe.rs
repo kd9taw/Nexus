@@ -34,6 +34,9 @@ pub enum RadioProbeState {
     Disabled,
     /// No CAT model set (VOX only): there is nothing to read.
     NoCat,
+    /// It has CAT, but the monitor does not watch it while another radio is in use (an OmniRig
+    /// radio: its model lives in OmniRig), so there is no reading to give.
+    NotMonitored,
     /// No radio with that id.
     Unknown,
 }
@@ -56,15 +59,22 @@ impl Engine {
         self.monitor_reads.get(&id).copied().unwrap_or(0)
     }
 
-    /// The answer that needs no waiting: the radio in use, a radio turned off, one with no CAT,
-    /// or no such radio. `None` = a monitored radio, whose answer is the monitor's next report.
+    /// The answer that needs no waiting: the radio in use, a radio turned off, one with no CAT, one
+    /// the monitor does not watch, or no such radio. `None` = a monitored radio, whose answer is the
+    /// monitor's next report.
     fn radio_probe_without_reading(&self, id: u32) -> Option<RadioCatProbe> {
         let state = match self.settings.radios.iter().find(|p| p.id == id) {
             None => RadioProbeState::Unknown,
             Some(_) if id == self.settings.active_radio => RadioProbeState::InUse,
             Some(p) if !p.enabled => RadioProbeState::Disabled,
-            // The monitor's own predicate (`monitor_want`): a radio with no model is not opened.
-            Some(p) if p.rig_model == 0 => RadioProbeState::NoCat,
+            // The monitor's own predicate (`monitor_want`): a radio it does not open has no reading.
+            Some(p) if !p.monitored_while(self.settings.active_radio) => {
+                if crate::settings::rig_conn_is_omnirig(&p.rig_conn) {
+                    RadioProbeState::NotMonitored
+                } else {
+                    RadioProbeState::NoCat
+                }
+            }
             Some(_) => return None,
         };
         Some(RadioCatProbe {

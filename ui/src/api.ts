@@ -3453,7 +3453,7 @@ export async function routePreviewDraft(
 /** What the read-only Test CAT of a radio not in use found (Rust `RadioCatProbe`). */
 export interface RadioCatProbe {
   id: number
-  state: 'answered' | 'notAnswering' | 'noFreshReport' | 'inUse' | 'disabled' | 'noCat' | 'unknown'
+  state: 'answered' | 'notAnswering' | 'noFreshReport' | 'inUse' | 'disabled' | 'noCat' | 'notMonitored' | 'unknown'
   ok: boolean | null
   dialMhz: number | null
 }

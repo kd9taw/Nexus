@@ -334,4 +334,157 @@ fn the_probe_names_a_radio_it_cannot_read_without_waiting() {
         probe_radio_read_only(&shared, 99, long, step).state,
         RadioProbeState::Unknown
     );
+    // An OmniRig radio has CAT with no model number of Nexus's: not "no CAT", but not watched by the
+    // monitor while another radio is in use, so there is nothing to read from here.
+    if let Some(p) = engine_lock(&shared)
+        .settings
+        .radios
+        .iter_mut()
+        .find(|p| p.id == ic9700)
+    {
+        p.rig_conn = "omnirig".into();
+    }
+    assert_eq!(
+        probe_radio_read_only(&shared, ic9700, long, step).state,
+        RadioProbeState::NotMonitored
+    );
+}
+
+/// One station of the setup's single-change fixture (`ui/src/settings/__fixtures__/
+/// radio-setup-single-changes.json`, written by `radioSetup.test.ts` from the setup's own compiler).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureStation {
+    name: String,
+    radios: Vec<FixtureRadio>,
+    active_radio: u32,
+    default_radio: Option<u32>,
+    rules: Vec<RoutingRule>,
+    cases: Vec<FixtureCase>,
+}
+#[derive(serde::Deserialize)]
+struct FixtureRadio {
+    id: u32,
+    bands: Vec<String>,
+    enabled: bool,
+}
+/// One cell of the "Where two radios share a band" step changed to `radio` (None = "No rule"), and
+/// the whole rule list Finish writes for it.
+#[derive(serde::Deserialize)]
+struct FixtureCase {
+    band: String,
+    mode: RouteMode,
+    radio: Option<u32>,
+    rules: Vec<RoutingRule>,
+}
+
+/// ⭐ ONE CHANGED CELL MOVES ONLY THAT CELL. For every single change the setup can make to a shared
+/// band's cell, on a station with a rule aimed at a radio that is turned off (the engine passes over
+/// it to the next rule) and on one with every kind of rule, the rules Finish writes route every
+/// OTHER band and mode exactly as the stored rules did, by the engine's own `route_radio`, both as
+/// the radios are and with every radio turned back on (no rule behind a turned-off radio was lost);
+/// and the changed cell goes to the radio it names when that radio can take it.
+#[test]
+fn one_changed_cell_moves_only_that_cell() {
+    let fixture: Vec<FixtureStation> = serde_json::from_str(include_str!(
+        "../../../../ui/src/settings/__fixtures__/radio-setup-single-changes.json"
+    ))
+    .expect("fixture parses");
+    // Parser sanity: a fixture that read as nothing would pass every assertion below.
+    assert_eq!(fixture.len(), 2);
+    assert!(fixture.iter().all(|st| st.cases.len() > 10));
+    let bands = [
+        "160m", "80m", "40m", "20m", "10m", "6m", "2m", "70cm", "23cm",
+    ];
+    let mut checked = 0;
+    for st in &fixture {
+        let mut s = Engine::new("KD9TAW", "EN52", 0).settings.clone();
+        s.ensure_radio_profiles();
+        while s.radios.len() < st.radios.len() {
+            s.add_radio_profile();
+        }
+        for r in &st.radios {
+            let p = s
+                .radios
+                .iter_mut()
+                .find(|p| p.id == r.id)
+                .expect("fixture radio id exists");
+            p.bands = r.bands.clone();
+            p.enabled = r.enabled;
+        }
+        s.active_radio = st.active_radio;
+        s.default_radio = st.default_radio;
+        s.routing_rules = st.rules.clone();
+        let usable = |id: u32| st.radios.iter().any(|r| r.id == id && r.enabled);
+        // The same station with every radio turned back on: a rule aimed at a radio that is off
+        // today must still be there for the day it is plugged back in.
+        let mut all_on = s.clone();
+        all_on.radios.iter_mut().for_each(|p| p.enabled = true);
+        for c in &st.cases {
+            for (before, on) in [(&s, false), (&all_on, true)] {
+                let mut after = before.clone();
+                after.routing_rules = c.rules.clone();
+                for band in bands {
+                    for mode in MODES {
+                        if band.eq_ignore_ascii_case(&c.band) && mode == c.mode {
+                            continue;
+                        }
+                        assert_eq!(
+                            after.route_radio(band, mode),
+                            before.route_radio(band, mode),
+                            "{} (every radio on: {on}): changing {} {:?} to {:?} moved {band} {mode:?}",
+                            st.name,
+                            c.band,
+                            c.mode,
+                            c.radio,
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+            if let Some(id) = c.radio.filter(|id| usable(*id)) {
+                let want = (id != st.active_radio).then_some(id);
+                let mut after = s.clone();
+                after.routing_rules = c.rules.clone();
+                assert_eq!(
+                    after.route_radio(&c.band, c.mode),
+                    want,
+                    "{}: {} {:?} set to {id}",
+                    st.name,
+                    c.band,
+                    c.mode
+                );
+            }
+        }
+    }
+    assert!(checked > 2000, "checked {checked}");
+}
+
+/// The review's case, by name: the IC-9700 (turned off) has a 2 m Digital rule with a 2 m Digital
+/// fallback to the FT-991A behind it. Changing only 2 m FM keeps 2 m FT8 on the FT-991A.
+#[test]
+fn a_fallback_behind_a_turned_off_radio_survives_a_change_to_another_cell() {
+    let fixture: Vec<FixtureStation> = serde_json::from_str(include_str!(
+        "../../../../ui/src/settings/__fixtures__/radio-setup-single-changes.json"
+    ))
+    .expect("fixture parses");
+    let st = &fixture[0];
+    let c = st
+        .cases
+        .iter()
+        .find(|c| c.band == "2m" && c.mode == RouteMode::Fm && c.radio == Some(0))
+        .expect("the 2 m FM → radio 0 case");
+    let mut s = Engine::new("KD9TAW", "EN52", 0).settings.clone();
+    s.ensure_radio_profiles();
+    s.add_radio_profile();
+    s.add_radio_profile();
+    for r in &st.radios {
+        let p = s.radios.iter_mut().find(|p| p.id == r.id).unwrap();
+        p.bands = r.bands.clone();
+        p.enabled = r.enabled;
+    }
+    s.active_radio = 0;
+    s.routing_rules = c.rules.clone();
+    assert!(!s.radios[2].enabled, "the IC-9700 is off");
+    assert_eq!(s.route_radio("2m", RouteMode::Digital), Some(1));
 }

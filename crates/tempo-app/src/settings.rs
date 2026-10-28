@@ -5012,6 +5012,17 @@ impl Settings {
     }
 }
 
+impl RadioProfile {
+    /// Whether the radio monitor holds a read-only CAT connection to this radio while radio
+    /// `active` is the one in use: it is on, not the one in use, and has a CAT model. THE monitor's
+    /// predicate (`tempo-audio`'s `monitor_want`), kept here so the radio setup's read-only Test CAT
+    /// asks the same question. An OmniRig radio has no model number of Nexus's (OmniRig holds it), so
+    /// the monitor does not watch it, although the radio has CAT when it is the one in use.
+    pub fn monitored_while(&self, active: u32) -> bool {
+        self.enabled && self.id != active && self.rig_model != 0
+    }
+}
+
 impl RadioProfilePatch {
     /// Copy the patch fields onto a profile, leaving its identity / bands / tune-memory alone.
     pub fn apply_to(self, p: &mut RadioProfile) {
@@ -6776,19 +6787,6 @@ impl Settings {
         (rule.radio != self.active_radio).then_some(rule.radio)
     }
 
-    /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
-    /// never leave a rule that silently never fires — or worse, a `default_radio` aimed at a gone
-    /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
-    /// delete the routing table; `route_radio` skips a disabled target at resolve time instead).
-    /// Idempotent; called on load, on every save, and after `remove_radio`.
-    ///
-    /// ALSO prunes `sat_uplink_radios`, and for a harder reason than the rules:
-    /// `add_radio_profile` allocates max(id)+1 over SURVIVING profiles, so a
-    /// freed id is REUSED — a consent entry that outlived its radio would hand
-    /// the next rig added a Main/Sub uplink confirmation it never got, and the
-    /// engine would drive its transmit VFO on it. A stale rule merely never
-    /// fires; a stale consent transmits. (A transient pre-migration `None`
-    /// has no ids to prune and confirms nothing; `load` resolves it.)
     /// A COPY of these settings with the radio setup's unsaved routing laid over it, exactly as
     /// the verbs Finish calls would leave them (`set_radio_bands`, `set_radio_enabled`,
     /// `set_routing_rules`, `set_default_radio`). A radio the draft does not name keeps what it
@@ -6809,6 +6807,19 @@ impl Settings {
         s
     }
 
+    /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
+    /// never leave a rule that silently never fires — or worse, a `default_radio` aimed at a gone
+    /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
+    /// delete the routing table; `route_radio` skips a disabled target at resolve time instead).
+    /// Idempotent; called on load, on every save, and after `remove_radio`.
+    ///
+    /// ALSO prunes `sat_uplink_radios`, and for a harder reason than the rules:
+    /// `add_radio_profile` allocates max(id)+1 over SURVIVING profiles, so a
+    /// freed id is REUSED — a consent entry that outlived its radio would hand
+    /// the next rig added a Main/Sub uplink confirmation it never got, and the
+    /// engine would drive its transmit VFO on it. A stale rule merely never
+    /// fires; a stale consent transmits. (A transient pre-migration `None`
+    /// has no ids to prune and confirms nothing; `load` resolves it.)
     pub fn ensure_routing_targets(&mut self) {
         let live: Vec<u32> = self.radios.iter().map(|p| p.id).collect();
         self.routing_rules.retain(|r| live.contains(&r.radio));

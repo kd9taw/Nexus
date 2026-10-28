@@ -5819,10 +5819,12 @@ export function SettingsPanel({
               settings={radioSetup}
               bands={FREQ_BANDS}
               onClose={() => setRadioSetup(null)}
-              onFinished={(plan) => {
+              onFinished={(plan, complete) => {
                 // The switch choice is form state with its own writer (as handleSetSwitchPolicy keeps
-                // it); the roster and the routing come back through reloadRadios.
-                const policy = plan.policy
+                // it); the roster and the routing come back through reloadRadios — also after a
+                // Finish refused partway, so the rule editor never writes the old rules back over
+                // what did land. The policy is written last, so only a complete Finish wrote it.
+                const policy = complete ? plan.policy : undefined
                 if (policy) {
                   setForm((prev) => (prev ? { ...prev, radioSwitchPolicy: policy } : prev))
                   if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: policy }
