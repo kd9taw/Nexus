@@ -308,12 +308,66 @@ pub fn tone(hz: f32, double: bool) -> Vec<f32> {
     out
 }
 
+/// The longest a notification sound plays, whatever it was made from: a notification is a second
+/// or two, and this bounds the time a sound holds its output and the memory its samples take
+/// at the device's rate (the WAV reader cuts a file to the same length before it is resampled).
+pub const MAX_PLAY_SECONDS: u32 = 10;
+
+/// `samples` at `from` samples a second, linearly resampled to `to` and cut to
+/// [`MAX_PLAY_SECONDS`] there.
+#[cfg_attr(not(feature = "device"), allow(dead_code))]
+fn clip_for_output(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
+    let from = from.max(1);
+    let keep = (from as usize).saturating_mul(MAX_PLAY_SECONDS as usize);
+    // Cut before resampling, so what is made at the device rate is at most that long too.
+    let samples = &samples[..samples.len().min(keep)];
+    if from == to || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let n = (samples.len() as u64 * u64::from(to) / u64::from(from)) as usize;
+    let step = from as f64 / to as f64;
+    (0..n)
+        .map(|i| {
+            let p = i as f64 * step;
+            let k = p as usize;
+            let f = (p - k as f64) as f32;
+            let a = samples[k.min(samples.len() - 1)];
+            let b = samples[(k + 1).min(samples.len() - 1)];
+            a + (b - a) * f
+        })
+        .collect()
+}
+
+/// Whether a sound is playing now ([`begin_play`]).
+static PLAYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A sound's turn at the output, held from before its stream opens until after it is closed.
+#[cfg_attr(not(feature = "device"), allow(dead_code))]
+struct PlayTurn;
+
+impl Drop for PlayTurn {
+    fn drop(&mut self) {
+        PLAYING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// The output's turn for one sound, or `None` while another sound has it: sounds play one at a
+/// time, so a burst of decodes cannot stack streams and threads.
+#[cfg_attr(not(feature = "device"), allow(dead_code))]
+fn begin_play() -> Option<PlayTurn> {
+    use std::sync::atomic::Ordering;
+    PLAYING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| PlayTurn)
+}
+
 #[cfg(feature = "device")]
 pub use device_play::play;
 
 #[cfg(feature = "device")]
 mod device_play {
-    use super::{refuse_tx, PlayRefusal};
+    use super::{begin_play, clip_for_output, refuse_tx, PlayRefusal};
     use crate::device::{cpal_device_name, dispatch_format, resolve_configured, AUDIO_HOST_LOCK};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::SampleFormat;
@@ -327,13 +381,18 @@ mod device_play {
     /// Play `samples` (mono, at `rate`) on `device` ("" = the system default output), unless the
     /// device that opens is one of `tx_devices` ([`would_transmit`]). Returns once the sound has
     /// started, or with why it did not; the sound plays out on its own thread, which owns the
-    /// stream (a cpal `Stream` is `!Send`).
+    /// stream (a cpal `Stream` is `!Send`). One sound plays at a time: a play asked for while
+    /// another is playing is dropped ([`begin_play`]) and returns `Ok`, nothing opened.
     pub fn play(
         device: &str,
         tx_devices: Vec<String>,
         rate: u32,
         samples: Vec<f32>,
     ) -> Result<(), PlayRefusal> {
+        // One sound at a time: one asked for while another plays is dropped, not queued.
+        let Some(turn) = begin_play() else {
+            return Ok(());
+        };
         let device = device.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
@@ -344,6 +403,7 @@ mod device_play {
                 let (stream, secs) = match started {
                     Ok(s) => (Some(s.0), s.1),
                     Err(e) => {
+                        drop(turn);
                         let _ = tx.send(Err(e));
                         return;
                     }
@@ -353,6 +413,7 @@ mod device_play {
                     std::thread::sleep(std::time::Duration::from_secs_f32(secs + 0.25));
                 }
                 close_locked(stream);
+                drop(turn);
             })
             .map_err(|e| PlayRefusal::Failed(e.to_string()))?;
         rx.recv()
@@ -394,7 +455,7 @@ mod device_play {
         let out_rate = supported.sample_rate();
         let out_ch = usize::from(supported.channels()).max(1);
         let config: cpal::StreamConfig = supported.config();
-        let clip: Arc<Vec<f32>> = Arc::new(resample(samples, rate, out_rate));
+        let clip: Arc<Vec<f32>> = Arc::new(clip_for_output(samples, rate, out_rate));
         let secs = clip.len() as f32 / out_rate.max(1) as f32;
         let stream = dispatch_format!(
             supported.sample_format(),
@@ -435,25 +496,6 @@ mod device_play {
             None,
         )
         .map_err(|e| e.to_string())
-    }
-
-    /// Linear resampling from `from` to `to` samples a second.
-    fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
-        if from == to || samples.is_empty() {
-            return samples.to_vec();
-        }
-        let n = (samples.len() as u64 * u64::from(to) / u64::from(from.max(1))) as usize;
-        let step = from as f64 / to as f64;
-        (0..n)
-            .map(|i| {
-                let p = i as f64 * step;
-                let k = p as usize;
-                let f = (p - k as f64) as f32;
-                let a = samples[k.min(samples.len() - 1)];
-                let b = samples[(k + 1).min(samples.len() - 1)];
-                a + (b - a) * f
-            })
-            .collect()
     }
 }
 
@@ -791,6 +833,47 @@ mod tests {
             .find(&format!("{}(stream)", "drop"))
             .expect("drops it");
         assert!(locked < dropped, "the lock is taken before the drop");
+    }
+
+    /// What reaches the output is at most MAX_PLAY_SECONDS, whatever the caller hands in and
+    /// whatever rate the device runs at, so a sound neither holds its output nor its memory long.
+    #[test]
+    fn a_sound_is_cut_to_the_longest_play_at_the_devices_rate() {
+        let long = vec![0.1f32; (8_000 * (MAX_PLAY_SECONDS + 5)) as usize];
+        assert_eq!(
+            clip_for_output(&long, 8_000, 48_000).len(),
+            (48_000 * MAX_PLAY_SECONDS) as usize
+        );
+        assert_eq!(
+            clip_for_output(&long, 8_000, 8_000).len(),
+            (8_000 * MAX_PLAY_SECONDS) as usize,
+            "the same rate too"
+        );
+        let short = tone(587.0, false);
+        let out = clip_for_output(&short, TONE_RATE, 96_000);
+        assert_eq!(out.len(), short.len() * 2, "control: a tone plays whole");
+    }
+
+    /// One sound at a time: a play while another is playing is dropped, and the next one after
+    /// it ends plays.
+    #[test]
+    fn overlapping_sounds_play_one_at_a_time() {
+        let first = begin_play().expect("nothing playing");
+        assert!(begin_play().is_none(), "a second while the first plays");
+        drop(first);
+        assert!(begin_play().is_some(), "the next after it ends");
+    }
+
+    #[test]
+    fn a_play_holds_its_turn_until_its_stream_is_closed() {
+        let src = include_str!("notify_sound.rs");
+        let play = &src[src.find("pub fn play(").expect("the play path")..];
+        let play = &play[..play.find("fn close_locked(").expect("the helper")];
+        let turn = play.find("begin_play()").expect("takes its turn");
+        let spawned = play.find(".spawn(").expect("the thread");
+        let closed = play.find("close_locked(stream)").expect("closes");
+        let released = play.rfind("drop(turn)").expect("gives its turn back");
+        assert!(turn < spawned && closed < released);
     }
 
     #[test]

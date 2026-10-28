@@ -8,7 +8,8 @@
 //! - only a RIFF/WAVE file, by its header, and only one whose format is a plausible sound: 1 to
 //!   [`MAX_CHANNELS`] channels, [`MIN_RATE`] to [`MAX_RATE`] samples a second, 8/16/24/32-bit
 //!   integer or 32-bit float PCM. A header cut short, or samples that stop before the header says
-//!   they do, is refused rather than played short.
+//!   they do, is refused rather than played short;
+//! - only the first [`MAX_SOUND_SECONDS`] are decoded, mixed to mono as they are read.
 //!
 //! The bytes never leave this module: the caller gets mono samples to play, or why not.
 use std::io::Read;
@@ -17,6 +18,9 @@ use std::path::Path;
 /// The largest sound file read: a notification is a second or two, and 10 MiB is a minute of
 /// CD-quality stereo.
 pub const MAX_SOUND_FILE_BYTES: u64 = 10 * 1024 * 1024;
+/// The longest a sound plays: what is past it is not decoded. A notification is a second or two;
+/// this bounds both the time a sound holds its output and the memory its samples take.
+pub const MAX_SOUND_SECONDS: u32 = 10;
 /// The fewest samples a second a sound may have (telephone audio).
 pub const MIN_RATE: u32 = 8_000;
 /// The most samples a second a sound may have (the highest common studio rate).
@@ -105,27 +109,35 @@ pub fn decode_sound(bytes: &[u8]) -> Result<SoundClip, SoundFileRefusal> {
     if !claimed.is_multiple_of(channels) || claimed > bytes.len() {
         return Err(SoundFileRefusal::BadFormat);
     }
-    let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .into_samples::<f32>()
-            .collect::<Result<_, _>>()
-            .map_err(|_| SoundFileRefusal::BadFormat)?,
+    // Only the first MAX_SOUND_SECONDS are decoded, and they are mixed to mono as they are read,
+    // so a long file costs neither its whole length in memory nor minutes of playing.
+    let frames = (claimed / channels).min(spec.sample_rate as usize * MAX_SOUND_SECONDS as usize);
+    let wanted = frames * channels;
+    let unit: Box<dyn Iterator<Item = Result<f32, hound::Error>>> = match spec.sample_format {
+        hound::SampleFormat::Float => Box::new(reader.into_samples::<f32>()),
         hound::SampleFormat::Int => {
             let full_scale = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .into_samples::<i32>()
-                .map(|s| s.map(|v| v as f32 / full_scale))
-                .collect::<Result<_, _>>()
-                .map_err(|_| SoundFileRefusal::BadFormat)?
+            Box::new(
+                reader
+                    .into_samples::<i32>()
+                    .map(move |s| s.map(|v| v as f32 / full_scale)),
+            )
         }
     };
-    if interleaved.len() != claimed {
+    let mut samples = Vec::with_capacity(frames);
+    let mut frame = 0f32;
+    let mut read = 0usize;
+    for v in unit.take(wanted) {
+        frame += v.map_err(|_| SoundFileRefusal::BadFormat)?;
+        read += 1;
+        if read.is_multiple_of(channels) {
+            samples.push((frame / channels as f32).clamp(-1.0, 1.0));
+            frame = 0.0;
+        }
+    }
+    if read != wanted {
         return Err(SoundFileRefusal::BadFormat);
     }
-    let samples = interleaved
-        .chunks_exact(channels)
-        .map(|frame| (frame.iter().sum::<f32>() / channels as f32).clamp(-1.0, 1.0))
-        .collect();
     Ok(SoundClip {
         rate: spec.sample_rate,
         samples,
@@ -195,6 +207,33 @@ mod tests {
             .collect();
         let clip = decode_sound(&wav(1, 44_100, 32, 3, &data)).unwrap();
         assert_eq!(clip.samples, vec![0.25, -0.75]);
+    }
+
+    /// A sound longer than [`MAX_SOUND_SECONDS`] plays its first seconds only: a notification is a
+    /// second or two, and a long file must cost neither minutes of playing nor its whole length in
+    /// memory (10 MiB of 8-bit 8 kHz mono is twenty minutes).
+    #[test]
+    fn a_long_sound_is_cut_to_its_first_seconds() {
+        let secs = MAX_SOUND_SECONDS + 2;
+        let mono = vec![0x80u8; (8_000 * secs) as usize];
+        let clip = decode_sound(&wav(1, 8_000, 8, 1, &mono)).unwrap();
+        assert_eq!(clip.samples.len(), (8_000 * MAX_SOUND_SECONDS) as usize);
+        let stereo = i16s(&vec![1000; (2 * 8_000 * secs) as usize]);
+        let clip = decode_sound(&wav(2, 8_000, 16, 1, &stereo)).unwrap();
+        assert_eq!(
+            clip.samples.len(),
+            (8_000 * MAX_SOUND_SECONDS) as usize,
+            "frames, not samples"
+        );
+        let short = vec![0x80u8; 8_000];
+        assert_eq!(
+            decode_sound(&wav(1, 8_000, 8, 1, &short))
+                .unwrap()
+                .samples
+                .len(),
+            8_000,
+            "control: a short sound plays whole"
+        );
     }
 
     #[test]
