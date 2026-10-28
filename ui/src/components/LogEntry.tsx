@@ -2449,6 +2449,7 @@ export function LogEntry({
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
+      iotaOffer.reset()
       loggedFromStrip(call, effBand)
       return true
     }

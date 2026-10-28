@@ -1907,6 +1907,7 @@ export function Logbook({
     const snap = await withErrorToast(() => logQso(record, undefined, iotaOffer.taken), t('logbook.form.logFailed'))
     if (snap) {
       load()
+      iotaOffer.reset()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', iota: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now

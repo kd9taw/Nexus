@@ -150,6 +150,9 @@ export function IotaOffer({
   )
 }
 
+/** A form's offer before any call: nothing asked, taken or dismissed. */
+const FRESH_OFFER = { call: '', offer: null, taken: false, dismissed: false }
+
 /** What a log form keeps of the IOTA offer for the call it holds ([`useIotaOffer`]). */
 export interface IotaOfferState {
   /** The offer to show, or null (none, dismissed, or the form holds a reference of its own). */
@@ -160,6 +163,8 @@ export interface IotaOfferState {
   toggle: () => void
   /** ×: no offer for this call. */
   dismiss: () => void
+  /** The contact is logged: what was taken or dismissed was for it, and the next starts over. */
+  reset: () => void
 }
 
 /**
@@ -167,17 +172,14 @@ export interface IotaOfferState {
  * 2026-10-27: offered from the spot comment and the callbook, the operator takes a chip, nothing is
  * stamped by itself). Asked again when the call changes and when `asked` does (a callbook lookup
  * that answered), never while the form holds a reference of its own (`held`: a typed one is never
- * replaced) and never while `off`. A new call starts over: nothing taken, nothing dismissed.
+ * replaced) and never while `off`. A new call starts over: nothing taken, nothing dismissed, and so
+ * does the next contact once the form logs one ([`IotaOfferState.reset`]), even with the same call:
+ * a Use press is for one contact.
  */
 export function useIotaOffer(call: string, held?: string | null, asked?: unknown, off = false): IotaOfferState {
   const key = call.trim().toUpperCase()
   const holding = (held ?? '').trim() !== ''
-  const [kept, setKept] = useState<{ call: string; offer: IotaOfferData | null; taken: boolean; dismissed: boolean }>({
-    call: '',
-    offer: null,
-    taken: false,
-    dismissed: false,
-  })
+  const [kept, setKept] = useState<{ call: string; offer: IotaOfferData | null; taken: boolean; dismissed: boolean }>(FRESH_OFFER)
   useEffect(() => {
     if (off || holding || key.length < 3) return
     let live = true
@@ -211,6 +213,7 @@ export function useIotaOffer(call: string, held?: string | null, asked?: unknown
     taken: offer && kept.taken ? offer : null,
     toggle: () => setKept((k) => ({ ...k, taken: !k.taken })),
     dismiss: () => setKept((k) => ({ ...k, taken: false, dismissed: true })),
+    reset: () => setKept(FRESH_OFFER),
   }
 }
 
