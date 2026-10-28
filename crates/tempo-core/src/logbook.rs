@@ -3469,6 +3469,20 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::OwnLog)
 }
 
+/// ★ The operator's own record for a logging program on their own machine (DXKeeper, HRD
+/// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
+/// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
+/// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+pub fn adif_record_own_logger(r: &QsoRecord) -> String {
+    if !callbook::is_map_only_grid(r) {
+        return adif_record_own_log(r);
+    }
+    let mut kept = r.clone();
+    kept.grid = None;
+    callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    adif_record_own_log(&kept)
+}
+
 /// One QSO as an ADIF record, **safe to send** — the private note is withheld.
 ///
 /// This is the default on purpose; see [`Audience`]. To write the operator's own log, say so

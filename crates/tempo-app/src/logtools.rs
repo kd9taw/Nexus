@@ -1254,6 +1254,7 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
 mod grids;
 pub use grids::{
     fill_grids, grid_offers, heard_at, heard_grids_in, GridFrom, GridOffer, GridPick, HeardGrids,
+    SessionGrids,
 };
 
 #[cfg(test)]

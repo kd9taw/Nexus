@@ -484,9 +484,9 @@ fn source_word(s: logtools::GridFrom) -> &'static str {
     }
 }
 
-/// The contacts with no grid for which a grid is known: heard on the air (ALL.TXT, then this
-/// session), else a callbook lookup already made (the lookup cache, while fresh; nothing is looked
-/// up). Changes nothing.
+/// The contacts with no grid for which a grid is known: heard on the air within 24 hours of the
+/// contact (ALL.TXT, and this session), else a callbook lookup already made (the lookup cache,
+/// while fresh; nothing is looked up). Changes nothing.
 #[tauri::command]
 pub async fn log_grid_offers(
     app: tauri::AppHandle,
@@ -505,9 +505,13 @@ pub async fn log_grid_offers(
                 .map(|f| logtools::heard_grids_in(std::io::BufReader::new(f), calls))
                 .unwrap_or_default()
         };
-        let session = |call: &str| tempo_app::engine::engine_lock(&engine).sent_grid(call);
+        // One Engine lock for every call, never one per contact.
+        let mut session = |calls: &std::collections::HashSet<String>| {
+            tempo_app::engine::engine_lock(&engine).sent_grids_heard(calls)
+        };
         let mut kept = |call: &str| crate::callbook_update::kept(&cache, call, max_age);
-        let (blank, offers) = logtools::grid_offers(&engine, &mut heard, &session, &mut kept, now)?;
+        let (blank, offers) =
+            logtools::grid_offers(&engine, &mut heard, &mut session, &mut kept, now)?;
         Ok(GridOffersDto {
             blank,
             offers: offers

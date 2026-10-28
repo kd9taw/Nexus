@@ -109,8 +109,10 @@ fn a_callbook_grid_is_for_distance_and_the_map_only() {
     assert!(is_callbook_filled(&rec, "GRIDSQUARE"), "marked");
     assert!(is_map_only_grid(&rec), "for the map only");
     assert!(
-        extra_field(&rec, GRIDLESS_CONTACT_FIELD).is_none(),
-        "the gridless note never reaches the log"
+        rec.extra
+            .iter()
+            .all(|(k, _)| !k.starts_with("APP_NEXUS_GRIDLESS")),
+        "no gridless note reaches the log"
     );
     assert!(extra_field(&rec, "DISTANCE").is_some(), "the distance");
     assert_eq!(counted_grid(&rec), None, "counts toward nothing");
@@ -213,4 +215,137 @@ fn run_and_work_a_gridless_caller_after(e: &mut Engine, before: usize) -> QsoRec
     let log = e.stored_log();
     assert_eq!(log.len(), before + 1, "premise: logged by itself");
     QsoRecord::clone(&log[before])
+}
+
+/// HRD Logbook, the program on the operator's own machine, gets their own record, but never a grid
+/// for the distance and the map only: it counts it toward VUCC and can upload the contact itself
+/// (operator decision, 2026-10-27). A grid a callbook filled on a form contact is sent as before.
+#[test]
+fn hrd_logbook_never_gets_a_map_only_grid() {
+    let mut e = ft8();
+    e.note_callbook_answer(DX, callbook(DX));
+    to_17m(&mut e);
+    let rec = run_and_work_a_gridless_caller(&mut e);
+    assert!(is_map_only_grid(&rec), "premise: map only");
+    let dg = e.hrd_datagram(&rec);
+    assert!(!dg.contains("<GRIDSQUARE:"), "{dg}");
+    assert!(!dg.contains("APP_NEXUS_MAP_ONLY_GRID"), "{dg}");
+    let typed = tempo_core::logbook::parse_adif(
+        "<CALL:5>7P8RU<BAND:3>20m<FREQ:6>14.200<MODE:3>SSB<QSO_DATE:8>20261027\
+         <TIME_ON:6>130000<EOR>",
+    )
+    .remove(0);
+    e.log_qso(typed);
+    let form = QsoRecord::clone(&e.stored_log()[1]);
+    assert!(
+        is_callbook_filled(&form, "GRIDSQUARE"),
+        "premise: today's mark"
+    );
+    assert!(e.hrd_datagram(&form).contains("<GRIDSQUARE:6>KG30ab"));
+}
+
+/// [`run_and_work_a_gridless_caller`] with the confirm-before-log popup on: the finished contact
+/// waits there, and the log is still empty.
+fn work_a_gridless_caller_into_the_popup(e: &mut Engine) {
+    e.settings.prompt_to_log = true;
+    e.set_mode("qso-run").expect("the run starts");
+    assert!(key_once(e, 100).starts_with("CQ KR4FQG"), "premise: CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU -15", -9)], 102);
+    key_once(e, 102);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU RR73", -9)], 104);
+    key_once(e, 104);
+    e.ingest_decodes_for_test(&[], 106);
+    assert!(e.stored_log().is_empty(), "premise: held, not logged");
+    assert!(e.pending_log().is_some(), "premise: in the popup");
+}
+
+/// ★ A call corrected in the popup drops the grid that was the busted call's, and the contact
+/// then has no grid from the station: the corrected call's callbook grid is for the distance and
+/// the map only, never counted, as for any FT8/FT4 contact logged with no grid.
+#[test]
+fn a_call_corrected_in_the_popup_takes_a_callbook_grid_for_the_map_only() {
+    let mut e = ft8();
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG31", -12)], 1);
+    to_17m(&mut e);
+    e.note_callbook_answer("7P8RX", callbook("7P8RX"));
+    work_a_gridless_caller_into_the_popup(&mut e);
+    let mut edited = e.pending_log().cloned().expect("held");
+    assert_eq!(
+        edited.grid.as_deref(),
+        Some("KG31"),
+        "premise: the grid it sent"
+    );
+    edited.call = "7P8RX".into();
+    let key = e.pending_qso_log_key().expect("a key");
+    assert!(e.confirm_pending_log(&key, edited));
+    let rec = QsoRecord::clone(&e.stored_log()[0]);
+    assert_eq!(rec.call, "7P8RX");
+    assert_eq!(
+        rec.grid.as_deref(),
+        Some("KG30ab"),
+        "the new call's callbook grid"
+    );
+    assert!(is_map_only_grid(&rec), "for the map only");
+    assert_eq!(counted_grid(&rec), None);
+}
+
+/// The note that a contact has no grid of its own rides the held contact, never its record: the
+/// popup, the journal and anything an older build might log from it never carry it, and a
+/// contact restored from the journal still takes a callbook grid for the map only.
+#[test]
+fn the_gridless_mark_rides_the_held_contact_not_its_record() {
+    let mut e = ft8();
+    to_17m(&mut e);
+    work_a_gridless_caller_into_the_popup(&mut e);
+    let held = e.pending_log().cloned().expect("held");
+    assert!(held.grid.is_none(), "premise: no grid");
+    assert!(
+        held.extra
+            .iter()
+            .all(|(k, _)| !k.starts_with("APP_NEXUS_GRIDLESS")),
+        "the record carries no note: {:?}",
+        held.extra
+    );
+    let journal = remote_logging::pending_qso_queue_json(&e.pending_logs, &e.set_aside_qsos)
+        .expect("journal");
+    assert!(!journal.contains("APP_NEXUS_GRIDLESS"), "{journal}");
+    let mut restarted = ft8();
+    restarted.load_pending_qso_json(&journal);
+    restarted.note_callbook_answer(DX, callbook(DX));
+    let rec = restarted.pending_log().cloned().expect("restored");
+    let key = restarted.pending_qso_log_key().expect("a key");
+    assert!(restarted.confirm_pending_log(&key, rec));
+    let logged = QsoRecord::clone(&restarted.stored_log()[0]);
+    assert!(
+        is_map_only_grid(&logged),
+        "still for the map only after a restart"
+    );
+}
+
+/// ★ A grid the station sent days ago in a session left running is not taken: a station heard at
+/// home on Monday and worked portable on Thursday with a bare report logs no grid of Monday's
+/// (operator decision, 2026-10-27). With a callbook answer, that grid is for the map only.
+#[test]
+fn a_grid_the_station_sent_days_ago_is_not_taken() {
+    let mut e = ft8();
+    let days_ago = now_unix_secs() - 3 * 86_400;
+    e.app
+        .inbox
+        .roster
+        .observe_at(&dec_snr("CQ 7P8RU KG31", -12), 1, days_ago);
+    assert_eq!(
+        e.app.inbox.roster.sent_grid_heard(DX),
+        Some((days_ago, "KG31")),
+        "premise: heard then"
+    );
+    e.app.inbox.roster.clear();
+    e.note_callbook_answer(DX, callbook(DX));
+    to_17m(&mut e);
+    let rec = run_and_work_a_gridless_caller(&mut e);
+    assert_eq!(
+        rec.grid.as_deref(),
+        Some("KG30ab"),
+        "not the grid sent days ago"
+    );
+    assert!(is_map_only_grid(&rec));
 }

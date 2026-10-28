@@ -1705,14 +1705,6 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// the measurement and fails if this moves.
 const ZERO_RF_POWER: f32 = 0.005;
 
-/// On a contact the FT8/FT4 engine built ([`Engine::qso_record`]) with no grid: the station gave
-/// none in the exchange, sent none this session, and was never logged with one. A callbook's grid
-/// filled at log time is then for the distance and the map only
-/// ([`tempo_core::logbook::callbook::fill_gridless_from_callbook`]; operator decision,
-/// 2026-10-27). It rides the record while the contact waits (the popup, Log QSO, the journal) and
-/// [`Engine::log_qso_inner`] takes it off before anything is written: it never reaches the log.
-pub(crate) const GRIDLESS_CONTACT_FIELD: &str = "APP_NEXUS_GRIDLESS_CONTACT";
-
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
 ///
 /// The heavy poll refreshes well inside this, and while a key Nexus applies (its own or another
@@ -14216,7 +14208,7 @@ impl Engine {
                     self.unconfirmed_auto_logs.push(overflow.record.clone());
                 }
                 self.pending_logs_auto_logged = self.pending_logs_auto_logged.saturating_add(1);
-                self.log_held_qso(overflow.record);
+                self.log_held_qso(overflow.record, overflow.gridless);
             }
         }
         self.pending_logs.push_back(held);
@@ -16642,13 +16634,34 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, rec: QsoRecord) {
-        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), false);
+        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), false, false);
+    }
+
+    /// [`Self::log_qso`] for a contact the FT8/FT4 engine built ([`HeldQso::built`]), as it was
+    /// built: one with no grid of its own takes a callbook's for the map only.
+    fn log_built_qso(&mut self, held: HeldQso) {
+        let _ = self.log_qso_inner(
+            held.record,
+            false,
+            StateSource::Operator,
+            Vec::new(),
+            false,
+            held.gridless,
+        );
     }
 
     /// [`Self::log_qso`] for a contact the confirm-before-log hold kept: its park was decided when
     /// it was held ([`Self::stamp_hold`]), so the activation running at the confirm adds none.
-    fn log_held_qso(&mut self, rec: QsoRecord) {
-        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), true);
+    /// `gridless` as [`HeldQso::gridless`].
+    fn log_held_qso(&mut self, rec: QsoRecord, gridless: bool) {
+        let _ = self.log_qso_inner(
+            rec,
+            false,
+            StateSource::Operator,
+            Vec::new(),
+            true,
+            gridless,
+        );
     }
 
     /// [`Self::log_qso`] for a contact from a log form, which knows where its state came from
@@ -16656,7 +16669,7 @@ impl Engine {
     /// (`park_places`, "US-ND"; resolved by the command layer outside the Engine lock). A park
     /// the record does not carry is ignored, and a hunted park brings its own places.
     pub fn log_form_qso(&mut self, rec: QsoRecord, source: StateSource, park_places: Vec<String>) {
-        let _ = self.log_qso_inner(rec, false, source, park_places, false);
+        let _ = self.log_qso_inner(rec, false, source, park_places, false, false);
     }
 
     /// Changes with native operating/profile changes, including value-identical
@@ -16841,7 +16854,7 @@ impl Engine {
     /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
     /// not change FT sequencing, pending-log semantics or desktop append timing.
     pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
-        self.log_qso_inner(rec, true, StateSource::Operator, Vec::new(), false)
+        self.log_qso_inner(rec, true, StateSource::Operator, Vec::new(), false, false)
     }
 
     /// Tag `rec` with the live POTA/SOTA activation (your side) if one is running and the
@@ -17024,14 +17037,16 @@ impl Engine {
     }
 
     /// `from_hold`: the contact was kept by the confirm-before-log hold, which stamped its
-    /// activation then ([`Self::stamp_hold`]).
-    fn log_qso_inner(
+    /// activation then ([`Self::stamp_hold`]). `gridless`: an FT8/FT4 contact the station gave no
+    /// grid in ([`HeldQso::gridless`]).
+    pub(crate) fn log_qso_inner(
         &mut self,
         mut rec: QsoRecord,
         sync: bool,
         source: StateSource,
         park_places: Vec<String>,
         from_hold: bool,
+        gridless: bool,
     ) -> LogWriteOutcome {
         // The contact in the log's one form before anything here reads it — the band in the
         // ADIF enumeration's lower case, a phone sideband as SSB's SUBMODE
@@ -17040,10 +17055,6 @@ impl Engine {
         // contact handed in again as "USB" must still read as that contact. An FT contact is
         // already in that form (its band is the band plan's, its mode the tier's) and is untouched.
         tempo_core::logbook::canonical::contact(&mut rec);
-        // An FT8/FT4 contact logged with no grid ([`GRIDLESS_CONTACT_FIELD`]): the note is read
-        // and taken off here, first, so it never reaches the log.
-        let gridless = rec.extra.iter().any(|(k, _)| k == GRIDLESS_CONTACT_FIELD);
-        rec.extra.retain(|(k, _)| k != GRIDLESS_CONTACT_FIELD);
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -17264,13 +17275,7 @@ impl Engine {
         if let Some(place) = tempo_core::contest::resolve_call(&rec.call) {
             tempo_core::logbook::fill_extra(&mut rec, "CONT", place.continent.to_string());
         }
-        let km = rec
-            .my_grid
-            .as_deref()
-            .and_then(maidenhead_center)
-            .zip(rec.grid.as_deref().and_then(maidenhead_center))
-            .map(|(me, them)| haversine_km(me, them).round() as u64);
-        if let Some(km) = km {
+        if let Some(km) = distance_km(&rec) {
             tempo_core::logbook::fill_extra(&mut rec, "DISTANCE", km.to_string());
         }
         // THE SPACE WEATHER (ADIF `K_INDEX`, `A_INDEX`, `SFI`), only when the operator asked for
@@ -17497,8 +17502,9 @@ impl Engine {
         // Same ruling as the DXKeeper push, and NOT the same destination as HRDLog.net:
         // this is the HRD Logbook program on the operator's own machine, so it gets their
         // own record, private note included. `hrdlog_push_qso_impl` is the WEB service and
-        // takes the withheld one.
-        let mut adif = tempo_core::logbook::adif_record_own_log(rec);
+        // takes the withheld one. Never a grid for the distance and the map only, which HRD
+        // would count and could upload (`adif_record_own_logger`).
+        let mut adif = tempo_core::logbook::adif_record_own_logger(rec);
         let tag = |name: &str, val: &str| -> String {
             let v = val.trim();
             if v.is_empty() {
@@ -18937,10 +18943,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // a shortened grid Nexus filled in counts as unchanged (operator rulings, 2026-10-27).
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
-        self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
-        self.log_held_qso(held);
+        self.log_held_qso(held, was.gridless || dropped);
         true
     }
 
@@ -18987,10 +18993,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// operator typed.
     ///
     /// `held` is the edited copy about to be logged; `was` is the record as held, and `grid`
-    /// its grid's provenance.
-    fn rederive_after_edits(&self, held: &mut QsoRecord, was: &QsoRecord, grid: GridSource) {
+    /// its grid's provenance. True when the grid was dropped: the contact then has no grid from
+    /// the station, and a callbook's is for the distance and the map only ([`HeldQso::gridless`]),
+    /// never counted as one the corrected call's station gave.
+    fn rederive_after_edits(
+        &self,
+        held: &mut QsoRecord,
+        was: &QsoRecord,
+        grid: GridSource,
+    ) -> bool {
         let was_sent = was.rst_sent.as_deref();
         let was_rcvd = was.rst_rcvd.as_deref();
+        let mut dropped = false;
         // The same rule `StationCore::update_qso` reads an edit with, so the two cannot
         // disagree about what a correction is: the same call in another case is not one.
         if !held.call.trim().eq_ignore_ascii_case(was.call.trim()) {
@@ -19008,6 +19022,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 };
             if stale_lookup {
                 held.grid = None;
+                dropped = true;
             }
         }
         if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
@@ -19020,6 +19035,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 );
             }
         }
+        dropped
     }
 
     /// Discard the contact the popup is showing without logging it, promoting the next.
@@ -19063,7 +19079,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let held_or_logged = if self.settings.prompt_to_log || held.confirm_only {
             self.hold_pending_log(held)
         } else {
-            self.log_qso(held.record);
+            self.log_built_qso(held);
             true
         };
         // One taken from those waiting for Log QSO leaves the journal only now that it is in
@@ -19149,7 +19165,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None;
-        let mut held = HeldQso::new(rec, grid_source);
+        let mut held = HeldQso::built(rec, grid_source);
         held.confirm_only = !reported;
         Some(held)
     }
@@ -19177,7 +19193,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let confirm_only = st.confirm_only;
         Some(HeldQso {
             confirm_only,
-            ..HeldQso::new(self.set_aside_record(st), grid_source)
+            ..HeldQso::built(self.set_aside_record(st), grid_source)
         })
     }
 
@@ -20449,7 +20465,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             rec.band = band;
             (rec.freq_mhz, rec.freq_rx_mhz) = freqs;
         }
-        let mut held = HeldQso::new(rec, grid_source);
+        let mut held = HeldQso::built(rec, grid_source);
         held.confirm_only = confirm_only;
         self.stamp_hold(&mut held.record);
         self.set_aside_qsos.push(held);
@@ -20480,9 +20496,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // silently — behind whatever it is already showing, never over it. The
             // hold carries where its grid came from: the popup can correct the call,
             // and a LOOKED-UP grid was keyed on the call that turned out to be wrong.
-            self.hold_pending_log(HeldQso::new(rec, grid_source));
+            self.hold_pending_log(HeldQso::built(rec, grid_source));
         } else {
-            self.log_qso(rec);
+            self.log_built_qso(HeldQso::built(rec, grid_source));
         }
     }
 
@@ -20504,7 +20520,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.hold_pending_log(HeldQso {
             confirm_only: true,
-            ..HeldQso::new(rec, grid_source)
+            ..HeldQso::built(rec, grid_source)
         });
     }
 
@@ -32048,10 +32064,20 @@ contact yourself."
         }
     }
 
-    /// The grid `call` last sent on the air this session, as decoded (`Roster::sent_grid`): what
-    /// the Logbook's blank-grid offer takes for a contact the decode log does not cover.
-    pub fn sent_grid(&self, call: &str) -> Option<String> {
-        self.app.inbox.roster.sent_grid(call).map(str::to_string)
+    /// The grid each of `calls` last sent on the air this session, as decoded, and when it was
+    /// heard (`Roster::sent_grid_heard`), in one pass: what the Logbook's blank-grid offer takes
+    /// for a contact the decode log does not cover, where it was heard near the contact's time.
+    pub fn sent_grids_heard(
+        &self,
+        calls: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, (u64, String)> {
+        calls
+            .iter()
+            .filter_map(|call| {
+                let (at, grid) = self.app.inbox.roster.sent_grid_heard(call)?;
+                Some((call.clone(), (at, grid.to_string())))
+            })
+            .collect()
     }
 
     /// The DX's grid for a contact: what the exchange itself carried, else what we decoded
@@ -32087,11 +32113,12 @@ contact yourself."
                 // Then the grid it SENT ON THE AIR earlier this session, on any band and in any
                 // mode: the roster forgets a station at a band or mode change, the station's own
                 // word does not change with it (operator decision, 2026-10-27). It counts as any
-                // logged grid, being the station's own.
+                // logged grid, being the station's own — sent within the last 24 hours only: a
+                // station heard days ago in a long session may be portable somewhere else now.
                 self.app
                     .inbox
                     .roster
-                    .sent_grid(dxcall)
+                    .sent_grid(dxcall, now_unix_secs())
                     .filter(|g| !g.trim().is_empty())
                     .map(str::to_string)
             })
@@ -32370,12 +32397,6 @@ contact yourself."
             .as_ref()
             .map_or_else(|| self.log_frequencies(), |m| m.freqs);
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
-        // No grid from the station at all: a callbook's, at log time, is for the map only.
-        let extra = if grid.is_none() {
-            vec![(GRIDLESS_CONTACT_FIELD.to_string(), "Y".to_string())]
-        } else {
-            Vec::new()
-        };
         // Built BEFORE the struct literal moves `mode` into the record.
         let reports_note = if self.settings.log_reports_to_comments {
             reports_comment(
@@ -32444,7 +32465,7 @@ contact yourself."
             my_grid: None,
             my_rig: None,
             station_callsign: self.station_callsign_now(),
-            extra,
+            extra: Vec::new(),
             contest: None,
         }
     }
@@ -34453,6 +34474,16 @@ fn best_caller_decodes(
         .filter(|(i, _)| !answers.contains(i) || Some(*i) == keep)
         .map(|(_, d)| d.clone())
         .collect()
+}
+
+/// The distance to the worked station, km (ADIF `DISTANCE`), from the record's own grid to theirs
+/// when both are known: what the log funnel fills, and the Blank grids clean-up with it.
+pub(crate) fn distance_km(rec: &QsoRecord) -> Option<u64> {
+    rec.my_grid
+        .as_deref()
+        .and_then(maidenhead_center)
+        .zip(rec.grid.as_deref().and_then(maidenhead_center))
+        .map(|(me, them)| haversine_km(me, them).round() as u64)
 }
 
 /// Maidenhead locator → (lat, lon) at the grid-square center; `None` when

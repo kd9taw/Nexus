@@ -4,10 +4,12 @@
 //! **Where a grid comes from, first found wins:**
 //!
 //! 1. **Heard on the air** ([`GridFrom::Heard`]): a grid the station itself SENT — its CQ, or a
-//!    call to anyone with its grid — as Nexus decoded it. From the decode log Nexus keeps
-//!    (ALL.TXT, [`heard_grids_in`]), the grid heard nearest the contact's time, so a rover's grid
-//!    is the one of that day; else the grid it sent this session (`Roster::sent_grid`). It is the
-//!    station's own word, and counts as any logged grid.
+//!    call to anyone with its grid — as Nexus decoded it, in the decode log Nexus keeps (ALL.TXT,
+//!    [`heard_grids_in`]) or this session (`Roster::sent_grid_heard`), and **only within 24 hours
+//!    of the contact** ([`heard_at`], `tempo_core::roster::SENT_GRID_MAX_AGE_SECS`; operator
+//!    decision, 2026-10-27): the station's own word about where it was then, so it counts as any
+//!    logged grid. A grid heard further from the contact says where a rover, a portable station or
+//!    one that has moved was on another day, and is never offered as heard.
 //! 2. **Home QTH, from the callbook** ([`GridFrom::Callbook`]): the grid a callbook lookup
 //!    already made answered for exactly this call (the lookup cache; nothing is looked up here),
 //!    only for a call with no stroke and no park, and only on a contact from the last 12 months —
@@ -17,7 +19,9 @@
 //!    toward no grid award, filling no GRID need, sent to no service
 //!    (`tempo_core::logbook::counted_grid`).
 //!
-//! **What it changes:** the grid of a contact that still has none, and nothing else. Never a call,
+//! **What it changes:** the grid of a contact that still has none, and the distance to it (ADIF
+//! `DISTANCE`, where the contact has none and its own grid is known), as the log funnel fills it
+//! when a contact is logged (`crate::engine::distance_km`). Never a call,
 //! a stamp or a confirmation: a contact already uploaded keeps its upload marks, as with every fix
 //! here (the module header), so nothing is sent again and each service keeps what it was sent.
 //! ONE run of the history, undone whole; a contact given a grid since it was offered is left out.
@@ -26,9 +30,13 @@ use super::*;
 use std::io::BufRead;
 use tempo_core::message::Msg;
 
-/// What the stations sent, by call: each grid as `(when, grid)`, in the order heard
-/// ([`heard_grids_in`]).
-pub type HeardGrids = HashMap<String, Vec<(u64, String)>>;
+/// What the stations sent, by call: each run of one grid as `(first heard, last heard, grid)`, in
+/// the order heard ([`heard_grids_in`]).
+pub type HeardGrids = HashMap<String, Vec<(u64, u64, String)>>;
+
+/// The grid each station last sent this session, by call, with the UTC second it was heard
+/// (`Engine::sent_grids_heard`).
+pub type SessionGrids = HashMap<String, (u64, String)>;
 
 /// Where an offered grid came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,14 +109,15 @@ fn callbook_grid(r: &QsoRecord, answer: &CallbookAnswer, now_unix: u64) -> Optio
 }
 
 /// ★ Every contact logged with no grid for which a grid is known. `heard(calls)` answers what the
-/// decode log holds for those calls ([`heard_grids_in`]), of which the grid in effect at the
-/// contact's time is taken ([`heard_at`]); else `session(call)`, the grid the station sent this
-/// session; else `kept(call key)`, the callbook answer a lookup already made. Read with the Engine
-/// lock released; changes nothing. How many contacts have no grid, and the offers.
+/// decode log holds for those calls ([`heard_grids_in`]) and `session(calls)` the grid each sent
+/// this session, with when it was heard; of both, the grid in effect at the contact's time is
+/// taken, if heard within 24 hours of it ([`heard_at`]); else `kept(call key)`, the callbook answer
+/// a lookup already made. Each is asked once. Read with the Engine lock released; changes nothing.
+/// How many contacts have no grid, and the offers.
 pub fn grid_offers(
     engine: &Mutex<Engine>,
     heard: &mut dyn FnMut(&HashSet<String>) -> HeardGrids,
-    session: &dyn Fn(&str) -> Option<String>,
+    session: &mut dyn FnMut(&HashSet<String>) -> SessionGrids,
     kept: &mut dyn FnMut(&str) -> Option<CallbookAnswer>,
     now_unix: u64,
 ) -> Result<(usize, Vec<GridOffer>), String> {
@@ -125,11 +134,18 @@ pub fn grid_offers(
         .iter()
         .map(|r| r.call.trim().to_ascii_uppercase())
         .collect();
-    let decoded = if calls.is_empty() {
+    let mut decoded = if calls.is_empty() {
         HashMap::new()
     } else {
         heard(&calls)
     };
+    if !calls.is_empty() {
+        for (call, (at, grid)) in session(&calls) {
+            let runs = decoded.entry(call).or_default();
+            runs.push((at, at, grid));
+            runs.sort_by_key(|(first, _, _)| *first);
+        }
+    }
     let mut answers: HashMap<String, Option<CallbookAnswer>> = HashMap::new();
     let mut offers = Vec::new();
     for r in &blank {
@@ -138,7 +154,6 @@ pub fn grid_offers(
             .get(&call)
             .and_then(|sent| heard_at(sent, r.when_unix))
             .map(str::to_string)
-            .or_else(|| session(&call))
             .filter(|g| tempo_core::message::is_valid_grid(g.trim()))
             .map(|g| (g, GridFrom::Heard))
             .or_else(|| {
@@ -235,6 +250,9 @@ pub fn fill_grids(
                     }
                 }
             }
+            if let Some(km) = crate::engine::distance_km(&after) {
+                tempo_core::logbook::fill_extra(&mut after, "DISTANCE", km.to_string());
+            }
             pairs.push((Arc::clone(row), Some(Arc::new(after))));
         }
         (pairs, refused)
@@ -274,24 +292,61 @@ fn all_txt_time(stamp: &str) -> Option<u64> {
     u64::try_from(days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s).ok()
 }
 
+/// A column of numbers on an ALL.TXT line: the report, DT or audio offset, or two of them run
+/// together.
+fn is_number(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"+-.".contains(&b))
+}
+
+/// Where the message starts on an ALL.TXT line split into words: after the stamp, the dial, Rx/Tx
+/// and the mode, past the report, DT and audio offset. Those are fixed-width fields with no space
+/// between them, so a wide value runs two together (a DT of -10.5 after a report of -12 is
+/// `-12-10.5`): the numbers are skipped as they come, up to three, never counted on as three.
+fn message_start(words: &[&str]) -> usize {
+    4 + words
+        .iter()
+        .skip(4)
+        .take(3)
+        .take_while(|w| is_number(w))
+        .count()
+}
+
+/// Whether a decode's words name one of `wanted` (calls as decoded, upper-cased): asked before
+/// the message is parsed, so the lines of every other station cost a lookup per word.
+fn names_one(words: &[&str], wanted: &HashSet<String>) -> bool {
+    words.iter().any(|w| {
+        wanted.contains(*w)
+            || (w.bytes().any(|b| b.is_ascii_lowercase())
+                && wanted.contains(&w.to_ascii_uppercase()))
+    })
+}
+
 /// What the stations in `wanted` (calls as decoded, upper-cased) SENT in the decode log `reader`
 /// holds — ALL.TXT, in WSJT-X's line format ([`crate::alltxt`]): each received CQ, or call to
-/// anyone, carrying the sender's grid, as `(when, grid)` in the order heard, a run of the same grid
-/// kept once. A line that is not such a decode (a transmission, a beacon spot, free text, a line
-/// of another format) is passed over. Read one line at a time: the file can be large.
+/// anyone, carrying the sender's grid, as runs of one grid `(first heard, last heard, grid)` in
+/// the order heard. A line that is not such a decode (a transmission, a beacon spot, free text, a
+/// line of another format) is passed over. Read one line at a time: the file can be large, and a
+/// line naming none of `wanted` is passed over before its message is parsed.
 pub fn heard_grids_in(reader: impl BufRead, wanted: &HashSet<String>) -> HeardGrids {
     let mut out = HeardGrids::new();
     for line in reader.split(b'\n') {
         let Ok(line) = line else { break };
         let line = String::from_utf8_lossy(&line);
         let words: Vec<&str> = line.split_whitespace().collect();
-        if words.len() < 9 || words[2] != "Rx" {
+        if words.len() < 5 || words[2] != "Rx" {
+            continue;
+        }
+        let message = &words[message_start(&words)..];
+        if message.is_empty() || !names_one(message, wanted) {
             continue;
         }
         let Some(when) = all_txt_time(words[0]) else {
             continue;
         };
-        let (sender, grid) = match Msg::parse(&words[7..].join(" ")) {
+        let (sender, grid) = match Msg::parse(&message.join(" ")) {
             Msg::Cq { de, grid, .. } | Msg::Grid { de, grid, .. } => (de, grid),
             _ => continue,
         };
@@ -299,23 +354,37 @@ pub fn heard_grids_in(reader: impl BufRead, wanted: &HashSet<String>) -> HeardGr
         if grid.trim().is_empty() || !wanted.contains(&sender) {
             continue;
         }
-        let list = out.entry(sender).or_default();
-        if list
-            .last()
-            .is_none_or(|(_, g)| !g.eq_ignore_ascii_case(&grid))
-        {
-            list.push((when, grid));
+        let runs = out.entry(sender).or_default();
+        match runs.last_mut() {
+            Some((first, last, g)) if g.eq_ignore_ascii_case(&grid) => {
+                *first = (*first).min(when);
+                *last = (*last).max(when);
+            }
+            _ => runs.push((when, when, grid)),
         }
     }
     out
 }
 
-/// Of the grids a station sent ([`heard_grids_in`]), the one in effect at `when`: the last sent at
-/// or before it, else the first sent after it.
-pub fn heard_at(sent: &[(u64, String)], when: u64) -> Option<&str> {
+/// Of the grids a station sent ([`heard_grids_in`]), the one in effect at `when`, and only one
+/// heard within 24 hours of it (`tempo_core::roster::SENT_GRID_MAX_AGE_SECS`): the last run begun
+/// at or before it, else the first begun after it. None heard that near: none.
+pub fn heard_at(sent: &[(u64, u64, String)], when: u64) -> Option<&str> {
+    // How far `when` is from a run: none inside it, else to its nearer end.
+    let near = |first: u64, last: u64| {
+        let gap = if when < first {
+            first - when
+        } else {
+            when.saturating_sub(last)
+        };
+        gap <= tempo_core::roster::SENT_GRID_MAX_AGE_SECS
+    };
     sent.iter()
         .rev()
-        .find(|(t, _)| *t <= when)
-        .or_else(|| sent.first())
-        .map(|(_, g)| g.as_str())
+        .find(|(first, last, _)| *first <= when && near(*first, *last))
+        .or_else(|| {
+            sent.iter()
+                .find(|(first, last, _)| *first > when && near(*first, *last))
+        })
+        .map(|(_, _, g)| g.as_str())
 }

@@ -2400,15 +2400,23 @@ fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
         ],
     );
     let now = 1_767_270_000; // 1 January 2026, after the contacts.
-                             // The decode log heard W1AW send FN31 (and nothing else asked of it); this session, JA1AA PM95.
+    let noon = 1_767_268_800; // 1 January 2026 12:00:00, the first contact.
+                              // The decode log heard W1AW send FN31 an hour before (and nothing else asked of it); this
+                              // session, JA1AA PM95 an hour after its contact.
     let mut heard = |calls: &HashSet<String>| {
         assert!(
             calls.contains("W1AW") && !calls.contains("VE3AA"),
             "the blank ones asked"
         );
-        HashMap::from([("W1AW".to_string(), vec![(0, "FN31".to_string())])])
+        HashMap::from([(
+            "W1AW".to_string(),
+            vec![(noon - 3600, noon - 3600, "FN31".to_string())],
+        )])
     };
-    let session = |call: &str| (call == "JA1AA").then(|| "PM95".to_string());
+    let mut session = |calls: &HashSet<String>| {
+        assert!(calls.contains("JA1AA"), "the blank ones asked");
+        HashMap::from([("JA1AA".to_string(), (noon + 360 + 3600, "PM95".to_string()))])
+    };
     let answer = |call: &str, grid: &str| CallbookAnswer {
         call: call.into(),
         grid: Some(grid.into()),
@@ -2427,7 +2435,7 @@ fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
             _ => None,
         }
     };
-    let (blank, offers) = grid_offers(&engine, &mut heard, &session, &mut kept, now).unwrap();
+    let (blank, offers) = grid_offers(&engine, &mut heard, &mut session, &mut kept, now).unwrap();
     assert_eq!(blank, 6, "every contact with no grid");
     let seen: Vec<(&str, &str, GridFrom)> = offers
         .iter()
@@ -2448,13 +2456,19 @@ fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
         "heard: no callbook asked"
     );
     // A year on, the callbook says where a station is now, not then: only the heard grid.
-    let (_, later) =
-        grid_offers(&engine, &mut heard, &session, &mut kept, now + 400 * 86_400).unwrap();
+    let (_, later) = grid_offers(
+        &engine,
+        &mut heard,
+        &mut session,
+        &mut kept,
+        now + 400 * 86_400,
+    )
+    .unwrap();
     assert_eq!(later.len(), 2);
 
     let w1aw = by_call(&engine, "W1AW")[0].clone();
     stamp(&engine, &w1aw, UploadService::Qrz, 1_767_270_100);
-    let (_, offers) = grid_offers(&engine, &mut heard, &session, &mut kept, now).unwrap();
+    let (_, offers) = grid_offers(&engine, &mut heard, &mut session, &mut kept, now).unwrap();
     assert!(
         offers[0].uploaded && !offers[1].uploaded,
         "the uploaded one says so"
@@ -2533,8 +2547,10 @@ fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
 }
 
 /// ALL.TXT's lines as WSJT-X writes them: each CQ, or call to anyone, that carries the sender's
-/// grid, as (when, grid), a run of one grid kept once; transmissions, reports, free text and
-/// other lines passed over. The grid in effect at a time is the last sent at or before it.
+/// grid, as a run of one grid (first heard, last heard, grid); transmissions, reports, free text
+/// and other lines passed over. A report and DT run together (`-12-10.5`) move the message a word
+/// left, and it is still read. The grid in effect at a time is the last run begun at or before
+/// it, else the first after it.
 #[test]
 fn the_grids_heard_are_read_from_all_txt() {
     let text = "\
@@ -2546,8 +2562,9 @@ fn the_grids_heard_are_read_from_all_txt() {
 260101_120115    14.074 Rx FT8    -12  0.1  900 TNX FER QSO
 garbage line
 260102_120000     7.074 Rx FT4    -10  0.2 1500 CQ DX G4AAA IO91
+260102_120030     7.074 Rx FT4    -12-10.5 1500 CQ JA1AA PM95
 ";
-    let wanted: HashSet<String> = ["W1AW", "G4AAA", "K1ABC"]
+    let wanted: HashSet<String> = ["W1AW", "G4AAA", "K1ABC", "JA1AA"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -2556,11 +2573,19 @@ garbage line
     assert_eq!(
         w1,
         &vec![
-            (1_767_268_800, "FN31".to_string()),
-            (1_767_268_860, "FN32".to_string())
+            (1_767_268_800, 1_767_268_815, "FN31".to_string()),
+            (1_767_268_860, 1_767_268_860, "FN32".to_string())
         ]
     );
-    assert_eq!(got["G4AAA"], vec![(1_767_355_200, "IO91".to_string())]);
+    assert_eq!(
+        got["G4AAA"],
+        vec![(1_767_355_200, 1_767_355_200, "IO91".to_string())]
+    );
+    assert_eq!(
+        got["JA1AA"],
+        vec![(1_767_355_230, 1_767_355_230, "PM95".to_string())],
+        "a report and DT run together"
+    );
     assert!(
         !got.contains_key("K1ABC"),
         "our own transmission is not heard"
@@ -2568,8 +2593,100 @@ garbage line
     assert_eq!(heard_at(w1, 1_767_268_850), Some("FN31"));
     assert_eq!(heard_at(w1, 1_767_268_900), Some("FN32"));
     assert_eq!(
-        heard_at(w1, 1_700_000_000),
+        heard_at(w1, 1_767_268_800 - 3600),
         Some("FN31"),
-        "before any: the first"
+        "an hour before any: the first"
+    );
+}
+
+/// ★ A grid heard more than 24 hours from the contact, before or after, is not offered as heard:
+/// the station may have been somewhere else then. The contact falls to the callbook's grid (for
+/// the map only) where there is one, else to nothing; this session's grid is held to the same
+/// rule (operator decision, 2026-10-27). Within the day, a run the station kept sending is in
+/// effect from its first decode to its last.
+#[test]
+fn a_grid_heard_far_from_the_contact_is_not_offered_as_heard() {
+    let noon = 1_767_268_800; // 1 January 2026 12:00:00.
+    let day = 86_400;
+    let w1 = vec![(noon + 400 * day, noon + 401 * day, "FN31".to_string())];
+    assert_eq!(heard_at(&w1, noon), None, "heard 400 days later");
+    let w1 = vec![(noon - 3 * day, noon - day - 1, "FN31".to_string())];
+    assert_eq!(
+        heard_at(&w1, noon),
+        None,
+        "last heard a day and a second before"
+    );
+    let w1 = vec![(noon - 3 * day, noon - day, "FN31".to_string())];
+    assert_eq!(heard_at(&w1, noon), Some("FN31"), "sent until a day before");
+    let w1 = vec![(noon + day, noon + 2 * day, "FN31".to_string())];
+    assert_eq!(heard_at(&w1, noon), Some("FN31"), "first heard a day after");
+
+    let d = Dir::new("tools-grids-far");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<MY_GRIDSQUARE:4>EN52"),
+            adif("G4AAA", "120500", "<MY_GRIDSQUARE:4>EN52"),
+            adif("JA1AA", "120600", ""),
+        ],
+    );
+    let mut heard = |_: &HashSet<String>| {
+        HashMap::from([
+            (
+                "W1AW".to_string(),
+                vec![(noon + 400 * day, noon + 400 * day, "FN31".to_string())],
+            ),
+            (
+                "G4AAA".to_string(),
+                vec![(noon - 2 * day, noon - 2 * day, "IO92".to_string())],
+            ),
+        ])
+    };
+    let mut session = |_: &HashSet<String>| {
+        HashMap::from([("JA1AA".to_string(), (noon + 3 * day, "PM95".to_string()))])
+    };
+    let mut kept = |key: &str| {
+        (key == "G4AAA").then(|| CallbookAnswer {
+            call: "G4AAA".into(),
+            grid: Some("IO91".into()),
+            ..CallbookAnswer::default()
+        })
+    };
+    let (blank, offers) =
+        grid_offers(&engine, &mut heard, &mut session, &mut kept, noon + day).unwrap();
+    assert_eq!(blank, 3);
+    let seen: Vec<(&str, &str, GridFrom)> = offers
+        .iter()
+        .map(|o| (o.call.as_str(), o.grid.as_str(), o.source))
+        .collect();
+    assert_eq!(
+        seen,
+        [("G4AAA", "IO91", GridFrom::Callbook)],
+        "none heard near enough: only the callbook's, for the map only"
+    );
+    // The fill writes the distance from the contact's own grid, as the log funnel does.
+    let picks: Vec<GridPick> = offers
+        .iter()
+        .map(|o| GridPick {
+            id: o.id,
+            grid: o.grid.clone(),
+            source: o.source,
+        })
+        .collect();
+    let (made, dur) = fill_grids(&engine, &picks);
+    made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    let g4 = by_call(&engine, "G4AAA")[0].clone();
+    assert!(callbook::is_map_only_grid(&g4), "premise: map only");
+    assert_eq!(
+        tempo_core::logbook::extra_field(&g4, "DISTANCE"),
+        crate::engine::distance_km(&g4)
+            .map(|km| km.to_string())
+            .as_deref(),
+        "the distance, as the log funnel fills it"
+    );
+    assert!(
+        tempo_core::logbook::extra_field(&g4, "DISTANCE").is_some(),
+        "premise: a distance"
     );
 }
