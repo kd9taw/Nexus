@@ -130,6 +130,7 @@ const ALERTS: NeedAlert[] = [
 const BA_ALERTS: NeedAlert[] = [
   alert('VK0ZN', ['NewZone', 'NewMode'], { entity: 'Heard Island', zone: 39 }),
   alert('ZS6MD', ['NewMode'], { entity: 'South Africa', zone: 38 }),
+  alert('IA5X', ['NewIota', 'NewMode'], { entity: 'Italy', zone: 15, iota: 'EU-028' }),
 ]
 const byCall = (alerts: NeedAlert[]) => new Map(alerts.map((a) => [a.call, [a]]))
 const leadByCall = (alerts: NeedAlert[]) => new Map(alerts.map((a) => [a.call, a.tags[0]]))
@@ -158,6 +159,7 @@ const DECODES: DecodeRow[] = [
   decode('ZL9ZZ', { freqHz: 1800, newDxcc: true }), // the decode's own new-one flag: a NEW ONE row
   decode('VK0ZN', { freqHz: 2000 }), // a zone need's row
   decode('ZS6MD', { freqHz: 2200 }), // a mode need's row
+  decode('IA5X', { freqHz: 2400 }), // an IOTA need's row
 ]
 const PHONE_ALERTS: NeedAlert[] = [
   alert('VP8PJ', ['Wanted', 'NewEntity'], { entity: 'Falkland Islands', mode: 'SSB', freqMhz: 14.2 }),
@@ -362,8 +364,8 @@ const HOSTS: Array<[string, () => ReactNode, 'any' | 'own']> = [
   ['Connect Spots box (dashboard rail)', () => dashPane('spots'), 'own'],
 ]
 
-/** Every need class the sheet colours a chip with (`.need-<cls> { --need-color }`), and the eleven NEED_CHIP draws. */
-const NEED_CLASSES = ['entity', 'zone', 'band', 'mode', 'grid', 'state', 'confirm', 'dxped', 'pota', 'sota', 'watch']
+/** Every need class the sheet colours a chip with (`.need-<cls> { --need-color }`), and the twelve NEED_CHIP draws. */
+const NEED_CLASSES = ['entity', 'iota', 'zone', 'band', 'mode', 'grid', 'state', 'confirm', 'dxped', 'pota', 'sota', 'watch']
 
 interface Chip {
   host: string
@@ -667,14 +669,16 @@ describe('a need chip reads in every theme, wherever it sits', () => {
   // THE INVENTORY: every host, with the needs its data here letters. Exact, on purpose: a host that stops rendering its
   // chips here would leave the sweep silently, and a new host is looked at before it joins.
   const ALL = ['band', 'confirm', 'dxped', 'entity', 'grid', 'mode', 'pota', 'sota', 'state', 'watch', 'zone']
+  // Band Activity letters the needs only its rows carry, an island group's among them.
+  const BAND_ACTIVITY = [...ALL, 'iota'].sort()
   const INVENTORY: Record<string, string[]> = {
-    'Operate Band Activity': ALL,
+    'Operate Band Activity': BAND_ACTIVITY,
     'Operate Rx Frequency': ['dxped', 'entity', 'pota', 'sota'],
-    'Operate roster-layout Band Activity': ALL,
+    'Operate roster-layout Band Activity': BAND_ACTIVITY,
     'Operate Call Roster': ['band', 'confirm', 'entity', 'grid', 'mode', 'pota', 'state', 'watch', 'zone'],
     'Operate Stations pane': ALL,
     'Tempo Stations rail': ALL,
-    'Tempo Band Activity rail': ALL,
+    'Tempo Band Activity rail': BAND_ACTIVITY,
     'the Needed view': ALL,
     'the Needed pop-out': ALL,
     'Phone Needed pane': ['band', 'entity', 'mode', 'pota', 'watch'],
@@ -788,7 +792,7 @@ describe('a need chip reads in every theme, wherever it sits', () => {
     }
     expect(wrong).toEqual([])
     expect(TINTED_ROWS.filter((n) => !chips.some((w) => isLead(w) && rowNeedOf(w) === n)), 'tinted rows with no lead chip').toEqual([])
-    expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-mode', 'need-pota', 'need-state', 'need-watch', 'need-zone'])
+    expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-iota', 'need-mode', 'need-pota', 'need-state', 'need-watch', 'need-zone'])
   }, 240_000)
 
   // POTA AND SOTA (operator, 2026-09-30: "SOTA/POTA's fixed colours give way"): a fixed green and purple, set for the

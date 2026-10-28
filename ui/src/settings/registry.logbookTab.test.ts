@@ -23,6 +23,7 @@ describe('Settings ▸ Logbook', () => {
       'lotw-users',
       'callsign-state',
       'country-file',
+      'iota-list',
     ])
   })
 

@@ -6,6 +6,7 @@
 //! unit-testable offline.
 
 pub mod aurora;
+mod body;
 pub mod callook;
 pub mod cloudlog;
 pub mod clublog;
@@ -16,6 +17,7 @@ pub mod geocode;
 pub mod hamqth;
 pub mod hearham;
 pub mod hrdlog;
+pub mod iota;
 pub mod kc2g;
 pub mod lotw;
 pub mod lotw_users;

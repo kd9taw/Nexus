@@ -121,9 +121,15 @@ mod ft_nonstandard_tests;
 /// FT8/FT4 never key an over the encoder refuses, on every path that queues an operator's text.
 #[cfg(test)]
 mod ft_refused_text_tests;
+/// A contact logged with no grid: the grid the station sent on the air, else a callbook's, which
+/// counts toward nothing and is sent nowhere.
+#[cfg(test)]
+mod grid_fill_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
+#[cfg(test)]
+mod iota_offer_tests;
 /// JS8's send mechanics: the TX offset moved while a message goes out.
 #[cfg(test)]
 mod js8_send_tests;
@@ -146,7 +152,12 @@ mod phone_usb_only_tests;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
 #[cfg(test)]
 mod pick_switch_tests;
+/// Test CAT for a radio that is not the one in use: a read-only look through the radio monitor.
+pub mod radio_probe;
 pub mod radio_selection;
+/// The radio setup: its preview, its read-only probe, and an untouched file staying untouched.
+#[cfg(test)]
+mod radio_setup_tests;
 pub mod receivers;
 pub mod remote_logging;
 pub mod remote_mic;
@@ -310,7 +321,7 @@ struct FeedRows {
     /// fold the new rows into the old window's average. (The 500 ms gap-restart in
     /// `RowAverage::push` would usually cover it, but that is a coincidence of two timeouts, not
     /// a guarantee — and coincidences are what this file keeps getting bitten by.)
-    scope_win: spectrum::WindowN,
+    scope_win: spectrum::ScopeAnalysis,
     /// The last frame number stamped, 0 before the first. One counter for all three slots.
     seq: u64,
     /// When the RF scope pane last read the RF slot — its standing request for the radio's own
@@ -358,8 +369,9 @@ struct ScopeReq {
     hi: f32,
     /// Analysis window length. ⚠️ A change here is NOT visible to `RowAverage::push`, which
     /// restarts on span / bin-count / source changes only — two window lengths have all three
-    /// in common. `scope_row` therefore clears the slot itself when this moves; see there.
-    win: spectrum::WindowN,
+    /// in common. `scope_row` therefore clears the slot itself when this moves; see there. The CW
+    /// scope's HiDef zoom is one more value of it.
+    win: spectrum::ScopeAnalysis,
     at: Instant,
 }
 
@@ -774,7 +786,7 @@ impl SpectrumFeed {
     /// Read by the rx-dsp thread once per tick. `None` is the normal state — no scope on
     /// screen, a native RF row winning, or a request that has aged out — and it costs the
     /// producer exactly one mutex read.
-    pub fn scope_request(&self) -> Option<(f32, f32, spectrum::WindowN)> {
+    pub fn scope_request(&self) -> Option<(f32, f32, spectrum::ScopeAnalysis)> {
         let g = self.rows.lock().ok()?;
         let req = g.scope_req?;
         (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi, req.win))
@@ -824,8 +836,14 @@ impl SpectrumFeed {
     ///   now — a mismatch means the request just changed, so it falls through rather than
     ///   drawing the old window's frequencies under the new window's labels;
     /// - else the full audio row, exactly as before.
-    pub fn scope_row(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<Spectrum> {
-        self.scope_frame(lo_hz, hi_hz, win).map(Spectrum::from)
+    pub fn scope_row(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: impl Into<spectrum::ScopeAnalysis>,
+    ) -> Option<Spectrum> {
+        self.scope_frame(lo_hz, hi_hz, win.into())
+            .map(Spectrum::from)
     }
 
     /// [`Self::scope_row`] for a caller that names the LAST FRAME IT DREW — `None` when the
@@ -846,11 +864,11 @@ impl SpectrumFeed {
         &self,
         lo_hz: f32,
         hi_hz: f32,
-        win: spectrum::WindowN,
+        win: impl Into<spectrum::ScopeAnalysis>,
         last_seq: u64,
         fallback: impl FnOnce() -> Spectrum,
     ) -> Option<SpectrumFrame> {
-        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win) else {
+        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win.into()) else {
             let row = fallback();
             return Some(SpectrumFrame {
                 seq: 0,
@@ -868,7 +886,12 @@ impl SpectrumFeed {
     }
 
     /// [`Self::scope_row`], as the frame the winning slot holds.
-    fn scope_frame(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<SpectrumFrame> {
+    fn scope_frame(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: spectrum::ScopeAnalysis,
+    ) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
             && hi_hz <= Self::SCOPE_MAX_HZ
@@ -3087,7 +3110,10 @@ pub fn n1mm_contact_for(
         mode: rec.mode.to_uppercase(),
         timestamp: tempo_net::n1mm::utc_timestamp(rec.when_unix),
         section: String::new(),
-        gridsquare: rec.grid.clone().unwrap_or_default(),
+        // Never a grid for the distance and the map only (`tempo_core::logbook::counted_grid`).
+        gridsquare: tempo_core::logbook::counted_grid(rec)
+            .unwrap_or_default()
+            .to_string(),
         points: 0,
         contestname: tempo_net::n1mm::GENERAL_LOG.to_string(),
         freq_10hz: (rec.freq_mhz * 1e5) as u64,
@@ -3453,6 +3479,13 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// The club list every connection is sent, built once per change
+    /// ([`Self::fd_club_list`]): the club log's stamp and the received slots it was read under.
+    fd_club_list_cache: Option<(
+        u64,
+        &'static [&'static str],
+        std::sync::Arc<tempo_net::fdsync::ClubListView>,
+    )>,
     /// ⭐ **The contest log the mode left, kept for club sync, and when it left it**
     /// ([`Self::fd_sync_log`]).
     ///
@@ -4691,6 +4724,10 @@ pub struct Engine {
     /// its stale profile `last_*`. The ACTIVE radio is NOT in this map — its live state is the flat
     /// `rig_*`/`settings.dial_mhz` block, driven by the existing `observe_rig_*`.
     radio_live: std::collections::HashMap<u32, RadioLive>,
+    /// How many CAT health reports the monitor has made per NON-active radio, ever (never reset,
+    /// not even by `forget_radio_live`). The radio setup's read-only Test CAT waits for this to
+    /// move, so it reports a reading made AFTER the press, never one from before it.
+    monitor_reads: std::collections::HashMap<u32, u64>,
     /// Last amplifier reading per radio, fed by the amplifier poll thread. Display-only.
     amp_live: std::collections::HashMap<u32, AmpLive>,
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
@@ -5486,6 +5523,11 @@ const APRS_DUPE_MERGE_SECS: i64 = 30;
 /// retention work — the cap is a memory ceiling, not a policy.
 pub const APRS_STATION_CAP: usize = 2000;
 
+/// Cap on one station's TRACK ([`AprsStation::track`]), in points. A mobile beaconing every minute
+/// fills the default hour's window with about sixty; the cap is a memory ceiling for the faster
+/// ones (a balloon or a car on a 20-second SmartBeaconing rate), and the oldest point goes first.
+pub const APRS_TRACK_CAP: usize = 120;
+
 /// Cap on RF-heard lines waiting to be gated to APRS-IS. Bounded so a feed that is down (or an
 /// uplink left on with no network) cannot grow the queue without limit; the oldest is dropped,
 /// because a stale position is the least valuable thing to contribute.
@@ -5524,6 +5566,22 @@ impl From<tempo_core::aprs::AprsWx> for AprsWxDto {
             pressure_tenth_hpa: w.pressure_tenth_hpa,
         }
     }
+}
+
+/// One place a station reported, and when — a point on its [`AprsStation::track`].
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsTrackPoint {
+    pub lat: f64,
+    pub lon: f64,
+    /// Unix seconds of the latest packet that put the station HERE (a parked station's re-beacons
+    /// of one spot keep one point and move its time on).
+    pub at_unix: i64,
+}
+
+/// A track of fewer than two points says nothing the position does not, so it is not sent.
+fn track_has_not_moved(track: &[AprsTrackPoint]) -> bool {
+    track.len() < 2
 }
 
 /// One STATION, accumulated from every packet it has sent — the unit the map and the station list
@@ -5573,6 +5631,11 @@ pub struct AprsStation {
     /// Latest weather readings, when this station sends them. Sticky like the position: a status
     /// packet from a weather station must not blank its last reading.
     pub wx: Option<AprsWxDto>,
+    /// Where this station has been, oldest first, ending at its current position: one point per
+    /// distinct position, in time order, at most [`APRS_TRACK_CAP`]. The map draws it as the
+    /// station's trail. Sent only once the station has moved (two points or more).
+    #[serde(skip_serializing_if = "track_has_not_moved")]
+    pub track: Vec<AprsTrackPoint>,
 }
 
 impl AprsStation {
@@ -5597,9 +5660,33 @@ impl AprsStation {
             packets: 0,
             first_heard_unix: h.at_unix,
             wx: None,
+            track: Vec::new(),
         };
         st.merge(h);
         st
+    }
+
+    /// Add a reported position to the track.
+    ///
+    /// The same spot again moves that point's time on rather than adding one, so a parked station
+    /// keeps a one-point track however often it beacons. A position OLDER than the newest point (a
+    /// late digipeated or internet copy) is not appended: the track stays in time order instead of
+    /// bending back to where the station no longer is.
+    fn extend_track(&mut self, lat: f64, lon: f64, at_unix: i64) {
+        if let Some(last) = self.track.last_mut() {
+            if at_unix < last.at_unix {
+                return;
+            }
+            if last.lat == lat && last.lon == lon {
+                last.at_unix = at_unix;
+                return;
+            }
+        }
+        self.track.push(AprsTrackPoint { lat, lon, at_unix });
+        if self.track.len() > APRS_TRACK_CAP {
+            let drop = self.track.len() - APRS_TRACK_CAP;
+            self.track.drain(0..drop);
+        }
     }
 
     /// Fold another packet from this station into its state.
@@ -5634,6 +5721,9 @@ impl AprsStation {
             // Course and speed belong to the position that carried them.
             self.speed_knots = h.speed_knots;
             self.course_deg = h.course_deg;
+        }
+        if let (Some(lat), Some(lon)) = (h.lat, h.lon) {
+            self.extend_track(lat, lon, h.at_unix);
         }
         if h.symbol_table != ' ' || h.symbol_code != ' ' {
             self.symbol_table = h.symbol_table;
@@ -6686,6 +6776,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_club_list_cache: None,
             fd_left_log: None,
             fd_link_gen: 0,
             fd_host_lan: Vec::new(),
@@ -6998,6 +7089,7 @@ impl Engine {
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
+            monitor_reads: std::collections::HashMap::new(),
             amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
@@ -9491,6 +9583,7 @@ impl Engine {
     /// Record a non-active radio's live CAT health (`Some(true/false)`), for its switcher pill.
     pub fn observe_radio_cat(&mut self, id: u32, ok: Option<bool>) {
         self.radio_live.entry(id).or_default().cat_ok = ok;
+        *self.monitor_reads.entry(id).or_default() += 1;
     }
 
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
@@ -11356,6 +11449,20 @@ impl Engine {
             .unwrap_or(self.settings.active_radio)
     }
 
+    /// [`Self::route_preview`] for the radio setup's UNSAVED routing: the same
+    /// [`crate::settings::Settings::route_radio`], asked of a copy of the settings with the draft
+    /// laid over it ([`crate::settings::Settings::with_routing_draft`]). Read-only: nothing is
+    /// stored and no radio moves.
+    pub fn route_preview_draft(
+        &self,
+        draft: &crate::settings::RoutingDraft,
+        band: &str,
+        mode: crate::settings::RouteMode,
+    ) -> u32 {
+        let s = self.settings.with_routing_draft(draft);
+        s.route_radio(band, mode).unwrap_or(s.active_radio)
+    }
+
     /// The active Phone mode override for the cockpit picker (`None` = AUTO / band-derived).
     pub fn sideband_override(&self) -> Option<String> {
         self.sideband_override.clone()
@@ -11709,8 +11816,9 @@ impl Engine {
     }
 
     /// The answer a lookup gave this session for exactly this call, if one did. Exact call, as
-    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`.
-    fn callbook_answer(
+    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`. Also what the log-time IOTA offer
+    /// reads (`tempo_core::logbook::offer::iota_offer`).
+    pub fn callbook_answer(
         &self,
         call: &str,
     ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
@@ -14228,7 +14336,7 @@ impl Engine {
                     self.unconfirmed_auto_logs.push(overflow.record.clone());
                 }
                 self.pending_logs_auto_logged = self.pending_logs_auto_logged.saturating_add(1);
-                self.log_held_qso(overflow.record);
+                self.log_held_qso(overflow.record, overflow.gridless);
             }
         }
         self.pending_logs.push_back(held);
@@ -15511,7 +15619,29 @@ impl Engine {
         text: &str,
         posid: &str,
     ) -> Result<crate::dto::FdClubImportDto, String> {
-        let now = now_unix_secs();
+        let plan = self.fd_club_import_plan(text, posid)?;
+        let mut read = plan.read(text);
+        while !self.fd_club_import_merge(&mut read)? {}
+        Ok(read.dto)
+    }
+
+    /// The first half of [`Self::fd_club_import`], taken under the Engine lock and let go: the
+    /// file's size, the club's call and session, and the position its contacts are from, checked
+    /// and kept for [`FdClubImportPlan::read`], which reads the file with the lock released.
+    pub fn fd_club_import_plan(&self, text: &str, posid: &str) -> Result<FdClubImportPlan, String> {
+        if text.len() > FD_CLUB_IMPORT_MAX_BYTES {
+            return Err(format!(
+                "This file is {:.1} MB, and a laptop's contest file is read up to {} MB: pick that laptop's fieldday_backup file",
+                text.len() as f64 / 1e6,
+                FD_CLUB_IMPORT_MAX_BYTES / 1_000_000
+            ));
+        }
+        self.fd_club_import_checks(posid)
+    }
+
+    /// The club hosted, the position one Nexus makes and not removed, and the club's session:
+    /// checked before a laptop's file is read and again before it is merged.
+    fn fd_club_import_checks(&self, posid: &str) -> Result<FdClubImportPlan, String> {
         let club = self
             .fd_club
             .as_ref()
@@ -15525,32 +15655,78 @@ impl Engine {
         if club.is_removed(&posid) {
             return Err("you removed that position from the club event: Allow back first".into());
         }
-        let session = self.fd_club_session(club)?;
-        let club_call = self.fd_club_call();
-        let mut log = tempo_core::fieldday::FieldDayLog::new(&club_call, session, "");
-        let read = log.restore_journal(text, 0, now);
-        let (other_contest, other_running) = log.held();
-        let mut dto = crate::dto::FdClubImportDto {
-            other_contest,
-            other_running,
-            unreadable: read.unreadable,
-            taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
-            ..Default::default()
+        Ok(FdClubImportPlan {
+            session: self.fd_club_session(club)?,
+            club_call: self.fd_club_call(),
+            hold: club.hold(&posid),
+            posid,
+            now: now_unix_secs(),
+        })
+    }
+
+    /// The last half of [`Self::fd_club_import`], under the Engine lock again: the next
+    /// [`FD_CLUB_IMPORT_CHUNK`] contacts [`FdClubImportPlan::read`] read, merged into the club's
+    /// log, and `Ok(true)` once the last is. Called once per hold of the lock, so a large file
+    /// never keeps the radio loop waiting. Checked again first, every time, as the lock was let go:
+    /// a club no longer hosted, a position removed meanwhile, or a club whose call or session
+    /// changed is refused, and nothing more is merged. Stopping there is safe: the contacts already
+    /// merged are the club's, by `(position, seq)`, so importing the file again adds the rest.
+    ///
+    /// Only what the file was read with counts as a session change
+    /// ([`FdClubImportPlan::reads_the_same`]): the host working a station meanwhile changes its
+    /// live session, and stops nothing. A Give of the position meanwhile stops the import with
+    /// its own sentence: the Give took that position's contacts out of the club's log, so the
+    /// rest of the old laptop's file must not go into the given position.
+    pub fn fd_club_import_merge(&mut self, read: &mut FdClubImportRead) -> Result<bool, String> {
+        let plan = &read.plan;
+        let total = read.log.qsos().len();
+        let again = self.fd_club_import_checks(&plan.posid);
+        if again.as_ref().is_ok_and(|again| again.hold != plan.hold) {
+            return Err(if read.next == 0 {
+                "you gave that position to another laptop while the file was read: nothing was added"
+                    .to_string()
+            } else {
+                format!(
+                    "the import stopped after {} of the file's {total} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {} this import added included",
+                    read.next, read.dto.added
+                )
+            });
+        }
+        let why = match again {
+            Ok(again) if again.club_call == plan.club_call && again.reads_the_same(plan) => None,
+            Ok(_) if read.next == 0 => {
+                Some("the club event changed while the file was read: import it again".to_string())
+            }
+            Ok(_) => Some("the club event changed".to_string()),
+            Err(e) => Some(e),
         };
+        if let Some(why) = why {
+            return Err(if read.next == 0 {
+                why
+            } else {
+                format!(
+                    "the import stopped after {} of the file's {total} contacts ({} added): {why}; import the file again for the rest",
+                    read.next, read.dto.added
+                )
+            });
+        }
+        let end = total.min(read.next + FD_CLUB_IMPORT_CHUNK);
+        let dto = &mut read.dto;
         let mut rows = Vec::new();
         {
             let other = self.fd_on_another_call_than("");
-            for q in log.qsos() {
+            for q in &read.log.qsos()[read.next..end] {
                 if other(q) {
                     dto.other_call += 1;
                 } else {
-                    rows.push(fd_wire_row(&posid, &club_call, q));
+                    rows.push(fd_wire_row(&plan.posid, &plan.club_call, q));
                 }
             }
         }
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
+        let now = plan.now;
         for row in &rows {
             match club.import(row, now) {
                 crate::fdevent::Imported::Added => dto.added += 1,
@@ -15564,7 +15740,8 @@ impl Engine {
                 }
             }
         }
-        Ok(dto)
+        read.next = end;
+        Ok(end == total)
     }
 
     /// ⭐ **A position takes back its own row `seq`** — `pos` is the position the connection
@@ -15764,7 +15941,7 @@ impl Engine {
         self.fd_club.as_ref()
     }
 
-    /// ⭐ **The host's club log, as its own screen lists it** — the newest
+    /// ⭐ **The club log, as the contest screen lists it** — the newest
     /// [`CLUB_LOG_SHOWN`](crate::fdevent::CLUB_LOG_SHOWN) of the club's merged contacts, newest
     /// first ([`crate::fdevent::ClubLog::newest`]), each with the position that logged it, named as
     /// the host's board names it, and whether it is a duplicate, beside how many the club holds.
@@ -15773,26 +15950,109 @@ impl Engine {
     /// dedupe every snapshot's board already runs ([`crate::fdevent::ClubLog::board_rows`]) and a
     /// sort of the rows by time.
     ///
-    /// `None` unless this Nexus is hosting: a joined position holds the club's counts and keys,
-    /// never its rows ([`crate::fdevent::ClubMirror`]).
+    /// ⭐ **On a joined laptop, the same list as the host sent it** ([`Self::fd_club_list`] there,
+    /// `ClubMirror::list` here), so every laptop lists exactly what the host lists. `None` while
+    /// this Nexus neither hosts nor has been sent one.
     ///
-    /// ⛔ The host's own screens only: no Remote query or operation reads it, and none of it rides
-    /// the snapshot, the club line every position is sent or the TV board.
+    /// ⛔ The station's own screens only: no Remote query or operation reads it, and none of it
+    /// rides the snapshot or the TV board.
     pub fn fd_club_log_newest(&self) -> Option<crate::dto::FdClubLogDto> {
-        let club = self.fd_club.as_ref()?;
-        // The log table's columns: Field Day's class and section, and for any other contest one
-        // per received slot of the club's session, as the screen's own log has. A session Settings
-        // can no longer build (the export names why) leaves those columns blank, not guessed.
-        let receives: &[&str] = match club.field_day_event() {
+        let Some(club) = self.fd_club.as_ref() else {
+            let list = self.fd_mirror.list.as_ref()?;
+            return Some(crate::dto::FdClubLogDto {
+                total: list.total,
+                rows: list
+                    .rows
+                    .iter()
+                    .map(|r| crate::dto::FdClubLogRow {
+                        call: r.call.clone(),
+                        class: r.class.clone(),
+                        section: r.sect.clone(),
+                        rcvd: r.rcvd.clone(),
+                        band: r.band.clone(),
+                        mode: r.mode.clone(),
+                        submode: r.sub.clone(),
+                        when_unix: r.when,
+                        posid: r.pos.clone(),
+                        seq: r.seq,
+                        pos_name: r.name.clone(),
+                        dupe: r.dupe,
+                    })
+                    .collect(),
+            });
+        };
+        let receives = self.fd_club_receives(club);
+        Some(crate::dto::FdClubLogDto {
+            total: club.qsos_raw(),
+            rows: Self::fd_club_log_rows(club, receives)
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect(),
+        })
+    }
+
+    /// ⭐ **The club list every connection is sent** (`fdsync::ClubBackend::club_list`): the host's
+    /// own list ([`Self::fd_club_log_newest`]) on the wire, each row with its merge order. Built
+    /// once per change of the club log or of the slots it is read under, and handed out again
+    /// while it stands, so twenty laptops asking at every tick cost one build. Empty, under a
+    /// stamp of its own, while this Nexus hosts no club.
+    pub fn fd_club_list(&mut self) -> std::sync::Arc<tempo_net::fdsync::ClubListView> {
+        let Some(club) = self.fd_club.as_ref() else {
+            return std::sync::Arc::default();
+        };
+        let (stamp, receives) = (club.list_stamp(), self.fd_club_receives(club));
+        if let Some((s, r, view)) = &self.fd_club_list_cache {
+            if *s == stamp && *r == receives {
+                return view.clone();
+            }
+        }
+        let view = std::sync::Arc::new(tempo_net::fdsync::ClubListView {
+            stamp: crate::fdevent::next_list_stamp(),
+            total: club.qsos_raw(),
+            rows: Self::fd_club_log_rows(club, receives)
+                .into_iter()
+                .map(|(ord, r)| tempo_net::fdsync::WireLogRow {
+                    pos: r.posid,
+                    seq: r.seq,
+                    ord,
+                    call: r.call,
+                    class: r.class,
+                    sect: r.section,
+                    rcvd: r.rcvd,
+                    band: r.band,
+                    mode: r.mode,
+                    sub: r.submode,
+                    when: r.when_unix,
+                    name: r.pos_name,
+                    dupe: r.dupe,
+                })
+                .collect(),
+        });
+        self.fd_club_list_cache = Some((stamp, receives, view.clone()));
+        view
+    }
+
+    /// The received slots the club list's columns are read under: none for Field Day (its two ride
+    /// `class` and `section`), and for any other contest one per received slot of the club's
+    /// session, as the screen's own log has. A session Settings can no longer build (the export
+    /// names why) leaves those columns blank, not guessed.
+    fn fd_club_receives(&self, club: &crate::fdevent::ClubLog) -> &'static [&'static str] {
+        match club.field_day_event() {
             Some(_) => &[],
             None => self
                 .fd_club_session(club)
                 .map(|session| session.role().receives)
                 .unwrap_or(&[]),
-        };
+        }
+    }
+
+    /// The club list's rows, newest first, each with its merge order ([`Self::fd_club_log_newest`]).
+    fn fd_club_log_rows(
+        club: &crate::fdevent::ClubLog,
+        receives: &[&str],
+    ) -> Vec<(u64, crate::dto::FdClubLogRow)> {
         let shown = club.shown_names();
-        let rows = club
-            .newest(crate::fdevent::CLUB_LOG_SHOWN)
+        club.newest(crate::fdevent::CLUB_LOG_SHOWN)
             .into_iter()
             .map(|e| {
                 let raw = |key: &str| {
@@ -15801,7 +16061,7 @@ impl Engine {
                         .map(|v| v.raw.clone())
                         .unwrap_or_default()
                 };
-                crate::dto::FdClubLogRow {
+                let row = crate::dto::FdClubLogRow {
                     call: e.row.call.clone(),
                     class: raw("CLASS"),
                     section: raw("SECTION"),
@@ -15815,13 +16075,10 @@ impl Engine {
                     seq: e.row.seq,
                     pos_name: shown.get(e.row.posid.as_str()).cloned().unwrap_or_default(),
                     dupe: e.dupe,
-                }
+                };
+                (e.ord, row)
             })
-            .collect();
-        Some(crate::dto::FdClubLogDto {
-            total: club.qsos_raw(),
-            rows,
-        })
+            .collect()
     }
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
@@ -16718,13 +16975,34 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, rec: QsoRecord) {
-        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), false);
+        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), false, false);
+    }
+
+    /// [`Self::log_qso`] for a contact the FT8/FT4 engine built ([`HeldQso::built`]), as it was
+    /// built: one with no grid of its own takes a callbook's for the map only.
+    fn log_built_qso(&mut self, held: HeldQso) {
+        let _ = self.log_qso_inner(
+            held.record,
+            false,
+            StateSource::Operator,
+            Vec::new(),
+            false,
+            held.gridless,
+        );
     }
 
     /// [`Self::log_qso`] for a contact the confirm-before-log hold kept: its park was decided when
     /// it was held ([`Self::stamp_hold`]), so the activation running at the confirm adds none.
-    fn log_held_qso(&mut self, rec: QsoRecord) {
-        let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new(), true);
+    /// `gridless` as [`HeldQso::gridless`].
+    fn log_held_qso(&mut self, rec: QsoRecord, gridless: bool) {
+        let _ = self.log_qso_inner(
+            rec,
+            false,
+            StateSource::Operator,
+            Vec::new(),
+            true,
+            gridless,
+        );
     }
 
     /// [`Self::log_qso`] for a contact from a log form, which knows where its state came from
@@ -16732,7 +17010,7 @@ impl Engine {
     /// (`park_places`, "US-ND"; resolved by the command layer outside the Engine lock). A park
     /// the record does not carry is ignored, and a hunted park brings its own places.
     pub fn log_form_qso(&mut self, rec: QsoRecord, source: StateSource, park_places: Vec<String>) {
-        let _ = self.log_qso_inner(rec, false, source, park_places, false);
+        let _ = self.log_qso_inner(rec, false, source, park_places, false, false);
     }
 
     /// Changes with native operating/profile changes, including value-identical
@@ -16917,7 +17195,7 @@ impl Engine {
     /// append and connector funnel, but receives open file handles to sync outside the engine lock. This does
     /// not change FT sequencing, pending-log semantics or desktop append timing.
     pub fn log_qso_for_sync(&mut self, rec: QsoRecord) -> LogWriteOutcome {
-        self.log_qso_inner(rec, true, StateSource::Operator, Vec::new(), false)
+        self.log_qso_inner(rec, true, StateSource::Operator, Vec::new(), false, false)
     }
 
     /// Tag `rec` with the live POTA/SOTA activation (your side) if one is running and the
@@ -17100,14 +17378,16 @@ impl Engine {
     }
 
     /// `from_hold`: the contact was kept by the confirm-before-log hold, which stamped its
-    /// activation then ([`Self::stamp_hold`]).
-    fn log_qso_inner(
+    /// activation then ([`Self::stamp_hold`]). `gridless`: an FT8/FT4 contact the station gave no
+    /// grid in ([`HeldQso::gridless`]).
+    pub(crate) fn log_qso_inner(
         &mut self,
         mut rec: QsoRecord,
         sync: bool,
         source: StateSource,
         park_places: Vec<String>,
         from_hold: bool,
+        gridless: bool,
     ) -> LogWriteOutcome {
         // The contact in the log's one form before anything here reads it — the band in the
         // ADIF enumeration's lower case, a phone sideband as SSB's SUBMODE
@@ -17309,7 +17589,7 @@ impl Engine {
                 None => {}
             }
         }
-        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, IOTA, zones, position,
+        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, zones, position,
         // e-mail, QSL route, and the name, QTH, grid and state where the record has none — on
         // every path, the FT auto-log included. Only an answer a lookup already returned this
         // session for exactly this call (the callsign card's, the log strip's): never a lookup
@@ -17317,8 +17597,20 @@ impl Engine {
         // after the park and the state above have had their say, and before DISTANCE below, which
         // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
         // are `tempo_core::logbook::callbook`'s.
+        //
+        // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
+        // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
+        // 2026-10-27). An FT contact auto-logged with no popup logs without one.
+        //
+        // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
+        // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
+        // and is sent nowhere. Every other contact takes it as it always has, counted.
         if let Some(answer) = self.callbook_answer(&rec.call) {
-            tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
+            if gridless {
+                tempo_core::logbook::callbook::fill_gridless_from_callbook(&mut rec, answer);
+            } else {
+                tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
+            }
         }
         // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
         // file's answer for the call — the same reading a contest row records — and the distance
@@ -17328,13 +17620,7 @@ impl Engine {
         if let Some(place) = tempo_core::contest::resolve_call(&rec.call) {
             tempo_core::logbook::fill_extra(&mut rec, "CONT", place.continent.to_string());
         }
-        let km = rec
-            .my_grid
-            .as_deref()
-            .and_then(maidenhead_center)
-            .zip(rec.grid.as_deref().and_then(maidenhead_center))
-            .map(|(me, them)| haversine_km(me, them).round() as u64);
-        if let Some(km) = km {
+        if let Some(km) = distance_km(&rec) {
             tempo_core::logbook::fill_extra(&mut rec, "DISTANCE", km.to_string());
         }
         // THE SPACE WEATHER (ADIF `K_INDEX`, `A_INDEX`, `SFI`), only when the operator asked for
@@ -17561,8 +17847,9 @@ impl Engine {
         // Same ruling as the DXKeeper push, and NOT the same destination as HRDLog.net:
         // this is the HRD Logbook program on the operator's own machine, so it gets their
         // own record, private note included. `hrdlog_push_qso_impl` is the WEB service and
-        // takes the withheld one.
-        let mut adif = tempo_core::logbook::adif_record_own_log(rec);
+        // takes the withheld one. Never a grid for the distance and the map only, which HRD
+        // would count and could upload (`adif_record_own_logger`).
+        let mut adif = tempo_core::logbook::adif_record_own_logger(rec);
         let tag = |name: &str, val: &str| -> String {
             let v = val.trim();
             if v.is_empty() {
@@ -18962,6 +19249,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// fields the desktop popup extends with COMMENT (#371). `rec` arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
+        self.confirm_pending_log_with_offer(expected_key, rec, None)
+    }
+
+    /// [`Self::confirm_pending_log`], with the IOTA offer the operator took in the popup
+    /// (`tempo_core::logbook::offer::accept_iota_offer`): written into the held record's IOTA only
+    /// when it has none, and held back from uploads until the operator touches it.
+    pub fn confirm_pending_log_with_offer(
+        &mut self,
+        expected_key: &str,
+        rec: QsoRecord,
+        iota_offer: Option<&tempo_core::logbook::offer::IotaOffer>,
+    ) -> bool {
         if self.pending_qso_log_key().as_deref() != Some(expected_key) {
             return false;
         }
@@ -19001,10 +19300,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // a shortened grid Nexus filled in counts as unchanged (operator rulings, 2026-10-27).
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
-        self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        if let Some(offer) = iota_offer {
+            tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
+        }
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
-        self.log_held_qso(held);
+        self.log_held_qso(held, was.gridless || dropped);
         true
     }
 
@@ -19051,10 +19353,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// operator typed.
     ///
     /// `held` is the edited copy about to be logged; `was` is the record as held, and `grid`
-    /// its grid's provenance.
-    fn rederive_after_edits(&self, held: &mut QsoRecord, was: &QsoRecord, grid: GridSource) {
+    /// its grid's provenance. True when the grid was dropped: the contact then has no grid from
+    /// the station, and a callbook's is for the distance and the map only ([`HeldQso::gridless`]),
+    /// never counted as one the corrected call's station gave.
+    fn rederive_after_edits(
+        &self,
+        held: &mut QsoRecord,
+        was: &QsoRecord,
+        grid: GridSource,
+    ) -> bool {
         let was_sent = was.rst_sent.as_deref();
         let was_rcvd = was.rst_rcvd.as_deref();
+        let mut dropped = false;
         // The same rule `StationCore::update_qso` reads an edit with, so the two cannot
         // disagree about what a correction is: the same call in another case is not one.
         if !held.call.trim().eq_ignore_ascii_case(was.call.trim()) {
@@ -19072,6 +19382,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 };
             if stale_lookup {
                 held.grid = None;
+                dropped = true;
             }
         }
         if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
@@ -19084,6 +19395,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 );
             }
         }
+        dropped
     }
 
     /// Discard the contact the popup is showing without logging it, promoting the next.
@@ -19127,7 +19439,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let held_or_logged = if self.settings.prompt_to_log || held.confirm_only {
             self.hold_pending_log(held)
         } else {
-            self.log_qso(held.record);
+            self.log_built_qso(held);
             true
         };
         // One taken from those waiting for Log QSO leaves the journal only now that it is in
@@ -19213,27 +19525,35 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None;
-        let mut held = HeldQso::new(rec, grid_source);
+        let mut held = HeldQso::built(rec, grid_source);
         held.confirm_only = !reported;
         Some(held)
     }
 
-    /// The contact set aside for Log QSO that a press takes: the run's give-up first, then a band
-    /// change's, then the oldest one a click or a mode change replaced ([`StalledQso`]). Taken,
-    /// so each is logged or offered once.
+    /// The contact set aside for Log QSO that a press takes: the run's give-up first, then the
+    /// oldest finished one waiting for it ([`Self::set_aside_qsos`], the ones the count beside Log
+    /// names), then an unfinished one a band change set aside ([`StalledQso`]). Taken, so each is
+    /// logged or offered once.
+    ///
+    /// The give-up comes before the counted ones because ANY log ends it ([`Self::log_qso_inner`]):
+    /// logged after another, it would be lost. The counted ones come before the band change's, so
+    /// the press the count invites takes a counted contact whenever no give-up waits; neither of
+    /// the other two is ended by a log of another contact.
     fn take_set_aside_record(&mut self) -> Option<HeldQso> {
-        let Some(st) = self
-            .stalled_qso
-            .take()
-            .or_else(|| self.band_change_qso.take())
-        else {
-            return self.take_waiting_record();
+        let st = match self.stalled_qso.take() {
+            Some(st) => st,
+            None => {
+                if let Some(held) = self.take_waiting_record() {
+                    return Some(held);
+                }
+                self.band_change_qso.take()?
+            }
         };
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
         Some(HeldQso {
             confirm_only,
-            ..HeldQso::new(self.set_aside_record(st), grid_source)
+            ..HeldQso::built(self.set_aside_record(st), grid_source)
         })
     }
 
@@ -19721,7 +20041,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // for Log QSO through the switch, as it always has: setting it aside would mark it logged,
         // and the run would call CQ in the new mode with nobody pressing anything (operator
         // decision, 2026-10-27). Only where and how it was made is kept, for the press.
-        if self.settings.auto_log || self.settings.prompt_to_log {
+        //
+        // …unless the switch ends the contact (into a receive-only tier, or away from a tier
+        // whose overs run long with TX on, below): the station is replaced and TX halted there,
+        // so with both off the finished contact is set aside for Log QSO first, not lost. That
+        // is logging only: the run ends there whatever is set.
+        let leaving_a_long_over_now = self.tx_enabled
+            && !matches!(
+                self.app.tier(),
+                Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep
+            );
+        let station_replaced = self.tier_is_rx_only(tier) || leaving_a_long_over_now;
+        if self.settings.auto_log || self.settings.prompt_to_log || station_replaced {
             self.rescue_replaced_contact();
         } else {
             self.keep_made_on_for_log_qso();
@@ -20469,14 +20800,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.offer_roger_click_contact(dx, dxgrid, None);
             }
         } else {
-            // The record as Log QSO would have built it now, so the journal keeps exactly that.
-            let grid_source = GridSource::of(dxgrid.as_deref());
-            let mut held = HeldQso::new(self.qso_record(dx, dxgrid, rx_report), grid_source);
-            held.confirm_only = !complete;
-            self.stamp_hold(&mut held.record);
-            self.set_aside_qsos.push(held);
-            self.persist_pending_qso();
+            self.wait_for_log_qso(dx, dxgrid, rx_report, !complete, None);
         }
+    }
+
+    /// Set a finished contact aside for Log QSO with Auto-log and the popup both off
+    /// ([`Self::set_aside_qsos`]): counted, journaled, kept until a press takes it. The record is
+    /// built now, while the contact is still the sequencer's, as Log QSO would have built it, so
+    /// the journal keeps exactly that. `made_on` names the band and logged frequencies it was made
+    /// on when the dial has already left them (a band change), unless a tier change kept them
+    /// first ([`MadeOn`]). Logging only.
+    fn wait_for_log_qso(
+        &mut self,
+        dx: String,
+        dxgrid: Option<String>,
+        rx_report: Option<i32>,
+        confirm_only: bool,
+        made_on: Option<(String, (f64, Option<f64>))>,
+    ) {
+        let grid_source = GridSource::of(dxgrid.as_deref());
+        let kept_by_tier_change = self.made_on_for(&dx).is_some();
+        let mut rec = self.qso_record(dx, dxgrid, rx_report);
+        if let Some((band, freqs)) = made_on.filter(|_| !kept_by_tier_change) {
+            rec.band = band;
+            (rec.freq_mhz, rec.freq_rx_mhz) = freqs;
+        }
+        let mut held = HeldQso::built(rec, grid_source);
+        held.confirm_only = confirm_only;
+        self.stamp_hold(&mut held.record);
+        self.set_aside_qsos.push(held);
+        self.persist_pending_qso();
     }
 
     /// Write a contact the auto-log found complete ([`ft_contact_complete`]): to the
@@ -20503,9 +20856,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // silently — behind whatever it is already showing, never over it. The
             // hold carries where its grid came from: the popup can correct the call,
             // and a LOOKED-UP grid was keyed on the call that turned out to be wrong.
-            self.hold_pending_log(HeldQso::new(rec, grid_source));
+            self.hold_pending_log(HeldQso::built(rec, grid_source));
         } else {
-            self.log_qso(rec);
+            self.log_built_qso(HeldQso::built(rec, grid_source));
         }
     }
 
@@ -20527,7 +20880,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.hold_pending_log(HeldQso {
             confirm_only: true,
-            ..HeldQso::new(rec, grid_source)
+            ..HeldQso::built(rec, grid_source)
         });
     }
 
@@ -20602,6 +20955,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     );
                     self.qso_logged = true;
                     self.auto_log_complete_contact(dx, dxgrid, rx_report, Some(made_on));
+                } else if ft_contact_complete(station, self.qso_report_sent) {
+                    // Complete, with Auto-log and the popup both off: it waits for Log QSO with
+                    // the others a click or Call CQ set aside, counted and kept across a restart,
+                    // on the band it was made on (operator decision, 2026-10-27).
+                    self.qso_logged = true;
+                    self.wait_for_log_qso(dx, dxgrid, rx_report, false, Some(made_on));
                 } else if rx_report.is_some()
                     || self.qso_report_sent.is_some()
                     || station.report_impossible_exchange()
@@ -20626,12 +20985,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         self.qso_logged = true;
                         self.offer_roger_click_contact(dx, dxgrid, Some(made_on));
                     } else {
-                        let mut st = self.set_aside(dx, dxgrid, None, made_on);
-                        st.start_unix = st
-                            .start_unix
-                            .or_else(|| Some(self.start_time_at_log(&st.dxcall)));
-                        st.confirm_only = true;
-                        self.band_change_qso = Some(st);
+                        // Offer-only, with the others waiting for Log QSO, as a click sets one
+                        // aside (operator decision, 2026-10-27).
+                        self.qso_logged = true;
+                        self.wait_for_log_qso(dx, dxgrid, None, true, Some(made_on));
                     }
                 }
             }
@@ -23902,7 +24259,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .aprs_stations
             .values()
             .filter(|st| st.last_heard_unix >= cutoff)
-            .cloned()
+            .map(|st| {
+                let mut st = st.clone();
+                // The track is held to the same window as the station: its older legs go.
+                st.track.retain(|p| p.at_unix >= cutoff);
+                st
+            })
             .collect();
         // Same-second ties are the NORMAL case (1 s timestamps — see the
         // eviction above): without a final tiebreak the stable sort preserved
@@ -32067,6 +32429,22 @@ contact yourself."
         }
     }
 
+    /// The grid each of `calls` last sent on the air this session, as decoded, and when it was
+    /// heard (`Roster::sent_grid_heard`), in one pass: what the Logbook's blank-grid offer takes
+    /// for a contact the decode log does not cover, where it was heard near the contact's time.
+    pub fn sent_grids_heard(
+        &self,
+        calls: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, (u64, String)> {
+        calls
+            .iter()
+            .filter_map(|call| {
+                let (at, grid) = self.app.inbox.roster.sent_grid_heard(call)?;
+                Some((call.clone(), (at, grid.to_string())))
+            })
+            .collect()
+    }
+
     /// The DX's grid for a contact: what the exchange itself carried, else what we decoded
     /// from that station earlier this session.
     ///
@@ -32097,8 +32475,26 @@ contact yourself."
             .and_then(|h| h.grid.clone())
             .filter(|g| !g.trim().is_empty())
             .or_else(|| {
-                // Third and last: a grid we LOGGED for this station before. The session roster
-                // only remembers stations heard since launch, so a station worked on a previous
+                // Then the grid it SENT ON THE AIR earlier this session, on any band and in any
+                // mode: the roster forgets a station at a band or mode change, the station's own
+                // word does not change with it (operator decision, 2026-10-27). It counts as any
+                // logged grid, being the station's own — sent within the last 24 hours only: a
+                // station heard days ago in a long session may be portable somewhere else now.
+                self.app
+                    .inbox
+                    .roster
+                    .sent_grid(dxcall, now_unix_secs())
+                    .filter(|g| !g.trim().is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                // Last: a grid we LOGGED for this station before — never one for the distance and
+                // the map only, which counts toward nothing (`tempo_core::logbook::counted_grid`).
+                // A station with none logs blank here, and the callbook's answer, if a lookup gave
+                // one this session, fills it for the distance and the map only (`log_qso_inner`).
+                //
+                // The session roster only remembers stations heard since launch, so a station
+                // worked on a previous
                 // day whose CQ we haven't decoded this session still logged with a blank grid —
                 // and a blank grid means `worked_grids` never learns it, so NewGrid keeps firing
                 // for a grid already worked. Same shape as the NewState defect, and fixed the
@@ -34283,6 +34679,114 @@ pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
     now.saturating_sub(back)
 }
 
+/// The largest laptop's contest file the host's "Import a laptop's file…" reads. A laptop's
+/// journal is a few hundred bytes a contact, so a whole Field Day is well under a megabyte; a file
+/// past this is not one, and is refused before it is read.
+pub const FD_CLUB_IMPORT_MAX_BYTES: usize = 16_000_000;
+
+/// How many of a laptop's contacts the host's "Import a laptop's file…" merges per hold of the
+/// Engine lock ([`Engine::fd_club_import_merge`]): each is journalled as it is merged, so a whole
+/// large file in one hold would keep the radio loop waiting.
+pub const FD_CLUB_IMPORT_CHUNK: usize = 256;
+
+/// What the host's "Import a laptop's file…" reads a file with, taken under the Engine lock
+/// ([`Engine::fd_club_import_plan`]) and read with it let go ([`Self::read`]).
+#[derive(Debug, Clone)]
+pub struct FdClubImportPlan {
+    posid: String,
+    club_call: String,
+    /// The position's hold ([`crate::fdevent::ClubLog::hold`]): how often the host gave it to
+    /// another laptop, so a Give during the import is seen.
+    hold: u64,
+    session: ContestSession,
+    now: u64,
+}
+
+impl FdClubImportPlan {
+    /// Is the file read under `other`'s session as it is under this one? Only what the read
+    /// ([`Self::read`], `restore_journal`) uses counts: the contest and the running it picks
+    /// (`event_id`, `contest_id`, `rules_year`), the exchange, where the station is (which picks
+    /// the role), and the exchange it sends (for a row written without one). The contact in
+    /// progress and the serials given out change as the host works stations, and the merge
+    /// reads none of them.
+    fn reads_the_same(&self, other: &Self) -> bool {
+        let (a, b) = (&self.session, &other.session);
+        a.event_id == b.event_id
+            && a.contest_id == b.contest_id
+            && a.rules_year == b.rules_year
+            && a.exchange == b.exchange
+            && a.my_location == b.my_location
+            && a.my_exchange == b.my_exchange
+    }
+
+    /// The file read as that laptop's own restart reads its journal, under the club's session
+    /// ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). Needs no Engine, so the radio
+    /// loop is never kept waiting on a large file.
+    pub fn read(self, text: &str) -> FdClubImportRead {
+        let mut log =
+            tempo_core::fieldday::FieldDayLog::new(&self.club_call, self.session.clone(), "");
+        let unreadable = log.restore_journal(text, 0, self.now).unreadable;
+        let (other_contest, other_running) = log.held();
+        let dto = crate::dto::FdClubImportDto {
+            other_contest,
+            other_running,
+            unreadable,
+            taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
+            ..Default::default()
+        };
+        FdClubImportRead {
+            plan: self,
+            log,
+            next: 0,
+            dto,
+        }
+    }
+}
+
+/// A laptop's file read, for [`Engine::fd_club_import_merge`] to merge, and how far it has.
+pub struct FdClubImportRead {
+    plan: FdClubImportPlan,
+    log: tempo_core::fieldday::FieldDayLog,
+    /// The first of `log`'s contacts not yet merged.
+    next: usize,
+    dto: crate::dto::FdClubImportDto,
+}
+
+/// ⭐ **The host's "Import a laptop's file…", with the Engine lock held only to check and to
+/// merge a few hundred contacts at a time** ([`Engine::fd_club_import`]): the file is read with
+/// the lock let go, and merged [`FD_CLUB_IMPORT_CHUNK`] contacts per hold, so a large file never
+/// keeps the radio loop, which unkeys under that lock, waiting.
+pub fn fd_club_import_in(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+) -> Result<crate::dto::FdClubImportDto, String> {
+    fd_club_import_with(engine, text, posid, FdClubImportPlan::read, || {})
+}
+
+/// [`fd_club_import_in`], with the read and what runs between two holds of the merge (the lock
+/// let go) given, so a test can watch both.
+fn fd_club_import_with(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+    read: impl FnOnce(FdClubImportPlan, &str) -> FdClubImportRead,
+    mut between: impl FnMut(),
+) -> Result<crate::dto::FdClubImportDto, String> {
+    let plan = engine_lock(engine).fd_club_import_plan(text, posid)?;
+    let mut read = read(plan, text);
+    loop {
+        let done = engine_lock(engine).fd_club_import_merge(&mut read)?;
+        if done {
+            return Ok(read.dto);
+        }
+        between();
+        // A lock let go and taken straight back is usually taken back before a thread it woke
+        // runs, so give a waiting thread (the radio loop) its turn.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
 /// ⭐ **One contest row as club sync sends it**, as position `posid`: the outbox's rows
 /// ([`Engine::fd_sync_outbox`]) and the rows of a laptop's file the host imports
@@ -34482,6 +34986,16 @@ fn best_caller_decodes(
         .filter(|(i, _)| !answers.contains(i) || Some(*i) == keep)
         .map(|(_, d)| d.clone())
         .collect()
+}
+
+/// The distance to the worked station, km (ADIF `DISTANCE`), from the record's own grid to theirs
+/// when both are known: what the log funnel fills, and the Blank grids clean-up with it.
+pub(crate) fn distance_km(rec: &QsoRecord) -> Option<u64> {
+    rec.my_grid
+        .as_deref()
+        .and_then(maidenhead_center)
+        .zip(rec.grid.as_deref().and_then(maidenhead_center))
+        .map(|(me, them)| haversine_km(me, them).round() as u64)
 }
 
 /// Maidenhead locator → (lat, lon) at the grid-square center; `None` when
@@ -42776,6 +43290,7 @@ mod tests {
             shown: vec!["iota".into()],
             hidden: Vec::new(),
             widths: [("country".to_string(), 210)].into_iter().collect(),
+            order: vec!["notes".into(), "call".into()],
         };
         let stale = e.settings().clone();
         e.set_logbook_columns(Some(chosen.clone()));
@@ -49077,6 +49592,33 @@ mod tests {
         assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
     }
 
+    /// HRD Logbook can upload a contact itself, so it never gets an IOTA reference taken from a
+    /// log-time offer the operator has not confirmed. One the operator typed, and an older
+    /// callbook-filled one, still go.
+    #[test]
+    fn the_hrd_datagram_never_carries_a_held_iota() {
+        use tempo_core::logbook::offer::{accept_iota_offer, IotaOffer, OfferSource};
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut held = e.qso_record("IA5X".into(), None, None);
+        let offer = IotaOffer {
+            reference: "EU-028".into(),
+            source: OfferSource::Spot,
+        };
+        assert!(accept_iota_offer(&mut held, &offer));
+        let d = e.hrd_datagram(&held);
+        assert!(!d.contains("<IOTA:"), "{d}");
+        assert!(!d.contains("APP_NEXUS_OFFER_HELD"), "{d}");
+        let mut typed = e.qso_record("IA5X".into(), None, None);
+        typed.ota.iota = Some("EU-028".into());
+        assert!(e.hrd_datagram(&typed).contains("<IOTA:6>EU-028"));
+        let mut older = e.qso_record("IA5X".into(), None, None);
+        older.ota.iota = Some("EU-025".into());
+        older
+            .extra
+            .push(("APP_NEXUS_CALLBOOK_FILLED".into(), "IOTA".into()));
+        assert!(e.hrd_datagram(&older).contains("<IOTA:6>EU-025"));
+    }
+
     /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT
     /// sequencer's record builder hard-coded `name: None`, so every auto-logged FT8/FT4 contact
     /// reached the Logbook, ADIF and the uploads nameless even when the callsign card had
@@ -54264,6 +54806,233 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **A laptop's file is read with the Engine lock let go**: the radio loop unkeys under that
+    /// lock, so a large file must never keep it waiting. The read is watched from inside: the lock
+    /// is free while it runs, and the contacts it read are still merged.
+    #[test]
+    fn a_laptops_file_is_read_with_the_engine_lock_let_go() {
+        let dir = import_dir("unlocked");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut free = None;
+        let got = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                free = Some(super::engine_try_lock(&host).is_ok());
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap();
+        assert_eq!(
+            free,
+            Some(true),
+            "the Engine lock was held while the file was read"
+        );
+        assert_eq!((got.added, got.dupes, got.already_in), (2, 0, 0), "{got:?}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(2),
+            "CONTROL: the contacts read are merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A file far larger than any laptop's contest file is refused, with a sentence**, before
+    /// it is read; one at the limit is read.
+    #[test]
+    fn a_very_large_club_file_is_refused_before_it_is_read() {
+        let dir = import_dir("cap");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let pad = |len: usize| format!("{file}{}", " ".repeat(len - file.len()));
+        let big = pad(super::FD_CLUB_IMPORT_MAX_BYTES + 1);
+        let err = super::fd_club_import_in(&host, &big, "bbbb0002").unwrap_err();
+        assert!(err.contains("MB"), "{err}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(0)
+        );
+        let at = pad(super::FD_CLUB_IMPORT_MAX_BYTES);
+        let got = super::fd_club_import_in(&host, &at, "bbbb0002").unwrap();
+        assert_eq!(
+            got.added, 1,
+            "CONTROL: a file at the limit is read: {got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `n` distinct calls a laptop can log, `K9AAA` on.
+    fn many_calls(n: usize) -> Vec<String> {
+        let letter = |i: usize, k: u32| char::from(b'A' + (i / 26usize.pow(k) % 26) as u8);
+        (0..n)
+            .map(|i| format!("K9{}{}{}", letter(i, 2), letter(i, 1), letter(i, 0)))
+            .collect()
+    }
+
+    /// The host's Settings call set to `call`, as the operator saves it.
+    fn set_call(e: &mut Engine, call: &str) {
+        let mut s = e.settings().clone();
+        s.mycall = call.into();
+        e.apply_settings(s);
+    }
+
+    /// ⭐ **A large file is merged a few hundred contacts per hold of the Engine lock**, and between
+    /// two holds another thread (the radio loop, which unkeys under that lock) takes it: the
+    /// import is held there while a second thread locks the Engine, which must get in within a
+    /// bound far longer than any CI pause. That thread also counts the club's log, so each hold
+    /// is seen to merge no more than [`super::FD_CLUB_IMPORT_CHUNK`].
+    ///
+    /// This proves the lock is let go between merges, not that a waiting thread gets its turn:
+    /// the importer is held here by hand. The 1 ms pause after each merge is what gives the radio
+    /// loop that turn in a real import, and whether a woken thread runs before the importer locks
+    /// again is the scheduler's choice, so no test can turn red on the pause going without
+    /// turning red, now and then, on a loaded machine with it in place.
+    #[test]
+    fn a_large_import_lets_the_engine_lock_go_between_merges() {
+        let dir = import_dir("chunks");
+        let calls = many_calls(2 * super::FD_CLUB_IMPORT_CHUNK + 88);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut seen = Vec::new();
+        let got = std::thread::scope(|scope| {
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let host = &host;
+                scope.spawn(move || {
+                    let held = super::engine_lock(host)
+                        .fd_club_log()
+                        .map(|c| c.qsos_raw() as usize);
+                    let _ = tx.send(held);
+                });
+                seen.push(
+                    rx.recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("another thread takes the Engine lock between two merges"),
+                );
+            })
+        })
+        .unwrap();
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        assert_eq!(seen, vec![Some(chunk), Some(2 * chunk)]);
+        assert_eq!((got.added, got.already_in), (calls.len(), 0), "{got:?}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize),
+            Some(calls.len()),
+            "CONTROL: every contact is merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **An import stopped partway is safe to repeat**: the club's call changing between two
+    /// merges stops it with how far it got, the contacts merged stay, and the same file imported
+    /// again adds only the rest.
+    #[test]
+    fn an_import_stopped_partway_adds_the_rest_when_imported_again() {
+        let dir = import_dir("partway");
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let mut e = super::engine_try_lock(&host).expect("the lock is free between merges");
+                set_call(&mut e, "K9NEW")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): the club event changed; import the file again for the rest",
+                calls.len()
+            )
+        );
+        let held = |host: &std::sync::Mutex<Engine>| {
+            super::engine_lock(host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize)
+        };
+        assert_eq!(held(&host), Some(chunk), "the contacts merged stay");
+        set_call(&mut super::engine_lock(&host), "W9XYZ");
+        let again = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(
+            (again.added, again.already_in, again.dupes),
+            (calls.len() - chunk, chunk, 0),
+            "{again:?}"
+        );
+        assert_eq!(held(&host), Some(calls.len()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A club call changed or the club stopped while the file was read refuses the merge**,
+    /// and nothing is merged: the rows would be built under the call the read started with.
+    #[test]
+    fn a_club_changed_while_the_file_was_read_merges_nothing() {
+        let dir = import_dir("changed");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let held = |host: &std::sync::Mutex<Engine>| {
+            super::engine_lock(host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize)
+        };
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                set_call(&mut super::engine_lock(&host), "K9NEW");
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the club event changed while the file was read: import it again"
+        );
+        assert_eq!(held(&host), Some(0), "a call change merges nothing");
+        set_call(&mut super::engine_lock(&host), "W9XYZ");
+
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                super::engine_lock(&host).fd_host_stop();
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(err, "this station is not hosting a club event");
+        assert_eq!(held(&host), None, "a club stopped merges nothing");
+        super::engine_lock(&host)
+            .fd_host_start(dir.join("ilqp.ndjson"))
+            .unwrap();
+        assert_eq!(held(&host), Some(0), "and its file holds nothing");
+
+        let got = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| plan.read(text),
+            || {},
+        )
+        .unwrap();
+        assert_eq!(got.added, 2, "CONTROL: unchanged, it merges: {got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **A duplicate and the contacts the club keeps out are counted, not added**: a station
     /// another position already worked, a contact logged on another call than the club's, one taken
     /// back on its laptop, one whose call is not a call sign, and a Field Day contact in the same
@@ -54345,6 +55114,218 @@ mod tests {
         for kept in ["K9CCC", "KKDDD", "K9EEE", "K1ABC"] {
             assert!(!cab.contains(kept), "{kept} kept out:\n{cab}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// How many of position `posid`'s contacts the host's club log holds.
+    fn club_rows_of(host: &std::sync::Mutex<Engine>, posid: &str) -> usize {
+        super::engine_lock(host)
+            .fd_club_log()
+            .map_or(0, |c| c.rows().iter().filter(|r| r.posid == posid).count())
+    }
+
+    /// The host's Give of position `posid` to a second laptop, turned away because a first one
+    /// holds it: the host's own Give button on its turned-away list.
+    fn give_to_another_laptop(e: &mut Engine, posid: &str) {
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut join = |key: &str| e.fd_club_join(v, posid, "tent", "W9XYZ", "ilqp", "", key);
+        join(&club_key_hash("the first laptop")).expect("the first laptop holds the position");
+        join(&club_key_hash("the second laptop")).expect_err("the second is turned away");
+        let handle = e
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .and_then(|c| c.refused.iter().find_map(|r| r.handle))
+            .expect("the turned-away laptop can be given the position");
+        e.fd_club_give_position(handle).unwrap();
+    }
+
+    /// The host's live contest session, changed as `change` changes it.
+    fn change_session(e: &mut Engine, change: impl FnOnce(&mut ContestSession)) {
+        match &mut e.mode {
+            Mode::FieldDay { station, .. } => change(&mut station.log.session),
+            _ => panic!("the host runs the party"),
+        }
+    }
+
+    /// ⭐ **A Give of the position a file is imported under stops the import**: the Give takes
+    /// that position's contacts out of the club's log and starts it afresh for the laptop given
+    /// it, so the rest of the old laptop's file must not merge into the new one's position, where
+    /// its `(position, seq)` slots would turn the new laptop's own contacts away. Given while the
+    /// file is read, nothing is merged; given between two merges, nothing more is.
+    #[test]
+    fn a_give_of_the_position_during_an_import_stops_it() {
+        let dir = import_dir("give");
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {chunk} this import added included",
+                calls.len()
+            )
+        );
+        assert_eq!(
+            club_rows_of(&host, "bbbb0002"),
+            0,
+            "nothing of the old laptop's file is in the given position"
+        );
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("read")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002");
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you gave that position to another laptop while the file was read: nothing was added"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0);
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("control")));
+        let got = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(got.added, calls.len(), "CONTROL: no Give, all of it merges");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host working stations during an import does not stop it**: a contact in progress
+    /// and one logged between two merges change the host's live session, but nothing the file
+    /// is read with. A change to what it is read with (where the host is, which picks the
+    /// exchange's role) still stops it.
+    #[test]
+    fn the_host_working_stations_during_an_import_does_not_stop_it() {
+        let dir = import_dir("working");
+        let calls = many_calls(2 * super::FD_CLUB_IMPORT_CHUNK + 88);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut turn = 0;
+        let got =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let mut e = super::engine_lock(&host);
+                turn += 1;
+                if turn == 1 {
+                    e.contest_working("N9ZZZ").unwrap();
+                } else {
+                    party_contact(&mut e, "N9ZZZ");
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            turn, 2,
+            "CONTROL: the host worked a station between both merges"
+        );
+        assert_eq!((got.added, got.already_in), (calls.len(), 0), "{got:?}");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("moved")));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): the club event changed; import the file again for the rest",
+                calls.len()
+            )
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), chunk);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **What the re-check before each merge catches, each by its own sentence**: the club's
+    /// session changed or the position removed while the file was read merges nothing, and the
+    /// club stopped between two merges says how far the import got (a sentence only the re-check
+    /// writes).
+    #[test]
+    fn the_recheck_before_each_merge_names_what_changed() {
+        let dir = import_dir("recheck");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                });
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the club event changed while the file was read: import it again"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a session change");
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("removed")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                let mut e = super::engine_lock(&host);
+                let v = tempo_net::fdsync::PROTO_VERSION;
+                let key = club_key_hash("bbbb0002");
+                e.fd_club_join(v, "bbbb0002", "tent", "W9XYZ", "ilqp", "", &key)
+                    .expect("the club knows the position");
+                e.fd_club_remove_position("bbbb0002").unwrap();
+                drop(e);
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you removed that position from the club event: Allow back first"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a position removed");
+
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, big) = party_laptop(&dir.join("big"), "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        let host = std::sync::Mutex::new(party_host(&dir.join("stopped")));
+        let err =
+            super::fd_club_import_with(&host, &big, "bbbb0002", FdClubImportPlan::read, || {
+                super::engine_lock(&host).fd_host_stop()
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): this station is not hosting a club event; import the file again for the rest",
+                calls.len()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -61687,7 +62668,7 @@ mod tests {
         );
         assert_eq!(
             feed.scope_request(),
-            Some((300.0, 1100.0, spectrum::WindowN::Balanced)),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced.into())),
             "and the request now stands, so the producer will answer it next tick"
         );
 
@@ -66001,6 +66982,111 @@ mod tests {
         let v = e.aprs_stations(0);
         assert_eq!(v.ttl_min, 15);
         assert!(v.fade_after_min < v.ttl_min);
+    }
+
+    /// A position packet from `call` at `lat`/`lon` — `aprs_pkt` with its fixed position replaced.
+    fn aprs_at(call: &str, lat: f64, lon: f64, at: i64) -> AprsHeard {
+        let mut h = aprs_pkt(call, "moving", at, AprsSource::Rf);
+        h.lat = Some(lat);
+        h.lon = Some(lon);
+        h
+    }
+
+    /// ⭐ THE TRACK. The store kept only the LAST position, so the map could show where a mobile is
+    /// but never where it has been. Each new position is appended in time order; a station that
+    /// re-beacons the spot it is parked on adds nothing, and a packet with no position adds nothing.
+    #[test]
+    fn a_moving_station_keeps_a_track_of_where_it_has_been() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1060));
+        // Parked: the same spot again, a minute later. One point, now stamped with the later time.
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1120));
+        // A status packet carries no position and must not touch the track.
+        let mut status = aprs_pkt("W9MOB-9", "status", 1150, AprsSource::Rf);
+        status.lat = None;
+        status.lon = None;
+        e.push_aprs_heard(status);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.03, -97.05, 1180));
+        let st = &e.aprs_stations(1200).stations[0];
+        let pts: Vec<(f64, f64, i64)> =
+            st.track.iter().map(|p| (p.lat, p.lon, p.at_unix)).collect();
+        assert_eq!(
+            pts,
+            vec![
+                (39.00, -97.00, 1000),
+                (39.01, -97.02, 1120),
+                (39.03, -97.05, 1180)
+            ]
+        );
+        // The last point is the station's current position, so the line ends under its symbol.
+        assert_eq!((st.lat, st.lon), (Some(39.03), Some(-97.05)));
+    }
+
+    /// A late copy of an OLDER position (a slow digipeater path, an internet delay) must not be
+    /// appended after a newer one: the track would zig-zag back to where the station no longer is.
+    #[test]
+    fn a_late_older_position_never_bends_the_track_backwards() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.02, -97.04, 1120));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1060));
+        let st = &e.aprs_stations(1200).stations[0];
+        let pts: Vec<i64> = st.track.iter().map(|p| p.at_unix).collect();
+        assert_eq!(pts, vec![1000, 1120]);
+    }
+
+    /// Bounded per station, oldest dropped first: memory stays fixed however long a mobile drives.
+    #[test]
+    fn a_track_is_capped_and_keeps_the_newest_points() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let n = APRS_TRACK_CAP as i64 + 25;
+        for i in 0..n {
+            e.push_aprs_heard(aprs_at("W9MOB-9", 39.0 + i as f64 * 0.001, -97.0, 1000 + i));
+        }
+        let st = &e.aprs_stations(1000 + n).stations[0];
+        assert_eq!(st.track.len(), APRS_TRACK_CAP);
+        assert_eq!(st.track.first().map(|p| p.at_unix), Some(1025));
+        assert_eq!(st.track.last().map(|p| p.at_unix), Some(1000 + n - 1));
+    }
+
+    /// The roster shows a station while it is inside the age window; its track is held to the same
+    /// window, so an hour-old leg of a long drive does not hang on the map behind a fresh station.
+    #[test]
+    fn the_roster_trims_track_points_older_than_the_window() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let ttl = i64::from(e.settings().aprs_station_ttl_min) * 60;
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.00, 1000 + ttl));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.02, -97.00, 1000 + ttl + 60));
+        let st = &e.aprs_stations(1000 + ttl + 61).stations[0];
+        let pts: Vec<i64> = st.track.iter().map(|p| p.at_unix).collect();
+        assert_eq!(pts, vec![1000 + ttl, 1000 + ttl + 60]);
+    }
+
+    /// Only a station that has MOVED carries a track on the wire. A fixed station's one point is
+    /// its position, which the record already holds, so it sends no `track` key at all.
+    #[test]
+    fn only_a_station_that_has_moved_sends_a_track() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9FIX", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9FIX", 39.00, -97.00, 1600));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.00, 1060));
+        let v = e.aprs_stations(1700);
+        let json = |call: &str| {
+            serde_json::to_value(v.stations.iter().find(|s| s.call == call).expect("station"))
+                .expect("serialises")
+        };
+        assert!(json("W9FIX").get("track").is_none());
+        let mob = json("W9MOB-9");
+        let track = mob
+            .get("track")
+            .and_then(|t| t.as_array())
+            .expect("a track");
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[1]["atUnix"], 1060);
+        assert_eq!(track[1]["lat"], 39.01);
     }
 
     #[test]

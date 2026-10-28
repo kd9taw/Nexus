@@ -75,7 +75,7 @@ pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
 /// device is (with native Flex audio it is not that device at all), so [`monitor_would_transmit`]
 /// refuses it as it refuses the TX device. Matched on the name's start, as a whole word, case-blind:
 /// the DAX receive and IQ devices, and a device that only mentions DAX, are not it.
-fn is_flex_dax_tx_device(name: &str) -> bool {
+pub(crate) fn is_flex_dax_tx_device(name: &str) -> bool {
     let n = name.trim().to_ascii_lowercase();
     ["dax audio tx", "dax tx"].iter().any(|p| {
         n.strip_prefix(p)

@@ -267,7 +267,17 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
 /// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
 /// ([`record_field`]).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
+///
+/// And the map-only mark ([`callbook::MAP_ONLY_GRID_FIELD`]): a grid a callbook filled for a
+/// contact logged with none is for the distance and the map, and counts toward nothing
+/// ([`counted_grid`]).
+pub const AWARD_EXTRAS: &[&str] = &[
+    "CQZ",
+    LOTW_DXCC_FIELD,
+    EQSL_AG_FIELD,
+    "STATE",
+    callbook::MAP_ONLY_GRID_FIELD,
+];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -293,6 +303,25 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// ★ The worked station's grid as the awards, the needs and every service count it: the grid the
+/// contact carries in its own field, as it is, **unless it is for the distance and the map only**
+/// ([`callbook::MAP_ONLY_GRID_FIELD`]): a callbook's grid filled into a contact logged with no grid
+/// of its own (an FT8/FT4 contact, the Blank grids clean-up). A callbook says where the station's
+/// licence is, its home QTH, not where the contact was made: that grid is kept on the contact for
+/// the distance and the map, and never counts toward a grid award (VUCC, the grid counts), never
+/// fills a GRID need and is never sent to a logging service (operator decision, 2026-10-27).
+///
+/// ⚠️ Keyed on that mark ONLY, never on the callbook's own mark ([`callbook::CALLBOOK_FILLED_FIELD`]):
+/// a grid a callsign-card lookup or Update from callbook filled counts and is sent as it always
+/// was, so no log's totals drop. An edit takes the mark off ([`callbook::unmark_edited`]), and so
+/// does LoTW's own grid (`reconcile::keep_lotw_detail`).
+pub fn counted_grid(r: &QsoRecord) -> Option<&str> {
+    if callbook::is_map_only_grid(r) {
+        return None;
+    }
+    r.grid.as_deref()
 }
 
 /// ⭐ **A field's value by its (uppercased) ADIF name, wherever the record keeps it** — the value
@@ -528,6 +557,7 @@ pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)])
         }
     }
     callbook::unmark_edited(&before, r);
+    offer::unmark_edited(&before, r);
 }
 
 /// The contest provenance of one general-log row (§3).
@@ -1173,6 +1203,7 @@ pub mod io_fence;
 pub mod logfile;
 pub mod migrate;
 pub mod mirror;
+pub mod offer;
 #[cfg(test)]
 mod one_row_tests;
 mod op;
@@ -3130,8 +3161,10 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if state_of(&rec) != state_of(old) {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
-    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]).
+    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
+    // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
+    offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that
@@ -3190,9 +3223,15 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
 /// really posts a card gets an ordinary monotonic sent mark back, not one permanently
 /// shadowed by their own correction.
 ///
+/// A card that goes out leaves the cards-to-send queue ([`qsl_card_queued`]): ADIF holds one
+/// `QSL_SENT`, and `Y` replaces the `Q` or `R` it held. A withdrawal leaves the queue as it is.
+///
 /// ★ THE one implementation of [`LogOp::MarkQslSent`] (SPEC-2 v3 §4.6), in the in-memory log and
 /// in a plan made on the row read from the store alike.
 pub(crate) fn qsl_sent_marked(rec: &mut QsoRecord, via: Option<QslVia>, date_unix: u64) {
+    if via.is_some() {
+        set_extra(rec, QSL_QUEUE_FIELD, None);
+    }
     rec.qsl_sent = match via {
         Some(via) => QslSent {
             sent: true,
@@ -3440,6 +3479,32 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::OwnLog)
 }
 
+/// ★ The operator's own record for a logging program on their own machine (DXKeeper, HRD
+/// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
+/// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
+/// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+/// For the same reason, **never an IOTA reference held back from uploads**
+/// ([`offer::withhold_iota`]), nor the marks naming it. Confirming it later in Nexus does not
+/// send it again: the program keeps the contact as it first got it.
+pub fn adif_record_own_logger(r: &QsoRecord) -> String {
+    let map_only = callbook::is_map_only_grid(r);
+    let held_iota = offer::withhold_iota(r);
+    if !map_only && !held_iota {
+        return adif_record_own_log(r);
+    }
+    let mut kept = r.clone();
+    if map_only {
+        kept.grid = None;
+        callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    }
+    if held_iota {
+        kept.ota.iota = None;
+        offer::unmark_offer_held(&mut kept, "IOTA");
+        callbook::unmark_callbook_filled(&mut kept, "IOTA");
+    }
+    adif_record_own_log(&kept)
+}
+
 /// One QSO as an ADIF record, **safe to send** — the private note is withheld.
 ///
 /// This is the default on purpose; see [`Audience`]. To write the operator's own log, say so
@@ -3456,7 +3521,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&field("CALL", &r.call));
     // `Some("")` is the same malformed shape as an empty MODE below — an import that
     // carried the tag with nothing in it. Filter rather than emit `<GRIDSQUARE:0>`.
-    if let Some(g) = r.grid.as_ref().filter(|g| !g.trim().is_empty()) {
+    // A grid for the distance and the map only stays in the operator's own log and goes to no
+    // service ([`counted_grid`]).
+    let withheld = audience == Audience::Outbound && callbook::is_map_only_grid(r);
+    if let Some(g) = r
+        .grid
+        .as_ref()
+        .filter(|g| !g.trim().is_empty() && !withheld)
+    {
         out.push_str(&field("GRIDSQUARE", g));
     }
     if let Some(c) = &r.country {
@@ -3692,13 +3764,16 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it).
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One taken from a log-time offer that
+    // the operator has not touched since stays in their own log and is sent nowhere
+    // ([`offer::OFFER_HELD_FIELD`]).
     if let Some(iota) = r
         .ota
         .iota
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|_| audience == Audience::OwnLog || !offer::withhold_iota(r))
     {
         out.push_str(&field("IOTA", iota));
     }
@@ -3726,9 +3801,12 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
-        // ([`callbook::CALLBOOK_FILLED_FIELD`]).
+        // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
         if audience == Audience::Outbound
-            && (k == SELF_FILLED_FIELD || k == callbook::CALLBOOK_FILLED_FIELD)
+            && (k == SELF_FILLED_FIELD
+                || k == callbook::CALLBOOK_FILLED_FIELD
+                || k == offer::OFFER_HELD_FIELD
+                || k == callbook::MAP_ONLY_GRID_FIELD)
         {
             continue;
         }
@@ -3743,6 +3821,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // the station sent, and the file then carried two, which can disagree. The exchange's
         // is the one [`record_field`] reads; the other stays in the store.
         if contest_adif.iter().any(|(t, cv)| t == k && !cv.is_empty()) {
+            continue;
+        }
+        // A card still to go and a sent mark cannot both be written: ADIF holds one `QSL_SENT`,
+        // and a sent mark is the later truth ([`qsl_card_queued`]).
+        if r.qsl_sent.sent && k == QSL_QUEUE_FIELD {
             continue;
         }
         out.push_str(&field(k, v));
@@ -4521,6 +4604,32 @@ fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool 
     f.remove(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
 }
 
+/// Consume `QSL_SENT`: `Y` is the sent mark. A card still TO GO — `Q` (queued) or `R` (the other
+/// station asked for one), ADIF's own spellings — is left in the record's passthrough, written
+/// back as it came and read by [`qsl_card_queued`]: the cards-to-send list, and another logger's
+/// queue, survive an import. Anything else (`N`, `I`) is the absence of a mark, as before.
+fn take_qsl_sent(f: &mut std::collections::HashMap<String, String>) -> bool {
+    if f.get("QSL_SENT").is_some_and(|v| is_card_queue_value(v)) {
+        return false;
+    }
+    take_yes(f, "QSL_SENT")
+}
+
+/// The passthrough field that holds a card still to go out (ADIF `QSL_SENT` = `Q` or `R`).
+pub const QSL_QUEUE_FIELD: &str = "QSL_SENT";
+
+/// A `QSL_SENT` value that means a paper card is still to go out: `Q` (queued) or `R` (requested).
+fn is_card_queue_value(v: &str) -> bool {
+    let v = v.trim();
+    v.eq_ignore_ascii_case("Q") || v.eq_ignore_ascii_case("R")
+}
+
+/// Whether a paper QSL card is waiting to go out for `r`: its `QSL_SENT` says `Q` or `R` and it
+/// is not marked sent. A sent mark always wins — a card that went out is not still to go.
+pub fn qsl_card_queued(r: &QsoRecord) -> bool {
+    !r.qsl_sent.sent && extra_value(r, QSL_QUEUE_FIELD).is_some_and(is_card_queue_value)
+}
+
 /// Consume a `*_QSL_RCVD` flag. ADIF's `QSL_Rcvd` enumeration spells a confirmation
 /// the importer HOLDS two ways, not one: `Y` (received) and `V` (verified — an award
 /// credit has been granted against it), the value Club Log and DXKeeper write for a
@@ -4951,7 +5060,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // Operator-declared OUTBOUND QSL request. Absent fields ⇒ default (not sent),
     // matching the QslRcvd legacy tolerance. QSLSDATE is date-only → UTC midnight.
     let qsl_sent = QslSent {
-        sent: take_yes(f, "QSL_SENT"),
+        sent: take_qsl_sent(f),
         via: f.remove("QSL_SENT_VIA").and_then(|v| QslVia::from_code(&v)),
         date_unix: f.remove("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
             let (sy, smo, sd) = (
@@ -5790,6 +5899,63 @@ mod tests {
             "identical-timestamp duplicate must dedup to one"
         );
         assert_eq!(skipped2, 1);
+    }
+
+    /// A grid a callbook filled for a contact logged with none stays in the operator's own log,
+    /// is sent to no service, and counts toward nothing ([`counted_grid`]); the same grid with no
+    /// mark is sent and counted. An edit of it makes it the operator's: sent and counted.
+    #[test]
+    fn a_map_only_grid_is_kept_counted_by_nothing_and_never_sent() {
+        let mut plain = rec("W1AW", "20m", 100);
+        plain.grid = Some("FN31pr".into());
+        let mut filled = plain.clone();
+        filled.grid = None;
+        callbook::fill_gridless_from_callbook(
+            &mut filled,
+            &callbook::CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN31pr".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filled.grid.as_deref(), Some("FN31pr"), "premise: filled");
+        assert!(callbook::is_map_only_grid(&filled), "premise: map only");
+        assert_eq!(counted_grid(&filled), None);
+        assert!(
+            !adif_record(&filled).contains(callbook::MAP_ONLY_GRID_FIELD),
+            "the mark is never sent"
+        );
+        assert!(adif_record_own_log(&filled).contains(callbook::MAP_ONLY_GRID_FIELD));
+        assert!(!adif_record(&filled).contains("<GRIDSQUARE:"), "never sent");
+        assert!(
+            adif_record_own_log(&filled).contains("<GRIDSQUARE:6>FN31pr"),
+            "kept"
+        );
+        assert_eq!(counted_grid(&plain), Some("FN31pr"));
+        assert!(adif_record(&plain).contains("<GRIDSQUARE:6>FN31pr"));
+        let mut edited = filled.clone();
+        edited.grid = Some("FN32".into());
+        callbook::unmark_edited(&filled, &mut edited);
+        assert!(!callbook::is_map_only_grid(&edited));
+        assert_eq!(counted_grid(&edited), Some("FN32"), "the operator's now");
+        assert!(adif_record(&edited).contains("<GRIDSQUARE:4>FN32"));
+    }
+
+    /// ★ A grid a callbook filled before the map-only mark existed (today's mark: a callsign-card
+    /// lookup at log time, or Update from callbook) counts and is sent exactly as it always was:
+    /// nobody's totals drop on update (operator decision, 2026-10-27).
+    #[test]
+    fn a_grid_with_todays_callbook_mark_counts_and_is_sent_as_before() {
+        let mut r = rec("W1AW", "20m", 100);
+        set_extra(
+            &mut r,
+            callbook::CALLBOOK_FILLED_FIELD,
+            Some("GRIDSQUARE".into()),
+        );
+        r.grid = Some("FN31pr".into());
+        assert!(callbook::is_callbook_filled(&r, "GRIDSQUARE"), "premise");
+        assert_eq!(counted_grid(&r), Some("FN31pr"));
+        assert!(adif_record(&r).contains("<GRIDSQUARE:6>FN31pr"), "sent");
     }
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {
@@ -7956,6 +8122,77 @@ mod tests {
         assert!(!r.confirmed && !r.award_confirmed && !r.qsl_rcvd.any());
         // Out-of-range is a no-op false.
         assert!(!lb.mark_qsl_sent(9, Some(QslVia::Bureau), 1_700_000_000));
+    }
+
+    /// A card still to go out — ADIF `QSL_SENT` `Q` (queued) or `R` (requested) — survives an
+    /// import and is written back as it came; `N` is still the absence of a mark.
+    #[test]
+    fn a_queued_or_requested_card_survives_the_round_trip() {
+        for value in ["Q", "R", "q"] {
+            let adif = format!(
+                "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20240101<QSL_SENT:1>{value}<EOR>\n"
+            );
+            let back = &parse_adif(&adif)[0];
+            assert!(!back.qsl_sent.sent, "{value} is not a sent mark");
+            assert!(qsl_card_queued(back), "{value} is a card to send");
+            let out = adif_record(back);
+            assert!(
+                out.contains(&format!("<QSL_SENT:1>{value}")),
+                "{value}: {out}"
+            );
+            assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        }
+        let no = &parse_adif("<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSL_SENT:1>N<EOR>\n")[0];
+        assert!(!qsl_card_queued(no) && !no.qsl_sent.sent);
+        assert!(!adif_record(no).contains("QSL_SENT"));
+    }
+
+    /// Marking a queued card sent ends the queue, and changes nothing else about the contact.
+    #[test]
+    fn sending_a_queued_card_ends_the_queue_and_nothing_else() {
+        let mut queued = rec("W1AW", "20m", 1_700_000_000);
+        queued.rst_sent = Some("599".into());
+        queued.extra = vec![
+            ("CNTY".into(), "MA,MIDDLESEX".into()),
+            (QSL_QUEUE_FIELD.into(), "Q".into()),
+            ("QSL_VIA".into(), "W1XYZ".into()),
+        ];
+        let mut lb = Logbook::new();
+        lb.add(queued);
+        let before = lb.records()[0].as_ref().clone();
+        assert!(qsl_card_queued(&before));
+
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), 1_700_086_400));
+        let after = lb.records()[0].as_ref().clone();
+        assert!(after.qsl_sent.sent && !qsl_card_queued(&after));
+        let mut expect = before.clone();
+        expect.qsl_sent = after.qsl_sent;
+        expect.extra.retain(|(k, _)| k != QSL_QUEUE_FIELD);
+        assert_eq!(after, expect, "only the QSL-sent mark moved");
+        let out = adif_record(&after);
+        assert!(
+            out.contains("<QSL_SENT:1>Y") && out.matches("QSL_SENT:").count() == 1,
+            "{out}"
+        );
+
+        // A withdrawal leaves a queue alone.
+        let mut lb = Logbook::new();
+        lb.add(before.clone());
+        assert!(lb.mark_qsl_sent(0, None, 1_700_086_400));
+        assert!(qsl_card_queued(&lb.records()[0]));
+    }
+
+    /// A contact holding a sent mark AND a stale queue value (a merge of two copies) is sent: it is
+    /// not listed to send, and its ADIF carries one `QSL_SENT`, the `Y`.
+    #[test]
+    fn a_sent_mark_outranks_a_stale_queue_value() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.qsl_sent.sent = true;
+        r.extra = vec![(QSL_QUEUE_FIELD.into(), "Q".into())];
+        assert!(!qsl_card_queued(&r));
+        let out = adif_record(&r);
+        assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        assert!(out.contains("<QSL_SENT:1>Y"), "{out}");
     }
 
     /// #163 — `FREQ_RX` round-trips through ADIF, and is ABSENT when there is nothing to say.

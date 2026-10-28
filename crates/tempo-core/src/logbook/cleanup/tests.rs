@@ -1296,3 +1296,141 @@ fn a_merge_carries_no_stamp_of_the_same_spelling_another_call_or_another_worked_
     let merged = merge(&[kept, other], 0, &HashMap::new()).record;
     assert_eq!(merged.upload.lotw, None, "another worked call");
 }
+
+/// An award's status set from Bulk edit or the contact card moves that award's one Credit code
+/// and nothing else: Granted takes it off Submitted, Submitted off Granted, a clear off both;
+/// another award's code and the award's band credit stay, and so does every other field.
+#[test]
+fn an_award_status_moves_its_one_credit_code_and_nothing_else() {
+    let mut r = contact("JA1ABC", T0, 1);
+    r.credit_granted = vec!["DXCC_BAND".into(), "WAS".into()];
+    r.credit_submitted = vec!["IOTA".into()];
+    r.qsl_rcvd.lotw = true;
+    r.award_confirmed = true;
+    let set = |field, value: Option<&str>| {
+        checked(&[Change {
+            field,
+            value: value.map(str::to_string),
+        }])
+        .unwrap()
+    };
+
+    let submitted = changed(&r, &set(Field::CreditDxcc, Some("submitted")), &no_country).unwrap();
+    assert_eq!(submitted.credit_submitted, ["DXCC", "IOTA"]);
+    assert_eq!(submitted.credit_granted, ["DXCC_BAND", "WAS"]);
+    assert_eq!(
+        value_of(&submitted, Field::CreditDxcc).as_deref(),
+        Some("SUBMITTED")
+    );
+    // Every other field as it was.
+    let mut back = submitted.clone();
+    back.credit_submitted = r.credit_submitted.clone();
+    assert_eq!(back, r);
+
+    let granted = changed(
+        &submitted,
+        &set(Field::CreditDxcc, Some("GRANTED")),
+        &no_country,
+    )
+    .unwrap();
+    assert_eq!(granted.credit_submitted, ["IOTA"]);
+    assert_eq!(granted.credit_granted, ["DXCC", "DXCC_BAND", "WAS"]);
+    assert_eq!(
+        value_of(&granted, Field::CreditDxcc).as_deref(),
+        Some("GRANTED")
+    );
+
+    let cleared = changed(&granted, &set(Field::CreditDxcc, None), &no_country).unwrap();
+    assert_eq!(
+        cleared, r,
+        "a clear takes the code off both lists, and only it"
+    );
+    assert_eq!(value_of(&cleared, Field::CreditDxcc), None);
+
+    // Already so: no change.
+    assert!(changed(
+        &granted,
+        &set(Field::CreditDxcc, Some("GRANTED")),
+        &no_country
+    )
+    .is_none());
+    // The other awards' fields write their own codes.
+    let waz = changed(
+        &r,
+        &set(Field::CreditCqwazMixed, Some("GRANTED")),
+        &no_country,
+    )
+    .unwrap();
+    assert_eq!(waz.credit_granted, ["CQWAZ_MIXED", "DXCC_BAND", "WAS"]);
+    let counties = changed(&r, &set(Field::CreditUsaca, Some("SUBMITTED")), &no_country).unwrap();
+    assert_eq!(counties.credit_submitted, ["IOTA", "USACA"]);
+    // A status that is not one is refused before any contact is read.
+    assert!(checked(&[Change {
+        field: Field::CreditIota,
+        value: Some("yes".into()),
+    }])
+    .is_err());
+    assert!(BULK_FIELDS.contains(&Field::CreditUsaca));
+}
+
+/// The award-status fields go over the wire by the award's Credit code.
+#[test]
+fn award_status_fields_are_named_by_their_credit_code() {
+    for (field, name) in [
+        (Field::CreditDxcc, "CREDIT_DXCC"),
+        (Field::CreditWas, "CREDIT_WAS"),
+        (Field::CreditCqwazMixed, "CREDIT_CQWAZ_MIXED"),
+        (Field::CreditIota, "CREDIT_IOTA"),
+        (Field::CreditUsaca, "CREDIT_USACA"),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&field).unwrap(),
+            format!("\"{name}\"")
+        );
+        assert_eq!(credit_code(field), name.strip_prefix("CREDIT_"));
+    }
+}
+
+/// The status written survives the log's own ADIF round trip.
+#[test]
+fn an_award_status_round_trips_through_adif() {
+    let r = contact("W9ABC", T0, 2);
+    let set = |field, v: &str| {
+        checked(&[Change {
+            field,
+            value: Some(v.into()),
+        }])
+        .unwrap()
+    };
+    let a = changed(&r, &set(Field::CreditUsaca, "SUBMITTED"), &no_country).unwrap();
+    let a = changed(&a, &set(Field::CreditDxcc, "GRANTED"), &no_country).unwrap();
+    let back = parse_adif(&adif_record_own_log(&a));
+    assert_eq!(back[0].credit_submitted, ["USACA"]);
+    assert_eq!(back[0].credit_granted, ["DXCC"]);
+}
+
+/// ★ A merge keeps a grid for the map only only when every copy holding that grid held it so: one
+/// copy that counted it (today's callbook mark alone, or none) keeps it counted, so a merge never
+/// takes a grid out of anyone's totals. The mark is never merged as a value of its own.
+#[test]
+fn a_merge_keeps_a_grid_for_the_map_only_only_when_every_copy_held_it_so() {
+    use crate::logbook::callbook::{is_map_only_grid, CALLBOOK_FILLED_FIELD, MAP_ONLY_GRID_FIELD};
+    let marks = |r: &mut QsoRecord, map_only: bool| {
+        r.grid = Some("FN31".into());
+        set_extra(r, CALLBOOK_FILLED_FIELD, Some("GRIDSQUARE".into()));
+        if map_only {
+            set_extra(r, MAP_ONLY_GRID_FIELD, Some("Y".into()));
+        }
+    };
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    marks(&mut a, true);
+    marks(&mut b, true);
+    let merged = merge(&[a.clone(), b.clone()], 0, &HashMap::new());
+    assert!(is_map_only_grid(&merged.record), "both map only");
+    assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    marks(&mut b, false);
+    set_extra(&mut b, MAP_ONLY_GRID_FIELD, None);
+    let merged = merge(&[a, b], 0, &HashMap::new());
+    assert!(!is_map_only_grid(&merged.record), "one copy counted it");
+    assert_eq!(crate::logbook::counted_grid(&merged.record), Some("FN31"));
+}

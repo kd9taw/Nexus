@@ -124,30 +124,7 @@ describe('the idle-watchdog toast', () => {
   })
 })
 
-// JS8Call's "New Message Received" box (mainwindow.cpp:9143-9154) for a MSG filed to me: once per
-// message, and not for what the inbox held when the view opened.
-describe('a new MSG to me announces itself', () => {
-  const entry = (id: number, state: 'unread' | 'read' | 'store') => ({
-    id, from: 'W1AW', to: 'KD9TAW', text: 'HELLO', path: ['W1AW'], state, atMs: Date.UTC(2026, 8, 30, 14, 5, 9), freqHz: 1500, snrDb: -7,
-  })
-  it('toasts once for a new unread message, and not for what was already there', async () => {
-    // A fresh object on every poll, as the engine's replies are.
-    const before = () => ({ ...base(), inbox: [entry(1, 'unread'), entry(2, 'read')] })
-    const after = () => ({ ...base(), inbox: [entry(1, 'unread'), entry(2, 'read'), entry(3, 'unread'), entry(4, 'store')] })
-    state.current = before()
-    await renderCockpit()
-    state.current = before()
-    await poll()
-    expect(toast.pushToast, 'what the inbox held when the view opened toasted').not.toHaveBeenCalled()
-    state.current = after()
-    await poll()
-    expect(toast.pushToast).toHaveBeenCalledTimes(1)
-    expect(String(toast.pushToast.mock.calls[0][0])).toBe('New message from W1AW at 14:05:09 UTC, in the Inbox')
-    state.current = after()
-    await poll()
-    state.current = after()
-    await poll()
-    expect(toast.pushToast, 'a message toasts once, not every poll').toHaveBeenCalledTimes(1)
-  })
-})
+// JS8Call's "New Message Received" box (mainwindow.cpp:9143-9154) for a MSG filed to me is raised from
+// any screen now, by Js8SoundPlayer (its test holds once per message, and not what was already there);
+// the cockpit raises none itself, so it never shows twice (Js8Cockpit.lists.test.tsx, "one owner").
 

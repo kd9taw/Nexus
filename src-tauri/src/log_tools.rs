@@ -1,5 +1,6 @@
 //! The Logbook's clean-up tools as the UI asks for them: the duplicate finder and its merge, the
-//! bulk edit with its preview, and the check with its fixes ([`tempo_app::logtools`]).
+//! bulk edit with its preview, the check with its fixes, and the blank grids
+//! ([`tempo_app::logtools`]).
 //!
 //! Every read runs with the Engine lock released and changes nothing. Every change is planned
 //! with the lock released and made under it, a chunk at a time, as ONE run of the log's history —
@@ -446,6 +447,124 @@ pub async fn apply_log_fixes(
     let engine = Arc::clone(&state);
     durable_command(move || {
         let (made, durability) = logtools::apply_fixes(&engine, &fixes);
+        (made.map(run_dto), durability)
+    })
+    .await
+}
+
+// ── blank grids ─────────────────────────────────────────────────────────────────────────────────
+
+/// One contact with no grid, and the grid known for its station ([`logtools::GridOffer`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GridOfferDto {
+    pub id: String,
+    pub call: String,
+    pub when_unix: u64,
+    pub band: String,
+    pub mode: String,
+    pub grid: String,
+    /// `heard` (sent on the air) or `callbook` (home QTH, for the distance and the map only).
+    pub source: &'static str,
+    pub uploaded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GridOffersDto {
+    /// How many contacts have no grid.
+    pub blank: usize,
+    pub offers: Vec<GridOfferDto>,
+}
+
+fn source_word(s: logtools::GridFrom) -> &'static str {
+    match s {
+        logtools::GridFrom::Heard => "heard",
+        logtools::GridFrom::Callbook => "callbook",
+    }
+}
+
+/// The contacts with no grid for which a grid is known: heard on the air within 24 hours of the
+/// contact (ALL.TXT, and this session), else a callbook lookup already made (the lookup cache,
+/// while fresh; nothing is looked up). Changes nothing.
+#[tauri::command]
+pub async fn log_grid_offers(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+) -> Result<GridOffersDto, String> {
+    use tauri::Manager;
+    let engine = Arc::clone(&state);
+    blocking(move || {
+        let max_age = tempo_app::engine::engine_lock(&engine)
+            .settings()
+            .callbook_cache_max_age_secs();
+        let now = u64::try_from(crate::now_unix()).unwrap_or(0);
+        let cache = app.state::<crate::SharedCallbookCache>();
+        let mut heard = |calls: &std::collections::HashSet<String>| {
+            std::fs::File::open(crate::all_txt_path())
+                .map(|f| logtools::heard_grids_in(std::io::BufReader::new(f), calls))
+                .unwrap_or_default()
+        };
+        // One Engine lock for every call, never one per contact.
+        let mut session = |calls: &std::collections::HashSet<String>| {
+            tempo_app::engine::engine_lock(&engine).sent_grids_heard(calls)
+        };
+        let mut kept = |call: &str| crate::callbook_update::kept(&cache, call, max_age);
+        let (blank, offers) =
+            logtools::grid_offers(&engine, &mut heard, &mut session, &mut kept, now)?;
+        Ok(GridOffersDto {
+            blank,
+            offers: offers
+                .into_iter()
+                .map(|o| GridOfferDto {
+                    id: o.id.to_string(),
+                    call: o.call,
+                    when_unix: o.when_unix,
+                    band: o.band,
+                    mode: o.mode,
+                    grid: o.grid,
+                    source: source_word(o.source),
+                    uploaded: o.uploaded,
+                })
+                .collect(),
+        })
+    })
+    .await
+}
+
+/// One contact the operator ticked, with the grid offered and where it came from.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GridPickDto {
+    pub id: String,
+    pub grid: String,
+    pub source: String,
+}
+
+/// Fill the ticked contacts' grids, and only those, as ONE run: a callbook grid with the
+/// callbook's mark. Sends nothing.
+#[tauri::command]
+pub async fn log_grid_fill(
+    state: State<'_, SharedEngine>,
+    picks: Vec<GridPickDto>,
+) -> Result<ToolRunDto, String> {
+    let picks: Vec<logtools::GridPick> = picks
+        .into_iter()
+        .map(|p| {
+            Ok(logtools::GridPick {
+                id: id_of(&p.id)?,
+                grid: p.grid,
+                source: match p.source.as_str() {
+                    "heard" => logtools::GridFrom::Heard,
+                    "callbook" => logtools::GridFrom::Callbook,
+                    other => return Err(format!("'{other}' is not where a grid comes from.")),
+                },
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let (made, durability) = logtools::fill_grids(&engine, &picks);
         (made.map(run_dto), durability)
     })
     .await

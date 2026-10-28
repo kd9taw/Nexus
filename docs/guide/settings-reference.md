@@ -1537,6 +1537,11 @@ nothing until you enable TX in the cockpit, every session.
 
 **Lists and marks**
 
+- **Reset Band activity, the call list and the RX pane at startup** — JS8Call's "Reset the Band
+  Activity, Call Activity, and RX history at startup", off by default. On, each time Nexus starts
+  the three lists start empty, as **Clear all lists…** leaves them; what is heard after fills them
+  again. Your Inbox and the station's own record of who it heard are kept. It takes effect at the
+  next start.
 - **Hide these callsigns in the RX pane** — JS8Call 3.0's RX block list, comma-separated and
   empty by default. Nothing a listed station sends prints in the RX pane (by its call as heard
   or its base call), and the call list marks it ✕; it is still heard, answered and filed as
@@ -1552,10 +1557,29 @@ nothing until you enable TX in the cockpit, every session.
 
 **Sounds**
 
-A short tone of its own for each of: a CQ, a heartbeat, an ACK for you, a message directed to
-you or your group, a message filed in your Inbox, a new callsign, a callsign you have worked.
-All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
-JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
+A sound for each of: a CQ, a heartbeat, an ACK for you, a message directed to you or your
+group, a message filed in your Inbox, a new callsign, a callsign you have worked. All off by
+default, as JS8Call's notifications are. Each plays a short tone of its own, or a WAV file you
+pick with **Choose…**, as JS8Call plays the file you pick for each; **Reset to built-in** goes
+back to the tone, and **Test** plays it. A file that cannot be played (moved, not a WAV file,
+larger than 10 MB) plays the tone instead, and Nexus says so once. They sound whichever screen
+is showing while JS8 is the mode, as JS8Call's do. The files are this computer's and travel in a
+profile; only a file chosen here is ever read. **Play the sounds on** picks the output (the system
+default unless you pick one). It is never a device your radio transmits from: a sound there could
+key a rig on VOX, so the radio's TX audio devices are shown but cannot be picked, and every sound
+is checked as it plays, so one is refused even if a TX audio device is changed to it later.
+
+**Colours and fonts**
+
+- JS8Call's colours and fonts for the **RX pane** (background, received text, transmitted text, and a
+  font for each kind of text), **Band activity and the call list** (one set for both, as in JS8Call:
+  background, text, selected row, traffic to you, CQ messages, the primary and secondary highlights,
+  and a font) and the **compose box** (background, text and a font). Each colour starts as the
+  theme's and opens a colour picker. What you pick is kept for the theme in use (Light or Dark); the
+  other theme keeps its own, so a colour chosen to read well on one never paints the other. A font
+  (a family name, and a size in points) serves both themes; a family this computer lacks falls back
+  to the theme's. A sample of each pane shows the result, a line under it says when a text would be
+  hard to read on its background (under 4.5:1), and **Reset** gives that pane back to the theme.
 
 **Sending**
 
@@ -1945,6 +1969,18 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
   resolver is fixed for a running session, so a downloaded update **applies at
   the next launch** — the status line shows the active release date and notes
   when a newer download is waiting.
+
+### IOTA island list
+
+- **Download the IOTA island-group list** — off until you turn it on (or say
+  **Download** on the one-line offer beside an IOTA reference). The list is © RSGB and
+  © Islands On The Air (IOTA) Ltd, published at iota-world.org for personal,
+  non-commercial use, so Nexus never ships a copy: it downloads the list (about
+  300 KB) onto this computer when you say yes, and refreshes it at most monthly.
+  With it, the Logbook and the contact card show each group's name beside a
+  reference, with IOTA Ltd's credit and a link, and flag a reference that is not an
+  island group. Without it, a reference is checked by its shape (`EU-131`) only.
+  Turning it off deletes the copy.
 
 ---
 

@@ -42,6 +42,7 @@ pub fn argb(tags: &[NeedTag]) -> u32 {
     let rgb = match lead {
         Some(NeedTag::Wanted) => 0xa3e635,
         Some(NeedTag::NewEntity) => 0xf23ec0,
+        Some(NeedTag::NewIota) => 0xfb7185,
         Some(NeedTag::NewZone) => 0xc084fc,
         Some(NeedTag::NewState) => 0x2dd4bf,
         Some(NeedTag::NewGrid) => 0x34d399,
@@ -172,6 +173,7 @@ mod tests {
             state_from: None,
             wpx_need: None,
             wae_need: None,
+            iota: None,
         }
     }
 
@@ -268,6 +270,7 @@ mod tests {
             (NeedTag::Wanted, "--need-watch"),
             (NeedTag::NewEntity, "--need-entity"),
             (NeedTag::NewZone, "--need-zone"),
+            (NeedTag::NewIota, "--need-iota"),
             (NeedTag::NewState, "--need-state"),
             (NeedTag::NewGrid, "--need-grid"),
             (NeedTag::NewBand, "--need-band"),

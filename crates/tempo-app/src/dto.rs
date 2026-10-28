@@ -3755,12 +3755,13 @@ pub struct FdImportRefusedDto {
     pub reason: String,
 }
 
-/// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many
-/// contacts the club holds, and the newest of them, newest first.
+/// ⭐ **The club log, as the host's own screen lists it** (`Engine::fd_club_log_newest`): how many
+/// contacts the club holds, and the newest of them, newest first. A joined laptop answers the same
+/// list, as the host sent it on its `rows` lines (`tempo_net::fdsync::ClubRows`).
 ///
-/// ⛔ The host's own screens only, as the answer to a command of its own. It rides nothing else:
-/// not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know), not
-/// the club line every position is sent, not the TV board.
+/// ⛔ The station's own screens only, as the answer to a command of its own. It rides nothing
+/// else: not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know),
+/// not the TV board.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FdClubLogDto {

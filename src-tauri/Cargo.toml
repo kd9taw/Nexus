@@ -118,6 +118,9 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # The application/domain logic. Built by the M3 UI task (#2). This shell only
 # locks its AppState behind a Mutex and forwards commands to it.
 tempo-app = { path = "../crates/tempo-app" }
+# A JS8 notification sound's WAV file, read and checked before it plays (`js8_sounds.rs`). Already in
+# the build through tempo-audio and tempo-client; named here because the shell reads it directly.
+tempo-codec = { path = "../crates/tempo-codec" }
 # Propagation & opening intelligence with LIVE feeds (NOAA SWPC + PSK Reporter).
 propagation = { path = "../crates/propagation", features = ["live"] }
 # DX-cluster / RBN spot feed for need-aware spotting.

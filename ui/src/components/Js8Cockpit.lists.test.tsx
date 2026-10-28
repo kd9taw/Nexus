@@ -10,7 +10,7 @@ import { useState, type ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit, type Js8ListSettings } from './Js8Cockpit'
-import { JS8_VIEW_KEY, JS8_LISTS_KEY } from '../features/js8View'
+import { JS8_VIEW_KEY, JS8_LISTS_KEY, js8RunStart } from '../features/js8View'
 import type { AppSnapshot, Js8ActivityRow, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
 
@@ -102,7 +102,14 @@ vi.mock('../alerts', () => ({ beep: vi.fn(), doubleBeep: vi.fn() }))
 vi.mock('./CockpitHeader', () => ({
   CockpitHeader: (p: { modeIndicator?: ReactNode }) => <header className="cockpit-header">{p.modeIndicator}</header>,
 }))
-vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
+/** The waterfall's props at its latest render. */
+const waterfallProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }))
+vi.mock('./Waterfall', () => ({
+  Waterfall: (p: Record<string, unknown>) => {
+    waterfallProps.current = p
+    return <div className="waterfall-wrap" />
+  },
+}))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 // A Remote observer's receiver: allowed to move the receive offset, and nothing else.
 const receiver = vi.hoisted(() => ({ rxAllowed: true, depthAllowed: false, tuneRx: vi.fn(), setDepth: vi.fn() }))
@@ -149,7 +156,6 @@ const lists = (o: Partial<Js8ListSettings> = {}): Js8ListSettings => ({
   highlightSecondary: [],
   eot: '♢',
   mfi: '……',
-  sounds: [],
   groups: ['@FUN'],
   avoidAllcall: false,
   setRxBlocklist: vi.fn(async () => {}),
@@ -372,6 +378,138 @@ describe('Band activity is JS8Call’s', () => {
   })
 })
 
+// JS8Call's "Minimal Column Labels" (Show Columns, one switch for both lists, off: mainwindow.cpp:
+// 4657-4712): the short headings of its label map and the cells' units dropped (:4890-4898,
+// displayBandActivity.cpp:232-251, displayCallActivity.cpp:280-291).
+describe('Minimal column labels, as JS8Call’s', () => {
+  const heads = (pane: string) => Array.from(document.querySelectorAll(`[data-pane="${pane}"] thead th`)).map((th) => th.textContent ?? '')
+  /** A row's cell under the heading `head` (the header and the row hold their cells in one order). */
+  const cell = (pane: string, row: Element, head: string) => {
+    const i = heads(pane).indexOf(head)
+    expect(i, `no "${head}" heading in ${pane}`).toBeGreaterThanOrEqual(0)
+    return row.querySelectorAll('td')[i].textContent
+  }
+  const band1503 = () => document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[2]
+
+  it('shortens both lists’ headings and drops the cells’ units, from either list’s ⋯, and is remembered', async () => {
+    await renderCockpit()
+    await pick(paneMenu('offsets'), 'Time delta', 'Show columns')
+    await pick(paneMenu('stations'), 'Time delta', 'Show columns')
+    expect(heads('offsets').filter(Boolean), 'control: the full headings').toEqual(['Offset', 'Age', 'SNR', 'Time delta', 'Message(s)'])
+    expect(heads('stations').filter(Boolean)).toEqual(['Callsigns (3)', 'Age', 'SNR', 'Offset', 'Time delta', '✓', 'Name', 'Comment'])
+    expect([cell('offsets', band1503(), 'Offset'), cell('offsets', band1503(), 'Time delta')], 'control: with units').toEqual(['1503 Hz', '100 ms'])
+    expect([cell('stations', stationRow('W0IND'), 'Offset'), cell('stations', stationRow('W0IND'), 'Time delta')]).toEqual(['1503 Hz', '100 ms'])
+
+    await pick(paneMenu('offsets'), 'Minimal column labels', 'Show columns')
+    expect(heads('offsets').filter(Boolean)).toEqual(['Off', 'Age', 'SN', 'TD', 'Message(s)'])
+    expect(heads('stations').filter(Boolean), 'one switch for both lists').toEqual(['Call(3)', 'Age', 'SN', 'Off', 'TD', '✓', 'Name', 'Comment'])
+    expect([cell('offsets', band1503(), 'Off'), cell('offsets', band1503(), 'TD')]).toEqual(['1503', '100'])
+    expect([cell('stations', stationRow('W0IND'), 'Off'), cell('stations', stationRow('W0IND'), 'TD')]).toEqual(['1503', '100'])
+    expect(JSON.parse(localStorage.getItem(JS8_VIEW_KEY)!).minimal).toBe(true)
+
+    cleanup()
+    await renderCockpit()
+    expect(heads('offsets').filter(Boolean), 'remembered').toEqual(['Off', 'Age', 'SN', 'TD', 'Message(s)'])
+    await pick(paneMenu('stations'), 'Minimal column labels', 'Show columns')
+    expect(heads('offsets').filter(Boolean), 'and off again from the call list’s ⋯').toEqual(['Offset', 'Age', 'SNR', 'Time delta', 'Message(s)'])
+    expect(cell('offsets', band1503(), 'Offset')).toBe('1503 Hz')
+  })
+})
+
+// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (Settings ▸ JS8, off):
+// JS8Call reads none of them back and clears them at its first band (mainwindow.cpp:505-508, :607-609,
+// :1281-1285). Here: Clear All Lists as of the run's start, decided once a run from the settings it
+// started with, at the station only.
+describe('the startup reset, as JS8Call’s', () => {
+  /** The fixture as heard before this run started: every time moved to end a second before it, and
+   *  its messages read (a station with an unread one stays listed through a clear, ⚑). */
+  const heardBefore = (): Js8State => {
+    const s = { ...js8Fixture(), inbox: js8Fixture().inbox.map((e) => ({ ...e, state: 'read' as const })) }
+    const newest = Math.max(...s.activity.map((r) => r.atMs), ...s.stations.map((h) => h.lastMs))
+    const by = Math.max(0, newest - (js8RunStart() - 1000))
+    return {
+      ...s,
+      activity: s.activity.map((r) => ({ ...r, atMs: r.atMs - by })),
+      stations: s.stations.map((h) => ({
+        ...h,
+        lastMs: h.lastMs - by,
+        ...(h.cqMs != null && { cqMs: h.cqMs - by }),
+        ...(h.ackMs != null && { ackMs: h.ackMs - by }),
+      })),
+    }
+  }
+  const callRows = () => document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group)').length
+  const lists3 = () => [rxLines().length, bandOffsets().length, callRows()]
+  const stored = () => JSON.parse(localStorage.getItem(JS8_LISTS_KEY) ?? 'null') as { startup?: number } | null
+  const cockpit = (l: Js8ListSettings | undefined) => <Js8Cockpit snap={snap} panels={fakePanels()} lists={l} />
+
+  it('on, the RX pane, Band activity and the call list start empty, and fill again with what is heard after', async () => {
+    state.current = heardBefore()
+    await renderCockpit({ lists: lists({ resetActivity: true }) })
+    expect(lists3()).toEqual([0, 0, 0])
+    expect(stored()?.startup, 'the run is recorded').toBe(js8RunStart())
+    const now = Date.now()
+    state.current = {
+      ...heardBefore(),
+      activity: [...heardBefore().activity, frame({ atMs: now, freqHz: 1500, from: 'N0NEW', text: 'N0NEW: @ALLCALL CQ CQ CQ EM10 ' })],
+      stations: [...heardBefore().stations, { call: 'N0NEW', grid: 'EM10', snrDb: -5, freqHz: 1500, speed: 'normal', lastMs: now, lastHb: false, lastCq: true, storedMsgs: 0 }],
+    }
+    await poll()
+    expect(lists3()).toEqual([1, 1, 1])
+    expect(stationRow('N0NEW')).toBeTruthy()
+  })
+
+  it('off, JS8Call’s default, the lists keep what was heard before', async () => {
+    state.current = heardBefore()
+    await renderCockpit({ lists: lists({ resetActivity: false }) })
+    expect(lists3()).toEqual([2, 3, 3])
+    expect(stored()?.startup, 'decided all the same').toBe(js8RunStart())
+  })
+
+  it('is decided by the first settings the run has: switched on later, or the cockpit mounted again, it waits for the next start', async () => {
+    state.current = heardBefore()
+    const r = await renderCockpit({ lists: undefined })
+    expect([lists3(), stored()], 'nothing decided before the settings come').toEqual([[2, 3, 3], null])
+    r.rerender(cockpit(lists({ resetActivity: false })))
+    await poll()
+    r.rerender(cockpit(lists({ resetActivity: true })))
+    await poll()
+    expect(lists3(), 'switched on during the run').toEqual([2, 3, 3])
+    cleanup()
+    await renderCockpit({ lists: lists({ resetActivity: true }) })
+    expect(lists3(), 'mounted again in the same run').toEqual([2, 3, 3])
+    localStorage.clear()
+    cleanup()
+    await renderCockpit({ lists: undefined }).then((again) => again.rerender(cockpit(lists({ resetActivity: true }))))
+    await poll()
+    expect(lists3(), 'control: the first settings of a run, on').toEqual([0, 0, 0])
+  })
+
+})
+
+// JS8Call's colours and fonts (Settings ▸ JS8 ▸ Colours and fonts, features/js8PaneStyle): the cockpit
+// carries what was picked for the theme it paints, as custom properties its panes' rules read.
+describe('the panes’ colours and fonts', () => {
+  const style = {
+    light: { rxBg: '#fafafa' },
+    dark: { rxBg: '#101820', cq: '#1f6f3f' },
+    fonts: { table: { family: 'Consolas', sizePt: 11 } },
+  }
+  const root = () => document.querySelector('main.js8-cockpit') as HTMLElement
+  const props = ['--js8-rx-bg', '--js8-table-cq', '--js8-table-font-family', '--js8-table-font-size']
+
+  it('are set on the cockpit for the theme it paints, the fonts for both, and nothing when nothing is picked', async () => {
+    await renderCockpit({ paneStyle: style, theme: 'dark' })
+    expect(props.map((v) => root().style.getPropertyValue(v))).toEqual(['#101820', '#1f6f3f', '"Consolas", var(--font-mono)', 'calc(11pt * var(--text-scale, 1))'])
+    cleanup()
+    await renderCockpit({ paneStyle: style, theme: 'light' })
+    expect(props.map((v) => root().style.getPropertyValue(v)), 'a Dark pick never paints Light').toEqual(['#fafafa', '', '"Consolas", var(--font-mono)', 'calc(11pt * var(--text-scale, 1))'])
+    cleanup()
+    await renderCockpit({})
+    expect(Array.from(root().style).filter((p) => p.startsWith('--js8-')), 'nothing picked: every pane the theme’s').toEqual([])
+  })
+})
+
 describe('the call list is JS8Call’s', () => {
   const marks = () =>
     Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group)')).map((r) => [
@@ -583,52 +721,37 @@ describe('the Inbox is JS8Call’s message panel', () => {
   })
 })
 
-describe('a new message announces itself, and the sounds', () => {
+// The new-message notice is App's (Js8SoundPlayer), from any screen; its Show asks this screen for the
+// station's Inbox, and the cockpit raises no notice of its own (one owner, never two).
+describe('a new message’s Show opens that station’s Inbox here', () => {
   const newMail = () => ({
     ...js8Fixture(),
     inbox: [...js8Fixture().inbox, { id: 3, from: 'K1HB', to: 'KD9TAW', text: 'HI', path: ['K1HB'], state: 'unread' as const, atMs: T0, freqHz: 600, snrDb: -12 }],
   })
 
-  it('stays up as JS8Call’s box does, 300 s, with a way to the message', async () => {
+  it('opens the Inbox on the asked station, and raises no notice itself', async () => {
     const toast = await import('../toast')
-    await renderCockpit()
+    const r = await renderCockpit()
     await poll()
     state.current = newMail()
     await poll()
-    const call = vi.mocked(toast.pushToast).mock.calls.find(([msg]) => String(msg).startsWith('New message from K1HB'))
-    expect(call, 'no notice').toBeTruthy()
-    expect(call![1]).toBe('info')
-    expect(call![2]).toBe(300_000)
-    expect(call![3]?.actionLabel).toBe('Show')
-    await act(async () => {
-      call![3]!.action!()
-    })
+    expect(vi.mocked(toast.pushToast).mock.calls.filter(([msg]) => String(msg).startsWith('New message from')), 'one owner').toEqual([])
+    r.rerender(<Js8Cockpit snap={snap} panels={fakePanels()} lists={lists()} inboxRequest={{ call: 'K1HB', seq: 1 }} />)
+    await poll()
     expect((document.querySelector('.js8-inbox-filter select') as HTMLSelectElement).value).toBe('K1HB')
   })
+})
 
-  it('plays only the sounds switched on, for what is new since the last poll', async () => {
-    const alerts = await import('../alerts')
-    await renderCockpit({ lists: lists({ sounds: ['cq', 'inbox'] }) })
-    await poll()
-    expect(alerts.beep, 'nothing heard yet is new').not.toHaveBeenCalled()
-    state.current = {
-      ...newMail(),
-      activity: [
-        ...js8Fixture().activity,
-        frame({ atMs: Date.now(), freqHz: 1800, from: 'N0CQ', text: 'N0CQ: @ALLCALL CQ CQ CQ EM10 ' }),
-        frame({ atMs: Date.now(), freqHz: 700, from: 'W9HB', text: 'W9HB: @HB HEARTBEAT EM10 ' }),
-      ],
-    }
-    await poll()
-    expect(alerts.beep).toHaveBeenCalledTimes(1)
-    expect(alerts.doubleBeep, 'the inbox rings twice').toHaveBeenCalledTimes(1)
-    cleanup()
-    vi.mocked(alerts.beep).mockClear()
-    state.current = js8Fixture()
+describe('the waterfall darkens what the decode filter leaves out, as JS8Call’s does', () => {
+  it('hands the waterfall the filter’s passband while the filter is on, and nothing while it is off', async () => {
+    const controls = (enabled: boolean) => ({ filter: { enabled, centerHz: 1200, widthHz: 600 }, qsyCenterHz: 1500, hop: null })
+    state.current = { ...js8Fixture(), controls: controls(true) }
     await renderCockpit()
     await poll()
-    state.current = newMail()
+    expect(waterfallProps.current, 'the waterfall is drawn').not.toBeNull()
+    expect(waterfallProps.current?.shade).toEqual({ loHz: 900, hiHz: 1500 })
+    state.current = { ...js8Fixture(), controls: controls(false) }
     await poll()
-    expect(alerts.beep, 'every sound off by default').not.toHaveBeenCalled()
+    expect(waterfallProps.current?.shade).toBeNull()
   })
 })

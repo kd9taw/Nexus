@@ -33,6 +33,8 @@ vi.mock('./MapView', () => ({
 }))
 
 vi.mock('../api', () => ({
+  // The map's Street choice reads the street map's state (features/streetMaps): not in a shell here.
+  isTauri: () => false,
   aprsArm: vi.fn(async () => []),
   getAprsHeard: vi.fn(async () => []),
   getAprsHealth: vi.fn(async () => ({

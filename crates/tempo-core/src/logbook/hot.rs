@@ -199,7 +199,9 @@ fn project(r: &QsoRecord) -> Project<'_> {
         band: &r.band,
         mode: &r.mode,
         when: r.when_unix,
-        grid: r.grid.as_deref(),
+        // A grid for the distance and the map only counts toward no grid and is no partner's grid
+        // to log again ([`super::counted_grid`]).
+        grid: super::counted_grid(r),
         prop_mode: r.prop_mode.as_deref(),
         their_program: r.ota.their_program.as_deref(),
         their_ref: r.ota.their_ref.as_deref(),
@@ -392,6 +394,11 @@ pub const STORE_COLUMNS: &[&str] = &[
     "lotw_rcvd_raw",
 ];
 
+/// The passthrough fields [`HotIndex::from_store`] reads beside [`STORE_COLUMNS`]: the map-only
+/// mark, without which a grid for the distance and the map only would read as one worked
+/// ([`project`]).
+pub const STORE_EXTRAS: &[&str] = &[super::callbook::MAP_ONLY_GRID_FIELD];
+
 /// One row's part in a change: the row as it stood before (`None` for a row put in) and as it
 /// stands after (`None` for a row taken out). A change to the log is a list of these, in log
 /// order, handed to [`HotIndex::follow`].
@@ -555,7 +562,7 @@ impl HotIndex {
         HOT_REBUILDS.with(|c| c.set(c.get() + 1));
         let mut index = Self::default();
         let mut last = 0;
-        db.each_narrow_after(STORE_COLUMNS, 0, &mut |rowid, r| {
+        db.each_narrow_after_with(STORE_COLUMNS, STORE_EXTRAS, 0, &mut |rowid, r| {
             index.put(r, u64::from(rowid), keys);
             last = rowid;
         })?;
@@ -2258,5 +2265,47 @@ mod tests {
         let mut index = HotIndex::build(&log, &Keys);
         index.calls.add("K1ABC".into());
         index.verify(&log, &Keys);
+    }
+
+    /// A grid for the distance and the map only is no worked grid and no partner's grid to log
+    /// again (`counted_grid`), built from the store (which reads the mark beside the grid) exactly
+    /// as from whole rows. A grid with today's callbook mark alone is both, as it always was.
+    #[test]
+    fn a_map_only_grid_is_not_worked_from_the_store_or_the_rows() {
+        use crate::logbook::callbook::{CALLBOOK_FILLED_FIELD, MAP_ONLY_GRID_FIELD};
+        let callbooks = |r: &mut QsoRecord, map_only: bool| {
+            crate::logbook::set_extra(r, CALLBOOK_FILLED_FIELD, Some("GRIDSQUARE".into()));
+            if map_only {
+                crate::logbook::set_extra(r, MAP_ONLY_GRID_FIELD, Some("Y".into()));
+            }
+        };
+        let mut log = Logbook::new();
+        let mut map_only = row("W1AW", "20m", Some("FN31"), 0);
+        callbooks(&mut map_only, true);
+        log.add(map_only);
+        let mut today = row("W1AW/P", "40m", Some("EM12"), 60);
+        callbooks(&mut today, false);
+        log.add(today);
+        let mut db = LogDb::open_in_memory().expect("a store");
+        db.insert_all(
+            log.records()
+                .iter()
+                .map(|r| (&**r, sqlite::Resolved::default())),
+        )
+        .expect("written");
+        let from_rows = HotIndex::build(&log, &Keys);
+        let from_store = db
+            .in_one_snapshot(|db| HotIndex::from_store(db, &Keys))
+            .expect("built");
+        for (how, hot) in [("rows", &from_rows), ("store", &from_store)] {
+            assert!(!hot.grid_worked_on("FN31", "20m"), "{how}: map only");
+            assert!(hot.grid_worked_on("EM12", "40m"), "{how}: today's mark");
+        }
+        assert!(from_store.answers_as(&from_rows));
+        // The newest W1AW row's grid is for the map only: none to log again. Today's mark's is.
+        let mut only = Logbook::new();
+        only.add(QsoRecord::clone(&log.records()[0]));
+        assert_eq!(HotIndex::build(&only, &Keys).newest_grid("W1AW"), None);
+        assert_eq!(from_rows.newest_grid("W1AW").as_deref(), Some("EM12"));
     }
 }

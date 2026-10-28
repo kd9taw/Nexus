@@ -59,6 +59,13 @@
 //! position it holds taken back, before the snap. The host keeps a taken-back row (a
 //! tombstone, never a deleted row) and every connection gets a fresh snap
 //! ([`ClubBackend::counts`]'s generation), so every position's club view drops it.
+//!
+//! ⭐ **Every laptop lists the club's contacts** (v5): the host sends each connection the club
+//! log as its own screen lists it ([`ClubListView`]: the newest contacts, newest first, and how
+//! many the club holds) on `rows` lines ([`ClubRows`]), the whole list after every welcome and
+//! from then on only what changed ([`ListSent`]). A laptop keeps no more than that list, so its
+//! memory is the same at a club's ten-thousandth contact as at its first. View only: the lines
+//! carry nothing a position can send back.
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -70,6 +77,12 @@ use std::time::{Duration, Instant};
 /// Protocol version, carried in `join`/`welcome`/`beacon`. A host refuses a
 /// JOIN with a higher version (the joiner is newer — it knows things we
 /// don't); same-or-lower joins reach the policy layer, with unknown fields ignored.
+///
+/// **v5 lists the club's contacts on every laptop** ([`Msg::Rows`]). It went to 5 because a v4
+/// position ignores a `rows` line, so its operator would look at a club board with no club log
+/// under it, and a v5 position at a v4 host would wait for one that never comes: a v5 position
+/// joining an older host is refused there by that host's own version check, verbatim, and an
+/// older position is refused by name at a v5 host (the policy layer's).
 ///
 /// **v4 takes a contact back** ([`Msg::Retract`], [`Msg::Restore`]). It went to 4 because the
 /// addition is not harmless either way: a v3 host reads a `retract` and ignores it, so a v4
@@ -91,7 +104,7 @@ use std::time::{Duration, Instant};
 /// legacy `class`/`sect` pair is still read — EXCEPT when the host was running a
 /// contest a v1 position cannot enter, show or send (`ClubBackend::join` takes the
 /// joiner's `v` for that decision, and for v3's).
-pub const PROTO_VERSION: u32 = 4;
+pub const PROTO_VERSION: u32 = 5;
 /// Default host TCP port. Arbitrary but conflict-checked against the ham
 /// ecosystem's squatters: 2237 (WSJT-X UDP), 2242 (JS8Call), 1100 (N3FJP),
 /// 12060 (N1MM) are all avoided. A setting, not a constant, at the caller.
@@ -352,6 +365,206 @@ pub struct ClubState {
     pub board: Vec<WireBoardRow>,
 }
 
+/// ⭐ **One contact of the club's log as every laptop lists it** (v5): the columns the host's own
+/// screen draws, read there, and the position that logged it. `(pos, seq)` is its identity, and
+/// `ord` the host's merge order, which breaks a tie between two contacts made in one second
+/// exactly as the host's list breaks it. Short names, empty values left off: a `rows` line is
+/// capped at [`MAX_LINE_BYTES`] like every other.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WireLogRow {
+    pub pos: String,
+    pub seq: u64,
+    pub ord: u64,
+    pub call: String,
+    /// Field Day's two received slots.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub class: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sect: String,
+    /// Any other contest's received values, one per slot of the club's session, in its order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<String>,
+    pub band: String,
+    /// Scoring class: "DIG" | "CW" | "PH".
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sub: String,
+    /// The logging position's clock when it was logged.
+    pub when: u64,
+    /// The name the host's board shows the position under (`""` for none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The club's files hold an earlier contact of the same key: a duplicate.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dupe: bool,
+}
+
+impl WireLogRow {
+    fn id(&self) -> (String, u64) {
+        (self.pos.clone(), self.seq)
+    }
+}
+
+/// ⭐ **The club log as the host's own screen lists it**, which every connection is sent
+/// ([`ClubBackend::club_list`]): how many contacts the club holds, and the newest of them, newest
+/// first. `stamp` changes whenever anything the list shows may have, so a connection sends
+/// nothing while it stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClubListView {
+    pub stamp: u64,
+    pub total: u64,
+    pub rows: Vec<WireLogRow>,
+}
+
+/// One `rows` line host→position (v5): what changed in the club list since the last. `reset`
+/// (the first line after a welcome) empties the laptop's list first; `out` names rows that left
+/// it, `put` rows that came in or changed. A list too long for one line goes over several, `out`
+/// first, every one carrying the total.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClubRows {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reset: bool,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub out: Vec<(String, u64)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub put: Vec<WireLogRow>,
+}
+
+/// ⭐ **The club list a laptop holds** — what the host's `rows` lines built ([`apply`](Self::apply)),
+/// newest first, as the host's own screen lists it; never more than `cap` rows, whatever a host
+/// sends.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClubList {
+    pub total: u64,
+    pub rows: Vec<WireLogRow>,
+}
+
+impl ClubList {
+    /// One `rows` line: `reset` empties the list first, then the rows `out` names leave, the rows
+    /// `put` carries come in (replacing their earlier selves), and the total is the line's. Kept
+    /// in the host's order — the time each was made, newest first, the later merge first within
+    /// one second — and cut to `cap`.
+    pub fn apply(&mut self, line: &ClubRows, cap: usize) {
+        if line.reset {
+            self.rows.clear();
+        }
+        let gone: std::collections::HashSet<(&str, u64)> =
+            line.out.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        let fresh: std::collections::HashSet<(&str, u64)> =
+            line.put.iter().map(|r| (r.pos.as_str(), r.seq)).collect();
+        self.rows.retain(|r| {
+            let id = (r.pos.as_str(), r.seq);
+            !gone.contains(&id) && !fresh.contains(&id)
+        });
+        self.rows.extend(line.put.iter().cloned());
+        self.rows
+            .sort_by_key(|r| std::cmp::Reverse((r.when, r.ord)));
+        self.rows.truncate(cap);
+        self.total = line.total;
+    }
+}
+
+/// ⭐ **What one connection has been sent of the club list**, so each line after the first
+/// carries only what changed: a new contact is one row in and, once the list is full, one out.
+#[derive(Debug, Default)]
+pub struct ListSent {
+    stamp: Option<u64>,
+    total: u64,
+    rows: std::collections::HashMap<(String, u64), WireLogRow>,
+}
+
+impl ListSent {
+    /// Write what `view` changes in the list this connection holds, as `rows` lines inside the
+    /// cap; with `reset`, the whole list, its first line emptying the laptop's. Nothing while the
+    /// view's stamp is the one last sent.
+    pub fn write(
+        &mut self,
+        w: &mut impl Write,
+        view: &ClubListView,
+        reset: bool,
+    ) -> std::io::Result<()> {
+        if !reset && self.stamp == Some(view.stamp) {
+            return Ok(());
+        }
+        if reset {
+            self.rows.clear();
+        }
+        let now: std::collections::HashMap<(String, u64), &WireLogRow> =
+            view.rows.iter().map(|r| (r.id(), r)).collect();
+        let mut out: Vec<(String, u64)> = self
+            .rows
+            .keys()
+            .filter(|id| !now.contains_key(*id))
+            .cloned()
+            .collect();
+        out.sort();
+        let put: Vec<&WireLogRow> = view
+            .rows
+            .iter()
+            .filter(|r| self.rows.get(&r.id()) != Some(*r))
+            .collect();
+        if reset || !out.is_empty() || !put.is_empty() || view.total != self.total {
+            write_club_rows(w, reset, view.total, &out, &put)?;
+        }
+        self.stamp = Some(view.stamp);
+        self.total = view.total;
+        self.rows = view.rows.iter().map(|r| (r.id(), r.clone())).collect();
+        Ok(())
+    }
+}
+
+/// `rows` lines for one change, each inside [`MAX_LINE_BYTES`]: `out` before `put`, so a laptop
+/// that caps its list never drops a row for one that is leaving. An entry too long for a line of
+/// its own is left out (only a hostile peer's row could make one). Measured off the encoder.
+fn write_club_rows(
+    w: &mut impl Write,
+    reset: bool,
+    total: u64,
+    out: &[(String, u64)],
+    put: &[&WireLogRow],
+) -> std::io::Result<()> {
+    let fresh = |reset: bool| ClubRows {
+        reset,
+        total,
+        ..Default::default()
+    };
+    let fits = |part: &ClubRows| encode_line(&Msg::Rows(part.clone())).len() <= MAX_LINE_BYTES;
+    // Push one entry (`Ok` a row leaving, `Err` a row coming in) onto a line; pop it again.
+    let add = |part: &mut ClubRows, item: Result<&(String, u64), &WireLogRow>| match item {
+        Ok(id) => part.out.push(id.clone()),
+        Err(r) => part.put.push(r.clone()),
+    };
+    let undo = |part: &mut ClubRows, item: Result<&(String, u64), &WireLogRow>| {
+        if item.is_ok() {
+            part.out.pop();
+        } else {
+            part.put.pop();
+        }
+    };
+    let mut part = fresh(reset);
+    let mut lines = String::new();
+    for item in out.iter().map(Ok).chain(put.iter().map(|r| Err(*r))) {
+        add(&mut part, item);
+        if fits(&part) {
+            continue;
+        }
+        undo(&mut part, item);
+        if part.out.is_empty() && part.put.is_empty() {
+            continue; // too long even alone
+        }
+        let full = std::mem::replace(&mut part, fresh(false));
+        lines.push_str(&encode_line(&Msg::Rows(full)));
+        add(&mut part, item);
+        if !fits(&part) {
+            undo(&mut part, item);
+        }
+    }
+    lines.push_str(&encode_line(&Msg::Rows(part)));
+    w.write_all(lines.as_bytes())
+}
+
 /// The whole wire vocabulary. Internally tagged by `t`; unknown tags land on
 /// [`Msg::Unknown`] (ignored — forward compatibility), unknown fields inside
 /// a known tag are ignored by serde's default.
@@ -501,6 +714,9 @@ pub enum Msg {
     /// host→pos (v4): the club log holds this position's row `seq` back — the answer to a
     /// `restore`.
     Restored { seq: u64 },
+    /// host→pos (v5): the club list as the host's own screen lists it — the whole of it after
+    /// every welcome (after the snap), and then what changed ([`ListSent`]).
+    Rows(ClubRows),
     /// host→pos refusal (version mismatch etc.) — shown to the operator
     /// verbatim.
     Error { msg: String },
@@ -650,6 +866,10 @@ pub trait ClubBackend: Send + Sync {
     /// The seqs of `pos`'s rows the club log holds taken back, ascending — sent to it after
     /// every welcome, so a position that put one back while away knows to say so.
     fn retracted(&self, pos: &str) -> Vec<u64>;
+    /// ⭐ The club list as the host's own screen lists it ([`ClubListView`]), asked at every tick:
+    /// cheap while its stamp stands, so the backend builds it once per change, not once per
+    /// connection.
+    fn club_list(&self) -> Arc<ClubListView>;
 }
 
 fn now_unix() -> u64 {
@@ -947,6 +1167,8 @@ fn serve_club_connection(
     let mut sent_sections = 0usize;
     // The generation the cursors above belong to: a new one is a fresh snap.
     let mut sent_generation = 0u64;
+    // What this connection has been sent of the club list.
+    let mut list = ListSent::default();
     let mut garbage_run = 0u32;
     let mut last_rx = Instant::now();
     let mut last_beat = Instant::now();
@@ -1047,6 +1269,12 @@ fn serve_club_connection(
                         sent_dupes = d;
                         sent_sections = s;
                         sent_generation = g;
+                        // ⭐ The whole club list, its first line emptying the laptop's: a laptop
+                        // back from away lists the club as it stands, not as it left it.
+                        list = ListSent::default();
+                        if list.write(&mut writer, &backend.club_list(), true).is_err() {
+                            break;
+                        }
                     }
                     // ⭐ Merged only as the position this connection JOINED as: every gate
                     // above decided on that JOIN, so a row naming another position is refused,
@@ -1179,6 +1407,13 @@ fn serve_club_connection(
                 }
                 sent_dupes = d;
                 sent_sections = s;
+            }
+            // What changed in the club list: a contact in, one out, a duplicate marked.
+            if list
+                .write(&mut writer, &backend.club_list(), false)
+                .is_err()
+            {
+                break;
             }
             if beat {
                 if writer
@@ -1332,6 +1567,8 @@ pub trait PositionSync: Send + Sync {
     /// A `snap` (full, `snap=true`) or `club` (delta) line: union the lists,
     /// overwrite the scalars.
     fn on_club(&self, snap: bool, st: &ClubState);
+    /// A `rows` line (v5): what changed in the club list the host's screen shows.
+    fn on_rows(&self, rows: &ClubRows);
     /// A host `error` line — shown to the operator verbatim.
     fn on_error(&self, msg: &str);
     /// Current presence for the band board — `(band, mode class, operator,
@@ -1530,6 +1767,7 @@ fn run_position_session(
                     Some(Msg::Club(st)) => backend.on_club(false, &st),
                     Some(Msg::Retracted { seq }) => backend.on_retracted(seq, true),
                     Some(Msg::Restored { seq }) => backend.on_retracted(seq, false),
+                    Some(Msg::Rows(rows)) => backend.on_rows(&rows),
                     Some(Msg::Ping { .. }) => {
                         let pong = Msg::Pong {
                             t0: 0,
@@ -1948,6 +2186,39 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// The most rows a laptop's list holds in these tests, as the app's own cap does.
+    const LIST_CAP: usize = 100;
+
+    fn list_row(pos: &str, seq: u64, when: u64, ord: u64) -> WireLogRow {
+        WireLogRow {
+            pos: pos.into(),
+            seq,
+            ord,
+            call: format!("K{seq}ABC"),
+            rcvd: vec!["599".into(), "COOK".into()],
+            band: "20m".into(),
+            mode: "CW".into(),
+            when,
+            name: format!("{pos} tent"),
+            ..Default::default()
+        }
+    }
+
+    /// Every `rows` line `bytes` holds, each checked against the cap.
+    fn rows_lines(bytes: &[u8]) -> Vec<ClubRows> {
+        String::from_utf8(bytes.to_vec())
+            .unwrap()
+            .lines()
+            .map(|l| {
+                assert!(l.len() < MAX_LINE_BYTES, "a line past the cap: {}", l.len());
+                match decode_line(l) {
+                    Some(Msg::Rows(r)) => r,
+                    other => panic!("not a rows line: {other:?}"),
+                }
+            })
+            .collect()
+    }
+
     // ---- codec -----------------------------------------------------------
 
     #[test]
@@ -2063,6 +2334,12 @@ mod tests {
             },
             Msg::Retracted { seq: 7 },
             Msg::Restored { seq: 7 },
+            Msg::Rows(ClubRows {
+                reset: true,
+                total: 12,
+                out: vec![("bbbb0002".into(), 3)],
+                put: vec![list_row("cccc0003", 4, 1_782_583_500, 9)],
+            }),
             Msg::Error { msg: "nope".into() },
         ];
         for m in msgs {
@@ -2295,6 +2572,9 @@ mod tests {
         gone: Mutex<std::collections::HashSet<(String, u64)>>,
         /// What `counts` says the generation is: moving it is the club rebuilding its lists.
         generation: Mutex<u64>,
+        /// The club list `club_list` answers: changing it (and its stamp) is the club's list
+        /// moving.
+        list: Mutex<ClubListView>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -2420,6 +2700,9 @@ mod tests {
                 .collect();
             seqs.sort_unstable();
             seqs
+        }
+        fn club_list(&self) -> Arc<ClubListView> {
+            Arc::new(self.list.lock().unwrap().clone())
         }
     }
 
@@ -2978,18 +3261,19 @@ mod tests {
         );
     }
 
-    /// ⭐ THE new→old direction, and why `PROTO_VERSION` moves at all: a v4 position joining
-    /// an older host — v2 (1.12 to 1.17.0) or v3 (the test builds before take-back) — is
+    /// ⭐ THE new→old direction, and why `PROTO_VERSION` moves at all: a v5 position joining
+    /// an older host — v2 (1.12 to 1.17.0), v3 (the test builds before take-back) or v4 (the
+    /// releases before every laptop listed the club's contacts) — is
     /// refused there, loudly, at hour zero, and shows the operator that host's own words.
     ///
     /// Each old host is a socket speaking its build's rule, because a shipped build cannot be
     /// linked in here; the bytes it answers with are its `fdsync.rs`'s own format string with
     /// its version in it (`"this host speaks Field Day sync v{PROTO_VERSION}, you sent v{v} —
-    /// update the host's Nexus"`, the same in 1.17.0 and in the v3 builds), which is what that
+    /// update the host's Nexus"`, the same in 1.17.0, the v3 builds and v4), which is what that
     /// build writes.
     #[test]
-    fn a_v4_position_joining_an_older_host_gets_that_hosts_refusal_verbatim() {
-        for old in [2u32, 3] {
+    fn a_v5_position_joining_an_older_host_gets_that_hosts_refusal_verbatim() {
+        for old in [2u32, 3, 4] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let seen_v = Arc::new(Mutex::new(0u32));
@@ -3027,13 +3311,13 @@ mod tests {
 
             assert_eq!(
                 *seen_v.lock().unwrap(),
-                4,
-                "this build's position announces v4, which is what makes the v{old} host refuse it"
+                5,
+                "this build's position announces v5, which is what makes the v{old} host refuse it"
             );
             assert_eq!(
                 pos.errors.lock().unwrap().as_slice(),
                 [format!(
-                    "this host speaks Field Day sync v{old}, you sent v4 — update the host's Nexus"
+                    "this host speaks Field Day sync v{old}, you sent v5 — update the host's Nexus"
                 )],
                 "the v{old} host's own words reach the operator unaltered"
             );
@@ -3173,7 +3457,7 @@ mod tests {
         // moved when PROTO_VERSION did.
         assert!(
             matches!(got.first(), Some(Msg::Error { msg })
-                if msg == "this host speaks Field Day sync v4, you sent v5 — update the host's Nexus"),
+                if msg == "this host speaks Field Day sync v5, you sent v6 — update the host's Nexus"),
             "the refusal names both versions: {got:?}"
         );
         // Control: the backend never even saw the join.
@@ -3515,6 +3799,7 @@ mod tests {
             }
         }
         fn on_club(&self, _snap: bool, _st: &ClubState) {}
+        fn on_rows(&self, _rows: &ClubRows) {}
         fn on_error(&self, _msg: &str) {}
         fn position_report(&self) -> Option<PosReport> {
             None
@@ -3660,6 +3945,8 @@ mod tests {
         unreachable: Mutex<Vec<Unreachable>>,
         /// This position's club key, a throwaway one.
         key: PositionKey,
+        /// The club list the host's `rows` lines built.
+        list: Mutex<ClubList>,
     }
     impl Default for FakePosition {
         fn default() -> Self {
@@ -3675,6 +3962,7 @@ mod tests {
                 samples: Mutex::new(Vec::new()),
                 unreachable: Mutex::new(Vec::new()),
                 key: throwaway_key(),
+                list: Mutex::new(ClubList::default()),
             }
         }
     }
@@ -3734,6 +4022,9 @@ mod tests {
         fn on_retracted(&self, _seq: u64, _gone: bool) {}
         fn on_club(&self, _snap: bool, st: &ClubState) {
             *self.club_qsos.lock().unwrap() = st.qsos;
+        }
+        fn on_rows(&self, rows: &ClubRows) {
+            self.list.lock().unwrap().apply(rows, LIST_CAP);
         }
         fn on_error(&self, msg: &str) {
             self.errors.lock().unwrap().push(msg.to_string());
@@ -3838,6 +4129,225 @@ mod tests {
             [posn.key.secret().to_string()],
             "the pump's JOIN carried the position's key to the host's backend"
         );
+    }
+
+    // ---- the club list on every laptop (v5) ------------------------------
+
+    /// A host's club log, modelled: every row it holds, with its merge order, and the view its
+    /// own screen lists (the newest `LIST_CAP` by time made, the later merge first).
+    #[derive(Default)]
+    struct ModelClub {
+        rows: Vec<WireLogRow>,
+        next_ord: u64,
+        stamp: u64,
+    }
+    impl ModelClub {
+        fn add(&mut self, pos: &str, seq: u64, when: u64) {
+            self.next_ord += 1;
+            self.rows.push(list_row(pos, seq, when, self.next_ord));
+            self.stamp += 1;
+        }
+        fn view(&self) -> ClubListView {
+            let mut rows = self.rows.clone();
+            rows.sort_by_key(|r| std::cmp::Reverse((r.when, r.ord)));
+            rows.truncate(LIST_CAP);
+            ClubListView {
+                stamp: self.stamp,
+                total: self.rows.len() as u64,
+                rows,
+            }
+        }
+    }
+
+    /// ⭐ **A laptop's list is the host's after every change, and each change costs a line or
+    /// two**: five positions log two thousand contacts each, interleaved, with offline catch-ups
+    /// landing among older contacts, take-backs, restores, a duplicate marked late and a renamed
+    /// position. After EVERY change the laptop's list (built only from the lines it was sent)
+    /// equals the host's view, row for row, and every line is inside the cap. The bytes are the
+    /// measurement the traffic bound is read from: a new contact at the top of a full list is one
+    /// row in and one out.
+    #[test]
+    fn a_laptops_club_list_follows_the_hosts_through_ten_thousand_contacts() {
+        let mut club = ModelClub::default();
+        let mut sent = ListSent::default();
+        let mut laptop = ClubList::default();
+        let mut wire = Vec::new();
+        sent.write(&mut wire, &club.view(), true).unwrap();
+        for l in rows_lines(&wire) {
+            laptop.apply(&l, LIST_CAP);
+        }
+        let (mut bytes, mut lines, mut changes) = (0usize, 0usize, 0usize);
+        let mut step = |club: &ModelClub, sent: &mut ListSent, laptop: &mut ClubList| {
+            let mut wire = Vec::new();
+            sent.write(&mut wire, &club.view(), false).unwrap();
+            let got = rows_lines(&wire);
+            lines += got.len();
+            bytes += wire.len();
+            changes += 1;
+            for l in &got {
+                laptop.apply(l, LIST_CAP);
+            }
+            let v = club.view();
+            assert_eq!(
+                (laptop.total, &laptop.rows),
+                (v.total, &v.rows),
+                "change {changes}"
+            );
+        };
+        let positions = ["aaaa0001", "bbbb0002", "cccc0003", "dddd0004", "eeee0005"];
+        let mut seqs = [0u64; 5];
+        let mut taken: Vec<WireLogRow> = Vec::new();
+        for i in 0..10_000u64 {
+            let p = (i % 5) as usize;
+            seqs[p] += 1;
+            // Two contacts often share a second; a position back from away now and then
+            // sends one made ten minutes ago.
+            let when = 1_782_583_200 + i / 2 - if i % 97 == 0 { 600 } else { 0 };
+            club.add(positions[p], seqs[p], when);
+            step(&club, &mut sent, &mut laptop);
+            if i % 501 == 500 {
+                // A take-back of the newest, and every other time its restore.
+                let at = club.rows.len() - 1;
+                taken.push(club.rows.remove(at));
+                club.stamp += 1;
+                step(&club, &mut sent, &mut laptop);
+            } else if i % 1003 == 1002 {
+                if let Some(r) = taken.pop() {
+                    club.rows.push(r);
+                    club.stamp += 1;
+                    step(&club, &mut sent, &mut laptop);
+                }
+            }
+            if i % 777 == 776 {
+                // A late re-push makes an earlier contact the duplicate; a rename.
+                let n = club.rows.len();
+                club.rows[n - 1].dupe = !club.rows[n - 1].dupe;
+                club.rows[n / 2].name = format!("renamed {i}");
+                club.stamp += 1;
+                step(&club, &mut sent, &mut laptop);
+            }
+        }
+        // The measurement: per change, one or two lines of a few hundred bytes, never the list.
+        let per_change = bytes / changes;
+        eprintln!("club list traffic: {changes} changes, {lines} lines, {bytes} bytes, {per_change} bytes a change");
+        assert!(per_change < 600, "{per_change} bytes a change");
+        assert!(
+            lines <= changes + changes / 50,
+            "{lines} lines for {changes} changes"
+        );
+    }
+
+    /// ⭐ **A full list of the longest rows goes over several lines, each inside the cap**, and the
+    /// laptop's list is the host's; a list that stands sends nothing at all, and a list a laptop
+    /// held before a rejoin is emptied by the first line, never unioned.
+    #[test]
+    fn a_full_list_of_long_rows_goes_over_lines_inside_the_cap() {
+        let long = "X".repeat(64);
+        let view = ClubListView {
+            stamp: 7,
+            total: 9_999,
+            rows: (0..LIST_CAP as u64)
+                .map(|i| {
+                    let mut r = list_row(&format!("{i:08x}"), i + 1, 1_782_583_200 - i, i);
+                    r.rcvd = vec![long.clone(); 4];
+                    r.name = long.clone();
+                    r.call = "W9ABCDEFGHIJKLM".into();
+                    r
+                })
+                .collect(),
+        };
+        let mut sent = ListSent::default();
+        let mut wire = Vec::new();
+        sent.write(&mut wire, &view, true).unwrap();
+        let got = rows_lines(&wire);
+        assert!(got.len() > 3, "{} lines", got.len());
+        assert!(got[0].reset && got[1..].iter().all(|l| !l.reset));
+        let mut laptop = ClubList {
+            total: 3,
+            // Newer than every row of the list, so only the reset can take it off.
+            rows: vec![list_row("dead0001", 1, 1_900_000_000, 1)],
+        };
+        for l in &got {
+            laptop.apply(l, LIST_CAP);
+        }
+        assert_eq!((laptop.total, &laptop.rows), (view.total, &view.rows));
+        // It stands: nothing.
+        let mut again = Vec::new();
+        sent.write(&mut again, &view, false).unwrap();
+        assert!(again.is_empty());
+        // CONTROL: a new stamp with one row marked a duplicate is that one row.
+        let mut next = view.clone();
+        next.stamp = 8;
+        next.rows[5].dupe = true;
+        let mut wire = Vec::new();
+        sent.write(&mut wire, &next, false).unwrap();
+        let got = rows_lines(&wire);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].put.len(), got[0].out.len()), (1, 0));
+    }
+
+    /// ⭐ **The host sends a joining laptop the whole club list after its snap, and then what
+    /// changed**, over a real socket through the real pump; the laptop's list is the club's.
+    #[test]
+    fn the_host_sends_the_club_list_after_the_snap_and_then_what_changed() {
+        let club = Arc::new(FakeClub::default());
+        *club.list.lock().unwrap() = ClubListView {
+            stamp: 1,
+            total: 2,
+            rows: vec![
+                list_row("bbbb0002", 1, 1_782_583_260, 2),
+                list_row("aaaa0001", 1, 1_782_583_200, 1),
+            ],
+        };
+        let (addr, host_sd) = start_host(club.clone());
+        // On the wire: welcome, the snap, then the list, its first line a reset.
+        let got = talk(addr, &[join_msg("cccc0003", 0)], 600);
+        let tags: Vec<&str> = got
+            .iter()
+            .filter_map(|m| match m {
+                Msg::Welcome { .. } => Some("welcome"),
+                Msg::Snap(_) => Some("snap"),
+                Msg::Rows(r) if r.reset => Some("rows"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(&tags[..3], ["welcome", "snap", "rows"], "{got:?}");
+
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let wait_for = |want: &ClubListView| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                let l = posn.list.lock().unwrap().clone();
+                if (l.total, &l.rows) == (want.total, &want.rows) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            panic!(
+                "the laptop never listed {want:?}: {:?}",
+                posn.list.lock().unwrap()
+            );
+        };
+        let first = club.list.lock().unwrap().clone();
+        wait_for(&first);
+        // A contact arrives and one is taken back: the laptop follows.
+        let next = ClubListView {
+            stamp: 2,
+            total: 2,
+            rows: vec![
+                list_row("cccc0003", 1, 1_782_583_300, 3),
+                list_row("aaaa0001", 1, 1_782_583_200, 1),
+            ],
+        };
+        *club.list.lock().unwrap() = next.clone();
+        wait_for(&next);
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        host_sd.store(true, Ordering::Relaxed);
     }
 
     /// ⭐ **A JOIN carries its position's key to the host's backend, and nothing prints it.**

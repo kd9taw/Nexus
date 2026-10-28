@@ -78,6 +78,7 @@ vi.mock('../toast', () => ({
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+vi.mock('../confirm', () => ({ confirmDialog: vi.fn(async () => true) }))
 
 const js8Send = api.js8Send as ReturnType<typeof vi.fn>
 const js8CallCq = api.js8CallCq as ReturnType<typeof vi.fn>
@@ -242,5 +243,60 @@ describe('the compose box while its message goes out (typeahead)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// THE RX PANE'S CLEAR, as JS8Call's `clearRXActivity` (mainwindow.cpp:3001-3014): it empties the
+// compose box as well as the pane, and so does "Clear All Lists", which runs it (:2970-2990); the
+// other two lists' Clear leave the box alone (:2993-2999, :3016-3031). JS8Call's box holds the whole
+// message, so here the text and the command go; the To box is JS8Call's selected call, which stays.
+// While the box's own message goes out it holds what is still to go: that is left to go.
+describe('the RX pane’s Clear empties the compose box, as JS8Call’s does', () => {
+  /** Open a pane's ⋯ and pick an entry. */
+  async function pick(pane: string, entry: string) {
+    const trigger = q(`[data-pane="${pane}"] .pane-menu`)
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    })
+    const item = await waitFor(() => {
+      const hit = [...document.querySelectorAll('[role^="menuitem"]')].find((el) => el.textContent === entry)
+      expect(hit, `no "${entry}" in the ${pane} menu`).toBeTruthy()
+      return hit as HTMLElement
+    })
+    await act(async () => {
+      fireEvent.click(item)
+    })
+  }
+  const cmd = () => q<HTMLSelectElement>('.js8-cmd-select')
+  const to = () => q<HTMLInputElement>('.js8-to')
+  const write = () => {
+    type(box(), 'HELLO')
+    fireEvent.change(cmd(), { target: { value: cmd().options[1].value } })
+  }
+
+  it('RX’s Clear and Clear all lists empty the text and the command; Band activity’s and the call list’s Clear leave them', async () => {
+    await renderCockpit()
+    type(to(), 'W1AW')
+    write()
+    const picked = cmd().options[1].value
+    await pick('offsets', t('js8.lists.clear'))
+    await pick('stations', t('js8.lists.clear'))
+    expect([box().value, cmd().value], 'Band activity’s and the call list’s Clear leave the box').toEqual(['HELLO', picked])
+    await pick('activity', t('js8.lists.clear'))
+    expect([box().value, cmd().value, to().value], 'RX’s Clear empties it; the selected call stays').toEqual(['', '', 'W1AW'])
+    write()
+    expect([box().value, cmd().value], 'premise: written again').toEqual(['HELLO', picked])
+    await pick('activity', t('js8.lists.clearAll'))
+    expect([box().value, cmd().value, to().value], 'Clear all lists empties it too').toEqual(['', '', 'W1AW'])
+  })
+
+  it('while the box’s own message goes out, Clear leaves it holding what is still to go and hands the engine nothing', async () => {
+    await renderCockpit()
+    await send('HELLO', { sent: '', unsent: 'KD9TAW: HELLO', locked: false })
+    await pick('activity', t('js8.lists.clear'))
+    await pick('activity', t('js8.lists.clearAll'))
+    expect(box().value, 'the message going out, unchanged').toBe('KD9TAW: HELLO')
+    expect(js8Typeahead, 'nothing handed to the engine').not.toHaveBeenCalled()
+    await gone()
   })
 })

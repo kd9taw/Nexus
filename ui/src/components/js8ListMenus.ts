@@ -90,10 +90,12 @@ export function js8ClearEntries(clear: () => void, clearAll: () => void): Js8Men
   ]
 }
 
-/** JS8Call's "Show Columns…" (mainwindow.cpp:4669-4734): the labels, then each column. */
+/** JS8Call's "Show Columns…" (mainwindow.cpp:4669-4734): the labels and the minimal labels (one switch
+ *  for both lists), then each column. */
 function columnEntries(table: 'band' | 'call', view: Js8ViewPrefs, change: (v: Js8ViewPrefs) => void): Js8MenuEntry[] {
   return [
     { kind: 'check', label: t('js8.view.labels'), checked: view.labels, onChange: (on) => change({ ...view, labels: on }) },
+    { kind: 'check', label: t('js8.view.minimal'), checked: view.minimal, onChange: (on) => change({ ...view, minimal: on }) },
     { kind: 'sep' },
     ...(table === 'band'
       ? JS8_BAND_COLUMNS.map((c) => ({

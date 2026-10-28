@@ -212,7 +212,7 @@ describe('the locked colours do not move', () => {
   const LOCKED = {
     light: {
       '--alert-critical': '#9c0000', '--need-band': '#a16207', '--need-confirm': '#64748b', '--need-dxped': '#0369a1',
-      '--need-entity': '#c2187f', '--need-grid': '#047857', '--need-ink': '#ffffff', '--need-mode': '#0d6f8a',
+      '--need-entity': '#c2187f', '--need-grid': '#047857', '--need-ink': '#ffffff', '--need-iota': '#be123c', '--need-mode': '#0d6f8a',
       '--need-mode-ft4': '#0f7038', '--need-mode-rtty': '#8a5200', '--need-pota': '#01541c', '--need-sota': '#6d28d9',
       '--need-state': '#0f766e', '--need-watch': '#3f6212', '--need-zone': '#7e22ce',
       '--on-air-bg': 'color-mix(in srgb, #a50000 90%, #000000)', '--on-air-ink': '#ffffff', '--status-confirmed': '#008d3c',
@@ -221,7 +221,7 @@ describe('the locked colours do not move', () => {
     },
     dark: {
       '--alert-critical': '#ff6100', '--need-band': '#f59e0b', '--need-confirm': '#9ca3af', '--need-dxped': '#38bdf8',
-      '--need-entity': '#f23ec0', '--need-grid': '#34d399', '--need-ink': '#10131a', '--need-mode': '#22d3ee',
+      '--need-entity': '#f23ec0', '--need-grid': '#34d399', '--need-ink': '#10131a', '--need-iota': '#fb7185', '--need-mode': '#22d3ee',
       '--need-mode-ft4': '#a7f3d0', '--need-mode-rtty': '#f5a524', '--need-pota': '#4ade80', '--need-sota': '#a78bfa',
       '--need-state': '#2dd4bf', '--need-watch': '#a3e635', '--need-zone': '#c084fc',
       '--on-air-bg': 'color-mix(in srgb, #e64343 90%, #000000)', '--on-air-ink': '#ffffff', '--status-confirmed': '#70e093',

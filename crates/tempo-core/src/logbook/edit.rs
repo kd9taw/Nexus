@@ -146,6 +146,11 @@ impl FieldEdit {
                 "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
             ));
         }
+        // The one mark the operator takes off by hand: confirming a reference taken from an offer
+        // (`offer::OFFER_HELD_FIELD`) — removal only, never a value.
+        if tag == super::offer::OFFER_HELD_FIELD && self.value().is_none() {
+            return Ok(());
+        }
         if tag.starts_with("APP_NEXUS_")
             || tag.starts_with("APP_TEMPO_")
             || tag == super::EQSL_AG_FIELD
@@ -1125,6 +1130,9 @@ mod tests {
             change("CQZ", Some("5"), Some("4")),
             change("QSLRDATE", Some("20240101"), None),
             change("APP_OTHERPROG_FOO", None, Some("bar")),
+            // A card still to go out is kept as written; the sent mark is not.
+            change("QSL_SENT", None, Some("Q")),
+            change("QSL_SENT", Some("R"), None),
         ] {
             assert_eq!(ok.check(), Ok(()), "{}", ok.tag);
         }
@@ -1142,6 +1150,7 @@ mod tests {
             change("TIME_OFF", None, Some("1210")),
             change("NAME", None, Some("Hans")),
             change("LOTW_QSL_SENT", None, Some("Y")),
+            change("QSL_SENT", None, Some("Y")),
         ] {
             assert!(bad.check().is_err(), "{} must be refused", bad.tag);
         }

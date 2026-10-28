@@ -157,6 +157,7 @@ vi.mock('./components/Waterfall', () => ({
 }))
 
 import App from './App'
+import { js8RunStart } from './features/js8View'
 
 // THE BUDGET (2026-10-04). The App this file mounts is real work, and it scales with the CPU a test gets: the
 // slowest test takes 0.61 s on a quiet box, 1.9–2.4 s with a fifth of a CPU and 3.9–4.8 s with a tenth, against
@@ -319,6 +320,51 @@ describe('the JS8 Band activity pane takes its aging from Settings', () => {
     } finally {
       vi.mocked(api.getSettings).mockImplementation(async () => null as never)
       vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
+    }
+  })
+})
+
+// …and JS8Call's startup reset (Settings ▸ JS8): the three lists start the run empty when it is on.
+describe('the JS8 lists take the startup reset from Settings', () => {
+  it('a station heard before this run started is not listed with the reset on, and is with it off', async () => {
+    const api = await import('./api')
+    const heard = (call: string, lastMs: number) => ({
+      call, grid: null, snrDb: -9, freqHz: 1500, speed: 'normal', lastMs, lastHb: true, lastCq: false, storedMsgs: 0,
+    })
+    vi.mocked(api.getJs8State).mockImplementation(
+      async () => ({ ...js8State, stations: [heard('W0OLD', js8RunStart() - 60_000), heard('W0NEW', Date.now())] }) as never,
+    )
+    const listed = () => onScreen('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call').map((b) => b.textContent)
+    try {
+      vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8ResetActivity: false }) as never)
+      await mountOn('js8')
+      await waitFor(() => expect(listed(), 'control: off, both are listed').toEqual(['W0NEW', 'W0OLD']), { timeout: 3000 })
+      cleanup()
+      localStorage.clear()
+      vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8ResetActivity: true }) as never)
+      await mountOn('js8')
+      await waitFor(() => expect(listed(), 'on: only what was heard since the start').toEqual(['W0NEW']), { timeout: 3000 })
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
+      vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
+    }
+  })
+})
+
+// …and JS8Call's colours and fonts (Settings ▸ JS8): the cockpit carries what was picked for the theme.
+describe('the JS8 panes take their colours and fonts from Settings', () => {
+  it('the cockpit carries a colour picked for the theme in use', async () => {
+    const api = await import('./api')
+    vi.mocked(api.getSettings).mockImplementation(
+      async () => ({ ...defaultSettings, js8PaneStyle: { light: { rxBg: '#123456' }, dark: { rxBg: '#123456' }, fonts: {} } }) as never,
+    )
+    try {
+      await mountOn('js8')
+      await waitFor(() => expect((document.querySelector('main.js8-cockpit') as HTMLElement).style.getPropertyValue('--js8-rx-bg')).toBe('#123456'), {
+        timeout: 3000,
+      })
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
     }
   })
 })

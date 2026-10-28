@@ -121,6 +121,7 @@ import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
 import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
 import { JttyCockpit } from './components/JttyCockpit'
+import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
@@ -168,6 +169,7 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
+  type IotaOfferData,
   focusWindow,
 } from './api'
 import {
@@ -1720,8 +1722,8 @@ function App() {
   }, [])
 
   const handleConfirmLog = useCallback(
-    (record: LoggedQso) => {
-      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey)
+    (record: LoggedQso, iotaOffer?: IotaOfferData | null) => {
+      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey, iotaOffer)
         .then((s) => {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
@@ -1870,9 +1872,9 @@ function App() {
         highlightSecondary: settings.js8HighlightSecondary ?? [],
         eot: settings.js8Eot ?? '\u2662',
         mfi: settings.js8Mfi ?? '\u2026\u2026',
-        sounds: settings.js8Sounds ?? [],
         groups: settings.js8Groups ?? [],
         avoidAllcall: settings.js8AvoidAllcall ?? false,
+        resetActivity: settings.js8ResetActivity === true,
         setRxBlocklist: async (calls: string[]) => {
           const saved = await withErrorToast(() => js8SetRxBlocklist(calls), t('js8.lists.saveFailed'))
           if (saved) setSettings((prev) => (prev ? { ...prev, js8RxBlocklist: saved } : prev))
@@ -2587,6 +2589,10 @@ function App() {
   // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
   const [contestReentering, setContestReentering] = useState(false)
 
+  // The JS8 new-message notice's "Show" (Js8SoundPlayer, from any screen): the station whose Inbox the
+  // JS8 screen opens on, a new `seq` for each ask.
+  const [js8InboxAsk, setJs8InboxAsk] = useState<{ call: string; seq: number } | null>(null)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
@@ -2840,7 +2846,7 @@ function App() {
       ids: ProfileId[],
       landing: View,
       modes: FeatureId[],
-      license: string,
+      license: string | null,
       draft: WizardDraft,
       experience: ExperienceLevel | null,
     ) => {
@@ -2848,10 +2854,16 @@ function App() {
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
       // wizard's own TX-lockout promise silently undone). Draft first, class
-      // second; failures surface instead of a false-success close.
+      // second; failures surface instead of a false-success close. The class only when the wizard
+      // changed it (null = the class the station holds), and App's copy follows it so the next
+      // run opens on it, as the experience answer's does.
       void applyWizardDraft(draft)
-        .then(() => setLicenseClass(license))
-        .then((s) => s && setSnap(s))
+        .then(() => (license ? setLicenseClass(license) : null))
+        .then((s) => {
+          if (!s || !license) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, licenseClass: license } : prev))
+        })
         // The experience answer has its own writer; a later form save keeps it. Only an answer
         // given in this run is written: none leaves the station's (absent = never asked).
         .then(() => (experience ? apiSetExperienceLevel(experience) : null))
@@ -4356,8 +4368,27 @@ function App() {
                 compose={js8ComposeConfig(settings)}
                 onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
                 lists={js8Lists}
+                paneStyle={settings?.js8PaneStyle}
+                inboxRequest={js8InboxAsk}
               />
             </div>
+          )}
+          {/* JS8Call's sounds from whichever screen is showing (Js8SoundPlayer): beside the JS8 host,
+              not inside it, and handed nothing about the view, so the screen shown never decides
+              whether a sound plays. */}
+          {isViewEnabled('js8') && (
+            <Js8SoundPlayer
+              tier={snap?.link.tier}
+              sounds={settings?.js8Sounds ?? []}
+              files={settings?.js8SoundFiles ?? {}}
+              myCall={snap?.mycall ?? ''}
+              groups={settings?.js8Groups ?? []}
+              logTick={snap?.logTick}
+              onShowMessage={(call) => {
+                handleView('js8')
+                setJs8InboxAsk((was) => ({ call, seq: (was?.seq ?? 0) + 1 }))
+              }}
+            />
           )}
           {workspace}
         </ErrorBoundary>

@@ -7,10 +7,14 @@
 //! is never touched. It is pure: the answer is one a lookup already returned, held by the engine;
 //! nothing here asks the network.
 //!
+//! **Never the IOTA reference.** A callbook's island group describes the licensee's record, not
+//! necessarily this activation, so it is OFFERED at log time and written only when the operator
+//! takes it (`super::offer`; operator decision, 2026-10-27).
+//!
 //! **Where the station is, only when the answer is that station's.** A lookup of a stroked call
 //! (`W1ABC/P`, `KH6/W1ABC`) falls back to the base call's record, which says where the licensee
 //! lives, not where the contact was made; and a contact with a hunted park or summit is placed
-//! by the park. So the location fields — grid, QTH, state, county, position, IOTA, zones, UTC
+//! by the park. So the location fields — grid, QTH, state, county, position, zones, UTC
 //! offset — are filled only when the record the callbook answered with IS the logged call and
 //! the contact carries no park. The name, e-mail, web page, QSL route and the confirmation
 //! flags say who the operator is and go on either.
@@ -26,11 +30,24 @@
 //! callbook zone, filled first, would block LoTW's authoritative one for good, and WAZ would
 //! count the callbook's.
 
-use super::{extra_value, record_field, set_extra, valid_iota, QsoRecord};
+use super::{extra_value, record_field, set_extra, QsoRecord};
 
 /// The fields the callbook filled on this contact, as a comma-separated list of their ADIF names
 /// (see the module header). App-private, never sent.
 pub const CALLBOOK_FILLED_FIELD: &str = "APP_NEXUS_CALLBOOK_FILLED";
+
+/// ★ **A grid for the distance and the map only**, `Y`: the callbook's grid filled into a contact
+/// logged with no grid of its own, by [`fill_gridless_from_callbook`] (an FT8/FT4 contact the
+/// station gave no grid in, and the Blank grids clean-up's callbook offers). A callbook says where
+/// the licence is, not where the contact was made, so this grid counts toward no grid award, fills
+/// no GRID need and is sent to no service (`counted_grid`; operator decision, 2026-10-27).
+///
+/// It is NOT [`CALLBOOK_FILLED_FIELD`] naming `GRIDSQUARE` alone: a grid that mark alone names (a
+/// callsign-card lookup at log time, Update from callbook) counts and is sent as it always was,
+/// so no log loses a grid it already counted. This mark rides beside that one and goes with it:
+/// an edit of the grid, or LoTW's own grid, takes both off ([`unmark_callbook_filled`]).
+/// App-private, never sent.
+pub const MAP_ONLY_GRID_FIELD: &str = "APP_NEXUS_MAP_ONLY_GRID";
 
 /// Whether the station confirms by LoTW, by eQSL and by paper card, `Y` or `N`, as its callbook
 /// entry said when the contact was logged. ADIF has no field for any of them.
@@ -84,6 +101,11 @@ pub fn is_callbook_filled(r: &QsoRecord, tag: &str) -> bool {
     callbook_filled(r).contains(&tag)
 }
 
+/// Whether the record's grid is for the distance and the map only ([`MAP_ONLY_GRID_FIELD`]).
+pub fn is_map_only_grid(r: &QsoRecord) -> bool {
+    extra_value(r, MAP_ONLY_GRID_FIELD).is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"))
+}
+
 /// Rewrite the mark: sorted, deduplicated, and gone when empty.
 fn set_callbook_filled(r: &mut QsoRecord, mut tags: Vec<String>) {
     tags.sort();
@@ -94,6 +116,10 @@ fn set_callbook_filled(r: &mut QsoRecord, mut tags: Vec<String>) {
 
 /// Take `tag` off the mark: the value is no longer the callbook's.
 pub(crate) fn unmark_callbook_filled(r: &mut QsoRecord, tag: &str) {
+    // The grid's map-only mark goes with the callbook's: it is no longer the callbook's grid.
+    if tag == "GRIDSQUARE" {
+        set_extra(r, MAP_ONLY_GRID_FIELD, None);
+    }
     if !is_callbook_filled(r, tag) {
         return;
     }
@@ -130,6 +156,17 @@ pub(crate) fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
         if !same {
             unmark_callbook_filled(rec, tag);
         }
+    }
+}
+
+/// [`fill_from_callbook`] for a contact logged with no grid of its own: a grid it fills is for the
+/// distance and the map only, and carries [`MAP_ONLY_GRID_FIELD`] beside the callbook's mark.
+/// Every other field is filled, and marked, exactly as [`fill_from_callbook`] fills it.
+pub fn fill_gridless_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
+    let had_grid = value_of(rec, "GRIDSQUARE").is_some() || is_callbook_filled(rec, "GRIDSQUARE");
+    fill_from_callbook(rec, a);
+    if !had_grid && is_callbook_filled(rec, "GRIDSQUARE") {
+        set_extra(rec, MAP_ONLY_GRID_FIELD, Some("Y".into()));
     }
 }
 
@@ -182,8 +219,7 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
             "NAME" => &mut rec.name,
             "QTH" => &mut rec.qth,
             "STATE" => &mut rec.state,
-            "GRIDSQUARE" => &mut rec.grid,
-            _ => &mut rec.ota.iota,
+            _ => &mut rec.grid,
         };
         if blank(slot) {
             *slot = Some(v);
@@ -203,7 +239,6 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
             "GRIDSQUARE",
             clean(&a.grid).filter(|g| crate::message::is_valid_grid(g)),
         );
-        column(rec, "IOTA", a.iota.as_deref().and_then(valid_iota));
     }
 
     // The rest, in `extra`.
@@ -351,7 +386,6 @@ mod tests {
             ("CQZ", "5"),
             ("EMAIL", "w1abc@example.org"),
             ("GRIDSQUARE", "FN31pr"),
-            ("IOTA", "NA-001"),
             ("ITUZ", "8"),
             ("LAT", "S041 42.882"),
             ("LON", "W072 43.632"),
@@ -379,6 +413,20 @@ mod tests {
         // Never the DXCC number, and the country stays the country file's.
         assert_eq!(r.dxcc, None);
         assert_eq!(r.country.as_deref(), Some("United States"));
+    }
+
+    /// ★ A callbook's IOTA reference is never stamped into a contact (operator decision,
+    /// 2026-10-27): it describes the licensee's record, not necessarily this activation, so it is
+    /// OFFERED at log time (`offer::iota_offer`) and written only when the operator takes it.
+    #[test]
+    fn a_callbook_iota_is_offered_never_stamped() {
+        let mut r = rec("W1ABC");
+        fill_from_callbook(&mut r, &answer("W1ABC"));
+        assert_eq!(r.ota.iota, None);
+        assert!(!is_callbook_filled(&r, "IOTA"));
+        let mut g = rec("W1ABC");
+        fill_gridless_from_callbook(&mut g, &answer("W1ABC"));
+        assert_eq!(g.ota.iota, None);
     }
 
     /// ★ Operator data is never overwritten: each field the record already holds keeps its value

@@ -792,6 +792,17 @@ impl SdrconnectFollow {
 /// SDRconnect's WebSocket API port as SDRplay ships it.
 pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
 
+/// Does this radio's waterfall source ([`RadioProfile::native_scope`]) say the sound card's audio
+/// waterfall rather than the radio's own scope? Only the word `audio` does: `auto` (the default)
+/// and any other word, including one from a later build, leave the radio's scope where it is.
+pub fn native_scope_is_audio(word: &str) -> bool {
+    word.trim().eq_ignore_ascii_case("audio")
+}
+
+fn default_native_scope() -> String {
+    "auto".to_string()
+}
+
 fn default_scope_source() -> String {
     ScopeSource::Radio.as_setting().to_string()
 }
@@ -1484,6 +1495,31 @@ pub struct Settings {
     /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
     #[serde(default)]
     pub js8_sounds: Vec<String>,
+    // --- JS8 screen options: JS8Call 3.0.3's own, at its defaults ---
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (`ResetActivity`,
+    /// OFF by default, Configuration.ui:429-433, Configuration.cpp:2303): on, the cockpit starts each
+    /// run with its RX pane, Band activity and call list empty, as JS8Call reads none of them back
+    /// (mainwindow.cpp:505-508, :607-609) and clears them at its first band (:1281-1285). Display
+    /// only, as the lists' Clear All is: the station's own record of who it heard is kept.
+    #[serde(default)]
+    pub js8_reset_activity: bool,
+    /// JS8Call's colours and fonts for its RX pane, its two lists and its compose box (Configuration
+    /// ▸ UI, Configuration.ui:3250-4060). Empty by default: every pane then follows the theme.
+    #[serde(default)]
+    pub js8_pane_style: Js8PaneStyle,
+    /// The WAV file each of those sounds plays, by the same event names: JS8Call's
+    /// `Notifications/<event>/path`, picked with its "Select" button (Configuration.cpp:2054-2066,
+    /// :2462-2478). An event with none, the default, plays Nexus's own tone for it, and so does one
+    /// whose file cannot be played. Paths on this computer: they travel in a profile, and the
+    /// Remote settings document does not carry them.
+    #[serde(default)]
+    pub js8_sound_files: std::collections::BTreeMap<String, String>,
+    /// The output the JS8 sounds play on, by device name, as JS8Call lets its notifications pick one.
+    /// Empty, the default, is the system default output. Never a device the station transmits from:
+    /// every play is refused while this (or the default it stands for) is a TX audio device
+    /// (`tempo_audio::notify_sound`), so a VOX-keyed rig is never keyed by a notification.
+    #[serde(default)]
+    pub js8_sound_device: String,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -2094,6 +2130,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The active radio's waterfall source (flat mirror — see [`RadioProfile::native_scope`]).
+    /// `"auto"` is today's behaviour.
+    #[serde(default = "default_native_scope")]
+    pub native_scope: String,
     /// The active radio's transmit audio source for CAT PTT (flat mirror — see
     /// [`RadioProfile::tx_audio_source`]). "front" is today's behaviour.
     #[serde(default = "default_tx_audio_source")]
@@ -4577,6 +4617,28 @@ impl RoutingRule {
     }
 }
 
+/// One radio as the radio setup has it before Finish: which bands it lists (empty = covers every
+/// band) and whether it is on. Part of a [`RoutingDraft`].
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RadioRoutingDraft {
+    pub id: u32,
+    pub bands: Vec<String>,
+    pub enabled: bool,
+}
+
+/// The routing the radio setup is showing and has NOT saved: every radio's band list and on/off,
+/// the ordered rules and the default radio. [`Settings::with_routing_draft`] lays it over a copy
+/// of the settings so "Where would this go?" is answered by [`Settings::route_radio`] itself, the
+/// function the engine routes by, and never by a second copy of the rules. Nothing stores it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RoutingDraft {
+    pub radios: Vec<RadioRoutingDraft>,
+    pub rules: Vec<RoutingRule>,
+    pub default_radio: Option<u32>,
+}
+
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
 /// exactly one (migrated from the flat `Settings` rig/audio fields); adding a 2nd radio in Settings
 /// appends another. Serde-defaulted throughout so partial/older records load.
@@ -4759,7 +4821,16 @@ pub struct RadioProfile {
     pub last_dial_mhz: f64,
     pub last_band: String,
     pub last_sideband: String,
-    // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
+    /// THIS radio's waterfall source, where Nexus streams the radio's own scope over its Icom
+    /// CI-V engine (the native CI-V switch, or the Icom network connection): `"auto"` (the
+    /// default) draws the radio's scope there as every release has, and `"audio"` draws the sound
+    /// card's audio waterfall instead, as on the Hamlib path, and stops the radio's scope stream
+    /// while CI-V keeps serving CAT ([`native_scope_is_audio`]; any other word is `"auto"`).
+    ///
+    /// Per radio, because the reason to choose it is the radio: an IC-7300's scope is ~105 Hz a
+    /// point at ±25 kHz, coarser than the audio waterfall for close-in work (#417). The FlexRadio
+    /// panadapter, the FT-710's and a TCI program's are not read here: each is already its own
+    /// per-radio switch, off by default (`flex_native_pan`, `yaesu_rf_scope`, `tci_pan`).
     pub native_scope: String,
     // --- FlexRadio native lane (PER-RADIO since 2026-08-18) ---
     /// THIS radio's FlexRadio LAN IP for the SmartSDR Ethernet API (port 4992) — the address the
@@ -4987,6 +5058,17 @@ impl Settings {
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == id) {
             p.yaesu_fix_starts.insert(band.to_string(), mhz);
         }
+    }
+}
+
+impl RadioProfile {
+    /// Whether the radio monitor holds a read-only CAT connection to this radio while radio
+    /// `active` is the one in use: it is on, not the one in use, and has a CAT model. THE monitor's
+    /// predicate (`tempo-audio`'s `monitor_want`), kept here so the radio setup's read-only Test CAT
+    /// asks the same question. An OmniRig radio has no model number of Nexus's (OmniRig holds it), so
+    /// the monitor does not watch it, although the radio has CAT when it is the one in use.
+    pub fn monitored_while(&self, active: u32) -> bool {
+        self.enabled && self.id != active && self.rig_model != 0
     }
 }
 
@@ -5813,6 +5895,38 @@ fn default_js8_mfi() -> String {
     "\u{2026}\u{2026}".to_string()
 }
 
+/// The JS8 panes' colours and fonts ([`Settings::js8_pane_style`]), as JS8Call's UI settings hold
+/// them: the RX pane's background and its received and transmitted text, the two lists' background,
+/// text, selected row and row tints, and the compose box's background and text. A colour is kept for
+/// the theme it was picked under (`light`, `dark`), so a choice made readable on one theme never
+/// paints the other; a font is one for both, as in JS8Call. An element or pane with no entry takes
+/// the theme's own. Display only, read by the UI, which checks every entry it reads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneStyle {
+    /// Colours picked under the Light theme, by element (`rxBg`, `tableFg`, `cq`, …), each `#rrggbb`.
+    #[serde(default)]
+    pub light: std::collections::BTreeMap<String, String>,
+    /// The same under the Dark theme.
+    #[serde(default)]
+    pub dark: std::collections::BTreeMap<String, String>,
+    /// Fonts by pane: `rx` and `tx` (the RX pane's received and transmitted text), `table`, `compose`.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, Js8PaneFont>,
+}
+
+/// One pane's font, as JS8Call's font buttons name it ("Font (family size)").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneFont {
+    /// One family name; empty takes the theme's.
+    #[serde(default)]
+    pub family: String,
+    /// Points, as JS8Call's; 0 takes the theme's size.
+    #[serde(default)]
+    pub size_pt: u16,
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
@@ -5862,6 +5976,11 @@ pub struct LogbookColumns {
     /// Dragged widths, in CSS px, by column id.
     #[serde(default)]
     pub widths: std::collections::BTreeMap<String, u32>,
+    /// The column order the operator dragged, by column id; empty while the table is in its
+    /// default order, and then not written at all, so a choice saved before there was an order
+    /// is written back exactly as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -5946,6 +6065,10 @@ impl Default for Settings {
             js8_eot: default_js8_eot(),
             js8_mfi: default_js8_mfi(),
             js8_sounds: Vec::new(),
+            js8_reset_activity: false,
+            js8_pane_style: Js8PaneStyle::default(),
+            js8_sound_files: std::collections::BTreeMap::new(),
+            js8_sound_device: String::new(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -6056,6 +6179,7 @@ impl Default for Settings {
             split_detect_enabled: false,
             yaesu_rf_scope: false,
             icom_data_mode: 1,
+            native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
@@ -6530,7 +6654,7 @@ impl Settings {
             last_dial_mhz: self.dial_mhz,
             last_band: self.band.clone(),
             last_sideband: self.sideband.clone(),
-            native_scope: "auto".to_string(),
+            native_scope: self.native_scope.clone(),
             // The Flex three come from the flat mirror like every other rig field — this IS the
             // migration for a pre-multi-radio settings file (see `load`'s sibling for the file
             // that already HAS profiles).
@@ -6752,6 +6876,26 @@ impl Settings {
         let rule = designated(Some(RouteContext::Satellite)).or_else(|| designated(None))?;
         // Authoritative exactly as in the band tiers, stay-put included.
         (rule.radio != self.active_radio).then_some(rule.radio)
+    }
+
+    /// A COPY of these settings with the radio setup's unsaved routing laid over it, exactly as
+    /// the verbs Finish calls would leave them (`set_radio_bands`, `set_radio_enabled`,
+    /// `set_routing_rules`, `set_default_radio`). A radio the draft does not name keeps what it
+    /// has. The active radio stays as it is, so a preview answers "from the radio in use now".
+    /// Read-only: `self` is untouched.
+    pub fn with_routing_draft(&self, draft: &RoutingDraft) -> Settings {
+        let mut s = self.clone();
+        for d in &draft.radios {
+            if let Some(p) = s.radios.iter_mut().find(|p| p.id == d.id) {
+                p.bands = d.bands.clone();
+                // The radio in use cannot be switched off (`set_radio_enabled` refuses it).
+                p.enabled = d.enabled || p.id == s.active_radio;
+            }
+        }
+        s.routing_rules = draft.rules.clone();
+        s.default_radio = draft.default_radio;
+        s.ensure_routing_targets();
+        s
     }
 
     /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
@@ -6985,6 +7129,7 @@ impl Settings {
         // mode selects which audio input the rig transmits from, so the wrong one is wrong
         // TX audio routing on the radio you just switched to.
         self.icom_data_mode = p.icom_data_mode;
+        self.native_scope = p.native_scope;
         self.tx_audio_source = p.tx_audio_source;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
@@ -7042,6 +7187,7 @@ impl Settings {
             rigctld_port,
             icom_native_cat,
             icom_data_mode,
+            native_scope,
             tx_audio_source,
             yaesu_rf_scope,
             data_modes_plain_ssb,
@@ -7087,6 +7233,7 @@ impl Settings {
             self.rigctld_port,
             self.icom_native_cat,
             self.icom_data_mode,
+            self.native_scope.clone(),
             self.tx_audio_source.clone(),
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
@@ -7133,6 +7280,7 @@ impl Settings {
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.icom_data_mode = icom_data_mode;
+            p.native_scope = native_scope;
             p.tx_audio_source = tx_audio_source;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
@@ -10205,6 +10353,100 @@ mod tests {
             }
         }
         assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The per-radio waterfall source (`native_scope`) by its wire key: the radio's own scope
+    /// in a fresh and an older file, carried to the flat form and back for the radio in use, and
+    /// a second radio keeps its own choice across a switch. By JSON, so it reads the stored file
+    /// exactly as a later build would.
+    #[test]
+    fn the_waterfall_source_defaults_to_the_radio_scope_and_is_per_radio() {
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            assert_eq!(v["nativeScope"], "auto", "{what} file, flat");
+        }
+        // A whole stored file from before the flat key (the UI's fixture of every key; its radios
+        // already carry theirs).
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        let raw: serde_json::Value = serde_json::from_str(full).expect("the fixture is JSON");
+        assert!(
+            raw.get("nativeScope").is_none(),
+            "fixture predates the flat key"
+        );
+        let stored: Settings = serde_json::from_str(full).expect("the stored file loads");
+        assert_eq!(
+            stored.native_scope, "auto",
+            "a stored file from before the key"
+        );
+        let profile: RadioProfile = serde_json::from_str(r#"{"id": 3, "rigModel": 3073}"#)
+            .expect("a profile from before the choice loads");
+        assert_eq!(profile.native_scope, "auto", "an older profile");
+        assert!(!native_scope_is_audio(&profile.native_scope));
+
+        // Two radios: the IC-7300 on its audio waterfall, the other left alone.
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    rig_model: 3073,
+                    native_scope: "audio".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    rig_model: 3081,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "audio",
+            "the radio in use brings its choice"
+        );
+        s.active_radio = 1;
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "auto",
+            "the second radio is unaffected"
+        );
+
+        // An edit to the radio in use goes through the flat form and reaches its profile only.
+        let mut flat = serde_json::to_value(&s).expect("serializes");
+        flat["nativeScope"] = "audio".into();
+        let mut s: Settings = serde_json::from_value(flat).expect("loads");
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].native_scope, "audio",
+            "a flat save reaches the profile"
+        );
+        assert_eq!(
+            s.radios[0].native_scope, "audio",
+            "the other radio kept its own"
+        );
+        s.radios[0].native_scope = "auto".into();
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[0].native_scope, "auto",
+            "saving radio 1 never writes radio 0"
+        );
+    }
+
+    /// Only the word "audio" moves the waterfall off the radio's scope; anything else, including
+    /// a word from a later build, leaves it where it has always been.
+    #[test]
+    fn only_audio_moves_the_waterfall_off_the_radio_scope() {
+        assert!(native_scope_is_audio("audio"));
+        assert!(native_scope_is_audio(" Audio "));
+        for word in ["auto", "", "none", "civ", "flex", "radio"] {
+            assert!(!native_scope_is_audio(word), "{word:?}");
+        }
     }
 
     /// The stored words are read leniently, and a word this build does not know leaves the
@@ -13318,6 +13560,156 @@ mod tests {
         );
     }
 
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup": off by
+    /// default (`ResetActivity`, Configuration.cpp:2303), its camelCase wire key, an upgrader's
+    /// file, a round trip of the choice, and the TS mirror.
+    #[test]
+    fn js8_reset_activity_defaults_off_as_js8call_and_round_trips() {
+        assert!(
+            !Settings::default().js8_reset_activity,
+            "ResetActivity: off"
+        );
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8ResetActivity\":false"), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.js8_reset_activity, "an upgrader's lists are kept");
+        let on: Settings = serde_json::from_str(r#"{"js8ResetActivity":true}"#).unwrap();
+        assert!(on.js8_reset_activity);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8ResetActivity"),
+            "ui/src/types.ts Settings is missing `js8ResetActivity`"
+        );
+        assert!(
+            !typed("js8ResetActivities"),
+            "control: a near miss is not found"
+        );
+    }
+
+    /// JS8Call's colours and fonts for the JS8 panes: empty by default (every pane follows the
+    /// theme), the camelCase wire shape, an upgrader's file, a partial record, a round trip of
+    /// colours picked under each theme and a font, and the TS mirror.
+    #[test]
+    fn js8_pane_style_defaults_empty_and_round_trips_per_theme() {
+        let s = Settings::default();
+        assert_eq!(s.js8_pane_style, Js8PaneStyle::default());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""js8PaneStyle":{"light":{},"dark":{},"fonts":{}}"#),
+            "the wire shape"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.js8_pane_style,
+            Js8PaneStyle::default(),
+            "an upgrader's panes follow the theme"
+        );
+        let partial: Settings =
+            serde_json::from_str(r##"{"js8PaneStyle":{"dark":{"rxBg":"#000000"}}}"##).unwrap();
+        assert!(partial.js8_pane_style.light.is_empty() && partial.js8_pane_style.fonts.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r##"{"js8PaneStyle":{"light":{"rxBg":"#ffeaa7"},"dark":{"cq":"#1f6f3f"},"fonts":{"rx":{"family":"DejaVu Sans Mono","sizePt":11}}}}"##,
+        )
+        .unwrap();
+        let p = &chosen.js8_pane_style;
+        assert_eq!(p.light.get("rxBg").map(String::as_str), Some("#ffeaa7"));
+        assert_eq!(p.dark.get("cq").map(String::as_str), Some("#1f6f3f"));
+        assert_eq!(
+            p.fonts.get("rx"),
+            Some(&Js8PaneFont {
+                family: "DejaVu Sans Mono".into(),
+                size_pt: 11
+            })
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8PaneStyle"),
+            "ui/src/types.ts Settings is missing `js8PaneStyle`"
+        );
+        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
+    }
+
+    /// The JS8 sounds' output: the system default (empty) by default, its camelCase wire key, an
+    /// upgrader's file, a round trip, and the TS mirror.
+    #[test]
+    fn js8_sound_device_is_the_system_default_by_default_and_round_trips() {
+        assert_eq!(Settings::default().js8_sound_device, "");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8SoundDevice\":\"\""), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_sound_device, "", "an upgrader plays on the default");
+        let on: Settings =
+            serde_json::from_str(r#"{"js8SoundDevice":"Speakers (Realtek)"}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back.js8_sound_device, "Speakers (Realtek)");
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("  js8SoundDevice?: string"),
+            "ui/src/types.ts Settings mirrors it"
+        );
+    }
+
+    /// The JS8 sounds' WAV files: none by default (JS8Call's empty paths, so every sound plays its
+    /// built-in tone), the camelCase wire key, an upgrader's file, a round trip of chosen paths
+    /// with their slashes and backslashes as written, and the TS mirror.
+    #[test]
+    fn js8_sound_files_are_none_by_default_and_round_trip() {
+        let wire = |s: &Settings| serde_json::to_value(s).unwrap()["js8SoundFiles"].clone();
+        assert_eq!(
+            wire(&Settings::default()),
+            serde_json::json!({}),
+            "no file: every sound its tone"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(wire(&old), serde_json::json!({}), "an upgrader's file");
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8Sounds":["cq","inbox"],"js8SoundFiles":{"cq":"/home/op/sounds/cq.wav","inbox":"C:\\Sounds\\mail.wav"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wire(&chosen),
+            serde_json::json!({"cq": "/home/op/sounds/cq.wav", "inbox": "C:\\Sounds\\mail.wav"})
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .map(str::trim_start)
+                .any(|l| { l.starts_with("js8SoundFiles:") || l.starts_with("js8SoundFiles?:") }),
+            "ui/src/types.ts Settings is missing `js8SoundFiles`"
+        );
+    }
+
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the
     /// operator's Settings Save, in the panel. The file keeps it: every background save (window
     /// places, band and rig state, through `SettingsWriter`, which calls `save`) writes it back
@@ -13995,6 +14387,7 @@ mod tests {
             widths: [("country".to_string(), 210), ("county".to_string(), 140)]
                 .into_iter()
                 .collect(),
+            order: Vec::new(),
         };
         assert_eq!(
             loaded.logbook_columns.as_ref(),
@@ -14016,6 +14409,48 @@ mod tests {
                 hidden: vec!["mode".into()],
                 ..LogbookColumns::default()
             })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A dragged column order survives the file, and a choice saved before there was one is
+    /// written back exactly as it was** — no `order` key appears in a file that never had one.
+    #[test]
+    fn logbook_column_order_round_trips_and_an_old_choice_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("tempo_logcols_order_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookColumns":{"shown":["iota"],"hidden":[],"widths":{},"order":["notes","call","country"]}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        let cols = loaded.logbook_columns.clone().unwrap();
+        assert_eq!(
+            cols.order,
+            vec!["notes", "call", "country"],
+            "loaded under the UI's key"
+        );
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).logbook_columns.unwrap().order,
+            vec!["notes", "call", "country"],
+            "an ordinary save dropped it"
+        );
+
+        let old: Settings = serde_json::from_str(
+            r#"{"logbookColumns":{"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}}"#,
+        )
+        .unwrap();
+        let cols = old.logbook_columns.clone().unwrap();
+        assert!(cols.order.is_empty(), "an old choice has no order");
+        let written = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            written["logbookColumns"],
+            serde_json::json!({"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}),
+            "an old choice is written back as it was"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

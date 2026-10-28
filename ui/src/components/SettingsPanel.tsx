@@ -100,7 +100,6 @@ import {
   setRadioSwitchPolicy,
   setExperienceLevel,
   routePreview,
-  updateRadioProfile,
   type RadioProfilePatch,
   testCat,
   probeCatPorts,
@@ -253,11 +252,14 @@ import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
+import { Js8PaneStyleSettings } from './Js8PaneStyleSettings'
+import { pickJs8SoundFile } from '../api'
 import { resolveTarget, sectionsForTab, type SettingsTabId } from '../settings/registry'
 import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, screensTurnedOff, startsFolded, targetOpens } from '../settings/experience'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
+import { RadioSetupWizard } from './RadioSetupWizard'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
-import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
+import { changedSince, mergeListEdit, patchRadio, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -289,6 +291,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 import { IS_MAC, IS_WINDOWS } from '../platform'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
+import { IotaListSettings } from './Iota'
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -784,7 +787,7 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
  * 9 cm is offered for coverage/routing but carries NO US privilege segments (allocation
  * removed) — the picker shows it TX-locked for US classes, which is the honest answer.
  * Modes stay FT8/FT4 — the override table's own scope. */
-const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
+export const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
 const FREQ_MODES = ['FT8', 'FT4']
 
 // The routing mode classes and their labels live with the plain-words routing description.
@@ -970,6 +973,21 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     tciPan: s.tciPan ?? false,
     tciSpots: s.tciSpots ?? false,
   }
+}
+
+/** The per-radio fields: the ones the rig form shows for ONE radio, which a save sends to that radio. */
+const RADIO_FIELDS = Object.keys(radioPatch({})) as (keyof RadioProfilePatch)[]
+/** `changes` split into the radio's own fields and the rest. */
+function splitRadioFields(changes: Partial<Settings>): { radio: Partial<RadioProfilePatch>; rest: Partial<Settings> } {
+  const radio: Record<string, unknown> = {}
+  const rest: Record<string, unknown> = { ...changes }
+  for (const key of RADIO_FIELDS) {
+    if (key in rest) {
+      radio[key] = rest[key]
+      delete rest[key]
+    }
+  }
+  return { radio: radio as Partial<RadioProfilePatch>, rest: rest as Partial<Settings> }
 }
 
 /**
@@ -2217,6 +2235,17 @@ export function SettingsPanel({
     markDirty()
     setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
   }
+  // A JS8 sound's WAV file (Js8ListsSettings): null goes back to the built-in tone.
+  const setJs8SoundFile = (event: string, path: string | null) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const files = { ...(prev.js8SoundFiles ?? {}) }
+      if (path) files[event] = path
+      else delete files[event]
+      return { ...prev, js8SoundFiles: files }
+    })
+  }
   const parseJs8Groups = (raw: string): string[] =>
     raw
       .split(',')
@@ -2597,6 +2626,42 @@ export function SettingsPanel({
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
   // snapshot. We then re-pull the full settings and merge ONLY the radios[]/active/peg fields back
   // into the form, so the roster reflects the change without discarding unsaved flat-form edits.
+  // The radio setup ("Set up radios…"): opened on the stored settings, read fresh, so it compares
+  // against what is saved and never against this form's unsaved edits.
+  const [radioSetup, setRadioSetup] = useState<Settings | null>(null)
+  const openRadioSetup = () => {
+    void withErrorToast(() => getSettings(), t('radioSetup.load.failed')).then((s) => s && setRadioSetup(s))
+  }
+  // The form's rig fields now describe radio `r`, and so does the baseline a Save is diffed against:
+  // only what the operator then changes is that radio's edit (`persistRadioForm`).
+  const showRadio = (r: Partial<RadioProfilePatch>) => {
+    const fields = radioPatch(r)
+    setForm((prev) => (prev ? { ...prev, ...fields } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...fields }
+  }
+  // After the radio setup's Finish: each field of the radio on the form that the form has NOT changed
+  // takes the value the station holds now, in the form and its baseline, so the form shows a sound
+  // card or keying method the setup set. A field the operator has changed here keeps the edit.
+  const adoptStoredRadioFields = () => {
+    const id = editingRadioId
+    void getSettings().then((s) => {
+      const stored = s.radios?.find((r) => r.id === (id ?? s.activeRadio))
+      const was = savedRef.current
+      if (!stored || !was) return
+      const now = radioPatch(stored) as unknown as Record<string, unknown>
+      const base = was as unknown as Record<string, unknown>
+      setForm((prev) => {
+        if (!prev) return prev
+        const shown = prev as unknown as Record<string, unknown>
+        const fresh: Record<string, unknown> = {}
+        for (const key of RADIO_FIELDS) {
+          if (JSON.stringify(shown[key]) === JSON.stringify(base[key])) fresh[key] = now[key]
+        }
+        savedRef.current = { ...was, ...fresh }
+        return { ...prev, ...fresh }
+      })
+    })
+  }
   const reloadRadios = () => {
     void getSettings().then((s) => {
       setForm((prev) =>
@@ -2642,7 +2707,7 @@ export function SettingsPanel({
       // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
       // the radio it was editing before, and the first Save copied that radio's port, baud and
       // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
-      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      showRadio(added)
       setEditingRadioId(added.id)
       dirtyRef.current = false
     })
@@ -2670,7 +2735,7 @@ export function SettingsPanel({
       if (editingRadioId === id) {
         const fresh = await getSettings()
         const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
-        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        if (operating) showRadio(operating)
         dirtyRef.current = false
       }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
@@ -2912,7 +2977,7 @@ export function SettingsPanel({
     }
     const r = form?.radios?.find((p) => p.id === id)
     if (!r) return
-    setForm((prev) => (prev ? { ...prev, ...radioPatch(r) } : prev))
+    showRadio(r)
     setEditingRadioId(id)
     dirtyRef.current = false
   }
@@ -3116,8 +3181,22 @@ export function SettingsPanel({
   // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
   // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
   // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
-  const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
+  //
+  // While the form shows a radio other than the one in use, its baseline holds THAT radio's fields
+  // (`showRadio`), and a station-wide payload holds the radio in use's copy (`withActiveRadioConfig`).
+  // Every field where the two radios differ would read as a change and put the copy back over the
+  // radio in use: the cockpit's drive, a sound card set since. So the radio fields are left out of
+  // the changes then (`stationWideChanges`), for every caller: Save, Test CAT, Auto-test and the two
+  // confirmation downloads.
+  const stationWideChanges = (payload: NonNullable<typeof form>): Partial<Settings> => {
     const changes = changedSince(savedRef.current, payload)
+    return editingRadioId != null && editingRadioId !== payload.activeRadio ? splitRadioFields(changes).rest : changes
+  }
+  const saveForm = (
+    payload: NonNullable<typeof form>,
+    forced: Partial<Settings> = {},
+    changes: Partial<Settings> = stationWideChanges(payload),
+  ) => {
     return patchSettings((live) => {
       const whole: Partial<Settings> = {
         ...payload,
@@ -3162,25 +3241,21 @@ export function SettingsPanel({
     // contest role preview, which is why it reads this rather than the form.
     setSavedTick((n) => n + 1)
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
-      const edited = next.radios?.find((r) => r.id === editingRadioId)
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
       // cannot be stamped onto the one being operated (the 2026-07-25 report).
-      await saveForm(
-        {
-          ...withActiveRadioConfig(next),
-          mycall: next.mycall.trim().toUpperCase(),
-        },
-        forced,
-      )
-      await updateRadioProfile(
-        editingRadioId,
-        radioPatch({
-          ...next,
-          rotctldPort: edited?.rotctldPort ?? next.rigctldPort + 1,
-          nativeScope: edited?.nativeScope ?? 'auto',
-        }),
-      )
+      //
+      // The edited radio gets what the operator changed in its fields, over that radio as the
+      // station holds it now (`patchRadio`): every other field is sent as stored. Sent whole, the
+      // form's copy of every field it had not touched went back over the newer value: a sound card
+      // or keying method set in the radio setup since was gone at the next Save of anything. Its
+      // fields are kept out of the station-wide save, which describes the radio in use.
+      // The radio's waterfall source (`nativeScope`) is one of those fields: a choice made in
+      // the form is sent to the edited radio, never restored from its profile.
+      const mycall = next.mycall.trim().toUpperCase()
+      const { radio, rest } = splitRadioFields(changedSince(savedRef.current, { ...next, mycall }))
+      await saveForm({ ...withActiveRadioConfig(next), mycall }, forced, rest)
+      await patchRadio(editingRadioId, (stored) => radioPatch({ ...stored, ...radio }))
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
@@ -3191,17 +3266,14 @@ export function SettingsPanel({
     const { radios } = await getSettings()
     setForm((prev) => (prev ? { ...prev, radios } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
-    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
-    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
-    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
-    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
-    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
-    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
+    // reads as a change. (The station-wide save of a form showing another radio leaves the radio
+    // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
+    // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
+    // `commitSave` then takes the whole of what this returns.
     const saved = { ...next, radios }
-    const baseline =
-      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
-    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
-    return baseline
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios }
+    return saved
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -5512,6 +5584,16 @@ export function SettingsPanel({
               <button type="button" className="settings-refresh" onClick={handleAddRadio}>
                 {t('settings.radios.add.action')}
               </button>
+              {(form.radios?.length ?? 1) > 1 && (
+                <button
+                  type="button"
+                  className="settings-refresh radios-setup-open"
+                  title={t('settings.radios.setup.title')}
+                  onClick={openRadioSetup}
+                >
+                  {t('settings.radios.setup.action')}
+                </button>
+              )}
               <span className="settings-hint">
                 {(form.radios?.length ?? 1) > 1
                   ? t('settings.radios.hint.multi', {
@@ -5759,6 +5841,26 @@ export function SettingsPanel({
               </label>
             )}
           </fieldset>
+          {radioSetup && (
+            <RadioSetupWizard
+              settings={radioSetup}
+              bands={FREQ_BANDS}
+              onClose={() => setRadioSetup(null)}
+              onFinished={(plan, complete) => {
+                // The switch choice is form state with its own writer (as handleSetSwitchPolicy keeps
+                // it); the roster and the routing come back through reloadRadios — also after a
+                // Finish refused partway, so the rule editor never writes the old rules back over
+                // what did land. The policy is written last, so only a complete Finish wrote it.
+                const policy = complete ? plan.policy : undefined
+                if (policy) {
+                  setForm((prev) => (prev ? { ...prev, radioSwitchPolicy: policy } : prev))
+                  if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: policy }
+                }
+                reloadRadios()
+                if (plan.radios.length) adoptStoredRadioFields()
+              }}
+            />
+          )}
           <fieldset className="settings-section" id="settings-profiles" {...fold('profiles')}>
             <legend>{t('settings.profiles.legend')}</legend>
             <div className="settings-grid">
@@ -6773,6 +6875,32 @@ export function SettingsPanel({
                       : NATIVE_CIV_MODELS.includes(form.rigModel)
                         ? 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'
                         : 'Needs the Icom network connection: through Hamlib the radio always lands on D1.'}
+                  </span>
+                </label>
+              )}
+
+              {/* #417: WHICH WATERFALL this radio draws where Nexus streams the Icom's own scope —
+                  the radio's scope (the default, as every release has) or the sound card's audio
+                  waterfall, finer close in. Per radio. Offered where the CI-V engine can stream a
+                  scope (the native switch's scope radios, or the Icom network connection), and
+                  disabled with the reason when the native switch is off: on Hamlib the waterfall is
+                  already the audio one. Read as Rust reads it (`native_scope_is_audio`). */}
+              {(NATIVE_CIV_MODELS.includes(form.rigModel) || form.rigConn === 'icomlan') && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.waterfallSource.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={(form.nativeScope ?? '').trim().toLowerCase() === 'audio' ? 'audio' : 'auto'}
+                    disabled={!civAppliesDataMode}
+                    onChange={(e) => update('nativeScope', e.target.value)}
+                  >
+                    <option value="auto">{t('settings.rigControl.waterfallSource.radio')}</option>
+                    <option value="audio">{t('settings.rigControl.waterfallSource.audio')}</option>
+                  </select>
+                  <span className="settings-hint">
+                    {civAppliesDataMode
+                      ? t('settings.rigControl.waterfallSource.hint')
+                      : t('settings.rigControl.waterfallSource.needsNative')}
                   </span>
                 </label>
               )}
@@ -10321,7 +10449,28 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
               </label>
             </div>
-            <Js8ListsSettings form={form} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+            <Js8ListsSettings
+              form={form}
+              setList={setJs8Words}
+              setMark={setJs8Mark}
+              setSounds={setJs8Sounds}
+              setReset={(on) => updateBool('js8ResetActivity', on)}
+              pickSoundFile={pickJs8SoundFile}
+              setSoundFile={setJs8SoundFile}
+              outputs={audio.output}
+              outputLabel={(d) => audioLabel(d, 'output')}
+              setSoundDevice={(d) => update('js8SoundDevice', d)}
+              locked={locked}
+              setAtStation={setAtStation}
+            />
+            <Js8PaneStyleSettings
+              form={form}
+              theme={paintedTheme === 'light' ? 'light' : 'dark'}
+              onChange={(js8PaneStyle) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, js8PaneStyle } : prev))
+              }}
+            />
 
             {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
                 sides off by default (its own file says what keeps each promise). Never on the
@@ -11887,6 +12036,11 @@ export function SettingsPanel({
                 )}
               <span className="settings-hint">{t('settings.countryFile.hint')}</span>
             </div>
+          </fieldset>
+          {/* The IOTA island-group list: IOTA Ltd's, downloaded only with the operator's yes. */}
+          <fieldset className="settings-section" id="settings-iota-list">
+            <legend>{t('settings.iotaList.legend')}</legend>
+            <IotaListSettings />
           </fieldset>
           </>
           )}

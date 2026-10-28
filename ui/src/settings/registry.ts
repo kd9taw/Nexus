@@ -207,7 +207,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit',
       // The Flex client's Beta setting for CW, Tune and the ATU, under the words for what it
       // switches on: an operator looking for it asks how to get CW or the tuner through the client.
-      'flex cw', 'cwx', 'flex tune', 'flex atu'],
+      'flex cw', 'cwx', 'flex tune', 'flex atu',
+      // #417: the waterfall source, under what the operator sees — a coarse Icom scope waterfall.
+      'waterfall source', 'audio waterfall', 'icom scope', 'scope resolution'],
   },
   {
     id: 'audio',
@@ -408,7 +410,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
       'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
       'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
-      'js8 sounds', 'notifications',
+      'js8 sounds', 'notifications', 'wav', 'sound file', 'sound output', 'output device',
+      'reset activity', 'reset at startup', 'clear lists at startup',
+      'colours', 'colors', 'fonts', 'font', 'font size', 'background colour', 'text colour', 'highlight colour',
       'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {
@@ -527,6 +531,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logbook',
     keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
       'country'],
+  },
+  {
+    id: 'iota-list',
+    label: 'IOTA island list',
+    tab: 'logbook',
+    keywords: ['iota', 'islands on the air', 'island', 'island group', 'island names', 'download'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------

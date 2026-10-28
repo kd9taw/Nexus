@@ -25,7 +25,7 @@
 // the fields this one does not know: a save merges onto what is stored instead of replacing it.
 
 import { useCallback, useRef, useState } from 'react'
-import type { ScopeWindow } from '../api'
+import type { ScopeAnalysis, ScopeWindow } from '../api'
 import { surfaceGet } from '../features/windowScope'
 import { AVERAGE_MAX_MS, AVERAGE_STEPS_MS } from './scaleAverage'
 import type { Detector } from './types'
@@ -45,6 +45,9 @@ export interface ScaleSettings {
   zero: number
   /** The analysis window (FFT size): Fast 1024, Balanced 2048, Sharp 4096. */
   window: ScopeWindow
+  /** The CW scope's HiDef/Fast switch: HiDef is the backend's zoom FFT of the CW passband (a
+   *  steady carrier ~4–5 Hz wide); Fast is the window above. Only the CW scope offers or reads it. */
+  hiDef: boolean
 }
 
 /** The storage key of each cockpit's record. Shared by every window (see the header). */
@@ -107,7 +110,16 @@ export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
     gain: 0,
     zero: 0,
     window: cockpit === 'phone' ? 'fast' : 'balanced',
+    // HiDef on for CW (operator decision, 2026-10-27): the CW scope's carriers were drawn as wide
+    // as the 2048 window's lobe however far the view zoomed in.
+    hiDef: cockpit === 'cw',
   }
+}
+
+/** What a cockpit's scope asks the backend to compute its row with: HiDef from the CW scope with
+ *  the switch on, otherwise the analysis window. */
+export function scopeAnalysis(cockpit: ScopeCockpit, s: ScaleSettings): ScopeAnalysis {
+  return cockpit === 'cw' && s.hiDef ? 'hidef' : s.window
 }
 
 /** The nearest averaging step to a time, after clamping it to 0..AVERAGE_MAX_MS. */
@@ -136,6 +148,7 @@ export function clampScaleSettings(raw: unknown, base: ScaleSettings): ScaleSett
     gain: knob(r.gain) ?? base.gain,
     zero: knob(r.zero) ?? base.zero,
     window: WINDOWS.includes(r.window as ScopeWindow) ? (r.window as ScopeWindow) : base.window,
+    hiDef: typeof r.hiDef === 'boolean' ? r.hiDef : base.hiDef,
   }
 }
 

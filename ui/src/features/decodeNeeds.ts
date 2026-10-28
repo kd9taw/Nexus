@@ -11,6 +11,7 @@ import {
 const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   NewEntity: 'entity',
   NewZone: 'zone',
+  NewIota: 'iota',
   NewBand: 'band',
   NewMode: 'mode',
   NewGrid: 'grid',

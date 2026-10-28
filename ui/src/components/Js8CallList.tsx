@@ -51,6 +51,7 @@ export function Js8CallList({
   rows,
   columns,
   labels,
+  minimal = false,
   nowMs,
   selectedCall,
   pins,
@@ -70,6 +71,8 @@ export function Js8CallList({
   rows: readonly Js8CallRow[]
   columns: Readonly<Record<Js8CallColumn, boolean>>
   labels: boolean
+  /** JS8Call's Minimal Column Labels: its short headings, and no units in the cells. */
+  minimal?: boolean
   nowMs: number
   selectedCall: string
   /** The operator's pinned calls (features/js8Pins): a pinned row is tinted. */
@@ -106,14 +109,14 @@ export function Js8CallList({
     setMenuFor(call)
   }
   const head: Record<Js8CallColumn, string> = {
-    callsign: t('js8.calls.col.callsign', { count: rows.length }),
+    callsign: minimal ? t('js8.calls.col.callsign.minimal', { count: rows.length }) : t('js8.calls.col.callsign', { count: rows.length }),
     timestamp: t('js8.col.age'),
-    snr: t('js8.col.snr'),
-    offset: t('js8.col.offset'),
-    tdrift: t('js8.col.tdrift'),
-    submode: t('js8.col.speed'),
+    snr: minimal ? t('js8.col.snr.minimal') : t('js8.col.snr'),
+    offset: minimal ? t('js8.col.offset.minimal') : t('js8.col.offset'),
+    tdrift: minimal ? t('js8.col.tdrift.minimal') : t('js8.col.tdrift'),
+    submode: minimal ? t('js8.col.speed.minimal') : t('js8.col.speed'),
     grid: t('js8.calls.col.grid'),
-    distance: t('js8.calls.col.distance'),
+    distance: minimal ? t('js8.calls.col.distance.minimal') : t('js8.calls.col.distance'),
     azimuth: t('js8.calls.col.azimuth'),
     log: t('js8.calls.col.log'),
     logName: t('js8.calls.col.logName'),
@@ -201,12 +204,12 @@ export function Js8CallList({
                 // (`cd.offset`): the Band activity pane's rule.
                 offset: (
                   <td className="js8-cell" key="offset">
-                    {h ? `${Math.trunc(h.freqHz)} ${HZ}` : ''}
+                    {h ? (minimal ? `${Math.trunc(h.freqHz)}` : `${Math.trunc(h.freqHz)} ${HZ}`) : ''}
                   </td>
                 ),
                 tdrift: (
                   <td className={`js8-cell${r.dtS != null ? ' js8-dt' : ''}`} key="tdrift" title={t('js8.panel.offsets.dt.title')}>
-                    {r.dtS != null ? dtLabel(r.dtS) : ''}
+                    {r.dtS != null ? dtLabel(r.dtS, !minimal) : ''}
                   </td>
                 ),
                 submode: (
