@@ -9,6 +9,7 @@
 //! radio's own microphone exactly as before, and the computer's microphone is never opened.
 
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tempo_app::mic::PC_MIC;
 
 const DEVICE: &str = "Desk Microphone";
@@ -399,4 +400,154 @@ fn an_interrupted_over_is_named_in_the_lane() {
             .map(|x| x.cause),
         Some(tempo_app::dto::PcMicCause::Interrupted)
     );
+}
+
+/// A CAT radio that runs `stop` on the engine ONCE, while the loop waits on its answer to the
+/// over's key (`T 1`): a stop that lands inside the keying tick, as a short PTT tap or a Stop TX
+/// clicked as the key goes out does. The radio and the mock sound card share one event log.
+fn stop_during_the_key(
+    stop: fn(&mut Engine),
+) -> (PcScene, Arc<Mutex<Vec<String>>>, Arc<AtomicBool>) {
+    let s = PcScene::new(true);
+    let engine = Arc::clone(&s.engine);
+    let fired = Arc::new(AtomicBool::new(false));
+    let fired2 = Arc::clone(&fired);
+    let (addr, log) = mock_rigctld_hooked(14_200_000, false, "0\n", move |line| {
+        if line != "T 1" || fired2.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // The loop holds no engine lock across the key; a bounded wait keeps a regression from
+        // hanging the suite.
+        let give_up = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(mut e) = engine.try_lock() {
+                stop(&mut e);
+                return;
+            }
+            assert!(
+                Instant::now() < give_up,
+                "the engine was locked across the key"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let mut s = s;
+    s.rig = Rig::rigctld(&addr);
+    s.backend.events = Some(Arc::clone(&log));
+    (s, log, fired)
+}
+
+impl PcScene {
+    /// Press, and tick (the microphone delivering `level`) until the radio has been asked to key.
+    fn press_until_keyed(&mut self, fired: &AtomicBool, level: f32) -> f64 {
+        self.ptt(true);
+        let mut t = 0.0;
+        while !fired.load(Ordering::SeqCst) {
+            assert!(
+                t < 1_000.0,
+                "premise: the over never asked the radio to key"
+            );
+            self.tick(t, level);
+            t += 20.0;
+        }
+        t
+    }
+}
+
+/// ⛔ UNKEY FIRST, THEN CLOSE THE MICROPHONE, for a stop that lands INSIDE a tick (the release,
+/// Stop TX or TX Off while the radio is still answering the key). The keying tick leaves the
+/// microphone alone, and the next tick sends `T 0` and flushes before it closes the microphone: a
+/// close that blocks (the audio host lock held by a device listing, a stream slow to drop) can
+/// only ever come after the unkey. It used to close the microphone on the keying tick, with the
+/// radio keyed, and unkey a tick later.
+#[test]
+fn a_stop_during_the_key_unkeys_before_the_microphone_is_closed() {
+    type EngineStop = fn(&mut Engine);
+    let stops: [(&str, EngineStop); 3] = [
+        ("PTT release", |e| e.set_ptt(false)),
+        ("Stop TX", |e| e.halt_tx()),
+        ("TX Off", |e| e.set_tx_enabled(false)),
+    ];
+    for (name, stop) in stops {
+        let (mut s, log, fired) = stop_during_the_key(stop);
+        let mut t = s.press_until_keyed(&fired, 0.5);
+        // Stop TX's own path may already have unkeyed later in that tick; what may never happen
+        // is a closed microphone under a keyed radio.
+        assert!(
+            !s.rig.keyed || s.backend.pc_mic_open,
+            "{name}: the microphone was closed with the radio keyed"
+        );
+        s.tick(t, 0.5);
+        t += 20.0;
+        let events = log.lock().unwrap().clone();
+        let key = events.iter().position(|l| l == "T 1").unwrap();
+        let at = |what: &str| {
+            events[key..]
+                .iter()
+                .position(|l| l == what)
+                .map(|i| i + key)
+                .unwrap_or_else(|| panic!("{name}: no {what:?}: {events:?}"))
+        };
+        let (unkey, flush, close) = (at("T 0"), at("flush"), at("pc_mic close"));
+        assert!(
+            unkey < close && flush < close,
+            "{name}: the microphone closed before the unkey: {events:?}"
+        );
+        assert!(!s.rig.keyed, "{name}: the rig stayed keyed");
+        assert!(!s.backend.pc_mic_open, "{name}: the microphone stayed open");
+        for _ in 0..20 {
+            s.tick(t, 0.5);
+            t += 20.0;
+            assert!(!s.rig.keyed, "{name}: re-keyed by itself");
+        }
+    }
+}
+
+/// A release and a new press while the radio is still answering the old over's key: the old over
+/// is unkeyed and flushed on the next tick, only then is the microphone closed and opened afresh,
+/// and the new over keys on its own audio with nothing in the lane. Nothing captured for the old
+/// over (0.9) goes out. It used to reopen the microphone with the old over still keyed, and the
+/// new over died a tick later as interrupted.
+#[test]
+fn a_re_press_during_the_key_starts_a_fresh_over() {
+    let (mut s, log, fired) = stop_during_the_key(|e| {
+        e.set_ptt(false);
+        e.set_ptt(true);
+    });
+    let mut t = s.press_until_keyed(&fired, 0.9);
+    let opens = s.backend.pc_mic_calls.len();
+    assert!(
+        s.backend.pc_mic_open,
+        "the microphone was reopened with the old over keyed"
+    );
+    s.tick(t, 0.9);
+    t += 20.0;
+    let events = log.lock().unwrap().clone();
+    let at = |what: &str| events.iter().rposition(|l| l == what);
+    assert!(
+        at("T 0").unwrap() < at("pc_mic close").unwrap(),
+        "the old over was not unkeyed before the close: {events:?}"
+    );
+    assert!(!s.rig.keyed, "the old over was not unkeyed");
+    assert_eq!(
+        s.backend.pc_mic_calls[opens..],
+        [None, Some(DEVICE.to_string())],
+        "the microphone was not opened afresh for the new over"
+    );
+    for _ in 0..20 {
+        s.tick(t, 0.5);
+        t += 20.0;
+    }
+    assert!(s.rig.keyed, "the new over never keyed");
+    assert!(
+        s.backend.played.contains(&0.5),
+        "the new over's voice never went out"
+    );
+    assert!(
+        !s.backend.played.contains(&0.9),
+        "the old over's audio went out"
+    );
+    let e = s.engine.lock().unwrap();
+    assert!(e.pc_mic_keyed(), "the new over was dropped");
+    assert_eq!(e.snapshot().radio.pc_mic_ended, None);
 }

@@ -12807,11 +12807,19 @@ impl RadioLoop {
                 .pc_mic_source()
                 .map(|w| (w.device, w.gen));
             let died = matches!(captured, Some(Err(_)));
-            if self.pc_mic_open.is_some() && (died || want != self.pc_mic_open) {
+            // ⛔ Never while this loop still holds the rig keyed for an over. A stop that landed
+            // DURING this tick (the release or Stop TX while `key_over` waited on the radio's
+            // answer) armed an abort this tick has not taken: the next tick unkeys and flushes
+            // FIRST and only then gets here. A quick re-press in that window likewise opens its
+            // own capture only after the old over is unkeyed, then keys on its own audio.
+            // (`died` ended the over on this tick, so `pc_mic_keyed` is already false with it.)
+            let keyed_here = self.pc_mic_keyed && !died;
+            if !keyed_here && self.pc_mic_open.is_some() && (died || want != self.pc_mic_open) {
                 let _ = backend.set_pc_mic(None);
                 self.pc_mic_open = None;
             }
-            if let Some((device, gen)) = want.filter(|_| self.pc_mic_open.is_none()) {
+            if let Some((device, gen)) = want.filter(|_| !keyed_here && self.pc_mic_open.is_none())
+            {
                 // The input the sound card opened for receive (the system default, when none is
                 // set) is never the microphone, under any of its names: its audio is the band.
                 let is_receive = backend.capture_input().is_some_and(|rx| {
@@ -35960,6 +35968,18 @@ mod tests {
         meters_answer: bool,
         ptt: &'static str,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        mock_rigctld_hooked(dial_hz, meters_answer, ptt, |_| {})
+    }
+
+    /// [`mock_rigctld_ptt`] that runs `on_line` with every command it is sent, after logging it
+    /// and BEFORE it answers: whatever the hook does lands while the loop waits on the radio
+    /// (inside a tick, e.g. during the key's round trip).
+    fn mock_rigctld_hooked(
+        dial_hz: u64,
+        meters_answer: bool,
+        ptt: &'static str,
+        on_line: impl Fn(&str) + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -35981,6 +36001,7 @@ mod tests {
                     }
                     let l = line.trim().to_string();
                     log2.lock().unwrap().push(l.clone());
+                    on_line(&l);
                     let dial = format!("{dial_hz}\n");
                     let reply = if l == "f" {
                         dial.as_str()
