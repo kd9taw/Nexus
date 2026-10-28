@@ -44,13 +44,25 @@ pub fn resolve_output_name(name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The TX devices the headphone monitor is refused against: the JS8 sounds' list, built the same
+/// way ([`crate::notify_sound::tx_audio_devices`], then
+/// [`crate::notify_sound::guarded_tx_devices`]). That is every radio profile's TX audio device, the
+/// radio in use or not (a second rig can be keyed by its own VOX while the first is the one shown),
+/// and every TX output the radio's audio path holds open now, by the name it opened as (a TX
+/// device of "system default" stays on the device it opened when the default later moves).
+pub fn monitor_tx_devices(settings: &tempo_app::settings::Settings) -> Vec<String> {
+    crate::notify_sound::guarded_tx_devices(&crate::notify_sound::tx_audio_devices(settings))
+}
+
 /// The TX-device guard, as a pure predicate: `true` when opening the monitor on
-/// `monitor_device` might feed the received band into the rig's TX audio device (`audio_out`)
-/// and thus transmit it back out. When it returns `true` the monitor must NOT open.
+/// `monitor_device` might feed the received band into one of `tx_devices`
+/// ([`monitor_tx_devices`]) and thus transmit it back out. An empty TX name is the system default
+/// output, `default_output` (`None` when the host cannot name one). When it returns `true` the
+/// monitor must NOT open.
 ///
-/// It is the JS8 sounds' guard ([`crate::notify_sound`]), with the rig's TX device as the one TX
-/// device, so the two cannot drift apart. Fail-safe: the monitor is refused when the two are the
-/// same device, or cannot be PROVEN different by name.
+/// It is the JS8 sounds' guard ([`crate::notify_sound`]), against the same TX devices, so the two
+/// cannot drift apart. Fail-safe: the monitor is refused when it is one of them, or cannot be
+/// PROVEN different from one by name.
 /// - Windows / macOS: two names are one device case-blind and without the " #N" a device list adds
 ///   to a second identically named codec, or the "N- " Windows numbers it by ("Speakers (2- USB
 ///   Audio CODEC)"), since those numbers move when one is unplugged.
@@ -61,11 +73,16 @@ pub fn resolve_output_name(name: &str) -> String {
 ///   monitor output by card name.
 /// - An empty name (a system default the host could not name) is refused against anything.
 ///
-/// SmartSDR's DAX transmit device is refused whatever `audio_out` is ([`is_flex_dax_tx_device`]).
-pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
+/// SmartSDR's DAX transmit device is refused whatever the TX devices are ([`is_flex_dax_tx_device`]).
+pub fn monitor_would_transmit(
+    monitor_device: &str,
+    tx_devices: &[String],
+    default_output: Option<&str>,
+) -> bool {
     monitor_would_transmit_as(
         monitor_device,
-        audio_out,
+        tx_devices,
+        default_output,
         crate::notify_sound::HOST_NAMING,
         &crate::notify_sound::system_card_id,
     )
@@ -75,20 +92,13 @@ pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
 /// their own platform and cards).
 fn monitor_would_transmit_as(
     monitor_device: &str,
-    audio_out: &str,
+    tx_devices: &[String],
+    default_output: Option<&str>,
     naming: crate::notify_sound::Naming,
     card_id: &dyn Fn(u32) -> Option<String>,
 ) -> bool {
-    // The names come resolved (`resolve_output_name`): an empty one is a default nobody could
-    // name, so no default is handed in and it is refused against anything.
-    crate::notify_sound::device_verdict(
-        monitor_device,
-        &[audio_out.to_string()],
-        None,
-        naming,
-        card_id,
-    )
-    .is_some()
+    crate::notify_sound::device_verdict(monitor_device, tx_devices, default_output, naming, card_id)
+        .is_some()
 }
 
 /// Whether `name` is SmartSDR's DAX transmit device on Windows: "DAX Audio TX (FlexRadio Systems
@@ -1042,13 +1052,13 @@ mod tests {
 
     /// The guard as Windows / macOS name their devices.
     fn endpoint(monitor: &str, tx: &str) -> bool {
-        monitor_would_transmit_as(monitor, tx, Endpoint, &no_cards)
+        monitor_would_transmit_as(monitor, &[tx.to_string()], None, Endpoint, &no_cards)
     }
 
     /// The guard as Linux (ALSA) names its devices, card 1 being `CODEC`.
     fn alsa(monitor: &str, tx: &str) -> bool {
         let cards = |n: u32| (n == 1).then(|| "CODEC".to_string());
-        monitor_would_transmit_as(monitor, tx, Alsa, &cards)
+        monitor_would_transmit_as(monitor, &[tx.to_string()], None, Alsa, &cards)
     }
 
     #[test]
@@ -1155,7 +1165,7 @@ mod tests {
             assert!(endpoint(dax_tx, "Speakers"), "{dax_tx:?} let through");
             assert!(endpoint(dax_tx, ""), "{dax_tx:?} let through");
             assert!(
-                monitor_would_transmit(dax_tx, "Speakers"),
+                monitor_would_transmit(dax_tx, &["Speakers".to_string()], None),
                 "{dax_tx:?} let through on this computer"
             );
         }
@@ -1183,7 +1193,7 @@ mod tests {
             ("Headphones", ""),
         ] {
             assert_eq!(
-                monitor_would_transmit(monitor, tx),
+                monitor_would_transmit(monitor, &[tx.to_string()], None),
                 crate::notify_sound::would_transmit(monitor, &[tx.to_string()], None),
                 "{monitor:?} against {tx:?}"
             );

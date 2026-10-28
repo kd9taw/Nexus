@@ -288,7 +288,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
-import { IS_MAC, IS_WINDOWS } from '../platform'
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from '../platform'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
@@ -7399,9 +7399,11 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   {t('settings.headphoneMonitor.device.hint')}
                 </span>
-                <span className="settings-hint">
-                  {t('settings.headphoneMonitor.device.linuxHint')}
-                </span>
+                {IS_LINUX && (
+                  <span className="settings-hint">
+                    {t('settings.headphoneMonitor.device.linuxHint')}
+                  </span>
+                )}
               </label>
 
               <label className="settings-field">

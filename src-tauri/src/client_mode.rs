@@ -1622,6 +1622,12 @@ impl Client {
                 if tone.is_empty() {
                     break;
                 }
+                // While this computer's own over mutes the station (M9), a tone from the speakers
+                // could reach the open microphone and the air. It fires on its own, when a decode
+                // arrives, so it is skipped then, not queued for after.
+                if headset.rings().muted() {
+                    return Ok(json!({ "fileRefused": null }));
+                }
                 headset.rings().sound(&tone);
                 return Ok(json!({ "fileRefused": null }));
             }

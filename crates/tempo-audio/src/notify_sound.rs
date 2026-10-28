@@ -112,9 +112,9 @@ pub fn open_tx_outputs() -> Vec<String> {
 }
 
 /// The TX devices a sound is refused against: the settings' (`tx_devices`) and every TX output
-/// the radio holds open now ([`open_tx_outputs`]).
-#[cfg_attr(not(feature = "device"), allow(dead_code))]
-fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
+/// the radio holds open now ([`open_tx_outputs`]). The headphone monitor's guard is refused
+/// against the same list ([`crate::monitor::monitor_would_transmit`]).
+pub(crate) fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
     let mut all = tx_devices.to_vec();
     all.extend(open_tx_outputs());
     all
@@ -1164,7 +1164,9 @@ mod tests {
     #[test]
     fn the_tx_output_the_radio_holds_open_is_refused_whatever_settings_say() {
         let tx = s(&[""]);
-        let codec = "Nexus Test Held CODEC";
+        // A card's name, so on Linux it is told apart from the other tests' cards while it is held:
+        // the hold is process-wide, and the headphone monitor's guard reads it too.
+        let codec = "plughw:CARD=NexusHeldTest,DEV=0";
         assert_eq!(
             ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
             Ok(()),

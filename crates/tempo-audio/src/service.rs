@@ -3977,6 +3977,9 @@ struct RadioLoop {
     /// change (used when the voice-mic notice cleared a line the monitor may
     /// still be entitled to — its guard/failure state gets re-surfaced).
     monitor_reapply: bool,
+    /// The TX devices the monitor was last checked against (`monitor::monitor_tx_devices`): a
+    /// change checks it again, as a change to its own setting does.
+    monitor_tx: Vec<String>,
     /// Last TX-mute state pushed to the audio backend, so the loop only speaks on a CHANGE.
     /// `false` initially, which matches a monitor that starts unmuted.
     monitor_tx_muted: bool,
@@ -4708,6 +4711,7 @@ impl RadioLoop {
             voice_mic_open: false,
             voice_mic_failed: false,
             monitor_reapply: false,
+            monitor_tx: Vec::new(),
             monitor_tx_muted: false,
             mic_keyed: false,
             mic_busy_until: 0.0,
@@ -8460,26 +8464,36 @@ impl RadioLoop {
             // monitor-setting change — or re-apply it to a freshly rebuilt backend,
             // whose monitor starts off. This never rebuilds the capture/TX streams, so
             // the decode path never restarts. Guard: refuse to open the monitor on the
-            // rig's TX output device, or one it cannot be told apart from by name, which would
-            // transmit the received band back out.
+            // TX output devices, or one it cannot be told apart from by name, which would
+            // transmit the received band back out. Those are the JS8 sounds' TX devices: every
+            // radio profile's and every TX output the radio holds open, so a change to them checks
+            // the monitor again too.
+            let monitor_tx = crate::monitor::monitor_tx_devices(engine_lock(engine).settings());
             if audio_rebuilt
                 || want.monitor_differs(&self.applied)
                 || std::mem::take(&mut self.monitor_reapply)
+                || monitor_tx != self.monitor_tx
             {
                 // Resolve "system default" to its REAL device name first — an
                 // empty monitor_device against a named audio_out that happens to
                 // BE the OS default was a hole in the name-based guard (review
                 // catch: the monitor would mix the received band into the rig's
-                // TX stream). Resolution only runs when the monitor is on.
-                let (mon_dev, out_dev) = if want.monitor_enabled {
+                // TX stream). An empty TX device is that default too. Resolution only runs
+                // when the monitor is on.
+                let (mon_dev, default_out) = if want.monitor_enabled {
                     (
                         crate::monitor::resolve_output_name(&want.monitor_device),
-                        crate::monitor::resolve_output_name(&want.audio_out),
+                        crate::monitor::resolve_output_name(""),
                     )
                 } else {
-                    (want.monitor_device.clone(), want.audio_out.clone())
+                    (want.monitor_device.clone(), String::new())
                 };
-                let guarded = crate::monitor::monitor_would_transmit(&mon_dev, &out_dev);
+                let guarded = crate::monitor::monitor_would_transmit(
+                    &mon_dev,
+                    &monitor_tx,
+                    Some(&default_out),
+                );
+                self.monitor_tx = monitor_tx;
                 let effective = want.monitor_enabled && !guarded;
                 let outcome =
                     backend.set_monitor(effective, &want.monitor_device, want.monitor_level);
@@ -40204,6 +40218,168 @@ mod tests {
             "premise: the guard held the monitor off: {said:?}"
         );
         assert_eq!(line_kind(&engine), "monitor");
+    }
+
+    /// The station's TX audio on its own card, every radio profile's with it, and the headphone
+    /// monitor on `monitor`. The names are ALSA cards', so two different names are two different
+    /// cards on every platform.
+    fn monitor_station(monitor: &str, idle_radio_tx: Option<&str>) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.monitor_enabled = true;
+            s.monitor_device = monitor.to_string();
+            eng.apply_settings(s);
+            let active = eng.settings().active_radio;
+            radio_tx_audio(&mut eng, active, "plughw:CARD=CODEC,DEV=0");
+            if let Some(tx) = idle_radio_tx {
+                let idle = eng.add_radio();
+                radio_tx_audio(&mut eng, idle, tx);
+            }
+        }
+        engine
+    }
+
+    /// Radio `id`'s TX audio set to `tx`, as Settings ▸ Radio saves one radio in place.
+    fn radio_tx_audio(eng: &mut Engine, id: u32, tx: &str) {
+        let mut p = eng
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap()
+            .clone();
+        p.audio_out = tx.to_string();
+        let patch = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+        eng.update_radio_profile(id, patch).unwrap();
+    }
+
+    /// The monitor applied on a fresh card, and what the audio line says after it.
+    fn monitor_verdict(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        backend: &mut MockBackend,
+    ) -> Option<String> {
+        quiet_step(engine, state, backend, 0.0);
+        backend.queue_capture(vec![0.01_f32; 512]);
+        quiet_step(engine, state, backend, 20.0);
+        state.monitor_reapply = true;
+        quiet_step(engine, state, backend, 40.0);
+        engine.lock().unwrap().snapshot().radio.audio_error
+    }
+
+    const MONITOR_OFF: &str = "Headphone monitor is off";
+
+    /// ⛔ A MONITOR ON ANOTHER RADIO'S TX AUDIO STAYS OFF: two rigs, the one in use on its own card,
+    /// and the monitor on the idle rig's codec. That rig is not keyed by Nexus, but with its VOX on
+    /// the received band playing into it would transmit it. Refused as the JS8 sounds are, against
+    /// every radio profile's TX device; a separate card still monitors.
+    #[test]
+    fn a_monitor_on_an_idle_radios_tx_device_stays_off() {
+        let idle = "plughw:CARD=IdleRig,DEV=0";
+        let engine = monitor_station(idle, Some(idle));
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .settings()
+                .radios
+                .iter()
+                .any(|r| r.audio_out == idle),
+            "premise: the second radio is in the roster"
+        );
+        assert_eq!(
+            engine.lock().unwrap().settings().audio_out,
+            "plughw:CARD=CODEC,DEV=0",
+            "premise: the radio in use is on its own card"
+        );
+        let said = monitor_verdict(&engine, &mut loop_state(), &mut MockBackend::new());
+        assert!(
+            said.as_deref().is_some_and(|m| m.starts_with(MONITOR_OFF)),
+            "the monitor opened on the idle rig's TX codec: {said:?}"
+        );
+        // Control: a headset of its own monitors, with the same two rigs.
+        let engine = monitor_station("hw:CARD=Headset,DEV=0", Some(idle));
+        let said = monitor_verdict(&engine, &mut loop_state(), &mut MockBackend::new());
+        assert_eq!(said, None, "a separate card was refused");
+    }
+
+    /// ⛔ A MONITOR ON THE TX OUTPUT THE RADIO HOLDS OPEN STAYS OFF: the radio opened its TX audio
+    /// as "system default" and the default moved afterwards, so the settings no longer name the
+    /// device it transmits on. The monitor is refused on that device for as long as it is held.
+    #[test]
+    fn a_monitor_on_the_tx_output_the_radio_holds_stays_off() {
+        let held_name = "plughw:CARD=NexusMonHeld,DEV=0";
+        let engine = monitor_station(held_name, None);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        assert_eq!(
+            monitor_verdict(&engine, &mut state, &mut backend),
+            None,
+            "premise: by the settings alone it monitors"
+        );
+        let held = crate::notify_sound::hold_tx_output(held_name.to_string());
+        state.monitor_reapply = true;
+        quiet_step(&engine, &mut state, &mut backend, 60.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        drop(held);
+        assert!(
+            said.as_deref().is_some_and(|m| m.starts_with(MONITOR_OFF)),
+            "the monitor opened on the TX output the radio holds: {said:?}"
+        );
+    }
+
+    /// THE MONITOR IS CHECKED AGAIN WHEN THE TX DEVICES CHANGE, not only when its own setting does:
+    /// a radio added with the monitor's card as its TX audio turns the monitor off, and so does the
+    /// radio holding that card open; each comes back when the clash goes.
+    #[test]
+    fn the_monitor_is_checked_again_when_the_tx_devices_change() {
+        let spare = "plughw:CARD=NexusMonSpare,DEV=0";
+        let engine = monitor_station(spare, None);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        assert_eq!(
+            monitor_verdict(&engine, &mut state, &mut backend),
+            None,
+            "premise: it monitors"
+        );
+        let said =
+            |engine: &Arc<Mutex<Engine>>| engine.lock().unwrap().snapshot().radio.audio_error;
+        // A radio added with the monitor's card as its TX audio; the monitor's setting untouched.
+        let added = {
+            let mut eng = engine.lock().unwrap();
+            let id = eng.add_radio();
+            radio_tx_audio(&mut eng, id, spare);
+            id
+        };
+        quiet_step(&engine, &mut state, &mut backend, 60.0);
+        assert!(
+            said(&engine)
+                .as_deref()
+                .is_some_and(|m| m.starts_with(MONITOR_OFF)),
+            "a radio added on the monitor's card left it on: {:?}",
+            said(&engine)
+        );
+        assert!(
+            engine.lock().unwrap().remove_radio(added),
+            "premise: removed"
+        );
+        quiet_step(&engine, &mut state, &mut backend, 80.0);
+        assert_eq!(said(&engine), None, "the radio gone, the monitor came back");
+        // The radio holds the monitor's card open: off, and back when it lets it go.
+        let held = crate::notify_sound::hold_tx_output(spare.to_string());
+        quiet_step(&engine, &mut state, &mut backend, 100.0);
+        let while_held = said(&engine);
+        drop(held);
+        quiet_step(&engine, &mut state, &mut backend, 120.0);
+        assert!(
+            while_held
+                .as_deref()
+                .is_some_and(|m| m.starts_with(MONITOR_OFF)),
+            "a TX output held on the monitor's card left it on: {while_held:?}"
+        );
+        assert_eq!(said(&engine), None, "released, the monitor came back");
     }
 
     /// A QSO recording that cannot start is named a RECORDING notice on the line: the radio works

@@ -1738,6 +1738,54 @@ fn a_js8_sound_here_is_its_built_in_tone_in_this_computers_headset() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// ⛔ NO JS8 TONE WHILE THIS COMPUTER'S OWN OVER MUTES THE STATION: during a voice press from here
+/// the station's audio is silenced, so nothing from the speakers reaches the microphone and the
+/// air. A JS8 tone fires on its own when a decode arrives, so it is skipped then, not played into
+/// an open microphone. CONTROL: unmuted, the same event plays its tone.
+#[test]
+fn a_js8_tone_is_skipped_while_this_computers_over_mutes_the_station() {
+    use crate::js8_sounds::{tone_at, Js8SoundEvent};
+    let shack = FakeShack::new();
+    let dir = scratch("js8-tone-muted");
+    let client = client_in(&dir, &shack);
+    let headset = tempo_client::audio_road::StandIn::new();
+    client.hear_in_a_test(Arc::clone(&headset) as Arc<dyn Headset>);
+    let screens = screens(&client);
+    let heard = |n: usize| -> Vec<f32> {
+        let mut out = tempo_codec::headset::Cushion::new(48_000);
+        (0..n).map(|_| out.next(&headset.rings)).collect()
+    };
+    let tone = tone_at(Js8SoundEvent::Directed, 48_000);
+    assert!(!tone.is_empty(), "premise: directed has a tone");
+    headset.rings.mute(true);
+    assert_eq!(
+        ask(
+            &screens.main,
+            "play_js8_sound",
+            json!({ "event": "directed" })
+        ),
+        Ok(json!({ "fileRefused": null })),
+        "a skipped tone is not a failure"
+    );
+    headset.rings.mute(false);
+    assert!(
+        heard(tone.len() + 10).iter().all(|s| *s == 0.0),
+        "the tone played during the over"
+    );
+    // Control: the over ended, the same event plays its tone.
+    assert_eq!(
+        ask(
+            &screens.main,
+            "play_js8_sound",
+            json!({ "event": "directed" })
+        ),
+        Ok(json!({ "fileRefused": null }))
+    );
+    assert_eq!(heard(tone.len())[..], tone[..], "control: its tone");
+    assert!(shack.sent().is_empty(), "nothing went to the shack");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up with no press held)
 /// goes by the link alone, as it always has, since TX off lets an FT over finish and a Stop does
 /// not. CONTROL: each stop command does take it.
