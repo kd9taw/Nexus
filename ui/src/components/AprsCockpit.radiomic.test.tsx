@@ -16,6 +16,8 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 vi.mock('./MapView', () => ({ MapView: () => <div data-testid="map" /> }))
 
 vi.mock('../api', () => ({
+  // The map's Street choice reads the street map's state (features/streetMaps): not in a shell here.
+  isTauri: () => false,
   aprsArm: vi.fn(async () => []),
   getAprsHeard: vi.fn(async () => []),
   getAprsHealth: vi.fn(async () => ({

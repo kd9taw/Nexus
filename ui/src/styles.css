@@ -30211,7 +30211,8 @@ button.sat-chip:disabled {
 .aprs-card {
   position: absolute;
   top: var(--space-2);
-  left: var(--space-2);
+  /* Top RIGHT of the map: the Layers panel holds the top left (`.map-layers`). */
+  right: var(--space-2);
   z-index: 30;
   width: 19rem;
   max-height: calc(100% - var(--space-4));
@@ -31368,14 +31369,9 @@ tr.sel .aprs-sym {
   border-radius: 8px;
   overflow: hidden;
 }
-/* The map-side switch (layout L7): a chip in the map's top-right corner, over the map rather than
-   in the header, where one more chip wraps the row at some widths and takes a line from the body.
-   Below the station card (z 30), which may cover it while a station is open. */
+/* The map-side switch (layout L7): a chip in the map's own toolbar (MapView `aprsToolbar`), which
+   wraps, rather than in the header, where one more chip wraps the row and takes a line from the body. */
 .aprs-map-side {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  z-index: 20;
   background: var(--panel);
 }
 /* On, it is the header chips' `.active`, laid on the panel so the map never shows through. */

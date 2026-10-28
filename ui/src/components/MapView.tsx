@@ -9,7 +9,7 @@
 // modes, bearings, km, MHz, dB, knots, satellite names, CQ zone numbers, the layer and
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
@@ -27,7 +27,7 @@ import {
 } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects, type GeoProjection } from 'd3-geo'
-import { Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
+import { Crosshair, Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
   PcaView,
@@ -59,6 +59,7 @@ import {
   SAT_CHASE_EVENT,
 } from '../features/satChase'
 import { decollideLabels } from '../features/mapLabels'
+import { aprsLabelOrder, aprsTrail, placeAprsLabels } from '../features/aprsMap'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
@@ -83,6 +84,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   aprsMapCenter,
+  viewCentredOn,
   graticule,
   makeProjection,
   project,
@@ -245,6 +247,24 @@ interface Props {
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
   selectedAprs?: string | null
+  /** APRS map: draw each station's trail (its `track`), held to `aprsTrailMin` minutes (0 = the
+   *  whole track the store keeps). */
+  aprsTracks?: boolean
+  aprsTrailMin?: number
+  /** APRS map: name every station (a label with no free spot is left out). Off, only the selection
+   *  and the moving stations are named. */
+  aprsLabels?: boolean
+  /** APRS map: the station kept in the middle of the map; it is re-centred each time the station
+   *  reports a new position, and a drag between reports still moves the picture. */
+  aprsFollow?: string | null
+  /** APRS map: the toolbar's Centre button was pressed — the host drops its follow, if any. */
+  onAprsCentre?: () => void
+  /** APRS map: the host's own controls (its map picker and filters), at the start of the map's
+   *  toolbar, so the toolbar wraps them with the zoom and Centre buttons as one strip. */
+  aprsToolbar?: ReactNode
+  /** APRS map: drawn over the map canvas, above the Layers panel (the station card, the empty-map
+   *  note), so they are placed against the map and not against the toolbar. */
+  aprsOverlay?: ReactNode
   /** Bumped by a host that rewrote this surface's stored map setup (Connect's layouts:
    *  features/connectPresets `mapLayers`, through `setIntentMapLayer`): the map reads its layers
    *  again. */
@@ -616,6 +636,27 @@ const APRS_EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
   }
   return out
 })()
+/** The layers the APRS map offers in its Layers panel: the base map, the grid and its labels (APRS
+ *  speaks in grid squares), the satellites (the ISS and other birds carry APRS digipeaters) and
+ *  the stations. Everything else stays as APRS_EMBED_LAYERS has it: off. */
+const APRS_LAYER_CHOICES: readonly LayerKey[] = ['relief', 'coast', 'states', 'grid', 'gridLabels', 'sats', 'aprs']
+/** Where the APRS map's layer picks are kept, per window: `{ <layer>: boolean }`. */
+const APRS_LAYERS_KEY = 'nexus.aprs.map.layers'
+function loadAprsLayers(): Record<LayerKey, Layer> {
+  let raw: unknown = null
+  try {
+    raw = JSON.parse(surfaceGet(APRS_LAYERS_KEY) ?? 'null')
+  } catch {
+    raw = null
+  }
+  const out = { ...APRS_EMBED_LAYERS }
+  if (typeof raw !== 'object' || raw === null) return out
+  for (const k of APRS_LAYER_CHOICES) {
+    const v = (raw as Record<string, unknown>)[k]
+    if (typeof v === 'boolean') out[k] = { ...out[k], visible: v }
+  }
+  return out
+}
 const RINGS_KM = [1000, 3000, 5000, 10000]
 
 /** `SP` / `LP` — the ham abbreviations for the short and long great-circle path. Technical
@@ -830,6 +871,13 @@ export function MapView({
   aprsFadeAfterMin = 20,
   aprsTtlMin = 60,
   aprsNowSec,
+  aprsTracks = false,
+  aprsTrailMin = 0,
+  aprsLabels = false,
+  aprsFollow = null,
+  onAprsCentre,
+  aprsToolbar,
+  aprsOverlay,
   focusBand = null,
   onFocusBand,
   outlook = null,
@@ -866,7 +914,8 @@ export function MapView({
   const [ownKind, setKind] = useState<Projection>(() =>
     embedded ? 'globe' : flatPick(initialSetup?.map) ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
   )
-  const kind: Projection = embedded
+  // The satellite detail globe is locked to the Globe; the APRS map takes its host's pick.
+  const kind: Projection = embedded && !embedded.aprs
     ? 'globe'
     : projection === 'street' && !streetPack
       ? 'world'
@@ -881,7 +930,7 @@ export function MapView({
   const [layers, setLayers] = useState(() =>
     embedded
       ? embedded.aprs
-        ? APRS_EMBED_LAYERS
+        ? loadAprsLayers()
         : EMBED_LAYERS
       : (layersFromValue(initialSetup?.layers) ??
         (intent
@@ -1164,6 +1213,13 @@ export function MapView({
     }, aprsRedraw)
     return () => clearInterval(id)
   }, [aprsRedraw])
+  // The APRS map's layer picks, per window — its own record, never the Connect map's.
+  useEffect(() => {
+    if (!embedded?.aprs) return
+    const picks: Record<string, boolean> = {}
+    for (const k of APRS_LAYER_CHOICES) picks[k] = layers[k].visible
+    surfaceSet(APRS_LAYERS_KEY, JSON.stringify(picks))
+  }, [layers, embedded?.aprs])
   // Persist this intent's setup whenever any of it changes — a projection pick, a layer toggle or
   // opacity nudge, the colour mode, a Reset, or a preset applied on first use — so the next visit,
   // window and launch restore it. Writing on mount is what makes a preset a FIRST-use default: the
@@ -1212,13 +1268,45 @@ export function MapView({
   )
   // Never draw "you are here" at a borrowed centre — that would invent a QTH.
   const showQth = myQth != null
+  // THE APRS MAP'S FOCUS: the followed station's position while one is followed, else the centre
+  // above. Every other map's focus is its centre. Keyed by value, so a poll that hands over the
+  // same position does not re-centre a picture the operator has just dragged.
+  const followAt = useMemo(() => {
+    if (!embedded?.aprs || !aprsFollow) return null
+    const st = aprs?.find((a) => a.call === aprsFollow)
+    return st && st.lat != null && st.lon != null ? { lat: st.lat, lon: st.lon } : null
+  }, [embedded?.aprs, aprsFollow, aprs])
+  const followKey = followAt ? `${followAt.lat},${followAt.lon}` : ''
+  const focusLL = followAt ?? me
+  // Follow: each new position of the followed station re-centres the map on it, at the zoom the
+  // operator chose (on Street, MapLibre's camera moves; it owns that view).
+  useEffect(() => {
+    if (!followAt) return
+    setView((v) => ({ ...v, rotate: null, panX: 0, panY: 0 }))
+    if (kind === 'street') streetRef.current?.centreOn(followAt.lon, followAt.lat)
+  }, [followKey, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** The APRS toolbar's Centre button: back to the operator's station (or the middle of the heard
+   *  traffic without a grid), at the same zoom, ending any follow. */
+  const centreOnMe = () => {
+    onAprsCentre?.()
+    setView((v) => ({ ...v, rotate: null, panX: 0, panY: 0 }))
+    const at = myQth ?? me
+    if (kind === 'street' && at) streetRef.current?.centreOn(at.lon, at.lat)
+  }
   /** The projection every overlay is placed, drawn and hit-tested through: the 2-D map's own, or on
    *  Street the Mercator locked to MapLibre's camera, which is null until the street map has said
    *  where it is. */
   const projectionFor = (w: number, h: number): GeoProjection | null =>
     kind === 'street'
       ? streetView && streetProjection(streetView, w, h)
-      : me && makeProjection(kind, me, w, h, view)
+      : me &&
+        makeProjection(
+          kind,
+          me,
+          w,
+          h,
+          embedded?.aprs && focusLL ? viewCentredOn(kind, me, focusLL, w, h, view) : view,
+        )
   // Street opens on the station when the pack holds it, else on the pack's own centre.
   const streetOpenAt: [number, number] | undefined =
     streetPack && myQth && packCovers(streetPack, myQth.lat, myQth.lon) ? [myQth.lon, myQth.lat] : undefined
@@ -1965,7 +2053,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, streetView, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -2006,6 +2094,49 @@ export function MapView({
         .filter((a) => a.lat != null && a.lon != null)
         .slice()
         .sort((a, b) => a.lastHeardUnix - b.lastHeardUnix)
+      // TRAILS, under every symbol: where each moving station has been (features/aprsMap
+      // `aprsTrail`), in its family's colour, the selection's in the accent and heavier with a dot
+      // at each report. A run of points the view cannot show (the Globe's far side) breaks the line
+      // rather than joining across it.
+      if (aprsTracks) {
+        for (const a of positioned) {
+          const pts = aprsTrail(a, drawNowSec, aprsTrailMin)
+          if (pts.length === 0) continue
+          const isSel = sel != null && a.call.toUpperCase() === sel
+          const sym = resolveSymbol(a.symbolTable, a.symbolCode)
+          const ink = isSel ? '#5eead4' : cssVar(CATEGORY_VAR[symbolCategory(sym.glyph)]) || 'rgba(203, 213, 225, 0.95)'
+          const fade = ageFade(a.lastHeardUnix, drawNowSec, aprsFadeAfterMin, aprsTtlMin)
+          const xy = pts.map((q) => placePoint(kind, proj, q))
+          ctx.save()
+          ctx.globalAlpha = layers.aprs.opacity * fade * (isSel ? 0.95 : 0.7)
+          ctx.strokeStyle = ink
+          ctx.lineWidth = (isSel ? 2.6 : 1.6) * ms
+          ctx.lineJoin = 'round'
+          ctx.lineCap = 'round'
+          ctx.beginPath()
+          let pen = false
+          for (const q of xy) {
+            if (!q) {
+              pen = false
+              continue
+            }
+            if (pen) ctx.lineTo(q[0], q[1])
+            else ctx.moveTo(q[0], q[1])
+            pen = true
+          }
+          ctx.stroke()
+          if (isSel) {
+            ctx.fillStyle = ink
+            for (const q of xy) {
+              if (!q) continue
+              ctx.beginPath()
+              ctx.arc(q[0], q[1], 2.2 * ms, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+          ctx.restore()
+        }
+      }
       for (const a of positioned) {
         const p = placePoint(kind, proj, { lat: a.lat as number, lon: a.lon as number })
         if (!p) continue
@@ -2117,13 +2248,31 @@ export function MapView({
           ctx.arc(p[0], p[1], (drawSymbols ? 16 : 9) * ms, 0, Math.PI * 2)
           ctx.stroke()
         }
-        // Label only the selection and anything moving — labelling every station
-        // turns a busy local net into a wall of text.
-        if (isSel || (a.speedKnots != null && a.speedKnots > 1)) {
-          ctx.fillStyle = cssVar('--text') || '#e2e8f0'
-          haloText(a.call, p[0] + 8 * ms, p[1])
-        }
         placedAprsRef.current.push({ call: a.call, x: p[0], y: p[1] })
+      }
+      // LABELS THAT DO NOT COLLIDE (features/aprsMap `placeAprsLabels`): in priority order — the
+      // selection, the moving stations, then the most recently heard — each takes the first free
+      // side of its symbol, clear of the labels already placed and of every other symbol, or is
+      // left out. With Labels off only the selection and the moving stations are candidates, as
+      // the map named them before.
+      const at = new Map(placedAprsRef.current.map((q) => [q.call, q]))
+      const symR = (drawSymbols ? 9 : 4) * ms
+      const clear = (drawSymbols ? 12 : 8) * ms
+      const rowH = 12 * ms
+      const cands = aprsLabelOrder(positioned, selectedAprs ?? null, aprsLabels).flatMap((call) => {
+        const q = at.get(call)
+        return q ? [{ key: call, x: q.x, y: q.y, w: ctx.measureText(call).width, h: rowH, clear }] : []
+      })
+      const labels = placeAprsLabels(
+        cands,
+        { w, h },
+        placedAprsRef.current.map((q) => ({ x: q.x, y: q.y, r: symR })),
+      )
+      ctx.globalAlpha = layers.aprs.opacity
+      ctx.textAlign = 'left'
+      for (const l of labels) {
+        ctx.fillStyle = sel != null && l.key.toUpperCase() === sel ? '#5eead4' : cssVar('--text') || '#e2e8f0'
+        haloText(l.key, l.x, l.y)
       }
       ctx.globalAlpha = 1
     }
@@ -2931,7 +3080,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3138,6 +3287,8 @@ export function MapView({
     return (
       <div className="map-view">
         <StateBlock kind="empty" title={t('map.empty.title')} detail={t('map.empty.detail')} />
+        {/* The APRS card still opens for a station picked in the list (one without a position). */}
+        {embedded?.aprs && aprsOverlay}
       </div>
     )
   }
@@ -3408,7 +3559,7 @@ export function MapView({
     setHoverKey(null)
     if (kind === 'globe') {
       const k = 0.32 / (d.base.zoom || 1) // deg per px, slower when zoomed in
-      const base = d.base.rotate ?? (me ? [-me.lon, -me.lat] : [0, 0])
+      const base = d.base.rotate ?? (focusLL ? [-focusLL.lon, -focusLL.lat] : [0, 0])
       const rot: [number, number] = [base[0] + dx * k, Math.max(-90, Math.min(90, base[1] - dy * k))]
       setView({ ...d.base, rotate: rot })
     } else {
@@ -3635,6 +3786,35 @@ export function MapView({
         </button>
       </div>
       )}
+      {/* THE APRS MAP'S TOOLBAR: the host's own controls (map picker, filters), then zoom and Centre.
+          The same wrapping strip as the main toolbar; no Reset, colour mode or Full screen — full
+          screen would cover the cockpit's TX strip, and its Stop TX and TX latch must stay on screen. */}
+      {embedded?.aprs && (
+        <div className="map-toolbar aprs-map-toolbar">
+          {aprsToolbar}
+          <div className="map-proj" role="group" aria-label={t('map.zoom.aria')}>
+            <button
+              type="button"
+              onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(1) : setView((v) => ({ ...v, zoom: Math.min(MAX_ZOOM, v.zoom * 1.3) })))}
+              title={t('map.zoom.in')}
+              aria-label={t('map.zoom.in')}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(-1) : setView((v) => ({ ...v, zoom: Math.max(MIN_ZOOM, v.zoom / 1.3) })))}
+              title={t('map.zoom.out')}
+              aria-label={t('map.zoom.out')}
+            >
+              −
+            </button>
+          </div>
+          <button type="button" className="map-chrome-btn" onClick={centreOnMe} title={t('map.centre.title')}>
+            <Crosshair size={13} /> {t('map.centre.label')}
+          </button>
+        </div>
+      )}
 
       <div className="map-body">
         <div className="map-canvas-wrap" ref={wrapRef}>
@@ -3756,6 +3936,28 @@ export function MapView({
           )}
           {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
+          {/* The APRS map's Layers panel: the same overlay as Connect's, with the layers that mean
+              something on a 2 m packet map (APRS_LAYER_CHOICES). */}
+          {embedded?.aprs && (
+            <MapLayersPanel className="map-layers" title={t('map.layers.head')} narrow={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}>
+              {APRS_LAYER_CHOICES.map((k) => (
+                <div
+                  className={`map-layer${streetScale && WORLD_SCALE_LAYERS.includes(k) ? ' street-dim' : ''}`}
+                  key={k}
+                >
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={layers[k].visible}
+                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                    />
+                    {layerLabel(k)}
+                  </label>
+                </div>
+              ))}
+            </MapLayersPanel>
+          )}
+          {embedded?.aprs && aprsOverlay}
           {/* THE LAYERS PANEL — an overlay pinned top-left of the map: the same place and the same fold
               as on the 3-D globe (MapLayersPanel; why an overlay, not a column: `.map-layers` in
               styles.css). Gated on the embedded/standalone distinction only (the Expert gate went
