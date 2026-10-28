@@ -666,3 +666,235 @@ fn a_held_contact_is_not_restamped_by_the_profile_at_the_confirm() {
         [None, None, None]
     );
 }
+
+// --- Nothing else changes the call while the run, the contact or the message is under way --------
+
+/// A station on the club profile (W9ABC) under a General licence, its CQ run armed and every slot
+/// skipped by the licence refusal.
+fn club_run() -> (Engine, String) {
+    let (mut e, _) = ft8_station();
+    assert!(e.set_license_class("general"));
+    let mut club = portable();
+    club.name = "Club".into();
+    club.call = "W9ABC".into();
+    let club = e.save_station_profile(club).unwrap();
+    e.switch_station_profile(&club).unwrap();
+    assert!(!e.tx_allowed(), "premise: the club call is refused");
+    e.start_cq(None).unwrap();
+    assert!(tx_now(&e).contains("W9ABC"), "premise: {}", tx_now(&e));
+    assert_eq!(
+        keyed(&mut e, 0..2),
+        Vec::<String>::new(),
+        "premise: slots skipped"
+    );
+    (e, club)
+}
+
+fn profile_call(e: &Engine, id: &str) -> String {
+    e.settings
+        .station_profiles
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.call.clone())
+        .unwrap_or_default()
+}
+
+/// ⛔ The reviewer's sequence. Refused on the club call, the operator presses Call CQ, then reads
+/// the refusal and types their own call into Settings ▸ Station and presses Save. The station's call
+/// stays W9ABC, so the licence refusal still stands and nothing goes out as "CQ W9ABC". The rest
+/// of the form is saved. Once the run is ended, the same save changes the call.
+#[test]
+fn a_settings_save_mid_run_keeps_the_stations_call() {
+    let (mut e, club) = club_run();
+    let mut form = e.settings.clone();
+    form.mycall = ME.into();
+    form.op_name = "Club op".into();
+    e.apply_settings(form);
+    let sent = keyed(&mut e, 2..10);
+    assert!(
+        sent.iter().all(|t| !t.contains("W9ABC")),
+        "nothing on the air under the club call: {sent:?}"
+    );
+    assert_eq!(
+        (
+            e.settings.mycall.as_str(),
+            profile_call(&e, &club).as_str(),
+            e.snapshot().mycall.as_str(),
+        ),
+        ("W9ABC", "W9ABC", "W9ABC")
+    );
+    assert_eq!(e.settings.active_station_profile, club);
+    assert!(!e.tx_allowed(), "still refused");
+    assert_eq!(
+        e.settings.op_name, "Club op",
+        "the rest of the form is saved"
+    );
+    // CONTROL: the run ended, the same save changes the club profile's call.
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    let mut form = e.settings.clone();
+    form.mycall = "W9ABD".into();
+    e.apply_settings(form);
+    assert_eq!(e.settings.mycall, "W9ABD");
+    assert_eq!(profile_call(&e, &club), "W9ABD");
+}
+
+/// ⛔ A form loaded on Home before the switch to the club call, edited and saved mid-run: Home's
+/// call is not rewritten either (it would lift the club call's refusal).
+#[test]
+fn a_stale_form_save_mid_run_changes_no_profiles_call() {
+    let (mut e, club) = club_run();
+    let mut stale = e.settings.clone();
+    stale.active_station_profile = HOME_STATION_PROFILE.into();
+    stale.mycall = "W9ABC".into();
+    e.apply_settings(stale);
+    assert_eq!(profile_call(&e, HOME_STATION_PROFILE), ME);
+    assert_eq!(e.settings.mycall, "W9ABC");
+    assert_eq!(e.settings.active_station_profile, club);
+    let sent = keyed(&mut e, 2..10);
+    assert!(sent.iter().all(|t| !t.contains("W9ABC")), "{sent:?}");
+}
+
+/// ⛔ A settings restore (or reset) mid-run is refused with the reason, and nothing changes; idle,
+/// it goes.
+#[test]
+fn a_settings_restore_mid_run_is_refused() {
+    let (e, club) = club_run();
+    let mut bundle = e.settings.clone();
+    bundle.active_station_profile = HOME_STATION_PROFILE.into();
+    bundle.mycall = ME.into();
+    assert_eq!(
+        e.station_profile_restore_refusal(&Settings::default()),
+        Some(crate::settings::STATION_PROFILE_RESTORE_REFUSED),
+        "a reset too"
+    );
+    let engine = std::sync::Mutex::new(e);
+    let restored = restore_with_session_rows(&engine, bundle.clone(), |_| ());
+    let mut e = engine.into_inner().unwrap();
+    assert_eq!(
+        restored,
+        Err(crate::settings::STATION_PROFILE_RESTORE_REFUSED.to_string())
+    );
+    assert_eq!(e.settings.mycall, "W9ABC");
+    assert_eq!(e.settings.active_station_profile, club);
+    let sent = keyed(&mut e, 2..10);
+    assert!(sent.iter().all(|t| !t.contains("W9ABC")), "{sent:?}");
+    // CONTROL: idle, the restore goes.
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    let engine = std::sync::Mutex::new(e);
+    assert_eq!(restore_with_session_rows(&engine, bundle, |_| ()), Ok(()));
+    assert_eq!(engine.into_inner().unwrap().settings.mycall, ME);
+}
+
+/// ⛔ Editing Home's call to the club's mid-run would lift the club call's refusal: refused, and
+/// nothing is saved. An edit of Home that leaves the refusal standing goes.
+#[test]
+fn an_edit_of_home_that_lifts_the_refusal_waits_for_the_run() {
+    let (mut e, _) = club_run();
+    let mut home = e.settings.station_profiles[0].clone();
+    home.call = "W9ABC".into();
+    assert_eq!(
+        e.save_station_profile(home),
+        Err(STATION_PROFILE_SWITCH_REFUSED.to_string())
+    );
+    assert_eq!(profile_call(&e, HOME_STATION_PROFILE), ME, "nothing saved");
+    let sent = keyed(&mut e, 2..10);
+    assert!(sent.iter().all(|t| !t.contains("W9ABC")), "{sent:?}");
+    let mut home = e.settings.station_profiles[0].clone();
+    home.antenna = "Beam".into();
+    e.save_station_profile(home).unwrap();
+    assert_eq!(e.settings.station_profiles[0].antenna, "Beam");
+}
+
+/// ⛔ A JS8 message queued on the club profile is built with W9ABC. With TX off, the switch is
+/// refused while it is queued; cleared, the switch goes.
+#[test]
+fn a_queued_js8_message_keeps_the_profile() {
+    let mut e = station();
+    let mut club = portable();
+    club.call = "W9ABC".into();
+    let club = e.save_station_profile(club).unwrap();
+    e.switch_station_profile(&club).unwrap();
+    e.js8_send(None, "HELLO FROM THE CLUB".into()).unwrap();
+    assert!(!e.tx_enabled(), "premise: queued, TX off");
+    assert_eq!(
+        e.switch_station_profile(HOME_STATION_PROFILE),
+        Err(crate::settings::STATION_PROFILE_JS8_QUEUED_REFUSED.to_string())
+    );
+    assert_eq!(e.settings.mycall, "W9ABC");
+    assert!(e.snapshot().station_profile_locked);
+    e.js8_drop_queue();
+    e.switch_station_profile(HOME_STATION_PROFILE).unwrap();
+    assert_eq!(e.settings.mycall, ME);
+}
+
+/// ⛔ With Auto-log and the log prompt both off, a finished FT contact waits for Log QSO. The
+/// switch is refused until it is logged, and it is logged under the call its overs went out
+/// with; then the switch goes.
+#[test]
+fn a_finished_contact_not_yet_logged_keeps_the_profile() {
+    let (mut e, portable) = ft8_station();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.ingest_decodes_for_test(&[dec_snr("CQ W1AW FN31", -12)], 11);
+    e.work_station("W1AW", None, Some("CQ W1AW FN31"), Some(-12), Some(1500.0))
+        .unwrap();
+    let mut sent = keyed(&mut e, 12..14);
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -15", -9)], 14);
+    sent.extend(keyed(&mut e, 15..17));
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -9)], 17);
+    sent.extend(keyed(&mut e, 18..20));
+    assert!(sent.len() >= 3, "premise: {sent:?}");
+    assert!(e.stored_log().is_empty(), "premise: not logged by itself");
+    // "Disable TX after 73": the radio loop turns TX off once our 73 has played.
+    assert!(e.take_pending_tx_disable(), "premise: TX goes off after 73");
+    e.set_tx_enabled(false);
+    assert_eq!(
+        keyed(&mut e, 20..22),
+        Vec::<String>::new(),
+        "the next slots: off the air"
+    );
+    assert!(!e.on_air(), "premise: off the air");
+    let switched = e.switch_station_profile(&portable);
+    assert!(e.log_current_qso(), "Log QSO");
+    let logged = QsoRecord::clone(&e.stored_log()[0]);
+    assert_eq!(logged.station_callsign.as_deref(), Some(ME));
+    assert_eq!(
+        switched,
+        Err(crate::settings::STATION_PROFILE_UNLOGGED_REFUSED.to_string())
+    );
+    e.switch_station_profile(&portable).unwrap();
+    assert_eq!(e.settings.mycall, "KD9TAW/P");
+}
+
+/// Stop during a run cannot take the station back to Home: the station stays on the park's
+/// profile, Stop says once which profile to pick to go back, and the return is kept, so the next
+/// activation of the park, stopped when idle, goes back to Home.
+#[test]
+fn a_stop_that_cannot_go_back_says_so_and_keeps_the_way_back() {
+    let (mut e, _) = ft8_station();
+    let mut park = portable();
+    park.park = "US-1234".into();
+    let park = e.save_station_profile(park).unwrap();
+    e.set_activation("POTA", "US-1234", vec![]).unwrap();
+    assert_eq!(e.settings.active_station_profile, park, "premise: picked");
+    e.start_cq(None).unwrap();
+    let told = e.clear_activation_from(false);
+    assert_eq!(e.settings.active_station_profile, park, "stays mid-run");
+    assert_eq!(
+        told.map(|p| (p.id, p.call)),
+        Some((HOME_STATION_PROFILE.to_string(), ME.to_string()))
+    );
+    assert_eq!(
+        e.clear_activation_from(false),
+        None,
+        "told once: nothing to stop now"
+    );
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    e.set_activation("POTA", "US-1234", vec![]).unwrap();
+    assert_eq!(e.clear_activation_from(false), None);
+    assert_eq!(e.settings.active_station_profile, HOME_STATION_PROFILE);
+    assert_eq!(e.settings.mycall, ME);
+}

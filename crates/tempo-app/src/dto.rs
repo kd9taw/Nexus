@@ -165,6 +165,12 @@ pub struct ActivationDto {
     /// The activation was taken up at launch from the one the last session left running.
     #[serde(default)]
     pub restored: bool,
+    /// Only on the Stop pressed at the station that ended it, and only when Stop could not take
+    /// the station back to the "My station" profile it was on before the park's (a run, a contact
+    /// or a queued message under way): that profile, which the operator picks in the top bar to
+    /// go back. Absent otherwise, and on a station with no profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station_profile_back: Option<StationProfileChoice>,
 }
 
 /// One park of an activation, and what it holds today ([`ActivationDto::parks`]).

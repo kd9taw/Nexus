@@ -48,6 +48,19 @@ pub const STATION_PROFILE_CALL_TX_REFUSED: &str = "This station profile uses ano
 /// and log the contact under another (`Engine::station_profile_switch_refusal`).
 pub const STATION_PROFILE_SWITCH_REFUSED: &str = "The station profile changes only between contacts. Stop transmitting and end the run or contact (S&P) first, then switch.";
 
+/// ⛔ Why the station profile does not change now: a JS8 message is queued or going out. JS8 builds
+/// its frames with the call when the message is queued, so they would go out under the call the
+/// station has left.
+pub const STATION_PROFILE_JS8_QUEUED_REFUSED: &str = "The station profile waits while a JS8 message is queued or going out under this call. Let it finish, or clear the JS8 queue, then switch.";
+
+/// ⛔ Why the station profile does not change now: a contact is finished and not logged yet. Its
+/// overs went out under this call, and the log takes the call the station has when it is logged.
+pub const STATION_PROFILE_UNLOGGED_REFUSED: &str = "The station profile waits until the contact you just finished is logged. Press Log QSO, or Clear DX to leave it out, then switch.";
+
+/// ⛔ Why a settings restore or reset is refused now: it would change the call the station
+/// transmits under while a run, a contact, an over or a JS8 message is under way.
+pub const STATION_PROFILE_RESTORE_REFUSED: &str = "Settings are not restored or reset while a run, a contact, an over or a JS8 message is under way: that would change the call the station transmits under. Stop transmitting and end the run or contact (S&P) first, then try again.";
+
 /// One named station setup. Every field but the id and name is optional: blank means "not
 /// stated", and a blank field stamps nothing on a contact.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -21,10 +21,12 @@
 //! marked as Nexus's own, so the LoTW upload leaves them out and TQSL signs from its Station
 //! Location as before (`tempo_core::logbook::SELF_FILLED_FIELD`).
 
-use super::{now_unix_secs, Engine, Mode, STATION_FIELDS_MAX_AGE_SECS};
+use super::{ft_contact_complete, now_unix_secs, Engine, Mode, STATION_FIELDS_MAX_AGE_SECS};
 use crate::dto::StationProfileChoice;
 use crate::settings::{
-    Settings, StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_SWITCH_REFUSED,
+    Settings, StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_JS8_QUEUED_REFUSED,
+    STATION_PROFILE_RESTORE_REFUSED, STATION_PROFILE_SWITCH_REFUSED,
+    STATION_PROFILE_UNLOGGED_REFUSED,
 };
 use tempo_core::logbook::{fill_extra, mark_self_filled, QsoRecord};
 
@@ -70,7 +72,10 @@ impl Engine {
         next.sync_active_station_from_flat();
         next.active_station_profile = id.to_string();
         next.sync_flat_from_active_station();
-        self.adopt_station_profiles(next)
+        self.adopt_station_profiles(next)?;
+        // The station has moved: a return kept from a Stop that could not go is spent.
+        self.station_profile_return_kept = None;
+        Ok(())
     }
 
     /// ⛔ Why the station profile cannot change now, or `None` when it can. The FT sequencer sends
@@ -85,16 +90,44 @@ impl Engine {
     /// - a CQ run is up, or the FT sequencer holds a message to send (a CQ, a contact part-way, a
     ///   73 still owed), armed or not: Enable TX would send it under the call it was built with.
     ///
+    /// - a JS8 message is queued or going out: JS8 builds its frames with the call when the
+    ///   message is queued, so they would go out under the call the station has left
+    ///   ([`STATION_PROFILE_JS8_QUEUED_REFUSED`]);
+    /// - an FT contact is finished and not logged yet (Auto-log and the log prompt both off): its
+    ///   overs went out under this call, and the Log QSO button logs it under the call the
+    ///   station has when it is pressed ([`STATION_PROFILE_UNLOGGED_REFUSED`]).
+    ///
     /// It reads the transmit state and changes none of it. S&P (monitoring) or Clear DX with TX
     /// off leaves nothing to send, and the profile can change.
     pub fn station_profile_switch_refusal(&self) -> Option<&'static str> {
-        let sequencer_holds_a_message = match &self.mode {
-            Mode::Qso { station, .. } => station.pending.is_some(),
-            Mode::FieldDay { station, .. } => station.pending.is_some(),
-            Mode::Chat => false,
+        let (sequencer_holds_a_message, finished_not_logged) = match &self.mode {
+            Mode::Qso { station, .. } => (
+                station.pending.is_some(),
+                ft_contact_complete(station, self.qso_report_sent) && !self.qso_logged,
+            ),
+            Mode::FieldDay { station, .. } => (station.pending.is_some(), false),
+            Mode::Chat => (false, false),
         };
-        (self.transmit_needs_the_lock() || self.cq_running || sequencer_holds_a_message)
-            .then_some(STATION_PROFILE_SWITCH_REFUSED)
+        if self.transmit_needs_the_lock() || self.cq_running || sequencer_holds_a_message {
+            Some(STATION_PROFILE_SWITCH_REFUSED)
+        } else if self.js8_station.outbox_count() > 0 {
+            Some(STATION_PROFILE_JS8_QUEUED_REFUSED)
+        } else if finished_not_logged {
+            Some(STATION_PROFILE_UNLOGGED_REFUSED)
+        } else {
+            None
+        }
+    }
+
+    /// ⛔ Why a settings restore or reset (`incoming`, which replaces the station's profiles and
+    /// call) is refused now, or `None`: while [`Self::station_profile_switch_refusal`] stands and
+    /// the station or the bundle has profiles, it would change the call the station transmits
+    /// under. With no profiles on either side it is never refused here, as before profiles.
+    pub fn station_profile_restore_refusal(&self, incoming: &Settings) -> Option<&'static str> {
+        let profiles =
+            !self.settings.station_profiles.is_empty() || !incoming.station_profiles.is_empty();
+        (profiles && self.station_profile_switch_refusal().is_some())
+            .then_some(STATION_PROFILE_RESTORE_REFUSED)
     }
 
     /// Save one profile (an empty id adds a new one), and return its id. The first saved writes
@@ -148,7 +181,8 @@ impl Engine {
     /// changes whether the licence refusal stands, so an edit of a profile the station is not on
     /// never cancels an over in flight. A change of call, grid, state or power is refused, with
     /// nothing taken, while [`Self::station_profile_switch_refusal`] says so: saving the profile
-    /// the station is on is a switch of those four.
+    /// the station is on is a switch of those four. So is a change of the list alone that lifts
+    /// the licence refusal.
     fn adopt_station_profiles(&mut self, next: Settings) -> Result<(), String> {
         let flat = |s: &Settings| {
             (
@@ -160,7 +194,10 @@ impl Engine {
         };
         let refused_before = self.settings.station_profile_tx_refusal();
         let flat_changed = flat(&next) != flat(&self.settings);
-        if flat_changed {
+        // An edit of another profile can lift the licence refusal too (Home's call made the
+        // club's): the call on the air would then be judged afresh, so it waits as a switch does.
+        let refusal_lifts = refused_before.is_some() && next.station_profile_tx_refusal().is_none();
+        if flat_changed || refusal_lifts {
             if let Some(why) = self.station_profile_switch_refusal() {
                 return Err(why.into());
             }
@@ -180,14 +217,30 @@ impl Engine {
     /// before the save landed); the save's flat station fields go to the profile its form was on
     /// ([`Settings::keep_station_form`]), and if that put the flat fields back to another
     /// profile's, the identity follows them.
+    ///
+    /// ⛔ `call_waits`: the station's call before the save, given while
+    /// [`Self::station_profile_switch_refusal`] stood then. The save changes no profile's call:
+    /// the run or contact under way goes on under the call it was built with, and the licence
+    /// refusal keeps judging that call. The rest of the form is saved.
     pub(super) fn keep_live_station_profiles(
         &mut self,
         live: Vec<StationProfile>,
         live_active: String,
+        call_waits: Option<String>,
     ) {
         let form = std::mem::replace(&mut self.settings.active_station_profile, live_active);
         self.settings.station_profiles = live;
         let bound = (self.settings.mycall.clone(), self.settings.mygrid.clone());
+        if let Some(call) = call_waits {
+            // The call of the profile the form describes, as it is: the live one for the profile
+            // the station is on, the stored one for a profile a stale form was on.
+            self.settings.mycall = self
+                .settings
+                .station_profiles
+                .iter()
+                .find(|p| p.id == form && p.id != self.settings.active_station_profile)
+                .map_or(call, |p| p.call.clone());
+        }
         self.settings.keep_station_form(&form);
         if (self.settings.mycall.clone(), self.settings.mygrid.clone()) != bound {
             let (call, grid) = (self.settings.mycall.clone(), self.settings.mygrid.clone());
@@ -241,19 +294,20 @@ impl Engine {
     /// The activation ended (`back`, taken from it before it went): back to the profile the
     /// station was on before it picked the park's, unless the operator has switched since. Not
     /// while a run, a contact or an over is under way (the switch refuses it), and from a computer
-    /// driving the station not onto a different call: the station then stays where it is.
+    /// driving the station not onto a different call: the station then stays where it is, and the
+    /// return is kept for the next activation of it (`station_profile_return_kept`). At the
+    /// station, the profile it could not go back to is handed back once, so the operator is told
+    /// to pick it in the top bar (from afar the picker is the station's, and says so).
     pub(super) fn return_from_activation_station_profile(
         &mut self,
         back: Option<(String, String)>,
         from_afar: bool,
-    ) {
-        let Some((before, picked)) = back else {
-            return;
-        };
+    ) -> Option<StationProfileChoice> {
+        let (before, picked) = back?;
         if self.settings.active_station_profile != picked {
-            return;
+            return None;
         }
-        if from_afar {
+        let went = if from_afar {
             let call = self
                 .settings
                 .station_profiles
@@ -261,11 +315,20 @@ impl Engine {
                 .find(|p| p.id == before)
                 .map(|p| p.call.clone())
                 .unwrap_or_default();
-            if !self.same_call_as_now(&call) {
-                return;
-            }
+            self.same_call_as_now(&call) && self.switch_station_profile(&before).is_ok()
+        } else {
+            self.switch_station_profile(&before).is_ok()
+        };
+        if went {
+            return None;
         }
-        let _ = self.switch_station_profile(&before);
+        let choice = self
+            .station_profile_choices()
+            .0
+            .into_iter()
+            .find(|p| p.id == before)?;
+        self.station_profile_return_kept = Some((before, picked));
+        (!from_afar).then_some(choice)
     }
 
     /// Whether `call` is the call the station transmits under now.

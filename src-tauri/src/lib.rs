@@ -14493,6 +14493,13 @@ fn save_and_publish(
                     return Err(refusal);
                 }
             }
+            // ⛔ A reset replaces the station's profiles and call: not while a run, a contact or an
+            // over is under way on a station with profiles (a form save keeps the call instead).
+            if authoritative_roster {
+                if let Some(why) = eng.station_profile_restore_refusal(&settings) {
+                    return Err(why.to_string());
+                }
+            }
             // The LoTW sync cursor is bound to the exact query (notably the username);
             // if the username changed, reset it to a full pull so a config edit can't
             // silently skip confirmations.
@@ -20249,10 +20256,12 @@ fn save_station_profile(
     cache: State<'_, PropCache>,
     profile: tempo_app::settings::StationProfile,
 ) -> Result<AppSnapshot, String> {
-    let settings = {
-        let mut eng = engine_lock(&state);
-        eng.save_station_profile(profile)?;
-        eng.settings().clone()
+    let Some(settings) = save_station_profile_on(&state, profile)? else {
+        let eng = engine_lock(&state);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: save_station_profile save failed: {e}")
+        });
+        return Ok(eng.snapshot());
     };
     apply_and_persist(
         state,
@@ -20264,6 +20273,28 @@ fn save_station_profile(
         settings,
         false,
     )
+}
+
+/// [`save_station_profile`]'s body, over the plain handle: the settings to apply and save when the
+/// save moved the station's call, grid, state or power (it was the profile the station is on), so
+/// the feeds follow the call. `None` when it changed the list alone: that is only written to disk,
+/// with no settings apply, so an over already planned keeps its slot.
+fn save_station_profile_on(
+    engine: &SharedEngine,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<Option<Settings>, String> {
+    let flat = |s: &Settings| {
+        (
+            s.mycall.clone(),
+            s.mygrid.clone(),
+            s.op_state.clone(),
+            s.station_power_w,
+        )
+    };
+    let mut eng = engine_lock(engine);
+    let before = flat(eng.settings());
+    eng.save_station_profile(profile)?;
+    Ok((flat(eng.settings()) != before).then(|| eng.settings().clone()))
 }
 
 /// Remove one "My station" profile. Home and the profile the station is on stay. Returns the
@@ -34769,9 +34800,13 @@ fn clear_activation_on(
 ) -> (tempo_app::dto::ActivationDto, Option<Settings>) {
     let mut eng = engine_lock(engine);
     let profile = eng.settings().active_station_profile.clone();
-    eng.clear_activation_from(afar.is_some());
+    let back = eng.clear_activation_from(afar.is_some());
     self_spot::activation_ended();
-    (activation_now(&eng), profile_moved(&eng, &profile))
+    let dto = tempo_app::dto::ActivationDto {
+        station_profile_back: back,
+        ..activation_now(&eng)
+    };
+    (dto, profile_moved(&eng, &profile))
 }
 
 /// The operator's "Still activating": an activation taken up at launch, paused until now, stamps
@@ -52679,6 +52714,111 @@ mod tests {
             moved.is_none(),
             "CONTROL: no profile names it, nothing handed"
         );
+    }
+
+    /// A settings reset during a CQ run on a station with profiles is refused whole, with the
+    /// reason: it would change the call the run sends under. Idle, it goes.
+    #[test]
+    fn a_reset_mid_run_is_refused_with_profiles() {
+        let (engine, _) = station_with_a_park_profile();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let refused =
+            crate::save_and_publish(&engine, crate::Settings::default(), true).map(|_| ());
+        assert_eq!(
+            refused,
+            Err(tempo_app::settings::STATION_PROFILE_RESTORE_REFUSED.to_string())
+        );
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        assert_eq!(engine_lock(&engine).settings().station_profiles.len(), 2);
+        {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.set_mode("qso-monitor").unwrap();
+        }
+        crate::save_and_publish(&engine, crate::Settings::default(), true).expect("idle: reset");
+        assert!(engine_lock(&engine).settings().station_profiles.is_empty());
+    }
+
+    /// Stop during a CQ run cannot take the station back from the park's profile: its answer names
+    /// the profile to pick in the top bar, once. Nothing else carries it.
+    #[test]
+    fn a_stop_that_cannot_go_back_names_the_profile_to_pick() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        {
+            let mut e = engine_lock(&engine);
+            assert_eq!(e.settings().active_station_profile, park, "premise");
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert!(moved.is_none(), "the station stays on the park's profile");
+        assert_eq!(
+            dto.station_profile_back.map(|p| (p.id, p.call)),
+            Some((
+                tempo_app::settings::HOME_STATION_PROFILE.to_string(),
+                "KD9TAW".to_string()
+            ))
+        );
+        let again = serde_json::to_string(&crate::activation_now(&engine_lock(&engine))).unwrap();
+        assert!(!again.contains("stationProfileBack"), "{again}");
+    }
+
+    /// Editing a profile the station is not on during a CQ run is only written to disk: no settings
+    /// apply, so the over already planned keys in its slot (the radio loop builds it with the Engine
+    /// unlocked, and an apply in between cancels it). CONTROL: the same over is cancelled by a
+    /// settings apply, which is what saving the profile the station is on still runs.
+    #[test]
+    fn saving_a_profile_the_station_is_not_on_keeps_the_planned_over() {
+        let (engine, park) = station_with_a_park_profile();
+        let plan_cq = |engine: &SharedEngine, slot: u64| {
+            engine_lock(engine)
+                .plan_tx(slot)
+                .expect("premise: the CQ is planned")
+        };
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let plan = plan_cq(&engine, 0);
+        let mut edit = engine_lock(&engine)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.id == park)
+            .cloned()
+            .unwrap();
+        edit.antenna = "Vertical".into();
+        let applied = crate::save_station_profile_on(&engine, edit).expect("saved");
+        if let Some(settings) = applied.clone() {
+            crate::save_and_publish(&engine, settings, false).expect("applied");
+        }
+        let mut e = engine_lock(&engine);
+        let wave = plan.waveform.build();
+        assert!(
+            !e.commit_tx(&plan, wave, 0).is_empty(),
+            "the planned over keys"
+        );
+        assert!(applied.is_none(), "the list alone: no settings apply");
+        assert_eq!(e.settings().station_profiles[1].antenna, "Vertical");
+        drop(e);
+        // CONTROL: a settings apply between plan and key cancels the over.
+        let plan = plan_cq(&engine, 2);
+        let now = engine_lock(&engine).settings().clone();
+        crate::save_and_publish(&engine, now, false).expect("applied");
+        let wave = plan.waveform.build();
+        assert!(engine_lock(&engine).commit_tx(&plan, wave, 2).is_empty());
     }
 
     /// A Settings form loaded on Home and saved after a switch to the park profile keeps the station

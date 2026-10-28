@@ -3772,6 +3772,11 @@ pub struct Engine {
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
+    /// Where an activation's Stop would have taken the station profile back to, kept when the Stop
+    /// could not go (a run or contact under way, or stopped from afar onto another call):
+    /// (the profile before, the park's profile). The next activation started on it takes it up,
+    /// so its Stop goes back; a switch drops it (`engine/station_profiles.rs`).
+    station_profile_return_kept: Option<(String, String)>,
     /// Unix-secs when the current QSO's exchange began (TIME_ON) — set when answering a
     /// station or when our CQ first gets a reply; `None` between QSOs. The log records
     /// this as the contact start, with the completion time as TIME_OFF.
@@ -6835,6 +6840,7 @@ impl Engine {
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
             qso_logged: false,
+            station_profile_return_kept: None,
             qso_start_unix: None,
             cq_running: false,
             // Seeded from the callsign so two stations do not share a draw
@@ -7463,6 +7469,11 @@ impl Engine {
         // The station profiles and which one is on: ONE writer each, the profile verbs
         // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
         // call, grid, state and power describe (`Settings::keep_station_form`).
+        // ⛔ While a run, a contact, an over or a JS8 message is under way, a save keeps the call
+        // the station transmits under (`keep_live_station_profiles`). Read before the save lands.
+        let live_station_call_waits = (!self.settings.station_profiles.is_empty()
+            && self.station_profile_switch_refusal().is_some())
+        .then(|| self.settings.mycall.clone());
         let live_station_profiles = std::mem::take(&mut self.settings.station_profiles);
         let live_active_station = std::mem::take(&mut self.settings.active_station_profile);
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
@@ -7634,7 +7645,11 @@ impl Engine {
             // A form never writes or wipes the note; the save itself may take it or end it.
             self.settings.contest_before = live_contest_before;
             self.note_contest_before(contest_was, contest_was_active);
-            self.keep_live_station_profiles(live_station_profiles, live_active_station);
+            self.keep_live_station_profiles(
+                live_station_profiles,
+                live_active_station,
+                live_station_call_waits,
+            );
         }
         if let Some(club) = self.fd_club.as_mut() {
             club.note_host_settings(
@@ -33485,8 +33500,12 @@ contact yourself."
         places: Vec<String>,
         from_afar: bool,
     ) -> Result<(String, String), String> {
-        // Where a running activation's Stop would have gone back to: the new one keeps it.
-        let back = self.station.activation_station_profile_return();
+        // Where a running activation's Stop would have gone back to: the new one keeps it, and so
+        // does one started after a Stop that could not go back.
+        let back = self
+            .station
+            .activation_station_profile_return()
+            .or_else(|| self.station_profile_return_kept.take());
         let started = self.station.set_activation(program, reference, places);
         self.sync_fd_activation();
         if started.is_ok() {
@@ -33520,12 +33539,16 @@ contact yourself."
 
     /// See [`StationCore::clear_activation`], and the station profile it goes back to
     /// (`return_from_activation_station_profile`). `from_afar`: stopped from a computer driving
-    /// the station, which may not switch the call the station transmits under.
-    pub fn clear_activation_from(&mut self, from_afar: bool) {
+    /// the station, which may not switch the call the station transmits under. The profile it
+    /// could not go back to, once, for the operator to be told how to switch back by hand.
+    pub fn clear_activation_from(
+        &mut self,
+        from_afar: bool,
+    ) -> Option<crate::dto::StationProfileChoice> {
         let back = self.station.activation_station_profile_return();
         self.station.clear_activation();
         self.sync_fd_activation();
-        self.return_from_activation_station_profile(back, from_afar);
+        self.return_from_activation_station_profile(back, from_afar)
     }
 
     /// See [`StationCore::resume_activation`].
@@ -33572,6 +33595,7 @@ contact yourself."
             started_at: a.started_at,
             utc_day: now / 86_400,
             restored: a.restored,
+            station_profile_back: None,
         }
     }
 
@@ -34391,13 +34415,18 @@ pub fn restore_with_session_rows<T>(
         engine,
         |eng| eng.save_opens_session(&asked),
         |eng, rows| {
+            // ⛔ Not while a run, a contact or an over is under way on a station with profiles:
+            // the bundle would change the call the station transmits under.
+            if let Some(why) = eng.station_profile_restore_refusal(&restored) {
+                return Err(why.to_string());
+            }
             eng.apply_restored_settings(restored);
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
-            then(eng)
+            Ok(then(eng))
         },
-    )
+    )?
 }
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.

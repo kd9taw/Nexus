@@ -13,7 +13,8 @@ pub mod writer;
 
 pub use station_profiles::{
     StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_CALL_TX_REFUSED,
-    STATION_PROFILE_SWITCH_REFUSED,
+    STATION_PROFILE_JS8_QUEUED_REFUSED, STATION_PROFILE_RESTORE_REFUSED,
+    STATION_PROFILE_SWITCH_REFUSED, STATION_PROFILE_UNLOGGED_REFUSED,
 };
 
 /// What kind of operating the active section is doing — the per-section rig-mode
