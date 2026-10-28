@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use tempo_app::dto::Spectrum;
 use tempo_app::engine::{MeterFeed, SpectrumFeed};
-use tempo_core::spectrum::WindowN;
+use tempo_core::spectrum::{HiDefZoom, ScopeAnalysis, WindowN};
 
 use crate::capture_resample::CaptureResampler;
 use crate::rxtap::RxTap;
@@ -165,6 +165,10 @@ pub struct RxDsp {
     cw_quiet: u8,
     /// Ticks that reading may still stand for — see [`ZERO_BEAT_HOLD_TICKS`].
     cw_hold: u32,
+    /// The CW scope's HiDef zoom, while a scope is asking for it. `None` otherwise, so it costs
+    /// nothing unless the CW scope is on screen in HiDef; dropped when the request lapses or
+    /// moves to a plain window, so history from before a pause is never spliced to new audio.
+    zoom: Option<HiDefZoom>,
 }
 
 impl Default for RxDsp {
@@ -186,6 +190,7 @@ impl RxDsp {
             cw_agree: 0,
             cw_quiet: 0,
             cw_hold: 0,
+            zoom: None,
         }
     }
 
@@ -214,6 +219,7 @@ impl RxDsp {
         if src.epoch != self.epoch {
             self.rs = CaptureResampler::new(src.rate, ANALYSIS_RATE_HZ);
             self.window.clear();
+            self.zoom = None;
             self.epoch = src.epoch;
             self.rate = src.rate;
         }
@@ -269,10 +275,50 @@ impl RxDsp {
         // The rig scope's own window, when one is on screen asking for it. One extra 2048-point
         // FFT (~30 us of a 20 ms budget) and no extra bytes — see `compute_row_over`. The
         // request expires on its own, so this costs nothing when no scope is up.
-        if let Some((lo, hi, win)) = feed.scope_request() {
-            feed.publish_scope(compute_row_over(&self.window, lo, hi, win));
+        //
+        // HiDef (the CW scope's zoom FFT) is fed THIS tick's new samples and nothing else: it
+        // keeps its own decimated history, 683 ms long, which the 341 ms rolling window could
+        // not hold. It reads `pcm`, never writes `self.window`, so the row above and the
+        // zero-beat reading are untouched by it. Cost: see `scope_row_hidef`.
+        match feed.scope_request() {
+            Some((lo, hi, ScopeAnalysis::HiDef)) if HiDefZoom::serves(lo, hi) => {
+                feed.publish_scope(self.scope_row_hidef(&pcm, lo, hi));
+            }
+            Some((lo, hi, analysis)) => {
+                self.zoom = None;
+                // A plain window, or a span HiDef cannot keep alias-free: today's row.
+                let win = match analysis {
+                    ScopeAnalysis::Window(w) => w,
+                    ScopeAnalysis::HiDef => WindowN::Balanced,
+                };
+                feed.publish_scope(compute_row_over(&self.window, lo, hi, win));
+            }
+            None => self.zoom = None,
         }
         true
+    }
+
+    /// The CW scope's HiDef row over `lo..hi`, after feeding it this tick's samples.
+    ///
+    /// COST PER 20 ms TICK, only while the CW scope is up in HiDef: mixing 240 samples, 30
+    /// outputs of a 128-tap complex filter (~7.7k multiply-adds), one 2048-point and one 256-point
+    /// complex FFT, and 512 display bins twice. Measured on a release build (2026-10-27): ~25 µs
+    /// a tick, against ~19 µs for the plain 2048 scope row it REPLACES — about 0.1% of the 20 ms
+    /// tick, and nothing at all while the scope is in Fast or off screen.
+    fn scope_row_hidef(&mut self, pcm: &[f32], lo: f32, hi: f32) -> Spectrum {
+        let fc = (lo + hi) / 2.0;
+        // A new centre is a new zoom: history mixed against the old one is other frequencies.
+        let zoom = match self.zoom.take() {
+            Some(z) if z.fc() == fc => self.zoom.insert(z),
+            _ => self.zoom.insert(HiDefZoom::new(ANALYSIS_RATE, fc)),
+        };
+        zoom.push(pcm);
+        Spectrum {
+            row: zoom.row(lo, hi, 512),
+            lo_hz: f64::from(lo),
+            hi_hz: f64::from(hi),
+            source: "audio".into(),
+        }
     }
 
     /// Store a zero-beat reading (or its absence) and restart its hold.
@@ -593,6 +639,135 @@ mod tests {
         row.iter().filter(|v| **v >= thr).count()
     }
 
+    /// -6 dB width (Hz) of the strongest lobe in a row over `lo..hi`, the crossings interpolated
+    /// between display bins.
+    fn width_6db_hz(row: &[f32], lo: f64, hi: f64) -> f32 {
+        let bin_hz = (hi - lo) as f32 / row.len() as f32;
+        let (pk, pv) = row
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, f32::MIN), |a, (i, v)| if v > a.1 { (i, v) } else { a });
+        let thr = pv - 6.0 / tempo_core::spectrum::DB_SPAN;
+        let (mut l, mut r) = (pk, pk);
+        while l > 0 && row[l - 1] >= thr {
+            l -= 1;
+        }
+        while r + 1 < row.len() && row[r + 1] >= thr {
+            r += 1;
+        }
+        let left = if l == 0 {
+            0.0
+        } else {
+            l as f32 - (row[l] - thr) / (row[l] - row[l - 1])
+        };
+        let right = if r + 1 == row.len() {
+            r as f32
+        } else {
+            r as f32 + (row[r] - thr) / (row[r] - row[r + 1])
+        };
+        (right - left) * bin_hz
+    }
+
+    /// ⭐ THE CW SCOPE IN HiDef, END TO END, AND NOTHING ELSE MOVES. Two identical pipelines are
+    /// fed identical audio; one has the CW scope up in HiDef. Its scope row draws a carrier
+    /// ≤ 4 Hz wide at -6 dB, while the audio row every other display reads and the zero-beat
+    /// reading stay bit-identical to the pipeline with no scope at all. Then the same scope in
+    /// Fast draws today's ~12 Hz carrier.
+    #[test]
+    fn the_cw_scope_hidef_row_is_narrow_and_every_other_reading_is_unchanged() {
+        let audio: Vec<f32> = (0..30_000)
+            .map(|i| {
+                let t = i as f32 / 12_000.0;
+                0.5 * (std::f32::consts::TAU * 701.3 * t).sin()
+                    + 0.05 * (std::f32::consts::TAU * 1_830.0 * t).sin()
+            })
+            .collect();
+        let (tap, plain) = (RxTap::new(), RxTap::new());
+        let (ring, ring2) = (
+            Arc::new(SpscRing::new(48_000)),
+            Arc::new(SpscRing::new(48_000)),
+        );
+        tap.publish_card(ring.clone(), 12_000);
+        plain.publish_card(ring2.clone(), 12_000);
+        let (feed, feed2) = (SpectrumFeed::default(), SpectrumFeed::default());
+        let (meters, meters2) = (MeterFeed::default(), MeterFeed::default());
+        meters.set_cw_target_hz(Some(700.0));
+        meters2.set_cw_target_hz(Some(700.0));
+        let (mut dsp, mut dsp2) = (RxDsp::new(), RxDsp::new());
+        let mut hidef = None;
+        for chunk in audio.chunks(240) {
+            ring.push_slice(chunk);
+            ring2.push_slice(chunk);
+            dsp.tick(&tap, &feed, &meters);
+            dsp2.tick(&plain, &feed2, &meters2);
+            hidef = feed.scope_row(300.0, 1100.0, ScopeAnalysis::HiDef);
+            let (a, b) = (
+                feed.audio_row().expect("row"),
+                feed2.audio_row().expect("row"),
+            );
+            assert!(
+                a.row
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .eq(b.row.iter().map(|v| v.to_bits())),
+                "the audio row moved because the CW scope is in HiDef"
+            );
+            assert_eq!(
+                meters.cw_tone_hz().map(f32::to_bits),
+                meters2.cw_tone_hz().map(f32::to_bits),
+                "the zero-beat reading moved because the CW scope is in HiDef"
+            );
+        }
+        assert!(
+            meters.cw_tone_hz().is_some(),
+            "control: the zero-beat reading was live"
+        );
+        let hidef = hidef.expect("a HiDef row");
+        assert_eq!((hidef.lo_hz, hidef.hi_hz), (300.0, 1100.0));
+        assert_eq!(hidef.row.len(), 512, "still 512 display bins over the span");
+        let w = width_6db_hz(&hidef.row, hidef.lo_hz, hidef.hi_hz);
+        assert!(w <= 4.0, "HiDef carrier is {w:.2} Hz wide at -6 dB");
+
+        // Fast: the scope's plain window, today's picture.
+        feed.scope_row(300.0, 1100.0, WindowN::Balanced);
+        for chunk in audio[..2_400].chunks(240) {
+            ring.push_slice(chunk);
+            dsp.tick(&tap, &feed, &meters);
+        }
+        assert!(dsp.zoom.is_none(), "leaving HiDef drops its history");
+        let fast = feed
+            .scope_row(300.0, 1100.0, WindowN::Balanced)
+            .expect("a Fast row");
+        assert_eq!((fast.lo_hz, fast.hi_hz), (300.0, 1100.0));
+        let wf = width_6db_hz(&fast.row, fast.lo_hz, fast.hi_hz);
+        println!("CW scope carrier -6 dB width: HiDef {w:.2} Hz, Fast {wf:.2} Hz");
+        assert!(wf > 10.0, "Fast is today's wide row ({wf:.2} Hz)");
+    }
+
+    /// A span HiDef cannot keep alias-free is drawn with today's row rather than refused.
+    #[test]
+    fn a_span_too_wide_for_hidef_falls_back_to_the_plain_row() {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        let (feed, meters) = (SpectrumFeed::default(), MeterFeed::default());
+        let mut dsp = RxDsp::new();
+        feed.scope_row(0.0, 2000.0, ScopeAnalysis::HiDef);
+        ring.push_slice(&tone(12_000, 700.0, 4096));
+        dsp.tick(&tap, &feed, &meters);
+        let row = feed
+            .scope_row(0.0, 2000.0, ScopeAnalysis::HiDef)
+            .expect("a row");
+        assert_eq!((row.lo_hz, row.hi_hz), (0.0, 2000.0));
+        assert!(dsp.zoom.is_none());
+        assert_eq!(
+            row.row,
+            compute_row_over(&dsp.window, 0.0, 2000.0, WindowN::Balanced).row,
+            "the 2048 row over the asked span"
+        );
+    }
+
     /// TIER 3 — the scope's row follows the scope's WINDOW, and that is where fidelity comes from.
     #[test]
     fn a_narrow_scope_window_samples_the_lobe_far_more_finely() {
@@ -884,8 +1059,21 @@ mod tests {
     /// the DEFAULT row (`WindowN::Balanced`, which every other consumer including the FT waterfall reads)
     /// and the scope's DEFAULT (`WindowN::Balanced`). Deleting this pin to make the control fit
     /// would have thrown away the guarantee for everyone who never touches the control.
+    ///
+    /// THE CW SCOPE'S HiDef (operator decision, 2026-10-27: zoom FFT, on by default for the CW
+    /// scope only) is outside this pin by its LATENCY, not its smear: it draws the instant at the
+    /// centre of a 683 ms window, ~340 ms ago, but edges at that instant come from a 43 ms window,
+    /// so keying stays sharp. The time resolution is pinned below; the backend's default
+    /// (`WindowN::Balanced`, what an unknown tag gets) does not move.
     #[test]
     fn the_analysis_window_fits_the_display_liveliness_budget() {
+        let hidef_short_s = tempo_core::spectrum::HIDEF_SHORT_N as f32
+            / (ANALYSIS_RATE / tempo_core::spectrum::HIDEF_DECIM as f32);
+        assert!(
+            hidef_short_s < 0.048,
+            "HiDef's short window ({:.0} ms) must be shorter than a 25 wpm gap (48 ms)",
+            hidef_short_s * 1000.0
+        );
         let window_s = WindowN::Balanced.n() as f32 / ANALYSIS_RATE;
         assert!(
             window_s <= 0.200,

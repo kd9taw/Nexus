@@ -7,6 +7,7 @@ import {
   SCALE_KEYS,
   saveScaleSettings,
   scaleDefaults,
+  scopeAnalysis,
   useScaleSettings,
   type ScaleSettings,
   type ScopeCockpit,
@@ -39,7 +40,7 @@ afterEach(() => {
 })
 
 describe('a cockpit’s scale settings', () => {
-  it('start from the specification’s defaults, with CW’s averaging off and Phone’s window fast', () => {
+  it('start from the specification’s defaults, with CW’s averaging off, Phone’s window fast and CW in HiDef', () => {
     for (const c of COCKPITS) {
       expect(loadScaleSettings(c), c).toEqual({
         averageMs: c === 'cw' ? 0 : c === 'phone' ? 100 : 250,
@@ -47,8 +48,24 @@ describe('a cockpit’s scale settings', () => {
         gain: 0,
         zero: 0,
         window: c === 'phone' ? 'fast' : 'balanced',
+        hiDef: c === 'cw',
       })
     }
+  })
+
+  it('ask the backend for HiDef only from the CW scope with HiDef on; Fast asks for the chosen window', () => {
+    expect(scopeAnalysis('cw', scaleDefaults('cw'))).toBe('hidef')
+    expect(scopeAnalysis('cw', { ...scaleDefaults('cw'), hiDef: false })).toBe('balanced')
+    expect(scopeAnalysis('cw', { ...scaleDefaults('cw'), hiDef: false, window: 'sharp' })).toBe('sharp')
+    // The switch is the CW scope's: a record that says hiDef anywhere else asks for its window.
+    expect(scopeAnalysis('phone', { ...scaleDefaults('phone'), hiDef: true })).toBe('fast')
+    expect(scopeAnalysis('rfpan', { ...scaleDefaults('rfpan'), hiDef: true })).toBe('balanced')
+  })
+
+  it('keep the CW scope’s Fast choice across a reload', () => {
+    saveScaleSettings('cw', { ...scaleDefaults('cw'), hiDef: false })
+    expect(loadScaleSettings('cw').hiDef).toBe(false)
+    expect(loadScaleSettings('phone').hiDef).toBe(false)
   })
 
   it('round-trip: whatever is saved is what loads, for every cockpit', () => {
@@ -63,6 +80,7 @@ describe('a cockpit’s scale settings', () => {
         gain: k % 7 === 0 ? pick([-1, 1]) : Math.round((r() * 2 - 1) * 20) / 20 + 0,
         zero: k % 5 === 0 ? pick([-1, 1]) : r() * 2 - 1,
         window: pick(['fast', 'balanced', 'sharp'] as const),
+        hiDef: r() < 0.5,
       }
       saveScaleSettings(c, s)
       expect(loadScaleSettings(c), `${c} ${JSON.stringify(s)}`).toEqual(s)
@@ -107,6 +125,7 @@ describe('clamped on load', () => {
       '{"averageMs":NaN}',
       '{"averageMs":"250","gain":"0.5","zero":null,"detector":"rms","window":"ultra"}',
       '{"detector":7,"window":{"id":"fast"}}',
+      '{"hiDef":"yes","window":"hidef"}',
       '[250,"average"]',
       '"average"',
       'null',
@@ -177,6 +196,7 @@ describe('clamped on load', () => {
       detector: 'peak',
       gain: 0,
       zero: 0,
+      hiDef: false,
     })
   })
 

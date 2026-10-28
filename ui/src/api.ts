@@ -5190,7 +5190,7 @@ export async function getScopeRow(
   _transmitting: boolean,
   loHz: number,
   hiHz: number,
-  window?: ScopeWindow,
+  window?: ScopeAnalysis,
 ): Promise<Spectrum> {
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
@@ -5208,7 +5208,7 @@ export async function getScopeRow(
 export async function getScopeFrame(
   loHz: number,
   hiHz: number,
-  window: ScopeWindow | undefined,
+  window: ScopeAnalysis | undefined,
   lastSeq: number,
 ): Promise<SpectrumFrameWire | null> {
   return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
@@ -5241,6 +5241,13 @@ export async function getRfFrame(lastSeq: number): Promise<SpectrumFrameWire | n
  * rather than to a blank scope.
  */
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
+
+/**
+ * What the rig scope's row is computed with: one of the windows above, or `hidef`, the CW scope's
+ * zoom FFT of its own passband (a steady carrier ~3 Hz wide, ~340 ms behind the audio). Mirrors
+ * `tempo_core::spectrum::ScopeAnalysis`; a backend that does not know `hidef` draws `balanced`.
+ */
+export type ScopeAnalysis = ScopeWindow | 'hidef'
 
 /** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
  * full settings save, which clears the TX queue and re-derives the TX cycle (#54; the mode

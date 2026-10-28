@@ -371,6 +371,312 @@ pub fn iq_power(iq: &[f32], win: WindowN, power: &mut [f32]) -> bool {
     true
 }
 
+// ---- HIDEF: THE CW SCOPE'S ZOOM FFT (operator decision, 2026-10-27) ----
+//
+// Operator report: on the CW cockpit's audio waterfall a steady carrier drew "wide as a barn
+// door" while the other modes looked crisp. The CW scope zooms its DISPLAY to a few hundred Hz
+// round the pitch, but every window in [`WindowN`] runs over the 12 kHz capture, and the width
+// of a carrier is the window's main lobe, not the display grid: 11.7 Hz at -6 dB (and 23.4 Hz
+// null to null) at 2048. Zooming the grid only drew that lobe in more pixels.
+//
+// HiDef zooms the ANALYSIS instead. The span is mixed down to baseband, low-passed and decimated
+// by [`HIDEF_DECIM`] (12 kHz → 1.5 kHz complex), and FFT'd over [`HIDEF_N`] decimated samples:
+// 683 ms of audio, 1.46 Hz bins, a 2.9 Hz -6 dB width. Still 512 display bins over the span.
+//
+// ⚠️ A WINDOW THAT LONG CANNOT, BY ITSELF, SHOW THE GAPS IN KEYED CW: 25 wpm puts a 48 ms gap
+// between elements, and no 683 ms window resolves that. So the row is the MINIMUM of two power
+// estimates over the same instant: the long window (narrow in frequency) and a 43 ms window
+// ([`HIDEF_SHORT_N`]) taken from the long window's CENTRE (sharp in time). A steady carrier is
+// bright in both and takes the long one's narrow lobe; a gap is dark in the short one and stays
+// dark. Taking the minimum of estimates never invents energy — every value drawn is at most what
+// one real measurement saw. The price is latency: the instant drawn is the long window's
+// centre, ~340 ms ago, against ~85 ms for the 2048-sample window.
+
+/// What the rig scope's row is computed with: a plain FFT window over the 12 kHz capture, or the
+/// CW scope's zoom FFT. The scope request carries this; every other row ignores it.
+///
+/// Wire tags are [`WindowN`]'s three plus `"hidef"`, and an unknown tag stays `None` for the
+/// caller to default, exactly as [`WindowN::from_tag`] does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScopeAnalysis {
+    Window(WindowN),
+    HiDef,
+}
+
+impl Default for ScopeAnalysis {
+    fn default() -> Self {
+        Self::Window(WindowN::default())
+    }
+}
+
+impl From<WindowN> for ScopeAnalysis {
+    fn from(win: WindowN) -> Self {
+        Self::Window(win)
+    }
+}
+
+impl ScopeAnalysis {
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Window(w) => w.tag(),
+            Self::HiDef => "hidef",
+        }
+    }
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "hidef" => Some(Self::HiDef),
+            t => WindowN::from_tag(t).map(Self::Window),
+        }
+    }
+}
+
+/// Decimation from the 12 kHz analysis rate: 1.5 kHz complex, ±750 Hz round the span's centre.
+pub const HIDEF_DECIM: usize = 8;
+/// The long window, in decimated samples: 683 ms at 1.5 kHz, Hann bins of 1.46 Hz.
+pub const HIDEF_N: usize = 1024;
+/// The long window's FFT, zero-padded 2x so the lobe is drawn from exact samples of the
+/// spectrum rather than repeated across display bins. Padding adds samples, never resolution.
+const HIDEF_PAD: usize = 2048;
+/// The short window, in decimated samples: 43 ms, shorter than one 25 wpm gap (48 ms).
+pub const HIDEF_SHORT_N: usize = 64;
+/// The short window's FFT, zero-padded for the same reason as [`HIDEF_PAD`].
+const HIDEF_SHORT_PAD: usize = 256;
+/// Widest span HiDef serves. The anti-alias filter passes ±492 Hz and stops from ±1008 Hz,
+/// which keeps ±400 Hz round the centre clean after decimation to 1.5 kHz (an image would have
+/// to start at ±1100). The CW scope never asks for more than 800 Hz.
+pub const HIDEF_MAX_SPAN_HZ: f32 = 800.0;
+/// Anti-alias FIR length at the 12 kHz input: Blackman-windowed sinc, cutoff 750 Hz.
+const HIDEF_TAPS: usize = 128;
+
+/// The CW scope's zoom FFT: the mixer, the decimating filter and the decimated history, fed the
+/// same 12 kHz samples the rolling window gets. One instance per centre frequency: a new centre
+/// is a new instance, because history mixed against the old one describes other frequencies.
+pub struct HiDefZoom {
+    sr: f32,
+    fc: f32,
+    phase: f64,
+    step: f64,
+    taps: Vec<f32>,
+    /// The last mixed input samples, enough for one filter output.
+    line: Vec<microfft::Complex32>,
+    /// Input samples since the last filter output.
+    count: usize,
+    /// Decimated history, newest last; trimmed to [`HIDEF_N`] when it doubles.
+    hist: Vec<microfft::Complex32>,
+    long_win: Vec<f32>,
+    short_win: Vec<f32>,
+}
+
+impl HiDefZoom {
+    /// Can HiDef draw `lo_hz..hi_hz`? A span it cannot keep free of aliases is refused, and the
+    /// caller draws the plain FFT instead.
+    pub fn serves(lo_hz: f32, hi_hz: f32) -> bool {
+        lo_hz.is_finite()
+            && hi_hz.is_finite()
+            && lo_hz >= 0.0
+            && hi_hz > lo_hz
+            && hi_hz - lo_hz <= HIDEF_MAX_SPAN_HZ
+    }
+
+    /// A zoom centred on `fc` Hz of audio sampled at `sr` Hz.
+    pub fn new(sr: f32, fc: f32) -> Self {
+        let cut = 750.0 / sr;
+        let mid = (HIDEF_TAPS - 1) as f32 / 2.0;
+        let mut taps: Vec<f32> = (0..HIDEF_TAPS)
+            .map(|i| {
+                let x = i as f32 - mid;
+                let sinc = if x == 0.0 {
+                    2.0 * cut
+                } else {
+                    (2.0 * std::f32::consts::PI * cut * x).sin() / (std::f32::consts::PI * x)
+                };
+                let a = 2.0 * std::f32::consts::PI * i as f32 / (HIDEF_TAPS - 1) as f32;
+                sinc * (0.42 - 0.5 * a.cos() + 0.08 * (2.0 * a).cos())
+            })
+            .collect();
+        // Unity gain in the passband, so a tone keeps its dBFS reading through the filter.
+        let sum: f32 = taps.iter().sum();
+        for t in taps.iter_mut() {
+            *t /= sum;
+        }
+        Self {
+            sr,
+            fc,
+            phase: 0.0,
+            step: std::f64::consts::TAU * f64::from(fc) / f64::from(sr),
+            taps,
+            line: Vec::with_capacity(HIDEF_TAPS * 4),
+            count: 0,
+            hist: Vec::with_capacity(HIDEF_N * 2),
+            long_win: (0..HIDEF_N).map(|i| hann(i, HIDEF_N)).collect(),
+            short_win: (0..HIDEF_SHORT_N).map(|i| hann(i, HIDEF_SHORT_N)).collect(),
+        }
+    }
+
+    /// The centre frequency this zoom was built for.
+    pub fn fc(&self) -> f32 {
+        self.fc
+    }
+
+    /// Mix, filter and decimate the next run of input samples into the history.
+    pub fn push(&mut self, samples: &[f32]) {
+        for &x in samples {
+            let (s, c) = self.phase.sin_cos();
+            self.line
+                .push(microfft::Complex32::new(x * c as f32, -x * s as f32));
+            self.phase = (self.phase + self.step) % std::f64::consts::TAU;
+            self.count += 1;
+            if self.count == HIDEF_DECIM {
+                self.count = 0;
+                if self.line.len() >= HIDEF_TAPS {
+                    let w = &self.line[self.line.len() - HIDEF_TAPS..];
+                    let (mut re, mut im) = (0.0f32, 0.0f32);
+                    for (t, v) in self.taps.iter().zip(w) {
+                        re += t * v.re;
+                        im += t * v.im;
+                    }
+                    self.hist.push(microfft::Complex32::new(re, im));
+                }
+            }
+        }
+        if self.line.len() > HIDEF_TAPS * 3 {
+            let drop = self.line.len() - HIDEF_TAPS;
+            self.line.drain(..drop);
+        }
+        if self.hist.len() > HIDEF_N * 2 {
+            let drop = self.hist.len() - HIDEF_N;
+            self.hist.drain(..drop);
+        }
+    }
+
+    /// The row: `bins` display values over `lo_hz..hi_hz` on the dB axis every row uses.
+    ///
+    /// Each display bin is the MINIMUM of the long and the short window's power there (see the
+    /// section header), each normalised to full scale for its own length so a steady tone reads
+    /// the same dBFS in both. Before the history holds a full window it is front-zero-padded, as
+    /// the plain FFT's is while warming up.
+    pub fn row(&self, lo_hz: f32, hi_hz: f32, bins: usize) -> Vec<f32> {
+        if bins == 0 {
+            return Vec::new();
+        }
+        let fs = self.sr / HIDEF_DECIM as f32;
+        let n = self.hist.len().min(HIDEF_N);
+        let pad = HIDEF_N - n;
+        let recent = &self.hist[self.hist.len() - n..];
+        // Sample `i` (0..HIDEF_N) of the long window's frame, zero before the history starts.
+        let frame = |i: usize| {
+            if i < pad {
+                microfft::Complex32::new(0.0, 0.0)
+            } else {
+                recent[i - pad]
+            }
+        };
+        let (long, short) = IQ_SCRATCH.with(|sc| {
+            let mut buf = sc.borrow_mut();
+            for (i, c) in buf[..HIDEF_PAD].iter_mut().enumerate() {
+                *c = if i < HIDEF_N {
+                    frame(i) * self.long_win[i]
+                } else {
+                    microfft::Complex32::new(0.0, 0.0)
+                };
+            }
+            let spec = microfft::complex::cfft_2048(
+                (&mut buf[..HIDEF_PAD])
+                    .try_into()
+                    .expect("scratch covers 2048"),
+            );
+            let long = spread_baseband(
+                spec,
+                full_scale_power(HIDEF_N),
+                fs,
+                self.fc,
+                lo_hz,
+                hi_hz,
+                bins,
+            );
+            // The short window sits at the long one's CENTRE, so both describe the same instant.
+            let start = (HIDEF_N - HIDEF_SHORT_N) / 2;
+            for (i, c) in buf[..HIDEF_SHORT_PAD].iter_mut().enumerate() {
+                *c = if i < HIDEF_SHORT_N {
+                    frame(start + i) * self.short_win[i]
+                } else {
+                    microfft::Complex32::new(0.0, 0.0)
+                };
+            }
+            let spec = microfft::complex::cfft_256(
+                (&mut buf[..HIDEF_SHORT_PAD])
+                    .try_into()
+                    .expect("scratch covers 256"),
+            );
+            let short = spread_baseband(
+                spec,
+                full_scale_power(HIDEF_SHORT_N),
+                fs,
+                self.fc,
+                lo_hz,
+                hi_hz,
+                bins,
+            );
+            (long, short)
+        });
+        long.iter()
+            .zip(&short)
+            .map(|(l, s)| power_to_display(l.min(*s)))
+            .collect()
+    }
+}
+
+/// A complex FFT of baseband centred on `fc` (bin `j` is `fc + j·fs/m` for `j < m/2`, and
+/// `fc + (j − m)·fs/m` above), as POWER RELATIVE TO FULL SCALE over `bins` display bins of
+/// `lo_hz..hi_hz`. The same scatter and nearest-bin fill as [`power_spectrum_n`]: each FFT bin
+/// peak-holds into the one display bin holding its centre, and a display bin no FFT bin landed in
+/// repeats the nearest one rather than inventing a value.
+///
+/// `full` is the full-scale power of the window length BEFORE zero padding: a real sine of
+/// amplitude A mixes to a complex tone of amplitude A/2, which a Hann window of n samples puts in
+/// its bin at `(A/2)·n/2`, i.e. `(A·n/4)²` — the real FFT's own full-scale reference.
+fn spread_baseband(
+    spec: &[microfft::Complex32],
+    full: f32,
+    fs: f32,
+    fc: f32,
+    lo_hz: f32,
+    hi_hz: f32,
+    bins: usize,
+) -> Vec<f32> {
+    let m = spec.len() as isize;
+    let df = fs / m as f32;
+    let span = hi_hz - lo_hz;
+    let power = |k: isize| {
+        let c = spec[k.rem_euclid(m) as usize];
+        (c.re * c.re + c.im * c.im) / full
+    };
+    let mut acc = vec![0.0f32; bins];
+    let mut hit = vec![false; bins];
+    for k in -m / 2..m / 2 {
+        let f = fc + k as f32 * df;
+        if f < lo_hz || f >= hi_hz {
+            continue;
+        }
+        let i = (((f - lo_hz) / span) * bins as f32) as usize;
+        if i >= bins {
+            continue;
+        }
+        acc[i] = acc[i].max(power(k));
+        hit[i] = true;
+    }
+    for (i, h) in hit.iter().enumerate() {
+        if !*h {
+            let f = lo_hz + span * (i as f32 + 0.5) / bins as f32;
+            let k = ((f - fc) / df).round() as isize;
+            if (-m / 2..m / 2).contains(&k) {
+                acc[i] = power(k);
+            }
+        }
+    }
+    acc
+}
+
 /// One tone found in the receive audio — the measurement behind the CW zero-beat indicator.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToneEstimate {
@@ -1267,5 +1573,218 @@ mod tests {
         assert!(power.iter().chain(&short).all(|p| *p == 7.0), "untouched");
         assert!(iq_power(&vec![0.0; 2 * n], WindowN::Balanced, &mut power));
         assert!(power.iter().all(|p| *p == 0.0), "silence is no power");
+    }
+
+    // ---- HiDef: the CW scope's zoom FFT ----
+
+    /// The CW scope's span round a 700 Hz pitch (`cwScopeWindow` at the 800 Hz cap).
+    const CW_LO: f32 = 300.0;
+    const CW_HI: f32 = 1100.0;
+
+    /// Deterministic low-level noise, so a gap has a floor to fall to rather than exact zeros.
+    fn noise(n: usize, amp: f32) -> Vec<f32> {
+        let mut x: u32 = 0x1234_5678;
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (x as f32 / u32::MAX as f32 - 0.5) * 2.0 * amp
+            })
+            .collect()
+    }
+
+    /// Feed `audio` through a HiDef zoom in 20 ms ticks (240 samples at 12 kHz), as the rx-dsp
+    /// thread does, and hand back the row after each tick.
+    fn hidef_rows(audio: &[f32], lo: f32, hi: f32) -> Vec<Vec<f32>> {
+        let mut z = HiDefZoom::new(12_000.0, (lo + hi) / 2.0);
+        audio
+            .chunks(240)
+            .map(|c| {
+                z.push(c);
+                z.row(lo, hi, 512)
+            })
+            .collect()
+    }
+
+    /// The width of the strongest lobe `down_db` below its peak, in Hz, with the two crossings
+    /// interpolated linearly between display bins (so the answer is not quantised to a bin).
+    fn lobe_width_hz(row: &[f32], lo: f32, hi: f32, down_db: f32) -> f32 {
+        assert!(!row.is_empty(), "no row to measure");
+        let bin_hz = (hi - lo) / row.len() as f32;
+        let (pk, pv) = row
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, f32::MIN), |a, (i, v)| if v > a.1 { (i, v) } else { a });
+        let thr = pv - down_db / DB_SPAN;
+        let mut l = pk;
+        while l > 0 && row[l - 1] >= thr {
+            l -= 1;
+        }
+        let left = if l == 0 {
+            0.0
+        } else {
+            l as f32 - (row[l] - thr) / (row[l] - row[l - 1])
+        };
+        let mut r = pk;
+        while r + 1 < row.len() && row[r + 1] >= thr {
+            r += 1;
+        }
+        let right = if r + 1 == row.len() {
+            r as f32
+        } else {
+            r as f32 + (row[r] - thr) / (row[r] - row[r + 1])
+        };
+        (right - left) * bin_hz
+    }
+
+    /// ⭐ THE OPERATOR'S REPORT, MEASURED: a steady carrier on the CW scope is ≤ 4 Hz wide at
+    /// -6 dB in HiDef, where today's row (the 2048 window over the same span) is ~12 Hz.
+    /// Several pitches, none on a bin centre, so no lucky alignment flatters the number.
+    #[test]
+    fn hidef_draws_a_steady_carrier_under_4_hz_wide() {
+        for f in [700.0f32, 701.3, 733.7, 662.2] {
+            let mut audio = tones(&[(f, 0.5)], 12_000.0, 18_000);
+            for (a, n) in audio.iter_mut().zip(noise(18_000, 0.0005)) {
+                *a += n;
+            }
+            let today = power_spectrum_n(&audio, 12_000.0, CW_LO, CW_HI, 512, WindowN::Balanced);
+            let fast = lobe_width_hz(&today, CW_LO, CW_HI, 6.0);
+            let rows = hidef_rows(&audio, CW_LO, CW_HI);
+            let row = rows.last().expect("rows");
+            let hidef = lobe_width_hz(row, CW_LO, CW_HI, 6.0);
+            println!(
+                "carrier {f} Hz: -6 dB width today {fast:.2} Hz, HiDef {hidef:.2} Hz; \
+                 -20 dB {:.2} / {:.2}; -40 dB {:.2} / {:.2}",
+                lobe_width_hz(&today, CW_LO, CW_HI, 20.0),
+                lobe_width_hz(row, CW_LO, CW_HI, 20.0),
+                lobe_width_hz(&today, CW_LO, CW_HI, 40.0),
+                lobe_width_hz(row, CW_LO, CW_HI, 40.0),
+            );
+            assert!(
+                fast > 10.0,
+                "today's row is the wide one ({fast:.2} Hz at {f})"
+            );
+            assert!(
+                hidef <= 4.0,
+                "HiDef carrier at {f} Hz is {hidef:.2} Hz wide at -6 dB"
+            );
+        }
+    }
+
+    /// Two carriers 10 Hz apart are two lines in HiDef, with a real valley between them. Today's
+    /// row cannot separate them at all.
+    #[test]
+    fn hidef_resolves_two_carriers_10_hz_apart() {
+        let audio = tones(&[(695.0, 0.3), (705.0, 0.3)], 12_000.0, 18_000);
+        let bin = |f: f32| ((f - CW_LO) / (CW_HI - CW_LO) * 512.0) as usize;
+        let valley_db = |row: &[f32]| {
+            let a = row[bin(692.0)..=bin(698.0)]
+                .iter()
+                .copied()
+                .fold(f32::MIN, f32::max);
+            let b = row[bin(702.0)..=bin(708.0)]
+                .iter()
+                .copied()
+                .fold(f32::MIN, f32::max);
+            let mid = row[bin(699.0)..=bin(701.0)]
+                .iter()
+                .copied()
+                .fold(f32::MAX, f32::min);
+            (a.min(b) - mid) * DB_SPAN
+        };
+        let today = power_spectrum_n(&audio, 12_000.0, CW_LO, CW_HI, 512, WindowN::Balanced);
+        let rows = hidef_rows(&audio, CW_LO, CW_HI);
+        let (t, h) = (valley_db(&today), valley_db(rows.last().expect("rows")));
+        println!("10 Hz pair: valley today {t:.1} dB, HiDef {h:.1} dB");
+        assert!(
+            t < 3.0,
+            "today's row was expected to merge them (valley {t:.1} dB)"
+        );
+        assert!(h >= 10.0, "HiDef must resolve them (valley only {h:.1} dB)");
+    }
+
+    /// Keyed CW at 25 wpm keeps the gaps between its elements: every element of PARIS is its
+    /// own bright run at the pitch, separated by a dip. The long window alone smears them into
+    /// one bar — that is what the short window's minimum is for.
+    #[test]
+    fn hidef_keeps_the_gaps_between_25_wpm_elements() {
+        let mut audio = crate::cw::morse_samples("PARIS", 25, 700.0, 12_000);
+        audio.extend(std::iter::repeat_n(0.0, 12_000));
+        let mut audio: Vec<f32> = audio.iter().map(|s| s * 0.5).collect();
+        let n = audio.len();
+        for (a, x) in audio.iter_mut().zip(noise(n, 0.0005)) {
+            *a += x;
+        }
+        let rows = hidef_rows(&audio, CW_LO, CW_HI);
+        let at = ((700.0 - CW_LO) / (CW_HI - CW_LO) * 512.0) as usize;
+        let trace: Vec<f32> = rows
+            .iter()
+            .map(|r| r[at - 1..=at + 1].iter().copied().fold(f32::MIN, f32::max) * DB_SPAN)
+            .collect();
+        let top = trace.iter().copied().fold(f32::MIN, f32::max);
+        // An element is a run above top-20 dB; it ends only when the trace falls below top-30.
+        // The 10 dB of hysteresis means a dip has to be a real gap, not a ripple on one element.
+        let (on, off) = (top - 20.0, top - 30.0);
+        let (mut runs, mut lit) = (0, false);
+        for &v in &trace {
+            if !lit && v > on {
+                lit = true;
+                runs += 1;
+            } else if lit && v < off {
+                lit = false;
+            }
+        }
+        let shown: Vec<i32> = trace.iter().map(|v| (v - top) as i32).collect();
+        println!("PARIS at 25 wpm, HiDef trace at the pitch (dB re top, one per 20 ms): {shown:?}");
+        // P .--.  A .-  R .-.  I ..  S ...  = 4 + 2 + 3 + 2 + 3 elements.
+        assert_eq!(
+            runs, 14,
+            "elements of PARIS seen as separate runs; trace (dB re top): {shown:?}"
+        );
+    }
+
+    /// The dB axis does not move with HiDef: a tone reads its own dBFS, as at every window.
+    #[test]
+    fn hidef_reads_a_tone_at_its_own_dbfs() {
+        for amp in [0.5f32, 0.05] {
+            let want = 20.0 * amp.log10();
+            let audio = tones(&[(700.0, amp)], 12_000.0, 18_000);
+            let rows = hidef_rows(&audio, CW_LO, CW_HI);
+            let peak = rows
+                .last()
+                .expect("rows")
+                .iter()
+                .copied()
+                .fold(f32::MIN, f32::max);
+            let got = (peak - 1.0) * DB_SPAN;
+            assert!(
+                (got - want).abs() < 1.0,
+                "a {want:.1} dBFS tone read {got:.2} dBFS in HiDef"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_analysis_tags_round_trip() {
+        for a in [
+            ScopeAnalysis::Window(WindowN::Fast),
+            ScopeAnalysis::Window(WindowN::Balanced),
+            ScopeAnalysis::Window(WindowN::Sharp),
+            ScopeAnalysis::HiDef,
+        ] {
+            assert_eq!(ScopeAnalysis::from_tag(a.tag()), Some(a));
+        }
+        assert_eq!(ScopeAnalysis::from_tag("zoom"), None);
+        assert_eq!(
+            ScopeAnalysis::default(),
+            ScopeAnalysis::Window(WindowN::Balanced)
+        );
+        assert!(HiDefZoom::serves(300.0, 1100.0));
+        assert!(
+            !HiDefZoom::serves(0.0, 4000.0),
+            "wider than the filter keeps alias-free"
+        );
+        assert!(!HiDefZoom::serves(-10.0, 500.0));
+        assert!(!HiDefZoom::serves(f32::NAN, 500.0));
     }
 }
