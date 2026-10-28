@@ -2846,7 +2846,7 @@ function App() {
       ids: ProfileId[],
       landing: View,
       modes: FeatureId[],
-      license: string,
+      license: string | null,
       draft: WizardDraft,
       experience: ExperienceLevel | null,
     ) => {
@@ -2854,9 +2854,10 @@ function App() {
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
       // wizard's own TX-lockout promise silently undone). Draft first, class
-      // second; failures surface instead of a false-success close.
+      // second; failures surface instead of a false-success close. Each only when the wizard
+      // changed it: an untouched wizard writes nothing (null = the class the station holds).
       void applyWizardDraft(draft)
-        .then(() => setLicenseClass(license))
+        .then(() => (license ? setLicenseClass(license) : null))
         .then((s) => s && setSnap(s))
         // The experience answer has its own writer; a later form save keeps it. Only an answer
         // given in this run is written: none leaves the station's (absent = never asked).
@@ -2879,7 +2880,9 @@ function App() {
       if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
-      recordWizardSeen()
+      // The first run is recorded as done in the settings file; a re-run from Settings already is,
+      // and writes nothing it did not change.
+      if (wizardAsks) recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
@@ -2888,10 +2891,10 @@ function App() {
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
-    recordWizardSeen()
+    if (wizardAsks) recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [recordWizardSeen])
+  }, [recordWizardSeen, wizardAsks])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -4446,6 +4449,7 @@ function App() {
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
           onOpenWalk={() => setShowWalk(true)}
+          onOpenServices={() => openSettingsAt('confirmations')}
           askExperience={wizardAsks}
           rerun={!wizardAsks}
         />
