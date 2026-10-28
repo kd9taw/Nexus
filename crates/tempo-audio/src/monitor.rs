@@ -101,6 +101,110 @@ fn monitor_would_transmit_as(
         .is_some()
 }
 
+/// What the audio line says when [`monitor_would_transmit`] refused `monitor_device` (resolved, as
+/// the guard took it): which radio's TX audio it collided with, by the radio's name, and that
+/// device (or "the system default output"), and what to do. Always starts "Headphone monitor is
+/// off".
+pub fn monitor_refusal_notice(
+    monitor_device: &str,
+    settings: &tempo_app::settings::Settings,
+    default_output: Option<&str>,
+) -> String {
+    monitor_refusal_notice_as(
+        monitor_device,
+        &crate::notify_sound::tx_audio_device_owners(settings),
+        &crate::notify_sound::open_tx_outputs(),
+        default_output,
+        crate::notify_sound::HOST_NAMING,
+        &crate::notify_sound::system_card_id,
+    )
+}
+
+/// [`monitor_refusal_notice`] against `owners` (each TX device with its radio's name, `None` for
+/// the radio in use's flat setting) and `held` (the TX outputs held open), under `naming`.
+fn monitor_refusal_notice_as(
+    monitor_device: &str,
+    owners: &[(String, Option<String>)],
+    held: &[String],
+    default_output: Option<&str>,
+    naming: crate::notify_sound::Naming,
+    card_id: &dyn Fn(u32) -> Option<String>,
+) -> String {
+    use crate::notify_sound::PlayRefusal;
+    const OFF: &str = "Headphone monitor is off";
+    if monitor_device.trim().is_empty() {
+        return format!(
+            "{OFF}: this computer could not name its default output, so it cannot be told apart \
+             from a radio's TX audio. Pick the monitor's output by its device name (on Linux, by \
+             its card name)."
+        );
+    }
+    if is_flex_dax_tx_device(monitor_device) {
+        return format!(
+            "{OFF}: the chosen output is SmartSDR's DAX transmit device, which feeds the Flex's \
+             transmitter. Pick a headphone or speaker device."
+        );
+    }
+    let rank = |r: &PlayRefusal| match r {
+        PlayRefusal::TxDevice => 3,
+        PlayRefusal::TxUnsure => 2,
+        _ => 1,
+    };
+    // The strongest clash, the first of equals: a radio's own setting, then a held output.
+    let mut found: Option<(PlayRefusal, &str, Option<&str>, bool)> = None;
+    let candidates = owners
+        .iter()
+        .map(|(d, who)| (d.as_str(), who.as_deref(), false))
+        .chain(held.iter().map(|d| (d.as_str(), None, true)));
+    for (device, who, is_held) in candidates {
+        let verdict = crate::notify_sound::device_verdict(
+            monitor_device,
+            &[device.to_string()],
+            default_output,
+            naming,
+            card_id,
+        );
+        if let Some(v) = verdict {
+            if found.as_ref().is_none_or(|(w, ..)| rank(&v) > rank(w)) {
+                found = Some((v, device, who, is_held));
+            }
+        }
+    }
+    let Some((why, device, who, is_held)) = found else {
+        return format!(
+            "{OFF}: the chosen output is a radio's TX device, or cannot be told apart from it — \
+             monitoring it would transmit the received band. Pick a separate headphone or speaker \
+             device (on Linux, by its card name)."
+        );
+    };
+    let clash = if why == PlayRefusal::TxUnsure {
+        "cannot be told apart from"
+    } else {
+        "is"
+    };
+    let device = if device.trim().is_empty() {
+        "the system default output".to_string()
+    } else {
+        device.trim().to_string()
+    };
+    if is_held {
+        return format!(
+            "{OFF}: the chosen output {clash} the TX output the radio in use has open ({device}), \
+             so monitoring it would transmit the received band. Pick a separate headphone or \
+             speaker output (on Linux, by its card name)."
+        );
+    }
+    let radio = match who.map(str::trim) {
+        Some(name) if !name.is_empty() => format!("radio \u{201c}{name}\u{201d}"),
+        _ => "the radio in use".to_string(),
+    };
+    format!(
+        "{OFF}: the chosen output {clash} the TX audio of {radio} ({device}), so monitoring it \
+         would transmit the received band. Pick a separate headphone or speaker output (on Linux, \
+         by its card name), or set the TX audio of {radio} to its own device in Settings ▸ Radio."
+    )
+}
+
 /// Whether `name` is SmartSDR's DAX transmit device on Windows: "DAX Audio TX (FlexRadio Systems
 /// DAX TX)" as SmartSDR's DAX documents it, or "DAX TX (FlexRadio DAX)" as newer DAX drivers name
 /// the live endpoint. What plays on it goes to a Flex's transmitter, whatever Nexus's own TX audio
@@ -1179,6 +1283,191 @@ mod tests {
         ] {
             assert!(!endpoint(other, "USB Audio CODEC"), "{other:?} refused");
         }
+    }
+
+    /// A station: the radio in use on its own codec, and `other` beside it.
+    fn station_with(other: tempo_app::settings::RadioProfile) -> tempo_app::settings::Settings {
+        let active = tempo_app::settings::RadioProfile {
+            id: 1,
+            name: "FTDX10".into(),
+            rig_conn: "serial".into(),
+            audio_out: "Speakers (USB Audio CODEC)".into(),
+            ..Default::default()
+        };
+        tempo_app::settings::Settings {
+            audio_out: active.audio_out.clone(),
+            radios: vec![active, other],
+            active_radio: 1,
+            ..Default::default()
+        }
+    }
+
+    /// A second radio with no TX audio device set, connected by `conn`.
+    fn other_radio(conn: &str) -> tempo_app::settings::RadioProfile {
+        let mut p = tempo_app::settings::RadioProfile {
+            id: 2,
+            name: "Radio 2".into(),
+            ..Default::default()
+        };
+        p.rig_conn = conn.into();
+        p.audio_out = String::new();
+        p.rig_model = 3078;
+        p.tci_host = "127.0.0.1".into();
+        p.tci_port = 50001;
+        p.tci_audio = true;
+        p
+    }
+
+    /// The monitor on the system default output ("Headphones"), as Windows / macOS name it, against
+    /// the station's TX devices from its settings.
+    fn monitor_on_default(s: &tempo_app::settings::Settings) -> bool {
+        let tx = crate::notify_sound::tx_audio_devices(s);
+        monitor_would_transmit_as("Headphones", &tx, Some("Headphones"), Endpoint, &no_cards)
+    }
+
+    /// ⛔ A RADIO WHOSE TX AUDIO IS NOT ON THIS COMPUTER'S SOUND CARD IS NO "SYSTEM DEFAULT" TX
+    /// DEVICE: an Icom on its network connection (nothing transmits over it), a TCI radio with its
+    /// audio over TCI, and a Flex on Nexus's own client with native audio, each with no TX audio
+    /// device set, leave the monitor on the default output. A radio that DOES transmit from a card
+    /// with none set still refuses it (fail safe): a serial rig, TCI with its audio off, the Flex
+    /// client with native audio off.
+    #[test]
+    fn a_radio_with_no_sound_card_tx_audio_leaves_the_default_output_to_the_monitor() {
+        let mut flex = other_radio("network");
+        flex.rig_model = 2036;
+        flex.flex_native_cat = true;
+        flex.flex_radio_ip = "192.168.1.50".into();
+        flex.flex_native_audio = true;
+        for (what, p) in [
+            ("Icom network", other_radio("icomlan")),
+            ("TCI with its audio", other_radio("tci")),
+            ("Flex client with native audio", flex.clone()),
+        ] {
+            let s = station_with(p);
+            assert_eq!(
+                crate::notify_sound::tx_audio_devices(&s),
+                vec!["Speakers (USB Audio CODEC)".to_string(); 2],
+                "{what}: its empty TX device was counted"
+            );
+            assert!(!monitor_on_default(&s), "{what}: the monitor was refused");
+        }
+        let mut tci_card = other_radio("tci");
+        tci_card.tci_audio = false;
+        let mut flex_card = flex;
+        flex_card.flex_native_audio = false;
+        for (what, p) in [
+            ("a serial rig", other_radio("serial")),
+            ("TCI with its audio off", tci_card),
+            ("Flex client with native audio off", flex_card),
+        ] {
+            let s = station_with(p);
+            assert!(
+                crate::notify_sound::tx_audio_devices(&s).contains(&String::new()),
+                "{what}: its system-default TX device was left out"
+            );
+            assert!(
+                monitor_on_default(&s),
+                "{what}: the monitor was let through"
+            );
+        }
+    }
+
+    /// The same rule for the radio in use's flat setting: on TCI with its audio over TCI and no TX
+    /// device, it is no TX device; on a serial rig with none, it is the system default.
+    #[test]
+    fn the_radio_in_uses_flat_tx_device_follows_the_same_rule() {
+        let mut s = tempo_app::settings::Settings {
+            radios: Vec::new(),
+            audio_out: String::new(),
+            rig_conn: "tci".into(),
+            rig_model: 3078,
+            tci_host: "127.0.0.1".into(),
+            tci_port: 50001,
+            tci_audio: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::notify_sound::tx_audio_devices(&s),
+            Vec::<String>::new()
+        );
+        assert!(!monitor_on_default(&s), "TCI: refused");
+        s.rig_conn = "serial".into();
+        assert_eq!(
+            crate::notify_sound::tx_audio_devices(&s),
+            vec![String::new()]
+        );
+        assert!(monitor_on_default(&s), "serial: let through");
+    }
+
+    /// The refusal names what the monitor clashed with: the radio by its name and its device, or
+    /// "the system default output", and what to do; a TX output held open is named as that.
+    #[test]
+    fn the_monitor_refusal_names_the_radio_and_the_device() {
+        let owners = vec![
+            ("Speakers (USB Audio CODEC)".to_string(), None),
+            (String::new(), Some("IC-7300 portable".to_string())),
+        ];
+        let said = monitor_refusal_notice_as(
+            "Headphones",
+            &owners,
+            &[],
+            Some("Headphones"),
+            Endpoint,
+            &no_cards,
+        );
+        assert_eq!(
+            said,
+            "Headphone monitor is off: the chosen output is the TX audio of radio \u{201c}IC-7300 \
+             portable\u{201d} (the system default output), so monitoring it would transmit the \
+             received band. Pick a separate headphone or speaker output (on Linux, by its card \
+             name), or set the TX audio of radio \u{201c}IC-7300 portable\u{201d} to its own device \
+             in Settings ▸ Radio."
+        );
+        // A named device of the radio in use (the flat setting) beats a default clash.
+        let said = monitor_refusal_notice_as(
+            "Speakers (USB Audio CODEC)",
+            &owners,
+            &[],
+            Some("Speakers (USB Audio CODEC)"),
+            Endpoint,
+            &no_cards,
+        );
+        assert!(
+            said.starts_with(
+                "Headphone monitor is off: the chosen output is the TX audio of the radio in use \
+                 (Speakers (USB Audio CODEC))"
+            ),
+            "{said}"
+        );
+        // Linux: unprovable, and named so.
+        let said = monitor_refusal_notice_as(
+            "default",
+            &[(
+                "plughw:CARD=CODEC,DEV=0".to_string(),
+                Some("FT-991A".to_string()),
+            )],
+            &[],
+            Some("default"),
+            Alsa,
+            &no_cards,
+        );
+        assert!(
+            said.contains("cannot be told apart from the TX audio of radio \u{201c}FT-991A\u{201d} (plughw:CARD=CODEC,DEV=0)"),
+            "{said}"
+        );
+        // Only a held output clashes.
+        let said = monitor_refusal_notice_as(
+            "USB Audio CODEC",
+            &[("Speakers".to_string(), Some("A".to_string()))],
+            &["USB Audio CODEC".to_string()],
+            Some("Speakers"),
+            Endpoint,
+            &no_cards,
+        );
+        assert!(
+            said.contains("the TX output the radio in use has open (USB Audio CODEC)"),
+            "{said}"
+        );
     }
 
     /// This computer's guard is the JS8 sounds' guard under this computer's naming: the same

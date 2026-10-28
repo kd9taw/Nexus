@@ -45,8 +45,8 @@ pub enum PlayRefusal {
     /// The device that would open is one the station transmits from.
     TxDevice,
     /// A TX audio device is set to "the system default output" (the station's, or a radio
-    /// profile's that has none, as a radio whose audio is not on this computer has), and the sound
-    /// would open that default, or a default nobody can name.
+    /// profile's that has none and transmits from a sound card), and the sound would open that
+    /// default, or a default nobody can name.
     TxDefault,
     /// The two cannot be proven different by name, so the sound is refused (Linux): the sound
     /// server's default sink (`default`, `pulse`, `pipewire`…) or a PCM routed by a config file
@@ -61,10 +61,37 @@ pub enum PlayRefusal {
 }
 
 /// Every TX audio device the station has configured: the flat `audio_out` and each radio
-/// profile's. An empty name is "the system default output".
+/// profile's. An empty name is "the system default output", except on a radio whose transmit audio
+/// does not leave through this computer's sound card at all (the Icom network connection, TCI with
+/// its audio on, Nexus's own Flex client with native audio on:
+/// [`tempo_app::settings::tx_audio_on_sound_card`]). There an empty name is no device, and is left
+/// out. A device such a radio names is kept, and the TX output the radio in use holds open is
+/// guarded on its own ([`guarded_tx_devices`]).
 pub fn tx_audio_devices(settings: &Settings) -> Vec<String> {
-    std::iter::once(settings.audio_out.clone())
-        .chain(settings.radios.iter().map(|r| r.audio_out.clone()))
+    tx_audio_device_owners(settings)
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect()
+}
+
+/// [`tx_audio_devices`], each with the radio whose TX audio it is: a profile's name, or `None` for
+/// the flat setting (the radio in use, or the station's own before it had profiles).
+pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String>)> {
+    use tempo_app::settings::tx_audio_on_sound_card;
+    let counts = |device: &str, on_card: bool| on_card || !device.trim().is_empty();
+    let flat = counts(
+        &settings.audio_out,
+        tx_audio_on_sound_card(&settings.tx_audio_route()),
+    )
+    .then(|| (settings.audio_out.clone(), None));
+    flat.into_iter()
+        .chain(
+            settings
+                .radios
+                .iter()
+                .filter(|r| counts(&r.audio_out, tx_audio_on_sound_card(&r.tx_audio_route())))
+                .map(|r| (r.audio_out.clone(), Some(r.name.clone()))),
+        )
         .collect()
 }
 

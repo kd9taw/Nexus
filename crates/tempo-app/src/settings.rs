@@ -721,6 +721,40 @@ pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> b
     rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
 }
 
+/// One radio's settings that say where its transmit audio goes ([`tx_audio_on_sound_card`]).
+pub struct TxAudioRoute<'a> {
+    pub rig_model: u32,
+    pub rig_conn: &'a str,
+    pub tci_host: &'a str,
+    pub tci_port: u16,
+    pub tci_audio: bool,
+    pub flex_native_cat: bool,
+    pub flex_radio_ip: &'a str,
+    pub flex_native_audio: bool,
+}
+
+/// Does this radio's transmit audio leave through this computer's sound card? False only where
+/// Nexus sends no transmit audio to a card at all, decided the way the radio's audio path decides:
+/// - the Icom network connection: nothing transmits over it, and the engine refuses every over
+///   before PTT ([`rig_conn_is_icom_lan`], `tempo_audio::icomlan`);
+/// - Nexus's TCI client with Audio over TCI on: the transmit audio goes into the TCI session through
+///   its tee, and that client keys Nexus's audio only while the tee is in ([`tci_reachable`],
+///   [`Settings::tci_audio`]);
+/// - Nexus's own Flex client with native audio on: DAX over the network, and Phone at the shack
+///   keys the radio's own microphone ([`flex_client_reachable`], [`Settings::flex_native_audio`]).
+///
+/// Every other radio, and any of these with its network audio off, takes its audio from the card.
+/// The headphone monitor and the JS8 sounds use it to leave out a TX device of "system default" on
+/// a radio that does not transmit from a card ([`Settings`]'s TX devices, in `tempo_audio`).
+pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
+    let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
+    let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
+    let flex = r.flex_native_cat
+        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && r.flex_native_audio;
+    !(icom_lan || tci || flex)
+}
+
 /// The port Nexus's own TCI server listens on unless the operator moves it
 /// ([`Settings::tci_server_port`]): 40001, where WSJT-X, JTDX, MacLoggerDX and the Go TCI tools
 /// look by default, and clear of 50001, where Thetis (and, by a user's report, ExpertSDR3) serves
@@ -5069,6 +5103,37 @@ impl RadioProfile {
     /// the monitor does not watch it, although the radio has CAT when it is the one in use.
     pub fn monitored_while(&self, active: u32) -> bool {
         self.enabled && self.id != active && self.rig_model != 0
+    }
+
+    /// Where this radio's transmit audio goes ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
+}
+
+impl Settings {
+    /// Where the radio in use's transmit audio goes, from the flat mirror of its settings
+    /// ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
     }
 }
 

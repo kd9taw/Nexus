@@ -8514,14 +8514,13 @@ impl RadioLoop {
                         }
                         Ok(()) if want.monitor_enabled && guarded => {
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some((
-                                    AudioErrorKind::Monitor,
-                                    "Headphone monitor is off: the chosen output is the rig's TX \
-                                     device, or cannot be told apart from it — monitoring it would \
-                                     transmit the received band. Pick a separate headphone or \
-                                     speaker device (on Linux, by its card name)."
-                                        .to_string(),
-                                )));
+                                // Names the radio and the device it clashed with, and what to do.
+                                let notice = crate::monitor::monitor_refusal_notice(
+                                    &mon_dev,
+                                    eng.settings(),
+                                    Some(&default_out),
+                                );
+                                eng.set_audio_error(Some((AudioErrorKind::Monitor, notice)));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
@@ -40294,10 +40293,26 @@ mod tests {
             "plughw:CARD=CODEC,DEV=0",
             "premise: the radio in use is on its own card"
         );
+        let idle_name = engine
+            .lock()
+            .unwrap()
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.audio_out == idle)
+            .map(|r| r.name.clone())
+            .unwrap();
         let said = monitor_verdict(&engine, &mut loop_state(), &mut MockBackend::new());
         assert!(
             said.as_deref().is_some_and(|m| m.starts_with(MONITOR_OFF)),
             "the monitor opened on the idle rig's TX codec: {said:?}"
+        );
+        // The notice names the radio it clashed with, and its device.
+        assert!(
+            said.as_deref().is_some_and(|m| m.contains(&format!(
+                "the TX audio of radio \u{201c}{idle_name}\u{201d} ({idle})"
+            ))),
+            "the notice does not name the idle radio {idle_name:?}: {said:?}"
         );
         // Control: a headset of its own monitors, with the same two rigs.
         let engine = monitor_station("hw:CARD=Headset,DEV=0", Some(idle));
