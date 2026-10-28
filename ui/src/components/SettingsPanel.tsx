@@ -7243,7 +7243,7 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">{t('settings.audio.pcMic.title')}</span>
               <div className="settings-field">
                 <span className="settings-label">{t('settings.audio.pcMic.label')}</span>
-                <button
+                <button disabled={locked('pcMic')} data-setting="pcMic"
                   type="button"
                   role="switch"
                   aria-checked={form.pcMic ?? false}
@@ -7253,13 +7253,16 @@ export function SettingsPanel({
                 >
                   <span className="toggle-knob" />
                 </button>
+                {setAtStation('pcMic')}
                 <span className="settings-hint">{t('settings.audio.pcMic.hint')}</span>
               </div>
-              {form.pcMic && (
+              {/* From a computer driving the station all three are the station's, shown read-only
+                  whatever the switch says. */}
+              {(form.pcMic || stationOnly('pcMic')) && (
                 <>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.audio.pcMic.device.label')}</span>
-                    <select
+                    <select disabled={locked('pcMicDevice')} data-setting="pcMicDevice"
                       className="settings-input"
                       value={form.pcMicDevice ?? ''}
                       onChange={(e) => update('pcMicDevice', e.target.value)}
@@ -7271,6 +7274,7 @@ export function SettingsPanel({
                         </option>
                       ))}
                     </select>
+                    {setAtStation('pcMicDevice')}
                     <span className="settings-hint">{t('settings.audio.pcMic.device.hint')}</span>
                   </label>
                   <label className="settings-field">
@@ -7280,7 +7284,7 @@ export function SettingsPanel({
                         {t('settings.audio.pcMic.gain.value', { db: Math.round(form.pcMicGainDb ?? 0) })}
                       </span>
                     </span>
-                    <input
+                    <input disabled={locked('pcMicGainDb')} data-setting="pcMicGainDb"
                       className="settings-slider"
                       type="range"
                       min="-20"
@@ -7290,6 +7294,7 @@ export function SettingsPanel({
                       onChange={(e) => updateNum('pcMicGainDb', Number(e.target.value))}
                       aria-label={t('settings.audio.pcMic.gain.label')}
                     />
+                    {setAtStation('pcMicGainDb')}
                     <span className="settings-hint">{t('settings.audio.pcMic.gain.hint')}</span>
                   </label>
                 </>
