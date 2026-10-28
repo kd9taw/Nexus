@@ -14038,6 +14038,13 @@ export const EN = {
     "Smooth scroll — the waterfall moves at a steady rate. When the radio's scope sweeps slower than that, the newest sweep is repeated until the next one arrives, and each repeat is recorded as one. Click for one row per sweep.",
   'scope.rows.sweep.title':
     'One row per sweep — the waterfall moves only when the radio sends a new sweep, so a slow scope scrolls slowly, in steps, and every row is new. Click for smooth scroll.',
+  // The CW scope's HiDef/Fast switch (`PhoneScope.tsx`). "HiDef" is the mode's name.
+  'scope.hidef.label': 'HiDef',
+  'scope.fast.label': 'Fast',
+  'scope.hidef.on.title':
+    'HiDef — the CW passband is analysed on its own: a steady carrier draws about 4–5 Hz wide, two signals 10 Hz apart stay apart, and keying keeps its gaps. The picture runs about a quarter of a second behind the audio. Click for Fast.',
+  'scope.hidef.off.title':
+    'Fast — the scope is analysed like every other display: the picture follows the audio closely and carriers draw wider (the resolution is under ⚙). Click for HiDef.',
 
   // ── The MSK144 Fast Graph ───────────────────────────────────────────────────────────
   // The callsigns and the second ticks drawn on it are data and a scale.

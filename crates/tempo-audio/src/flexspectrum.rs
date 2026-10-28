@@ -1261,9 +1261,13 @@ mod tests {
         use tempo_net::flex::vita::FftFragment;
         let feed = SpectrumFeed::default();
         let newest = |last| {
-            feed.scope_frame_after(0.0, 0.0, Default::default(), last, || {
-                unreachable!("a sweep was published, so the fallback is never asked")
-            })
+            feed.scope_frame_after(
+                0.0,
+                0.0,
+                tempo_core::spectrum::ScopeAnalysis::default(),
+                last,
+                || unreachable!("a sweep was published, so the fallback is never asked"),
+            )
         };
         let fragment = |frame_index: u32, start_bin: u16, rows: &[u16]| FftFragment {
             start_bin,
@@ -1330,9 +1334,13 @@ mod tests {
     }
 
     fn newest(feed: &SpectrumFeed) -> tempo_app::dto::SpectrumFrame {
-        feed.scope_frame_after(0.0, 0.0, Default::default(), 0, || {
-            unreachable!("a frame was published")
-        })
+        feed.scope_frame_after(
+            0.0,
+            0.0,
+            tempo_core::spectrum::ScopeAnalysis::default(),
+            0,
+            || unreachable!("a frame was published"),
+        )
         .expect("a frame")
     }
 

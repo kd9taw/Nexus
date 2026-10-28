@@ -314,7 +314,7 @@ struct FeedRows {
     /// fold the new rows into the old window's average. (The 500 ms gap-restart in
     /// `RowAverage::push` would usually cover it, but that is a coincidence of two timeouts, not
     /// a guarantee — and coincidences are what this file keeps getting bitten by.)
-    scope_win: spectrum::WindowN,
+    scope_win: spectrum::ScopeAnalysis,
     /// The last frame number stamped, 0 before the first. One counter for all three slots.
     seq: u64,
     /// When the RF scope pane last read the RF slot — its standing request for the radio's own
@@ -362,8 +362,9 @@ struct ScopeReq {
     hi: f32,
     /// Analysis window length. ⚠️ A change here is NOT visible to `RowAverage::push`, which
     /// restarts on span / bin-count / source changes only — two window lengths have all three
-    /// in common. `scope_row` therefore clears the slot itself when this moves; see there.
-    win: spectrum::WindowN,
+    /// in common. `scope_row` therefore clears the slot itself when this moves; see there. The CW
+    /// scope's HiDef zoom is one more value of it.
+    win: spectrum::ScopeAnalysis,
     at: Instant,
 }
 
@@ -778,7 +779,7 @@ impl SpectrumFeed {
     /// Read by the rx-dsp thread once per tick. `None` is the normal state — no scope on
     /// screen, a native RF row winning, or a request that has aged out — and it costs the
     /// producer exactly one mutex read.
-    pub fn scope_request(&self) -> Option<(f32, f32, spectrum::WindowN)> {
+    pub fn scope_request(&self) -> Option<(f32, f32, spectrum::ScopeAnalysis)> {
         let g = self.rows.lock().ok()?;
         let req = g.scope_req?;
         (req.at.elapsed() < Self::SCOPE_REQ_TTL).then_some((req.lo, req.hi, req.win))
@@ -828,8 +829,14 @@ impl SpectrumFeed {
     ///   now — a mismatch means the request just changed, so it falls through rather than
     ///   drawing the old window's frequencies under the new window's labels;
     /// - else the full audio row, exactly as before.
-    pub fn scope_row(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<Spectrum> {
-        self.scope_frame(lo_hz, hi_hz, win).map(Spectrum::from)
+    pub fn scope_row(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: impl Into<spectrum::ScopeAnalysis>,
+    ) -> Option<Spectrum> {
+        self.scope_frame(lo_hz, hi_hz, win.into())
+            .map(Spectrum::from)
     }
 
     /// [`Self::scope_row`] for a caller that names the LAST FRAME IT DREW — `None` when the
@@ -850,11 +857,11 @@ impl SpectrumFeed {
         &self,
         lo_hz: f32,
         hi_hz: f32,
-        win: spectrum::WindowN,
+        win: impl Into<spectrum::ScopeAnalysis>,
         last_seq: u64,
         fallback: impl FnOnce() -> Spectrum,
     ) -> Option<SpectrumFrame> {
-        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win) else {
+        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win.into()) else {
             let row = fallback();
             return Some(SpectrumFrame {
                 seq: 0,
@@ -872,7 +879,12 @@ impl SpectrumFeed {
     }
 
     /// [`Self::scope_row`], as the frame the winning slot holds.
-    fn scope_frame(&self, lo_hz: f32, hi_hz: f32, win: spectrum::WindowN) -> Option<SpectrumFrame> {
+    fn scope_frame(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: spectrum::ScopeAnalysis,
+    ) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
             && hi_hz <= Self::SCOPE_MAX_HZ
@@ -61907,7 +61919,7 @@ mod tests {
         );
         assert_eq!(
             feed.scope_request(),
-            Some((300.0, 1100.0, spectrum::WindowN::Balanced)),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced.into())),
             "and the request now stands, so the producer will answer it next tick"
         );
 

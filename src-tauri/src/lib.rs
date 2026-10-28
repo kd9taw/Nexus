@@ -14076,10 +14076,10 @@ fn get_scope_row(
     // An absent or unrecognised tag is the DEFAULT, stated here rather than hidden in
     // `from_tag`: a scope that keeps drawing at the shipped window is the right failure for a
     // UI that is out of step with this build, and it is the only failure that cannot surprise
-    // an operator who never opened the control.
+    // an operator who never opened the control. `"hidef"` is the CW scope's zoom FFT.
     let win = window
         .as_deref()
-        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
     if let Some(row) = feed.scope_row(lo_hz, hi_hz, win) {
         return Ok(row);
@@ -14105,7 +14105,7 @@ fn get_scope_frame(
     // The same default as `get_scope_row`, for the reason given there.
     let win = window
         .as_deref()
-        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }

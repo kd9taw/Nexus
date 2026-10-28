@@ -57,7 +57,9 @@ function mount(cockpit?: 'phone' | 'cw') {
   render(<PhoneScope transmitting={false} theme="dark" cockpit={cockpit} />)
   fireEvent.click(gear())
   const strip = screen.getByRole('group', { name: 'Scope display settings' })
-  const windows = within(within(strip).getByRole('group', { name: 'Resolution' })).getAllByRole('button')
+  // Absent on the CW scope while HiDef is on: the window is Fast's.
+  const group = within(strip).queryByRole('group', { name: 'Resolution' })
+  const windows = group ? within(group).getAllByRole('button') : []
   return { strip, windows }
 }
 const pressed = (windows: HTMLElement[]) => windows.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)
@@ -80,7 +82,9 @@ describe('rig scope analysis window', () => {
     expect(windows.map((b) => b.textContent)).toEqual(['47 Hz', '23 Hz', '12 Hz'])
     expect(pressed(windows)).toEqual(['47 Hz']) // 1024-point, 85 ms — the phone default (operator ruling 2026-10-23)
     cleanup()
-    expect(pressed(mount('cw').windows)).toEqual(['23 Hz']) // CW keeps the 2048-point window
+    localStorage.setItem(CW_KEY, JSON.stringify({ hiDef: false }))
+    expect(pressed(mount('cw').windows)).toEqual(['23 Hz']) // CW's Fast keeps the 2048-point window
+    localStorage.removeItem(CW_KEY)
     expect(localStorage.getItem(PHONE_KEY)).toBeNull()
     expect(localStorage.getItem(LEGACY_WIN_KEY)).toBeNull()
   })
@@ -119,8 +123,42 @@ describe('rig scope analysis window', () => {
     localStorage.setItem(LEGACY_WIN_KEY, 'fast')
     expect(pressed(mount().windows)).toEqual(['47 Hz'])
     cleanup()
-    localStorage.setItem(CW_KEY, JSON.stringify({ window: 'sharp' }))
+    localStorage.setItem(CW_KEY, JSON.stringify({ window: 'sharp', hiDef: false }))
     expect(pressed(mount('cw').windows)).toEqual(['12 Hz'])
+  })
+})
+
+describe('the CW scope’s HiDef/Fast switch', () => {
+  const hiDefSwitch = () => screen.getByRole('button', { name: /^(HiDef|Fast)$/ })
+
+  it('is HiDef on the CW scope with nothing stored, and the window control is Fast’s', () => {
+    const { windows } = mount('cw')
+    expect(hiDefSwitch().textContent).toBe('HiDef')
+    expect(hiDefSwitch().getAttribute('aria-pressed')).toBe('true')
+    expect(windows, 'the window does not apply while HiDef is on').toEqual([])
+    expect(localStorage.getItem(CW_KEY), 'nothing written until asked').toBeNull()
+  })
+
+  it('switches to Fast, shows the window it uses, and keeps the choice for the CW cockpit', () => {
+    mount('cw')
+    fireEvent.click(hiDefSwitch())
+    expect(hiDefSwitch().textContent).toBe('Fast')
+    expect(hiDefSwitch().getAttribute('aria-pressed')).toBe('false')
+    const strip = screen.getByRole('group', { name: 'Scope display settings' })
+    const windows = within(within(strip).getByRole('group', { name: 'Resolution' })).getAllByRole('button')
+    expect(pressed(windows)).toEqual(['23 Hz'])
+    expect(stored(CW_KEY).hiDef).toBe(false)
+    cleanup()
+    mount('cw')
+    expect(hiDefSwitch().textContent, 'Fast survives a remount').toBe('Fast')
+    fireEvent.click(hiDefSwitch())
+    expect(stored(CW_KEY).hiDef).toBe(true)
+    expect(localStorage.getItem(PHONE_KEY), 'a CW choice is not a Phone one').toBeNull()
+  })
+
+  it('is the CW scope’s alone: Phone has no switch', () => {
+    mount('phone')
+    expect(screen.queryByRole('button', { name: /^(HiDef|Fast)$/ })).toBeNull()
   })
 })
 
