@@ -175,11 +175,19 @@ mod device_play {
                 if ok {
                     std::thread::sleep(std::time::Duration::from_secs_f32(secs + 0.25));
                 }
-                drop(stream);
+                close_locked(stream);
             })
             .map_err(|e| PlayRefusal::Failed(e.to_string()))?;
         rx.recv()
             .unwrap_or_else(|_| Err(PlayRefusal::Failed("the sound thread ended".into())))
+    }
+
+    /// Tear the sound's stream down under [`AUDIO_HOST_LOCK`], as every other cpal teardown in
+    /// this crate is (`device.rs`: host init and stream construction/teardown from two threads at
+    /// once fault natively, which no `catch_unwind` catches). The play thread closes ONLY here.
+    fn close_locked(stream: Option<cpal::Stream>) {
+        let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        drop(stream);
     }
 
     fn open_and_start(
@@ -426,6 +434,32 @@ mod tests {
             !src.contains(&fallback),
             "no silent fallback to the default"
         );
+    }
+
+    /// A sound's stream is torn down under the host lock, as every other cpal teardown is
+    /// (`device.rs`'s AUDIO_HOST_LOCK: an unlocked teardown racing an enumeration or an open faults
+    /// natively). The cpal half cannot run headless, so this is held by the source: the play
+    /// thread closes its stream only through `close_locked`, which takes the lock before the drop.
+    #[test]
+    fn a_sounds_stream_is_closed_under_the_host_lock() {
+        let src = include_str!("notify_sound.rs");
+        let play = &src[src.find("pub fn play(").expect("the play path")..];
+        let play = &play[..play.find("fn close_locked(").expect("the helper")];
+        assert!(
+            play.contains("close_locked(stream)"),
+            "the play thread closes through the locked helper"
+        );
+        assert!(
+            !play.contains(&format!("{}(stream)", "drop")),
+            "no unlocked drop of the stream"
+        );
+        let helper = &src[src.find("fn close_locked(").expect("the helper")..];
+        let helper = &helper[..helper.find("\n    }\n").expect("its end")];
+        let locked = helper.find("AUDIO_HOST_LOCK").expect("takes the lock");
+        let dropped = helper
+            .find(&format!("{}(stream)", "drop"))
+            .expect("drops it");
+        assert!(locked < dropped, "the lock is taken before the drop");
     }
 
     #[test]
