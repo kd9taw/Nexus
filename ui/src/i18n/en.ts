@@ -1900,6 +1900,11 @@ export const EN = {
   'logbook.columns.title': 'Choose the columns the log shows',
   'logbook.columns.hint':
     'Drag the right edge of a column’s header to change its width, or press Alt+← or Alt+→ on the header. Double-click the edge to put it back.',
+  'logbook.columns.moveHint':
+    'Drag a column’s header to move the column, or press Alt+Shift+← or Alt+Shift+→ on the header.',
+  'logbook.columns.moved': '{{column}} moved to place {{place}} of {{count}}',
+  'logbook.columns.atFirst': '{{column}} is already the first column',
+  'logbook.columns.atLast': '{{column}} is already as far right as it can go',
   'logbook.columns.group.contact': 'Contact',
   'logbook.columns.group.location': 'Location',
   'logbook.columns.group.qsl': 'QSL',

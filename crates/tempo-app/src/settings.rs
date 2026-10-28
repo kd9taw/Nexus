@@ -5862,6 +5862,11 @@ pub struct LogbookColumns {
     /// Dragged widths, in CSS px, by column id.
     #[serde(default)]
     pub widths: std::collections::BTreeMap<String, u32>,
+    /// The column order the operator dragged, by column id; empty while the table is in its
+    /// default order, and then not written at all, so a choice saved before there was an order
+    /// is written back exactly as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -13995,6 +14000,7 @@ mod tests {
             widths: [("country".to_string(), 210), ("county".to_string(), 140)]
                 .into_iter()
                 .collect(),
+            order: Vec::new(),
         };
         assert_eq!(
             loaded.logbook_columns.as_ref(),
@@ -14016,6 +14022,48 @@ mod tests {
                 hidden: vec!["mode".into()],
                 ..LogbookColumns::default()
             })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A dragged column order survives the file, and a choice saved before there was one is
+    /// written back exactly as it was** — no `order` key appears in a file that never had one.
+    #[test]
+    fn logbook_column_order_round_trips_and_an_old_choice_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("tempo_logcols_order_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookColumns":{"shown":["iota"],"hidden":[],"widths":{},"order":["notes","call","country"]}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        let cols = loaded.logbook_columns.clone().unwrap();
+        assert_eq!(
+            cols.order,
+            vec!["notes", "call", "country"],
+            "loaded under the UI's key"
+        );
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).logbook_columns.unwrap().order,
+            vec!["notes", "call", "country"],
+            "an ordinary save dropped it"
+        );
+
+        let old: Settings = serde_json::from_str(
+            r#"{"logbookColumns":{"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}}"#,
+        )
+        .unwrap();
+        let cols = old.logbook_columns.clone().unwrap();
+        assert!(cols.order.is_empty(), "an old choice has no order");
+        let written = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            written["logbookColumns"],
+            serde_json::json!({"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}),
+            "an old choice is written back as it was"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

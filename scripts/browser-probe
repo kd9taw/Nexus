@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|logbook
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -168,6 +168,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         board with its head, nothing scrolls sideways, and the newest and the
                         hundredth contact's cells are on screen, with a planted wide row that
                         must be caught (ui/probe/clublog-probe.mjs; it builds nothing)
+  --desktop logbook     the Logbook in the app's own wrapper at 1024×768, 1920×1080 and
+                        2560×1440, asserting the panel spans the window and the table the
+                        panel, nothing scrolls sideways at the page, the default table fits,
+                        every column scrolls sideways inside the table with its header, and a
+                        real drag of a header moves the column without sorting while a click
+                        still sorts, with the old centred measure as a control that must be
+                        caught (ui/probe/logbook-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -184,7 +191,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, logwaiting, topbar, header, rttyfit, firstrun or clublog" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|logwaiting|topbar|header|rttyfit|firstrun|clublog|logbook) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, logwaiting, topbar, header, rttyfit, firstrun, clublog or logbook" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -218,6 +225,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
+  [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

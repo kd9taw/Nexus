@@ -173,7 +173,8 @@ describe('the shell gives the scoreboard more room than the centre column did, n
     for (const t of TIERS) {
       const expected: Record<string, string> = {
         'panel pota-view pota-hunter': '1100px', // prose-shaped, and still is
-        'panel log-view logbook': t === 'xl' ? '1600px' : '1100px',
+        // The Logbook went the width of the window from md (2026-10-27), as Settings and Repeaters did.
+        'panel log-view logbook': t === 'xs' || t === 'sm' ? '1100px' : 'none',
       }
       for (const [classes, want] of Object.entries(expected)) {
         const got = maxWidth(panel(classes, t))

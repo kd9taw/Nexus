@@ -6299,11 +6299,20 @@ body.resizing {
   max-width: 1100px;
   margin: 0 auto;
 }
-/* xl (effective width ≥ 2400): let the DATA surface — Logbook's 11-column table — use
-   the room. POTA is prose-shaped and keeps the 1100px measure above; Settings and
-   Repeaters USED to, and the rules below are why they no longer do. */
+/* THE LOGBOOK USES THE WHOLE WINDOW from md, as Settings, Repeaters and the Field Day board do.
+   (The operator, 2026-10-27: "a large portion of the screen on either side is unused, and must
+   one scroll horizontally.") It was capped at the 1100px measure above, and at 1600px on xl only,
+   so the table sat in a centred column: 935px of a 1024×768 window (md at its 85 % zoom), 1100px
+   of 1920 (lg), 1600px of 2560 (xl), while a table with added columns scrolled sideways inside
+   that column. The table is the content here, and width buys it columns, not longer lines. Where
+   the columns still do not fit, `.log-scroll` scrolls them sideways (`.logbook-table.wide`), never
+   the page. md AND UP for Settings' reason: at xs/sm the cap is inert by arithmetic, so the floor
+   is untouched. Computed per tier in settings-width.test.tsx; measured in real Chrome by
+   `scripts/browser-probe --desktop logbook`. POTA is prose-shaped and keeps the measure. */
+[data-viewport='md'] .layout.single > .panel.log-view,
+[data-viewport='lg'] .layout.single > .panel.log-view,
 [data-viewport='xl'] .layout.single > .panel.log-view {
-  max-width: 1600px;
+  max-width: none;
 }
 /* Repeaters uses the whole width of its pane from md, as Settings does (the operator,
    2026-10-03: "the screen is narrow and in the middle and you have a lot of room on the screen
@@ -18327,6 +18336,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-col-resize:hover {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A header being dragged to another place (Logbook.tsx, MOVING A COLUMN): the one carried dims, and
+   the header it would land beside shows an accent bar on that side. Drawn inside the cell (an inset
+   shadow), so a move in progress takes no width and shifts nothing. */
+.logbook-row.head > .log-cell.moving {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+.logbook-row.head > .log-cell.drop-before {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.logbook-row.head > .log-cell.drop-after {
+  box-shadow: inset -3px 0 0 var(--accent);
 }
 /* An upload column's mark: the state in a glyph, its words in the tooltip. */
 .log-upload.done {

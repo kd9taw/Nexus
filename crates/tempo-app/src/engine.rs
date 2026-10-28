@@ -42864,6 +42864,7 @@ mod tests {
             shown: vec!["iota".into()],
             hidden: Vec::new(),
             widths: [("country".to_string(), 210)].into_iter().collect(),
+            order: vec!["notes".into(), "call".into()],
         };
         let stale = e.settings().clone();
         e.set_logbook_columns(Some(chosen.clone()));
