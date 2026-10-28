@@ -179,6 +179,10 @@ mod rtty_sideband_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
+/// The first login saved for QRZ Logbook, ClubLog or eQSL never sends the old log unasked: where
+/// each service's automatic uploads start.
+#[cfg(test)]
+mod upload_start_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
@@ -7468,6 +7472,15 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // Where QRZ Logbook's, ClubLog's and eQSL's automatic uploads start has ONE writer too
+        // (`set_upload_start`, from the answer to the first login's question): a form read before
+        // the answer would put the old log back in the catch-up's reach, and a save from another
+        // computer must not answer that question for the station.
+        let live_upload_start = (
+            self.settings.qrz_logbook_upload_from,
+            self.settings.clublog_upload_from,
+            self.settings.eqsl_upload_from,
+        );
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7615,6 +7628,11 @@ impl Engine {
             self.settings.log_prop_mode = live_log_prop_mode;
             self.settings.radio_switch_policy = live_radio_switch_policy;
             self.settings.experience_level = live_experience_level;
+            (
+                self.settings.qrz_logbook_upload_from,
+                self.settings.clublog_upload_from,
+                self.settings.eqsl_upload_from,
+            ) = live_upload_start;
             (
                 self.settings.beacon,
                 self.settings.js8_autoreply,
@@ -8055,6 +8073,61 @@ impl Engine {
     pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
         self.settings.wrl_upload = on;
         self.settings.clone()
+    }
+
+    /// ⛔ **THE ONE WRITER of where a service's automatic uploads start**
+    /// ([`Settings::qrz_logbook_upload_from`] and its ClubLog and eQSL siblings), for each of
+    /// QRZ Logbook, ClubLog and eQSL in `legs` (the others keep no per-contact upload record, so
+    /// they have no start point). `Some(t)`: a contact made before `t` is never sent there
+    /// automatically, and it comes off what is already waiting to go now (the upload queue and the
+    /// contest's held contacts). `None`: no start point, every contact not yet sent is owed again.
+    /// A form save keeps the live value (`apply_settings_inner`). Returns the settings for the
+    /// caller to persist.
+    pub fn set_upload_start(&mut self, legs: u8, from: Option<u64>) -> Settings {
+        let legs = legs & (upload_legs::QRZ | upload_legs::CLUBLOG | upload_legs::EQSL);
+        for (leg, field) in [
+            (upload_legs::QRZ, &mut self.settings.qrz_logbook_upload_from),
+            (upload_legs::CLUBLOG, &mut self.settings.clublog_upload_from),
+            (upload_legs::EQSL, &mut self.settings.eqsl_upload_from),
+        ] {
+            if legs & leg != 0 {
+                *field = from;
+            }
+        }
+        if let (Some(from), true) = (from, legs != 0) {
+            self.station.unqueue_before(legs, from);
+            let held = self.contest_held_uploads.len();
+            for h in self.contest_held_uploads.iter_mut() {
+                if h.rec.when_unix < from {
+                    h.owed &= !legs;
+                }
+            }
+            self.contest_held_uploads.retain(|h| h.owed != 0);
+            if self.contest_held_uploads.len() != held {
+                self.persist_contest_held_uploads();
+            }
+        }
+        self.settings.clone()
+    }
+
+    /// A login for the service on `leg` (QRZ Logbook, ClubLog or eQSL) was just saved, BEFORE its
+    /// upload is turned on and its catch-up runs. `first`: no login for it was stored before this
+    /// save. Only a first login moves the start point: `send_old` (the operator's "Send them")
+    /// clears it, anything else — the default "Only contacts made from now on", or no answer at
+    /// all — puts it at `now_unix`. A login saved over one already stored changes nothing (`None`),
+    /// so a station that had its logins before this question existed sees no difference.
+    /// Returns the settings to persist when it changed them.
+    pub fn first_login_saved(
+        &mut self,
+        leg: u8,
+        first: bool,
+        send_old: bool,
+        now_unix: u64,
+    ) -> Option<Settings> {
+        if !first {
+            return None;
+        }
+        Some(self.set_upload_start(leg, (!send_old).then_some(now_unix)))
     }
 
     /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
@@ -33481,7 +33554,8 @@ contact yourself."
     #[cfg(test)]
     pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
         let (rows, room) = (self.log_rows(), self.catch_up_room());
-        let stale = crate::station::catch_up_records(&rows, legs, room)
+        let start = crate::station::UploadStart::of(&self.settings);
+        let stale = crate::station::catch_up_records(&rows, legs, room, start)
             .expect("the test's log can be read");
         self.station.requeue_catch_up(stale)
     }

@@ -3689,6 +3689,21 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Where QRZ Logbook's automatic uploads start, in Unix seconds: a contact made before it is
+    /// never sent there automatically, by the catch-up a saved login runs or from what was waiting
+    /// to go when it was set. `None` (the only value an existing station has) starts nowhere, so
+    /// every contact not yet sent is owed, as before. Set when the operator saves the first login
+    /// for the service and answers "Only contacts made from now on" (the default); "Send them"
+    /// clears it. Sending an older contact by hand still works. Written only by
+    /// `Engine::set_upload_start`; a settings form save keeps the live value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz_logbook_upload_from: Option<u64>,
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog_upload_from: Option<u64>,
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
@@ -6473,6 +6488,9 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            qrz_logbook_upload_from: None,
+            clublog_upload_from: None,
+            eqsl_upload_from: None,
             eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
             wrl_upload: false, // the credential is the opt-in

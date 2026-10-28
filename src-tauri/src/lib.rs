@@ -28238,11 +28238,15 @@ fn catch_up_failed_uploads(
     // The pick reads the logbook store, so it runs with the engine lock released: the queue's
     // room and the log's rows are taken under it, and the contacts picked are queued under it
     // again (a record the queue has filled up past meanwhile stays unsent for the next sweep).
-    let (rows, room) = {
+    let (rows, room, start) = {
         let eng = engine_lock(state);
-        (eng.log_rows(), eng.catch_up_room())
+        (
+            eng.log_rows(),
+            eng.catch_up_room(),
+            tempo_app::station::UploadStart::of(eng.settings()),
+        )
     };
-    let stale = match tempo_app::station::catch_up_records(&rows, leg, room) {
+    let stale = match tempo_app::station::catch_up_records(&rows, leg, room, start) {
         Ok(stale) => stale,
         Err(e) => {
             conn_log(
@@ -28272,11 +28276,84 @@ fn catch_up_failed_uploads(
     );
 }
 
+/// The first login saved for QRZ Logbook, ClubLog or eQSL: where its automatic uploads start
+/// (`Engine::first_login_saved`), set BEFORE the upload is turned on and the catch-up runs, so
+/// nothing older than the answer is ever queued. `first` is whether no login was stored before
+/// this save (read before it was written); a login saved over one changes nothing. `send_old` is
+/// the operator's answer to "Send N contacts not yet sent to <service>?": only `Some(true)`, "Send
+/// them", sends the old log; the default and no answer both start from now.
+fn start_uploads_for_login(
+    state: &State<'_, SharedEngine>,
+    leg: u8,
+    service: &'static str,
+    first: bool,
+    send_old: Option<bool>,
+) {
+    let send_old = send_old == Some(true);
+    let changed = {
+        let mut eng = engine_lock(state);
+        eng.first_login_saved(leg, first, send_old, now_unix().max(0) as u64)
+    };
+    if let Some(updated) = changed {
+        persist_settings(updated, |e| {
+            eprintln!("tempo: couldn't persist settings: {e}")
+        });
+        if !send_old {
+            conn_log(
+                service,
+                "info",
+                format!(
+                    "only contacts made from now on are sent to {service} automatically; send an \
+                     older one from the Logbook"
+                ),
+            );
+        }
+    }
+}
+
+/// The service a login question is about, by its name on the wire: its upload leg and the keychain
+/// user its login is kept under.
+fn backlog_service(service: &str) -> Result<(u8, &'static str), String> {
+    use tempo_app::engine::upload_legs;
+    match service {
+        "qrz" => Ok((upload_legs::QRZ, QRZ_LOGBOOK_KEYCHAIN_USER)),
+        "clublog" => Ok((upload_legs::CLUBLOG, CLUBLOG_KEYCHAIN_USER)),
+        "eqsl" => Ok((upload_legs::EQSL, EQSL_KEYCHAIN_USER)),
+        other => Err(format!("no upload service called {other:?}")),
+    }
+}
+
+/// What saving a login for `service` ("qrz", "clublog" or "eqsl") would ask first: `None` when a
+/// login for it is already stored (a save then asks nothing and changes nothing), else how many
+/// logged contacts have not been sent there. Asked by Settings before it saves the login; it says
+/// only whether a login is stored, never anything of it.
+#[tauri::command]
+async fn upload_backlog(
+    service: String,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<usize>, String> {
+    let (leg, user) = backlog_service(&service)?;
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        if keychain_has(user) {
+            return Ok(None);
+        }
+        let rows = engine_lock(&engine).log_rows();
+        tempo_app::station::backlog_count(&rows, leg).map(Some)
+    })
+    .await
+}
+
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
 /// Write-only, like the LoTW counterpart. Saving also switches eQSL auto-upload
-/// ON (entering the credential is the intent).
+/// ON (entering the credential is the intent). The first password saved asks first what becomes of
+/// the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_eqsl_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = eqsl_keychain()?;
     if password.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -28284,10 +28361,18 @@ fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result
         set_upload_toggle(&state, UploadToggle::Eqsl, false);
         return Ok(());
     }
+    let first = !keychain_has(EQSL_KEYCHAIN_USER);
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("eQSL", "ok", "password saved to the OS keychain");
+    start_uploads_for_login(
+        &state,
+        tempo_app::engine::upload_legs::EQSL,
+        "eQSL",
+        first,
+        send_old,
+    );
     set_upload_toggle(&state, UploadToggle::Eqsl, true);
     catch_up_failed_uploads(
         &state,
@@ -28399,9 +28484,15 @@ fn entered_credential(raw: &str) -> &str {
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
 /// password) in the OS keychain. Write-only. Saving a key also switches QRZ
 /// auto-upload ON: entering the key IS the intent ("upload my QSOs to QRZ") —
-/// previously the separate toggle silently stayed off and nothing uploaded.
+/// previously the separate toggle silently stayed off and nothing uploaded. The first key saved
+/// asks first what becomes of the contacts never sent there (`send_old`, see
+/// [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_qrz_logbook_key(
+    key: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
     // #291: a different key can unlock a different book, so the owner learned for the old one
@@ -28418,10 +28509,18 @@ fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<()
         set_upload_toggle(&state, UploadToggle::Qrz, false);
         return Ok(());
     }
+    let first = !keychain_has(QRZ_LOGBOOK_KEYCHAIN_USER);
     entry
         .set_password(key)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
+    start_uploads_for_login(
+        &state,
+        tempo_app::engine::upload_legs::QRZ,
+        "QRZ Logbook",
+        first,
+        send_old,
+    );
     set_upload_toggle(&state, UploadToggle::Qrz, true);
     catch_up_failed_uploads(
         &state,
@@ -31458,9 +31557,14 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
 /// Store (or, if empty, clear) the ClubLog **Application Password** in the OS
 /// keychain. Also re-arms ClubLog auto-push (a credential change clears the 403
 /// suspend latch). Write-only. Saving also switches ClubLog auto-upload ON
-/// (entering the credential is the intent).
+/// (entering the credential is the intent). The first app-password saved asks first what becomes
+/// of the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_clublog_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = clublog_keychain()?;
     if password.is_empty() {
         // Clearing = "turn ClubLog off": drop the credential AND the toggle. The
@@ -31479,10 +31583,18 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
     // no-credentials announce latch, so the next dry spell is announced again.
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+    let first = !keychain_has(CLUBLOG_KEYCHAIN_USER);
     entry
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
+    start_uploads_for_login(
+        &state,
+        tempo_app::engine::upload_legs::CLUBLOG,
+        "ClubLog",
+        first,
+        send_old,
+    );
     set_upload_toggle(&state, UploadToggle::Clublog, true);
     // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
     // re-send them. Without this, every QSO logged before the password was stored stayed
@@ -41244,6 +41356,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         open_download_page,
         update_route,
         set_qrz_logbook_key,
+        upload_backlog,
         clear_qrz_logbook_key,
         set_cloudlog_key,
         clear_cloudlog_key,
@@ -59496,5 +59609,43 @@ mod secrets_toward_remote_tests {
             tempo_core::clublog::ClubLogResult::Duplicate,
             "CONTROL"
         );
+    }
+}
+
+/// The first login's question ("Send N contacts not yet sent to <service>?") is the station's to
+/// answer: the answer rides on the login's own save, which another computer driving the station
+/// cannot make, and so is the count it is asked from.
+#[cfg(test)]
+mod upload_backlog_tests {
+    use tempo_app::engine::upload_legs;
+    use tempo_client::classes::{class_of, Class};
+
+    #[test]
+    fn only_the_station_answers_the_first_logins_question() {
+        for command in [
+            "set_qrz_logbook_key",
+            "set_clublog_password",
+            "set_eqsl_password",
+            "upload_backlog",
+        ] {
+            assert_eq!(class_of(command), Some(Class::RefusedHere), "{command}");
+        }
+    }
+
+    #[test]
+    fn the_question_is_asked_of_the_three_services_with_an_upload_record() {
+        assert_eq!(
+            super::backlog_service("qrz"),
+            Ok((upload_legs::QRZ, super::QRZ_LOGBOOK_KEYCHAIN_USER))
+        );
+        assert_eq!(
+            super::backlog_service("clublog"),
+            Ok((upload_legs::CLUBLOG, super::CLUBLOG_KEYCHAIN_USER))
+        );
+        assert_eq!(
+            super::backlog_service("eqsl"),
+            Ok((upload_legs::EQSL, super::EQSL_KEYCHAIN_USER))
+        );
+        assert!(super::backlog_service("hrdlog").is_err());
     }
 }
