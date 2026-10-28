@@ -13598,6 +13598,15 @@ impl Engine {
             );
             return Err(TxOwner::Tci.busy_reason());
         }
+        // So does the computer's microphone, armed or keyed (`engine/pc_mic.rs`): the operator is
+        // holding PTT and talking, on every rig.
+        if self.pc_mic_armed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: the computer microphone is transmitting",
+            );
+            return Err(TxOwner::ManualPtt.busy_reason());
+        }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
                 "tx",
@@ -13701,6 +13710,11 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if self.pc_mic_armed() {
+            // The operator's PTT on the computer's microphone, pressed after the message was
+            // queued and before this tick (the press is refused while a message is pending, so
+            // this is the belt to that brace).
+            Some("the computer microphone is transmitting")
         } else if self.cw_sending() {
             // An F-key's CW (which asks no owner) queued after the message, before this tick.
             Some("CW is sending")

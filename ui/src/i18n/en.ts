@@ -13247,6 +13247,20 @@ export const EN = {
   'shell.lane.pcMic.ceiling': 'the over reached its 10-minute limit, so Nexus unkeyed the radio.',
   'shell.lane.pcMic.watchdog':
     'the TX watchdog tripped, so Nexus unkeyed the radio and turned TX off.',
+  'shell.lane.pcMic.busy':
+    'something else was transmitting (a voice-keyer message, among others), so nothing was sent. Press PTT again when it ends.',
+  'shell.lane.pcMic.flexMic':
+    'the radio was on its own mic (Nexus\'s Flex client puts it there in Phone), which audio from this computer does not reach, so nothing was sent. Use the radio\'s microphone, or turn this computer\'s microphone off for this radio.',
+  'shell.lane.pcMic.radioReceive':
+    'the chosen microphone carries a radio\'s receive audio (another radio\'s receive input, or a Flex DAX receive channel), so nothing was sent: that would put the band on the air. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.loopback':
+    'the chosen microphone is a loopback or a virtual cable, which carries what this computer plays, Nexus\'s own transmit audio included, so nothing was sent. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.gateDown':
+    'transmit stopped being allowed during the over (TX off, outside your licence, a tune, leaving Phone, or another radio, microphone or audio route), so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.interrupted':
+    'the radio was unkeyed or taken over during the over (a radio switch, a CAT hold, or an unkey from elsewhere), so Nexus ended it. Press PTT again.',
+  'shell.lane.pcMic.keyRefused':
+    'the radio did not accept the key, so nothing was sent.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
   // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
   // or something else keyed it first. Never played later; the next message the keyer accepts

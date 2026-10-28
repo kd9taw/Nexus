@@ -26,6 +26,20 @@ function why(cause: PcMicCause): string {
       return t('shell.lane.pcMic.ceiling')
     case 'watchdog':
       return t('shell.lane.pcMic.watchdog')
+    case 'busy':
+      return t('shell.lane.pcMic.busy')
+    case 'flexMic':
+      return t('shell.lane.pcMic.flexMic')
+    case 'radioReceive':
+      return t('shell.lane.pcMic.radioReceive')
+    case 'loopback':
+      return t('shell.lane.pcMic.loopback')
+    case 'gateDown':
+      return t('shell.lane.pcMic.gateDown')
+    case 'interrupted':
+      return t('shell.lane.pcMic.interrupted')
+    case 'keyRefused':
+      return t('shell.lane.pcMic.keyRefused')
   }
 }
 

@@ -22,6 +22,13 @@ describe('the status lane after a computer-microphone over ended', () => {
     ['noAudio', 'shell.lane.pcMic.noAudio'],
     ['ceiling', 'shell.lane.pcMic.ceiling'],
     ['watchdog', 'shell.lane.pcMic.watchdog'],
+    ['busy', 'shell.lane.pcMic.busy'],
+    ['flexMic', 'shell.lane.pcMic.flexMic'],
+    ['radioReceive', 'shell.lane.pcMic.radioReceive'],
+    ['loopback', 'shell.lane.pcMic.loopback'],
+    ['gateDown', 'shell.lane.pcMic.gateDown'],
+    ['interrupted', 'shell.lane.pcMic.interrupted'],
+    ['keyRefused', 'shell.lane.pcMic.keyRefused'],
   ])('names %s, with the time', (cause, key) => {
     const lane = pcMicLane({ at: AT, cause })
     expect(lane).not.toBeNull()

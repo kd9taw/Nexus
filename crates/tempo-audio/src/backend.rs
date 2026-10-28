@@ -234,6 +234,13 @@ pub struct MockBackend {
     pub pc_mic_lost: Option<String>,
     /// The headphone monitor's TX mute, as the loop last set it.
     pub monitor_tx_muted: bool,
+    /// The input the mock sound card "opened" for receive (`capture_input`): `None`, as a backend
+    /// with no real capture stream answers.
+    pub capture_input: Option<crate::receive_audio::CaptureInput>,
+    /// When set, `flush_output` and closing the computer microphone write `flush` and
+    /// `pc_mic close` here, in order: a test hands the same log to a mock radio to see which came
+    /// first, the unkey or the close.
+    pub events: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
     /// Models an ALSA card that can only be open once: while this is held, a mock
     /// `reopen_audio` refuses to open the same card. `release_device()` clears it, which
     /// is exactly what the real backend does by dropping its streams.
@@ -261,6 +268,11 @@ impl MockBackend {
     /// Queue a chunk that the next `capture()` will return.
     pub fn queue_capture(&mut self, samples: Vec<f32>) {
         self.to_capture.push_back(samples);
+    }
+    fn note_event(&self, what: &str) {
+        if let Some(log) = &self.events {
+            log.lock().unwrap().push(what.to_string());
+        }
     }
     /// Queue a chunk the computer microphone delivers to the next `pc_mic_capture()`.
     pub fn queue_pc_mic(&mut self, samples: Vec<f32>) {
@@ -311,6 +323,7 @@ impl AudioBackend for MockBackend {
     }
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
+        self.note_event("flush");
         0
     }
     fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
@@ -350,11 +363,15 @@ impl AudioBackend for MockBackend {
                 Ok(())
             }
             None => {
+                self.note_event("pc_mic close");
                 self.pc_mic_open = false;
                 self.to_pc_mic.clear();
                 Ok(())
             }
         }
+    }
+    fn capture_input(&self) -> Option<crate::receive_audio::CaptureInput> {
+        self.capture_input.clone()
     }
     fn pc_mic_capture(&mut self) -> Result<Vec<f32>, String> {
         if !self.pc_mic_open {

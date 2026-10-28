@@ -100,10 +100,8 @@ fn audio_reaches_the_transmitter_only_between_press_and_release() {
         "the press keyed the radio's own microphone as well"
     );
     assert_eq!(
-        e.pc_mic_source(),
-        Some(PcMicSource {
-            device: MIC_DEVICE.into()
-        })
+        e.pc_mic_source().map(|s| s.device),
+        Some(MIC_DEVICE.to_string())
     );
     for k in 0..50 {
         assert_eq!(e.poll_pc_mic(t0 + ms(k * 20), TICK, 1), MicTick::Armed);
@@ -369,4 +367,268 @@ fn the_gain_is_applied_and_clipped() {
         out.contains(&1.0),
         "the loud frame was not clipped to full scale"
     );
+}
+
+/// The cause the status lane shows, if any.
+fn lane(e: &Engine) -> Option<PcMicCause> {
+    e.snapshot().radio.pc_mic_ended.map(|x| x.cause)
+}
+
+/// ⛔ The voice keyer and the computer microphone never share the transmitter: a message sent
+/// while a PC-mic over is armed or keyed is refused (on every rig, not only a Flex), a message
+/// already taken is dropped, and a press while a message is pending or playing arms nothing and
+/// says why. CONTROL: with no press the same message is queued.
+#[test]
+fn the_voice_keyer_and_the_computer_microphone_exclude_each_other() {
+    let msg = || vec![0.1f32; 12_000];
+    // Armed (no audio yet): refused.
+    let mut e = station();
+    e.set_ptt(true);
+    assert!(e.pc_mic_armed(), "premise: armed");
+    assert!(
+        e.send_voice(msg()).is_err(),
+        "a message queued under an armed over"
+    );
+    assert!(e.voice_tx.is_none(), "the message was kept");
+    // Keyed: refused.
+    let mut e = station();
+    keyed(&mut e, Instant::now());
+    assert!(
+        e.send_voice(msg()).is_err(),
+        "a message queued under a keyed over"
+    );
+    // A message already queued when an over arms (the press is refused then, so set by hand):
+    // the loop's take drops it.
+    let mut e = station();
+    e.set_ptt(true);
+    e.voice_tx = Some(msg());
+    assert_eq!(
+        e.poll_voice(),
+        None,
+        "a message played under the computer microphone"
+    );
+    assert!(e.voice_tx.is_none(), "the message was held for later");
+    // The other way: a pending message, then the press. Nothing arms, and the lane says why.
+    let mut e = station();
+    e.send_voice(msg())
+        .expect("CONTROL: with no press the message is queued");
+    e.set_ptt(true);
+    assert!(!e.pc_mic_armed(), "armed under a pending voice message");
+    assert_eq!(lane(&e), Some(PcMicCause::Busy));
+    // …and one on the air.
+    let mut e = station();
+    e.send_voice(msg()).unwrap();
+    assert!(
+        e.poll_voice().is_some(),
+        "premise: the loop took the message"
+    );
+    e.set_ptt(true);
+    assert!(!e.pc_mic_armed(), "armed under a playing voice message");
+    e.set_voice_on_air(false);
+    e.set_ptt(false);
+    e.set_ptt(true);
+    assert!(
+        e.pc_mic_armed(),
+        "CONTROL: the message over, the press arms"
+    );
+}
+
+/// ⛔ No feedback path: the microphone is refused, with the reason, whenever it may carry receive
+/// audio or Nexus's own: the radio's receive input under another ALSA name or ordinal, another
+/// radio's receive input, a Flex DAX receive channel, and a loopback or virtual cable.
+/// CONTROL: an ordinary microphone arms, and the exact-name case still refuses.
+#[test]
+fn a_microphone_that_may_carry_receive_or_transmit_audio_is_refused() {
+    let cases: [(&str, &str, PcMicCause); 9] = [
+        ("Radio Codec", "Radio Codec", PcMicCause::SameAsReceive),
+        ("radio codec #2", "Radio Codec", PcMicCause::SameAsReceive),
+        (
+            "plughw:CARD=Codec,DEV=0",
+            "hw:CARD=Codec,DEV=0",
+            PcMicCause::SameAsReceive,
+        ),
+        ("dsnoop:1,0", "hw:1,0", PcMicCause::SameAsReceive),
+        ("Second Codec", "Radio Codec", PcMicCause::RadioReceive),
+        (
+            "DAX Audio RX 1 (FlexRadio Systems DAX Audio)",
+            "Radio Codec",
+            PcMicCause::RadioReceive,
+        ),
+        (
+            "CABLE Output (VB-Audio Virtual Cable)",
+            "Radio Codec",
+            PcMicCause::Loopback,
+        ),
+        (
+            "Stereo Mix (Realtek(R) Audio)",
+            "Radio Codec",
+            PcMicCause::Loopback,
+        ),
+        (
+            "Monitor of Built-in Audio Analog Stereo",
+            "Radio Codec",
+            PcMicCause::Loopback,
+        ),
+    ];
+    for (mic, rx, cause) in cases {
+        let mut e = station();
+        e.settings.audio_in = rx.into();
+        e.settings.radios[0].audio_in = rx.into();
+        e.settings.radios[1].audio_in = "Second Codec".into();
+        e.settings.pc_mic_device = mic.into();
+        e.set_ptt(true);
+        assert!(!e.pc_mic_armed(), "{mic:?} armed beside {rx:?}");
+        assert_eq!(lane(&e), Some(cause), "{mic:?} beside {rx:?}");
+    }
+    let mut e = station();
+    e.settings.radios[1].audio_in = "Second Codec".into();
+    e.set_ptt(true);
+    assert!(e.pc_mic_armed(), "CONTROL: an ordinary microphone");
+}
+
+#[test]
+fn device_names_compare_as_the_same_input_when_in_doubt() {
+    use super::same_audio_device as same;
+    assert!(same("USB Audio CODEC ", "usb audio codec"));
+    assert!(same("USB Audio CODEC #2", "USB Audio CODEC"));
+    assert!(same("hw:CARD=Device,DEV=0", "default:CARD=Device"));
+    assert!(same("plughw:2,0", "hw:2"));
+    assert!(!same("hw:CARD=Device,DEV=0", "hw:CARD=Other,DEV=0"));
+    assert!(!same("hw:1,0", "hw:2,0"));
+    assert!(!same("Desk Microphone", "USB Audio CODEC"));
+    assert!(!same("", ""), "no device is no device");
+    assert!(
+        !same("Desk Microphone", ""),
+        "an unset receive input is the loop's to check"
+    );
+}
+
+/// ⛔ The loop's check of the input the sound card actually opened (the system default when none
+/// is set) ends the over before the microphone opens, and says why.
+#[test]
+fn the_input_receive_actually_opened_is_refused_at_the_loop() {
+    let mut e = station();
+    e.set_ptt(true);
+    assert!(e.pc_mic_armed());
+    e.pc_mic_is_receive();
+    assert!(!e.pc_mic_armed());
+    assert!(
+        !e.take_pc_mic_abort(),
+        "nothing was keyed, nothing to unkey"
+    );
+    assert_eq!(lane(&e), Some(PcMicCause::SameAsReceive));
+}
+
+/// ⛔ Nexus's own Flex client giving the radio its own mic: the press arms nothing and says why
+/// (the PC audio would leave over DAX while the radio transmits its own mic), and an over already
+/// keyed when the radio takes its mic ends on the next tick.
+#[test]
+fn a_flex_with_its_own_mic_refuses_the_computer_microphone() {
+    let mut e = station();
+    e.observe_flex_radio_has_mic(true);
+    e.set_ptt(true);
+    assert!(!e.pc_mic_armed(), "armed while the radio has its own mic");
+    assert!(
+        !e.manual_ptt(),
+        "the press fell back to keying the radio's mic"
+    );
+    assert_eq!(lane(&e), Some(PcMicCause::FlexMic));
+    e.set_ptt(false);
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    e.observe_flex_radio_has_mic(true);
+    let t = t0 + ms(220);
+    e.push_pc_mic(&audio(20, 0.5), t);
+    assert_eq!(e.poll_pc_mic(t, TICK, 1), MicTick::Idle);
+    assert!(
+        e.take_pc_mic_abort(),
+        "no unkey when the radio took its mic"
+    );
+    assert_eq!(lane(&e), Some(PcMicCause::GateDown));
+}
+
+/// A gate that goes down under a held over is named in the lane (the PTT is still held, so the
+/// operator needs to know why nothing is going out). CONTROL: the operator's own release says
+/// nothing.
+#[test]
+fn an_over_ended_by_a_gate_says_so() {
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    e.set_tune(true);
+    let t = t0 + ms(220);
+    e.push_pc_mic(&audio(20, 0.5), t);
+    let _ = e.poll_pc_mic(t, TICK, 1);
+    assert_eq!(lane(&e), Some(PcMicCause::GateDown));
+    let mut e = station();
+    keyed(&mut e, t0);
+    e.set_ptt(false);
+    assert_eq!(lane(&e), None, "CONTROL: the release is the operator's own");
+    for (name, call) in [
+        ("interrupted", Engine::pc_mic_interrupted as fn(&mut Engine)),
+        ("key refused", Engine::pc_mic_key_refused),
+    ] {
+        let mut e = station();
+        keyed(&mut e, t0);
+        call(&mut e);
+        assert!(!e.pc_mic_armed(), "{name}: still armed");
+        assert!(e.take_pc_mic_abort(), "{name}: no unkey");
+        assert!(lane(&e).is_some(), "{name}: the lane says nothing");
+    }
+}
+
+/// ⛔ Digital silence is no audio: a microphone that keeps calling back with nothing but zeros
+/// (stalled, muted in hardware, asleep) keys nothing, and ends a keyed over at the gap.
+/// CONTROL: a quiet microphone's noise keeps the over up.
+#[test]
+fn a_microphone_delivering_only_digital_silence_is_no_audio() {
+    let mut e = station();
+    let t0 = Instant::now();
+    e.set_ptt(true);
+    for k in 0..30 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.0), t);
+        let tick = e.poll_pc_mic(t, TICK, 1);
+        assert_ne!(tick, MicTick::Key, "digital silence keyed the radio");
+    }
+    let mut e = station();
+    keyed(&mut e, t0);
+    let mut ended = None;
+    for k in 11..60u64 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.0), t);
+        let _ = e.poll_pc_mic(t, TICK, 1);
+        if !e.pc_mic_armed() && ended.is_none() {
+            ended = Some(k * 20);
+        }
+    }
+    let at = ended.expect("a keyed over stayed up on digital silence");
+    assert!(at <= 200 + PC_MIC.gap_ms + 20, "ended only at {at} ms");
+    assert_eq!(lane(&e), Some(PcMicCause::NoAudio));
+    // CONTROL: a quiet microphone (its noise floor) holds the over.
+    let mut e = station();
+    keyed(&mut e, t0);
+    for k in 11..60u64 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 1e-4), t);
+        let _ = e.poll_pc_mic(t, TICK, 1);
+    }
+    assert!(e.pc_mic_keyed(), "CONTROL: quiet audio ended the over");
+}
+
+/// A release and a new press before the loop's next tick: the new over is a new capture (its
+/// generation moves), so the loop stops the old over and opens the microphone afresh for it.
+#[test]
+fn a_new_press_is_a_new_capture() {
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    let first = e.pc_mic_source().unwrap();
+    e.set_ptt(false);
+    e.set_ptt(true);
+    let second = e.pc_mic_source().expect("the re-press armed");
+    assert_eq!(first.device, second.device);
+    assert_ne!(first.gen, second.gen, "the re-press reuses the old capture");
+    assert!(e.take_pc_mic_abort(), "the old over's unkey was lost");
 }

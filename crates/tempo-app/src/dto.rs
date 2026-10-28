@@ -1638,6 +1638,25 @@ pub enum PcMicCause {
     Ceiling,
     /// The TX watchdog tripped.
     Watchdog,
+    /// Something else held the transmitter at the press (a voice-keyer message, among others).
+    Busy,
+    /// Nexus's own Flex client had given the radio its own mic, which audio Nexus plays does not
+    /// reach.
+    FlexMic,
+    /// The chosen microphone carries another radio's receive audio (its receive input, or a Flex
+    /// DAX receive channel).
+    RadioReceive,
+    /// The chosen microphone is a loopback or a virtual cable: what this computer plays, Nexus's
+    /// transmit audio among it, would come back in.
+    Loopback,
+    /// A transmit condition went down during the over (TX off, the licence, a tune, leaving Phone,
+    /// the switch, the radio, the microphone or the transmit audio route).
+    GateDown,
+    /// The radio was unkeyed under the over, or was not Nexus's to key (a handoff, a CAT hold, a
+    /// radio switch).
+    Interrupted,
+    /// The radio did not accept the key.
+    KeyRefused,
 }
 
 /// A voice-keyer message Nexus's own Flex client dropped without keying the radio

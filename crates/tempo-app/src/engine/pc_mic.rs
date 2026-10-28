@@ -62,6 +62,9 @@ pub(crate) struct PcMicState {
     seq: u64,
     /// Audio short of a whole frame, carried to the next delivery.
     partial: Vec<f32>,
+    /// Moves at every arm: the radio loop closes and reopens the microphone for a new over, so
+    /// nothing captured before a quick re-press reaches it, and the old over's stop is taken first.
+    gen: u64,
     /// Why the last over ended or never keyed, when the operator did not choose it (the status lane).
     pub(crate) ended: Option<PcMicEnded>,
 }
@@ -77,6 +80,7 @@ impl Default for PcMicState {
             media: 0,
             seq: 0,
             partial: Vec::new(),
+            gen: 0,
             ended: None,
         }
     }
@@ -87,6 +91,8 @@ impl Default for PcMicState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcMicSource {
     pub device: String,
+    /// The over this capture is for ([`PcMicState::gen`]): a new one is a new capture.
+    pub gen: u64,
 }
 
 impl Engine {
@@ -118,10 +124,32 @@ impl Engine {
             || !self.tx_enabled
             || !self.tx_allowed()
             || self.tuning
-            || self.tx_owner().is_some()
             || self.clock_repair_holds_tx()
             || self.remote_transmit_held()
+            || self.connection_tx_refusal().is_some()
         {
+            return false;
+        }
+        // Something else holds the transmitter (a voice-keyer message queued or playing among
+        // them): two sources would share one output ring, so the press arms nothing, and says so.
+        if let Some(owner) = self.tx_owner() {
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "{} over refused: {owner:?} holds the transmitter",
+                    PC_MIC.name
+                ),
+            );
+            self.note_pc_mic(PcMicCause::Busy);
+            return false;
+        }
+        // Nexus's own Flex client gives the radio its own mic in Phone at the shack, and audio
+        // Nexus plays leaves over DAX, which the radio is then not listening to: the operator
+        // would be on the radio's mic believing they were on this one. The voice keyer's switch
+        // to DAX around a message is not reused: it carries at most the client's DAX queue
+        // (`FLEX_VOICE_MAX_SAMPLES`), and a held over has no length. Refused, as APRS and SSTV are.
+        if self.flex_radio_has_mic {
+            self.note_pc_mic(PcMicCause::FlexMic);
             return false;
         }
         let device = self.settings.pc_mic_device.trim().to_string();
@@ -129,11 +157,12 @@ impl Engine {
             self.note_pc_mic(PcMicCause::NoDevice);
             return false;
         }
-        if device == self.settings.audio_in.trim() {
-            self.note_pc_mic(PcMicCause::SameAsReceive);
+        if let Some(cause) = self.pc_mic_feedback(&device) {
+            self.note_pc_mic(cause);
             return false;
         }
         self.pc_mic.over.arm();
+        self.pc_mic.gen += 1;
         self.pc_mic.feed.open();
         self.pc_mic.radio = Some(self.settings.active_radio);
         self.pc_mic.device = device;
@@ -181,6 +210,53 @@ impl Engine {
         });
     }
 
+    /// Why `device` may not be this computer's microphone, if it may not: it carries receive audio
+    /// or Nexus's own, which would go back out on the air (a feedback path). Refuses when in doubt:
+    /// any radio's receive input, under any name for the same card ([`same_audio_device`]); a Flex
+    /// DAX receive channel; and anything named like a loopback or a virtual cable. The input the
+    /// sound card ACTUALLY opened for receive (the system default when none is set) is checked by
+    /// the radio loop before it opens the microphone ([`Self::pc_mic_is_receive`]).
+    fn pc_mic_feedback(&self, device: &str) -> Option<PcMicCause> {
+        if same_audio_device(device, &self.settings.audio_in) {
+            return Some(PcMicCause::SameAsReceive);
+        }
+        for radio in &self.settings.radios {
+            if same_audio_device(device, &radio.audio_in) {
+                return Some(if radio.id == self.settings.active_radio {
+                    PcMicCause::SameAsReceive
+                } else {
+                    PcMicCause::RadioReceive
+                });
+            }
+        }
+        let name = device.to_lowercase();
+        if DAX_RECEIVE.iter().any(|n| name.contains(n)) {
+            return Some(PcMicCause::RadioReceive);
+        }
+        if LOOPBACK.iter().any(|n| name.contains(n)) || name.ends_with(".monitor") {
+            return Some(PcMicCause::Loopback);
+        }
+        None
+    }
+
+    /// The radio loop found the microphone is the input the sound card opened for receive (the
+    /// system default, when no receive input is set): the over ends before the microphone opens.
+    pub fn pc_mic_is_receive(&mut self) {
+        self.drop_pc_mic_for(PcMicCause::SameAsReceive);
+    }
+
+    /// The radio loop could not carry the over on: something else unkeyed the radio under it, the
+    /// radio is not the operator's to key this tick (a handoff, a CAT hold, a radio switch), or the
+    /// loop was rebuilt under it. The over ends, and the lane says so.
+    pub fn pc_mic_interrupted(&mut self) {
+        self.drop_pc_mic_for(PcMicCause::Interrupted);
+    }
+
+    /// The radio did not accept the key for the over's first audio: nothing was sent.
+    pub fn pc_mic_key_refused(&mut self) {
+        self.drop_pc_mic_for(PcMicCause::KeyRefused);
+    }
+
     /// Take + reset the one-shot abort (the loop flushes the output and unkeys).
     pub fn take_pc_mic_abort(&mut self) -> bool {
         std::mem::take(&mut self.pc_mic.abort)
@@ -190,6 +266,7 @@ impl Engine {
     pub fn pc_mic_source(&self) -> Option<PcMicSource> {
         self.pc_mic.over.active().then(|| PcMicSource {
             device: self.pc_mic.device.clone(),
+            gen: self.pc_mic.gen,
         })
     }
 
@@ -230,6 +307,13 @@ impl Engine {
             self.pc_mic.seq += 1;
             let media = self.pc_mic.media;
             self.pc_mic.media += FRAME as u64;
+            // Digital silence (every sample exactly zero) is no audio: a live microphone always
+            // carries some noise, and a stalled or muted device that keeps calling back with zeros
+            // must not hold the radio keyed. It keys nothing, and the gap ends an over that gets
+            // only that.
+            if frame.iter().all(|&x| x == 0.0) {
+                continue;
+            }
             // A frame the feed refuses (full: the loop stopped reading) is a moment of silence, as
             // a lost one is; the gap ends an over that gets none.
             let _ = self.pc_mic.feed.push(MicFrame {
@@ -251,13 +335,14 @@ impl Engine {
         }
         // The section gate carries this feature's own conditions too: Phone, this radio's switch
         // still on, the radio the over armed on, and the microphone it armed with.
+        // The radio taking its own mic (Nexus's Flex client) ends it too ([`Self::arm_pc_mic`]).
         let same_source = self.pc_mic.radio == Some(self.settings.active_radio)
             && self.settings.pc_mic_device.trim() == self.pc_mic.device;
         let gates = MicGates {
             tx_enabled: self.tx_enabled,
             tx_allowed: self.tx_allowed(),
             tuning: self.tuning,
-            in_section: self.pc_mic_wanted() && same_source,
+            in_section: self.pc_mic_wanted() && same_source && !self.flex_radio_has_mic,
             // The operator's own hold: the release ends the over directly, so while it is armed
             // the hold is held.
             presence: true,
@@ -285,13 +370,16 @@ impl Engine {
                 }
                 MicDrop::Ceiling => self.drop_pc_mic_for(PcMicCause::Ceiling),
                 MicDrop::AudioGap => self.drop_pc_mic_for(PcMicCause::NoAudio),
-                // A gate the operator moved (TX Off, a QSY out of the licence, a tune, leaving
-                // Phone, the switch, another radio or microphone, a new transmit route) says so
-                // on its own control; the over just ends.
-                MicDrop::GateDown
-                | MicDrop::Presence
-                | MicDrop::DeviceChanged
-                | MicDrop::Drained => self.drop_pc_mic(),
+                // A gate went down under the over (TX Off, a QSY out of the licence, a tune,
+                // leaving Phone, the switch, another radio or microphone, a new transmit route,
+                // the radio taking its own mic): the lane says the over ended on one, since the
+                // operator's PTT is still held.
+                MicDrop::GateDown | MicDrop::DeviceChanged => {
+                    self.drop_pc_mic_for(PcMicCause::GateDown)
+                }
+                // Never raised here: the hold is the operator's own (`presence` is always up), and
+                // nothing releases this over gracefully. Ended all the same.
+                MicDrop::Presence | MicDrop::Drained => self.drop_pc_mic(),
             }
             tempo_core::applog::info("tx", &format!("{} over ended: {why:?}", PC_MIC.name));
         }
@@ -300,6 +388,83 @@ impl Engine {
         }
         res.tick
     }
+}
+
+/// Input names that are a Flex radio's DAX receive channels (lower case): band audio.
+const DAX_RECEIVE: [&str; 3] = ["dax audio rx", "dax rx", "dax iq"];
+
+/// Input names that are a loopback or a virtual cable (lower case): what plays on this computer,
+/// Nexus's own transmit audio among it, comes back in on them. A PulseAudio/PipeWire monitor source
+/// is also caught by its `.monitor` name.
+const LOOPBACK: [&str; 13] = [
+    "stereo mix",
+    "what u hear",
+    "wave out mix",
+    "cable output",
+    "cable-a output",
+    "cable-b output",
+    "virtual audio cable",
+    "vb-audio",
+    "voicemeeter",
+    "loopback",
+    "monitor of ",
+    "blackhole",
+    "soundflower",
+];
+
+/// Whether two saved device names may be the same input. Refuses when in doubt: names compare
+/// trimmed and case-blind, without the ` #N` ordinal Nexus adds to identically named devices (two
+/// codecs of one name are not told apart), and ALSA names of one card compare equal under any
+/// access path (`hw:` / `plughw:` / `dsnoop:` / `default:` / `sysdefault:` …, by `CARD=` or by card
+/// number). An empty name is no device.
+pub fn same_audio_device(a: &str, b: &str) -> bool {
+    let (a, b) = (device_base(a), device_base(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    matches!((alsa_card(&a), alsa_card(&b)), (Some(x), Some(y)) if x == y)
+}
+
+/// A saved name trimmed, lower case, without a trailing ` #N` ordinal.
+fn device_base(name: &str) -> String {
+    let name = name.trim();
+    let base = match name.rsplit_once(" #") {
+        Some((base, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => base,
+        _ => name,
+    };
+    base.trim().to_lowercase()
+}
+
+/// The card an ALSA device name addresses (lower case), whatever its access path: the `CARD=`
+/// token's value, or the card number of `hw:1,0`. `None` for a name that is no ALSA PCM name.
+fn alsa_card(name: &str) -> Option<String> {
+    if let Some(at) = name.find("card=") {
+        let rest = &name[at + 5..];
+        return Some(
+            rest[..rest.find(',').unwrap_or(rest.len())]
+                .trim()
+                .to_string(),
+        );
+    }
+    let (path, rest) = name.split_once(':')?;
+    const PATHS: [&str; 8] = [
+        "hw",
+        "plughw",
+        "dsnoop",
+        "dmix",
+        "default",
+        "sysdefault",
+        "front",
+        "iec958",
+    ];
+    if !PATHS.contains(&path.trim()) {
+        return None;
+    }
+    let card = rest[..rest.find(',').unwrap_or(rest.len())].trim();
+    (!card.is_empty()).then(|| card.to_string())
 }
 
 #[cfg(test)]

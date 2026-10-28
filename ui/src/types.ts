@@ -6472,6 +6472,13 @@ export type PcMicCause =
   | 'noAudio'
   | 'ceiling'
   | 'watchdog'
+  | 'busy'
+  | 'flexMic'
+  | 'radioReceive'
+  | 'loopback'
+  | 'gateDown'
+  | 'interrupted'
+  | 'keyRefused'
 
 export interface PcMicEnded {
   /** When, in Unix seconds. */
