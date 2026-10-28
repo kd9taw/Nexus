@@ -263,21 +263,26 @@ pub fn backlog_count(rows: &crate::logstore::LogRows, legs: u8) -> Result<usize,
     Ok(n)
 }
 
-/// Where each service's automatic uploads start, in Unix seconds, as the settings hold them
-/// ([`Settings::qrz_logbook_upload_from`](crate::settings::Settings::qrz_logbook_upload_from)):
-/// a contact made before a service's start point is never sent to it automatically. `None` is
-/// no start point, every contact not yet sent is owed: what every station had before, and still
-/// has unless it answered "Only contacts made from now on" when it first saved a login.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Where each service's automatic uploads start, in Unix seconds: a contact made before a
+/// service's start point is never sent to it automatically. Kept beside the shared log
+/// ([`crate::upload_start`]), so every window sharing the log honours the same ones. `None` is no
+/// start point, every contact not yet sent is owed: what every station had before, and still has
+/// unless it answered "Only contacts made from now on" when it first saved a login.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UploadStart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qrz: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clublog: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eqsl: Option<u64>,
 }
 
 impl UploadStart {
-    /// The start points `s` holds.
-    pub fn of(s: &crate::settings::Settings) -> Self {
+    /// The start points an earlier build of this change left in one window's settings file
+    /// ([`Settings::qrz_logbook_upload_from`](crate::settings::Settings::qrz_logbook_upload_from)),
+    /// to be moved beside the log.
+    pub fn left_in(s: &crate::settings::Settings) -> Self {
         Self {
             qrz: s.qrz_logbook_upload_from,
             clublog: s.clublog_upload_from,
@@ -293,6 +298,47 @@ impl UploadStart {
             l::CLUBLOG => self.clublog,
             l::EQSL => self.eqsl,
             _ => None,
+        }
+    }
+
+    /// The operator's answer to the first login's question for the service on `leg`: "Send them"
+    /// (`send_old`) clears its start point; "Only contacts made from now on" puts it at `now_unix`,
+    /// or keeps an earlier one already there (operator ruling "Keep the earlier point"), so a
+    /// contact made between two answers that never reached the service is still owed.
+    pub fn answer(&mut self, leg: u8, send_old: bool, now_unix: u64) {
+        use crate::engine::upload_legs as l;
+        let slot = match leg {
+            l::QRZ => &mut self.qrz,
+            l::CLUBLOG => &mut self.clublog,
+            l::EQSL => &mut self.eqsl,
+            _ => return,
+        };
+        *slot = if send_old {
+            None
+        } else {
+            Some(slot.map_or(now_unix, |held| held.min(now_unix)))
+        };
+    }
+
+    /// Each service's earlier start point of the two, or the one there is.
+    pub fn keep_earliest(self, other: Self) -> Self {
+        let early = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Self {
+            qrz: early(self.qrz, other.qrz),
+            clublog: early(self.clublog, other.clublog),
+            eqsl: early(self.eqsl, other.eqsl),
+        }
+    }
+
+    /// `other`'s start point only for a service that has none here.
+    pub fn fill_from(self, other: Self) -> Self {
+        Self {
+            qrz: self.qrz.or(other.qrz),
+            clublog: self.clublog.or(other.clublog),
+            eqsl: self.eqsl.or(other.eqsl),
         }
     }
 

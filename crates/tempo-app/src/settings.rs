@@ -3689,19 +3689,16 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
-    /// Where QRZ Logbook's automatic uploads start, in Unix seconds: a contact made before it is
-    /// never sent there automatically, by the catch-up a saved login runs or from what was waiting
-    /// to go when it was set. `None` (the only value an existing station has) starts nowhere, so
-    /// every contact not yet sent is owed, as before. Set when the operator saves the first login
-    /// for the service and answers "Only contacts made from now on" (the default); "Send them"
-    /// clears it. Sending an older contact by hand still works. Written only by
-    /// `Engine::set_upload_start`; a settings form save keeps the live value.
+    /// Where QRZ Logbook's automatic uploads start, as an earlier build of this change kept it
+    /// in one window's settings. Read only to be moved beside the shared log, where every window
+    /// reads it ([`crate::upload_start`]), and cleared once moved; nothing else reads or writes it.
+    /// `None`, the only value a released build's file has, writes no key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qrz_logbook_upload_from: Option<u64>,
-    /// ClubLog's, as [`Self::qrz_logbook_upload_from`].
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clublog_upload_from: Option<u64>,
-    /// eQSL's, as [`Self::qrz_logbook_upload_from`].
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has

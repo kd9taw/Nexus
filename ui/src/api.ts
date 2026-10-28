@@ -2428,8 +2428,9 @@ export async function uploadBacklog(service: 'qrz' | 'clublog' | 'eqsl'): Promis
 }
 
 /** Store the eQSL password in the OS keychain (write-only; empty clears it). `sendOld` answers
- *  the first password's question (see `uploadBacklog`): only `true` sends the contacts not yet
- *  sent there; anything else starts eQSL's automatic uploads from now. */
+ *  the first password's question (see `uploadBacklog`): `true` sends the contacts not yet sent
+ *  there, `false` starts eQSL's automatic uploads from now, and no answer (nothing was asked)
+ *  saves as before. */
 export async function setEqslPassword(password: string, sendOld?: boolean): Promise<void> {
   await invoke<void>('set_eqsl_password', { password, sendOld })
 }

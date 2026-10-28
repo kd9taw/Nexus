@@ -3522,8 +3522,8 @@ export function SettingsPanel({
   // now on". `true` sends them, as a save did before. A login saved over a stored one, or one whose
   // upload switch is already on, asks nothing (`undefined`: the backend changes nothing either).
   // With nothing waiting there is nothing to ask, and the answer is "from now on", so a log
-  // imported later is not sent by the next save. A count that cannot be read is no answer: the
-  // backend then saves as it always did if the keychain could not be read, else as the default.
+  // imported later is not sent by the next save. A count that cannot be read is no answer, and no
+  // question asked: the backend then saves as it always did, with no start point.
   const askSendOld = async (
     service: 'qrz' | 'clublog' | 'eqsl',
     name: string,

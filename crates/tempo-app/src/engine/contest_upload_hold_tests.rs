@@ -438,7 +438,7 @@ fn a_held_contact_made_before_a_first_logins_answer_is_not_sent_to_that_service(
     e.log_form_qso(cw("W1AW"), StateSource::Operator, Vec::new());
     assert!(e.take_pending_uploads().is_empty(), "premise: held");
     // 2027-01-15, after the contact's 2026-10-17.
-    e.first_login_saved(upload_legs::QRZ, true, false, 1_800_000_000);
+    e.drop_waiting_before(upload_legs::QRZ, 1_800_000_000);
     contest_off(&mut e);
     let sent: Vec<(String, u8)> = e
         .take_pending_uploads()
