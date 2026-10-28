@@ -6,7 +6,8 @@
 //   3. Shared bands     where two radios list a band: which one for each mode class (skipped if none).
 //   4. Everything else  the default radio for a band no radio lists.
 //   5. Switching        what happens when Nexus needs the other radio: switch and say so, or silently.
-//   6. Audio, keying    per radio, its receive and transmit sound cards and keying method, and a
+//   6. Audio, keying    per radio, its receive and transmit sound cards and keying method (and the
+//                       RTS/DTR keying port), with Settings' save-time checks on them, and a
 //                       Test CAT for each one.
 //   7. Check            "Where would this go?" and every rule Finish writes, in plain words. Finish.
 //
@@ -33,7 +34,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
-import type { AppSnapshot, AudioDevices, RouteMode, Settings } from '../types'
+import type { AppSnapshot, AudioDevices, RadioProfile, RouteMode, Settings } from '../types'
 import {
   getAudioDevices,
   getSettings,
@@ -57,10 +58,13 @@ import {
   sameSetup,
   sharedBands,
   withCells,
+  KIT_FIELDS,
   type FinishPlan,
   type RadioSetupAnswers,
+  kitOf,
   type RadioKit,
 } from '../settings/radioSetup'
+import { checkRigForm, NO_CAT_PTT_TRANSCEIVERS, type RigCheck, type RigFormFacts } from '../rigFormChecks'
 import { patchRadio } from '../settings/patch'
 import { radioPatch } from './SettingsPanel'
 
@@ -235,6 +239,13 @@ export function RadioSetupWizard({
       await verb
       landed = true
     }
+    // The checks Settings makes at Save, on each radio whose keying or sound cards changed here
+    // (`kitProblems`): one that cannot work (CAT keying with no rig model) is refused, saving nothing.
+    const refused = radios.flatMap((r) => kitProblems(r, a.kit[r.id])).find((c) => c.level === 'error')
+    if (refused) {
+      setError(refused.message)
+      return
+    }
     try {
       if (!sameSetup(settings, await getSettings())) {
         setError(t('radioSetup.finish.changed'))
@@ -288,8 +299,10 @@ export function RadioSetupWizard({
   }
   const setKit = (id: number, field: keyof RadioKit, value: string) =>
     setA((prev) => ({ ...prev, kit: { ...prev.kit, [id]: { ...prev.kit[id], [field]: value } } }))
-  // From a computer driving the station, the keying method is kept as the station has it (as in Settings).
+  // From a computer driving the station, the keying method and its port are kept as the station has
+  // them (as in Settings).
   const pttLocked = settings.stationOnlySettings?.includes('pttMethod') === true
+  const pttPortLocked = settings.stationOnlySettings?.includes('pttSerialPort') === true
   /** A sound card picker's choices: the system default, the devices the computer lists, and the
    *  stored one even when it is not plugged in now. */
   const deviceOptions = (kind: 'input' | 'output', value: string) => {
@@ -507,7 +520,8 @@ export function RadioSetupWizard({
           <div className="radio-setup-cards">
             {radios.map((r) => {
               const c = cat[r.id]
-              const kit = a.kit[r.id] ?? { audioIn: r.audioIn ?? '', audioOut: r.audioOut ?? '', pttMethod: r.pttMethod ?? '' }
+              const kit = a.kit[r.id] ?? kitOf(r)
+              const problems = kitProblems(r, kit)
               return (
                 <div key={r.id} className="radio-setup-card">
                   <strong>{name(r.id)}</strong>
@@ -539,6 +553,28 @@ export function RadioSetupWizard({
                     </select>
                     {pttLocked && <span className="settings-hint">{t('settings.stationOnly.hint')}</span>}
                   </label>
+                  {/* As under Settings' PTT Method, whatever the method. */}
+                  {r.rigConn !== 'omnirig' && r.rigConn !== 'icomlan' && NO_CAT_PTT_TRANSCEIVERS.includes(r.rigModel ?? 0) && (
+                    <p className="settings-hint">{t('settings.rigControl.ptt.noCatPtt')}</p>
+                  )}
+                  {(kit.pttMethod === 'rts' || kit.pttMethod === 'dtr') && (
+                    <label className="wizard-field">
+                      <span>{t('settings.rigControl.pttPort.label')}</span>
+                      <input
+                        className="settings-input"
+                        value={kit.pttSerialPort}
+                        disabled={pttPortLocked}
+                        placeholder={t('settings.rigControl.pttPort.placeholder')}
+                        onChange={(e) => setKit(r.id, 'pttSerialPort', e.target.value)}
+                      />
+                      {pttPortLocked && <span className="settings-hint">{t('settings.stationOnly.hint')}</span>}
+                    </label>
+                  )}
+                  {problems.map((c) => (
+                    <p key={c.message} className={`settings-hint radio-setup-warn${c.level === 'error' ? ' bad' : ''}`}>
+                      {c.message}
+                    </p>
+                  ))}
                   {/ #\d+$/.test(kit.audioIn) && <p className="settings-hint radio-setup-warn">{t('radioSetup.audio.sameName')}</p>}
                   <div className="radio-setup-test">
                     <button
@@ -665,6 +701,18 @@ export function RadioSetupWizard({
       </div>
     </Dialog>
   )
+}
+
+/** Settings' save-time rig checks (`checkRigForm`) on a radio as the setup would leave it, keeping
+ *  only what its changes here bring: a problem the radio already had is Settings' to report, and
+ *  must not stop a Finish that changes something else. No ports or catalog facts are passed, so the
+ *  checks that need them say the same before and after and drop out. */
+function kitProblems(r: RadioProfile, kit: RadioKit | undefined): RigCheck[] {
+  const was = kitOf(r)
+  if (!kit || KIT_FIELDS.every((f) => kit[f] === was[f])) return []
+  const facts = (k: RadioKit) => ({ ...r, serialPort: r.serialPort ?? '', rigConn: r.rigConn ?? '', rigModel: r.rigModel ?? 0, ...k }) as RigFormFacts
+  const before = checkRigForm(facts(was), [], []).map((c) => c.message)
+  return checkRigForm(facts(kit), [], []).filter((c) => !before.includes(c.message))
 }
 
 /** The keying methods Settings offers, as the persisted tokens. */

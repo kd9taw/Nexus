@@ -20,13 +20,15 @@ import type { RadioProfile, RadioSwitchPolicy, RouteMode, RoutingRule, Settings 
 import type { RoutingDraft } from '../api'
 import { ROUTE_MODES } from './describeRouting'
 
-/** A radio's sound cards and keying method, as the "Audio and keying" step edits them. */
+/** A radio's sound cards and keying, as the "Audio and keying" step edits them: the keying method
+ *  and, for Serial RTS or DTR, the port the keying line is on (blank = the CAT port), as Settings. */
 export interface RadioKit {
   audioIn: string
   audioOut: string
   pttMethod: string
+  pttSerialPort: string
 }
-export const KIT_FIELDS: readonly (keyof RadioKit)[] = ['audioIn', 'audioOut', 'pttMethod']
+export const KIT_FIELDS: readonly (keyof RadioKit)[] = ['audioIn', 'audioOut', 'pttMethod', 'pttSerialPort']
 
 export interface RadioSetupAnswers {
   /** Radio ids, in the station's order. */
@@ -76,7 +78,12 @@ export function sharedBands(a: RadioSetupAnswers, order: readonly string[]): str
   return order.filter((band) => a.ids.filter((id) => a.enabled[id] && a.bands[id]?.includes(band)).length >= 2)
 }
 
-const kitOf = (r: RadioProfile): RadioKit => ({ audioIn: r.audioIn ?? '', audioOut: r.audioOut ?? '', pttMethod: r.pttMethod ?? '' })
+export const kitOf = (r: RadioProfile): RadioKit => ({
+  audioIn: r.audioIn ?? '',
+  audioOut: r.audioOut ?? '',
+  pttMethod: r.pttMethod ?? '',
+  pttSerialPort: r.pttSerialPort ?? '',
+})
 
 /** The answers the stored settings already give: what the setup opens on. */
 export function answersFrom(s: Settings, order: readonly string[]): RadioSetupAnswers {

@@ -188,6 +188,82 @@ describe('the radio setup', () => {
     expect([calls[1][1].audioOut, calls[1][1].audioIn, calls[1][1].pttMethod]).toEqual(['', '', 'vox'])
   })
 
+  describe("the keying choice gets Settings' save-time checks", () => {
+    /** Radio 2 on VOX, with `model` as its rig model; the other two as `station()` has them. */
+    const withRadio2 = (model: number, pttMethod = 'vox') => {
+      const s = station()
+      s.radios = s.radios!.map((r) => (r.id === 2 ? { ...r, rigModel: model, pttMethod } : r))
+      api.get('getSettings').mockImplementation(() => Promise.resolve(structuredClone(s)))
+      return s
+    }
+    const openAudio = (s: Settings) => {
+      const onClose = vi.fn()
+      render(<RadioSetupWizard settings={s} bands={BANDS} onClose={onClose} />)
+      while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()
+      return onClose
+    }
+    const keying = (i: number) => screen.getAllByRole('combobox', { name: 'PTT Method' })[i] as HTMLSelectElement
+    const finish = () => {
+      while (screen.queryByRole('button', { name: 'Next' })) next()
+      fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    }
+    const CAT_NO_MODEL = /PTT is set to CAT but the rig model is None\/VOX/
+
+    it('CAT keying on a radio with no rig model is refused at Finish, saving nothing', async () => {
+      const onClose = openAudio(withRadio2(0))
+      fireEvent.change(keying(2), { target: { value: 'cat' } })
+      expect(screen.getByText(CAT_NO_MODEL)).toBeTruthy()
+      finish()
+      expect((await screen.findByRole('alert')).textContent).toMatch(CAT_NO_MODEL)
+      await Promise.resolve()
+      expect(writes()).toEqual([])
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('positive control: CAT keying on a radio with a rig model is written', async () => {
+      const onClose = openAudio(withRadio2(1))
+      fireEvent.change(keying(2), { target: { value: 'cat' } })
+      expect(screen.queryByText(CAT_NO_MODEL)).toBeNull()
+      finish()
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(api.spies.updateRadioProfile.mock.calls.map(([id, p]) => [id, (p as Record<string, unknown>).pttMethod])).toEqual([[2, 'cat']])
+    })
+
+    it('a problem the setup did not make is Settings\' to report: a sound card change on such a radio is written', async () => {
+      api.get('getAudioDevices').mockResolvedValue({ input: [], output: [{ name: 'out-b', label: 'USB Audio CODEC (B)' }] })
+      const onClose = openAudio(withRadio2(0, 'cat'))
+      const tx = screen.getAllByRole('combobox', { name: 'Output Device (TX)' })[2]
+      await within(tx).findByRole('option', { name: 'USB Audio CODEC (B)' })
+      fireEvent.change(tx, { target: { value: 'out-b' } })
+      finish()
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(api.spies.updateRadioProfile.mock.calls.map(([id]) => id)).toEqual([2])
+    })
+
+    it('a radio Hamlib cannot key over CAT says so under the picker, and CAT on it warns but saves', async () => {
+      const onClose = openAudio(withRadio2(3011))
+      const card = keying(2).closest('.radio-setup-card') as HTMLElement
+      expect(within(card).getByText(/Hamlib has no way to key this radio over CAT/)).toBeTruthy()
+      expect(within(keying(0).closest('.radio-setup-card') as HTMLElement).queryByText(/Hamlib has no way to key this radio/)).toBeNull()
+      fireEvent.change(keying(2), { target: { value: 'cat' } })
+      expect(within(card).getByText(/Hamlib can't key this radio over CAT/)).toBeTruthy()
+      finish()
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(api.spies.updateRadioProfile).toHaveBeenCalledTimes(1)
+    })
+
+    it('Serial RTS or DTR offers the keying port, and Finish writes it', async () => {
+      const onClose = openAudio(withRadio2(1))
+      expect(screen.queryByRole('textbox', { name: 'PTT Serial Port' })).toBeNull()
+      fireEvent.change(keying(2), { target: { value: 'rts' } })
+      fireEvent.change(screen.getByRole('textbox', { name: 'PTT Serial Port' }), { target: { value: 'COM9' } })
+      finish()
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      const [id, patch] = api.spies.updateRadioProfile.mock.calls[0] as [number, Record<string, unknown>]
+      expect([id, patch.pttMethod, patch.pttSerialPort]).toEqual([2, 'rts', 'COM9'])
+    })
+  })
+
   it('from a computer driving the station, the keying method is shown, not offered', () => {
     render(<RadioSetupWizard settings={{ ...station(), stationOnlySettings: ['pttMethod'] }} bands={BANDS} onClose={() => {}} />)
     while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()

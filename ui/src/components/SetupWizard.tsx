@@ -517,6 +517,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     audioIn: setAudioIn,
     audioOut: setAudioOut,
     pttMethod: pickKeying,
+    pttSerialPort: setPttSerialPort,
   }
   const radio1 = (s: Settings) => s.activeRadio ?? s.radios?.[0]?.id ?? 0
   const openRadioSetup = () => {
