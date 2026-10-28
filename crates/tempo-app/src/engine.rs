@@ -6303,6 +6303,9 @@ pub struct TxPlan {
 struct FtOverCount {
     /// The sequencer's step before and after the count.
     step: CountedStep,
+    /// The station's call the plan judged the over under (`settings.mycall`). The key judges it
+    /// by this call, not by whatever station the operator put in the sequencer meanwhile.
+    mycall: String,
     /// The engine's own bookkeeping before the count.
     pending_tx_disable: bool,
     pending_cw_id: bool,
@@ -29493,7 +29496,9 @@ contact yourself."
             .connection_tx_refusal()
             .or_else(|| self.ft_held_call_refusal())
             .or_else(|| {
-                self.ft_late_reply_dropped
+                // FT runs in the Digital section only, as the held-call notice above.
+                (self.ft_late_reply_dropped
+                    && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
                     .then_some(crate::settings::STATION_CALL_CHANGED_LATE_REPLY_DROPPED)
             })
             .map(str::to_string);
@@ -30514,9 +30519,11 @@ contact yourself."
             self.pending_cw_id,
             self.qso_start_unix,
             self.cq_pause_until,
+            self.settings.mycall.clone(),
         );
         let count = |step| FtOverCount {
             step,
+            mycall: flags.4.clone(),
             pending_tx_disable: flags.0,
             pending_cw_id: flags.1,
             qso_start_unix: flags.2,
@@ -31291,15 +31298,21 @@ contact yourself."
             | TxWaveform::Native { text, .. } => text,
             TxWaveform::Js8 { .. } => return,
         };
+        // Judged by the call the plan judged it under as well as by the station now in the
+        // sequencer: a station the operator picked in the window, made under a new call, must not
+        // make the over's own call look like another station's.
+        let now = &self.settings.mycall;
+        let profiles = &self.settings.station_profiles;
         let refused = match &count.step {
-            CountedStep::Owed(m) => ft_over_call_refusal(
-                text,
-                &self.settings.mycall,
-                "",
-                &self.settings.station_profiles,
-                Some(m),
-            ),
-            _ => self.ft_sent_call_refusal(text),
+            CountedStep::Owed(m) => {
+                ft_over_call_refusal(text, now, &count.mycall, profiles, Some(m))
+            }
+            CountedStep::Qso { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| ft_over_call_refusal(text, now, &count.mycall, profiles, None)),
+            CountedStep::FieldDay { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| contest_over_call_refusal(&count.mycall, now)),
         };
         if refused.is_none() {
             return;
@@ -31312,7 +31325,10 @@ contact yourself."
         if !count.pending_cw_id {
             self.pending_cw_id = false;
         }
-        let unchanged = match (&count.step, &mut self.mode) {
+        // Only what each plan changed is put back: the QSO over's plan sets the start estimate and
+        // clears the CQ pause, the late reply's clears the pause, the contest over's neither. A
+        // start time the operator set in the window (a Tx2 or Tx3 pick) is theirs and stays.
+        match (&count.step, &mut self.mode) {
             (CountedStep::Qso { before, after }, Mode::Qso { station, .. })
                 if QsoStep::of(station) == *after =>
             {
@@ -31320,27 +31336,25 @@ contact yourself."
                 station.tx_count = before.tx_count;
                 station.rv_count = before.rv_count;
                 station.keyed_on_air = before.keyed_on_air;
-                true
+                if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
+                    self.qso_start_unix = None;
+                }
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
             }
             (CountedStep::FieldDay { before, after }, Mode::FieldDay { station, .. })
                 if FdStep::of(station) == *after =>
             {
                 station.pending = before.pending.clone();
-                true
             }
             (CountedStep::Owed(_), _) => {
                 self.ft_late_reply_dropped = true;
-                true
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
             }
-            _ => false,
-        };
-        if unchanged {
-            if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
-                self.qso_start_unix = None;
-            }
-            if self.cq_pause_until.is_none() {
-                self.cq_pause_until = count.cq_pause_until;
-            }
+            _ => {}
         }
     }
 

@@ -2311,7 +2311,7 @@ fn a_tx_row_naming_another_profiles_call_is_refused() {
     );
 }
 
-// --- An over refused at the key is not counted; an owed late reply is dropped (ruling 959) -----
+// --- An over refused at the key for its call is not counted; an owed late reply is dropped ---------
 
 /// The radio loop's key of `slot`'s over with the call saved as `call` while it builds the wave
 /// with the engine unlocked (the window a Q65, FST4 or MSK144 build waits out a decode in): plan,
@@ -2487,5 +2487,124 @@ fn without_profiles_a_late_reply_refused_at_the_key_is_dropped_and_said() {
     assert_eq!(
         (key_over(&mut e, 10), ft_notice(&e)),
         (Some("CQ KD9TAW/P EN52".into()), None)
+    );
+}
+
+/// The radio loop's key of `slot`'s over with the operator's `acts` done while it builds the wave
+/// with the engine unlocked: plan, build, act, commit. Whether it keyed.
+fn key_over_with_acts_in_the_build(
+    e: &mut Engine,
+    slot: u64,
+    acts: impl FnOnce(&mut Engine),
+) -> bool {
+    let plan = e.plan_tx(slot).expect("premise: the over is planned");
+    let wave = plan.waveform.build();
+    acts(e);
+    !e.commit_tx(&plan, wave, slot).is_empty()
+}
+
+/// ⛔ An S&P final 73 planned under KD9TAW, refused at the key because, while its wave was built,
+/// the call was saved as a new base call (W9ABC) and another station was double-clicked: no CW ID
+/// is left armed for the 73 that never went, whatever station is in the sequencer at the key, and
+/// the station the operator picked is left exactly as they picked it. CONTROL: with no act in the
+/// window the 73 keys and the CW ID follows it, as before.
+#[test]
+fn without_profiles_a_final_73_refused_at_the_key_after_a_new_call_and_a_pick_arms_no_cw_id() {
+    let mut got = Vec::new();
+    let mut want = Vec::new();
+    for tier in [Tier::Q65, Tier::Fst4, Tier::Msk144] {
+        for acts in [false, true] {
+            let mut e = station();
+            e.settings.cw_id_after_73 = true;
+            e.settings.disable_tx_after_73 = true;
+            e.set_tier(tier);
+            e.call_station("W1AW");
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+            assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "{tier:?}: premise");
+            let mut picked = None;
+            let keyed = key_over_with_acts_in_the_build(&mut e, 4, |e| {
+                if acts {
+                    settings_call_edit(e, "W9ABC");
+                    e.call_station("K1ABC");
+                    picked = Some((tx_now(e), tx_count(e)));
+                }
+            });
+            got.push((
+                tier,
+                keyed,
+                e.take_pending_cw_id(),
+                picked.as_ref().map(|_| (tx_now(&e), tx_count(&e))),
+            ));
+            want.push(match picked {
+                Some(p) => (tier, false, false, Some(p)),
+                None => (tier, true, true, None),
+            });
+        }
+    }
+    assert_eq!(got, want);
+}
+
+/// ⛔ A final 73 refused at the key because the call was saved while it was built takes back only
+/// what its own count armed: a "Disable Tx after sending 73" and a CW ID already armed before the
+/// over was planned stay armed.
+#[test]
+fn without_profiles_a_refused_final_73_keeps_a_disable_tx_and_cw_id_armed_before_it() {
+    let mut got = Vec::new();
+    for armed in [false, true] {
+        let mut e = station();
+        e.settings.cw_id_after_73 = true;
+        e.settings.disable_tx_after_73 = true;
+        e.set_tier(Tier::Q65);
+        e.call_station("W1AW");
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+        e.pending_tx_disable = armed;
+        e.pending_cw_id = armed;
+        let keyed = key_over_with_a_call_edit_in_the_build(&mut e, 4, "KD9TAW/P");
+        got.push((
+            armed,
+            keyed,
+            e.take_pending_tx_disable(),
+            e.take_pending_cw_id(),
+        ));
+    }
+    assert_eq!(
+        got,
+        vec![(false, false, false, false), (true, false, true, true)]
+    );
+}
+
+/// ⛔ The late RR73 owed under KD9TAW, refused at the key because the call was saved while it was
+/// built: taking its count back does not erase a QSO start time the operator set in that window
+/// (Tx2 picked for a new caller), which the late reply's plan never touched.
+#[test]
+fn without_profiles_a_late_reply_refused_at_the_key_keeps_a_start_time_set_meanwhile() {
+    let mut e = run_owing_a_late_rr73();
+    let mut set = None;
+    let keyed = key_over_with_acts_in_the_build(&mut e, 8, |e| {
+        settings_call_edit(e, "KD9TAW/P");
+        e.override_next_tx("K1ABC", None, "K1ABC KD9TAW/P -10");
+        set = e.qso_start_unix;
+    });
+    assert!(set.is_some(), "premise: Tx2 set the start time");
+    assert_eq!((keyed, e.qso_start_unix), (false, set));
+}
+
+/// The dropped-late-reply notice belongs to the Digital section, where FT runs: switched to Phone
+/// without Stop TX, the cockpit does not name it (nor show it in place of a licence reason).
+/// CONTROL: in Digital it is said.
+#[test]
+fn the_dropped_late_reply_notice_is_said_only_in_digital() {
+    let mut e = run_owing_a_late_rr73();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(key_over(&mut e, 8), None, "premise: dropped");
+    let digital = ft_notice(&e);
+    e.set_operating_mode("phone", false);
+    assert_eq!(
+        (digital.as_deref(), ft_notice(&e)),
+        (Some(LATE_REPLY_DROPPED), None)
     );
 }
